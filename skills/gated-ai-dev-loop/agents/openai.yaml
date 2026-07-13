@@ -1,4 +1,4 @@
 interface:
   display_name: "门禁式 AI 开发循环"
-  short_description: "统一目录、开发方式选择、冻结门禁与独立验收的通用工作流"
-  default_prompt: "使用 $gated-ai-dev-loop 路由并冻结这个开发任务，在写代码前让我选择 active 或 manual，然后执行门禁和独立验收。"
+  short_description: "统一目录、可视进度、开发方式选择、冻结门禁与独立验收工作流"
+  default_prompt: "使用 $gated-ai-dev-loop 路由并冻结这个开发任务，生成人可读总览和进度，在写代码前让我选择 active 或 manual，然后执行门禁和独立验收。"

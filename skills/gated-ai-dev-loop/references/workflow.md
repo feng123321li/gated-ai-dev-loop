@@ -11,7 +11,8 @@ flowchart TD
     ROUTE -->|Full| FULL["Full 开发基线<br/>R / A / T 追踪"]
     LIGHT --> RUNTIME["统一写入 .ai-dev-loop/task-id/"]
     FULL --> RUNTIME
-    RUNTIME --> CONFIRM{"用户确认开发授权？"}
+    RUNTIME --> TRACK["生成 development-overview.md<br/>初始化 progress.md"]
+    TRACK --> CONFIRM{"用户确认开发授权？"}
     CONFIRM -->|否| HOST
     CONFIRM -->|是| FREEZE["冻结唯一开发授权与指纹"]
 
@@ -57,7 +58,7 @@ flowchart TD
     classDef review fill:#dcfce7,stroke:#16a34a,color:#052e16;
     classDef human fill:#f3f4f6,stroke:#4b5563,color:#111827;
 
-    class HOST,ROUTE,LIGHT,FULL,RUNTIME host;
+    class HOST,ROUTE,LIGHT,FULL,RUNTIME,TRACK host;
     class MODE_WAIT,DEV_MODE,ACTIVE_HOST,CODEX_DEV,CLAUDE_DEV,HANDOFF,USER_DEV,ACTIVE_RESULT,RESELECT,DEV_RESULT,REPAIR developer;
     class FREEZE,GATES,RECLASS,ESCALATE,GATE_RESULT gate;
     class CODEX,CODEX_REVIEW,CLAUDE_REVIEW,REVIEW_RESULT review;
@@ -67,6 +68,7 @@ flowchart TD
 ## 阅读重点
 
 - 所有产物统一放在 `.ai-dev-loop/<task-id>/`，CLI 缺失也不改变目录。
+- `development-overview.md` 提供稳定任务地图，`progress.md` 在每次状态转换后更新，人工验收从这两个入口查看。
 - 需求确认与开发方式选择是两个门禁；冻结后必须由用户明确选择 active 或 manual。
 - active 使用宿主同类开发运行时：Codex 启动 Codex，Claude 启动 Claude。
 - manual 是正式路径，可把冻结包跨工具交给全新 Codex 或 Claude。

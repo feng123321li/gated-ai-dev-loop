@@ -92,6 +92,7 @@ CLI 只自动完成路由、校验、指纹和冻结。实现编排、机械门�
 - 确认验收结果可观察。
 - 确认每条测试命令是 argv 数组，并指向项目真实测试。
 - 如实记录宿主是 `codex` 或 `claude`。
+- 按 `tracking.md` 创建 `development-overview.md` 和 `progress.md`，把进度置为等待需求确认。
 - 展示授权并取得用户明确确认。
 - 在任何实现写入前冻结。
 - 冻结完成后进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`，单独等待用户选择 `active` 或 `manual`；需求确认不能代替开发方式确认。

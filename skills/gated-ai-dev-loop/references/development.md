@@ -14,6 +14,8 @@
 ├── decision-log.md
 ├── handoff-to-claude.md
 ├── state.json
+├── development-overview.md
+├── progress.md
 └── rounds/
     └── round-NN/
         ├── development-mode.json
@@ -23,7 +25,7 @@
         └── review.json
 ```
 
-当前 CLI 使用 `handoff-to-claude.md` 作为兼容文件名；把它视为冻结开发交接包，Codex 开发上下文也可以读取。CLI 缺失时仍建立 `.ai-dev-loop/<task-id>/`，不得改用 `.acceptance/`。开发代理不得写 `.ai-dev-loop/**`；轮次文件由宿主创建和更新。
+当前 CLI 使用 `handoff-to-claude.md` 作为兼容文件名；把它视为冻结开发交接包，Codex 开发上下文也可以读取。CLI 缺失时仍建立 `.ai-dev-loop/<task-id>/`，不得改用 `.acceptance/`。开发代理不得写 `.ai-dev-loop/**`；总览、进度和轮次文件由宿主创建和更新。
 
 ## 选择实际开发方式
 

@@ -1,6 +1,6 @@
 ---
 name: gated-ai-dev-loop
-description: 将任意形式的软件需求路由为 Full、Light 或 None，通过统一运行目录、冻结开发基线、宿主同类主动开发或跨工具手动交接、确定性机械门禁、独立验收和用户确认来治理 AI 辅助开发。适用于功能开发、缺陷修复、重构、迁移及其他仓库改动，也适用于需要阻止需求漂移、在 Codex 与 Claude 之间交接开发或独立验收的任务。
+description: 将任意形式的软件需求路由为 Full、Light 或 None，通过统一运行目录、冻结开发基线、人可读总览与进度、宿主同类主动开发或跨工具手动交接、确定性机械门禁、独立验收和用户确认来治理 AI 辅助开发。适用于功能开发、缺陷修复、重构、迁移及其他仓库改动，也适用于需要阻止需求漂移、查看开发进度、在 Codex 与 Claude 之间交接开发或独立验收的任务。
 ---
 
 # 门禁式 AI 开发循环
@@ -42,7 +42,7 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 
 所有持久化流程产物必须位于项目根目录的 `.ai-dev-loop/<task-id>/`。CLI 缺失时也手工建立同一目录和等价文件；禁止改用 `.acceptance/`、临时规范目录或用户主目录。
 
-冻结核心产物放在任务目录根部；每次主动调用、手动交接、修复和验收的可见证据放在 `rounds/round-NN/`。开发代理不得修改 `.ai-dev-loop/**`，只有宿主可以写入轮次状态和证据。临时 runner 只能放在系统临时目录，不能进入业务仓库。
+冻结核心产物、`development-overview.md` 和 `progress.md` 放在任务目录根部；每次主动调用、手动交接、修复和验收的可见证据放在 `rounds/round-NN/`。开发代理不得修改 `.ai-dev-loop/**`，只有宿主可以写入总览、进度、轮次状态和证据。临时 runner 只能放在系统临时目录，不能进入业务仓库。
 
 ## 冻结唯一开发授权
 
@@ -54,6 +54,12 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 让当前宿主审核归一化后的授权。开发前不要求另一个模型复审。解决占位符、缺失决策、模糊验收和不安全测试命令；展示给用户并取得明确确认后再冻结，同时如实记录宿主是 `codex` 还是 `claude`。
 
 安装 `gated-loop` 后优先用它完成确定性路由和冻结；否则手工建立等价文件。没有实际运行命令时不得声称已由 CLI 完成。
+
+## 维护人工可读状态
+
+初始化任务目录后读取 [tracking.md](references/tracking.md)。在请求用户确认需求前生成 `development-overview.md`，并创建 `progress.md`。每次状态转换后以及向用户交还控制权前，由宿主更新进度；开发者和审查者保持只读。
+
+总览和进度只是冻结基线、结构化状态与轮次证据的人可读投影，不得作为开发授权或单独证明任务完成。人工验收时先展示这两个入口以及最新门禁、独立审查证据。
 
 ## 选择开发方式并隔离实现
 
@@ -101,6 +107,7 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 ## 保持安全与可见
 
 - 展示任务模式、开发方式、宿主、开发运行时、冻结文件、交接命令、证据和审查者身份。
+- 保持 `development-overview.md` 和 `progress.md` 与权威状态一致，让用户可随时查看当前阶段、完成任务、阻断项和下一步。
 - 只读取用户授权的仓库来源；不得为获取上下文扫描凭据存储或用户主目录。
 - 保留无关改动和开发前已有改动。
 - 未获明确授权时不得创建外部状态。
@@ -110,5 +117,6 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 
 - 需要理解、展示或解释完整流程时读取 [workflow.md](references/workflow.md)。
 - 路由、起草或冻结时读取 [baselines.md](references/baselines.md)。
+- 创建开发总览、更新进度或进入人工验收时读取 [tracking.md](references/tracking.md)。
 - 选择开发方式、生成交接或执行机械门禁时读取 [development.md](references/development.md)。
 - 独立验收或准备修复轮次时读取 [acceptance.md](references/acceptance.md)。

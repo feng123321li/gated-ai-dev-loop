@@ -8,15 +8,25 @@
 
 1. 当前 Codex 或 Claude 宿主采集、分析并审核需求，自动选择 `Full`、`Light` 或 `None`。
 2. 用户确认 Full 基线或 Light 简报后冻结，开发授权不再漂移。
-3. 冻结后、写代码前，由用户明确选择 active 或 manual；需求确认不代替开发方式确认。
-4. active 模式由 Codex 启动全新 Codex 开发、Claude 启动全新 Claude 开发；manual 模式允许用户跨工具交接冻结包。
-5. 宿主检查真实 diff、范围、指纹和冻结测试。
-6. 优先启动新的只读 Codex 验收；没有 Codex 时，启动新的、空上下文、只读 Claude 验收。
-7. 独立审查通过后仍由用户最终确认。
+3. 宿主生成 `development-overview.md` 并持续维护 `progress.md`，供用户查看当前阶段、任务、阻断项、证据和下一步。
+4. 冻结后、写代码前，由用户明确选择 active 或 manual；需求确认不代替开发方式确认。
+5. active 模式由 Codex 启动全新 Codex 开发、Claude 启动全新 Claude 开发；manual 模式允许用户跨工具交接冻结包。
+6. 宿主检查真实 diff、范围、指纹和冻结测试。
+7. 优先启动新的只读 Codex 验收；没有 Codex 时，启动新的、空上下文、只读 Claude 验收。
+8. 独立审查通过后仍由用户最终确认。
 
 完整的角色、门禁、升级和修复循环见：[工作流程图](skills/gated-ai-dev-loop/references/workflow.md)。
 
-`gated-loop` 当前只自动完成路由、基线准备和冻结。开发方式选择、机械门禁、独立验收及修复轮次由 Skill 指导执行，避免把尚未实现的自动化包装成可用命令。
+`gated-loop` 当前只自动完成路由、基线准备和冻结。`development-overview.md`、`progress.md`、开发方式选择、机械门禁、独立验收及修复轮次由宿主按 Skill 创建和维护，避免把尚未实现的自动化包装成可用命令。
+
+## 开发总览与进度
+
+每个任务都在 `.ai-dev-loop/<task-id>/` 中维护：
+
+- `development-overview.md`：目标、范围、R/A/T 追踪、开发与验收安排、风险和产物导航；
+- `progress.md`：当前阶段、精确任务完成数、当前轮次、门禁与审查结论、阻断项、下一步和追加式时间线。
+
+两者由宿主维护，开发和审查上下文只读。它们是人可读视图，不替代冻结基线、真实 diff、测试或独立审查。进入人工验收时，宿主必须先展示这两个文件及最新证据，方便逐项查看进度。
 
 ## 环境要求
 

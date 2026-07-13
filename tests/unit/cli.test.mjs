@@ -1,0 +1,68 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFile, readdir } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { runCli } from '../../src/cli/main.mjs';
+import { redact, renderJson } from '../../src/cli/output.mjs';
+
+async function invoke(argv) { const out = []; const err = []; const exitCode = await runCli(argv, { stdout: (s) => out.push(s), stderr: (s) => err.push(s) }); return { exitCode, out: out.join(''), err: err.join('') }; }
+
+test('help lists only implemented commands', async () => {
+  const result = await invoke(['--help']);
+  assert.equal(result.exitCode, 0);
+  assert.match(result.out, /^Usage: gated-loop <command> \[options\]/);
+  for (const command of ['route', 'start', 'prepare', 'freeze']) assert.match(result.out, new RegExp(`\\b${command}\\b`));
+  for (const command of ['install', 'doctor', 'develop', 'review', 'accept']) assert.doesNotMatch(result.out, new RegExp(`\\b${command}\\b`));
+});
+
+test('unknown and unimplemented commands have stable errors', async () => {
+  assert.deepEqual(await invoke(['wat']), { exitCode: 1, out: '', err: 'ERROR UNKNOWN_COMMAND: Unknown command: wat\n' });
+  assert.deepEqual(await invoke(['install']), { exitCode: 1, out: '', err: 'ERROR UNKNOWN_COMMAND: Unknown command: install\n' });
+});
+
+test('missing option values, unknown options, and duplicates are rejected', async () => {
+  assert.match((await invoke(['prepare', '--baseline'])).err, /OPTION_VALUE_REQUIRED/);
+  assert.match((await invoke(['prepare', '--wat'])).err, /UNKNOWN_OPTION/);
+  assert.match((await invoke(['prepare', '--baseline', 'x', '--baseline', 'y'])).err, /DUPLICATE_OPTION/);
+});
+
+test('parser requires exactly one command and rejects separators and extra positionals', async () => {
+  assert.match((await invoke(['freeze', 'extra'])).err, /UNKNOWN_OPTION/);
+  assert.match((await invoke(['freeze', '--', '--json'])).err, /UNKNOWN_OPTION/);
+  assert.match((await invoke(['freeze', '--task', 'one', 'review'])).err, /UNKNOWN_OPTION/);
+});
+
+test('option values are consumed positionally even when repeated elsewhere', async () => {
+  const result = await invoke(['freeze', '--task', 'status']);
+  assert.match(result.err, /CONFIRMATION_REQUIRED/);
+  assert.doesNotMatch(result.err, /DUPLICATE_OPTION|UNKNOWN_OPTION/);
+});
+
+test('json errors are exactly one recursively redacted object', async () => {
+  const result = await invoke(['wat', '--json']);
+  assert.equal(result.out, '');
+  const lines = result.err.trim().split('\n');
+  assert.equal(lines.length, 1);
+  assert.deepEqual(JSON.parse(lines[0]), { ok: false, error: { code: 'UNKNOWN_COMMAND', message: 'Unknown command: wat', details: {} } });
+});
+
+test('recursive redaction covers sensitive keys and streams', () => {
+  const value = redact({ token: 'x', nested: { API_KEY: 'y', stdout: 'z', safe: 1 }, list: [{ password: 'p', env: { X: 'x' } }] });
+  assert.deepEqual(value, { token: '[REDACTED]', nested: { API_KEY: '[REDACTED]', stdout: '[REDACTED]', safe: 1 }, list: [{ password: '[REDACTED]', env: '[REDACTED]' }] });
+  assert.equal(renderJson({ ok: true }), '{"ok":true}\n');
+});
+
+test('package exposes only the gated-loop executable and matching template', async () => {
+  const root = fileURLToPath(new URL('../..', import.meta.url));
+  const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
+  assert.equal(manifest.name, 'gated-ai-dev-loop');
+  assert.deepEqual(manifest.bin, { 'gated-loop': 'bin/gated-loop.mjs' });
+  assert.deepEqual(await readdir(path.join(root, 'bin')), ['gated-loop.mjs']);
+  assert.deepEqual(await readdir(path.join(root, 'templates')), ['gated-loop.yml']);
+  const smoke = spawnSync(process.execPath, [path.join(root, 'bin', 'gated-loop.mjs'), '--help'], { encoding: 'utf8' });
+  assert.equal(smoke.status, 0);
+  assert.match(smoke.stdout, /^Usage: gated-loop <command>/);
+  assert.equal(smoke.stderr, '');
+});

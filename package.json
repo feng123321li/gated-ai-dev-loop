@@ -1,0 +1,16 @@
+{
+  "name": "gated-ai-dev-loop",
+  "version": "0.1.0",
+  "description": "面向 Codex 与 Claude Code 的门禁式 AI 开发 Skill 和确定性冻结 CLI",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=20.19" },
+  "bin": { "gated-loop": "bin/gated-loop.mjs" },
+  "scripts": {
+    "skill:install": "node scripts/install-skill.mjs",
+    "test": "node --preserve-symlinks --preserve-symlinks-main --test \"tests/**/*.test.mjs\"",
+    "test:coverage": "node --preserve-symlinks --preserve-symlinks-main --experimental-test-coverage --test \"tests/**/*.test.mjs\""
+  },
+  "dependencies": { "yaml": "^2.8.1" }
+}

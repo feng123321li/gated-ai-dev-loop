@@ -1,0 +1,4 @@
+.worktrees/
+.dev-loop-work/
+node_modules/
+.ai-dev-loop/

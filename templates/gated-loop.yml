@@ -1,0 +1,15 @@
+version: 1
+runtimeDir: .ai-dev-loop
+maxRepairLoops: 3
+tools:
+  claude: claude
+  codex: codex
+  git: git
+protectedPaths:
+  - .ai-dev-loop/**
+  - .git/**
+forbiddenPaths:
+  - .env*
+  - '**/.env*'
+  - '**/*production*'
+  - '**/*preproduction*'

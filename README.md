@@ -13,6 +13,8 @@
 5. 优先启动新的只读 Codex 验收；没有 Codex 时，启动新的、空上下文、只读 Claude 验收。
 6. 独立审查通过后仍由用户最终确认。
 
+完整的角色、门禁、升级和修复循环见：[工作流程图](skills/gated-ai-dev-loop/references/workflow.md)。
+
 `gated-loop` 当前只自动完成路由、基线准备和冻结。Claude 开发、机械门禁、独立验收及修复轮次由 Skill 指导执行，避免把尚未实现的自动化包装成可用命令。
 
 ## 环境要求

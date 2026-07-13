@@ -95,6 +95,7 @@ Claude 停止后依次执行：
 
 ## 按阶段读取参考资料
 
+- 需要理解、展示或解释完整流程时读取 [workflow.md](references/workflow.md)。
 - 路由、起草或冻结时读取 [baselines.md](references/baselines.md)。
 - 启动 Claude 或执行机械门禁时读取 [development.md](references/development.md)。
 - 独立验收或准备修复轮次时读取 [acceptance.md](references/acceptance.md)。

@@ -67,6 +67,7 @@
 ## 使用 CLI 冻结
 
 只在 CLI 已安装时使用。传入结构化信号，不要期待 CLI 从自然语言推断安全事实。
+无论是否安装 CLI，运行态材料都只写入 `<project>/.ai-dev-loop/<task-id>/`，不得另建兼容目录或临时项目目录。
 
 ```text
 gated-loop route "<任务>" --signals signals.json --json
@@ -93,3 +94,4 @@ CLI 只自动完成路由、校验、指纹和冻结。实现编排、机械门�
 - 如实记录宿主是 `codex` 或 `claude`。
 - 展示授权并取得用户明确确认。
 - 在任何实现写入前冻结。
+- 冻结完成后进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`，单独等待用户选择 `active` 或 `manual`；需求确认不能代替开发方式确认。

@@ -5,17 +5,19 @@
 - [文件职责](#文件职责)
 - [development-overview.md 模板](#development-overviewmd-模板)
 - [progress.md 模板](#progressmd-模板)
+- [final-acceptance-report.md](#final-acceptance-reportmd)
 - [必须更新时间点](#必须更新时间点)
 - [人工验收入口](#人工验收入口)
 
 ## 文件职责
 
-在任务目录根部维护两个宿主专用文件：
+在任务目录根部维护三个宿主专用的人可读文件：
 
 - `development-overview.md`：稳定的任务地图，供开发前确认、交接和人工验收快速浏览。
 - `progress.md`：实时进度视图，展示当前阶段、任务状态、轮次证据、阻断项和下一步。
+- `final-acceptance-report.md`：最新一次独立验收的人工汇总入口；首次执行 `gated-loop accept` 后生成，每轮覆盖刷新。
 
-两者都不是开发授权或验收证据，不纳入冻结指纹。冻结基线、结构化 JSON、真实 diff、测试和审查结果始终具有更高权威。发现冲突时先修正视图，再继续流程。开发代理和审查代理不得修改这两个文件。
+三者都不纳入冻结指纹。总览和进度不是开发授权或验收证据；最终验收汇总也不能替代轮次级结构化 JSON、真实 diff、测试和审查结果。发现冲突时以冻结基线和轮次原始证据为准。开发代理和审查代理不得修改这些文件。
 
 ## development-overview.md 模板
 
@@ -109,6 +111,10 @@
 
 任务状态只能根据真实证据推进；开发者声明不能单独把任务标记为 `COMPLETED`。没有证据时保持 `PENDING`、`IN_PROGRESS` 或 `BLOCKED`。
 
+## final-acceptance-report.md
+
+该文件不由人工拼接。每次独立验收落盘后，宿主或 `gated-loop accept` 根据已校验的当前轮次结果覆盖刷新，至少包含：当前轮次、PASS/FAIL/NEED_HUMAN_REVIEW、机械门禁状态、审查者与隔离方式、P0/P1/P2 数量和完整 findings、人工确认状态、修复指令，以及冻结授权、总览、进度和轮次证据链接。模板见 [acceptance.md](acceptance.md#final-acceptance-reportmd-模板)。
+
 ## 人工验收入口
 
-进入 `WAITING_FOR_MANUAL_ACCEPTANCE` 时，先向用户展示并链接 `development-overview.md`、`progress.md`、冻结基线、最新 `self-check-report.md`、`acceptance-report.md`、`gate-evidence.json` 和 `review.json`。明确展示 P2 清单。用户可按任务、finding 和证据逐项查看；接受后记录 `ACCEPTED` 并进入 `COMPLETED`，拒绝时记录关联 finding 或验收 ID 和原因，再进入修复轮次。
+进入 `WAITING_FOR_MANUAL_ACCEPTANCE` 时，先向用户展示任务根目录的 `final-acceptance-report.md`。用户需要追溯时，再展开 `development-overview.md`、`progress.md`、冻结基线、最新 `self-check-report.md`、`acceptance-report.md`、`gate-evidence.json` 和 `review.json`。根级报告必须明确展示 P2 清单和人工确认状态。用户接受后记录 `ACCEPTED` 并进入 `COMPLETED`，拒绝时记录关联 finding 或验收 ID 和原因，再进入修复轮次。

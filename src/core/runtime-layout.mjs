@@ -5,6 +5,7 @@ import { GatedLoopError } from './errors.mjs';
 export const MUTABLE_RUNTIME_ENTRIES = Object.freeze([
   'development-overview.md',
   'progress.md',
+  'final-acceptance-report.md',
   'rounds',
 ]);
 

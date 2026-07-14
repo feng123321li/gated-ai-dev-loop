@@ -49,7 +49,7 @@ flowchart TD
 
     REVIEWER -->|是| OTHER_REVIEW["全新只读其他 Agent<br/>无开发上下文"]
     REVIEWER -->|否| SUBAGENT_REVIEW["宿主启动全新验收子 Agent<br/>无开发上下文"]
-    OTHER_REVIEW --> REVIEW_RESULT{"生成 P0/P1/P2 验收报告<br/>PASS / FAIL / NEED_HUMAN_REVIEW"}
+    OTHER_REVIEW --> REVIEW_RESULT{"生成轮次 P0/P1/P2 报告<br/>刷新根级最终验收报告<br/>PASS / FAIL / NEED_HUMAN_REVIEW"}
     SUBAGENT_REVIEW --> REVIEW_RESULT
     REVIEW_RESULT -->|FAIL，未超过三轮| REPAIR
     REVIEW_RESULT -->|FAIL 已达上限或证据不足| HUMAN
@@ -73,14 +73,14 @@ flowchart TD
 ## 阅读重点
 
 - 所有产物统一放在 `.ai-dev-loop/<task-id>/`，CLI 缺失也不改变目录。
-- `development-overview.md` 提供稳定任务地图，`progress.md` 在每次状态转换后更新，人工验收从这两个入口查看。
+- `development-overview.md` 提供稳定任务地图，`progress.md` 在每次状态转换后更新；独立验收后人工优先查看根级 `final-acceptance-report.md`，再按需追溯这两个视图和轮次证据。
 - 需求确认与开发方式选择是两个门禁；冻结后必须由用户明确选择 active 或 manual。
 - active 使用宿主同类开发运行时：Codex 启动 Codex，Claude 启动 Claude。
 - manual 是正式路径，可把冻结包跨工具交给全新 Codex 或 Claude。
 - single/parallel 是独立执行拓扑；只有任务和写入范围可证明互斥的 Full 才能选择 parallel。
 - 用户确认 active + parallel 计划后自动派遣，不再逐 Agent 询问；计划变化必须重新确认。
 - parallel 先逐 Agent 检查归属并集成，再对最终聚合 diff 运行完整门禁和独立验收。
-- 机械门禁生成 self-check-report.md；独立审查生成 acceptance-report.md 和 review.json，P0/P1 阻断、P2 非阻断但必须展示。
+- 机械门禁生成 self-check-report.md；独立审查生成轮次级 acceptance-report.md 和 review.json，并刷新根级 final-acceptance-report.md；P0/P1 阻断、P2 非阻断但必须展示。
 - 验收优先使用与开发者分离的其他 Agent；没有时才启动全新验收子 Agent，两者都不能继承分析或开发上下文。
 - 主动调用失败且确认零写入时重新请求选择并推荐 manual；不得自动切换。
 - 两种开发方式共用相同冻结授权、机械门禁和独立验收。

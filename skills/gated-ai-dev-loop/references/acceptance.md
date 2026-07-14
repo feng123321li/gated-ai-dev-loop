@@ -10,6 +10,7 @@
 - [审查提示词](#审查提示词)
 - [review.json 契约](#reviewjson-契约)
 - [acceptance-report.md 模板](#acceptance-reportmd-模板)
+- [final-acceptance-report.md 模板](#final-acceptance-reportmd-模板)
 - [结论判定](#结论判定)
 - [修复与人工验收](#修复与人工验收)
 
@@ -21,6 +22,8 @@
 - `self-check-report.md`：宿主根据机械证据生成的人可读自检报告；
 - `review.json`：独立审查的机器可读结论和 P0/P1/P2 findings；
 - `acceptance-report.md`：宿主根据已校验的 `review.json` 渲染的人可读验收报告。
+
+每次验收后还要在任务目录根部覆盖刷新 `final-acceptance-report.md`。它是给人工查看的最新汇总入口，不替代上述轮次原始证据。
 
 开发 Agent 不得直接写这些文件。独立验收 Agent 负责形成 findings 和结构化结论；宿主只负责保存、校验并从该结论确定性渲染 Markdown，不得改写审查语义。报告不得替代原始证据。
 
@@ -177,6 +180,53 @@ PASS / FAIL / NEED_HUMAN_REVIEW
 
 报告不得包含“允许合并”、自动提交或 Git commit message 建议；最终操作仍由用户决定。
 
+## final-acceptance-report.md 模板
+
+宿主从当前轮次已校验的机械证据和 `review.json` 确定性渲染；每轮覆盖旧汇总，但不得删除旧轮次报告：
+
+```markdown
+# <task-id> 最终验收报告
+
+> 当前验收结论：**PASS / FAIL / NEED_HUMAN_REVIEW**
+> 当前验收轮次：**round-NN**
+> 人工确认状态：**WAITING_FOR_MANUAL_ACCEPTANCE / BLOCKED_BY_P0_P1 / NEED_HUMAN_REVIEW**
+
+## 验收摘要
+| 项目 | 结果 |
+| --- | --- |
+| 任务模式 | Full / Light |
+| 机械门禁 | PASS / UNVERIFIED |
+| 独立审查者 | codex / claude |
+| 审查者类型 | independent-agent / fresh-subagent |
+| 上下文隔离 | fresh-read-only-no-development-context |
+| P0 / P1 / P2 | 0 / 0 / 1 |
+| 已检查验收 ID | A-001 |
+
+## P0 严重问题
+- 无；或完整列出 finding、关联 ID、位置、证据、影响和修复。
+
+## P1 阻断问题
+- 无；或完整列出 finding、关联 ID、位置、证据、影响和修复。
+
+## P2 非阻断建议
+- 无；或完整列出 finding、位置、证据、影响和建议。
+
+## 建议补充测试
+- 无；或列出具体场景。
+
+## 修复指令
+- 无需修复；或列出最小修复清单。
+
+## 人工操作结论
+<说明是否可进入人工确认；PASS 也不授权自动提交、推送、合并或发布。>
+
+## 证据导航
+- 冻结授权、开发总览和开发进度
+- 当前轮次 self-check-report.md、gate-evidence.json、acceptance-report.md 和 review.json
+```
+
+`PASS` 对应 `WAITING_FOR_MANUAL_ACCEPTANCE`；`FAIL` 对应 `BLOCKED_BY_P0_P1`；证据或隔离不足对应 `NEED_HUMAN_REVIEW`。报告必须包含完整 findings，不能只给数量或链接，确保人工先看这一份即可理解结论。
+
 机械自检 PASS 后运行：
 
 ```text
@@ -196,4 +246,4 @@ CLI 默认调用配置中的独立 Codex，命令不可用时才调用独立 Cla
 
 收到 `FAIL` 后，只把 P0/P1 finding、关联 ID、允许路径和必须重跑的测试交给新的隔离开发上下文，或通过明确 manual 方式交接。P2 默认不进入自动修复，除非用户明确授权。修复后重新运行全部机械门禁和独立验收，最多三轮。
 
-进入 `WAITING_FOR_MANUAL_ACCEPTANCE` 前，更新 `progress.md` 并展示 `development-overview.md`、`self-check-report.md`、`acceptance-report.md`、P2 清单和原始 JSON 证据。只有用户明确确认后才能完成；用户拒绝时记录关联 finding 或验收 ID 并进入修复轮次。
+进入 `WAITING_FOR_MANUAL_ACCEPTANCE` 前，更新 `progress.md`，刷新并优先展示任务根目录的 `final-acceptance-report.md`。用户需要追溯时再展示 `development-overview.md`、轮次级报告和原始 JSON 证据。只有用户明确确认后才能完成；用户拒绝时记录关联 finding 或验收 ID 并进入修复轮次。

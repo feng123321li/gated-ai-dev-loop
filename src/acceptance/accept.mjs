@@ -230,6 +230,75 @@ ${repairs}
 `;
 }
 
+function manualAcceptanceStatus(status) {
+  if (status === 'PASS') return 'WAITING_FOR_MANUAL_ACCEPTANCE';
+  if (status === 'FAIL') return 'BLOCKED_BY_P0_P1';
+  return 'NEED_HUMAN_REVIEW';
+}
+
+function renderFinalAcceptance(task, round, frozen, review, verified) {
+  const roundPath = `rounds/${round}`;
+  const authority = frozen.authorityName;
+  const tests = review.suggestedTests.length > 0 ? review.suggestedTests.map((entry) => `- ${entry}`).join('\n') : '- 无';
+  const repairs = review.repairInstructions.length > 0 ? review.repairInstructions.map((entry) => `- ${entry}`).join('\n') : '- 无需修复';
+  const operation = review.status === 'PASS'
+    ? '独立验收已通过，等待用户人工确认。PASS 不授权自动提交、推送、合并或发布。'
+    : review.status === 'FAIL'
+      ? '存在 P0/P1 阻断项，修复并重新完成机械门禁和独立验收前，不能进入人工完成确认。'
+      : '证据、隔离或审查过程不足，需要人工审查后决定重试、修复或终止。';
+  return `# ${task} 最终验收报告
+
+> 当前验收结论：**${review.status}**
+>
+> 当前验收轮次：**${round}**
+>
+> 人工确认状态：**${manualAcceptanceStatus(review.status)}**
+
+## 验收摘要
+
+| 项目 | 结果 |
+| --- | --- |
+| 任务模式 | ${frozen.mode} |
+| 机械门禁 | ${verified?.evidence?.status ?? 'UNVERIFIED'} |
+| 独立审查者 | ${review.reviewer} |
+| 审查者类型 | ${review.reviewerKind} |
+| 上下文隔离 | ${review.isolation} |
+| P0 / P1 / P2 | ${review.counts.p0} / ${review.counts.p1} / ${review.counts.p2} |
+| 已检查验收 ID | ${review.checkedAcceptanceIds.join('、') || '未完成'} |
+
+## P0 严重问题
+${findingSection(review.findings, 'P0')}
+
+## P1 阻断问题
+${findingSection(review.findings, 'P1')}
+
+## P2 非阻断建议
+${findingSection(review.findings, 'P2')}
+
+## 建议补充测试
+${tests}
+
+## 修复指令
+${repairs}
+
+## 人工操作结论
+
+${operation}
+
+## 证据导航
+
+- 冻结授权：[${authority}](${authority})
+- 开发总览：[development-overview.md](development-overview.md)
+- 开发进度：[progress.md](progress.md)
+- 本轮机械自检：[self-check-report.md](${roundPath}/self-check-report.md)
+- 本轮机械证据：[gate-evidence.json](${roundPath}/gate-evidence.json)
+- 本轮独立验收：[acceptance-report.md](${roundPath}/acceptance-report.md)
+- 本轮结构化审查：[review.json](${roundPath}/review.json)
+
+本文件由 \`gated-loop accept\` 根据当前轮次的已校验结果自动刷新。轮次报告与 JSON 是原始证据，本文件是给人工查看的最新汇总入口。
+`;
+}
+
 async function verifiedEvidence({ root, task, round, frozen, config, snapshotSource, fs, runProcessImpl, timeoutMs }) {
   const relative = path.join('.ai-dev-loop', task, 'rounds', round);
   const evidence = JSON.parse((await readSafeRegularFile(root, path.join(relative, 'gate-evidence.json'), { fs })).toString('utf8'));
@@ -273,9 +342,10 @@ export async function runAcceptance({
   const directory = await roundDirectory({ root, task, round, fs });
   let actualReviewer = reviewer === 'claude' ? 'claude' : 'codex';
   let reviewerKind = 'independent-agent';
+  let verified;
   let review;
   try {
-    const verified = await verifiedEvidence({ root, task, round, frozen, config, snapshotSource, fs, runProcessImpl, timeoutMs });
+    verified = await verifiedEvidence({ root, task, round, frozen, config, snapshotSource, fs, runProcessImpl, timeoutMs });
     const prompt = reviewerPrompt(frozen, verified.evidence, verified.report, verified.bundle.text);
     let invoked;
     if (reviewResult) invoked = { reviewer: reviewResult.reviewer, reviewerKind: reviewResult.reviewerKind, value: reviewResult };
@@ -289,5 +359,11 @@ export async function runAcceptance({
   }
   const reviewPath = await writeRoundFile(directory, 'review.json', json(review), { fs });
   const reportPath = await writeRoundFile(directory, 'acceptance-report.md', renderAcceptance(task, round, review), { fs });
-  return { status: review.status, task, round, reviewer: review.reviewer, counts: review.counts, reviewPath, reportPath };
+  const finalReportPath = await writeRoundFile(
+    frozen.taskPackage.target,
+    'final-acceptance-report.md',
+    renderFinalAcceptance(task, round, frozen, review, verified),
+    { fs },
+  );
+  return { status: review.status, task, round, reviewer: review.reviewer, counts: review.counts, reviewPath, reportPath, finalReportPath };
 }

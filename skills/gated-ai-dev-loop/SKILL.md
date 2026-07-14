@@ -42,7 +42,7 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 
 所有持久化流程产物必须位于项目根目录的 `.ai-dev-loop/<task-id>/`。CLI 缺失时也手工建立同一目录和等价文件；禁止改用 `.acceptance/`、临时规范目录或用户主目录。
 
-冻结核心产物、`development-overview.md` 和 `progress.md` 放在任务目录根部；每次主动调用、手动交接、修复和验收的可见证据放在 `rounds/round-NN/`。开发代理不得修改 `.ai-dev-loop/**`，只有宿主可以写入总览、进度、轮次状态和证据。临时 runner 只能放在系统临时目录，不能进入业务仓库。
+冻结核心产物、`development-overview.md`、`progress.md` 和最新的 `final-acceptance-report.md` 放在任务目录根部；每次主动调用、手动交接、修复和验收的原始证据放在 `rounds/round-NN/`。开发代理不得修改 `.ai-dev-loop/**`，只有宿主可以写入总览、进度、轮次状态和证据。临时 runner 只能放在系统临时目录，不能进入业务仓库。
 
 ## 冻结唯一开发授权
 
@@ -111,13 +111,13 @@ CLI 可用时执行 `gated-loop self-check --task <id> --round <NN>`；它要求
 
 ## 独立验收
 
-语义验收前读取 [acceptance.md](references/acceptance.md)。优先启动与开发者分离的全新只读其他 Agent；没有其他 Agent 时才启动宿主的全新验收子 Agent。两者都不能继承需求分析或开发上下文，只提供冻结授权、验收项、任务、真实 diff、开发事实和机械证据。宿主校验结构化结论后写入 `review.json`，并渲染 `acceptance-report.md`。CLI 可用时运行 `gated-loop accept --task <id> --round <NN>`；宿主 Agent 的结果通过 `--review-result` 传入。只接受：
+语义验收前读取 [acceptance.md](references/acceptance.md)。优先启动与开发者分离的全新只读其他 Agent；没有其他 Agent 时才启动宿主的全新验收子 Agent。两者都不能继承需求分析或开发上下文，只提供冻结授权、验收项、任务、真实 diff、开发事实和机械证据。宿主校验结构化结论后写入 `review.json`，渲染轮次级 `acceptance-report.md`，并刷新任务根目录的 `final-acceptance-report.md`。CLI 可用时运行 `gated-loop accept --task <id> --round <NN>`；宿主 Agent 的结果通过 `--review-result` 传入。只接受：
 
 - `PASS`：所有验收项满足、证据完整且没有 P0/P1；允许存在必须展示的 P2；
 - `FAIL`：存在至少一个关联需求、验收、任务或安全边界的 P0/P1；
 - `NEED_HUMAN_REVIEW`：无法证明隔离、证据、改动归属或只读保证。
 
-收到 `FAIL` 后只基于 P0/P1 建立最小修复交接，返回同类隔离开发上下文或明确的手动交接；P2 不自动修复，除非用户授权。重新运行全部机械门禁和独立验收，最多三轮。审查者 `PASS` 后仍需向用户展示报告并取得明确验收。
+收到 `FAIL` 后只基于 P0/P1 建立最小修复交接，返回同类隔离开发上下文或明确的手动交接；P2 不自动修复，除非用户授权。重新运行全部机械门禁和独立验收，最多三轮。审查者 `PASS` 后，先向用户展示根级 `final-acceptance-report.md`，再按需展开轮次报告和 JSON 证据，并取得明确验收。
 
 ## 保持安全与可见
 

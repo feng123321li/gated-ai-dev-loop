@@ -14,7 +14,7 @@
 6. Light 固定单 Agent；可证明任务和写入范围互斥的 Full 可由用户选择 single 或 parallel。
 7. 宿主先检查各 Agent 的改动归属，再对聚合 diff 执行范围、指纹和冻结测试，生成机械自检报告。
 8. 优先使用与开发者分离的全新只读其他 Agent 验收；没有其他 Agent 时使用宿主的全新验收子 Agent，两者均不继承开发上下文，并生成 P0/P1/P2 分级报告。
-9. 独立审查通过后仍由用户最终确认。
+9. `accept` 在任务根目录刷新 `final-acceptance-report.md`，汇总最新轮次结论、P0/P1/P2、人工确认状态和证据入口；独立审查通过后仍由用户最终确认。
 
 完整的角色、门禁、升级和修复循环见：[工作流程图](skills/gated-ai-dev-loop/references/workflow.md)。
 
@@ -25,13 +25,14 @@
 每个任务都在 `.ai-dev-loop/<task-id>/` 中维护：
 
 - `development-overview.md`：目标、范围、R/A/T 追踪、开发与验收安排、风险和产物导航；
-- `progress.md`：当前阶段、精确任务完成数、当前轮次、门禁与审查结论、阻断项、下一步和追加式时间线。
+- `progress.md`：当前阶段、精确任务完成数、当前轮次、门禁与审查结论、阻断项、下一步和追加式时间线；
+- `final-acceptance-report.md`：最新验收轮次的人可读总入口，由 `gated-loop accept` 自动刷新。
 
 两者由宿主维护，开发和审查上下文只读。它们是人可读视图，不替代冻结基线、真实 diff、测试或独立审查。进入人工验收时，宿主必须先展示这两个文件及最新证据，方便逐项查看进度。
 
 ## 验收报告与严重级别
 
-每轮机械门禁生成 `self-check-report.md` 和 `gate-evidence.json`；独立审查生成 `acceptance-report.md` 和 `review.json`：
+每轮机械门禁生成 `self-check-report.md` 和 `gate-evidence.json`；独立审查生成轮次级 `acceptance-report.md` 和 `review.json`，并刷新任务根目录的 `final-acceptance-report.md`：
 
 - `P0`：数据、安全、权限、不可逆破坏或关键服务级严重问题，阻断验收；
 - `P1`：需求、功能、关键边界、事务、兼容性或测试级阻断问题，阻断验收；
@@ -167,7 +168,7 @@ Light 简报通过 `start --brief brief.json` 传入，只有用户确认后才�
 
 开始开发前，宿主必须在当前轮次写入 `development-snapshot.json`，记录基线指纹、开发前 commit、允许路径和已有脏改动。`self-check` 据此计算本轮真实 diff、执行冻结测试，并生成 `gate-evidence.json` 与 `self-check-report.md`；缺少快照或归属不明时关闭门禁。
 
-`accept` 只接受 PASS 的机械证据。默认优先在系统临时目录调用全新只读 Codex 进程，命令不存在时调用全新只读 Claude；外部 reviewer 不以项目目录为工作目录。宿主能调度 Agent 时，优先让与开发者分离的其他 Agent 验收，没有时再启动空开发上下文的验收子 Agent，并用 `--review-result <file>` 或 `--review-result -` 提交结果。CLI 校验 reviewer 来源、无开发上下文隔离、全部验收 ID、P0/P1/P2 数量和结论，再写入 `review.json` 与 `acceptance-report.md`。
+`accept` 只接受 PASS 的机械证据。默认优先在系统临时目录调用全新只读 Codex 进程，命令不存在时调用全新只读 Claude；外部 reviewer 不以项目目录为工作目录。宿主能调度 Agent 时，优先让与开发者分离的其他 Agent 验收，没有时再启动空开发上下文的验收子 Agent，并用 `--review-result <file>` 或 `--review-result -` 提交结果。CLI 校验 reviewer 来源、无开发上下文隔离、全部验收 ID、P0/P1/P2 数量和结论，再写入 `review.json`、轮次级 `acceptance-report.md` 与根级 `final-acceptance-report.md`。
 
 ## 安全边界
 

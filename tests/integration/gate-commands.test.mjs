@@ -87,9 +87,18 @@ test('self-check writes deterministic evidence and accept records a fresh subage
   const result = JSON.parse(accepted.out).result;
   assert.equal(result.status, 'PASS');
   assert.equal(result.counts.p2, 1);
+  assert.equal(result.finalReportPath, path.join(root, '.ai-dev-loop', task, 'final-acceptance-report.md'));
   const report = await readFile(path.join(roundDir, 'acceptance-report.md'), 'utf8');
   assert.match(report, /fresh-subagent/);
   assert.match(report, /P2 非阻断建议/);
+  const finalReport = await readFile(path.join(root, '.ai-dev-loop', task, 'final-acceptance-report.md'), 'utf8');
+  assert.match(finalReport, /最终验收报告/);
+  assert.match(finalReport, /WAITING_FOR_MANUAL_ACCEPTANCE/);
+  assert.match(finalReport, /F-001/);
+  assert.match(finalReport, /rounds\/round-01\/acceptance-report\.md/);
+
+  const acceptedAgain = await invoke(root, ['accept', '--task', task, '--round', '1', '--review-result', `.ai-dev-loop/${task}/rounds/round-01/review-input.json`, '--json']);
+  assert.equal(acceptedAgain.exitCode, 0, acceptedAgain.err);
 });
 
 test('accept enforces P1 as FAIL and returns a non-zero gate status', async (t) => {
@@ -111,4 +120,17 @@ test('accept enforces P1 as FAIL and returns a non-zero gate status', async (t) 
   assert.equal(accepted.exitCode, 2);
   assert.equal(JSON.parse(accepted.out).result.status, 'FAIL');
   assert.match(await readFile(path.join(roundDir, 'acceptance-report.md'), 'utf8'), /P1 阻断问题/);
+  const finalReport = await readFile(path.join(root, '.ai-dev-loop', task, 'final-acceptance-report.md'), 'utf8');
+  assert.match(finalReport, /BLOCKED_BY_P0_P1/);
+  assert.match(finalReport, /F-001/);
+});
+
+test('accept still writes the human-facing root report when evidence needs human review', async (t) => {
+  const { root, task } = await fixture(t);
+  const accepted = await invoke(root, ['accept', '--task', task, '--json']);
+  assert.equal(accepted.exitCode, 2);
+  assert.equal(JSON.parse(accepted.out).result.status, 'NEED_HUMAN_REVIEW');
+  const finalReport = await readFile(path.join(root, '.ai-dev-loop', task, 'final-acceptance-report.md'), 'utf8');
+  assert.match(finalReport, /NEED_HUMAN_REVIEW/);
+  assert.match(finalReport, /UNVERIFIED/);
 });

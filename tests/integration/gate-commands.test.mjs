@@ -71,7 +71,7 @@ test('self-check writes deterministic evidence and accept records a fresh subage
   assert.match(await readFile(path.join(roundDir, 'self-check-report.md'), 'utf8'), /机械自检报告/);
 
   const review = {
-    status: 'PASS', reviewer: 'codex', reviewerKind: 'fresh-subagent',
+    status: 'PASS', reviewer: 'opencode', reviewerKind: 'fresh-subagent',
     isolation: 'fresh-read-only-no-development-context', checkedAcceptanceIds: ['A-001'],
     counts: { p0: 0, p1: 0, p2: 1 },
     findings: [{

@@ -1,5 +1,6 @@
 import { sha256Bytes } from '../core/hash.mjs';
 import { renderDevelopmentHandoff } from '../handoff/render.mjs';
+import { DEVELOPMENT_HANDOFF_FILE } from '../handoff/files.mjs';
 
 const SCHEMA_VERSION = 1;
 const GENERATOR_VERSION = 1;
@@ -64,7 +65,7 @@ export function buildLightArtifacts({ task, reviewer, brief, markdown } = {}) {
       'acceptance.json': json(acceptance),
       'tasks.json': json(tasks),
       'decision-log.md': decisionLog,
-      'handoff-to-claude.md': handoff,
+      [DEVELOPMENT_HANDOFF_FILE]: handoff,
     },
   };
 }

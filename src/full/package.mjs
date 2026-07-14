@@ -7,6 +7,10 @@ import { sha256Bytes } from '../core/hash.mjs';
 import { CLASSIFIER_VERSION, classifyMode } from '../mode/classify.mjs';
 import { canonicalJson } from '../baseline/sources.mjs';
 import { renderDevelopmentHandoff } from '../handoff/render.mjs';
+import {
+  DEVELOPMENT_HANDOFF_FILE,
+  handoffFileFromNames,
+} from '../handoff/files.mjs';
 import { requireHostRuntime } from '../mode/host-runtime.mjs';
 import { validateMutableRuntimeEntries } from '../core/runtime-layout.mjs';
 
@@ -14,7 +18,7 @@ export const WAITING_FILES = Object.freeze([
   'acceptance.json', 'baseline.md', 'decision-log.md', 'mode.json',
   'source-manifest.json', 'state.json', 'tasks.json',
 ]);
-export const FROZEN_FILES = Object.freeze([...WAITING_FILES, 'handoff-to-claude.md'].sort());
+export const FROZEN_FILES = Object.freeze([...WAITING_FILES, DEVELOPMENT_HANDOFF_FILE].sort());
 export const DEFAULT_DECISION_LOG = '# Decision Log\n\nNo additional decisions recorded.\n';
 
 export function json(value) { return `${JSON.stringify(value, null, 2)}\n`; }
@@ -76,11 +80,11 @@ export function renderFullHandoff(model, task, hostRuntime) {
 }
 
 const FROZEN_HASH_NAMES = Object.freeze([
-  'acceptance.json', 'baseline.md', 'decision-log.md', 'handoff-to-claude.md',
+  'acceptance.json', 'baseline.md', 'decision-log.md', DEVELOPMENT_HANDOFF_FILE,
   'mode.json', 'source-manifest.json', 'tasks.json',
 ]);
 
-export function deriveFrozenPackage(taskPackage, handoff) {
+export function deriveFrozenPackage(taskPackage, handoff, handoffName = DEVELOPMENT_HANDOFF_FILE) {
   const files = {
     'mode.json': taskPackage.modeBytes,
     'baseline.md': taskPackage.bytes['baseline.md'],
@@ -88,14 +92,18 @@ export function deriveFrozenPackage(taskPackage, handoff) {
     'tasks.json': taskPackage.bytes['tasks.json'],
     'source-manifest.json': taskPackage.bytes['source-manifest.json'],
     'decision-log.md': taskPackage.bytes['decision-log.md'],
-    'handoff-to-claude.md': handoff,
+    [handoffName]: handoff,
   };
-  return { files, hashes: artifactHashes(files, FROZEN_HASH_NAMES) };
+  const hashNames = FROZEN_HASH_NAMES.map((name) => (
+    name === DEVELOPMENT_HANDOFF_FILE ? handoffName : name
+  ));
+  return { files, hashes: artifactHashes(files, hashNames) };
 }
 
 export function validateFrozenPackage(taskPackage, handoff) {
-  const { hashes } = deriveFrozenPackage(taskPackage, handoff);
-  const valid = taskPackage.bytes['handoff-to-claude.md'].toString('utf8') === handoff
+  const handoffName = taskPackage.handoffName ?? DEVELOPMENT_HANDOFF_FILE;
+  const { hashes } = deriveFrozenPackage(taskPackage, handoff, handoffName);
+  const valid = taskPackage.bytes[handoffName].toString('utf8') === handoff
     && canonicalJson(taskPackage.state.artifactHashes) === canonicalJson(hashes)
     && taskPackage.state.frozenFingerprint === frozenStateFingerprint(taskPackage.state, hashes);
   if (!valid) throw new GatedLoopError('BASELINE_SOURCE_CHANGED', 'Frozen handoff or state metadata changed');
@@ -166,9 +174,9 @@ function validateState(state, task, hostRuntime) {
   }
 }
 
-function validateHashes(state, bytes) {
+function validateHashes(state, bytes, handoffName) {
   const expectedNames = state.stage === 'BASELINE_FROZEN'
-    ? ['acceptance.json', 'baseline.md', 'decision-log.md', 'handoff-to-claude.md', 'mode.json', 'source-manifest.json', 'tasks.json']
+    ? ['acceptance.json', 'baseline.md', 'decision-log.md', handoffName, 'mode.json', 'source-manifest.json', 'tasks.json']
     : ['acceptance.json', 'baseline.md', 'mode.json', 'source-manifest.json', 'tasks.json'];
   if (!same(Object.keys(state.artifactHashes).sort(), [...expectedNames].sort())) {
     throw new GatedLoopError('BASELINE_SOURCE_CHANGED', 'Existing artifact hash set is invalid');
@@ -206,12 +214,15 @@ export async function readFullPackage({ root, task, fs = fsPromises } = {}) {
   }
   const stateBytes = await readBytes(readableTarget, 'state.json', fs);
   const state = parseJson(stateBytes, 'state.json');
-  const expected = state?.stage === 'BASELINE_FROZEN' ? FROZEN_FILES : WAITING_FILES;
+  const handoffName = state?.stage === 'BASELINE_FROZEN' ? handoffFileFromNames(names) : null;
+  const expected = state?.stage === 'BASELINE_FROZEN'
+    ? [...WAITING_FILES, handoffName].sort()
+    : WAITING_FILES;
   if (!same(names, expected)) throw new GatedLoopError('BASELINE_SOURCE_CHANGED', 'Existing baseline package is incomplete or has unexpected files');
   const bytes = { 'state.json': stateBytes, 'mode.json': modeBytes };
   for (const name of names) if (name !== 'state.json' && name !== 'mode.json') bytes[name] = await readBytes(readableTarget, name, fs);
   validateState(state, task, hostRuntime);
-  validateHashes(state, bytes);
+  validateHashes(state, bytes, handoffName);
   return {
     target,
     stage: state.stage,
@@ -219,6 +230,7 @@ export async function readFullPackage({ root, task, fs = fsPromises } = {}) {
     modeBytes: bytes['mode.json'],
     hostRuntime,
     state,
+    handoffName,
     bytes,
     manifest: parseJson(bytes['source-manifest.json'], 'source-manifest.json'),
     acceptance: parseJson(bytes['acceptance.json'], 'acceptance.json'),
@@ -239,6 +251,9 @@ export async function replaceFullPackage(target, files, { fs = fsPromises, befor
 }
 
 export function fullOutcome(taskPackage, { created = false, updated = false } = {}) {
+  const artifactNames = taskPackage.state?.stage === 'BASELINE_FROZEN'
+    ? [...WAITING_FILES, taskPackage.handoffName ?? DEVELOPMENT_HANDOFF_FILE].sort()
+    : WAITING_FILES;
   return {
     created,
     updated,
@@ -247,8 +262,7 @@ export function fullOutcome(taskPackage, { created = false, updated = false } = 
     mode: 'full',
     stage: taskPackage.state?.stage,
     artifactDir: taskPackage.target,
-    artifacts: (taskPackage.state?.stage === 'BASELINE_FROZEN' ? FROZEN_FILES : WAITING_FILES)
-      .map((name) => path.join(taskPackage.target, name)),
+    artifacts: artifactNames.map((name) => path.join(taskPackage.target, name)),
     sourceFingerprint: taskPackage.state?.sourceFingerprint,
     baselineFingerprint: taskPackage.state?.baselineFingerprint,
     hostRuntime: taskPackage.hostRuntime,

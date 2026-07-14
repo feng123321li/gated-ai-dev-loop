@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { renderDevelopmentHandoff } from '../../src/handoff/render.mjs';
 
-test('shared handoff renderer freezes authority and constrains Claude to implementation facts', () => {
+test('shared handoff renderer freezes authority and constrains any developer Agent to implementation facts', () => {
   const handoff = renderDevelopmentHandoff({
     task: 'empty-value',
     reviewer: 'claude',

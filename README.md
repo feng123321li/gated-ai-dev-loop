@@ -1,20 +1,20 @@
 # 门禁式 AI 开发循环
 
-一套同时适用于 Codex 和 Claude Code 的通用开发 Skill。前期需求可以来自对话、Issue、PRD、截图、原型或代码分析；开发前统一冻结唯一授权，再通过宿主同类主动开发或跨工具手动交接完成实现，最后由独立上下文验收。
+一套适用于任意 AI Agent 的通用开发 Skill。前期需求可以来自对话、Issue、PRD、截图、原型或代码分析；开发前统一冻结唯一授权，再通过宿主自动派遣或通用手动提示词完成实现，最后由独立上下文验收。
 
 这不是某个需求框架的插件，也不限制 Windows。核心 Skill 是纯 Markdown，安装器和辅助 CLI 使用 Node.js，可在 Windows、macOS 和 Linux 运行。
 
 ## 工作方式
 
-1. 当前 Codex 或 Claude 宿主采集、分析并审核需求，自动选择 `Full`、`Light` 或 `None`。
+1. 当前任意宿主 Agent 采集、分析并审核需求，自动选择 `Full`、`Light` 或 `None`。
 2. 用户确认 Full 基线或 Light 简报后冻结，开发授权不再漂移。
 3. 宿主生成 `development-overview.md` 并持续维护 `progress.md`，供用户查看当前阶段、任务、阻断项、证据和下一步。
 4. 冻结后、写代码前，由用户明确选择 active 或 manual；需求确认不代替开发方式确认。
-5. active 模式由 Codex 启动全新 Codex 开发、Claude 启动全新 Claude 开发；manual 模式允许用户跨工具交接冻结包。
+5. active 模式由宿主自动启动可调度的全新隔离开发 Agent；manual 模式只返回可交给任意 Agent 的通用后续提示词。开发 Agent 均不继承前期对话。
 6. Light 固定单 Agent；可证明任务和写入范围互斥的 Full 可由用户选择 single 或 parallel。
 7. 宿主先检查各 Agent 的改动归属，再对聚合 diff 执行范围、指纹和冻结测试，生成机械自检报告。
 8. 优先使用与开发者分离的全新只读其他 Agent 验收；没有其他 Agent 时使用宿主的全新验收子 Agent，两者均不继承开发上下文，并生成 P0/P1/P2 分级报告。
-9. `accept` 在任务根目录刷新 `final-acceptance-report.md`，汇总最新轮次结论、P0/P1/P2、人工确认状态和证据入口；独立审查通过后仍由用户最终确认。
+9. 开发完成后，任意新宿主 Agent 都可读取 `gate-continuation.md` 和开发结果接管机械门禁，无需返回原对话；`accept` 在任务根目录刷新最终验收报告。
 
 完整的角色、门禁、升级和修复循环见：[工作流程图](skills/gated-ai-dev-loop/references/workflow.md)。
 
@@ -43,7 +43,7 @@
 ## 环境要求
 
 - Node.js `20.19` 或更高版本；
-- 需要 active 开发时使用当前宿主可创建的全新 Codex 或 Claude 上下文；
+- 需要 active 开发时，宿主必须能创建全新隔离开发 Agent；
 - 自动独立验收优先使用已安装的 Codex CLI，命令不存在时可使用 Claude CLI；宿主也可把全新其他 Agent 或验收子 Agent 的 JSON 结果交给 CLI 校验。
 
 ## 安装
@@ -115,29 +115,29 @@ $gated-ai-dev-loop 为当前项目增加用户导出功能，先分析并选择�
 /gated-ai-dev-loop 为当前项目修复订单重复提交问题，先完成路由和基线确认。
 ```
 
-Claude 可以作为前期宿主完成分析、审核和冻结，不强制交给 Codex 复审。active 模式启动新的 Claude 开发上下文；manual 模式可以把冻结包交给新的 Codex 或 Claude。原开发上下文不能验收自己的工作。
+Claude Code、Codex 或其他支持 Skill 的 Agent 都可以作为前期宿主完成分析、审核和冻结，不强制跨模型复审。原开发上下文不能验收自己的工作。
 
 ## 两种开发方式
 
-- `active`：Codex 宿主启动新的 Codex 开发上下文，Claude 宿主启动新的 Claude 开发上下文。
-- `manual`：宿主输出项目绝对路径、`.ai-dev-loop/<task-id>/`、冻结交接、提示词和返回方式，用户在新的 Codex 或 Claude 中执行。
+- `active`（直接运行）：用户在当前对话输入“直接运行”，宿主自动启动可调度的全新隔离开发 Agent。
+- `manual`（手动运行）：宿主输出项目绝对路径、`.ai-dev-loop/<task-id>/`、`development-handoff.md`、当前轮次提示词、一份通用后续提示词和返回方式，用户交给任意全新开发 Agent。
 
 基线冻结后必须显示以下选择，并等待用户回复：
 
 ```text
 需求基线已冻结，请选择开发方式：
-1. active
-2. manual
+1. 直接运行（active）
+2. 手动运行（manual）
 ```
 
-manual 选中后再选择 Codex 或 Claude。主动调用遇到网关容量、认证或模型不可用时，如果确认没有代码写入，重新展示选择并推荐 manual，不得自行切换；已经写入或无法确认时停止并要求人工检查。两种方式最终都回到当前宿主执行真实 diff、范围、测试和独立验收。
+manual 选中后不再选择 Codex、Claude 或其他运行时，也不返回工具专属 CLI 命令。宿主必须给出一份可复制到任意开发 Agent 的通用提示词；它引用 `development-handoff.md` 与当前轮次 `prompt.md`，禁止二次分析和越界写入，并在缺少跨仓库工作区、权限或契约时要求 `BLOCKED`。同时生成 `gate-continuation.md`；开发结束后，用户可把它和结构化开发结果交给任意新宿主 Agent 继续机械门禁，不要求返回原对话。主动调用遇到网关容量、认证或模型不可用时，如果确认没有代码写入，重新展示选择并推荐 manual，不得自行切换；已经写入或无法确认时停止并要求人工检查。
 
 ## 单 Agent 与并行开发
 
 开发方式确定后再选择执行拓扑：
 
 - `single`：一个开发上下文完成冻结任务；Light 固定使用。
-- `parallel`：多个同运行时子 Agent 按任务组并行；只对可证明路径互斥、没有并发语义依赖且具备聚合测试的 Full 开放。
+- `parallel`：多个隔离开发 Agent 按任务组并行；Agent 产品可以不同，只对可证明路径互斥、没有并发语义依赖且具备聚合测试的 Full 开放。
 
 parallel 必须先展示 `parallel-plan.json` 中的任务、验收 ID、文件白名单、依赖、波次和最大并发数并取得用户选择。选择 `active + parallel` 后，宿主自动按确认计划派遣子 Agent，不再逐个询问；manual + parallel 则输出多份独立交接。每个 Agent 只写自己的路径；宿主逐个检查归属、机械集成无冲突结果，再对最终完整 diff 执行所有测试和一次独立验收。任何路径重叠、语义冲突或归属不明都会停止自动集成。
 

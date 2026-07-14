@@ -15,10 +15,14 @@ import { normalizeHostRuntime, requireHostRuntime } from '../mode/host-runtime.m
 import { buildLightArtifacts } from './artifacts.mjs';
 import { buildLightBrief, validateLightBrief } from './build-brief.mjs';
 import { validateMutableRuntimeEntries } from '../core/runtime-layout.mjs';
+import {
+  DEVELOPMENT_HANDOFF_FILE,
+  handoffFileFromNames,
+} from '../handoff/files.mjs';
 
 const STATE_SCHEMA_VERSION = 1;
 const ARTIFACT_NAMES = Object.freeze([
-  'acceptance.json', 'decision-log.md', 'handoff-to-claude.md', 'light-brief.md',
+  'acceptance.json', 'decision-log.md', DEVELOPMENT_HANDOFF_FILE, 'light-brief.md',
   'mode.json', 'source-manifest.json', 'state.json', 'tasks.json',
 ]);
 const HASHED_ARTIFACT_NAMES = Object.freeze(ARTIFACT_NAMES.filter((name) => name !== 'state.json'));
@@ -48,8 +52,8 @@ function fingerprintInput(classification, markdown, hostRuntime, task) {
   }), 'utf8'));
 }
 
-function artifactHashes(files) {
-  return Object.fromEntries(HASHED_ARTIFACT_NAMES.map((name) => {
+function artifactHashes(files, names = HASHED_ARTIFACT_NAMES) {
+  return Object.fromEntries(names.map((name) => {
     const value = Buffer.isBuffer(files[name]) ? files[name] : Buffer.from(files[name], 'utf8');
     return [name, sha256Bytes(value)];
   }));
@@ -117,7 +121,11 @@ async function readExisting(target, fs, expectedTask) {
   try {
     const allNames = (await fs.readdir(target)).sort();
     const names = (await validateMutableRuntimeEntries(target, allNames, { fs })).sort();
-    if (canonicalJson(names) !== canonicalJson([...ARTIFACT_NAMES].sort())) throw new Error('unexpected frozen artifact');
+    const handoffName = handoffFileFromNames(names);
+    const artifactNames = ARTIFACT_NAMES.map((name) => (
+      name === DEVELOPMENT_HANDOFF_FILE ? handoffName : name
+    )).sort();
+    if (!handoffName || canonicalJson(names) !== canonicalJson(artifactNames)) throw new Error('unexpected frozen artifact');
     const bytes = Object.fromEntries(await Promise.all(names.map(async (name) => [
       name,
       await readSafeRegularFile(target, name, { fs }),
@@ -146,7 +154,8 @@ async function readExisting(target, fs, expectedTask) {
     const validSourceFiles = Array.isArray(manifest.files) && manifest.files.length === sourceFiles.length
       && sourceFiles.every((entry, index) => hasExactKeys(manifest.files[index], ['path', 'sha256'])
         && manifest.files[index].path === entry.path && manifest.files[index].sha256 === entry.sha256);
-    const hashes = artifactHashes(bytes);
+    const hashNames = artifactNames.filter((name) => name !== 'state.json');
+    const hashes = artifactHashes(bytes, hashNames);
     const valid = manifest.version === 1 && validSourceFiles
       && manifest.fingerprint === manifestFingerprint(sourceFiles)
       && typeof manifest.inputFingerprint === 'string' && /^[a-f0-9]{64}$/.test(manifest.inputFingerprint)
@@ -166,7 +175,7 @@ async function readExisting(target, fs, expectedTask) {
         expectedTask,
       );
     if (!valid) throw new Error('invalid frozen artifact');
-    return { mode, manifest, state, bytes };
+    return { mode, manifest, state, bytes, handoffName, artifactNames };
   } catch {
     throw new GatedLoopError('LIGHT_SOURCE_CHANGED', 'Existing Light artifacts are incomplete or changed');
   }
@@ -179,7 +188,7 @@ function outcome(target, existing, created) {
     mode: 'light',
     stage: 'BASELINE_FROZEN',
     artifactDir: target,
-    artifacts: ARTIFACT_NAMES.map((name) => path.join(target, name)),
+    artifacts: existing.artifactNames.map((name) => path.join(target, name)),
     sourceFingerprint: existing.manifest.fingerprint,
     inputFingerprint: existing.manifest.inputFingerprint,
     hostRuntime: existing.mode.hostRuntime,
@@ -189,7 +198,7 @@ function outcome(target, existing, created) {
 
 function generatedArtifactsMatch(existing, generated) {
   return Object.entries(generated.files).every(([name, content]) => (
-    existing.bytes[name].toString('utf8') === content
+    existing.bytes[name === DEVELOPMENT_HANDOFF_FILE ? existing.handoffName : name].toString('utf8') === content
   ));
 }
 
@@ -269,7 +278,7 @@ async function freezeLightTaskLocked({
     }
     throw new GatedLoopError('LIGHT_SOURCE_CHANGED', 'A different Light source was frozen concurrently');
   }
-  return outcome(target, { manifest, mode }, true);
+  return outcome(target, { manifest, mode, artifactNames: ARTIFACT_NAMES }, true);
 }
 
 export async function freezeLightTask(options = {}) {

@@ -2,7 +2,7 @@
 
 ```mermaid
 flowchart TD
-    INPUT["任意形式的需求输入"] --> HOST["当前宿主：Codex 或 Claude<br/>采集、分析、审核"]
+    INPUT["任意形式的需求输入"] --> HOST["任意宿主 Agent<br/>采集、分析、审核"]
     HOST --> ROUTE{"选择任务模式"}
     ROUTE -->|None| NONE["只回答，不写文件"]
     NONE --> END["结束"]
@@ -18,12 +18,9 @@ flowchart TD
 
     FREEZE --> MODE_WAIT["WAITING_FOR_DEVELOPMENT_MODE_SELECTION"]
     MODE_WAIT --> DEV_MODE{"用户选择开发方式"}
-    DEV_MODE -->|active| ACTIVE_HOST{"当前宿主"}
-    ACTIVE_HOST -->|Codex| DEV_RUNTIME["developerRuntime = Codex"]
-    ACTIVE_HOST -->|Claude| DEV_RUNTIME_C["developerRuntime = Claude"]
-    DEV_MODE -->|manual| MANUAL_RUNTIME["用户选择 Codex 或 Claude 运行时"]
-    DEV_RUNTIME --> TOPOLOGY{"执行拓扑"}
-    DEV_RUNTIME_C --> TOPOLOGY
+    DEV_MODE -->|直接运行 active| ACTIVE_HOST["宿主自动派遣可用的<br/>全新隔离开发 Agent"]
+    DEV_MODE -->|手动运行 manual| MANUAL_RUNTIME["返回任意 Agent 可接收的<br/>通用后续提示词"]
+    ACTIVE_HOST --> TOPOLOGY{"执行拓扑"}
     MANUAL_RUNTIME --> TOPOLOGY
     TOPOLOGY -->|single| SINGLE_DEV["按 active/manual 启动一个全新开发上下文"]
     TOPOLOGY -->|parallel，仅合格 Full| PARALLEL_PLAN["确认任务分组、互斥路径、波次和并发数"]
@@ -32,7 +29,7 @@ flowchart TD
 
     SINGLE_DEV --> ACTIVE_RESULT{"开发调用结果"}
     INTEGRATE --> ACTIVE_RESULT
-    ACTIVE_RESULT -->|成功| DEV_RESULT["COMPLETED / BLOCKED 事实"]
+    ACTIVE_RESULT -->|成功| DEV_RESULT["COMPLETED / BLOCKED 事实<br/>任意宿主可从 gate-continuation 接管"]
     ACTIVE_RESULT -->|失败单元零写入且其他归属明确| RESELECT["展示失败事实，重新选择或分配"]
     RESELECT --> DEV_MODE
     ACTIVE_RESULT -->|已有或无法判断写入| HUMAN["NEED_HUMAN_REVIEW"]
@@ -64,7 +61,7 @@ flowchart TD
     classDef human fill:#f3f4f6,stroke:#4b5563,color:#111827;
 
     class HOST,ROUTE,LIGHT,FULL,RUNTIME,TRACK host;
-    class MODE_WAIT,DEV_MODE,ACTIVE_HOST,DEV_RUNTIME,DEV_RUNTIME_C,MANUAL_RUNTIME,TOPOLOGY,SINGLE_DEV,PARALLEL_PLAN,PARALLEL_DEV,INTEGRATE,ACTIVE_RESULT,RESELECT,DEV_RESULT,REPAIR developer;
+    class MODE_WAIT,DEV_MODE,ACTIVE_HOST,MANUAL_RUNTIME,TOPOLOGY,SINGLE_DEV,PARALLEL_PLAN,PARALLEL_DEV,INTEGRATE,ACTIVE_RESULT,RESELECT,DEV_RESULT,REPAIR developer;
     class FREEZE,GATES,RECLASS,ESCALATE,GATE_RESULT gate;
     class REVIEWER,OTHER_REVIEW,SUBAGENT_REVIEW,REVIEW_RESULT review;
     class CONFIRM,HUMAN,FINAL_CONFIRM,WAIT,COMPLETE human;
@@ -75,8 +72,9 @@ flowchart TD
 - 所有产物统一放在 `.ai-dev-loop/<task-id>/`，CLI 缺失也不改变目录。
 - `development-overview.md` 提供稳定任务地图，`progress.md` 在每次状态转换后更新；独立验收后人工优先查看根级 `final-acceptance-report.md`，再按需追溯这两个视图和轮次证据。
 - 需求确认与开发方式选择是两个门禁；冻结后必须由用户明确选择 active 或 manual。
-- active 使用宿主同类开发运行时：Codex 启动 Codex，Claude 启动 Claude。
-- manual 是正式路径，可把冻结包跨工具交给全新 Codex 或 Claude。
+- active 表示由宿主自动派遣全新隔离开发 Agent，不要求与宿主同类。
+- manual 是正式路径，只返回任意 Agent 可接收的通用后续提示词，不预选工具或输出专属 CLI 命令。
+- 两种方式都使用同一 `development-handoff.md` 和轮次提示词；开发 Agent 不需要前期对话。开发结束后任意新宿主可读取 `gate-continuation.md` 接管机械门禁，不绑定原对话。
 - single/parallel 是独立执行拓扑；只有任务和写入范围可证明互斥的 Full 才能选择 parallel。
 - 用户确认 active + parallel 计划后自动派遣，不再逐 Agent 询问；计划变化必须重新确认。
 - parallel 先逐 Agent 检查归属并集成，再对最终聚合 diff 运行完整门禁和独立验收。

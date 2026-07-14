@@ -16,7 +16,7 @@
 
 把 `active/manual` 作为开发方式，把 `single/parallel` 作为执行拓扑。两者正交：开发方式决定谁启动开发者，执行拓扑决定启动一个还是多个开发上下文。
 
-同一轮的所有开发 Agent 必须使用同一种 `developerRuntime`。不得在一个并行轮次中混合 Codex 和 Claude，也不得让任一开发 Agent 验收聚合结果。
+同一轮的所有开发 Agent 必须使用同一冻结契约和结果格式，但可以来自不同 Agent 产品。不得让任一开发 Agent 验收聚合结果。
 
 ## 并行资格
 
@@ -33,7 +33,7 @@ Light 固定使用 `single`。Full 只有同时满足以下条件才可提供 `p
 
 ## 选择执行拓扑
 
-确定 `active/manual` 和 `developerRuntime` 后再判断并行资格：
+确定 `active/manual` 后再判断并行资格：
 
 - Light：展示“固定 single”及原因，直接记录；
 - Full 但不合格：展示阻断并记录 `single`；
@@ -50,7 +50,7 @@ Light 固定使用 `single`。Full 只有同时满足以下条件才可提供 `p
 ```json
 {
   "topology": "parallel",
-  "developerRuntime": "codex",
+  "developerAgentPolicy": "any-isolated-agent",
   "maxConcurrency": 2,
   "assignments": [
     {
@@ -98,7 +98,7 @@ rounds/round-NN/
 
 ## 启动与返回
 
-`active + parallel`：宿主把状态更新为 `DISPATCHING_PARALLEL_AGENTS`，自动按波次启动同运行时的全新开发子 Agent，每个上下文只收到自己的 assignment、冻结基线、允许路径和结果契约。派遣完成后进入 `WAITING_FOR_PARALLEL_AGENTS`，无需逐个等待用户批准。
+`active + parallel`：宿主把状态更新为 `DISPATCHING_PARALLEL_AGENTS`，自动按波次启动可调度的全新开发子 Agent，每个上下文只收到自己的 assignment、冻结基线、允许路径和结果契约。Agent 产品可以不同，但契约、隔离和归属规则必须相同。派遣完成后进入 `WAITING_FOR_PARALLEL_AGENTS`，无需逐个等待用户批准。
 
 `manual + parallel`：宿主为每个 Agent 输出独立交接卡片，用户在同一种运行时中分别启动全新会话。所有结果返回当前宿主后才能集成。
 

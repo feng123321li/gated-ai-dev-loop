@@ -8,6 +8,7 @@ import path from 'node:path';
 import { runCli } from '../../src/cli/main.mjs';
 import { startTask } from '../../src/commands/start.mjs';
 import { freezeFullBaseline } from '../../src/full/freeze.mjs';
+import { frozenStateFingerprint, readFullPackage } from '../../src/full/package.mjs';
 import { prepareFullBaseline } from '../../src/full/prepare.mjs';
 import { sha256Bytes } from '../../src/core/hash.mjs';
 import { validFullBaseline } from '../helpers/full-baseline.mjs';
@@ -19,6 +20,29 @@ const fullSignals = (patch = {}) => ({
   breaking: true,
   impactKnown: true,
   ...patch,
+});
+
+test('existing Full packages with the legacy handoff filename remain readable', async (t) => {
+  const options = await rootFixture(t, { task: 'legacy-full-handoff' });
+  await prepareFullBaseline({ ...options, baseline: 'requirements/baseline.md' });
+  await freezeFullBaseline({ root: options.root, task: options.task, confirmed: true });
+  const target = path.join(options.root, '.ai-dev-loop', options.task);
+  await fsPromises.rename(
+    path.join(target, 'development-handoff.md'),
+    path.join(target, 'handoff-to-claude.md'),
+  );
+  const statePath = path.join(target, 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  state.artifactHashes['handoff-to-claude.md'] = state.artifactHashes['development-handoff.md'];
+  delete state.artifactHashes['development-handoff.md'];
+  state.frozenFingerprint = frozenStateFingerprint(state);
+  await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`);
+
+  const existing = await readFullPackage({ root: options.root, task: options.task });
+  assert.equal(existing.handoffName, 'handoff-to-claude.md');
+  const repeated = await freezeFullBaseline({ root: options.root, task: options.task, confirmed: true });
+  assert.equal(repeated.idempotent, true);
+  assert.equal(repeated.artifacts.some((entry) => entry.endsWith('handoff-to-claude.md')), true);
 });
 
 async function rootFixture(t, { task = 'baseline-task', hostRuntime = 'codex' } = {}) {
@@ -224,7 +248,7 @@ test('freeze requires confirmation without mutation, then revalidates and freeze
   const state = JSON.parse(await readFile(path.join(target, 'state.json'), 'utf8'));
   assert.equal(state.stage, 'BASELINE_FROZEN');
   assert.equal(state.hostRuntime, state.reviewer);
-  const handoff = await readFile(path.join(target, 'handoff-to-claude.md'), 'utf8');
+  const handoff = await readFile(path.join(target, 'development-handoff.md'), 'utf8');
   assert.match(handoff, /T-001/);
   assert.match(handoff, /A-001/);
   assert.match(handoff, /\["node","--test","tests\/unit\/baseline\.test\.mjs"\]/);
@@ -241,7 +265,7 @@ test('Claude can be the recorded Full baseline host without a cross-model review
   await freezeFullBaseline({ root, task, confirmed: true });
   const target = path.join(root, '.ai-dev-loop', task);
   const state = JSON.parse(await readFile(path.join(target, 'state.json'), 'utf8'));
-  const handoff = await readFile(path.join(target, 'handoff-to-claude.md'), 'utf8');
+  const handoff = await readFile(path.join(target, 'development-handoff.md'), 'utf8');
   assert.equal(state.hostRuntime, 'claude');
   assert.equal(state.reviewer, 'claude');
   assert.match(handoff, /Reviewed by: claude/);

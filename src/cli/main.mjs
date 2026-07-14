@@ -9,6 +9,7 @@ import { prepareFullBaseline } from '../full/prepare.mjs';
 import { renderError, renderJson } from './output.mjs';
 import { runSelfCheck } from '../acceptance/self-check.mjs';
 import { runAcceptance } from '../acceptance/accept.mjs';
+import { isAgentRuntime } from '../mode/host-runtime.mjs';
 
 export const COMMANDS = Object.freeze(['route', 'start', 'prepare', 'freeze', 'self-check', 'accept']);
 const VALUE_OPTIONS = new Set([
@@ -60,8 +61,8 @@ function parse(argv) {
   if (values['--mode'] !== undefined && !['full', 'light'].includes(values['--mode'])) {
     throw new GatedLoopError('OPTION_VALUE_INVALID', '--mode must be full or light');
   }
-  if (values['--host-runtime'] !== undefined && !['codex', 'claude'].includes(values['--host-runtime'])) {
-    throw new GatedLoopError('OPTION_VALUE_INVALID', '--host-runtime must be codex or claude');
+  if (values['--host-runtime'] !== undefined && !isAgentRuntime(values['--host-runtime'])) {
+    throw new GatedLoopError('OPTION_VALUE_INVALID', '--host-runtime must be a safe lowercase Agent identifier');
   }
   if (values['--reviewer'] !== undefined && !['auto', 'codex', 'claude'].includes(values['--reviewer'])) {
     throw new GatedLoopError('OPTION_VALUE_INVALID', '--reviewer must be auto, codex, or claude');

@@ -7,6 +7,7 @@ import { GatedLoopError } from '../core/errors.mjs';
 import { readSafeRegularFile } from '../core/fs-safe.mjs';
 import { runProcess } from '../core/process.mjs';
 import { normalizeBaselineInputPath } from '../baseline/sources.mjs';
+import { isAgentRuntime } from '../mode/host-runtime.mjs';
 import {
   attributeChanges, buildDiffBundle, currentStatus, enrichStatus, fingerprint, json,
   loadFrozenTask, matchesAny, normalizeRound, readSnapshot, roundDirectory, stableJson,
@@ -19,7 +20,7 @@ export const REVIEW_SCHEMA = Object.freeze({
   required: ['status', 'reviewer', 'reviewerKind', 'isolation', 'checkedAcceptanceIds', 'counts', 'findings', 'suggestedTests', 'repairInstructions'],
   properties: {
     status: { enum: ['PASS', 'FAIL', 'NEED_HUMAN_REVIEW'] },
-    reviewer: { enum: ['codex', 'claude'] },
+    reviewer: { type: 'string', pattern: '^[a-z][a-z0-9._-]{0,63}$' },
     reviewerKind: { enum: ['independent-agent', 'fresh-subagent'] },
     isolation: { const: 'fresh-read-only-no-development-context' },
     checkedAcceptanceIds: { type: 'array', items: { type: 'string' }, uniqueItems: true },
@@ -62,7 +63,7 @@ export function validateReview(value, frozen, expectedReviewer, expectedKind) {
   const topKeys = ['status', 'reviewer', 'reviewerKind', 'isolation', 'checkedAcceptanceIds', 'counts', 'findings', 'suggestedTests', 'repairInstructions'];
   const validTop = exactKeys(value, topKeys)
     && ['PASS', 'FAIL', 'NEED_HUMAN_REVIEW'].includes(value.status)
-    && ['codex', 'claude'].includes(value.reviewer)
+    && isAgentRuntime(value.reviewer)
     && (!expectedReviewer || value.reviewer === expectedReviewer)
     && ['independent-agent', 'fresh-subagent'].includes(value.reviewerKind)
     && (!expectedKind || value.reviewerKind === expectedKind)

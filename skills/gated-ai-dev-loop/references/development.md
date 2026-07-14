@@ -12,7 +12,7 @@
 ├── tasks.json
 ├── source-manifest.json
 ├── decision-log.md
-├── handoff-to-claude.md
+├── development-handoff.md
 ├── state.json
 ├── development-overview.md
 ├── progress.md
@@ -22,6 +22,7 @@
         ├── development-mode.json
         ├── parallel-plan.json（仅 parallel）
         ├── prompt.md
+        ├── gate-continuation.md
         ├── result.json
         ├── agents/（仅 parallel）
         ├── integration-result.json（仅 parallel）
@@ -32,7 +33,7 @@
         └── review.json
 ```
 
-当前 CLI 使用 `handoff-to-claude.md` 作为兼容文件名；把它视为冻结开发交接包，Codex 开发上下文也可以读取。CLI 缺失时仍建立 `.ai-dev-loop/<task-id>/`，不得改用 `.acceptance/`。开发代理不得写 `.ai-dev-loop/**`；总览、进度、最终验收汇总和轮次文件由宿主创建和更新。
+新任务统一使用 `development-handoff.md`。CLI 仍可读取旧任务已有的 `handoff-to-claude.md`，但不得再生成旧名称。CLI 缺失时仍建立 `.ai-dev-loop/<task-id>/`，不得改用 `.acceptance/`。开发代理不得写 `.ai-dev-loop/**`；总览、进度、最终验收汇总和轮次文件由宿主创建和更新。
 
 ## 选择实际开发方式
 
@@ -40,33 +41,33 @@
 
 ```text
 需求基线已冻结，请选择开发方式：
-1. active：由当前宿主启动同类全新开发上下文
-2. manual：输出完整交接，由你在新的 Codex 或 Claude 中执行
+1. 直接运行（active）：由当前宿主自动启动全新隔离开发 Agent
+2. 手动运行（manual）：输出通用后续提示词，由你交给任意开发 Agent
 ```
 
 必须等待用户明确选择，最终只记录 `active` 或 `manual`：
 
-- `active`：当前 Codex 宿主启动全新 Codex 开发上下文；当前 Claude 宿主启动全新 Claude 开发上下文。要求 `developerRuntime == hostRuntime`。
-- `manual`：宿主展示完整交接卡片，用户把冻结包交给全新的 Codex 或 Claude。允许 `developerRuntime` 与 `hostRuntime` 不同。
+- `active`：任意宿主 Agent 使用自身可用的调度能力自动启动全新隔离开发 Agent，并记录实际开发 Agent；目标 Agent 不要求与宿主同类。
+- `manual`：宿主只展示完整交接卡片和一份通用后续提示词，不预选接收 Agent、不输出工具专属 CLI 命令；用户可把提示词交给任意全新开发 Agent。
 
-不得使用隐藏默认值或持久化 `auto`。用户选择 active 后，宿主仍需证明全新上下文、写入边界和调用状态；无法证明时说明原因并重新请求选择。用户选择 manual 后，再让用户选择 `developerRuntime=codex|claude`。把最终选择写入 `rounds/round-NN/development-mode.json`：
+用户在当前宿主对话输入“直接运行”视为明确选择 `active`，输入“手动运行”视为明确选择 `manual`。不得使用隐藏默认值。选择 active 后，宿主仍需证明全新上下文、写入边界和调用状态；无法证明时说明原因并返回方式选择，不得暗中切换。选择 manual 后不再询问 Codex、Claude 或其他运行时。把选择写入 `rounds/round-NN/development-mode.json`：
 
 ```json
 {
   "mode": "manual",
-  "hostRuntime": "codex",
-  "developerRuntime": "claude",
+  "hostAgent": "<agent-id>",
+  "developerAgent": null,
   "topology": "single",
   "status": "WAITING_FOR_MANUAL_DEVELOPER",
   "selectedBy": "user"
 }
 ```
 
-确定开发运行时后按 `parallel-development.md` 评估执行拓扑。Light 直接记录 `single`；Full 符合资格时必须等待用户选择。等待期间状态使用 `WAITING_FOR_EXECUTION_TOPOLOGY_SELECTION`。
+确定开发方式后按 `parallel-development.md` 评估执行拓扑。Light 直接记录 `single`；Full 符合资格时必须等待用户选择。等待期间状态使用 `WAITING_FOR_EXECUTION_TOPOLOGY_SELECTION`。
 
 ## 开发提示词契约
 
-从冻结交接包生成 `rounds/round-NN/prompt.md`，并把以下规则放在任务内容之后：
+从冻结交接包生成 `rounds/round-NN/prompt.md`，并把以下规则放在任务内容之后。无论 active 还是 manual，开发 Agent 只读取冻结文件、当前 assignment、允许路径、开发前快照和该提示词；不得传入需求分析对话、隐藏推理或原宿主会话摘要。
 
 ```text
 冻结交接包是唯一开发授权。
@@ -78,9 +79,9 @@
 只报告修改文件和实现事实，不得判断 PASS。
 ```
 
-## 主动模式
+## 直接运行模式
 
-Codex 宿主应启动全新的 Codex 开发 agent、子任务或独立任务，只传入冻结交接、允许路径和结果契约。Claude 宿主应启动全新的 Claude agent、子会话或隔离进程并传入相同内容。用户确认 active + parallel 计划后，宿主自动按波次派遣多个同运行时子 Agent，不再逐个请求确认。不能证明子 Agent 能力或上下文隔离时改用 manual 或 single。
+任意宿主 Agent 都可以发起。宿主使用自身可用的 Agent、子任务、独立会话或隔离进程能力，只传入冻结交接、允许路径和结果契约。用户确认 active + parallel 计划后，宿主自动按波次派遣开发 Agent，不再逐个请求确认。不能证明新上下文、只读交接边界或写入归属时停止自动调用，展示事实并让用户改选 manual 或 single。
 
 临时 runner 只能放入系统临时目录。用 argv 和 `shell:false` 启动外部进程，不得在业务仓库创建 `run-*.mjs`、批处理或临时提示脚本。
 
@@ -100,14 +101,55 @@ single 每轮默认只进行一次主动调用；parallel 的每个 assignment �
 开发方式：manual
 项目路径：<absolute-project-path>
 任务目录：<project>/.ai-dev-loop/<task-id>
-冻结交接：<task-dir>/handoff-to-claude.md
-开发运行时：codex | claude
+冻结交接：<task-dir>/development-handoff.md
+本轮提示：<task-dir>/rounds/<round>/prompt.md
 执行拓扑：single | parallel
 当前状态：WAITING_FOR_MANUAL_DEVELOPER
-完成后返回当前宿主并输入：开发完成，请继续机械门禁
+门禁接续：<task-dir>/rounds/<round>/gate-continuation.md
 ```
 
-手动 Claude 示例：在项目根目录打开全新 Claude Code 会话，把 `prompt.md` 作为系统补充提示，只发送“实现冻结交接包，只报告事实”。手动 Codex 示例：在相同项目中新建 Codex 任务，只提供 `prompt.md` 和冻结交接包。不要复用需求分析任务。
+紧接着输出一份与 Agent 产品、CLI 和操作系统无关的可复制提示词：
+
+```text
+请在项目 <absolute-project-path> 中执行本轮冻结开发任务。
+
+只读取并严格执行：
+1. <absolute-task-dir>/development-handoff.md
+2. <absolute-task-dir>/rounds/<round>/prompt.md
+
+不要重新分析、澄清、设计或改写需求。只实现冻结范围并只报告事实；不要修改 .ai-dev-loop/**，不要提交、推送、合并或发布。
+若缺少冻结范围内任一仓库的可写工作区、必要权限或上游契约实现，返回 BLOCKED 并列出阻断项，不要自行降级、绕过或扩大范围。
+完成后按 prompt.md 规定的结构化结果契约返回。
+```
+
+不能输出 `claude`、`codex` 等工具专属启动命令，也不能在手动交接前要求用户选择接收 Agent。冻结范围包含多个仓库时，在提示词中逐个列出绝对路径和授权状态；缺少任一工作区时点名该仓库并要求 `BLOCKED`。`manual + parallel` 为每个 assignment 分别输出一份只含自身任务、允许路径和对应提示词路径的通用提示词。
+
+开发 Agent 不需要知道原宿主是谁。它只返回后文规定的结构化结果，不自行验收。宿主在开始开发前同时生成 `rounds/round-NN/gate-continuation.md`：
+
+```markdown
+# <task-id> <round> 门禁接续
+
+任意宿主 Agent 都可以接管本轮，不需要原需求或开发对话。
+
+1. 读取任务根目录的 mode、冻结授权、acceptance、tasks、state、development-overview 和 progress。
+2. 读取本轮 development-mode、development-snapshot、prompt，以及用户提供的开发 Agent 结构化结果。
+3. 验证冻结指纹、HEAD、开发前已有改动和真实 diff；无法归属时返回 NEED_HUMAN_REVIEW。
+4. 由接管宿主把已校验的开发结果保存为 result.json，并更新 progress.md；不得让开发 Agent 写 .ai-dev-loop/**。
+5. 运行 gated-loop self-check --task <task-id> --round <NN>；非 PASS 时停止。
+6. 机械门禁 PASS 后启动无开发上下文的全新只读独立验收 Agent，再运行 gated-loop accept。
+7. 不重新分析或改写冻结需求，不自动提交、推送、合并或发布。
+```
+
+开发完成后，用户可以把开发结果交给任意新的宿主 Agent，并输入：
+
+```text
+请接管项目 <absolute-project-path> 的门禁流程。
+读取 <absolute-task-dir>/rounds/<round>/gate-continuation.md，并使用下面的开发 Agent 结果继续；不要重新分析需求：
+
+<粘贴开发 Agent 返回的结构化 JSON>
+```
+
+不要求回到原宿主对话。接管 Agent 可以运行确定性机械门禁，但不能让开发 Agent 验收自己的改动；语义验收仍必须使用全新无开发上下文的独立 Agent。
 
 开发者只允许返回：
 

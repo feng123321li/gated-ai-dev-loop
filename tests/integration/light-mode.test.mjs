@@ -7,7 +7,8 @@ import path from 'node:path';
 
 import { manifestFingerprint, sha256Bytes } from '../../src/core/hash.mjs';
 import { classifyMode } from '../../src/mode/classify.mjs';
-import { freezeLightTask as freezeLightTaskRaw } from '../../src/light/freeze.mjs';
+import { freezeLightTask as freezeLightTaskRaw, readLightPackage } from '../../src/light/freeze.mjs';
+import { canonicalJson } from '../../src/baseline/sources.mjs';
 import { persistFullMode as persistFullModeRaw } from '../../src/mode/persist.mjs';
 import { routeTask } from '../../src/commands/route.mjs';
 import { startTask as startTaskRaw } from '../../src/commands/start.mjs';
@@ -15,6 +16,30 @@ import { startTask as startTaskRaw } from '../../src/commands/start.mjs';
 const freezeLightTask = (options) => freezeLightTaskRaw({ hostRuntime: 'codex', ...options });
 const persistFullMode = (options) => persistFullModeRaw({ hostRuntime: 'codex', ...options });
 const startTask = (options) => startTaskRaw({ hostRuntime: 'codex', ...options });
+
+test('existing Light packages with the legacy handoff filename remain readable', async (t) => {
+  const root = await rootFixture(t);
+  const task = 'legacy-light-handoff';
+  await startTask({ root, task, signals: signals(), brief: brief(), confirmed: true });
+  const target = path.join(root, '.ai-dev-loop', task);
+  await fsPromises.rename(
+    path.join(target, 'development-handoff.md'),
+    path.join(target, 'handoff-to-claude.md'),
+  );
+  const statePath = path.join(target, 'state.json');
+  const state = JSON.parse(await readFile(statePath, 'utf8'));
+  state.artifactHashes['handoff-to-claude.md'] = state.artifactHashes['development-handoff.md'];
+  delete state.artifactHashes['development-handoff.md'];
+  const { frozenFingerprint: ignored, ...metadata } = state;
+  state.frozenFingerprint = sha256Bytes(Buffer.from(canonicalJson(metadata), 'utf8'));
+  await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`);
+
+  const existing = await readLightPackage({ root, task });
+  assert.equal(existing.handoffName, 'handoff-to-claude.md');
+  const repeated = await startTask({ root, task, signals: signals(), brief: brief(), confirmed: true });
+  assert.equal(repeated.freeze.idempotent, true);
+  assert.equal(repeated.freeze.artifacts.some((entry) => entry.endsWith('handoff-to-claude.md')), true);
+});
 
 const safeRisks = () => ({
   loadBearing: false, breaking: false, migrations: false, dependencyChange: false,
@@ -117,7 +142,7 @@ test('freeze atomically creates a host-reviewed eight-file Light development han
   });
   const artifactDir = path.join(root, '.ai-dev-loop', 'empty-value');
   assert.deepEqual((await readdir(artifactDir)).sort(), [
-    'acceptance.json', 'decision-log.md', 'handoff-to-claude.md', 'light-brief.md',
+    'acceptance.json', 'decision-log.md', 'development-handoff.md', 'light-brief.md',
     'mode.json', 'source-manifest.json', 'state.json', 'tasks.json',
   ]);
   const mode = JSON.parse(await readFile(path.join(artifactDir, 'mode.json'), 'utf8'));
@@ -126,7 +151,7 @@ test('freeze atomically creates a host-reviewed eight-file Light development han
   const acceptance = JSON.parse(await readFile(path.join(artifactDir, 'acceptance.json'), 'utf8'));
   const tasks = JSON.parse(await readFile(path.join(artifactDir, 'tasks.json'), 'utf8'));
   const decisionLog = await readFile(path.join(artifactDir, 'decision-log.md'), 'utf8');
-  const handoff = await readFile(path.join(artifactDir, 'handoff-to-claude.md'), 'utf8');
+  const handoff = await readFile(path.join(artifactDir, 'development-handoff.md'), 'utf8');
   assert.equal(mode.mode, 'light');
   assert.equal(mode.hostRuntime, 'codex');
   assert.equal(mode.createdAt, '2026-07-11T00:00:00.000Z');
@@ -146,7 +171,7 @@ test('freeze atomically creates a host-reviewed eight-file Light development han
   assert.equal(state.inputFingerprint, manifest.inputFingerprint);
   assert.equal(state.updatedAt, '2026-07-11T00:00:00.000Z');
   assert.deepEqual(Object.keys(state.artifactHashes).sort(), [
-    'acceptance.json', 'decision-log.md', 'handoff-to-claude.md', 'light-brief.md',
+    'acceptance.json', 'decision-log.md', 'development-handoff.md', 'light-brief.md',
     'mode.json', 'source-manifest.json', 'tasks.json',
   ]);
   assert.match(state.frozenFingerprint, /^[a-f0-9]{64}$/);
@@ -205,7 +230,7 @@ test('freeze persists the explicit validated predevelopment host runtime without
 });
 
 test('idempotent freeze rejects tampering of every generated Light handoff artifact', async (t) => {
-  for (const artifact of ['acceptance.json', 'tasks.json', 'decision-log.md', 'handoff-to-claude.md']) {
+  for (const artifact of ['acceptance.json', 'tasks.json', 'decision-log.md', 'development-handoff.md']) {
     const root = await rootFixture(t);
     const options = {
       root,
@@ -223,7 +248,7 @@ test('idempotent freeze rejects tampering of every generated Light handoff artif
 
 test('invalid host runtime fails before creating artifacts', async (t) => {
   const root = await rootFixture(t);
-  await assert.rejects(() => startTask({ root, task: 'hosted-light', hostRuntime: 'other', signals: signals(), brief: brief(), confirmed: true }), { code: 'HOST_RUNTIME_INVALID' });
+  await assert.rejects(() => startTask({ root, task: 'hosted-light', hostRuntime: 'Other Agent!', signals: signals(), brief: brief(), confirmed: true }), { code: 'HOST_RUNTIME_INVALID' });
   assert.deepEqual(await readdir(root), []);
 });
 

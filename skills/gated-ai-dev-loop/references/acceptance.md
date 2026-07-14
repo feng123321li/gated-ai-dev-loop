@@ -67,7 +67,7 @@ PASS / FAIL / NEED_HUMAN_REVIEW
 
 按以下顺序选择：
 
-1. 优先启动一个与开发者分离的其他 Agent，运行时可以是 Codex 或 Claude，但必须是全新、只读且不继承开发上下文，记录 `reviewerKind=independent-agent`。
+1. 优先启动一个与开发者分离的其他 Agent，产品不限，但必须是全新、只读且不继承开发上下文，记录 `reviewerKind=independent-agent`。
 2. 没有可用的其他 Agent 时，启动当前宿主的全新验收子 Agent，只传入本节允许的审查输入，记录 `reviewerKind=fresh-subagent`。
 3. 无法证明没有继承需求分析/开发上下文，或无法保证只读时，返回 `NEED_HUMAN_REVIEW`。
 
@@ -134,7 +134,7 @@ PASS 不授权提交、推送、合并、发布或最终验收。
 }
 ```
 
-`status` 只能是 `PASS`、`FAIL` 或 `NEED_HUMAN_REVIEW`；`reviewer` 只能是 `codex` 或 `claude`；`reviewerKind` 只能是 `independent-agent` 或 `fresh-subagent`；`isolation` 必须是 `fresh-read-only-no-development-context`。finding ID 必须唯一，severity 只能是 P0/P1/P2，counts 必须与 findings 精确一致。P0/P1 至少关联一个冻结 R/A/T ID或明确的 `SAFETY`；文件或行号不适用时使用 `null`，不得虚构位置。
+`status` 只能是 `PASS`、`FAIL` 或 `NEED_HUMAN_REVIEW`；`reviewer` 使用安全的小写 Agent 标识；`reviewerKind` 只能是 `independent-agent` 或 `fresh-subagent`；`isolation` 必须是 `fresh-read-only-no-development-context`。finding ID 必须唯一，severity 只能是 P0/P1/P2，counts 必须与 findings 精确一致。P0/P1 至少关联一个冻结 R/A/T ID或明确的 `SAFETY`；文件或行号不适用时使用 `null`，不得虚构位置。
 
 ## acceptance-report.md 模板
 
@@ -147,7 +147,7 @@ PASS 不授权提交、推送、合并、发布或最终验收。
 PASS / FAIL / NEED_HUMAN_REVIEW
 
 ## 审查身份
-- reviewer: Codex / Claude
+- reviewer: <agent-id>
 - reviewerKind: independent-agent / fresh-subagent
 - isolation: fresh-read-only-no-development-context
 

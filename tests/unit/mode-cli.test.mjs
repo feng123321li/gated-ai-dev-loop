@@ -141,19 +141,19 @@ test('CLI start leaves None artifact-free', async (t) => {
   assert.equal(result.modelCalls, 0);
 });
 
-test('CLI start persists Full mode and host without creating framework-specific paths', async (t) => {
+test('CLI start persists a generic Agent host without creating framework-specific paths', async (t) => {
   const root = await fixture(t);
   const signalFile = await putJson(root, 'signals.json', signals({ authentication: true }));
   const result = await invoke([
     'start', 'change authentication', '--signals', signalFile,
-    '--host-runtime', 'claude', '--json',
+    '--host-runtime', 'opencode', '--json',
   ], { cwd: root, now: () => '2026-07-11T00:00:00.000Z', generateTaskId: () => 'generated-auth-change' });
   const payload = JSON.parse(result.out);
   assert.equal(payload.result.nextAction, 'prepare');
   assert.equal(payload.result.authority, 'generic-baseline');
   assert.equal(payload.result.task, 'generated-auth-change');
   const mode = JSON.parse(await readFile(path.join(root, '.ai-dev-loop', 'generated-auth-change', 'mode.json'), 'utf8'));
-  assert.equal(mode.hostRuntime, 'claude');
+  assert.equal(mode.hostRuntime, 'opencode');
   assert.equal(mode.evaluatedInputs.description, 'change authentication');
   assert.equal((await readdir(root)).includes('requirements'), false);
   assert.equal(result.modelCalls, 0);
@@ -176,7 +176,7 @@ test('CLI start previews and then freezes an injected Light brief', async (t) =>
   assert.equal(frozenPayload.result.nextAction, 'develop');
   assert.equal(frozenPayload.result.task, 'generated-empty-input');
   assert.deepEqual((await readdir(path.join(root, '.ai-dev-loop', 'generated-empty-input'))).sort(), [
-    'acceptance.json', 'decision-log.md', 'handoff-to-claude.md', 'light-brief.md',
+    'acceptance.json', 'decision-log.md', 'development-handoff.md', 'light-brief.md',
     'mode.json', 'source-manifest.json', 'state.json', 'tasks.json',
   ]);
   assert.equal(preview.modelCalls + frozen.modelCalls, 0);
@@ -205,7 +205,7 @@ test('CLI mode options are strict and structured files cannot escape the project
   const root = await fixture(t);
   assert.match((await invoke(['route', '--json'], { cwd: root })).err, /DESCRIPTION_REQUIRED/);
   assert.match((await invoke(['route', 'task', '--mode', 'none', '--json'], { cwd: root })).err, /OPTION_VALUE_INVALID/);
-  assert.match((await invoke(['start', 'task', '--task', 'x', '--host-runtime', 'other', '--json'], { cwd: root })).err, /OPTION_VALUE_INVALID/);
+  assert.match((await invoke(['start', 'task', '--task', 'x', '--host-runtime', 'Other Agent!', '--json'], { cwd: root })).err, /OPTION_VALUE_INVALID/);
   assert.match((await invoke(['route', 'task', '--brief', 'brief.json', '--json'], { cwd: root })).err, /UNKNOWN_OPTION/);
   assert.match((await invoke(['route', 'task', '--signals', '..\\outside.json', '--json'], { cwd: root })).err, /PATH_OUTSIDE_ROOT|MODE_INPUT_READ/);
 });

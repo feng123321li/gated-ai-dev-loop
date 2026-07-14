@@ -31,9 +31,9 @@
 | --- | --- |
 | 任务 | <task-id> — <title> |
 | 任务模式 | Full / Light |
-| 宿主 | Codex / Claude |
+| 宿主 | <agent-id> |
 | 开发方式 | 待选择 / active / manual |
-| 开发运行时 | 待选择 / Codex / Claude |
+| 开发 Agent | 待派遣 / 用户手动选择 / <agent-id> |
 | 执行拓扑 | 待选择 / single / parallel |
 | 权威基线 | [baseline.md](baseline.md) 或 [light-brief.md](light-brief.md) |
 | 实时进度 | [progress.md](progress.md) |
@@ -49,7 +49,7 @@
 | R-001 | A-001 | T-001 | <简要说明> |
 
 ## 开发与验收安排
-- 开发者：<选择规则或已选运行时>
+- 开发者：<自动派遣规则、手动交接或实际 Agent 标识>
 - 机械门禁：<测试 argv 和范围检查摘要>
 - 独立审查：优先与开发者分离的全新只读其他 Agent；没有时使用宿主的全新只读验收子 Agent；两者均无开发上下文
 - 最终确认：用户人工验收
@@ -80,7 +80,7 @@
 | 当前轮次 | round-NN / 尚未开始 |
 | 任务进度 | <已完成数>/<总数>，不使用主观百分比 |
 | 活跃开发 Agent | <agent-id 列表或无> |
-| 下一责任方 | 用户 / 宿主 / Codex developer / Claude developer / reviewer |
+| 下一责任方 | 用户 / 宿主 Agent / developer Agent / reviewer Agent |
 
 ## 任务进度
 | 任务 | 波次 / Agent | 状态 | 证据 | 说明 |

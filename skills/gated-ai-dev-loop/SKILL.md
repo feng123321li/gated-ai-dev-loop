@@ -1,6 +1,6 @@
 ---
 name: gated-ai-dev-loop
-description: 将任意形式的软件需求路由为 Full、Light 或 None，通过统一运行目录、冻结开发基线、人可读总览与进度、单 Agent 实现或自动派遣多子 Agent 并行实现、宿主同类主动开发或跨工具手动交接、确定性机械门禁、P0/P1/P2 独立验收报告和用户确认来治理 AI 辅助开发。适用于功能开发、缺陷修复、重构、迁移及其他仓库改动，也适用于需要阻止需求漂移、查看开发进度、安全拆分并行任务、生成分级验收报告、在 Codex 与 Claude 之间交接开发或独立验收的任务。
+description: 将任意形式的软件需求路由为 Full、Light 或 None，通过统一运行目录、冻结开发基线、人可读总览与进度、宿主自动派遣隔离开发 Agent 或输出任意 Agent 可接收的通用手动提示词、可由任意新宿主恢复的机械门禁、P0/P1/P2 独立验收报告和用户确认来治理 AI 辅助开发。适用于任意 AI Agent 发起、接收或接管的软件功能开发、缺陷修复、重构、迁移及其他仓库改动。
 ---
 
 # 门禁式 AI 开发循环
@@ -9,9 +9,10 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 
 ## 分离角色
 
-- 允许当前 Codex 或 Claude 宿主采集、分析、审核和冻结需求。
-- 主动模式使用当前宿主的同类全新开发上下文：Codex 宿主启动 Codex 开发，Claude 宿主启动 Claude 开发。
-- 手动模式允许用户把同一冻结交接包交给全新的 Codex 或 Claude；Codex 无法调度 Claude 时优先使用该路径。
+- 允许任意能够读取本 Skill 的宿主 Agent 采集、分析、审核和冻结需求。
+- 直接运行模式由宿主自动启动其可调度的全新隔离开发 Agent，不要求开发 Agent 与宿主同类。
+- 手动运行模式只输出通用后续提示词，允许用户交给任意全新开发 Agent，不预选工具或返回工具专属 CLI 命令。
+- 开发 Agent 不继承前期对话，只读取冻结交接和当前轮次文件；开发完成后任意新宿主 Agent 都可从磁盘接管门禁，不绑定原宿主对话。
 - 优先使用与开发者分离的全新只读其他 Agent 做语义验收；没有其他 Agent 时才启动宿主的全新验收子 Agent。两者都不得继承需求分析或开发上下文。
 - 禁止任何开发上下文验收自己的改动。
 - 基线冻结和最终完成都必须由用户明确确认。
@@ -51,7 +52,7 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 - Full：生成 [baselines.md](references/baselines.md) 定义的可追踪 `baseline.md`。
 - Light：生成 [baselines.md](references/baselines.md) 定义的四段式简报。
 
-让当前宿主审核归一化后的授权。开发前不要求另一个模型复审。解决占位符、缺失决策、模糊验收和不安全测试命令；展示给用户并取得明确确认后再冻结，同时如实记录宿主是 `codex` 还是 `claude`。
+让当前宿主审核归一化后的授权。开发前不要求另一个模型复审。解决占位符、缺失决策、模糊验收和不安全测试命令；展示给用户并取得明确确认后再冻结，同时如实记录宿主 Agent 标识。
 
 安装 `gated-loop` 后优先用它完成确定性路由和冻结；否则手工建立等价文件。没有实际运行命令时不得声称已由 CLI 完成。
 
@@ -65,10 +66,10 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 
 用户确认并冻结开发授权后，进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`。开始任何代码写入前读取 [development.md](references/development.md)，向用户展示两个选项并等待明确选择：
 
-- `active`：宿主启动同运行时的全新隔离开发上下文；`developerRuntime` 必须等于 `hostRuntime`。
-- `manual`：宿主输出完整交接卡片，由用户在指定的全新 Codex 或 Claude 中执行；允许跨工具交接。
+- `active`（直接运行）：宿主自动启动其可调度的全新隔离开发 Agent。
+- `manual`（手动运行）：宿主输出完整交接卡片和一份任意开发 Agent 可接收的通用后续提示词。
 
-不得设置隐藏默认值，不得把需求确认视为开发方式确认。用户选择 manual 后，再确认 `developerRuntime=codex|claude`。没有明确选择时保持等待，不得开始开发。
+不得设置隐藏默认值，不得把需求确认视为开发方式确认。用户可在当前宿主对话输入“直接运行”选择 active，或输入“手动运行”选择 manual。manual 后不再询问接收 Agent；通用提示词必须包含 `development-handoff.md`、当前轮次 `prompt.md`、禁止二次分析、越界限制和 `BLOCKED` 条件。同时生成 `gate-continuation.md`，使任意新宿主 Agent 能结合开发结果继续机械门禁，不要求返回原对话。详细模板见 [development.md](references/development.md#手动模式)。
 
 两种方式必须使用同一冻结授权、允许范围、任务 ID、验收 ID、测试 argv 和结果格式。要求开发上下文：
 
@@ -80,13 +81,13 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 
 ## 选择单 Agent 或并行开发
 
-把 `active/manual` 视为开发方式，把 `single/parallel` 视为执行拓扑。确定开发方式和运行时后，读取 [parallel-development.md](references/parallel-development.md)：
+把 `active/manual` 视为开发方式，把 `single/parallel` 视为执行拓扑。确定开发方式后，读取 [parallel-development.md](references/parallel-development.md)：
 
 - Light 固定使用 `single`；
 - Full 只有任务组、验收 ID、写入路径、依赖、隔离和聚合测试都明确时才可提供 `parallel`；
 - Full 符合并行资格时，先展示分组计划，再等待用户明确选择 `single` 或 `parallel`。
 
-选择 parallel 后，同一轮所有子 Agent 必须使用相同运行时、全新上下文和互斥写入范围。先执行每个 Agent 的归属门禁，再机械集成无冲突结果，最后对聚合 diff 执行完整机械门禁和一次独立验收。无法证明隔离或归属时退回 single 或返回 `NEED_HUMAN_REVIEW`。
+选择 parallel 后，同一轮所有子 Agent 必须使用相同冻结契约、全新上下文和互斥写入范围；可以由不同 Agent 产品执行。先执行每个 Agent 的归属门禁，再机械集成无冲突结果，最后对聚合 diff 执行完整机械门禁和一次独立验收。无法证明隔离或归属时退回 single 或返回 `NEED_HUMAN_REVIEW`。
 
 用户确认 `active + parallel` 及完整并行计划后，宿主自动按波次派遣子 Agent，不再逐个请求确认。自动派遣不能代替拓扑选择，也不能擅自改变已确认的任务分组、路径或并发数；计划变化时必须重新展示并确认。宿主不支持创建全新子 Agent 时停止派遣，展示能力限制并让用户改选 single 或 manual。
 
@@ -94,7 +95,7 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 
 ## 执行机械门禁
 
-单个开发上下文结束、所有并行 Agent 返回，或用户从手动开发返回后，依次执行：
+单个开发上下文结束、所有并行 Agent 返回，或任意宿主 Agent 根据 `gate-continuation.md` 接管后，依次执行：
 
 1. 验证所有冻结产物及指纹未改变。
 2. 对比开发前快照与真实仓库 diff。
@@ -117,11 +118,11 @@ CLI 可用时执行 `gated-loop self-check --task <id> --round <NN>`；它要求
 - `FAIL`：存在至少一个关联需求、验收、任务或安全边界的 P0/P1；
 - `NEED_HUMAN_REVIEW`：无法证明隔离、证据、改动归属或只读保证。
 
-收到 `FAIL` 后只基于 P0/P1 建立最小修复交接，返回同类隔离开发上下文或明确的手动交接；P2 不自动修复，除非用户授权。重新运行全部机械门禁和独立验收，最多三轮。审查者 `PASS` 后，先向用户展示根级 `final-acceptance-report.md`，再按需展开轮次报告和 JSON 证据，并取得明确验收。
+收到 `FAIL` 后只基于 P0/P1 建立最小修复交接，交给任意新的隔离开发 Agent，或输出通用手动提示词；P2 不自动修复，除非用户授权。重新运行全部机械门禁和独立验收，最多三轮。审查者 `PASS` 后，先向用户展示根级 `final-acceptance-report.md`，再按需展开轮次报告和 JSON 证据，并取得明确验收。
 
 ## 保持安全与可见
 
-- 展示任务模式、开发方式、宿主、开发运行时、冻结文件、交接命令、证据和审查者身份。
+- 展示任务模式、开发方式、宿主 Agent、实际开发 Agent、冻结文件、通用交接提示词、证据和审查者身份。
 - 保持 `development-overview.md` 和 `progress.md` 与权威状态一致，让用户可随时查看当前阶段、完成任务、阻断项和下一步。
 - 只读取用户授权的仓库来源；不得为获取上下文扫描凭据存储或用户主目录。
 - 保留无关改动和开发前已有改动。

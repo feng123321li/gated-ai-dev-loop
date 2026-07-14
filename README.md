@@ -19,7 +19,7 @@
 
 完整的角色、门禁、升级和修复循环见：[工作流程图](skills/gated-ai-dev-loop/references/workflow.md)。
 
-`gated-loop` 已实现路由、基线准备、冻结、机械自检和能力驱动的验收落盘。开发方式选择、Agent 派遣、`development-overview.md`、`progress.md` 与修复轮次仍由宿主按 Skill 维护；CLI 只执行可确定验证，不代替宿主协调或用户确认。
+`gated-loop` 0.2.0 已实现路由、基线准备、冻结、schema v1/v2 机械自检和能力驱动的验收落盘。开发方式选择、Agent 派遣、`development-overview.md`、`progress.md` 与修复轮次仍由宿主按 Skill 维护；CLI 只执行可确定验证，不代替宿主协调或用户确认。
 
 ## 开发总览与进度
 
@@ -177,7 +177,7 @@ CLI 不从任务描述猜测权限、迁移或影响范围；这些事实必须�
 
 Light 简报通过 `start --brief brief.json` 传入，只有用户确认后才加入 `--confirmed`。无论 CLI 是否安装、开发方式是 active 还是 manual，运行产物都只能保存在 `.ai-dev-loop/<task-id>/`；该目录默认被 Git 忽略。
 
-开始开发前，宿主必须在当前轮次写入 `development-snapshot.json`，记录基线指纹、开发前 commit、允许路径和已有脏改动。单工作区使用 schema v1，`self-check` 据此计算本轮真实 diff、执行冻结测试，并生成 `gate-evidence.json` 与 `self-check-report.md`。跨工作区使用 schema v2；当前 CLI 尚未自动处理它，宿主必须逐工作区执行等价范围、HEAD、已有改动和测试检查，再聚合跨服务证据。不得用一次单仓库 `self-check` 声称多仓库通过。
+开始开发前，宿主必须在当前轮次写入 `development-snapshot.json`，记录基线指纹、开发前 commit、允许路径和已有脏改动。单工作区使用 schema v1；跨工作区使用 schema v2，并同时提供用户确认的 `workspace-authorization.json` 与 PASS 的 `workspace-coverage.json`。v2 的每个 `root` 必须是 Git worktree 顶层；单仓库内的前后端或模块通过 `allowedPaths` 与命令 `cwd` 区分。`self-check` 会自动识别版本：v2 校验工作区、冻结命令分配和无环 `dependsOn` 图，按依赖波次逐仓库检查分支、HEAD、范围、已有改动与测试；前置构建、契约或验证失败会把消费方测试标记为 `BLOCKED`，全部通过后才生成聚合 PASS。`accept` 会再次验证所有仓库和聚合 diff 未变化。会联网、发布制品或改写工作区的依赖安装不属于隐式机械检查，必须在计划中单独授权。
 
 `accept` 只接受 PASS 的机械证据，并先写出可见的 `review-plan.json`。宿主能调度 Agent 时，优先让与开发者分离的其他 Agent 验收，没有其他产品时再启动空开发上下文的同产品验收子 Agent，并用 `--review-result <file>` 或 `--review-result -` 提交结果。没有隔离能力时，CLI 默认不扫描或启动外部工具，而是生成 `NEED_HUMAN_REVIEW` 人工验收包；只有显式指定 `--reviewer codex|claude|auto` 才启用可选 CLI 适配器。CLI 校验 reviewer 来源、无开发上下文隔离、全部验收 ID、P0/P1/P2 数量和结论，再写入 `review.json`、轮次级 `acceptance-report.md` 与根级 `final-acceptance-report.md`。
 

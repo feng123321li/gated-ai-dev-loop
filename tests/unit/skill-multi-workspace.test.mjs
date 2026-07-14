@@ -25,7 +25,8 @@ test('多工作区契约定义逐仓库门禁和依赖波次', async () => {
 
   assert.match(reference, /先完成并机械验证提供方，再启动消费方/);
   assert.match(reference, /机械门禁先逐工作区、再整体聚合/);
-  assert.match(reference, /当前 CLI 的 `gated-loop self-check` 只处理单工作区 schema v1/);
+  assert.match(reference, /`gated-loop self-check` 原生识别 schema v2/);
+  assert.match(reference, /前置工作区.*后置工作区测试记录为 `BLOCKED`/);
   assert.match(reference, /"workspaceId": "provider-service"/);
 
   const examples = [...reference.matchAll(/```json\n([\s\S]*?)\n```/g)].map((match) => match[1]);

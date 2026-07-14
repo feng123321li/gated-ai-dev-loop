@@ -205,6 +205,8 @@ single 每轮默认只进行一次主动调用；parallel 的每个 assignment �
 gated-loop self-check --task <task-id> --round <NN>
 ```
 
+命令自动识别 schema v1 或 v2。schema v2 会读取当前轮次的工作区授权与覆盖文件，按 `dependsOn` 计算波次，逐工作区执行 Git、白名单、已有改动和冻结测试门禁，再生成聚合 `gate-evidence.json` 与 `self-check-report.md`。前置工作区失败时后置测试保持 `BLOCKED`。
+
 缺少快照、HEAD 已变化、已有脏改动被再次修改或 diff 被截断时关闭门禁，不猜测归属。
 
 ## 机械门禁顺序

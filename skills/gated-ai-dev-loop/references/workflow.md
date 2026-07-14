@@ -38,7 +38,7 @@ flowchart TD
     RESELECT --> DEV_MODE
     ACTIVE_RESULT -->|已有或无法判断写入| HUMAN["NEED_HUMAN_REVIEW"]
 
-    DEV_RESULT --> GATES["机械门禁并生成 self-check-report.md<br/>逐工作区指纹 / diff / 范围 / 测试，再聚合"]
+    DEV_RESULT --> GATES["机械门禁并生成 self-check-report.md<br/>按依赖波次逐工作区检查；前置失败则后置 BLOCKED，再聚合"]
     GATES --> RECLASS{"真实 diff 仍符合原模式？"}
     RECLASS -->|Light 越界| ESCALATE["升级 Full，重新审核与确认"]
     ESCALATE --> HOST

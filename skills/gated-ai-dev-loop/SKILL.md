@@ -124,7 +124,7 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 
 CLI 可用时执行 `gated-loop self-check --task <id> --round <NN>`；它要求当前轮次已有 `development-snapshot.json`，并写入 `gate-evidence.json` 和 `self-check-report.md`。命令返回非 PASS 时不得继续验收。
 
-当前 CLI 的 `self-check` 只自动处理单工作区 schema v1。多工作区 schema v2 必须由宿主按 [multi-workspace.md](references/multi-workspace.md) 逐工作区执行等价检查并聚合证据；不得用一次单仓库命令声称跨仓库门禁通过。
+CLI `self-check` 原生支持单工作区 schema v1 和多工作区 schema v2。schema v2 会校验用户确认的 `workspace-authorization.json`、`workspace-coverage.json`、冻结测试命令分配和无环任务依赖图，再按依赖波次逐工作区验证分支、HEAD、已有改动、范围与测试并聚合证据；前后端或上下游的构建、契约和消费依赖必须以冻结命令与 `dependsOn` 明确表达，前置工作区失败时必须阻断后置工作区测试。`accept` 必须重新读取全部工作区并验证聚合 diff 未变化后才允许语义验收。
 
 ## 能力驱动的语义验收
 

@@ -100,32 +100,104 @@ function safePattern(value) {
   return normalized;
 }
 
-export function validateSnapshot(value, frozen, round) {
-  const valid = value && typeof value === 'object' && !Array.isArray(value)
-    && value.schemaVersion === 1 && value.task === frozen.task && value.round === round
-    && SHA.test(value.baseCommit) && value.frozenFingerprint === frozen.frozenFingerprint
-    && Array.isArray(value.allowedPaths) && value.allowedPaths.length > 0
-    && Array.isArray(value.preExistingChanges);
-  if (!valid) throw new GatedLoopError('SNAPSHOT_INVALID', 'Development snapshot does not match the frozen task and round');
-  const allowedPaths = value.allowedPaths.map(safePattern);
-  if (allowedPaths.includes(null) || new Set(allowedPaths).size !== allowedPaths.length) {
-    throw new GatedLoopError('SNAPSHOT_INVALID', 'Development snapshot contains unsafe or duplicate allowed paths');
+function exactKeys(value, keys) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    && stableJson(Object.keys(value).sort()) === stableJson([...keys].sort());
+}
+
+function sameStringSet(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+  const orderedLeft = [...left].sort();
+  const orderedRight = [...right].sort();
+  return orderedLeft.every((entry, index) => entry === orderedRight[index]);
+}
+
+function validateStringIds(value, allowed, label, { nonempty = true } = {}) {
+  if (!Array.isArray(value) || (nonempty && value.length === 0)
+      || value.some((entry) => typeof entry !== 'string' || !allowed.has(entry))
+      || new Set(value).size !== value.length) {
+    throw new GatedLoopError('SNAPSHOT_INVALID', `Development snapshot contains invalid ${label}`);
   }
-  const preExistingChanges = value.preExistingChanges.map((entry) => {
+  return [...value];
+}
+
+function validatePreExisting(value) {
+  if (!Array.isArray(value)) throw new GatedLoopError('SNAPSHOT_INVALID', 'Development snapshot pre-existing changes must be an array');
+  const entries = value.map((entry) => {
     const filePath = safePattern(entry?.path);
     const hashValid = entry?.worktreeSha256 === null || SHA256.test(entry?.worktreeSha256);
-    if (!filePath || typeof entry.statusCode !== 'string' || entry.statusCode.length !== 2 || !hashValid) {
+    if (!exactKeys(entry, ['path', 'statusCode', 'worktreeSha256'])
+        || !filePath || typeof entry.statusCode !== 'string' || entry.statusCode.length !== 2 || !hashValid) {
       throw new GatedLoopError('SNAPSHOT_INVALID', 'Development snapshot contains an invalid pre-existing change');
     }
     return { path: filePath, statusCode: entry.statusCode, worktreeSha256: entry.worktreeSha256 };
   });
-  if (new Set(preExistingChanges.map((entry) => entry.path)).size !== preExistingChanges.length) {
+  if (new Set(entries.map((entry) => entry.path)).size !== entries.length) {
     throw new GatedLoopError('SNAPSHOT_INVALID', 'Development snapshot repeats a pre-existing path');
   }
-  if (frozen.mode === 'light' && allowedPaths.some((pattern) => pattern.includes('*') || !frozen.scope.includes(pattern))) {
-    throw new GatedLoopError('SNAPSHOT_INVALID', 'Light snapshot paths must exactly match frozen scope files');
+  return entries;
+}
+
+function validateAllowedPaths(value, label = 'allowed paths') {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new GatedLoopError('SNAPSHOT_INVALID', `Development snapshot ${label} must be a non-empty array`);
   }
-  return { ...value, allowedPaths, preExistingChanges };
+  const patterns = value.map(safePattern);
+  if (patterns.includes(null) || new Set(patterns).size !== patterns.length) {
+    throw new GatedLoopError('SNAPSHOT_INVALID', `Development snapshot contains unsafe or duplicate ${label}`);
+  }
+  if (patterns.some((pattern) => pattern === '.git' || pattern.startsWith('.git/')
+      || pattern === '.ai-dev-loop' || pattern.startsWith('.ai-dev-loop/'))) {
+    throw new GatedLoopError('SNAPSHOT_INVALID', `Development snapshot ${label} includes a protected runtime path`);
+  }
+  return patterns;
+}
+
+export function validateSnapshot(value, frozen, round) {
+  const common = value && typeof value === 'object' && !Array.isArray(value)
+    && value.task === frozen.task && value.round === round
+    && value.frozenFingerprint === frozen.frozenFingerprint;
+  if (!common) throw new GatedLoopError('SNAPSHOT_INVALID', 'Development snapshot does not match the frozen task and round');
+  if (value.schemaVersion === 1) {
+    if (!exactKeys(value, ['schemaVersion', 'task', 'round', 'baseCommit', 'frozenFingerprint', 'allowedPaths', 'preExistingChanges'])
+        || !SHA.test(value.baseCommit)) {
+      throw new GatedLoopError('SNAPSHOT_INVALID', 'Development snapshot schema v1 is invalid');
+    }
+    const allowedPaths = validateAllowedPaths(value.allowedPaths);
+    const preExistingChanges = validatePreExisting(value.preExistingChanges);
+    if (frozen.mode === 'light' && allowedPaths.some((pattern) => pattern.includes('*') || !frozen.scope.includes(pattern))) {
+      throw new GatedLoopError('SNAPSHOT_INVALID', 'Light snapshot paths must exactly match frozen scope files');
+    }
+    return { ...value, allowedPaths, preExistingChanges };
+  }
+  if (value.schemaVersion !== 2 || frozen.mode !== 'full'
+      || !exactKeys(value, ['schemaVersion', 'task', 'round', 'frozenFingerprint', 'workspaces'])
+      || !Array.isArray(value.workspaces) || value.workspaces.length < 2) {
+    throw new GatedLoopError('SNAPSHOT_INVALID', 'Development snapshot schema v2 requires a Full task and at least two workspaces');
+  }
+  const taskIds = new Set(frozen.tasks.map((entry) => entry.id));
+  const workspaces = value.workspaces.map((entry) => {
+    const valid = exactKeys(entry, ['id', 'root', 'branch', 'baseCommit', 'taskIds', 'allowedPaths', 'preExistingChanges'])
+      && typeof entry.id === 'string' && /^[a-z][a-z0-9._-]{0,63}$/.test(entry.id)
+      && typeof entry.root === 'string' && path.isAbsolute(entry.root) && !/[\u0000-\u001f\u007f]/.test(entry.root)
+      && typeof entry.branch === 'string' && entry.branch.length > 0 && entry.branch.length <= 256
+      && !/[\u0000-\u001f\u007f]/.test(entry.branch)
+      && SHA.test(entry.baseCommit);
+    if (!valid) throw new GatedLoopError('SNAPSHOT_INVALID', 'Development snapshot contains an invalid workspace');
+    return {
+      ...entry,
+      root: path.resolve(entry.root),
+      taskIds: validateStringIds(entry.taskIds, taskIds, 'workspace task IDs'),
+      allowedPaths: validateAllowedPaths(entry.allowedPaths, 'workspace allowed paths'),
+      preExistingChanges: validatePreExisting(entry.preExistingChanges),
+    };
+  });
+  const rootKeys = workspaces.map((entry) => process.platform === 'win32' ? entry.root.toLowerCase() : entry.root);
+  if (new Set(workspaces.map((entry) => entry.id)).size !== workspaces.length
+      || new Set(rootKeys).size !== workspaces.length) {
+    throw new GatedLoopError('SNAPSHOT_INVALID', 'Development snapshot repeats a workspace ID or root');
+  }
+  return { ...value, workspaces };
 }
 
 export async function readSnapshot({ root, task, round, source, frozen, fs = fsPromises } = {}) {
@@ -137,6 +209,155 @@ export async function readSnapshot({ root, task, round, source, frozen, fs = fsP
     throw new GatedLoopError('SNAPSHOT_READ', 'Unable to read development snapshot');
   }
   return validateSnapshot(value, frozen, round);
+}
+
+async function readRoundJson(root, task, round, name, fs) {
+  try {
+    return JSON.parse((await readSafeRegularFile(root, path.join('.ai-dev-loop', task, 'rounds', round, name), { fs })).toString('utf8'));
+  } catch (error) {
+    if (error instanceof GatedLoopError) throw error;
+    throw new GatedLoopError('WORKSPACE_GATE_READ', `Unable to read ${name}`);
+  }
+}
+
+function normalizeTestCommands(value, workspaceRoot) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new GatedLoopError('WORKSPACE_AUTHORIZATION_INVALID', 'Every workspace must define at least one test command');
+  }
+  return value.map((entry) => {
+    const argv = normalizeTestArgv(entry?.argv);
+    if (!exactKeys(entry, ['cwd', 'argv']) || typeof entry.cwd !== 'string' || !path.isAbsolute(entry.cwd) || !argv) {
+      throw new GatedLoopError('WORKSPACE_AUTHORIZATION_INVALID', 'Workspace test command is invalid');
+    }
+    const cwd = path.resolve(entry.cwd);
+    const relative = path.relative(workspaceRoot, cwd);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new GatedLoopError('WORKSPACE_AUTHORIZATION_INVALID', 'Workspace test cwd escapes its authorized root');
+    }
+    return { cwd, argv };
+  });
+}
+
+function topologicalWorkspacePlan(coverage, workspaces) {
+  const byId = new Map(workspaces.map((entry) => [entry.id, entry]));
+  const taskToWorkspaces = new Map();
+  for (const workspace of workspaces) for (const taskId of workspace.taskIds) {
+    const ids = taskToWorkspaces.get(taskId) ?? [];
+    ids.push(workspace.id); taskToWorkspaces.set(taskId, ids);
+  }
+  const dependencies = new Map(workspaces.map((entry) => [entry.id, new Set()]));
+  const taskDependencies = new Map(coverage.taskCoverage.map((entry) => [entry.taskId, entry.dependsOn]));
+  const visiting = new Set(); const visited = new Set();
+  const visitTask = (taskId) => {
+    if (visiting.has(taskId)) throw new GatedLoopError('WORKSPACE_DEPENDENCY_CYCLE', 'Workspace task dependency graph contains a cycle');
+    if (visited.has(taskId)) return;
+    visiting.add(taskId);
+    for (const dependency of taskDependencies.get(taskId) ?? []) visitTask(dependency);
+    visiting.delete(taskId); visited.add(taskId);
+  };
+  for (const taskId of taskDependencies.keys()) visitTask(taskId);
+  for (const entry of coverage.taskCoverage) {
+    for (const dependency of entry.dependsOn) {
+      for (const target of entry.workspaceIds) for (const source of taskToWorkspaces.get(dependency) ?? []) {
+        if (source !== target) dependencies.get(target).add(source);
+      }
+    }
+  }
+  const waves = new Map(); const resolving = new Set();
+  const wave = (id) => {
+    if (waves.has(id)) return waves.get(id);
+    if (resolving.has(id)) throw new GatedLoopError('WORKSPACE_DEPENDENCY_CYCLE', 'Workspace dependency graph contains a cycle');
+    resolving.add(id);
+    const value = 1 + Math.max(0, ...[...dependencies.get(id)].map(wave));
+    resolving.delete(id); waves.set(id, value); return value;
+  };
+  for (const id of byId.keys()) wave(id);
+  return workspaces.map((entry) => ({
+    ...entry,
+    dependsOnWorkspaceIds: [...dependencies.get(entry.id)].sort(),
+    wave: waves.get(entry.id),
+  })).sort((left, right) => left.wave - right.wave || left.id.localeCompare(right.id));
+}
+
+export async function loadWorkspacePlan({ root, task, round, snapshot, frozen, fs = fsPromises } = {}) {
+  if (snapshot.schemaVersion === 1) return [{
+    id: 'coordinator', root: path.resolve(root), branch: null, baseCommit: snapshot.baseCommit,
+    taskIds: frozen.tasks.map((entry) => entry.id), allowedPaths: snapshot.allowedPaths,
+    preExistingChanges: snapshot.preExistingChanges,
+    testCommands: frozen.testCommands.map((argv) => ({ cwd: path.resolve(root), argv })),
+    dependsOnWorkspaceIds: [], wave: 1, coordinator: true,
+  }];
+  const authorization = await readRoundJson(root, task, round, 'workspace-authorization.json', fs);
+  const coverage = await readRoundJson(root, task, round, 'workspace-coverage.json', fs);
+  const authorizationValid = exactKeys(authorization, ['schemaVersion', 'task', 'round', 'coordinatorWorkspaceId', 'status', 'confirmedBy', 'workspaces'])
+    && authorization.schemaVersion === 1 && authorization.task === task && authorization.round === round
+    && authorization.status === 'CONFIRMED' && authorization.confirmedBy === 'user'
+    && typeof authorization.coordinatorWorkspaceId === 'string' && Array.isArray(authorization.workspaces);
+  if (!authorizationValid) throw new GatedLoopError('WORKSPACE_AUTHORIZATION_INVALID', 'Workspace authorization is invalid or not user-confirmed');
+  const frozenTaskIds = new Set(frozen.tasks.map((entry) => entry.id));
+  const snapshotById = new Map(snapshot.workspaces.map((entry) => [entry.id, entry]));
+  const workspaces = authorization.workspaces.map((entry) => {
+    const snapshotEntry = snapshotById.get(entry?.id);
+    const rootPath = typeof entry?.root === 'string' && path.isAbsolute(entry.root) ? path.resolve(entry.root) : null;
+    const valid = exactKeys(entry, ['id', 'root', 'access', 'taskIds', 'allowedPaths', 'testCommands'])
+      && snapshotEntry && rootPath && entry.access === 'read-write';
+    if (!valid) throw new GatedLoopError('WORKSPACE_AUTHORIZATION_INVALID', 'Workspace authorization entry is invalid');
+    const taskIds = validateStringIds(entry.taskIds, frozenTaskIds, 'authorized task IDs');
+    const allowedPaths = validateAllowedPaths(entry.allowedPaths, 'authorized allowed paths');
+    if (!sameAbsolutePath(rootPath, snapshotEntry.root) || !sameStringSet(taskIds, snapshotEntry.taskIds)
+        || !sameStringSet(allowedPaths, snapshotEntry.allowedPaths)) {
+      throw new GatedLoopError('WORKSPACE_AUTHORIZATION_MISMATCH', 'Workspace authorization does not match the development snapshot');
+    }
+    return { ...snapshotEntry, testCommands: normalizeTestCommands(entry.testCommands, rootPath) };
+  });
+  if (workspaces.length !== snapshot.workspaces.length || new Set(workspaces.map((entry) => entry.id)).size !== workspaces.length
+      || !snapshotById.has(authorization.coordinatorWorkspaceId)) {
+    throw new GatedLoopError('WORKSPACE_AUTHORIZATION_MISMATCH', 'Workspace authorization does not cover every snapshot workspace');
+  }
+  const coordinator = workspaces.find((entry) => entry.id === authorization.coordinatorWorkspaceId);
+  if (!sameAbsolutePath(coordinator.root, root)) {
+    throw new GatedLoopError('WORKSPACE_AUTHORIZATION_MISMATCH', 'Coordinator workspace root does not match the CLI project root');
+  }
+  const authorizedCommands = workspaces.flatMap((entry) => entry.testCommands.map(({ argv }) => JSON.stringify(argv))).sort();
+  const frozenCommands = frozen.testCommands.map((argv) => JSON.stringify(argv)).sort();
+  if (!sameStringSet(authorizedCommands, frozenCommands)) {
+    throw new GatedLoopError('WORKSPACE_TEST_COMMAND_MISMATCH', 'Workspace test commands must exactly partition the frozen test commands');
+  }
+  const coverageValid = exactKeys(coverage, ['schemaVersion', 'task', 'round', 'status', 'taskCoverage', 'missing'])
+    && coverage.schemaVersion === 1 && coverage.task === task && coverage.round === round
+    && coverage.status === 'PASS' && Array.isArray(coverage.taskCoverage) && Array.isArray(coverage.missing)
+    && coverage.missing.length === 0;
+  if (!coverageValid) throw new GatedLoopError('WORKSPACE_COVERAGE_INVALID', 'Workspace coverage is not PASS');
+  const workspaceIds = new Set(workspaces.map((entry) => entry.id));
+  const taskCoverage = coverage.taskCoverage.map((entry) => {
+    const valid = exactKeys(entry, ['taskId', 'workspaceIds', 'dependsOn', 'status'])
+      && frozenTaskIds.has(entry?.taskId) && entry.status === 'COVERED';
+    if (!valid) throw new GatedLoopError('WORKSPACE_COVERAGE_INVALID', 'Workspace task coverage entry is invalid');
+    const coveredIds = validateStringIds(entry.workspaceIds, workspaceIds, 'covered workspace IDs');
+    const dependsOn = validateStringIds(entry.dependsOn, frozenTaskIds, 'task dependencies', { nonempty: false });
+    if (dependsOn.includes(entry.taskId)) throw new GatedLoopError('WORKSPACE_DEPENDENCY_CYCLE', 'A task cannot depend on itself');
+    const authorizedIds = workspaces.filter((workspace) => workspace.taskIds.includes(entry.taskId)).map((workspace) => workspace.id);
+    if (!sameStringSet(coveredIds, authorizedIds)) {
+      throw new GatedLoopError('WORKSPACE_COVERAGE_INVALID', 'Task coverage does not match workspace authorization');
+    }
+    return { ...entry, workspaceIds: coveredIds, dependsOn };
+  });
+  if (taskCoverage.length !== frozenTaskIds.size
+      || new Set(taskCoverage.map((entry) => entry.taskId)).size !== frozenTaskIds.size) {
+    throw new GatedLoopError('WORKSPACE_COVERAGE_INVALID', 'Workspace coverage must include every frozen task exactly once');
+  }
+  for (const workspace of workspaces) {
+    await assertSafePath(workspace.root, workspace.root, { fs });
+    const stat = await fs.lstat(workspace.root);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new GatedLoopError('WORKSPACE_ROOT_INVALID', 'Workspace root must be a real directory');
+    for (const command of workspace.testCommands) {
+      await assertSafePath(workspace.root, command.cwd, { fs });
+      const cwdStat = await fs.lstat(command.cwd);
+      if (!cwdStat.isDirectory() || cwdStat.isSymbolicLink()) throw new GatedLoopError('WORKSPACE_TEST_CWD_INVALID', 'Workspace test cwd must be a real directory');
+    }
+  }
+  const planned = topologicalWorkspacePlan({ ...coverage, taskCoverage }, workspaces);
+  return planned.map((entry) => ({ ...entry, coordinator: entry.id === authorization.coordinatorWorkspaceId }));
 }
 
 function globRegex(pattern) {
@@ -179,11 +400,19 @@ export async function gitOutput(root, git, args, { runProcessImpl = runProcess, 
 }
 
 export async function currentStatus({ root, git = 'git', runProcessImpl, timeoutMs } = {}) {
+  const topLevel = (await gitOutput(root, git, ['rev-parse', '--show-toplevel'], { runProcessImpl, timeoutMs })).stdout.trim();
+  if (!topLevel || !path.isAbsolute(topLevel) || !sameAbsolutePath(topLevel, root)) {
+    throw new GatedLoopError('GIT_ROOT_MISMATCH', 'Workspace root must be the Git worktree root');
+  }
   const head = (await gitOutput(root, git, ['rev-parse', 'HEAD'], { runProcessImpl, timeoutMs })).stdout.trim();
   if (!SHA.test(head)) throw new GatedLoopError('GIT_HEAD_INVALID', 'Git HEAD is invalid');
+  const branch = (await gitOutput(root, git, ['rev-parse', '--abbrev-ref', 'HEAD'], { runProcessImpl, timeoutMs })).stdout.trim();
+  if (!branch || /[\u0000-\u001f\u007f]/.test(branch)) {
+    throw new GatedLoopError('GIT_BRANCH_INVALID', 'Git branch is invalid');
+  }
   const statusResult = await gitOutput(root, git, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { runProcessImpl, timeoutMs });
   if (statusResult.stdoutTruncated) throw new GatedLoopError('GIT_STATUS_TRUNCATED', 'Git status is too large to attribute safely');
-  return { head, entries: parseGitStatus(statusResult.stdout) };
+  return { topLevel: path.resolve(topLevel), head, branch, entries: parseGitStatus(statusResult.stdout) };
 }
 
 export async function worktreeHash(root, filePath, { fs = fsPromises } = {}) {
@@ -253,6 +482,51 @@ export async function buildDiffBundle({ root, git = 'git', changed, runProcessIm
     ...untracked.flatMap((entry) => [`## ${entry.path}`, entry.content, '']),
   ].join('\n');
   return { paths, text, truncated, sha256: sha256Bytes(Buffer.from(text, 'utf8')) };
+}
+
+function sameAbsolutePath(left, right) {
+  const normalizedLeft = path.resolve(left); const normalizedRight = path.resolve(right);
+  return process.platform === 'win32'
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+export async function inspectWorkspace({
+  coordinatorRoot, task, workspace, git = 'git', protectedPaths = [], forbiddenPaths = [],
+  isPolicyForbidden = () => false, runProcessImpl, timeoutMs = 30_000, fs = fsPromises,
+} = {}) {
+  const repository = await currentStatus({ root: workspace.root, git, runProcessImpl, timeoutMs });
+  const runtimePrefix = `.ai-dev-loop/${task}/`;
+  const relevant = repository.entries.filter((entry) => !(workspace.coordinator
+    && sameAbsolutePath(workspace.root, coordinatorRoot) && entry.path.startsWith(runtimePrefix)));
+  const protectedChanged = relevant.filter((entry) => matchesAny(entry.path, protectedPaths));
+  const forbiddenChanged = relevant.filter((entry) => matchesAny(entry.path, forbiddenPaths) || isPolicyForbidden(entry.path));
+  const enriched = await enrichStatus(workspace.root, relevant, {
+    fs, skipPatterns: forbiddenPaths, skipPaths: forbiddenChanged.map((entry) => entry.path),
+  });
+  const attributed = attributeChanges(enriched, workspace);
+  const outOfScope = attributed.changed.filter((entry) => !matchesAny(entry.path, workspace.allowedPaths));
+  const forbiddenSet = new Set(forbiddenChanged.map((entry) => entry.path));
+  const safeChanged = attributed.changed.filter((entry) => !forbiddenSet.has(entry.path));
+  const diffBundle = await buildDiffBundle({
+    root: workspace.root, git, changed: safeChanged, runProcessImpl, timeoutMs, fs,
+  });
+  return {
+    workspace, repository, relevant, protectedChanged, forbiddenChanged, outOfScope,
+    changed: attributed.changed, ambiguous: attributed.ambiguous,
+    unchangedPreExisting: attributed.unchangedPreExisting, diffBundle,
+  };
+}
+
+export function aggregateDiffBundles(inspections) {
+  const ordered = [...inspections].sort((left, right) => left.workspace.id.localeCompare(right.workspace.id));
+  const text = ordered.map((entry) => `# Workspace ${entry.workspace.id}\n${entry.diffBundle.text}`).join('\n\n');
+  return {
+    text,
+    truncated: ordered.some((entry) => entry.diffBundle.truncated),
+    sha256: sha256Bytes(Buffer.from(text, 'utf8')),
+    workspaces: ordered.map((entry) => ({ workspaceId: entry.workspace.id, sha256: entry.diffBundle.sha256 })),
+  };
 }
 
 export async function roundDirectory({ root, task, round, fs = fsPromises } = {}) {

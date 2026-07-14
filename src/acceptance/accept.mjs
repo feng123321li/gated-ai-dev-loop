@@ -9,9 +9,9 @@ import { runProcess } from '../core/process.mjs';
 import { normalizeBaselineInputPath } from '../baseline/sources.mjs';
 import { isAgentRuntime } from '../mode/host-runtime.mjs';
 import {
-  attributeChanges, buildDiffBundle, currentStatus, enrichStatus, fingerprint, json,
-  loadFrozenTask, matchesAny, normalizeRound, readSnapshot, roundDirectory, stableJson,
-  writeRoundFile,
+  aggregateDiffBundles, attributeChanges, buildDiffBundle, currentStatus, enrichStatus, fingerprint,
+  inspectWorkspace, json, loadFrozenTask, loadWorkspacePlan, matchesAny, normalizeRound, readSnapshot,
+  roundDirectory, stableJson, writeRoundFile,
 } from './common.mjs';
 
 export const REVIEW_SCHEMA = Object.freeze({
@@ -363,6 +363,53 @@ async function verifiedEvidence({ root, task, round, frozen, config, snapshotSou
     throw new GatedLoopError('SELF_CHECK_NOT_PASS', 'A valid PASS self-check is required before acceptance');
   }
   const snapshot = await readSnapshot({ root, task, round, source: snapshotSource, frozen, fs });
+  if (snapshot.schemaVersion === 2) {
+    const plan = await loadWorkspacePlan({ root, task, round, snapshot, frozen, fs });
+    const inspections = [];
+    for (const workspace of plan) {
+      const inspection = await inspectWorkspace({
+        coordinatorRoot: root, task, workspace, git: config.tools.git,
+        protectedPaths: config.protectedPaths, forbiddenPaths: config.forbiddenPaths,
+        isPolicyForbidden: policyForbidden, runProcessImpl, timeoutMs, fs,
+      });
+      if (inspection.repository.head !== workspace.baseCommit
+          || inspection.repository.branch !== workspace.branch
+          || inspection.protectedChanged.length > 0 || inspection.forbiddenChanged.length > 0
+          || inspection.outOfScope.length > 0 || inspection.ambiguous.length > 0
+          || inspection.changed.length === 0 || inspection.diffBundle.truncated) {
+        throw new GatedLoopError('ACCEPTANCE_EVIDENCE_CHANGED', `Workspace evidence changed after self-check: ${workspace.id}`);
+      }
+      inspections.push(inspection);
+    }
+    const bundle = aggregateDiffBundles(inspections);
+    const currentPaths = inspections.flatMap((inspection) => inspection.changed.map((entry) => ({
+      workspaceId: inspection.workspace.id, path: entry.path,
+    }))).sort((left, right) => left.workspaceId.localeCompare(right.workspaceId) || left.path.localeCompare(right.path));
+    const currentWorkspaces = inspections.map((inspection) => ({
+      workspaceId: inspection.workspace.id,
+      headCommit: inspection.repository.head,
+      currentBranch: inspection.repository.branch,
+      changedFiles: inspection.changed.map((entry) => entry.path).sort(),
+      diffSha256: inspection.diffBundle.sha256,
+    })).sort((left, right) => left.workspaceId.localeCompare(right.workspaceId));
+    const evidenceWorkspaces = [...(evidence.workspaces ?? [])].map((entry) => ({
+      workspaceId: entry.workspaceId,
+      headCommit: entry.headCommit,
+      currentBranch: entry.currentBranch,
+      changedFiles: entry.changedFiles,
+      diffSha256: entry.diffSha256,
+    })).sort((left, right) => left.workspaceId.localeCompare(right.workspaceId));
+    if (bundle.truncated || bundle.sha256 !== evidence.diffSha256
+        || stableJson(currentPaths) !== stableJson(evidence.changedFiles)
+        || stableJson(currentWorkspaces) !== stableJson(evidenceWorkspaces)) {
+      throw new GatedLoopError('ACCEPTANCE_EVIDENCE_CHANGED', 'Multi-workspace evidence changed after self-check');
+    }
+    const report = (await readSafeRegularFile(root, path.join(relative, 'self-check-report.md'), { fs })).toString('utf8');
+    if (evidence.reportFingerprint !== fingerprint({ text: report })) {
+      throw new GatedLoopError('ACCEPTANCE_EVIDENCE_CHANGED', 'Self-check report changed after the mechanical gate');
+    }
+    return { evidence, report, bundle };
+  }
   const repository = await currentStatus({ root, git: config.tools.git, runProcessImpl, timeoutMs });
   const runtimePrefix = `.ai-dev-loop/${task}/`;
   const relevant = repository.entries.filter((entry) => !entry.path.startsWith(runtimePrefix));

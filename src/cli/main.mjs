@@ -7,16 +7,23 @@ import { readSafeRegularFile } from '../core/fs-safe.mjs';
 import { freezeFullBaseline } from '../full/freeze.mjs';
 import { prepareFullBaseline } from '../full/prepare.mjs';
 import { renderError, renderJson } from './output.mjs';
+import { runSelfCheck } from '../acceptance/self-check.mjs';
+import { runAcceptance } from '../acceptance/accept.mjs';
 
-export const COMMANDS = Object.freeze(['route', 'start', 'prepare', 'freeze']);
-const VALUE_OPTIONS = new Set(['--mode', '--signals', '--task', '--brief', '--host-runtime', '--baseline', '--source']);
+export const COMMANDS = Object.freeze(['route', 'start', 'prepare', 'freeze', 'self-check', 'accept']);
+const VALUE_OPTIONS = new Set([
+  '--mode', '--signals', '--task', '--brief', '--host-runtime', '--baseline', '--source',
+  '--round', '--snapshot', '--timeout-ms', '--reviewer', '--review-result',
+]);
 const REPEATABLE_OPTIONS = new Set(['--source']);
 const FLAG_OPTIONS = new Set(['--json', '--help', '--confirmed']);
 const ROUTE_OPTIONS = new Set(['--json', '--help', '--mode', '--signals']);
 const START_OPTIONS = new Set(['--json', '--help', '--mode', '--signals', '--task', '--brief', '--host-runtime', '--confirmed']);
 const PREPARE_OPTIONS = new Set(['--json', '--help', '--task', '--baseline', '--source']);
 const FREEZE_OPTIONS = new Set(['--json', '--help', '--task', '--confirmed']);
-const help = `Usage: gated-loop <command> [options]\n\nCommands:\n${COMMANDS.map((command) => `  ${command}`).join('\n')}\n`;
+const SELF_CHECK_OPTIONS = new Set(['--json', '--help', '--task', '--round', '--snapshot', '--timeout-ms']);
+const ACCEPT_OPTIONS = new Set(['--json', '--help', '--task', '--round', '--snapshot', '--timeout-ms', '--reviewer', '--review-result']);
+const help = `Usage: gated-loop <command> [options]\n\nCommands:\n${COMMANDS.map((command) => `  ${command}`).join('\n')}\n\nGate commands:\n  self-check --task <id> [--round 1] [--snapshot <file>]\n  accept --task <id> [--round 1] [--reviewer auto|codex|claude]\n`;
 
 function parse(argv) {
   const seen = new Set();
@@ -41,7 +48,10 @@ function parse(argv) {
   if (extraPositionals.length > (acceptsDescription ? 1 : 0)) {
     throw new GatedLoopError('UNKNOWN_OPTION', `Unexpected positional argument: ${extraPositionals.at(-1)}`);
   }
-  const commandOptions = { route: ROUTE_OPTIONS, start: START_OPTIONS, prepare: PREPARE_OPTIONS, freeze: FREEZE_OPTIONS };
+  const commandOptions = {
+    route: ROUTE_OPTIONS, start: START_OPTIONS, prepare: PREPARE_OPTIONS, freeze: FREEZE_OPTIONS,
+    'self-check': SELF_CHECK_OPTIONS, accept: ACCEPT_OPTIONS,
+  };
   if (commandOptions[command]) {
     for (const option of seen) if (!commandOptions[command].has(option)) {
       throw new GatedLoopError('UNKNOWN_OPTION', `Option is not valid for ${command}: ${option}`);
@@ -52,6 +62,12 @@ function parse(argv) {
   }
   if (values['--host-runtime'] !== undefined && !['codex', 'claude'].includes(values['--host-runtime'])) {
     throw new GatedLoopError('OPTION_VALUE_INVALID', '--host-runtime must be codex or claude');
+  }
+  if (values['--reviewer'] !== undefined && !['auto', 'codex', 'claude'].includes(values['--reviewer'])) {
+    throw new GatedLoopError('OPTION_VALUE_INVALID', '--reviewer must be auto, codex, or claude');
+  }
+  if (values['--timeout-ms'] !== undefined && (!/^\d+$/.test(values['--timeout-ms']) || Number(values['--timeout-ms']) < 1)) {
+    throw new GatedLoopError('OPTION_VALUE_INVALID', '--timeout-ms must be a positive integer');
   }
   return {
     command,
@@ -153,6 +169,24 @@ async function runBaselineCommand(parsed, io) {
   });
 }
 
+async function runGateCommand(parsed, io) {
+  const root = io.cwd ?? process.cwd();
+  const fs = io.fs ?? fsPromises;
+  const common = {
+    root, task: required(parsed, '--task'), round: parsed.values['--round'],
+    snapshot: parsed.values['--snapshot'], timeoutMs: parsed.values['--timeout-ms'] ? Number(parsed.values['--timeout-ms']) : undefined,
+    fs, runProcessImpl: io.runProcess, now: io.now,
+  };
+  if (parsed.command === 'self-check') return runSelfCheck(common);
+  const reviewResult = parsed.values['--review-result']
+    ? await readStructured(parsed.values['--review-result'], 'REVIEW_RESULT', { cwd: root, fs, stdin: io.stdin })
+    : undefined;
+  return runAcceptance({
+    ...common, reviewer: parsed.values['--reviewer'] ?? 'auto', reviewResult,
+    reviewerInvoker: io.reviewerInvoker,
+  });
+}
+
 export async function runCli(argv, io = {}) {
   const stdout = io.stdout ?? ((value) => process.stdout.write(value));
   const stderr = io.stderr ?? ((value) => process.stderr.write(value));
@@ -171,6 +205,11 @@ export async function runCli(argv, io = {}) {
       const result = await runBaselineCommand(parsed, io);
       stdout(jsonOutput ? renderJson({ ok: true, result }) : renderJson(result));
       return 0;
+    }
+    if (parsed.command === 'self-check' || parsed.command === 'accept') {
+      const result = await runGateCommand(parsed, io);
+      stdout(jsonOutput ? renderJson({ ok: result.status === 'PASS', result }) : renderJson(result));
+      return result.status === 'PASS' ? 0 : 2;
     }
     throw new GatedLoopError('UNKNOWN_COMMAND', `Unknown command: ${parsed.command}`);
   } catch (error) {

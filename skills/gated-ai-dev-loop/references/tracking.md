@@ -49,7 +49,7 @@
 ## 开发与验收安排
 - 开发者：<选择规则或已选运行时>
 - 机械门禁：<测试 argv 和范围检查摘要>
-- 独立审查：优先全新只读 Codex，否则全新空上下文只读 Claude
+- 独立审查：优先与开发者分离的全新只读其他 Agent；没有时使用宿主的全新只读验收子 Agent；两者均无开发上下文
 - 最终确认：用户人工验收
 
 ## 风险与关键决策
@@ -87,8 +87,8 @@
 
 ## 最新门禁与验收
 - 开发结果：<尚未产生或 result.json 链接>
-- 机械门禁：<尚未运行或 gate-evidence.json 链接与结论>
-- 独立审查：<尚未运行或 review.json 链接与结论>
+- 机械门禁：<尚未运行或 self-check-report.md、gate-evidence.json 链接与结论>
+- 独立审查：<尚未运行或 acceptance-report.md、review.json 链接、结论与 P0/P1/P2 数量>
 - 人工验收：WAITING / ACCEPTED / REJECTED
 
 ## 当前阻断项
@@ -111,4 +111,4 @@
 
 ## 人工验收入口
 
-进入 `WAITING_FOR_MANUAL_ACCEPTANCE` 时，先向用户展示并链接 `development-overview.md`、`progress.md`、冻结基线、最新 `gate-evidence.json` 和 `review.json`。用户可按 `progress.md` 的任务、阻断项和证据逐项查看。接受后记录 `ACCEPTED` 并进入 `COMPLETED`；拒绝时记录关联 ID 和原因，进入新的修复轮次，不得直接覆盖原结论。
+进入 `WAITING_FOR_MANUAL_ACCEPTANCE` 时，先向用户展示并链接 `development-overview.md`、`progress.md`、冻结基线、最新 `self-check-report.md`、`acceptance-report.md`、`gate-evidence.json` 和 `review.json`。明确展示 P2 清单。用户可按任务、finding 和证据逐项查看；接受后记录 `ACCEPTED` 并进入 `COMPLETED`，拒绝时记录关联 finding 或验收 ID 和原因，再进入修复轮次。

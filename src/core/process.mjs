@@ -4,11 +4,12 @@ import { GatedLoopError } from './errors.mjs';
 
 const LIMIT = 64 * 1024;
 function collector() {
-  const chunks = []; let size = 0;
+  const chunks = []; let size = 0; let truncated = false;
   return {
     add(chunk) {
       const bytes = Buffer.from(chunk); const remaining = LIMIT - size;
       if (remaining > 0) { chunks.push(bytes.subarray(0, remaining)); size += Math.min(bytes.length, remaining); }
+      if (bytes.length > remaining) truncated = true;
     },
     text() {
       // write(), without end(), deliberately omits an incomplete trailing codepoint.
@@ -22,10 +23,13 @@ function collector() {
       }
       return result;
     },
+    truncated() { return truncated; },
   };
 }
 
-export function runProcess(file, args, { spawn = nodeSpawn, timeoutMs = 0, signal, cwd, env } = {}) {
+export function runProcess(file, args, {
+  spawn = nodeSpawn, timeoutMs = 0, signal, cwd, env, captureOutput = false, input,
+} = {}) {
   if (signal?.aborted) return Promise.reject(new GatedLoopError('PROCESS_ABORTED', `Process aborted: ${file}`));
   return new Promise((resolve, reject) => {
     let settled = false; let timer; let child; let abortRequested = false; let killed = false;
@@ -39,17 +43,23 @@ export function runProcess(file, args, { spawn = nodeSpawn, timeoutMs = 0, signa
     };
     signal?.addEventListener('abort', abort, { once: true });
     try {
-      child = spawn(file, args, { shell: false, cwd, env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+      child = spawn(file, args, { shell: false, cwd, env, windowsHide: true, stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] });
     } catch (error) {
-      finish(reject, new GatedLoopError('PROCESS_SPAWN_FAILED', `Unable to start process: ${file}`, { details: { cause: error.message } }));
+      finish(reject, new GatedLoopError('PROCESS_SPAWN_FAILED', `Unable to start process: ${file}`, { details: { cause: error.message, causeCode: error.code } }));
       return;
     }
     if (abortRequested || signal?.aborted) { abort(); return; }
     child.stdout?.on('data', (chunk) => out.add(chunk)); child.stderr?.on('data', (chunk) => err.add(chunk));
+    if (input !== undefined) child.stdin?.end(input);
     if (timeoutMs > 0) timer = setTimeout(() => { kill(); finish(reject, new GatedLoopError('PROCESS_TIMEOUT', `Process timed out: ${file}`, { details: { timeoutMs, stdout: out.text(), stderr: err.text() } })); }, timeoutMs);
-    child.on('error', (error) => finish(reject, new GatedLoopError('PROCESS_SPAWN_FAILED', `Unable to start process: ${file}`, { details: { cause: error.message } })));
+    child.on('error', (error) => finish(reject, new GatedLoopError('PROCESS_SPAWN_FAILED', `Unable to start process: ${file}`, { details: { cause: error.message, causeCode: error.code } })));
     child.on('close', (exitCode, exitSignal) => exitCode === 0
-      ? finish(resolve, { exitCode, signal: exitSignal })
+      ? finish(resolve, captureOutput
+        ? {
+          exitCode, signal: exitSignal, stdout: out.text(), stderr: err.text(),
+          stdoutTruncated: out.truncated(), stderrTruncated: err.truncated(),
+        }
+        : { exitCode, signal: exitSignal })
       : finish(reject, new GatedLoopError('PROCESS_FAILED', `Process failed: ${file}`, { details: { exitCode, signal: exitSignal, stdout: out.text(), stderr: err.text() } })));
   });
 }

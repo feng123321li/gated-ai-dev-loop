@@ -564,6 +564,21 @@ test('runProcess uses argv with shell false and omits successful streams', async
   assert.deepEqual(result, { exitCode: 0, signal: null });
 });
 
+test('runProcess optionally captures bounded output and writes explicit stdin', async () => {
+  let suppliedInput;
+  const spawn = () => {
+    const child = fakeChild({ stdout: 'review-json', stderr: 'diagnostic' });
+    child.stdin = { end(value) { suppliedInput = value; } };
+    return child;
+  };
+  const result = await runProcess('reviewer', [], { spawn, input: 'prompt', captureOutput: true });
+  assert.equal(suppliedInput, 'prompt');
+  assert.deepEqual(result, {
+    exitCode: 0, signal: null, stdout: 'review-json', stderr: 'diagnostic',
+    stdoutTruncated: false, stderrTruncated: false,
+  });
+});
+
 test('runProcess handles synchronous abort and timeout races', async () => {
   const controller = new AbortController(); controller.abort();
   await assert.rejects(() => runProcess('tool', [], { signal: controller.signal, spawn: () => { throw new Error('must not spawn'); } }), { code: 'PROCESS_ABORTED' });

@@ -13,8 +13,8 @@ test('help lists only implemented commands', async () => {
   const result = await invoke(['--help']);
   assert.equal(result.exitCode, 0);
   assert.match(result.out, /^Usage: gated-loop <command> \[options\]/);
-  for (const command of ['route', 'start', 'prepare', 'freeze']) assert.match(result.out, new RegExp(`\\b${command}\\b`));
-  for (const command of ['install', 'doctor', 'develop', 'review', 'accept']) assert.doesNotMatch(result.out, new RegExp(`\\b${command}\\b`));
+  for (const command of ['route', 'start', 'prepare', 'freeze', 'self-check', 'accept']) assert.match(result.out, new RegExp(`\\b${command}\\b`));
+  for (const command of ['install', 'doctor', 'develop', 'review']) assert.doesNotMatch(result.out, new RegExp(`\\b${command}\\b`));
 });
 
 test('unknown and unimplemented commands have stable errors', async () => {

@@ -8,6 +8,7 @@ import { CLASSIFIER_VERSION, classifyMode } from '../mode/classify.mjs';
 import { canonicalJson } from '../baseline/sources.mjs';
 import { renderDevelopmentHandoff } from '../handoff/render.mjs';
 import { requireHostRuntime } from '../mode/host-runtime.mjs';
+import { validateMutableRuntimeEntries } from '../core/runtime-layout.mjs';
 
 export const WAITING_FILES = Object.freeze([
   'acceptance.json', 'baseline.md', 'decision-log.md', 'mode.json',
@@ -194,7 +195,8 @@ export async function readFullPackage({ root, task, fs = fsPromises } = {}) {
     throw error;
   }
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new GatedLoopError('BASELINE_SOURCE_CHANGED', 'Task artifact path is invalid');
-  const names = (await fs.readdir(readableTarget)).sort();
+  const allNames = (await fs.readdir(readableTarget)).sort();
+  const names = (await validateMutableRuntimeEntries(readableTarget, allNames, { fs })).sort();
   if (!names.includes('mode.json')) throw new GatedLoopError('FULL_MODE_REQUIRED', 'A persisted Full mode is required');
   const modeBytes = await readBytes(readableTarget, 'mode.json', fs);
   const mode = parseJson(modeBytes, 'mode.json');

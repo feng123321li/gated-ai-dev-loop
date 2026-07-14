@@ -24,7 +24,10 @@
         ├── result.json
         ├── agents/（仅 parallel）
         ├── integration-result.json（仅 parallel）
+        ├── development-snapshot.json
         ├── gate-evidence.json
+        ├── self-check-report.md
+        ├── acceptance-report.md
         └── review.json
 ```
 
@@ -121,6 +124,34 @@ single 每轮默认只进行一次主动调用；parallel 的每个 assignment �
 ## 开发前快照
 
 开始写入前记录当前 commit、staged/unstaged/untracked 路径、开发前已有修改的可用哈希，以及冻结产物指纹。不得覆盖或把开发前已有改动归属于开发者；无法分离时要求人工审查。
+
+宿主把快照写入 `rounds/round-NN/development-snapshot.json`。`allowedPaths` 是本轮唯一写入白名单；Light 只能列出冻结 Scope 中的精确文件，Full 可以使用安全的仓库相对 glob。已有敏感文件只记录路径和状态，不读取内容，并直接阻断开发。
+
+```json
+{
+  "schemaVersion": 1,
+  "task": "task-id",
+  "round": "round-01",
+  "baseCommit": "40-or-64-character-git-object-id",
+  "frozenFingerprint": "sha256",
+  "allowedPaths": ["src/example/**"],
+  "preExistingChanges": [
+    {
+      "path": "src/existing.ext",
+      "statusCode": " M",
+      "worktreeSha256": "sha256-or-null-for-deleted-file"
+    }
+  ]
+}
+```
+
+开发返回后优先运行：
+
+```text
+gated-loop self-check --task <task-id> --round <NN>
+```
+
+缺少快照、HEAD 已变化、已有脏改动被再次修改或 diff 被截断时关闭门禁，不猜测归属。
 
 ## 机械门禁顺序
 

@@ -12,13 +12,13 @@
 4. 冻结后、写代码前，由用户明确选择 active 或 manual；需求确认不代替开发方式确认。
 5. active 模式由 Codex 启动全新 Codex 开发、Claude 启动全新 Claude 开发；manual 模式允许用户跨工具交接冻结包。
 6. Light 固定单 Agent；可证明任务和写入范围互斥的 Full 可由用户选择 single 或 parallel。
-7. 宿主先检查各 Agent 的改动归属，再对聚合 diff 执行范围、指纹和冻结测试。
-8. 优先启动新的只读 Codex 验收；没有 Codex 时，启动新的、空上下文、只读 Claude 验收。
+7. 宿主先检查各 Agent 的改动归属，再对聚合 diff 执行范围、指纹和冻结测试，生成机械自检报告。
+8. 优先使用与开发者分离的全新只读其他 Agent 验收；没有其他 Agent 时使用宿主的全新验收子 Agent，两者均不继承开发上下文，并生成 P0/P1/P2 分级报告。
 9. 独立审查通过后仍由用户最终确认。
 
 完整的角色、门禁、升级和修复循环见：[工作流程图](skills/gated-ai-dev-loop/references/workflow.md)。
 
-`gated-loop` 当前只自动完成路由、基线准备和冻结。`development-overview.md`、`progress.md`、开发方式选择、机械门禁、独立验收及修复轮次由宿主按 Skill 创建和维护，避免把尚未实现的自动化包装成可用命令。
+`gated-loop` 已实现路由、基线准备、冻结、机械自检和独立验收。开发方式选择、Agent 派遣、`development-overview.md`、`progress.md` 与修复轮次仍由宿主按 Skill 维护；CLI 只执行可确定验证，不代替宿主协调或用户确认。
 
 ## 开发总览与进度
 
@@ -29,11 +29,21 @@
 
 两者由宿主维护，开发和审查上下文只读。它们是人可读视图，不替代冻结基线、真实 diff、测试或独立审查。进入人工验收时，宿主必须先展示这两个文件及最新证据，方便逐项查看进度。
 
+## 验收报告与严重级别
+
+每轮机械门禁生成 `self-check-report.md` 和 `gate-evidence.json`；独立审查生成 `acceptance-report.md` 和 `review.json`：
+
+- `P0`：数据、安全、权限、不可逆破坏或关键服务级严重问题，阻断验收；
+- `P1`：需求、功能、关键边界、事务、兼容性或测试级阻断问题，阻断验收；
+- `P2`：不阻断当前验收的改进建议，允许 PASS，但人工验收时必须展示。
+
+证据、隔离或改动归属无法证明时使用 `NEED_HUMAN_REVIEW`，不得归类为普通 P1。验收报告不包含自动合并、提交或 Git commit message 建议。
+
 ## 环境要求
 
 - Node.js `20.19` 或更高版本；
 - 需要 active 开发时使用当前宿主可创建的全新 Codex 或 Claude 上下文；
-- 需要 Codex 独立验收时安装或使用 Codex。
+- 自动独立验收优先使用已安装的 Codex CLI，命令不存在时可使用 Claude CLI；宿主也可把全新其他 Agent 或验收子 Agent 的 JSON 结果交给 CLI 校验。
 
 ## 安装
 
@@ -147,11 +157,17 @@ gated-loop route "<任务>" --signals signals.json --json
 gated-loop start "<任务>" --signals signals.json --host-runtime codex --json
 gated-loop prepare --task <id> --baseline requirements/baseline.md --source requirements/notes.md
 gated-loop freeze --task <id> --confirmed
+gated-loop self-check --task <id> --round 1
+gated-loop accept --task <id> --round 1
 ```
 
 CLI 不从任务描述猜测权限、迁移或影响范围；这些事实必须放进 `signals.json`。未提供结构化信号时会保守选择 Full。
 
 Light 简报通过 `start --brief brief.json` 传入，只有用户确认后才加入 `--confirmed`。无论 CLI 是否安装、开发方式是 active 还是 manual，运行产物都只能保存在 `.ai-dev-loop/<task-id>/`；该目录默认被 Git 忽略。
+
+开始开发前，宿主必须在当前轮次写入 `development-snapshot.json`，记录基线指纹、开发前 commit、允许路径和已有脏改动。`self-check` 据此计算本轮真实 diff、执行冻结测试，并生成 `gate-evidence.json` 与 `self-check-report.md`；缺少快照或归属不明时关闭门禁。
+
+`accept` 只接受 PASS 的机械证据。默认优先在系统临时目录调用全新只读 Codex 进程，命令不存在时调用全新只读 Claude；外部 reviewer 不以项目目录为工作目录。宿主能调度 Agent 时，优先让与开发者分离的其他 Agent 验收，没有时再启动空开发上下文的验收子 Agent，并用 `--review-result <file>` 或 `--review-result -` 提交结果。CLI 校验 reviewer 来源、无开发上下文隔离、全部验收 ID、P0/P1/P2 数量和结论，再写入 `review.json` 与 `acceptance-report.md`。
 
 ## 安全边界
 

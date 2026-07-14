@@ -37,7 +37,7 @@ flowchart TD
     RESELECT --> DEV_MODE
     ACTIVE_RESULT -->|已有或无法判断写入| HUMAN["NEED_HUMAN_REVIEW"]
 
-    DEV_RESULT --> GATES["机械门禁<br/>指纹 / diff / 范围 / 测试"]
+    DEV_RESULT --> GATES["机械门禁并生成 self-check-report.md<br/>指纹 / diff / 范围 / 测试"]
     GATES --> RECLASS{"真实 diff 仍符合原模式？"}
     RECLASS -->|Light 越界| ESCALATE["升级 Full，重新审核与确认"]
     ESCALATE --> HOST
@@ -45,12 +45,12 @@ flowchart TD
     GATE_RESULT -->|可修复失败| REPAIR["最小修复交接，最多三轮"]
     REPAIR --> DEV_MODE
     GATE_RESULT -->|证据或归属不清| HUMAN
-    GATE_RESULT -->|通过| CODEX{"独立 Codex 可用？"}
+    GATE_RESULT -->|通过| REVIEWER{"有与开发者分离的其他 Agent？"}
 
-    CODEX -->|是| CODEX_REVIEW["全新只读 Codex 验收"]
-    CODEX -->|否| CLAUDE_REVIEW["全新空上下文只读 Claude 验收"]
-    CODEX_REVIEW --> REVIEW_RESULT{"PASS / FAIL / NEED_HUMAN_REVIEW"}
-    CLAUDE_REVIEW --> REVIEW_RESULT
+    REVIEWER -->|是| OTHER_REVIEW["全新只读其他 Agent<br/>无开发上下文"]
+    REVIEWER -->|否| SUBAGENT_REVIEW["宿主启动全新验收子 Agent<br/>无开发上下文"]
+    OTHER_REVIEW --> REVIEW_RESULT{"生成 P0/P1/P2 验收报告<br/>PASS / FAIL / NEED_HUMAN_REVIEW"}
+    SUBAGENT_REVIEW --> REVIEW_RESULT
     REVIEW_RESULT -->|FAIL，未超过三轮| REPAIR
     REVIEW_RESULT -->|FAIL 已达上限或证据不足| HUMAN
     REVIEW_RESULT -->|PASS| FINAL_CONFIRM{"用户最终确认？"}
@@ -66,7 +66,7 @@ flowchart TD
     class HOST,ROUTE,LIGHT,FULL,RUNTIME,TRACK host;
     class MODE_WAIT,DEV_MODE,ACTIVE_HOST,DEV_RUNTIME,DEV_RUNTIME_C,MANUAL_RUNTIME,TOPOLOGY,SINGLE_DEV,PARALLEL_PLAN,PARALLEL_DEV,INTEGRATE,ACTIVE_RESULT,RESELECT,DEV_RESULT,REPAIR developer;
     class FREEZE,GATES,RECLASS,ESCALATE,GATE_RESULT gate;
-    class CODEX,CODEX_REVIEW,CLAUDE_REVIEW,REVIEW_RESULT review;
+    class REVIEWER,OTHER_REVIEW,SUBAGENT_REVIEW,REVIEW_RESULT review;
     class CONFIRM,HUMAN,FINAL_CONFIRM,WAIT,COMPLETE human;
 ```
 
@@ -80,6 +80,8 @@ flowchart TD
 - single/parallel 是独立执行拓扑；只有任务和写入范围可证明互斥的 Full 才能选择 parallel。
 - 用户确认 active + parallel 计划后自动派遣，不再逐 Agent 询问；计划变化必须重新确认。
 - parallel 先逐 Agent 检查归属并集成，再对最终聚合 diff 运行完整门禁和独立验收。
+- 机械门禁生成 self-check-report.md；独立审查生成 acceptance-report.md 和 review.json，P0/P1 阻断、P2 非阻断但必须展示。
+- 验收优先使用与开发者分离的其他 Agent；没有时才启动全新验收子 Agent，两者都不能继承分析或开发上下文。
 - 主动调用失败且确认零写入时重新请求选择并推荐 manual；不得自动切换。
 - 两种开发方式共用相同冻结授权、机械门禁和独立验收。
 - `PASS` 仍需用户最终确认。

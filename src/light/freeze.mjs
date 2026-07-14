@@ -14,6 +14,7 @@ import { CLASSIFIER_VERSION, classifyMode } from '../mode/classify.mjs';
 import { normalizeHostRuntime, requireHostRuntime } from '../mode/host-runtime.mjs';
 import { buildLightArtifacts } from './artifacts.mjs';
 import { buildLightBrief, validateLightBrief } from './build-brief.mjs';
+import { validateMutableRuntimeEntries } from '../core/runtime-layout.mjs';
 
 const STATE_SCHEMA_VERSION = 1;
 const ARTIFACT_NAMES = Object.freeze([
@@ -114,7 +115,8 @@ async function readExisting(target, fs, expectedTask) {
     throw new GatedLoopError('LIGHT_SOURCE_CHANGED', 'Existing Light artifact path is not a directory');
   }
   try {
-    const names = (await fs.readdir(target)).sort();
+    const allNames = (await fs.readdir(target)).sort();
+    const names = (await validateMutableRuntimeEntries(target, allNames, { fs })).sort();
     if (canonicalJson(names) !== canonicalJson([...ARTIFACT_NAMES].sort())) throw new Error('unexpected frozen artifact');
     const bytes = Object.fromEntries(await Promise.all(names.map(async (name) => [
       name,
@@ -319,3 +321,12 @@ export async function freezeLightTask(options = {}) {
 }
 
 export const freezeLight = freezeLightTask;
+
+export async function readLightPackage({ root, task, fs = fsPromises } = {}) {
+  if (typeof root !== 'string' || root.length === 0) throw new GatedLoopError('LIGHT_ROOT_INVALID', 'Project root is required');
+  validateTask(task);
+  const target = await assertSafePath(root, path.join('.ai-dev-loop', task), { fs });
+  const existing = await readExisting(target, fs, task);
+  if (!existing) throw new GatedLoopError('LIGHT_MODE_REQUIRED', 'A frozen Light package is required');
+  return { ...existing, target, stage: existing.state.stage, hostRuntime: existing.mode.hostRuntime };
+}

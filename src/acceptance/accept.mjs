@@ -20,9 +20,9 @@ export const REVIEW_SCHEMA = Object.freeze({
   required: ['status', 'reviewer', 'reviewerKind', 'isolation', 'checkedAcceptanceIds', 'counts', 'findings', 'suggestedTests', 'repairInstructions'],
   properties: {
     status: { enum: ['PASS', 'FAIL', 'NEED_HUMAN_REVIEW'] },
-    reviewer: { type: 'string', pattern: '^[a-z][a-z0-9._-]{0,63}$' },
-    reviewerKind: { enum: ['independent-agent', 'fresh-subagent'] },
-    isolation: { const: 'fresh-read-only-no-development-context' },
+    reviewer: { type: ['string', 'null'], pattern: '^[a-z][a-z0-9._-]{0,63}$' },
+    reviewerKind: { enum: ['independent-agent', 'fresh-subagent', 'human-review'] },
+    isolation: { enum: ['fresh-read-only-no-development-context', 'not-available'] },
     checkedAcceptanceIds: { type: 'array', items: { type: 'string' }, uniqueItems: true },
     counts: {
       type: 'object', additionalProperties: false, required: ['p0', 'p1', 'p2'],
@@ -61,13 +61,16 @@ function sameSet(left, right) {
 
 export function validateReview(value, frozen, expectedReviewer, expectedKind) {
   const topKeys = ['status', 'reviewer', 'reviewerKind', 'isolation', 'checkedAcceptanceIds', 'counts', 'findings', 'suggestedTests', 'repairInstructions'];
+  const humanReview = value?.reviewerKind === 'human-review';
+  const validIdentity = humanReview
+    ? value.status === 'NEED_HUMAN_REVIEW' && value.reviewer === null && value.isolation === 'not-available'
+    : isAgentRuntime(value?.reviewer) && ['independent-agent', 'fresh-subagent'].includes(value.reviewerKind)
+      && value.isolation === 'fresh-read-only-no-development-context';
   const validTop = exactKeys(value, topKeys)
     && ['PASS', 'FAIL', 'NEED_HUMAN_REVIEW'].includes(value.status)
-    && isAgentRuntime(value.reviewer)
-    && (!expectedReviewer || value.reviewer === expectedReviewer)
-    && ['independent-agent', 'fresh-subagent'].includes(value.reviewerKind)
-    && (!expectedKind || value.reviewerKind === expectedKind)
-    && value.isolation === 'fresh-read-only-no-development-context'
+    && validIdentity
+    && (expectedReviewer === undefined || value.reviewer === expectedReviewer)
+    && (expectedKind === undefined || value.reviewerKind === expectedKind)
     && Array.isArray(value.checkedAcceptanceIds) && Array.isArray(value.findings)
     && Array.isArray(value.suggestedTests) && value.suggestedTests.every(nonempty)
     && Array.isArray(value.repairInstructions) && value.repairInstructions.every(nonempty)
@@ -113,7 +116,7 @@ export function validateReview(value, frozen, expectedReviewer, expectedKind) {
 }
 
 function reviewerPrompt(frozen, evidence, report, diffText) {
-  return `你是与开发者分离的其他 Agent，是全新且只读的独立验收者，不得继承需求分析或开发会话上下文。reviewerKind 必须输出 independent-agent，isolation 必须输出 fresh-read-only-no-development-context。不得修改文件、修复代码、提交、推送、合并或发布。
+  return `你是与开发者分离的全新只读验收 Agent，不得继承需求分析或开发会话上下文。若你是宿主创建的全新子 Agent，reviewerKind 输出 fresh-subagent；否则输出 independent-agent。isolation 必须输出 fresh-read-only-no-development-context。不得修改文件、修复代码、提交、推送、合并或发布。
 根据冻结授权审查最终改动，逐项检查全部验收 ID，并检查边界、异常、权限、安全、数据、兼容性、并发和测试充分性。
 按给定 JSON schema 输出。P0/P1 必须 FAIL；只有 P2 可以 PASS；证据、隔离或归属不足时 NEED_HUMAN_REVIEW。
 
@@ -165,7 +168,7 @@ async function invokeClaude({ command, prompt, fs, runProcessImpl, timeoutMs }) 
 
 function unavailable(error) { return error?.code === 'PROCESS_SPAWN_FAILED' && error.details?.causeCode === 'ENOENT'; }
 
-async function autoReview({ root, preference, prompt, config, fs, runProcessImpl, timeoutMs }) {
+async function autoReview({ preference, prompt, config, fs, runProcessImpl, timeoutMs }) {
   if (preference === 'codex') return { reviewer: 'codex', reviewerKind: 'independent-agent', value: await invokeCodex({ command: config.tools.codex, prompt, fs, runProcessImpl, timeoutMs }) };
   if (preference === 'claude') return { reviewer: 'claude', reviewerKind: 'independent-agent', value: await invokeClaude({ command: config.tools.claude, prompt, fs, runProcessImpl, timeoutMs }) };
   try { return { reviewer: 'codex', reviewerKind: 'independent-agent', value: await invokeCodex({ command: config.tools.codex, prompt, fs, runProcessImpl, timeoutMs }) }; }
@@ -175,9 +178,54 @@ async function autoReview({ root, preference, prompt, config, fs, runProcessImpl
   }
 }
 
-function fallbackReview(reviewer, reviewerKind, reason) {
+function initialReviewPlan({ reviewer, reviewResult, reviewerInvoker }) {
+  if (reviewResult) return {
+    schemaVersion: 1, requested: 'review-result', route: 'provided-result', status: 'PLANNED',
+    selectedReviewer: reviewResult.reviewer ?? null, reviewerKind: reviewResult.reviewerKind ?? null,
+    isolation: reviewResult.isolation ?? null, reason: '宿主提供了已完成的结构化验收结果。',
+  };
+  if (reviewer === 'human') return {
+    schemaVersion: 1, requested: 'human', route: 'human', status: 'PLANNED', selectedReviewer: null,
+    reviewerKind: 'human-review', isolation: 'not-available', reason: '用户明确选择人工语义验收。',
+  };
+  if (reviewerInvoker) return {
+    schemaVersion: 1, requested: reviewer ?? 'host-capability', route: 'host-agent', status: 'PLANNED',
+    selectedReviewer: null, reviewerKind: null, isolation: 'fresh-read-only-no-development-context',
+    reason: '宿主提供了可创建全新独立 Agent 或子 Agent 的验收能力。',
+  };
+  if (reviewer === 'codex' || reviewer === 'claude') return {
+    schemaVersion: 1, requested: reviewer, route: 'external-cli', status: 'PLANNED', selectedReviewer: reviewer,
+    reviewerKind: 'independent-agent', isolation: 'fresh-read-only-no-development-context',
+    reason: `用户明确选择可选的 ${reviewer} CLI 验收适配器。`,
+  };
+  if (reviewer === 'auto') return {
+    schemaVersion: 1, requested: 'auto', route: 'external-cli-auto', status: 'PLANNED', selectedReviewer: null,
+    reviewerKind: 'independent-agent', isolation: 'fresh-read-only-no-development-context',
+    reason: '用户明确允许 CLI 按 Codex、Claude 的顺序探测可选验收适配器。',
+  };
   return {
-    status: 'NEED_HUMAN_REVIEW', reviewer, reviewerKind, isolation: 'fresh-read-only-no-development-context', checkedAcceptanceIds: [],
+    schemaVersion: 1, requested: 'default', route: 'human', status: 'PLANNED', selectedReviewer: null,
+    reviewerKind: 'human-review', isolation: 'not-available',
+    reason: '未提供隔离验收能力；默认不扫描或启动外部 Agent，转入人工语义验收。',
+  };
+}
+
+function completedReviewPlan(plan, invoked) {
+  return {
+    ...plan, status: 'COMPLETED', selectedReviewer: invoked.reviewer,
+    reviewerKind: invoked.reviewerKind, isolation: invoked.value.isolation,
+    reason: '已取得并校验全新只读无开发上下文的语义验收结果。',
+  };
+}
+
+function failedReviewPlan(plan, error, stage) {
+  const reason = `${error.code ?? 'ACCEPTANCE_FAILED'}：${error.message ?? '语义验收无法完成'}`;
+  return { ...plan, status: stage === 'evidence' ? 'BLOCKED' : 'UNAVAILABLE', reason };
+}
+
+function fallbackReview(reason) {
+  return {
+    status: 'NEED_HUMAN_REVIEW', reviewer: null, reviewerKind: 'human-review', isolation: 'not-available', checkedAcceptanceIds: [],
     counts: { p0: 0, p1: 0, p2: 0 }, findings: [], suggestedTests: [], repairInstructions: [reason],
   };
 }
@@ -194,13 +242,15 @@ function findingSection(findings, severity) {
 function renderAcceptance(task, round, review) {
   const tests = review.suggestedTests.length > 0 ? review.suggestedTests.map((entry) => `- ${entry}`).join('\n') : '- 无';
   const repairs = review.repairInstructions.length > 0 ? review.repairInstructions.map((entry) => `- ${entry}`).join('\n') : '- 无需修复';
-  return `# ${task} ${round} 独立验收报告
+  const title = review.reviewerKind === 'human-review' ? '人工语义验收待办报告' : '独立语义验收报告';
+  const reviewer = review.reviewer ?? '未启动（人工验收）';
+  return `# ${task} ${round} ${title}
 
 ## 结论
 ${review.status}
 
 ## 审查身份
-- reviewer: ${review.reviewer}
+- reviewer: ${reviewer}
 - reviewerKind: ${review.reviewerKind}
 - isolation: ${review.isolation}
 
@@ -242,11 +292,14 @@ function renderFinalAcceptance(task, round, frozen, review, verified) {
   const authority = frozen.authorityName;
   const tests = review.suggestedTests.length > 0 ? review.suggestedTests.map((entry) => `- ${entry}`).join('\n') : '- 无';
   const repairs = review.repairInstructions.length > 0 ? review.repairInstructions.map((entry) => `- ${entry}`).join('\n') : '- 无需修复';
+  const reviewer = review.reviewer ?? '未启动（人工验收）';
   const operation = review.status === 'PASS'
     ? '独立验收已通过，等待用户人工确认。PASS 不授权自动提交、推送、合并或发布。'
     : review.status === 'FAIL'
       ? '存在 P0/P1 阻断项，修复并重新完成机械门禁和独立验收前，不能进入人工完成确认。'
-      : '证据、隔离或审查过程不足，需要人工审查后决定重试、修复或终止。';
+      : review.reviewerKind === 'human-review'
+        ? '机械门禁不因此失效，但尚未完成独立语义验收。请由用户人工审查冻结验收项、真实 diff、机械证据和本报告；不得把此状态表述为独立验收 PASS。'
+        : '证据、隔离或审查过程不足，需要人工审查后决定重试、修复或终止。';
   return `# ${task} 最终验收报告
 
 > 当前验收结论：**${review.status}**
@@ -261,7 +314,7 @@ function renderFinalAcceptance(task, round, frozen, review, verified) {
 | --- | --- |
 | 任务模式 | ${frozen.mode} |
 | 机械门禁 | ${verified?.evidence?.status ?? 'UNVERIFIED'} |
-| 独立审查者 | ${review.reviewer} |
+| 独立审查者 | ${reviewer} |
 | 审查者类型 | ${review.reviewerKind} |
 | 上下文隔离 | ${review.isolation} |
 | P0 / P1 / P2 | ${review.counts.p0} / ${review.counts.p1} / ${review.counts.p2} |
@@ -293,7 +346,8 @@ ${operation}
 - 开发进度：[progress.md](progress.md)
 - 本轮机械自检：[self-check-report.md](${roundPath}/self-check-report.md)
 - 本轮机械证据：[gate-evidence.json](${roundPath}/gate-evidence.json)
-- 本轮独立验收：[acceptance-report.md](${roundPath}/acceptance-report.md)
+- 本轮验收路由：[review-plan.json](${roundPath}/review-plan.json)
+- 本轮语义验收：[acceptance-report.md](${roundPath}/acceptance-report.md)
 - 本轮结构化审查：[review.json](${roundPath}/review.json)
 
 本文件由 \`gated-loop accept\` 根据当前轮次的已校验结果自动刷新。轮次报告与 JSON 是原始证据，本文件是给人工查看的最新汇总入口。
@@ -334,30 +388,36 @@ async function verifiedEvidence({ root, task, round, frozen, config, snapshotSou
 }
 
 export async function runAcceptance({
-  root, task, round: suppliedRound, snapshot: snapshotSource, reviewer = 'auto', reviewResult,
+  root, task, round: suppliedRound, snapshot: snapshotSource, reviewer, reviewResult,
   timeoutMs = 300_000, fs = fsPromises, runProcessImpl = runProcess, reviewerInvoker,
 } = {}) {
   const round = normalizeRound(suppliedRound);
   const frozen = await loadFrozenTask({ root, task, fs });
   const config = await loadConfig(root);
   const directory = await roundDirectory({ root, task, round, fs });
-  let actualReviewer = reviewer === 'claude' ? 'claude' : 'codex';
-  let reviewerKind = 'independent-agent';
+  let plan = initialReviewPlan({ reviewer, reviewResult, reviewerInvoker });
+  let planPath = await writeRoundFile(directory, 'review-plan.json', json(plan), { fs });
+  let stage = 'evidence';
   let verified;
   let review;
   try {
     verified = await verifiedEvidence({ root, task, round, frozen, config, snapshotSource, fs, runProcessImpl, timeoutMs });
+    stage = 'review';
     const prompt = reviewerPrompt(frozen, verified.evidence, verified.report, verified.bundle.text);
     let invoked;
     if (reviewResult) invoked = { reviewer: reviewResult.reviewer, reviewerKind: reviewResult.reviewerKind, value: reviewResult };
+    else if (reviewer === 'human' || (!reviewer && !reviewerInvoker)) {
+      throw new GatedLoopError('INDEPENDENT_REVIEW_UNAVAILABLE', '未提供全新隔离 Agent 或子 Agent；已转入人工语义验收');
+    }
     else if (reviewerInvoker) invoked = await reviewerInvoker({ prompt, schema: REVIEW_SCHEMA, preference: reviewer });
-    else invoked = await autoReview({ root, preference: reviewer, prompt, config, fs, runProcessImpl, timeoutMs });
-    actualReviewer = invoked.reviewer;
-    reviewerKind = invoked.reviewerKind;
-    review = validateReview(invoked.value, frozen, actualReviewer, reviewerKind);
+    else invoked = await autoReview({ preference: reviewer, prompt, config, fs, runProcessImpl, timeoutMs });
+    review = validateReview(invoked.value, frozen, invoked.reviewer, invoked.reviewerKind);
+    plan = completedReviewPlan(plan, invoked);
   } catch (error) {
-    review = fallbackReview(actualReviewer, reviewerKind, `${error.code ?? 'ACCEPTANCE_FAILED'}：${error.message ?? '独立验收无法完成'}`);
+    plan = failedReviewPlan(plan, error, stage);
+    review = fallbackReview(plan.reason);
   }
+  planPath = await writeRoundFile(directory, 'review-plan.json', json(plan), { fs });
   const reviewPath = await writeRoundFile(directory, 'review.json', json(review), { fs });
   const reportPath = await writeRoundFile(directory, 'acceptance-report.md', renderAcceptance(task, round, review), { fs });
   const finalReportPath = await writeRoundFile(
@@ -366,5 +426,5 @@ export async function runAcceptance({
     renderFinalAcceptance(task, round, frozen, review, verified),
     { fs },
   );
-  return { status: review.status, task, round, reviewer: review.reviewer, counts: review.counts, reviewPath, reportPath, finalReportPath };
+  return { status: review.status, task, round, reviewer: review.reviewer, counts: review.counts, planPath, reviewPath, reportPath, finalReportPath };
 }

@@ -1,6 +1,6 @@
 ---
 name: gated-ai-dev-loop
-description: 将任意形式的软件需求路由为 Full、Light 或 None，通过统一运行目录、冻结开发基线、人可读总览与进度、宿主自动派遣隔离开发 Agent 或输出任意 Agent 可接收的通用手动提示词、可由任意新宿主恢复的机械门禁、P0/P1/P2 独立验收报告和用户确认来治理 AI 辅助开发。适用于任意 AI Agent 发起、接收或接管的软件功能开发、缺陷修复、重构、迁移及其他仓库改动。
+description: 将任意形式的软件需求路由为 Full、Light 或 None，通过统一运行目录、冻结开发基线、人可读总览与进度、宿主自动派遣隔离开发 Agent 或输出任意 Agent 可接收的通用手动提示词、可由任意新宿主恢复的机械门禁、能力驱动的独立或人工语义验收、P0/P1/P2 报告和用户确认来治理 AI 辅助开发。适用于任意单 Agent、多 Agent 或支持子 Agent 的宿主发起、接收或接管软件功能开发、缺陷修复、重构、迁移及其他仓库改动。
 ---
 
 # 门禁式 AI 开发循环
@@ -13,7 +13,8 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 - 直接运行模式由宿主自动启动其可调度的全新隔离开发 Agent，不要求开发 Agent 与宿主同类。
 - 手动运行模式只输出通用后续提示词，允许用户交给任意全新开发 Agent，不预选工具或返回工具专属 CLI 命令。
 - 开发 Agent 不继承前期对话，只读取冻结交接和当前轮次文件；开发完成后任意新宿主 Agent 都可从磁盘接管门禁，不绑定原宿主对话。
-- 优先使用与开发者分离的全新只读其他 Agent 做语义验收；没有其他 Agent 时才启动宿主的全新验收子 Agent。两者都不得继承需求分析或开发上下文。
+- 语义验收按能力选择：优先使用与开发者分离的全新只读其他 Agent；没有其他产品时允许使用宿主创建的全新只读验收子 Agent；两者都不得继承需求分析或开发上下文。
+- 没有任何可证明隔离的新 Agent 或子 Agent 时继续完成开发和机械门禁，生成可见的人工验收包并返回 `NEED_HUMAN_REVIEW`；不得声称已完成独立语义验收。
 - 禁止任何开发上下文验收自己的改动。
 - 基线冻结和最终完成都必须由用户明确确认。
 
@@ -87,7 +88,7 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 - Full 只有任务组、验收 ID、写入路径、依赖、隔离和聚合测试都明确时才可提供 `parallel`；
 - Full 符合并行资格时，先展示分组计划，再等待用户明确选择 `single` 或 `parallel`。
 
-选择 parallel 后，同一轮所有子 Agent 必须使用相同冻结契约、全新上下文和互斥写入范围；可以由不同 Agent 产品执行。先执行每个 Agent 的归属门禁，再机械集成无冲突结果，最后对聚合 diff 执行完整机械门禁和一次独立验收。无法证明隔离或归属时退回 single 或返回 `NEED_HUMAN_REVIEW`。
+选择 parallel 后，同一轮所有子 Agent 必须使用相同冻结契约、全新上下文和互斥写入范围；可以由同一或不同 Agent 产品执行。先执行每个 Agent 的归属门禁，再机械集成无冲突结果，最后对聚合 diff 执行完整机械门禁和一次能力驱动的语义验收。无法证明开发隔离或归属时退回 single 或返回 `NEED_HUMAN_REVIEW`。
 
 用户确认 `active + parallel` 及完整并行计划后，宿主自动按波次派遣子 Agent，不再逐个请求确认。自动派遣不能代替拓扑选择，也不能擅自改变已确认的任务分组、路径或并发数；计划变化时必须重新展示并确认。宿主不支持创建全新子 Agent 时停止派遣，展示能力限制并让用户改选 single 或 manual。
 
@@ -103,22 +104,28 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 4. 根据真实 diff 重新分类；必要时把 Light 升级为 Full。
 5. 用 `shell:false` 或宿主等价的直接进程 API 执行冻结测试 argv。
 6. 记录命令、退出码以及通过、失败、错误、跳过数量；测试未运行即门禁失败。
-7. 根据机械证据生成当前轮次 `self-check-report.md`；只有结论 PASS 才能进入独立验收。
+7. 根据机械证据生成当前轮次 `self-check-report.md`；只有结论 PASS 才能进入语义验收路由。
 8. 禁止自动提交、推送、合并、迁移、发布或公开。
 
 严格区分开发前已存在的脏改动。无法确定文件或代码行归属时停止，并返回 `NEED_HUMAN_REVIEW`。
 
 CLI 可用时执行 `gated-loop self-check --task <id> --round <NN>`；它要求当前轮次已有 `development-snapshot.json`，并写入 `gate-evidence.json` 和 `self-check-report.md`。命令返回非 PASS 时不得继续验收。
 
-## 独立验收
+## 能力驱动的语义验收
 
-语义验收前读取 [acceptance.md](references/acceptance.md)。优先启动与开发者分离的全新只读其他 Agent；没有其他 Agent 时才启动宿主的全新验收子 Agent。两者都不能继承需求分析或开发上下文，只提供冻结授权、验收项、任务、真实 diff、开发事实和机械证据。宿主校验结构化结论后写入 `review.json`，渲染轮次级 `acceptance-report.md`，并刷新任务根目录的 `final-acceptance-report.md`。CLI 可用时运行 `gated-loop accept --task <id> --round <NN>`；宿主 Agent 的结果通过 `--review-result` 传入。只接受：
+语义验收前读取 [acceptance.md](references/acceptance.md)。先生成 `review-plan.json`，按能力而不是产品名称选择且公开记录原因：
+
+1. 使用与开发者分离的全新只读其他 Agent，记录 `independent-agent`；
+2. 没有其他产品但宿主能创建全新子 Agent 时，使用无开发上下文的只读验收子 Agent，记录 `fresh-subagent`；
+3. 两者都不可用时转入人工语义验收，记录 `human-review`，继续保留机械门禁结果但不得输出独立验收 `PASS`。
+
+不同 Agent 产品不是前提，新的同产品子 Agent 可以完成独立验收；同一个开发 Agent、开发会话或继承开发上下文的 fork 不可以。Agent 验收只接收冻结授权、验收项、任务、真实 diff、开发事实和机械证据。宿主校验结构化结论后写入 `review.json`，渲染轮次级 `acceptance-report.md`，并刷新任务根目录的 `final-acceptance-report.md`。CLI 可用时优先通过 `--review-result` 传入宿主取得的 Agent 结果；未提供隔离能力时 `gated-loop accept` 默认生成清晰的人工验收待办，不扫描或启动外部 Agent。只接受：
 
 - `PASS`：所有验收项满足、证据完整且没有 P0/P1；允许存在必须展示的 P2；
 - `FAIL`：存在至少一个关联需求、验收、任务或安全边界的 P0/P1；
-- `NEED_HUMAN_REVIEW`：无法证明隔离、证据、改动归属或只读保证。
+- `NEED_HUMAN_REVIEW`：无法证明隔离、证据、改动归属或只读保证，或当前只有人工语义验收能力。
 
-收到 `FAIL` 后只基于 P0/P1 建立最小修复交接，交给任意新的隔离开发 Agent，或输出通用手动提示词；P2 不自动修复，除非用户授权。重新运行全部机械门禁和独立验收，最多三轮。审查者 `PASS` 后，先向用户展示根级 `final-acceptance-report.md`，再按需展开轮次报告和 JSON 证据，并取得明确验收。
+收到 `FAIL` 后只基于 P0/P1 建立最小修复交接，交给任意新的隔离开发 Agent，或输出通用手动提示词；P2 不自动修复，除非用户授权。重新运行全部机械门禁和语义验收，最多三轮。独立审查者 `PASS` 后，先向用户展示根级 `final-acceptance-report.md`，再按需展开轮次报告和 JSON 证据，并取得明确验收。人工路径必须明确展示“尚未完成独立语义验收”，由用户查看验收包后决定后续动作。
 
 ## 保持安全与可见
 
@@ -136,4 +143,4 @@ CLI 可用时执行 `gated-loop self-check --task <id> --round <NN>`；它要求
 - 创建开发总览、更新进度或进入人工验收时读取 [tracking.md](references/tracking.md)。
 - 选择开发方式、生成交接或执行机械门禁时读取 [development.md](references/development.md)。
 - 评估并行资格、拆分任务、启动多子 Agent 或集成结果时读取 [parallel-development.md](references/parallel-development.md)。
-- 独立验收或准备修复轮次时读取 [acceptance.md](references/acceptance.md)。
+- 选择验收能力、执行独立或人工语义验收、准备修复轮次时读取 [acceptance.md](references/acceptance.md)。

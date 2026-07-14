@@ -24,7 +24,7 @@ const PREPARE_OPTIONS = new Set(['--json', '--help', '--task', '--baseline', '--
 const FREEZE_OPTIONS = new Set(['--json', '--help', '--task', '--confirmed']);
 const SELF_CHECK_OPTIONS = new Set(['--json', '--help', '--task', '--round', '--snapshot', '--timeout-ms']);
 const ACCEPT_OPTIONS = new Set(['--json', '--help', '--task', '--round', '--snapshot', '--timeout-ms', '--reviewer', '--review-result']);
-const help = `Usage: gated-loop <command> [options]\n\nCommands:\n${COMMANDS.map((command) => `  ${command}`).join('\n')}\n\nGate commands:\n  self-check --task <id> [--round 1] [--snapshot <file>]\n  accept --task <id> [--round 1] [--reviewer auto|codex|claude]\n`;
+const help = `Usage: gated-loop <command> [options]\n\nCommands:\n${COMMANDS.map((command) => `  ${command}`).join('\n')}\n\nGate commands:\n  self-check --task <id> [--round 1] [--snapshot <file>]\n  accept --task <id> [--round 1] [--reviewer human|auto|codex|claude]\n\nAcceptance defaults to human handling unless a host reviewer result or reviewer capability is supplied.\n`;
 
 function parse(argv) {
   const seen = new Set();
@@ -64,8 +64,8 @@ function parse(argv) {
   if (values['--host-runtime'] !== undefined && !isAgentRuntime(values['--host-runtime'])) {
     throw new GatedLoopError('OPTION_VALUE_INVALID', '--host-runtime must be a safe lowercase Agent identifier');
   }
-  if (values['--reviewer'] !== undefined && !['auto', 'codex', 'claude'].includes(values['--reviewer'])) {
-    throw new GatedLoopError('OPTION_VALUE_INVALID', '--reviewer must be auto, codex, or claude');
+  if (values['--reviewer'] !== undefined && !['human', 'auto', 'codex', 'claude'].includes(values['--reviewer'])) {
+    throw new GatedLoopError('OPTION_VALUE_INVALID', '--reviewer must be human, auto, codex, or claude');
   }
   if (values['--timeout-ms'] !== undefined && (!/^\d+$/.test(values['--timeout-ms']) || Number(values['--timeout-ms']) < 1)) {
     throw new GatedLoopError('OPTION_VALUE_INVALID', '--timeout-ms must be a positive integer');
@@ -183,7 +183,7 @@ async function runGateCommand(parsed, io) {
     ? await readStructured(parsed.values['--review-result'], 'REVIEW_RESULT', { cwd: root, fs, stdin: io.stdin })
     : undefined;
   return runAcceptance({
-    ...common, reviewer: parsed.values['--reviewer'] ?? 'auto', reviewResult,
+    ...common, reviewer: parsed.values['--reviewer'], reviewResult,
     reviewerInvoker: io.reviewerInvoker,
   });
 }

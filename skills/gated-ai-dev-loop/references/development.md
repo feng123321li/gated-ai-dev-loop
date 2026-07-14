@@ -136,7 +136,7 @@ single 每轮默认只进行一次主动调用；parallel 的每个 assignment �
 3. 验证冻结指纹、HEAD、开发前已有改动和真实 diff；无法归属时返回 NEED_HUMAN_REVIEW。
 4. 由接管宿主把已校验的开发结果保存为 result.json，并更新 progress.md；不得让开发 Agent 写 .ai-dev-loop/**。
 5. 运行 gated-loop self-check --task <task-id> --round <NN>；非 PASS 时停止。
-6. 机械门禁 PASS 后启动无开发上下文的全新只读独立验收 Agent，再运行 gated-loop accept。
+6. 机械门禁 PASS 后按验收能力路由：其他独立 Agent、同宿主全新只读子 Agent，或没有隔离能力时生成完整人工验收包；再运行 gated-loop accept 落盘结果。
 7. 不重新分析或改写冻结需求，不自动提交、推送、合并或发布。
 ```
 
@@ -149,7 +149,7 @@ single 每轮默认只进行一次主动调用；parallel 的每个 assignment �
 <粘贴开发 Agent 返回的结构化 JSON>
 ```
 
-不要求回到原宿主对话。接管 Agent 可以运行确定性机械门禁，但不能让开发 Agent 验收自己的改动；语义验收仍必须使用全新无开发上下文的独立 Agent。
+不要求回到原宿主对话。接管 Agent 可以运行确定性机械门禁，但不能让开发 Agent 验收自己的改动；语义验收优先使用全新无开发上下文的其他 Agent 或子 Agent。两者都不可用时转人工，并明确不声称完成独立语义验收。
 
 开发者只允许返回：
 

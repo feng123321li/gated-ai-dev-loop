@@ -87,7 +87,12 @@ test('self-check writes deterministic evidence and accept records a fresh subage
   const result = JSON.parse(accepted.out).result;
   assert.equal(result.status, 'PASS');
   assert.equal(result.counts.p2, 1);
+  assert.equal(result.planPath, path.join(roundDir, 'review-plan.json'));
   assert.equal(result.finalReportPath, path.join(root, '.ai-dev-loop', task, 'final-acceptance-report.md'));
+  const plan = JSON.parse(await readFile(path.join(roundDir, 'review-plan.json'), 'utf8'));
+  assert.equal(plan.route, 'provided-result');
+  assert.equal(plan.status, 'COMPLETED');
+  assert.equal(plan.selectedReviewer, 'opencode');
   const report = await readFile(path.join(roundDir, 'acceptance-report.md'), 'utf8');
   assert.match(report, /fresh-subagent/);
   assert.match(report, /P2 非阻断建议/);
@@ -96,9 +101,49 @@ test('self-check writes deterministic evidence and accept records a fresh subage
   assert.match(finalReport, /WAITING_FOR_MANUAL_ACCEPTANCE/);
   assert.match(finalReport, /F-001/);
   assert.match(finalReport, /rounds\/round-01\/acceptance-report\.md/);
+  assert.match(finalReport, /rounds\/round-01\/review-plan\.json/);
 
   const acceptedAgain = await invoke(root, ['accept', '--task', task, '--round', '1', '--review-result', `.ai-dev-loop/${task}/rounds/round-01/review-input.json`, '--json']);
   assert.equal(acceptedAgain.exitCode, 0, acceptedAgain.err);
+});
+
+test('accept defaults to visible human review without launching an external Agent', async (t) => {
+  const { root, task, roundDir } = await fixture(t);
+  assert.equal((await invoke(root, ['self-check', '--task', task, '--json'])).exitCode, 0);
+  const accepted = await invoke(root, ['accept', '--task', task, '--json']);
+  assert.equal(accepted.exitCode, 2);
+  const result = JSON.parse(accepted.out).result;
+  assert.equal(result.status, 'NEED_HUMAN_REVIEW');
+  assert.equal(result.reviewer, null);
+  const plan = JSON.parse(await readFile(path.join(roundDir, 'review-plan.json'), 'utf8'));
+  assert.deepEqual({ route: plan.route, status: plan.status, selectedReviewer: plan.selectedReviewer }, {
+    route: 'human', status: 'UNAVAILABLE', selectedReviewer: null,
+  });
+  const review = JSON.parse(await readFile(path.join(roundDir, 'review.json'), 'utf8'));
+  assert.equal(review.reviewerKind, 'human-review');
+  assert.equal(review.isolation, 'not-available');
+  assert.match(await readFile(path.join(roundDir, 'acceptance-report.md'), 'utf8'), /人工语义验收待办报告/);
+});
+
+test('accept uses a fresh same-host subagent when that is the available isolated capability', async (t) => {
+  const { root, task, roundDir } = await fixture(t);
+  assert.equal((await invoke(root, ['self-check', '--task', task, '--json'])).exitCode, 0);
+  const accepted = await invoke(root, ['accept', '--task', task, '--json'], {
+    reviewerInvoker: async () => ({
+      reviewer: 'codex-subagent', reviewerKind: 'fresh-subagent',
+      value: {
+        status: 'PASS', reviewer: 'codex-subagent', reviewerKind: 'fresh-subagent',
+        isolation: 'fresh-read-only-no-development-context', checkedAcceptanceIds: ['A-001'],
+        counts: { p0: 0, p1: 0, p2: 0 }, findings: [], suggestedTests: [], repairInstructions: [],
+      },
+    }),
+  });
+  assert.equal(accepted.exitCode, 0, accepted.err);
+  const plan = JSON.parse(await readFile(path.join(roundDir, 'review-plan.json'), 'utf8'));
+  assert.equal(plan.route, 'host-agent');
+  assert.equal(plan.status, 'COMPLETED');
+  assert.equal(plan.reviewerKind, 'fresh-subagent');
+  assert.equal(plan.selectedReviewer, 'codex-subagent');
 });
 
 test('accept enforces P1 as FAIL and returns a non-zero gate status', async (t) => {

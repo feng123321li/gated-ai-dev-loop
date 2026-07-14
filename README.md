@@ -1,6 +1,6 @@
 # 门禁式 AI 开发循环
 
-一套适用于任意 AI Agent 的通用开发 Skill。前期需求可以来自对话、Issue、PRD、截图、原型或代码分析；开发前统一冻结唯一授权，再通过宿主自动派遣或通用手动提示词完成实现，最后由独立上下文验收。
+一套适用于任意 AI Agent 的通用开发 Skill。前期需求可以来自对话、Issue、PRD、截图、原型或代码分析；开发前统一冻结唯一授权，再通过宿主自动派遣或通用手动提示词完成实现，最后按宿主能力选择其他独立 Agent、同宿主全新子 Agent 或人工语义验收。
 
 这不是某个需求框架的插件，也不限制 Windows。核心 Skill 是纯 Markdown，安装器和辅助 CLI 使用 Node.js，可在 Windows、macOS 和 Linux 运行。
 
@@ -13,12 +13,12 @@
 5. active 模式由宿主自动启动可调度的全新隔离开发 Agent；manual 模式只返回可交给任意 Agent 的通用后续提示词。开发 Agent 均不继承前期对话。
 6. Light 固定单 Agent；可证明任务和写入范围互斥的 Full 可由用户选择 single 或 parallel。
 7. 宿主先检查各 Agent 的改动归属，再对聚合 diff 执行范围、指纹和冻结测试，生成机械自检报告。
-8. 优先使用与开发者分离的全新只读其他 Agent 验收；没有其他 Agent 时使用宿主的全新验收子 Agent，两者均不继承开发上下文，并生成 P0/P1/P2 分级报告。
+8. 优先使用与开发者分离的全新只读其他 Agent 验收；没有其他产品时使用宿主的全新验收子 Agent；两者均不继承开发上下文。两者都不可用时生成完整人工验收包，不阻止开发和机械门禁，也不声称独立语义验收通过。
 9. 开发完成后，任意新宿主 Agent 都可读取 `gate-continuation.md` 和开发结果接管机械门禁，无需返回原对话；`accept` 在任务根目录刷新最终验收报告。
 
 完整的角色、门禁、升级和修复循环见：[工作流程图](skills/gated-ai-dev-loop/references/workflow.md)。
 
-`gated-loop` 已实现路由、基线准备、冻结、机械自检和独立验收。开发方式选择、Agent 派遣、`development-overview.md`、`progress.md` 与修复轮次仍由宿主按 Skill 维护；CLI 只执行可确定验证，不代替宿主协调或用户确认。
+`gated-loop` 已实现路由、基线准备、冻结、机械自检和能力驱动的验收落盘。开发方式选择、Agent 派遣、`development-overview.md`、`progress.md` 与修复轮次仍由宿主按 Skill 维护；CLI 只执行可确定验证，不代替宿主协调或用户确认。
 
 ## 开发总览与进度
 
@@ -32,19 +32,19 @@
 
 ## 验收报告与严重级别
 
-每轮机械门禁生成 `self-check-report.md` 和 `gate-evidence.json`；独立审查生成轮次级 `acceptance-report.md` 和 `review.json`，并刷新任务根目录的 `final-acceptance-report.md`：
+每轮机械门禁生成 `self-check-report.md` 和 `gate-evidence.json`；语义验收先生成 `review-plan.json`，再生成轮次级 `acceptance-report.md` 和 `review.json`，并刷新任务根目录的 `final-acceptance-report.md`：
 
 - `P0`：数据、安全、权限、不可逆破坏或关键服务级严重问题，阻断验收；
 - `P1`：需求、功能、关键边界、事务、兼容性或测试级阻断问题，阻断验收；
 - `P2`：不阻断当前验收的改进建议，允许 PASS，但人工验收时必须展示。
 
-证据、隔离或改动归属无法证明时使用 `NEED_HUMAN_REVIEW`，不得归类为普通 P1。验收报告不包含自动合并、提交或 Git commit message 建议。
+证据、隔离或改动归属无法证明，或没有全新隔离 Agent/子 Agent 能力时使用 `NEED_HUMAN_REVIEW`，不得归类为普通 P1。验收报告不包含自动合并、提交或 Git commit message 建议。
 
 ## 环境要求
 
 - Node.js `20.19` 或更高版本；
 - 需要 active 开发时，宿主必须能创建全新隔离开发 Agent；
-- 自动独立验收优先使用已安装的 Codex CLI，命令不存在时可使用 Claude CLI；宿主也可把全新其他 Agent 或验收子 Agent 的 JSON 结果交给 CLI 校验。
+- 独立验收不要求第二种 Agent 产品；宿主可以使用全新其他 Agent 或同产品验收子 Agent，并把 JSON 结果交给 CLI 校验。Codex/Claude CLI 只是用户显式启用的可选适配器。
 
 ## 安装
 
@@ -139,7 +139,7 @@ manual 选中后不再选择 Codex、Claude 或其他运行时，也不返回工
 - `single`：一个开发上下文完成冻结任务；Light 固定使用。
 - `parallel`：多个隔离开发 Agent 按任务组并行；Agent 产品可以不同，只对可证明路径互斥、没有并发语义依赖且具备聚合测试的 Full 开放。
 
-parallel 必须先展示 `parallel-plan.json` 中的任务、验收 ID、文件白名单、依赖、波次和最大并发数并取得用户选择。选择 `active + parallel` 后，宿主自动按确认计划派遣子 Agent，不再逐个询问；manual + parallel 则输出多份独立交接。每个 Agent 只写自己的路径；宿主逐个检查归属、机械集成无冲突结果，再对最终完整 diff 执行所有测试和一次独立验收。任何路径重叠、语义冲突或归属不明都会停止自动集成。
+parallel 必须先展示 `parallel-plan.json` 中的任务、验收 ID、文件白名单、依赖、波次和最大并发数并取得用户选择。选择 `active + parallel` 后，宿主自动按确认计划派遣子 Agent，不再逐个询问；manual + parallel 则输出多份独立交接。每个 Agent 只写自己的路径；宿主逐个检查归属、机械集成无冲突结果，再对最终完整 diff 执行所有测试和能力驱动的语义验收。任何路径重叠、语义冲突或归属不明都会停止自动集成。
 
 ## 模式
 
@@ -168,7 +168,7 @@ Light 简报通过 `start --brief brief.json` 传入，只有用户确认后才�
 
 开始开发前，宿主必须在当前轮次写入 `development-snapshot.json`，记录基线指纹、开发前 commit、允许路径和已有脏改动。`self-check` 据此计算本轮真实 diff、执行冻结测试，并生成 `gate-evidence.json` 与 `self-check-report.md`；缺少快照或归属不明时关闭门禁。
 
-`accept` 只接受 PASS 的机械证据。默认优先在系统临时目录调用全新只读 Codex 进程，命令不存在时调用全新只读 Claude；外部 reviewer 不以项目目录为工作目录。宿主能调度 Agent 时，优先让与开发者分离的其他 Agent 验收，没有时再启动空开发上下文的验收子 Agent，并用 `--review-result <file>` 或 `--review-result -` 提交结果。CLI 校验 reviewer 来源、无开发上下文隔离、全部验收 ID、P0/P1/P2 数量和结论，再写入 `review.json`、轮次级 `acceptance-report.md` 与根级 `final-acceptance-report.md`。
+`accept` 只接受 PASS 的机械证据，并先写出可见的 `review-plan.json`。宿主能调度 Agent 时，优先让与开发者分离的其他 Agent 验收，没有其他产品时再启动空开发上下文的同产品验收子 Agent，并用 `--review-result <file>` 或 `--review-result -` 提交结果。没有隔离能力时，CLI 默认不扫描或启动外部工具，而是生成 `NEED_HUMAN_REVIEW` 人工验收包；只有显式指定 `--reviewer codex|claude|auto` 才启用可选 CLI 适配器。CLI 校验 reviewer 来源、无开发上下文隔离、全部验收 ID、P0/P1/P2 数量和结论，再写入 `review.json`、轮次级 `acceptance-report.md` 与根级 `final-acceptance-report.md`。
 
 ## 安全边界
 
@@ -176,7 +176,7 @@ Light 简报通过 `start --brief brief.json` 传入，只有用户确认后才�
 - 不自动读取 `.env`、生产配置、凭据目录或用户主目录作为需求来源。
 - 不自动提交、推送、合并、迁移、发布或创建其他外部状态。
 - 无法确认改动归属、上下文隔离或只读约束时返回 `NEED_HUMAN_REVIEW`。
-- 测试未运行不能进入语义验收；独立审查 `PASS` 也不替代用户最终确认。
+- 测试未运行不能进入语义验收；没有第二种 Agent 不阻止开发和机械门禁，但人工路径不得标记为独立 `PASS`；独立审查 `PASS` 也不替代用户最终确认。
 
 ## 验证
 

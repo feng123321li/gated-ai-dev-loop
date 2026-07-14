@@ -1,6 +1,6 @@
 ---
 name: gated-ai-dev-loop
-description: 将任意形式的软件需求路由为 Full、Light 或 None，通过统一运行目录、冻结开发基线、人可读总览与进度、宿主自动派遣隔离开发 Agent 或输出任意 Agent 可接收的通用手动提示词、可由任意新宿主恢复的机械门禁、能力驱动的独立或人工语义验收、P0/P1/P2 报告和用户确认来治理 AI 辅助开发。适用于任意单 Agent、多 Agent 或支持子 Agent 的宿主发起、接收或接管软件功能开发、缺陷修复、重构、迁移及其他仓库改动。
+description: 将任意形式的软件需求路由为 Full、Light 或 None，通过统一协调目录、冻结开发基线、跨目录与多微服务工作区覆盖门禁、人可读总览与进度、宿主自动派遣隔离开发 Agent 或输出任意 Agent 可接收的通用手动提示词、可由任意新宿主恢复的机械门禁、能力驱动的独立或人工语义验收、P0/P1/P2 报告和用户确认来治理 AI 辅助开发。适用于任意单 Agent、多 Agent 或支持子 Agent 的宿主发起、接收或接管单仓库及跨仓库的软件功能开发、缺陷修复、重构、迁移。
 ---
 
 # 门禁式 AI 开发循环
@@ -33,6 +33,7 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 - 数据、数据库、配置、存储、API 版本或依赖迁移；
 - 认证、授权、权限、状态机、事务、并发或幂等；
 - 新增外部依赖；
+- 需要写入多个独立工作区、仓库或微服务；
 - 尚未解决的设计选项；
 - 阈值、超时、重试或容量决策；
 - 预计修改超过三个文件；
@@ -42,7 +43,7 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 
 ## 统一运行目录
 
-所有持久化流程产物必须位于项目根目录的 `.ai-dev-loop/<task-id>/`。CLI 缺失时也手工建立同一目录和等价文件；禁止改用 `.acceptance/`、临时规范目录或用户主目录。
+所有持久化流程产物必须位于协调工作区根目录的 `.ai-dev-loop/<task-id>/`。CLI 缺失时也手工建立同一目录和等价文件；禁止改用 `.acceptance/`、临时规范目录或用户主目录。AI 分析后发现任务跨目录、跨仓库或跨微服务时，只选择一个协调工作区保存任务包，其他工作区只保存业务改动，不复制任务包。
 
 冻结核心产物、`development-overview.md`、`progress.md` 和最新的 `final-acceptance-report.md` 放在任务目录根部；每次主动调用、手动交接、修复和验收的原始证据放在 `rounds/round-NN/`。开发代理不得修改 `.ai-dev-loop/**`，只有宿主可以写入总览、进度、轮次状态和证据。临时 runner 只能放在系统临时目录，不能进入业务仓库。
 
@@ -57,6 +58,18 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 
 安装 `gated-loop` 后优先用它完成确定性路由和冻结；否则手工建立等价文件。没有实际运行命令时不得声称已由 CLI 完成。
 
+## 验证跨目录工作区覆盖
+
+冻结后先判断每个会产生写入的 `T-NNN` 是否只落在一个工作区。只要需求分析发现任务跨目录、跨仓库、跨微服务，或需要同时修改提供方与消费方，就必须读取 [multi-workspace.md](references/multi-workspace.md)，并在开发方式选择前完成工作区覆盖门禁：
+
+- 为每个写入任务列出稳定的工作区 ID、规范化绝对根路径、仓库相对允许路径、测试工作目录和依赖顺序；
+- 取得用户对精确工作区和写入范围的确认，生成当前轮次 `workspace-authorization.json`；
+- 验证所有任务、路径、测试和依赖均被覆盖，生成 `workspace-coverage.json`；
+- 只有覆盖结论为 `PASS` 才能创建 `prompt.md`、展示 active/manual 选择或派遣开发 Agent；
+- 覆盖不完整时进入 `WAITING_FOR_WORKSPACE_AUTHORIZATION`，在总览和进度中列出缺口，不得生成一个已知会 `BLOCKED` 的交接。
+
+单工作区继续使用原有契约。多工作区使用 schema v2 开发快照，并逐工作区执行机械门禁后再聚合。缺少的只是已冻结服务的物理路径或权限时可在新轮次补充授权；如果新增目录会扩大需求、任务或验收范围，则回到需求确认并重新冻结。
+
 ## 维护人工可读状态
 
 初始化任务目录后读取 [tracking.md](references/tracking.md)。在请求用户确认需求前生成 `development-overview.md`，并创建 `progress.md`。每次状态转换后以及向用户交还控制权前，由宿主更新进度；开发者和审查者保持只读。
@@ -65,7 +78,7 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 
 ## 选择开发方式并隔离实现
 
-用户确认并冻结开发授权后，进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`。开始任何代码写入前读取 [development.md](references/development.md)，向用户展示两个选项并等待明确选择：
+用户确认并冻结开发授权、且所需工作区覆盖门禁通过后，进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`。开始任何代码写入前读取 [development.md](references/development.md)，向用户展示两个选项并等待明确选择：
 
 - `active`（直接运行）：宿主自动启动其可调度的全新隔离开发 Agent。
 - `manual`（手动运行）：宿主输出完整交接卡片和一份任意开发 Agent 可接收的通用后续提示词。
@@ -99,10 +112,10 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 单个开发上下文结束、所有并行 Agent 返回，或任意宿主 Agent 根据 `gate-continuation.md` 接管后，依次执行：
 
 1. 验证所有冻结产物及指纹未改变。
-2. 对比开发前快照与真实仓库 diff。
+2. 对比开发前快照与真实仓库 diff；多工作区时逐个验证根路径、HEAD、已有改动与真实 diff 归属。
 3. 并行时先验证每个 Agent 的改动归属，再拒绝重叠、受保护、敏感、无关或越界改动。
 4. 根据真实 diff 重新分类；必要时把 Light 升级为 Full。
-5. 用 `shell:false` 或宿主等价的直接进程 API 执行冻结测试 argv。
+5. 用 `shell:false` 或宿主等价的直接进程 API，在每条命令已授权的工作目录中执行冻结测试 argv；多工作区完成逐仓库测试后再执行跨服务集成检查。
 6. 记录命令、退出码以及通过、失败、错误、跳过数量；测试未运行即门禁失败。
 7. 根据机械证据生成当前轮次 `self-check-report.md`；只有结论 PASS 才能进入语义验收路由。
 8. 禁止自动提交、推送、合并、迁移、发布或公开。
@@ -110,6 +123,8 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 严格区分开发前已存在的脏改动。无法确定文件或代码行归属时停止，并返回 `NEED_HUMAN_REVIEW`。
 
 CLI 可用时执行 `gated-loop self-check --task <id> --round <NN>`；它要求当前轮次已有 `development-snapshot.json`，并写入 `gate-evidence.json` 和 `self-check-report.md`。命令返回非 PASS 时不得继续验收。
+
+当前 CLI 的 `self-check` 只自动处理单工作区 schema v1。多工作区 schema v2 必须由宿主按 [multi-workspace.md](references/multi-workspace.md) 逐工作区执行等价检查并聚合证据；不得用一次单仓库命令声称跨仓库门禁通过。
 
 ## 能力驱动的语义验收
 
@@ -140,6 +155,7 @@ CLI 可用时执行 `gated-loop self-check --task <id> --round <NN>`；它要求
 
 - 需要理解、展示或解释完整流程时读取 [workflow.md](references/workflow.md)。
 - 路由、起草或冻结时读取 [baselines.md](references/baselines.md)。
+- AI 分析后发现跨目录、跨仓库、跨微服务或提供方/消费方联动时读取 [multi-workspace.md](references/multi-workspace.md)。
 - 创建开发总览、更新进度或进入人工验收时读取 [tracking.md](references/tracking.md)。
 - 选择开发方式、生成交接或执行机械门禁时读取 [development.md](references/development.md)。
 - 评估并行资格、拆分任务、启动多子 Agent 或集成结果时读取 [parallel-development.md](references/parallel-development.md)。

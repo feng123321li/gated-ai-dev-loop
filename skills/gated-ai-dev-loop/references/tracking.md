@@ -35,6 +35,7 @@
 | 开发方式 | 待选择 / active / manual |
 | 开发 Agent | 待派遣 / 用户手动选择 / <agent-id> |
 | 执行拓扑 | 待选择 / single / parallel |
+| 工作区覆盖 | 单工作区 / 待授权 / PASS / BLOCKED |
 | 权威基线 | [baseline.md](baseline.md) 或 [light-brief.md](light-brief.md) |
 | 实时进度 | [progress.md](progress.md) |
 
@@ -50,6 +51,7 @@
 
 ## 开发与验收安排
 - 开发者：<自动派遣规则、手动交接或实际 Agent 标识>
+- 工作区：<单工作区摘要；或 workspace-authorization.json、workspace-coverage.json 与依赖波次>
 - 机械门禁：<测试 argv 和范围检查摘要>
 - 语义验收：其他全新只读 Agent → 同宿主全新只读子 Agent → 人工语义验收；前两者均无开发上下文，第三种不得声称独立 PASS
 - 最终确认：用户人工验收
@@ -61,6 +63,8 @@
 - [任务清单](tasks.json)
 - [验收清单](acceptance.json)
 - [决策记录](decision-log.md)
+- [当前轮次工作区授权](rounds/round-NN/workspace-authorization.json)（跨工作区时）
+- [当前轮次工作区覆盖](rounds/round-NN/workspace-coverage.json)（跨工作区时）
 - [轮次证据](rounds/)
 ```
 
@@ -78,6 +82,7 @@
 | 当前阶段 | <需求确认 / 方式选择 / 开发 / 门禁 / 语义验收 / 人工确认> |
 | 状态 | <与 state.json 一致> |
 | 当前轮次 | round-NN / 尚未开始 |
+| 工作区覆盖 | 单工作区 / WAITING / PASS / BLOCKED |
 | 任务进度 | <已完成数>/<总数>，不使用主观百分比 |
 | 活跃开发 Agent | <agent-id 列表或无> |
 | 下一责任方 | 用户 / 宿主 Agent / developer Agent / reviewer Agent |
@@ -86,6 +91,11 @@
 | 任务 | 波次 / Agent | 状态 | 证据 | 说明 |
 | --- | --- | --- | --- | --- |
 | T-001 | wave-1 / agent-01 | PENDING / IN_PROGRESS / BLOCKED / COMPLETED | <相对链接> | <事实> |
+
+## 工作区状态
+| 工作区 | 绝对根路径 | 任务 | 授权 | 快照 / 门禁 | 阻断 |
+| --- | --- | --- | --- | --- | --- |
+| service-a | <absolute-root> | T-001 | CONFIRMED / MISSING | <相对链接或尚未生成> | 无 / <解除条件> |
 
 ## 最新门禁与验收
 - 开发结果：<尚未产生或 result.json 链接>
@@ -107,7 +117,7 @@
 
 ## 必须更新时间点
 
-在初始化、等待需求确认、完成冻结、等待开发方式或执行拓扑选择、自动派遣开始或结束、每个并行 Agent 开始或结束、主动调用失败、手动交接和返回、结果集成、每次机械门禁、验收能力选择、独立或人工语义验收、修复轮次、等待人工确认、用户接受或拒绝、`NEED_HUMAN_REVIEW` 时更新 `progress.md`。
+在初始化、等待需求确认、完成冻结、等待工作区授权、工作区覆盖通过或阻断、等待开发方式或执行拓扑选择、自动派遣开始或结束、每个并行 Agent 开始或结束、主动调用失败、手动交接和返回、结果集成、每次机械门禁、验收能力选择、独立或人工语义验收、修复轮次、等待人工确认、用户接受或拒绝、`NEED_HUMAN_REVIEW` 时更新 `progress.md`。
 
 任务状态只能根据真实证据推进；开发者声明不能单独把任务标记为 `COMPLETED`。没有证据时保持 `PENDING`、`IN_PROGRESS` 或 `BLOCKED`。
 

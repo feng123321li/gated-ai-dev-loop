@@ -19,6 +19,8 @@
 ├── final-acceptance-report.md（首次独立验收后生成）
 └── rounds/
     └── round-NN/
+        ├── workspace-authorization.json（跨工作区时必需）
+        ├── workspace-coverage.json（跨工作区时必需）
         ├── development-mode.json
         ├── parallel-plan.json（仅 parallel）
         ├── prompt.md
@@ -37,7 +39,9 @@
 
 ## 选择实际开发方式
 
-基线冻结后、任何代码写入前，设置状态 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION` 并显示：
+基线冻结后、任何代码写入前，先判断冻结任务是否跨目录、跨仓库或跨微服务。跨工作区时必须按照 [multi-workspace.md](multi-workspace.md) 生成并验证 `workspace-authorization.json` 与 `workspace-coverage.json`；覆盖未通过时保持 `WAITING_FOR_WORKSPACE_AUTHORIZATION`，不得生成 `prompt.md`、展示开发方式或启动开发 Agent。
+
+单工作区任务，或多工作区覆盖结论为 `PASS` 后，设置状态 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION` 并显示：
 
 ```text
 需求基线已冻结，请选择开发方式：
@@ -67,7 +71,9 @@
 
 ## 开发提示词契约
 
-从冻结交接包生成 `rounds/round-NN/prompt.md`，并把以下规则放在任务内容之后。无论 active 还是 manual，开发 Agent 只读取冻结文件、当前 assignment、允许路径、开发前快照和该提示词；不得传入需求分析对话、隐藏推理或原宿主会话摘要。
+只能在工作区覆盖门禁通过后，从冻结交接包生成 `rounds/round-NN/prompt.md`，并把以下规则放在任务内容之后。无论 active 还是 manual，开发 Agent 只读取冻结文件、当前 assignment、允许路径、开发前快照和该提示词；不得传入需求分析对话、隐藏推理或原宿主会话摘要。
+
+多工作区提示词必须逐个列出工作区 ID、规范化绝对根路径、任务 ID、仓库相对允许路径、测试命令的 `cwd` 与 argv、依赖波次，以及 `workspace-authorization.json`、`workspace-coverage.json` 和 schema v2 快照路径。接收 Agent 在首次写入前只读预检全部工作区；任一不可访问或不匹配时在零写入状态返回 `BLOCKED`。
 
 ```text
 冻结交接包是唯一开发授权。
@@ -108,10 +114,13 @@ single 每轮默认只进行一次主动调用；parallel 的每个 assignment �
 门禁接续：<task-dir>/rounds/<round>/gate-continuation.md
 ```
 
+多工作区时把“项目路径”改为“协调工作区”，并紧接着列出完整工作区清单：`workspaceId`、绝对根路径、授权状态、任务 ID、允许路径、测试 `cwd` 和依赖波次。不得只展示协调工作区或当前 shell 所在目录。
+
 紧接着输出一份与 Agent 产品、CLI 和操作系统无关的可复制提示词：
 
 ```text
-请在项目 <absolute-project-path> 中执行本轮冻结开发任务。
+请在协调工作区 <absolute-project-path> 发起本轮冻结开发任务，并仅在下列已授权工作区中写入：
+<逐项列出 workspaceId、绝对根路径、任务 ID、允许路径和依赖顺序；单工作区时列出一项>
 
 只读取并严格执行：
 1. <absolute-task-dir>/development-handoff.md
@@ -122,7 +131,7 @@ single 每轮默认只进行一次主动调用；parallel 的每个 assignment �
 完成后按 prompt.md 规定的结构化结果契约返回。
 ```
 
-不能输出 `claude`、`codex` 等工具专属启动命令，也不能在手动交接前要求用户选择接收 Agent。冻结范围包含多个仓库时，在提示词中逐个列出绝对路径和授权状态；缺少任一工作区时点名该仓库并要求 `BLOCKED`。`manual + parallel` 为每个 assignment 分别输出一份只含自身任务、允许路径和对应提示词路径的通用提示词。
+不能输出 `claude`、`codex` 等工具专属启动命令，也不能在手动交接前要求用户选择接收 Agent。冻结范围包含多个工作区时，必须先完成交接覆盖门禁，随后在提示词中逐个列出绝对路径和授权状态；宿主已知缺少任一工作区时不得输出提示词。接收端环境与宿主不一致而缺少工作区时，开发 Agent 点名该工作区并在任何写入前返回 `BLOCKED`。`manual + parallel` 为每个 assignment 分别输出一份只含自身任务、工作区、允许路径和对应提示词路径的通用提示词。
 
 开发 Agent 不需要知道原宿主是谁。它只返回后文规定的结构化结果，不自行验收。宿主在开始开发前同时生成 `rounds/round-NN/gate-continuation.md`：
 
@@ -170,6 +179,8 @@ single 每轮默认只进行一次主动调用；parallel 的每个 assignment �
 
 宿主把快照写入 `rounds/round-NN/development-snapshot.json`。`allowedPaths` 是本轮唯一写入白名单；Light 只能列出冻结 Scope 中的精确文件，Full 可以使用安全的仓库相对 glob。已有敏感文件只记录路径和状态，不读取内容，并直接阻断开发。
 
+以下 schema v1 只用于单工作区。跨工作区使用 [multi-workspace.md](multi-workspace.md#多工作区开发快照) 定义的 schema v2，对每个工作区分别记录根路径、分支、HEAD、任务、允许路径和已有改动。
+
 ```json
 {
   "schemaVersion": 1,
@@ -199,11 +210,11 @@ gated-loop self-check --task <task-id> --round <NN>
 ## 机械门禁顺序
 
 1. 重新读取并验证冻结产物。
-2. 相对开发前快照计算真实改动路径。
+2. 相对开发前快照计算真实改动路径；多工作区逐个计算并验证归属。
 3. 拒绝 `.git/**`、`.ai-dev-loop/**`、凭据文件、冻结产物和无关路径。
 4. Light 的真实路径必须是精确 Scope 的子集，且不超过三个文件。
 5. 根据真实 diff 重新执行 Full/Light 硬条件检查。
-6. 逐条直接执行冻结测试 argv，不得拼成 shell 字符串。
+6. 逐条在授权的工作区和 `cwd` 中直接执行冻结测试 argv，不得拼成 shell 字符串；再按依赖顺序执行跨服务集成检查。
 7. 把命令、退出码和测试数量写入当前轮次 `gate-evidence.json`；失败、错误、无正当理由的跳过、超时或未运行都视为阻断。
 8. 只有全部机械门禁通过后才能开始语义验收。
 

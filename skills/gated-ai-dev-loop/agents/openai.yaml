@@ -1,4 +1,4 @@
 interface:
   display_name: "门禁式 AI 开发循环"
-  short_description: "支持单 Agent、子 Agent 与多 Agent 的通用门禁开发验收流程"
-  default_prompt: "使用 $gated-ai-dev-loop 路由并冻结这个开发任务，在开发前让我选择直接或手动运行，并按可用能力选择其他独立 Agent、全新验收子 Agent 或人工语义验收。"
+  short_description: "支持跨目录、多微服务和多 Agent 的通用门禁开发流程"
+  default_prompt: "使用 $gated-ai-dev-loop 分析并冻结这个开发任务；若涉及跨目录或多微服务，先完成所有工作区覆盖门禁，再让我选择直接或手动运行。"

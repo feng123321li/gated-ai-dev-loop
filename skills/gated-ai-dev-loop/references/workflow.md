@@ -16,7 +16,11 @@ flowchart TD
     CONFIRM -->|否| HOST
     CONFIRM -->|是| FREEZE["冻结唯一开发授权与指纹"]
 
-    FREEZE --> MODE_WAIT["WAITING_FOR_DEVELOPMENT_MODE_SELECTION"]
+    FREEZE --> WORKSPACE_CHECK{"所有写入任务的工作区<br/>路径、权限、测试与依赖已覆盖？"}
+    WORKSPACE_CHECK -->|否| WORKSPACE_WAIT["WAITING_FOR_WORKSPACE_AUTHORIZATION<br/>列出缺失目录、任务与解除条件"]
+    WORKSPACE_WAIT --> WORKSPACE_CHECK
+    WORKSPACE_CHECK -->|是| WORKSPACE_PASS["生成 workspace-authorization.json<br/>与 workspace-coverage.json（跨工作区）"]
+    WORKSPACE_PASS --> MODE_WAIT["WAITING_FOR_DEVELOPMENT_MODE_SELECTION"]
     MODE_WAIT --> DEV_MODE{"用户选择开发方式"}
     DEV_MODE -->|直接运行 active| ACTIVE_HOST["宿主自动派遣可用的<br/>全新隔离开发 Agent"]
     DEV_MODE -->|手动运行 manual| MANUAL_RUNTIME["返回任意 Agent 可接收的<br/>通用后续提示词"]
@@ -34,7 +38,7 @@ flowchart TD
     RESELECT --> DEV_MODE
     ACTIVE_RESULT -->|已有或无法判断写入| HUMAN["NEED_HUMAN_REVIEW"]
 
-    DEV_RESULT --> GATES["机械门禁并生成 self-check-report.md<br/>指纹 / diff / 范围 / 测试"]
+    DEV_RESULT --> GATES["机械门禁并生成 self-check-report.md<br/>逐工作区指纹 / diff / 范围 / 测试，再聚合"]
     GATES --> RECLASS{"真实 diff 仍符合原模式？"}
     RECLASS -->|Light 越界| ESCALATE["升级 Full，重新审核与确认"]
     ESCALATE --> HOST
@@ -66,7 +70,7 @@ flowchart TD
 
     class HOST,ROUTE,LIGHT,FULL,RUNTIME,TRACK host;
     class MODE_WAIT,DEV_MODE,ACTIVE_HOST,MANUAL_RUNTIME,TOPOLOGY,SINGLE_DEV,PARALLEL_PLAN,PARALLEL_DEV,INTEGRATE,ACTIVE_RESULT,RESELECT,DEV_RESULT,REPAIR developer;
-    class FREEZE,GATES,RECLASS,ESCALATE,GATE_RESULT gate;
+    class FREEZE,WORKSPACE_CHECK,WORKSPACE_WAIT,WORKSPACE_PASS,GATES,RECLASS,ESCALATE,GATE_RESULT gate;
     class REVIEW_PLAN,REVIEWER,SUBAGENT,OTHER_REVIEW,SUBAGENT_REVIEW,REVIEW_RESULT review;
     class CONFIRM,HUMAN_REVIEW,HUMAN,FINAL_CONFIRM,WAIT,COMPLETE human;
 ```
@@ -74,8 +78,9 @@ flowchart TD
 ## 阅读重点
 
 - 所有产物统一放在 `.ai-dev-loop/<task-id>/`，CLI 缺失也不改变目录。
+- AI 分析发现跨目录、跨仓库或跨微服务时，只在一个协调工作区保存任务包；必须先证明全部写入任务的工作区、路径、测试目录和依赖已覆盖，才允许生成交接提示词。
 - `development-overview.md` 提供稳定任务地图，`progress.md` 在每次状态转换后更新；独立验收后人工优先查看根级 `final-acceptance-report.md`，再按需追溯这两个视图和轮次证据。
-- 需求确认与开发方式选择是两个门禁；冻结后必须由用户明确选择 active 或 manual。
+- 需求确认、跨工作区覆盖与开发方式选择是独立门禁；冻结后先补齐工作区，再由用户明确选择 active 或 manual。
 - active 表示由宿主自动派遣全新隔离开发 Agent，不要求与宿主同类。
 - manual 是正式路径，只返回任意 Agent 可接收的通用后续提示词，不预选工具或输出专属 CLI 命令。
 - 两种方式都使用同一 `development-handoff.md` 和轮次提示词；开发 Agent 不需要前期对话。开发结束后任意新宿主可读取 `gate-continuation.md` 接管机械门禁，不绑定原对话。

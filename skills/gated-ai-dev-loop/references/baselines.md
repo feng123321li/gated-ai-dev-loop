@@ -40,7 +40,7 @@
 记录已解决的选择及理由。
 ```
 
-要求 `R-NNN`、`A-NNN`、`T-NNN` 唯一。每个验收项至少关联一个需求，每个任务同时关联需求与验收项。测试命令只能保存为 JSON argv 数组，不得保存 shell 拼接字符串。
+要求 `R-NNN`、`A-NNN`、`T-NNN` 唯一。每个验收项至少关联一个需求，每个任务同时关联需求与验收项。AI 分析发现任务跨目录、跨仓库或跨微服务时，Scope 和 Tasks 必须说明每个任务所属的逻辑工作区或服务、提供方/消费方关系及依赖顺序；不要把尚未提供的物理绝对路径写成需求事实。测试命令只能保存为 JSON argv 数组，不得保存 shell 拼接字符串；具体工作区和 `cwd` 在当前轮次工作区授权中绑定。
 
 ## Light 简报
 
@@ -89,6 +89,7 @@ CLI 只自动完成路由、校验、指纹和冻结。实现编排、机械门�
 
 - 删除占位符和未解决选项。
 - 确认 Scope 与 Non-Goals 不冲突。
+- 确认每个写入任务所属的逻辑工作区或服务；跨工作区时明确提供方、消费方和契约依赖。
 - 确认验收结果可观察。
 - 确认每条测试命令是 argv 数组，并指向项目真实测试。
 - 使用安全的小写 Agent 标识如实记录宿主，例如 `codex`、`claude`、`opencode`。
@@ -96,4 +97,4 @@ CLI 只自动完成路由、校验、指纹和冻结。实现编排、机械门�
 - 按 `tracking.md` 创建 `development-overview.md` 和 `progress.md`，把进度置为等待需求确认。
 - 展示授权并取得用户明确确认。
 - 在任何实现写入前冻结。
-- 冻结完成后进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`，单独等待用户选择 `active` 或 `manual`；需求确认不能代替开发方式确认。
+- 冻结完成后，单工作区可进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`；跨工作区先按 `multi-workspace.md` 完成授权和覆盖门禁，未通过时进入 `WAITING_FOR_WORKSPACE_AUTHORIZATION`。需求确认不能代替工作区授权或开发方式确认。

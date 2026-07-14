@@ -23,6 +23,8 @@
 
 不得提供隐藏的宿主推理、已放弃方案、早期对话或开发者自评。
 
+parallel 任务只验收最终聚合状态，同时提供 `parallel-plan.json`、每个 Agent 的范围证据和 `integration-result.json`。不得把多个局部审查结论拼接为整体 `PASS`。
+
 ## 审查提示词
 
 ```text

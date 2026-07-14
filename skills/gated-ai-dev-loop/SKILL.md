@@ -1,6 +1,6 @@
 ---
 name: gated-ai-dev-loop
-description: 将任意形式的软件需求路由为 Full、Light 或 None，通过统一运行目录、冻结开发基线、人可读总览与进度、宿主同类主动开发或跨工具手动交接、确定性机械门禁、独立验收和用户确认来治理 AI 辅助开发。适用于功能开发、缺陷修复、重构、迁移及其他仓库改动，也适用于需要阻止需求漂移、查看开发进度、在 Codex 与 Claude 之间交接开发或独立验收的任务。
+description: 将任意形式的软件需求路由为 Full、Light 或 None，通过统一运行目录、冻结开发基线、人可读总览与进度、单 Agent 实现或自动派遣多子 Agent 并行实现、宿主同类主动开发或跨工具手动交接、确定性机械门禁、独立验收和用户确认来治理 AI 辅助开发。适用于功能开发、缺陷修复、重构、迁移及其他仓库改动，也适用于需要阻止需求漂移、查看开发进度、安全拆分并行任务、在 Codex 与 Claude 之间交接开发或独立验收的任务。
 ---
 
 # 门禁式 AI 开发循环
@@ -78,15 +78,27 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 - 冻结授权不完整或冲突时返回 `BLOCKED`；
 - 只报告实现事实，不得报告 `PASS`。
 
-主动调用遇到 `429/529`、容量不可用或等价外部错误时不得连续隐藏重试。确认没有写入后重新进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`，展示失败事实并推荐用户改选 manual；不得自行切换。已经写入或无法确认写入状态时返回 `NEED_HUMAN_REVIEW`。不得复用需求分析上下文作为开发上下文。
+## 选择单 Agent 或并行开发
+
+把 `active/manual` 视为开发方式，把 `single/parallel` 视为执行拓扑。确定开发方式和运行时后，读取 [parallel-development.md](references/parallel-development.md)：
+
+- Light 固定使用 `single`；
+- Full 只有任务组、验收 ID、写入路径、依赖、隔离和聚合测试都明确时才可提供 `parallel`；
+- Full 符合并行资格时，先展示分组计划，再等待用户明确选择 `single` 或 `parallel`。
+
+选择 parallel 后，同一轮所有子 Agent 必须使用相同运行时、全新上下文和互斥写入范围。先执行每个 Agent 的归属门禁，再机械集成无冲突结果，最后对聚合 diff 执行完整机械门禁和一次独立验收。无法证明隔离或归属时退回 single 或返回 `NEED_HUMAN_REVIEW`。
+
+用户确认 `active + parallel` 及完整并行计划后，宿主自动按波次派遣子 Agent，不再逐个请求确认。自动派遣不能代替拓扑选择，也不能擅自改变已确认的任务分组、路径或并发数；计划变化时必须重新展示并确认。宿主不支持创建全新子 Agent 时停止派遣，展示能力限制并让用户改选 single 或 manual。
+
+主动调用遇到 `429/529`、容量不可用或等价外部错误时不得连续隐藏重试。single 确认没有写入后重新进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`，展示失败事实并推荐用户改选 manual；不得自行切换。parallel 按失败 Agent 单独判断：该 Agent 零写入且其他改动归属明确时停止后续波次并让用户选择重新分配、manual 或 single；该 Agent 已写入或归属不明时返回 `NEED_HUMAN_REVIEW`。不得复用需求分析上下文作为开发上下文。
 
 ## 执行机械门禁
 
-开发上下文结束，或用户从手动开发返回后，依次执行：
+单个开发上下文结束、所有并行 Agent 返回，或用户从手动开发返回后，依次执行：
 
 1. 验证所有冻结产物及指纹未改变。
 2. 对比开发前快照与真实仓库 diff。
-3. 拒绝受保护、敏感、无关或越界改动。
+3. 并行时先验证每个 Agent 的改动归属，再拒绝重叠、受保护、敏感、无关或越界改动。
 4. 根据真实 diff 重新分类；必要时把 Light 升级为 Full。
 5. 用 `shell:false` 或宿主等价的直接进程 API 执行冻结测试 argv。
 6. 记录命令、退出码以及通过、失败、错误、跳过数量；测试未运行即门禁失败。
@@ -119,4 +131,5 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 - 路由、起草或冻结时读取 [baselines.md](references/baselines.md)。
 - 创建开发总览、更新进度或进入人工验收时读取 [tracking.md](references/tracking.md)。
 - 选择开发方式、生成交接或执行机械门禁时读取 [development.md](references/development.md)。
+- 评估并行资格、拆分任务、启动多子 Agent 或集成结果时读取 [parallel-development.md](references/parallel-development.md)。
 - 独立验收或准备修复轮次时读取 [acceptance.md](references/acceptance.md)。

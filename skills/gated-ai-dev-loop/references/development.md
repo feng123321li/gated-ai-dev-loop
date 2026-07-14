@@ -19,8 +19,11 @@
 └── rounds/
     └── round-NN/
         ├── development-mode.json
+        ├── parallel-plan.json（仅 parallel）
         ├── prompt.md
         ├── result.json
+        ├── agents/（仅 parallel）
+        ├── integration-result.json（仅 parallel）
         ├── gate-evidence.json
         └── review.json
 ```
@@ -49,10 +52,13 @@
   "mode": "manual",
   "hostRuntime": "codex",
   "developerRuntime": "claude",
+  "topology": "single",
   "status": "WAITING_FOR_MANUAL_DEVELOPER",
   "selectedBy": "user"
 }
 ```
+
+确定开发运行时后按 `parallel-development.md` 评估执行拓扑。Light 直接记录 `single`；Full 符合资格时必须等待用户选择。等待期间状态使用 `WAITING_FOR_EXECUTION_TOPOLOGY_SELECTION`。
 
 ## 开发提示词契约
 
@@ -70,14 +76,15 @@
 
 ## 主动模式
 
-Codex 宿主应启动全新的 Codex 开发 agent、子任务或独立任务，只传入冻结交接、允许路径和结果契约。Claude 宿主应启动全新的 Claude agent、子会话或隔离进程并传入相同内容。不能证明上下文隔离时改用 manual。
+Codex 宿主应启动全新的 Codex 开发 agent、子任务或独立任务，只传入冻结交接、允许路径和结果契约。Claude 宿主应启动全新的 Claude agent、子会话或隔离进程并传入相同内容。用户确认 active + parallel 计划后，宿主自动按波次派遣多个同运行时子 Agent，不再逐个请求确认。不能证明子 Agent 能力或上下文隔离时改用 manual 或 single。
 
 临时 runner 只能放入系统临时目录。用 argv 和 `shell:false` 启动外部进程，不得在业务仓库创建 `run-*.mjs`、批处理或临时提示脚本。
 
-每轮默认只进行一次主动调用。只有本地参数错误且确认零写入时，说明原因并取得用户同意后才允许修正重试一次。遇到 `429/529`、模型容量、认证或网关错误时：
+single 每轮默认只进行一次主动调用；parallel 的每个 assignment 也只调用一次。只有本地参数错误且确认对应开发单元零写入时，说明原因并取得用户同意后才允许修正重试一次。遇到 `429/529`、模型容量、认证或网关错误时：
 
-- 确认零写入：记录失败，回到 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION` 并推荐 manual；
-- 已有写入或无法确认：停止并返回 `NEED_HUMAN_REVIEW`。
+- single 确认零写入：记录失败，回到 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION` 并推荐 manual；
+- parallel 的失败 Agent 确认零写入且其他归属明确：停止后续波次，按并行契约请求重新分配、manual 或 single；
+- 失败开发单元已有写入或无法确认归属：停止并返回 `NEED_HUMAN_REVIEW`。
 
 不得通过隐藏的连续重试延长不可见交互，也不得在用户未选择 manual 时自行开始手动路径。
 
@@ -91,6 +98,7 @@ Codex 宿主应启动全新的 Codex 开发 agent、子任务或独立任务，�
 任务目录：<project>/.ai-dev-loop/<task-id>
 冻结交接：<task-dir>/handoff-to-claude.md
 开发运行时：codex | claude
+执行拓扑：single | parallel
 当前状态：WAITING_FOR_MANUAL_DEVELOPER
 完成后返回当前宿主并输入：开发完成，请继续机械门禁
 ```

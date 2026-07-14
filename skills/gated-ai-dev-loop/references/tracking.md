@@ -32,6 +32,7 @@
 | 宿主 | Codex / Claude |
 | 开发方式 | 待选择 / active / manual |
 | 开发运行时 | 待选择 / Codex / Claude |
+| 执行拓扑 | 待选择 / single / parallel |
 | 权威基线 | [baseline.md](baseline.md) 或 [light-brief.md](light-brief.md) |
 | 实时进度 | [progress.md](progress.md) |
 
@@ -76,12 +77,13 @@
 | 状态 | <与 state.json 一致> |
 | 当前轮次 | round-NN / 尚未开始 |
 | 任务进度 | <已完成数>/<总数>，不使用主观百分比 |
+| 活跃开发 Agent | <agent-id 列表或无> |
 | 下一责任方 | 用户 / 宿主 / Codex developer / Claude developer / reviewer |
 
 ## 任务进度
-| 任务 | 状态 | 证据 | 说明 |
-| --- | --- | --- | --- |
-| T-001 | PENDING / IN_PROGRESS / BLOCKED / COMPLETED | <相对链接> | <事实> |
+| 任务 | 波次 / Agent | 状态 | 证据 | 说明 |
+| --- | --- | --- | --- | --- |
+| T-001 | wave-1 / agent-01 | PENDING / IN_PROGRESS / BLOCKED / COMPLETED | <相对链接> | <事实> |
 
 ## 最新门禁与验收
 - 开发结果：<尚未产生或 result.json 链接>
@@ -103,7 +105,7 @@
 
 ## 必须更新时间点
 
-在初始化、等待需求确认、完成冻结、等待开发方式选择、开始或结束开发、主动调用失败、手动交接和返回、每次机械门禁、独立审查、修复轮次、等待人工验收、用户接受或拒绝、`NEED_HUMAN_REVIEW` 时更新 `progress.md`。
+在初始化、等待需求确认、完成冻结、等待开发方式或执行拓扑选择、自动派遣开始或结束、每个并行 Agent 开始或结束、主动调用失败、手动交接和返回、结果集成、每次机械门禁、独立审查、修复轮次、等待人工验收、用户接受或拒绝、`NEED_HUMAN_REVIEW` 时更新 `progress.md`。
 
 任务状态只能根据真实证据推进；开发者声明不能单独把任务标记为 `COMPLETED`。没有证据时保持 `PENDING`、`IN_PROGRESS` 或 `BLOCKED`。
 

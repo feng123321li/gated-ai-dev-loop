@@ -1,6 +1,6 @@
 ---
 name: gated-ai-dev-loop
-description: 将任意形式的软件需求按 None/Light/Full 门禁等级、Micro/Task/Capability/Project 工作规模和 Feature/Bugfix/Refactor/Migration/Maintenance/Docs/Test 变更类型治理，通过已有任务优先恢复、统一协调目录、冻结开发基线、完整项目总纲、里程碑/工作流/任务拆解、逐 SOP 进度回写、跨目录与多微服务覆盖门禁、隔离开发、机械门禁、独立或人工语义验收、P0/P1/P2 报告和用户确认来管理 AI 辅助开发。适用于单 Agent、多 Agent 或支持子 Agent 的宿主发起、接收或接管单仓库及跨仓库的软件开发、缺陷修复、重构、迁移和大型完整项目，也适用于开发或验收后的后续对话：继续已有任务、人工验收时要求修改、调整目标或范围、补充建议、采纳 P2、创建关联后续任务，以及上下文压缩或新会话后的任务恢复。
+description: 将任意形式的软件需求按 None/Light/Full 门禁等级、Micro/Task/Capability/Project 工作规模和 Feature/Bugfix/Refactor/Migration/Maintenance/Docs/Test 变更类型治理，通过根级任务注册表确定性恢复、统一协调目录、冻结开发基线、完整项目总纲、里程碑/工作流/任务拆解、逐 SOP 进度回写、跨目录与多微服务覆盖门禁、隔离开发、机械门禁、独立或人工语义验收、P0/P1/P2 报告和用户确认来管理 AI 辅助开发。适用于单 Agent、多 Agent 或支持子 Agent 的宿主发起、接收或接管单仓库及跨仓库的软件开发、缺陷修复、重构、迁移和大型完整项目，也适用于开发或验收后的后续对话：继续已有任务、人工验收时要求修改、调整目标或范围、补充建议、采纳 P2、创建关联后续任务，以及上下文压缩或新会话后的任务恢复。
 ---
 
 # 门禁式 AI 开发循环
@@ -52,19 +52,22 @@ description: 将任意形式的软件需求按 None/Light/Full 门禁等级、Mi
 
 ## 统一运行目录
 
-所有持久化流程产物必须位于协调工作区根目录的 `.ai-dev-loop/<task-id>/`。CLI 缺失时也手工建立同一目录和等价文件；禁止改用 `.acceptance/`、临时规范目录或用户主目录。AI 分析后发现任务跨目录、跨仓库或跨微服务时，只选择一个协调工作区保存任务包，其他工作区只保存业务改动，不复制任务包。
+持久化产物分为两层：协调工作区 `.ai-dev-loop/task-registry.json` 保存完整任务索引、生命周期、当前焦点、周期和完成计数，`.ai-dev-loop/workspace-overview.md` 是给人的工作区总纲；每个任务的冻结包和轮次证据仍位于 `.ai-dev-loop/<task-id>/`。schema、焦点、恢复和总纲见 [task-registry.md](references/task-registry.md)，控制路径、暂存、事件、投影与并发见 [registry-transactions.md](references/registry-transactions.md)，生命周期、计数、终态、关系和迁移见 [registry-lifecycle.md](references/registry-lifecycle.md)。创建或更新控制面前必须确认 `task-registry.json`、`workspace-overview.md`、`.host-staging/**`、`.task-registry.lock`、`.task-registry.lock.recovery-*` 和目标 task 路径都未被 Git 跟踪且已被忽略，并保留这些控制名称不得用作 task ID；不满足时先等待用户配置。CLI 缺失时也手工建立等价任务目录；禁止改用 `.acceptance/`、临时规范目录或用户主目录。跨目录、跨仓库或跨微服务时，只选择一个协调工作区保存注册表与任务包，其他工作区只保存业务改动，不复制这些产物。
 
-冻结核心产物、`development-overview.md`、`progress.md` 和最新的 `final-acceptance-report.md` 放在任务目录根部；每次主动调用、手动交接、修复和验收的原始证据放在 `rounds/round-NN/`。开发代理不得修改 `.ai-dev-loop/**`，只有宿主可以写入总览、进度、轮次状态和证据。临时 runner 只能放在系统临时目录，不能进入业务仓库。
+冻结完成后，核心产物、`development-overview.md`、`progress.md` 和最新的 `final-acceptance-report.md` 放在任务目录根部；每次主动调用、手动交接、修复和验收的原始证据放在 `rounds/round-NN/`。现有 CLI 可能在 `prepare/freeze` 时整体替换任务目录，因此冻结前的总览、进度、Project plan 与 lifecycle event 先写入 `.host-staging/<task-id>/`，登记 `PROVISIONAL` 后再调用 CLI；冻结成功后保持 event 字节不变、按最终相对路径重渲染 Markdown，并核对来源/输出摘要后把记录改为 `HEALTHY`。本次 Skill 不新增任务根级 lifecycle 文件，也不修改 `state.json`；后者仍只表示冻结信封。开发代理不得修改 `.ai-dev-loop/**`，只有宿主可以写入注册表、总纲、进度、轮次状态和证据。临时 runner 只能放在系统临时目录，不能进入业务仓库。
 
 ## 每次进入先恢复已有任务
 
-每次收到开发类消息都先检查当前协调工作区的 `.ai-dev-loop/`，尤其是“继续”“再改一下”“验收时发现”“调整需求”“补充建议”“这个先保留，再做……”等后续消息。必须在调用 `start`、生成新 task ID、起草新 baseline 或创建新任务目录之前完成恢复：
+每次收到开发类消息都先按 [task-registry.md](references/task-registry.md) 校验当前协调工作区的根级注册表；涉及旧目录导入、异常分类、终态或关系解析时同时读取 [registry-lifecycle.md](references/registry-lifecycle.md)，涉及未完成外部动作、staging、投影或锁恢复时同时读取 [registry-transactions.md](references/registry-transactions.md)。尤其是“继续”“再改一下”“验收时发现”“调整需求”“补充建议”“这个先保留，再做……”等后续消息，必须在调用 `start`、生成新 task ID、起草新 baseline 或创建新任务目录之前完成恢复：
 
-- 用户给出 task ID 时读取该任务；没有 task ID 且只有一个非终态任务时默认续接它；存在多个候选时列出任务、当前状态和最近证据，让用户明确选择；
-- 读取冻结授权、`development-overview.md`、`progress.md`、`final-acceptance-report.md` 和最新 `rounds/round-NN/` 证据，按磁盘事实恢复阶段，不能依赖当前对话记忆；
-- 仓库中的原始 baseline 来源文件被移动或删除，不代表任务消失；`.ai-dev-loop/<task-id>/baseline.md` 或 `light-brief.md` 及其冻结指纹仍是该版本的权威副本，不得删除、重命名或用另一个任务覆盖；
-- `state.json` 只表示冻结包阶段，不能单独证明任务已经完成；结合 `progress.md`、最终验收报告和轮次证据判断是否仍在等待开发、门禁、验收或人工决定；
-- 无法唯一恢复时进入 `WAITING_FOR_TASK_SELECTION` 或 `NEED_HUMAN_REVIEW`，不得用新描述的哈希静默创建任务。
+- 恢复优先级固定为：精确 task ID / 精确任务路径 → 注册表中有效 `currentFocus` → 唯一 `ACTIVE` 或 `WAITING_USER` 候选 → 多候选时用户明确选择；
+- 显式目标健康时可以覆盖失效焦点，无关旧任务异常只展示告警；没有显式目标时，失效焦点、`UNKNOWN` 或完整性异常必须先分类，不能静默回退到另一个健康任务；
+- 聚焦任务只有在“证据完整的 `integrity=PROVISIONAL`”，或“`integrity=HEALTHY + phase=FINALIZING_TASK_CREATION + creationContext != null`”时，才必须优先按 `nextAction` 续提任务包创建或派生关系收尾并禁止开发；相同字段出现在 `MISSING_TASK_DIRECTORY`、`EVIDENCE_CONFLICT` 或其他组合时进入分类/阻断，不能继续处置来源任务。除此之外，普通健康任务的 `currentFocus` 只有 `ACTIVE/WAITING_USER + WORKING_TASK` 可自动续接。`BLOCKED + BLOCKER_CONTEXT` 只展示解除条件，`DEFERRED + DEFERRED_CONTEXT` 先取得恢复授权，`TERMINAL + FEEDBACK_CONTEXT` 只进入反馈分类，`UNKNOWN` 必须人工分类；这些状态也不参与唯一候选自动续接；
+- 任务目录名只用于与注册表做单层一致性核对；禁止按名称相似度、修改时间、最新文件或消息哈希选择任务；
+- 选中后读取冻结授权、注册表 evidence、`development-overview.md`、`progress.md`、`final-acceptance-report.md` 和最新轮次证据，按注册表 `phase` 与 `nextAction` 恢复，不能依赖当前对话记忆；
+- 仓库中的原始 baseline 来源文件被移动或删除，不代表任务消失；任务目录中的冻结副本及指纹仍是该版本的权威授权，不得删除、重命名或用另一个任务覆盖；
+- 注册表缺失时按兼容迁移规则只扫描一次直接子目录；无法从证据分类的旧任务登记为 `UNKNOWN`，不得仅凭 `state.json` 推断完成；
+- 无法唯一恢复时进入 `WAITING_FOR_TASK_SELECTION` 或 `NEED_RESUME_CLASSIFICATION`，不得静默创建任务。
 
 只有确认不存在应续接的任务，或用户按 [post-acceptance-feedback.md](references/post-acceptance-feedback.md) 明确批准创建关联或独立任务后，才能进入“写入前路由”。
 
@@ -93,17 +96,19 @@ description: 将任意形式的软件需求按 None/Light/Full 门禁等级、Mi
 
 ## 维护人工可读状态
 
-初始化任务目录后读取 [tracking.md](references/tracking.md)。在请求用户确认需求前生成 `development-overview.md`，并创建 `progress.md`。每次状态转换后以及向用户交还控制权前，由宿主更新进度；开发者和审查者保持只读。
+用户批准 task ID 后读取 [task-registry.md](references/task-registry.md)、[registry-transactions.md](references/registry-transactions.md)、[registry-lifecycle.md](references/registry-lifecycle.md) 和 [tracking.md](references/tracking.md)：取得单写锁，在 `.host-staging/<task-id>/` 写 `TASK_CREATION_APPROVED` event，登记 `PROVISIONAL / CREATING_TASK_PACKAGE`，刷新 `workspace-overview.md`，最后写冻结前任务投影；不得先创建一份可能被 CLI 替换、但 registry 尚不可恢复的任务目录。冻结成功后物化投影并改为 `HEALTHY`。每次状态转换后以及向用户交还控制权前，由宿主按“不可变 event → registry(PENDING) → 工作区总纲 → task Markdown → projection ack → 工作区总纲(CURRENT)”顺序回写；写 event、registry 和投影期间必须持有 `.task-registry.lock`，开发者和审查者保持只读。
 
-总览和进度只是冻结基线、结构化状态与轮次证据的人可读投影，不得作为开发授权或单独证明任务完成。人工验收时先展示这两个入口以及最新门禁、独立审查证据。
+CLI、开发 Agent 或 reviewer 等长时间外部动作不持续占用根锁，但调用前必须在锁内写 `ACTION_CLAIMED` 并加入 `activeOperations`；parallel 在同一事务声明整波成员。取得可查询的运行时 run/session handle 后立即用同一 operationId 写 `ACTION_DISPATCH_CONFIRMED`，调用后再逐 operation 锁内校验结果并清除；看到未完成 operation 的其他宿主只能核对和续提，无法证明已启动或未启动时必须阻断，不能重复执行。
+
+`task-registry.json` 是生命周期、当前焦点、周期和完成计数的规范记录，但状态迁移必须有轮次或用户确认 evidence；它不能覆盖冻结授权。根级 `workspace-overview.md` 和任务内总览、进度都是可重建的人可读投影，不得单独证明授权或完成。人工验收时先展示工作区总纲和当前任务入口，再展示最新门禁、独立审查证据。
 
 如果需求分析确认工作规模是 `Project`，选择 `Full · Project · 主要变更类型`，并在需求确认前读取 [project-planning.md](references/project-planning.md)：
 
-- 把 `development-overview.md` 提升为项目开发总纲，写清最终结果、边界、架构约束、里程碑、工作流、依赖、集成顺序、验收节奏和关键风险；
-- 在 `rounds/planning/project-plan.md` 建立 `M-NNN → W-NNN → T-NNN` 分层任务拆解，每个可执行任务必须关联 R/A、工作区与允许路径、依赖、输入输出、测试和完成定义；
+- 把 `development-overview.md` 提升为项目开发总纲，写清最终结果、边界、架构约束、里程碑、工作流、依赖、集成顺序、验收节奏和关键风险；冻结前写入 staging，冻结后物化到任务根；
+- 在 `rounds/planning/project-plan.md` 建立 `M-NNN → W-NNN → T-NNN` 分层任务拆解，每个可执行任务必须关联 R/A、工作区与允许路径、依赖、输入输出、测试和完成定义；冻结前同样写入 staging；
 - 禁止使用“完成整个后端”“实现全部接口”这类无法独立验收的粗任务；拆解未覆盖全部需求、验收、工作区和集成依赖时不得请求冻结确认；
 - 在 `progress.md` 分别跟踪里程碑、执行任务和 `S-NNN` SOP 步骤，不使用主观百分比；
-- 每个 SOP 步骤或执行任务开始、完成、阻断、跳过后立即由宿主回写 `progress.md` 的状态、时间、责任方和证据，再继续下一步。不能等整轮结束后批量补写，也不能只在对话里口头报告。
+- 每个 SOP 步骤或执行任务开始、完成、阻断、跳过后立即由宿主落盘证据，更新注册表的阶段、周期与精确完成计数，再刷新根级总纲和 `progress.md`，然后继续下一步。不能等整轮结束后批量补写，也不能只在对话里口头报告。
 
 Task 和 Capability 也必须有可执行的 R/A/T 拆解；Capability 额外展示工作流、依赖和集成门禁，Project 再增加项目级总纲、里程碑和完整 SOP 看板。工作规模和变更类型不替代冻结基线。
 
@@ -171,7 +176,7 @@ CLI `self-check` 原生支持单工作区 schema v1 和多工作区 schema v2。
 - `FAIL`：存在至少一个关联需求、验收、任务或安全边界的 P0/P1；
 - `NEED_HUMAN_REVIEW`：无法证明隔离、证据、改动归属或只读保证，或当前只有人工语义验收能力。
 
-收到 `FAIL` 后只基于 P0/P1 建立最小修复交接，交给任意新的隔离开发 Agent，或输出通用手动提示词；P2 不自动修复，除非用户授权。重新运行全部机械门禁和语义验收，最多三轮。独立审查者 `PASS` 后，先向用户展示根级 `final-acceptance-report.md`，再按需展开轮次报告和 JSON 证据，并取得明确验收。人工路径必须明确展示“尚未完成独立语义验收”，由用户查看验收包后决定后续动作。
+收到 `FAIL` 后只基于 P0/P1 建立最小修复交接，交给任意新的隔离开发 Agent，或输出通用手动提示词；P2 不自动修复，除非用户授权。重新运行全部机械门禁和语义验收，最多三轮。独立审查者 `PASS` 后，先向用户展示任务根级 `final-acceptance-report.md`，再按需展开轮次报告和 JSON 证据，并取得明确验收。人工路径必须明确展示“尚未完成独立语义验收”，由用户查看验收包后决定后续动作。
 
 ## 分流人工验收反馈
 
@@ -185,10 +190,12 @@ CLI `self-check` 原生支持单工作区 schema v1 和多工作区 schema v2。
 
 后续消息改变了措辞不等于用户批准新任务。只有确认后的 `manual-feedback.json` 才能触发修复轮次、修订包或关联任务；创建修订或新任务后，原任务目录仍必须可恢复。
 
+反馈确认后同步注册表关系、周期和焦点：非终态同授权修复沿用原条目；终态任务在分类确认前保持终态，同授权修复还需用户明确确认 `REOPEN_CURRENT` 并保留旧终态历史；修订任务成功冻结后才把上一版本置为 `TERMINAL / SUPERSEDED`；follow-up 不自动终结原任务；用户明确接受或放弃分别写 `TERMINAL / COMPLETED` 或 `TERMINAL / ABANDONED`。任何终态与重开都必须引用用户确认 evidence。
+
 ## 保持安全与可见
 
 - 展示任务模式、开发方式、宿主 Agent、实际开发 Agent、冻结文件、通用交接提示词、证据和审查者身份。
-- 保持 `development-overview.md` 和 `progress.md` 与权威状态一致，让用户可随时查看当前阶段、完成任务、阻断项和下一步。
+- 保持 `task-registry.json`、`workspace-overview.md`、`development-overview.md` 和 `progress.md` 一致，让用户可随时查看当前焦点、周期、精确完成数、阻断项和下一步。
 - 只读取用户授权的仓库来源；不得为获取上下文扫描凭据存储或用户主目录。
 - 保留无关改动和开发前已有改动。
 - 未获明确授权时不得创建外部状态。
@@ -197,6 +204,9 @@ CLI `self-check` 原生支持单工作区 schema v1 和多工作区 schema v2。
 ## 按阶段读取参考资料
 
 - 需要理解、展示或解释完整流程时读取 [workflow.md](references/workflow.md)。
+- 校验 registry schema、选择或切换焦点、确定性恢复任务、重建工作区总纲时读取 [task-registry.md](references/task-registry.md)。
+- 检查 Git 忽略和控制路径、创建或物化 staging、写 lifecycle/workspace event、刷新投影、声明或续提 `activeOperations`、执行写回或锁恢复时读取 [registry-transactions.md](references/registry-transactions.md)。
+- 判定生命周期与完成条件、更新周期和精确计数、修订/后续关系、终态迁移、旧任务迁移或一致性错误时读取 [registry-lifecycle.md](references/registry-lifecycle.md)。
 - 路由、起草或冻结时读取 [baselines.md](references/baselines.md)。
 - 判定门禁等级、Micro/Task/Capability/Project 工作规模和主要变更类型时读取 [routing-profiles.md](references/routing-profiles.md)。
 - AI 分析后发现跨目录、跨仓库、跨微服务或提供方/消费方联动时读取 [multi-workspace.md](references/multi-workspace.md)。

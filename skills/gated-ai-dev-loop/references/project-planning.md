@@ -24,12 +24,14 @@
 
 ## 规划产物
 
-在用户确认基线前建立：
+在用户确认基线前建立。CLI 可能替换任务目录，因此冻结前先写入 `.ai-dev-loop/.host-staging/<task-id>/` 的同构相对位置，冻结成功后再物化到任务目录。staging 版链接必须可解析或明确标为冻结后目标；物化时根据结构化计划重新渲染最终相对链接并核对来源/输出摘要：
 
-1. 根级 `development-overview.md`：面向人的稳定开发总纲；
+1. 最终任务根级 `development-overview.md`：面向人的稳定项目开发总纲；
 2. `rounds/planning/project-plan.md`：详细里程碑、工作流、原子任务、依赖与验收映射；
-3. 根级 `progress.md`：实时任务与 SOP 状态；
+3. 最终任务根级 `progress.md`：实时任务与 SOP 状态；
 4. Full `baseline.md`、`tasks.json` 和 `acceptance.json`：唯一冻结开发授权。
+
+协调工作区根级另由 [task-registry.md](task-registry.md) 维护跨任务 `task-registry.json` 与 `workspace-overview.md`，不要把它们和单个 Project 的开发总纲混为一份。
 
 总纲和项目计划不能取代基线。发生冲突时以用户确认并冻结的基线为准；规划必须修正到与基线一致后才能继续。
 
@@ -59,6 +61,8 @@
 
 ```markdown
 # <task-id> 项目开发计划
+
+> task record revision: <recordRevision>
 
 ## 规划判定
 - 门禁等级：Full
@@ -133,21 +137,22 @@
 
 ## 执行与回写
 
-宿主是进度文件唯一写入者。每次状态变化按以下顺序执行：
+宿主是注册表与进度投影唯一写入者。每次状态变化按以下顺序执行：
 
-1. 先持久化真实证据或阻断事实；
-2. 立即更新 `progress.md` 对应 M/W/T 或 S 行；
-3. 更新完成计数、当前阶段、下一责任方和阻断项；
-4. 向时间线追加一条带时间和证据链接的事件；
-5. 再派遣下一任务或向用户报告。
+1. 先收集真实外部结果或阻断事实，不在锁外创建或覆盖宿主规范 evidence；
+2. 在根级单写锁内复核 revision，以 create-new 写规范 evidence 与目标 record revision 的不可变 lifecycle event，再更新 `task-registry.json` 对应任务的 phase、周期、完成计数、下一责任方和阻断项；
+3. 把 task projections 标为 `PENDING` 并重建根级 `workspace-overview.md`；
+4. 更新 `project-plan.md`、`progress.md` 对应 M/W/T 或 S 行及 task revision marker，并向时间线追加带时间和证据链接的事件；
+5. 核对摘要后提交 projection ack、标为 `CURRENT`，再重建最终工作区总纲；
+6. 再派遣下一任务或向用户报告。
 
 不得把开发 Agent 的“已完成”直接写成 `VERIFIED`。开发结果存在时标记 `IMPLEMENTED`；机械和语义证据通过后标记 `VERIFIED`；用户最终接受后才完成整个项目。
 
-进度写回失败时，不得口头宣称状态已经推进。先重试安全写回；仍失败则停止并报告 `PROGRESS_WRITE_FAILED`。
+规范注册表写回失败时不得口头宣称状态已经推进，停止并报告 `TASK_REGISTRY_WRITE_FAILED`；注册表成功但总纲或进度投影失败时报告 `TASK_REGISTRY_PROJECTION_FAILED`，下次进入先从 registry 重建投影。
 
 ## 变更控制
 
-- 计划细化但不改变冻结授权：更新 `project-plan.md`，在 progress 时间线记录原因和影响，不删除旧证据；
+- 计划语义细化但不改变冻结授权：写 `PLAN_REFINED` lifecycle event 并增加 task record revision，按完整 registry/projection 事务重渲染 `project-plan.md`、`workspace-overview.md` 和 `progress.md`，不删除旧证据。仅由模板版本触发、结构化事实完全不变的确定性排版重渲染不写 task event、可保持 task record revision，但仍需 workspace projection ack 与摘要；不得手工改一份 Markdown 后跳过注册表；
 - 调整任务顺序或责任方：重新检查依赖、路径互斥和工作区覆盖；
 - 新增行为、验收、工作区或里程碑：不是普通计划更新，按 `REVISE_CURRENT` 重新确认；
 - 删除或延期冻结范围：取得用户确认并记录 disposition；

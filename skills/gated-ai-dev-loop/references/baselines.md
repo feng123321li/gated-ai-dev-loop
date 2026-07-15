@@ -44,7 +44,7 @@
 
 ## 工作规模与拆解深度
 
-路由后把工作规模、固定代表说明、当前任务说明和主要变更类型写入 `development-overview.md` 与 `progress.md`；`mode.json` 仍只保存 CLI 支持的 None、Light 或 Full：
+路由后先把工作规模、固定代表说明、当前任务说明和主要变更类型写入根级 registry 的 provisional 任务记录，再投影到 `development-overview.md` 与 `progress.md`；`mode.json` 仍只保存 CLI 支持的 None、Light 或 Full：
 
 - `Micro`：只授权一个局部点；低风险时使用 Light 简报，命中硬条件时仍使用 Full baseline；
 - `Task`：Full baseline 的每个 T 都必须是可独立验证的执行任务；
@@ -78,7 +78,7 @@
 ## 使用 CLI 冻结
 
 只在 CLI 已安装时使用。传入结构化信号，不要期待 CLI 从自然语言推断安全事实。
-无论是否安装 CLI，运行态材料都只写入 `<project>/.ai-dev-loop/<task-id>/`，不得另建兼容目录或临时项目目录。
+无论是否安装 CLI，冻结后的任务包与轮次材料都写入 `<project>/.ai-dev-loop/<task-id>/`；宿主按 [registry-transactions.md](registry-transactions.md) 在 `.ai-dev-loop/` 根维护 `task-registry.json`、`workspace-overview.md` 与暂存事务。冻结前的 lifecycle event、总览、进度和 Project plan 只暂存在保留的 `.ai-dev-loop/.host-staging/<task-id>/`，因为 CLI 可能整体替换任务目录；冻结成功后再物化。不得另建其他兼容目录，也不得向任务根新增当前 CLI 不认识的生命周期文件。
 
 ```text
 gated-loop route "<任务>" --signals signals.json --json
@@ -94,11 +94,12 @@ gated-loop freeze --task <id> --confirmed
 
 Light：把结构化简报传给 `start`，只有用户确认后才加入 `--confirmed`。
 
-CLI 只自动完成路由、校验、指纹和冻结。实现编排、机械门禁、独立验收和最终确认以本 Skill 为准。
+CLI 负责确定性路由、任务包准备/冻结、指纹与 schema 校验、`self-check` 机械门禁、`accept` 验收结果校验和落盘；宿主 Skill 负责根级 registry、生命周期 event、实现编排、reviewer 调度和用户最终确认。不得把任一侧尚未实现的能力归给另一侧。
 
 ## 冻结检查表
 
 - 删除占位符和未解决选项。
+- 新 task ID 必须满足 CLI 的精确 ID 规则，且不得占用 `task-registry.json`、`workspace-overview.md`、`.host-staging`、`.task-registry.lock` 或任何 `.task-registry.lock.recovery-*`；初始化控制面前确认根级控制路径、staging、锁、锁恢复隔离文件和目标 task 路径都未被 Git 跟踪且已被忽略，否则进入 `WAITING_FOR_REGISTRY_IGNORE_CONFIGURATION`。
 - 确认 Scope 与 Non-Goals 不冲突。
 - 确认每个写入任务所属的逻辑工作区或服务；跨工作区时明确提供方、消费方和契约依赖。
 - 确认验收结果可观察。
@@ -106,7 +107,8 @@ CLI 只自动完成路由、校验、指纹和冻结。实现编排、机械门�
 - 使用安全的小写 Agent 标识如实记录宿主，例如 `codex`、`claude`、`opencode`。
 - Full 可能并行时，为每个任务记录精确允许路径和依赖；路径或依赖不明确时不得提供 parallel。
 - 记录工作规模、固定代表说明、当前任务说明和主要变更类型；Capability 检查工作流、依赖和集成门禁，Project 额外通过 project-planning.md 的全部拆解质量门禁。
-- 按 `tracking.md` 创建 `development-overview.md` 和 `progress.md`，把进度置为等待需求确认。
+- 用户批准 task ID 后，先取得单写锁，在 `.host-staging/<task-id>/` 以 create-new 写 `TASK_CREATION_APPROVED` event，并登记 `PROVISIONAL / CREATING_TASK_PACKAGE`，再刷新工作区总纲；反馈派生任务只有用户确认后才执行这一步。
+- 按 `tracking.md` 在 staging 创建 `development-overview.md`、`progress.md` 和适用的 Project plan，把 provisional 记录推进为 `WAITING_USER / WAITING_FOR_REQUIREMENT_CONFIRMATION`；用户确认后调用 CLI 冻结，成功物化到任务目录，再把 registry 改为 `HEALTHY` 并进入工作区授权或开发方式选择。
 - 初始化 `progress.md` 的全部业务任务和 SOP 步骤；大型项目同时初始化全部 M/W/T，不能只写一个总任务。
 - 展示授权并取得用户明确确认。
 - 在任何实现写入前冻结。

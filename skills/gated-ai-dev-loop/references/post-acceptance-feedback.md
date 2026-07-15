@@ -19,8 +19,8 @@
 
 每次处理开发类消息时遵守以下顺序：
 
-1. 扫描当前协调工作区 `.ai-dev-loop/`；
-2. 恢复候选任务和最新轮次；
+1. 按 [task-registry.md](task-registry.md) 校验根级 `task-registry.json`，并按 [registry-lifecycle.md](registry-lifecycle.md#一致性并发与错误) 对任务目录做单层一致性核对；
+2. 按显式 ID / 路径、当前焦点、唯一合格候选的顺序恢复任务和最新轮次；
 3. 判断消息是接受、修复、修订、建议还是新任务；
 4. 展示分类、原任务处置、目标 task ID、业务工作区和下一步；
 5. 等待用户明确确认；
@@ -30,21 +30,27 @@
 
 ## 恢复已有任务
 
-按以下优先级选择候选：
+按以下优先级选择任务：
 
-1. 用户明确给出的 task ID；
-2. 当前对话已明确且磁盘仍存在的 task ID；
-3. 当前协调工作区唯一的非终态任务；
-4. 多个非终态任务时，由用户选择。
+1. 用户明确给出的精确 task ID 或任务目录路径；
+2. 注册表中证据完整的 `PROVISIONAL + creationContext` 当前焦点，或 `HEALTHY + FINALIZING_TASK_CREATION + creationContext` 当前焦点；先续提创建/关系/来源处置/最终焦点收尾，完成前不重新分类本条反馈；
+3. 注册表中仍存在、`HEALTHY + creationContext=null` 的普通 `currentFocus`；非终态按原阶段恢复，终态 `FEEDBACK_CONTEXT` 只用于本节反馈分类；
+4. 注册表中唯一的 `ACTIVE` 或 `WAITING_USER` 任务；
+5. 多个合格任务时，由用户选择。
 
-对每个候选至少读取：
+显式目标健康时可以覆盖失效旧焦点；无关 `UNKNOWN` 或历史目录异常只作为告警。没有显式目标时，失效焦点或待分类任务优先进入 `NEED_RESUME_CLASSIFICATION`，不得自动改选另一个活动任务。候选 ID 的精确集合按 [task-registry.md](task-registry.md#确定性恢复) 保存。
 
+对普通健康候选至少读取：
+
+- 注册表中的生命周期、`phase`、`nextAction`、周期、完成计数和 evidence；
 - `state.json` 与冻结 `baseline.md` 或 `light-brief.md`；
 - `development-overview.md` 和 `progress.md`；
 - `final-acceptance-report.md`（如果存在）；
 - 最新 `rounds/round-NN/` 中的 result、gate、review、acceptance 和反馈证据。
 
-把 `COMPLETED`、`ABANDONED` 和已由显式关系替代的任务视为终态；其他状态都是续接候选。证据不足时显示 `NEED_RESUME_CLASSIFICATION` 并让用户决定，不得猜测。
+合法 `PROVISIONAL` 尚无可依赖的任务目录，只读取 registry、`creationContext`、`.host-staging/<task-id>/` 中的创建 event、结构化投影来源和 active operation evidence，再按 `nextAction` 续提；不得要求 `state.json` 或冻结 baseline。`HEALTHY + FINALIZING_TASK_CREATION + creationContext` 读取已物化任务包、关系/来源处置 evidence 和收尾 nextAction，但仍禁止开发。creationContext 与其他 integrity/phase 组合同时出现时进入 `NEED_RESUME_CLASSIFICATION`。
+
+除上述已聚焦的合法创建中间态外，只有普通 `ACTIVE` 和 `WAITING_USER` 参与唯一候选自动续接。`BLOCKED`、`DEFERRED`、`TERMINAL`、`UNKNOWN` 和完整性异常必须展示但不自动选择；显式选择后分别恢复阻断、请求恢复授权、展示终态或进入 `NEED_RESUME_CLASSIFICATION`。禁止按目录名、修改时间、标题相似度或当前对话猜测。注册表缺失时按兼容迁移规则登记全部直接子目录，证据不足的任务写 `UNKNOWN`，不得猜测。
 
 冻结副本与仓库来源文件职责不同：来源文件用于准备和冻结，任务目录中的冻结副本用于后续恢复。来源文件缺失时报告来源漂移，但不得据此宣称冻结任务不存在，也不得拿另一个 baseline 代替它。
 
@@ -86,6 +92,8 @@
 - 允许新的隔离开发 Agent 修改上一轮已证明属于本任务的文件，但仍保护开发前无关脏改动；
 - 对从最初开发快照到当前结果的聚合 diff 重新执行全部机械和语义验收。
 
+确认修复后先取得根级单写锁，以 create-new 写反馈 evidence 与 lifecycle event，再保持同一 task ID、增加 repair round、更新周期、阶段和下一动作，最后按完整 projection 事务刷新工作区总纲与任务进度。若任务已经是终态，确认分类期间保持终态；只有用户额外确认 `REOPEN_CURRENT` 后，才按 [终态迁移矩阵](registry-lifecycle.md#修订后续任务与终态) 保存原终态历史、清空当前终态字段，把本轮机械/语义门禁重置为 `NOT_RUN`、`semanticReviewRoute` 重置为 `NOT_SELECTED`、`needHumanReviewReason` 清空为 `null`、`humanSemanticReviewOutcome` 重置为 `NOT_RUN`、`manualConfirmation` 重置为 `NOT_READY`，并进入 `ACTIVE / PREPARING_REPAIR_ROUND`。
+
 如果当前 CLI 无法证明跨轮未提交改动归属，返回 `NEED_HUMAN_REVIEW` 并请求人工确认归属；不得用创建新任务绕过。
 
 ## 修订当前任务
@@ -96,7 +104,7 @@
 - 建议新 ID 为 `<task-id>-r02`、`<task-id>-r03`，并记录 `REVISION_OF`、来源 round 和 `manual-feedback.json` 路径；
 - 默认沿用原业务工作区，不自动创建新的 Git worktree；范围新增目录或微服务时重新执行工作区授权和覆盖门禁；
 - 新基线必须完整重新展示、确认和冻结，不能只提交一个增量说明；
-- 修订包冻结前，原任务保持 `WAITING_FOR_REVISION_CONFIRMATION`；修订冻结后，在两个任务的 `progress.md` 中写明双向关系；
+- 修订包冻结前，非终态原任务在注册表中保持 `WAITING_USER / WAITING_FOR_REVISION_CONFIRMATION`，终态原任务保持原 disposition 不变；用户确认新 task ID 后先在 `.host-staging/<task-id>/` 写创建 event，以包含来源 task、计划关系、旧焦点和最终焦点策略的 `creationContext` 登记 `PROVISIONAL`，并把 currentFocus 临时指向新记录作为恢复指针。CLI 冻结成功、投影物化且新记录改为 `HEALTHY` 后，才登记 `REVISION_OF / REVISED_BY` 双向关系，必要时先保存原终态历史，再把原任务置为 `TERMINAL / SUPERSEDED`，清空 creationContext 并确认最终焦点；
 - 原 baseline 继续作为上一版本权威，不得重命名成新任务文件，也不得因新修订存在而删除。
 
 这里的新“任务包”是冻结授权的版本容器，不等于另建业务代码工作区。只有用户另行授权时才创建新 Git worktree。
@@ -121,7 +129,7 @@ P2 永不自动进入修复轮次。用户说“这些建议不错”仍需确�
 - 关系：`FOLLOW_UP_OF`、`RELATED_TO` 或 `INDEPENDENT`；
 - 是否沿用业务工作区；若工作区已有其他任务未提交改动，如何隔离和保护。
 
-未确认前不得调用 `start`。新任务准备后不得清理原任务目录。共享同一脏工作区且无法证明改动归属或路径互斥时，先请求隔离 worktree 或返回 `NEED_HUMAN_REVIEW`。
+未确认前不得调用 `start` 或在注册表预登记目标任务。新任务准备后不得清理原任务目录。共享同一脏工作区且无法证明改动归属或路径互斥时，先请求隔离 worktree 或返回 `NEED_HUMAN_REVIEW`。
 
 ## 落盘证据
 
@@ -143,9 +151,9 @@ P2 永不自动进入修复轮次。用户说“这些建议不错”仍需确�
 }
 ```
 
-确认前只在 `progress.md` 记录反馈摘要、建议分类和 `WAITING_FOR_FEEDBACK_CONFIRMATION`，不创建目标任务目录。确认后的 JSON 不再覆盖；后续变化新增一条反馈证据。
+确认前，非终态原任务可更新为 `WAITING_USER / WAITING_FOR_FEEDBACK_CONFIRMATION` 并在 `progress.md` 记录反馈摘要和建议分类；终态任务必须保持原 `TERMINAL/*`，只由 `currentFocus.purpose=FEEDBACK_CONTEXT` 锚定分类，不得提前重开。不创建或登记目标任务。确认后的 JSON 不再覆盖；后续变化新增一条反馈证据。
 
-同步更新 `progress.md` 时间线，并在有关任务的总览中链接原任务、目标任务和反馈证据。`state.json` 是冻结信封，不能为了记录反馈而修改。
+业务顺序固定为：锁内 create-new 写 `manual-feedback.json` 与反馈 lifecycle event → staging 中的 `TASK_CREATION_APPROVED` event（如适用）→ 带 creationContext 和临时恢复焦点的 `PROVISIONAL` 新记录 → `ACTION_CLAIMED` 后在锁外调用 CLI 创建/冻结 → 锁内校验并物化 staging、改为 `HEALTHY` → 注册表关系、原任务处置、清空 creationContext 与最终焦点。每个会改变 task record 的箭头都必须先独立完成“event → registry(PENDING) → `workspace-overview.md(PENDING)` → 有关任务的 `progress.md` / 总览 → projection ack → `workspace-overview.md(CURRENT)`”，再进入下一箭头；不能把中间多次状态变化拖到最后一次性补投影。每段控制面写回都使用根级单写锁，长时间外部调用不持锁但必须有 active operation claim。`state.json` 是冻结信封，不能为了记录反馈而修改。用户接受映射为 `TERMINAL / COMPLETED`，明确放弃映射为 `TERMINAL / ABANDONED`；普通 follow-up 或 related 关系不会自动终结原任务。
 
 ## 典型判断
 

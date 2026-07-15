@@ -100,7 +100,7 @@ Git 提交类型只能作为“变更类型”的参考，不能决定工作规�
 
 推荐紧凑显示为 `Full · Capability · Feature`。不要使用 `Full-Feature`，因为 Feature 是变更类型，不是规模。
 
-把门禁等级写入 CLI `mode.json`；把工作规模、固定代表说明、当前任务说明和变更类型写入 `development-overview.md` 与 `progress.md`。CLI 仍只支持 None/Light/Full，不得伪造 CLI 已支持工作规模或变更类型。
+把门禁等级写入 CLI `mode.json`；把工作规模、固定代表说明、当前任务说明和变更类型先写入根级 `task-registry.json` 的任务条目并把投影标为 `PENDING`，再刷新 `workspace-overview.md`，投影到任务内或冻结前 staging 的 `development-overview.md`、`progress.md`，最后提交 projection ack 并刷新 `CURRENT` 总纲。CLI 仍只支持 None/Light/Full，不得伪造 CLI 已支持注册表、工作规模或变更类型。`None` 不创建任务包，也不为一次纯回答初始化注册表。
 
 ## 规划产物
 

@@ -2,46 +2,53 @@
 
 ## 统一运行目录
 
-无论 CLI 是否安装、宿主是谁、开发方式是什么，都只使用：
+无论 CLI 是否安装、宿主是谁、开发方式是什么，都使用协调工作区的两层布局：
 
 ```text
-<project>/.ai-dev-loop/<task-id>/
-├── mode.json
-├── baseline.md 或 light-brief.md
-├── acceptance.json
-├── tasks.json
-├── source-manifest.json
-├── decision-log.md
-├── development-handoff.md
-├── state.json
-├── development-overview.md
-├── progress.md
-├── final-acceptance-report.md（首次独立验收后生成）
-└── rounds/
-    └── round-NN/
-        ├── workspace-authorization.json（跨工作区时必需）
-        ├── workspace-coverage.json（跨工作区时必需）
-        ├── development-mode.json
-        ├── parallel-plan.json（仅 parallel）
-        ├── prompt.md
-        ├── gate-continuation.md
-        ├── result.json
-        ├── agents/（仅 parallel）
-        ├── integration-result.json（仅 parallel）
-        ├── development-snapshot.json
-        ├── gate-evidence.json
-        ├── self-check-report.md
-        ├── acceptance-report.md
-        └── review.json
+<project>/.ai-dev-loop/
+├── task-registry.json
+├── workspace-overview.md
+├── .task-registry.lock（宿主写入时临时存在）
+├── .host-staging/（冻结前宿主投影与 event 暂存）
+└── <task-id>/
+    ├── mode.json
+    ├── baseline.md 或 light-brief.md
+    ├── acceptance.json
+    ├── tasks.json
+    ├── source-manifest.json
+    ├── decision-log.md
+    ├── development-handoff.md
+    ├── state.json
+    ├── development-overview.md
+    ├── progress.md
+    ├── final-acceptance-report.md（首次 accept / 等价验收路由后生成）
+    └── rounds/
+        └── round-NN/
+            ├── workspace-authorization.json（跨工作区时必需）
+            ├── workspace-coverage.json（跨工作区时必需）
+            ├── development-mode.json
+            ├── parallel-plan.json（仅 parallel）
+            ├── prompt.md
+            ├── gate-continuation.md
+            ├── result.json
+            ├── lifecycle-events/
+            ├── agents/（仅 parallel）
+            ├── integration-result.json（仅 parallel）
+            ├── development-snapshot.json
+            ├── gate-evidence.json
+            ├── self-check-report.md
+            ├── acceptance-report.md
+            ├── review.json
+            └── human-semantic-review.json（仅人工语义审查完成后）
 ```
 
-新任务统一使用 `development-handoff.md`。CLI 仍可读取旧任务已有的 `handoff-to-claude.md`，但不得再生成旧名称。CLI 缺失时仍建立 `.ai-dev-loop/<task-id>/`，不得改用 `.acceptance/`。开发代理不得写 `.ai-dev-loop/**`；总览、进度、最终验收汇总和轮次文件由宿主创建和更新。
+新任务统一使用 `development-handoff.md`。CLI 仍可读取旧任务已有的 `handoff-to-claude.md`，但不得再生成旧名称。CLI 缺失时仍建立 `.ai-dev-loop/<task-id>/`，不得改用 `.acceptance/`。根级注册表、工作区总纲、单写锁与冻结前 staging 由宿主按 [registry-transactions.md](registry-transactions.md) 维护；CLI `prepare/freeze` 可能替换整个任务目录，所以冻结前投影不得只保存在任务根。为兼容 CLI，不向任务根新增生命周期文件，也不修改 `state.json`；lifecycle event 只放轮次目录。开发代理不得写 `.ai-dev-loop/**`。
 
 ## 选择实际开发方式
 
-基线冻结后、任何代码写入前，先判断冻结任务是否跨目录、跨仓库或跨微服务。跨工作区时必须按照 [multi-workspace.md](multi-workspace.md) 生成并验证 `workspace-authorization.json` 与 `workspace-coverage.json`；覆盖未通过时保持 `WAITING_FOR_WORKSPACE_AUTHORIZATION`，不得生成 `prompt.md`、展示开发方式或启动开发 Agent。
+基线冻结后、任何代码写入前，先判断冻结任务是否跨目录、跨仓库或跨微服务。跨工作区时必须按照 [multi-workspace.md](multi-workspace.md) 生成并验证 `workspace-authorization.json` 与 `workspace-coverage.json`；覆盖未通过时把注册表更新为 `WAITING_USER / WAITING_FOR_WORKSPACE_AUTHORIZATION`，不得生成 `prompt.md`、展示开发方式或启动开发 Agent。
 
-单工作区任务，或多工作区覆盖结论为 `PASS` 后，设置状态 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION` 并显示：
+单工作区任务，或多工作区覆盖结论为 `PASS` 后，把注册表阶段设置为 `WAITING_USER / WAITING_FOR_DEVELOPMENT_MODE_SELECTION` 并显示：
 
 ```text
 需求基线已冻结，请选择开发方式：
@@ -67,7 +74,7 @@
 }
 ```
 
-确定开发方式后按 `parallel-development.md` 评估执行拓扑。Light 直接记录 `single`；Full 符合资格时必须等待用户选择。等待期间状态使用 `WAITING_FOR_EXECUTION_TOPOLOGY_SELECTION`。
+确定开发方式后按 `parallel-development.md` 评估执行拓扑。Light 直接记录 `single`；Full 符合资格时必须等待用户选择。等待期间注册表使用 `WAITING_USER / WAITING_FOR_EXECUTION_TOPOLOGY_SELECTION`。
 
 ## 开发提示词契约
 
@@ -87,7 +94,7 @@
 
 ## 直接运行模式
 
-任意宿主 Agent 都可以发起。宿主使用自身可用的 Agent、子任务、独立会话或隔离进程能力，只传入冻结交接、允许路径和结果契约。用户确认 active + parallel 计划后，宿主自动按波次派遣开发 Agent，不再逐个请求确认。不能证明新上下文、只读交接边界或写入归属时停止自动调用，展示事实并让用户改选 manual 或 single。
+任意宿主 Agent 都可以发起。宿主使用自身可用的 Agent、子任务、独立会话或隔离进程能力，只传入冻结交接、允许路径和结果契约。每次主动调用前先在根级锁内写 `ACTION_CLAIMED` 与 `activeOperations[]`；single 声明一个 operation，parallel 在同一事务声明当前波次全部成员，释放锁后才调用。用户确认 active + parallel 计划后，宿主自动按波次派遣开发 Agent，不再逐个请求确认。不能证明新上下文、只读交接边界或写入归属时停止自动调用，展示事实并让用户改选 manual 或 single。
 
 临时 runner 只能放入系统临时目录。用 argv 和 `shell:false` 启动外部进程，不得在业务仓库创建 `run-*.mjs`、批处理或临时提示脚本。
 
@@ -140,13 +147,13 @@ single 每轮默认只进行一次主动调用；parallel 的每个 assignment �
 
 任意宿主 Agent 都可以接管本轮，不需要原需求或开发对话。
 
-1. 读取任务根目录的 mode、冻结授权、acceptance、tasks、state、development-overview 和 progress；Project 规模同时读取 rounds/planning/project-plan.md。
+1. 先校验协调工作区的 task-registry.json、当前焦点和目标 task 的 phase / nextAction，再读取任务根目录的 mode、冻结授权、acceptance、tasks、state、development-overview 和 progress；Project 规模同时读取 rounds/planning/project-plan.md。
 2. 读取本轮 development-mode、development-snapshot、prompt，以及用户提供的开发 Agent 结构化结果。
 3. 验证冻结指纹、HEAD、开发前已有改动和真实 diff；无法归属时返回 NEED_HUMAN_REVIEW。
-4. 由接管宿主把已校验的开发结果保存为 result.json，逐 T 把 progress.md 更新为 IMPLEMENTED 或 BLOCKED，并完成 S-008 回写；不得让开发 Agent 写 .ai-dev-loop/**。
-5. 运行 gated-loop self-check --task <task-id> --round <NN>；非 PASS 时停止，并立即回写 S-009、阻断项和证据。
-6. 机械门禁 PASS 后按验收能力路由：其他独立 Agent、同宿主全新只读子 Agent，或没有隔离能力时生成完整人工验收包；再运行 gated-loop accept 落盘结果，并立即回写 S-010 和符合证据的 VERIFIED 任务。
-7. 每个 SOP 状态变化都先按 tracking.md 回写 progress，再继续；不重新分析或改写冻结需求，不自动提交、推送、合并或发布。
+4. 接管宿主取得根级锁并复核 revision 后，以 create-new 保存已校验的 result.json 与 lifecycle event；再按“registry(PENDING) → workspace-overview(PENDING) → task projections → projection ack → workspace-overview(CURRENT)”逐 T 更新 IMPLEMENTED 或 BLOCKED，并完成 S-008 回写；不得让开发 Agent 写 .ai-dev-loop/**。
+5. 先为 `gated-loop self-check --task <task-id> --round <NN>` 写机械门禁 operation claim，再在锁外运行并锁内结算；非 PASS 时停止，并按同一顺序回写 S-009、阻断项和证据。
+6. 机械门禁 PASS 后按验收能力路由：为其他独立 Agent 或同宿主全新只读子 Agent 分别 claim reviewer operation；没有隔离能力时生成完整人工验收包。随后为 `gated-loop accept` 写独立 CLI operation claim，锁外运行、锁内结算，并按同一顺序回写 S-010 和符合证据的 VERIFIED 任务。
+7. 每个 SOP 状态变化都先按 [registry-transactions.md](registry-transactions.md#写回事务) 和 [tracking.md](tracking.md) 完成规范状态与人可读投影，再继续；不重新分析或改写冻结需求，不自动提交、推送、合并或发布。
 ```
 
 开发完成后，用户可以把开发结果交给任意新的宿主 Agent，并输入：
@@ -179,7 +186,7 @@ single 每轮默认只进行一次主动调用；parallel 的每个 assignment �
 }
 ```
 
-总体 `status` 只能是 `COMPLETED` 或 `BLOCKED`；每个已分配的 T 必须且只能出现一次，任务状态只能是 `IMPLEMENTED` 或 `BLOCKED`。宿主把声明保存为 `rounds/round-NN/result.json`，随后逐项回写 `progress.md`；开发者不得直接写这些文件。真实 diff 和测试才是权威证据，`IMPLEMENTED` 不能被表述为已验收。
+总体 `status` 只能是 `COMPLETED` 或 `BLOCKED`；这里的 `COMPLETED` 仅表示实现调用结束，不是注册表的任务终态。每个已分配的 T 必须且只能出现一次，任务状态只能是 `IMPLEMENTED` 或 `BLOCKED`。宿主把声明保存为 `rounds/round-NN/result.json`，随后逐项更新 registry 和 `progress.md`；开发者不得直接写这些文件。真实 diff 和测试才是权威证据，`IMPLEMENTED` 不能被表述为已验收。
 
 ## 开发前快照
 

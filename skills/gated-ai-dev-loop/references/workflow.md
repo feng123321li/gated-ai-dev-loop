@@ -3,15 +3,28 @@
 ```mermaid
 flowchart TD
     INPUT["任意形式的需求输入"] --> HOST["任意宿主 Agent<br/>采集、分析、审核"]
-    HOST --> ROUTE{"选择任务模式"}
+    HOST --> RECOVER{".ai-dev-loop 中有<br/>应续接的非终态任务？"}
+    RECOVER -->|一个| RESUME["读取冻结授权、progress、<br/>最终报告和最新轮次证据"]
+    RECOVER -->|多个| TASK_SELECT["WAITING_FOR_TASK_SELECTION<br/>用户明确选择"]
+    TASK_SELECT --> RESUME
+    RESUME --> RECOVERED_ACTION["按磁盘 nextAction 续接<br/>不得重新 start 或替换 baseline"]
+    RECOVER -->|没有或已确认新任务| ROUTE{"门禁等级"}
     ROUTE -->|None| NONE["只回答，不写文件"]
     NONE --> END["结束"]
 
-    ROUTE -->|Light| LIGHT["四段式 Light 简报"]
-    ROUTE -->|Full| FULL["Full 开发基线<br/>R / A / T 追踪"]
-    LIGHT --> RUNTIME["统一写入 .ai-dev-loop/task-id/"]
-    FULL --> RUNTIME
-    RUNTIME --> TRACK["生成 development-overview.md<br/>初始化 progress.md"]
+    ROUTE -->|Light| MICRO_LIGHT["Light · Micro<br/>四段式简报"]
+    ROUTE -->|Full| SCALE{"工作规模"}
+    SCALE -->|micro| MICRO_FULL["Full · Micro<br/>高风险局部改动"]
+    SCALE -->|task| TASK["Full · Task<br/>一个独立验收结果"]
+    SCALE -->|capability| CAPABILITY["Full · Capability<br/>多任务协同的完整能力"]
+    SCALE -->|project| PROJECT["Full · Project<br/>总纲、M / W / T 与 project-plan"]
+    MICRO_LIGHT --> KIND["记录主要变更类型<br/>和固定/具体代表说明"]
+    MICRO_FULL --> KIND
+    TASK --> KIND
+    CAPABILITY --> KIND
+    PROJECT --> KIND
+    KIND --> RUNTIME["统一写入 .ai-dev-loop/task-id/"]
+    RUNTIME --> TRACK["生成 development-overview.md<br/>初始化业务任务与 SOP progress"]
     TRACK --> CONFIRM{"用户确认开发授权？"}
     CONFIRM -->|否| HOST
     CONFIRM -->|是| FREEZE["冻结唯一开发授权与指纹"]
@@ -60,6 +73,16 @@ flowchart TD
     REVIEW_RESULT -->|FAIL 已达上限或证据不足| HUMAN
     REVIEW_RESULT -->|PASS| FINAL_CONFIRM{"用户最终确认？"}
     FINAL_CONFIRM -->|等待反馈| WAIT["保持待确认，不自动发布"]
+    FINAL_CONFIRM -->|提出修改、建议或新目标| FEEDBACK{"先恢复原任务并分类<br/>WAITING_FOR_FEEDBACK_CONFIRMATION"}
+    FEEDBACK -->|冻结 R/A/T 已要求| REPAIR
+    FEEDBACK -->|改变目标、范围或验收| REVISION_CONFIRM["确认 REVISION_OF 与新基线<br/>保留原任务包"]
+    REVISION_CONFIRM -->|确认| HOST
+    FEEDBACK -->|P2 或建议| SUGGESTION{"DEFER / DISMISS /<br/>IMPLEMENT_AS_REVISION / FOLLOW_UP"}
+    SUGGESTION -->|延期或拒绝| FINAL_CONFIRM
+    SUGGESTION -->|现在实现| REVISION_CONFIRM
+    SUGGESTION -->|后续任务| NEW_TASK_CONFIRM["确认原任务处置、关系、task ID 与工作区"]
+    FEEDBACK -->|独立新目标| NEW_TASK_CONFIRM
+    NEW_TASK_CONFIRM -->|确认| HOST
     FINAL_CONFIRM -->|确认| COMPLETE["完成"]
 
     classDef host fill:#dbeafe,stroke:#2563eb,color:#172554;
@@ -68,16 +91,19 @@ flowchart TD
     classDef review fill:#dcfce7,stroke:#16a34a,color:#052e16;
     classDef human fill:#f3f4f6,stroke:#4b5563,color:#111827;
 
-    class HOST,ROUTE,LIGHT,FULL,RUNTIME,TRACK host;
+    class HOST,RECOVER,RESUME,TASK_SELECT,RECOVERED_ACTION,ROUTE,SCALE,MICRO_LIGHT,MICRO_FULL,TASK,CAPABILITY,PROJECT,KIND,RUNTIME,TRACK host;
     class MODE_WAIT,DEV_MODE,ACTIVE_HOST,MANUAL_RUNTIME,TOPOLOGY,SINGLE_DEV,PARALLEL_PLAN,PARALLEL_DEV,INTEGRATE,ACTIVE_RESULT,RESELECT,DEV_RESULT,REPAIR developer;
     class FREEZE,WORKSPACE_CHECK,WORKSPACE_WAIT,WORKSPACE_PASS,GATES,RECLASS,ESCALATE,GATE_RESULT gate;
     class REVIEW_PLAN,REVIEWER,SUBAGENT,OTHER_REVIEW,SUBAGENT_REVIEW,REVIEW_RESULT review;
-    class CONFIRM,HUMAN_REVIEW,HUMAN,FINAL_CONFIRM,WAIT,COMPLETE human;
+    class CONFIRM,HUMAN_REVIEW,HUMAN,FINAL_CONFIRM,WAIT,FEEDBACK,REVISION_CONFIRM,SUGGESTION,NEW_TASK_CONFIRM,COMPLETE human;
 ```
 
 ## 阅读重点
 
 - 所有产物统一放在 `.ai-dev-loop/<task-id>/`，CLI 缺失也不改变目录。
+- 每次开发类消息先恢复已有非终态任务；一个任务直接续接，多个任务让用户选择，没有候选或用户明确批准新任务后才重新路由。
+- 路由分别记录门禁等级、Micro/Task/Capability/Project 工作规模和主要变更类型；CLI 仍只使用 None/Light/Full，执行拓扑另行选择。
+- 总览和进度必须显示规模的固定中文代表说明及当前任务的具体说明；Capability 展示工作流、依赖和集成门禁，Project 提供开发总纲、project-plan、M/W/T 拆解和 SOP 进度看板。
 - AI 分析发现跨目录、跨仓库或跨微服务时，只在一个协调工作区保存任务包；必须先证明全部写入任务的工作区、路径、测试目录和依赖已覆盖，才允许生成交接提示词。
 - `development-overview.md` 提供稳定任务地图，`progress.md` 在每次状态转换后更新；独立验收后人工优先查看根级 `final-acceptance-report.md`，再按需追溯这两个视图和轮次证据。
 - 需求确认、跨工作区覆盖与开发方式选择是独立门禁；冻结后先补齐工作区，再由用户明确选择 active 或 manual。
@@ -93,3 +119,5 @@ flowchart TD
 - 主动调用失败且确认零写入时重新请求选择并推荐 manual；不得自动切换。
 - 两种开发方式共用相同冻结授权、机械门禁和验收能力路由。
 - `PASS` 仍需用户最终确认。
+- 最终确认阶段的修改、建议或新目标必须先恢复原任务并分类；只有冻结 R/A/T 已要求的缺口才能直接进入同任务修复轮次，授权变化要保留原任务包并重新冻结，P2 和新任务都需要单独确认。
+- 每个执行任务和 SOP 步骤开始、完成、阻断或跳过后必须立即回写 `progress.md` 及证据，再进入下一步；不能在整轮结束后批量补写。

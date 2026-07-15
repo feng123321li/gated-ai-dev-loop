@@ -40,7 +40,7 @@ Light 固定使用 `single`。Full 只有同时满足以下条件才可提供 `p
 - Full 但不合格：展示阻断并记录 `single`；
 - Full 且合格：先展示任务分组、路径、依赖、波次和最大并发数，再等待用户明确选择 `single` 或 `parallel`。
 
-存在可用的 `parallel` 选项时不得隐藏默认。用户未选择前保持 `WAITING_FOR_EXECUTION_TOPOLOGY_SELECTION`，不得启动开发。
+存在可用的 `parallel` 选项时不得隐藏默认。用户未选择前在注册表保持 `WAITING_USER / WAITING_FOR_EXECUTION_TOPOLOGY_SELECTION`，不得启动开发。
 
 用户选择 `active + parallel` 即授权宿主按照已展示计划自动派遣；不再对每个 Agent 重复询问。用户没有授权自动改变计划，任何 assignment、允许路径、波次或最大并发数变化都必须重新确认。
 
@@ -104,13 +104,13 @@ rounds/round-NN/
 
 ## 启动与返回
 
-`active + parallel`：宿主把状态更新为 `DISPATCHING_PARALLEL_AGENTS`，自动按波次启动可调度的全新开发子 Agent，每个上下文只收到自己的 assignment、冻结基线、授权工作区、允许路径和结果契约。Agent 产品可以不同，但契约、隔离和归属规则必须相同。派遣完成后进入 `WAITING_FOR_PARALLEL_AGENTS`，无需逐个等待用户批准。
+`active + parallel`：宿主先取得根级单写锁，在一次事务中为当前波次写一条批量 `ACTION_CLAIMED` task lifecycle event，并为每个成员加入独立 `activeOperations[]` 条目。event 的升序 `operationIds` 必须与这些条目一一对应；每个条目记录 waveId、agentId、assignedTaskIds 和输入摘要。随后把注册表阶段更新为 `ACTIVE / DISPATCHING_PARALLEL_AGENTS`。释放锁后才并发启动已声明的全新开发子 Agent；不得临时增加未 claim 的成员。每取得一个可查询的 run/session handle，就立即在新锁事务中以对应 operationId 写 `ACTION_DISPATCH_CONFIRMED` 和 durable receipt；claim 后崩溃而没有 receipt 时按注册表的确定性核对规则处理，禁止盲目重派。每个上下文只收到自己的 assignment、冻结基线、授权工作区、允许路径和结果契约。Agent 产品可以不同，但契约、隔离和归属规则必须相同。派遣完成后在锁内把 phase 更新为 `WAITING_FOR_PARALLEL_AGENTS`，无需逐个等待用户批准。
 
 `manual + parallel`：宿主为每个 Agent 输出独立交接卡片，用户在同一种运行时中分别启动全新会话。所有结果返回当前宿主后才能集成。
 
 自动派遣前必须确认宿主确实支持创建全新隔离子 Agent。运行时缺少该能力、无法限制写入范围或无法观察调用状态时，不得用当前会话模拟子 Agent；停止并让用户改选 single 或 manual。
 
-每个 Agent 的结果增加 `agentId`，其余沿用包含逐 T `taskResults` 的开发结果契约。宿主将结果保存到对应 `agents/<agent-id>/result.json`，并依据真实改动生成 `scope-evidence.json`。每个 Agent 返回并验证归属后，立即回写其 T 状态、证据和 progress 时间线，再启动依赖它的后续波次；Agent 声明不能替代实际路径检查。
+每个 Agent 的结果增加 `agentId`，其余沿用包含逐 T `taskResults` 的开发结果契约。每个 Agent 返回后，宿主取得根级锁，核对匹配 operationId 与真实改动，再以 create-new 把结果保存到对应 `agents/<agent-id>/result.json` 并生成 `scope-evidence.json`；随后写结果 event、删除该 `activeOperations` 条目，并按“registry(PENDING) → workspace overview(PENDING) → task projections → projection ack → workspace overview(CURRENT)”回写其 T 状态。全部成员单独结算后才启动依赖它们的后续波次；Agent 声明不能替代实际路径检查。
 
 ## 集成和机械门禁
 
@@ -127,6 +127,6 @@ rounds/round-NN/
 
 ## 失败处理
 
-任一 Agent 返回 `BLOCKED`、越界、冲突或外部调用失败时，停止派遣尚未启动的后续波次，暂停集成并立即更新对应 T、S-008、阻断项和 `progress.md` 时间线。已安全完成的其他 Agent 结果可以保留，但不能进入整体门禁或验收。
+任一 Agent 返回 `BLOCKED`、越界、冲突或外部调用失败时，停止派遣尚未启动的后续波次，暂停集成；取得根级锁后 create-new 落盘事实与结果 event，结算对应 active operation，把任务更新为 `BLOCKED`，同时写入 blocker、解除条件、`nextAction`、责任方，并把当前焦点 purpose 改为 `BLOCKER_CONTEXT`。随后按完整写回事务刷新对应 T、S-008、工作区总纲和 `progress.md` 时间线。已安全完成的其他 Agent 结果可以保留，但不能进入整体门禁或验收。
 
 确认失败 Agent 零写入时，向用户展示事实并选择重新分配、改为 manual 或降级为 single；不得隐藏重试。已有写入或无法确认归属时返回 `NEED_HUMAN_REVIEW`。语义冲突需要创建全新的集成开发 assignment；超过三轮仍不能集成时请求人工处理。

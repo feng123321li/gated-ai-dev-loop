@@ -21,7 +21,7 @@
 
 ## 协调工作区
 
-多工作区任务只选择一个协调工作区保存 `.ai-dev-loop/<task-id>/`。通常选择用户发起任务时所在的仓库，或最能代表整体交付的仓库。其他业务工作区只保存业务改动，不复制任务包，也不允许开发 Agent 在其中创建 `.ai-dev-loop/**`。
+多工作区任务只选择一个协调工作区保存根级 `task-registry.json`、`workspace-overview.md` 和 `.ai-dev-loop/<task-id>/`。通常选择用户发起任务时所在的仓库，或最能代表整体交付的仓库。其他业务工作区只保存业务改动，不复制注册表、总纲或任务包，也不允许开发 Agent 在其中创建 `.ai-dev-loop/**`。
 
 协调工作区不是默认的唯一写入范围。每个参与工作区都必须在当前轮次的授权清单中单独列出。schema v2 中的每个 `root` 必须是对应 Git worktree 的顶层根目录；同一仓库内的前端、后端或模块子目录通过 `allowedPaths` 和测试命令 `cwd` 表达，不能伪装成两个仓库。所有根路径都使用规范化绝对路径；业务允许路径使用相对于对应根目录的路径或安全 glob。不要依赖当前工作目录、盘符假设、符号链接别名或“相邻仓库”等隐含约定。
 
@@ -37,7 +37,7 @@
 6. 验证提供方到消费方的依赖图可执行且无环；未冻结或尚不存在的公共契约不能假装已就绪。
 7. 把用户对精确工作区和写入范围的确认写入 `workspace-authorization.json`，再派生 `workspace-coverage.json`。
 
-只有 `workspace-coverage.json.status` 为 `PASS` 时，才能进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`、生成 `prompt.md` 或启动任何开发 Agent。否则状态为 `WAITING_FOR_WORKSPACE_AUTHORIZATION`，在 `progress.md` 列出缺少的工作区、任务 ID、所需路径和解除条件，然后等待用户补充或授权。
+只有 `workspace-coverage.json.status` 为 `PASS` 时，才能进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`、生成 `prompt.md` 或启动任何开发 Agent。否则在注册表中写 `WAITING_USER / WAITING_FOR_WORKSPACE_AUTHORIZATION`，并在工作区总纲与 `progress.md` 列出缺少的工作区、任务 ID、所需路径和解除条件，然后等待用户补充或授权。
 
 单工作区任务可以继续使用原有快照格式，不强制生成这两个文件；一旦冻结范围明确涉及其他工作区，就必须使用本门禁。宿主无法验证手动接收端的实际权限时，至少要验证当前已提供的绝对路径和用户授权，并要求接收端在首次写入前做同样的只读预检。
 
@@ -200,4 +200,4 @@ CLI 从 `workspace-coverage.json.taskCoverage[].dependsOn` 校验任务依赖图
 
 如果缺少的只是已冻结服务的实际绝对路径或写权限，用户可在新轮次补充授权，无需改写冻结需求。如果新增工作区会扩大目标、行为、任务或验收范围，则返回需求确认阶段，更新基线并重新冻结。
 
-开发开始后发现遗漏工作区、错误仓库、契约不可用或依赖顺序错误时，立即停止后续写入并返回 `BLOCKED`；不要在当前轮次临时扩大白名单。已经发生部分写入时保留现场、记录每个工作区的归属并转 `NEED_HUMAN_REVIEW`，不得自动回滚或把改动归给错误的 Agent。
+开发开始后发现遗漏工作区、错误仓库、契约不可用或依赖顺序错误时，立即停止后续写入并返回 `BLOCKED`；先收集阻断事实，再在根级单写锁内以 create-new 落盘阻断 evidence 与 lifecycle event，随后更新注册表、工作区总纲和任务进度，不要在当前轮次临时扩大白名单。已经发生部分写入时保留现场、记录每个工作区的归属并转 `NEED_HUMAN_REVIEW`，不得自动回滚或把改动归给错误的 Agent。

@@ -1,6 +1,6 @@
 ---
 name: gated-ai-dev-loop
-description: 将任意形式的软件需求路由为 Full、Light 或 None，通过统一协调目录、冻结开发基线、跨目录与多微服务工作区覆盖门禁、人可读总览与进度、宿主自动派遣隔离开发 Agent 或输出任意 Agent 可接收的通用手动提示词、可由任意新宿主恢复的机械门禁、能力驱动的独立或人工语义验收、P0/P1/P2 报告和用户确认来治理 AI 辅助开发。适用于任意单 Agent、多 Agent 或支持子 Agent 的宿主发起、接收或接管单仓库及跨仓库的软件功能开发、缺陷修复、重构、迁移。
+description: 将任意形式的软件需求按 None/Light/Full 门禁等级、Micro/Task/Capability/Project 工作规模和 Feature/Bugfix/Refactor/Migration/Maintenance/Docs/Test 变更类型治理，通过已有任务优先恢复、统一协调目录、冻结开发基线、完整项目总纲、里程碑/工作流/任务拆解、逐 SOP 进度回写、跨目录与多微服务覆盖门禁、隔离开发、机械门禁、独立或人工语义验收、P0/P1/P2 报告和用户确认来管理 AI 辅助开发。适用于单 Agent、多 Agent 或支持子 Agent 的宿主发起、接收或接管单仓库及跨仓库的软件开发、缺陷修复、重构、迁移和大型完整项目，也适用于开发或验收后的后续对话：继续已有任务、人工验收时要求修改、调整目标或范围、补充建议、采纳 P2、创建关联后续任务，以及上下文压缩或新会话后的任务恢复。
 ---
 
 # 门禁式 AI 开发循环
@@ -20,11 +20,20 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 
 ## 写入前路由
 
-只选择一种任务模式：
+使用三个独立维度，避免把风险、规模、改动性质和执行方式混成一个模式：
 
-- `None`：只回答问题，不写文件。
-- `Full`：命中任一硬条件。
-- `Light`：所有硬条件均为假、影响明确、目标与验收具体，并且预计最多修改三个普通文件。
+1. 选择与 CLI 兼容的门禁等级：`None`、`Light` 或 `Full`；
+2. 写入任务按 [routing-profiles.md](references/routing-profiles.md) 选择工作规模：`Micro`、`Task`、`Capability` 或 `Project`；None 的工作规模为 `N/A`；
+3. 记录主要变更类型：`Feature`、`Bugfix`、`Refactor`、`Migration`、`Maintenance`、`Docs` 或 `Test`。
+
+向用户显示 `门禁等级 · 工作规模 · 变更类型`，例如 `Full · Capability · Feature`。`single/parallel` 是冻结后的执行拓扑，不属于这三个维度。
+
+- `Micro（微改）`：代表“修改一个局部点，不形成独立功能包”；
+- `Task（单任务）`：代表“交付一个可独立验收的结果”；
+- `Capability（完整能力）`：代表“多个任务协同形成一项完整业务能力”；
+- `Project（完整项目）`：代表“多个能力和里程碑组成一个完整项目”。
+
+固定代表说明和当前任务的具体代表例子必须同时写入总览与进度，不能只显示英文枚举。
 
 以下任一情况强制使用 `Full`：
 
@@ -39,13 +48,25 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 - 预计修改超过三个文件；
 - 影响范围未知。
 
-存在疑问时选择 `Full`。不得用用户指定的 Light 绕过硬条件。实现后根据真实 diff 重新分类；真实改动越界时把 Light 升级为 Full。
+存在疑问时选择 `Full`。不得用用户指定的 Light 或较小工作规模绕过硬条件。Light 只适用于低风险 Micro；Full 可以是高风险 Micro，也可以是 Task、Capability 或 Project。实现后根据真实 diff 重新分类；越界时分别升级门禁等级或工作规模。冻结后不得静默降级或更换维度；需要改变时展示影响并取得用户确认。
 
 ## 统一运行目录
 
 所有持久化流程产物必须位于协调工作区根目录的 `.ai-dev-loop/<task-id>/`。CLI 缺失时也手工建立同一目录和等价文件；禁止改用 `.acceptance/`、临时规范目录或用户主目录。AI 分析后发现任务跨目录、跨仓库或跨微服务时，只选择一个协调工作区保存任务包，其他工作区只保存业务改动，不复制任务包。
 
 冻结核心产物、`development-overview.md`、`progress.md` 和最新的 `final-acceptance-report.md` 放在任务目录根部；每次主动调用、手动交接、修复和验收的原始证据放在 `rounds/round-NN/`。开发代理不得修改 `.ai-dev-loop/**`，只有宿主可以写入总览、进度、轮次状态和证据。临时 runner 只能放在系统临时目录，不能进入业务仓库。
+
+## 每次进入先恢复已有任务
+
+每次收到开发类消息都先检查当前协调工作区的 `.ai-dev-loop/`，尤其是“继续”“再改一下”“验收时发现”“调整需求”“补充建议”“这个先保留，再做……”等后续消息。必须在调用 `start`、生成新 task ID、起草新 baseline 或创建新任务目录之前完成恢复：
+
+- 用户给出 task ID 时读取该任务；没有 task ID 且只有一个非终态任务时默认续接它；存在多个候选时列出任务、当前状态和最近证据，让用户明确选择；
+- 读取冻结授权、`development-overview.md`、`progress.md`、`final-acceptance-report.md` 和最新 `rounds/round-NN/` 证据，按磁盘事实恢复阶段，不能依赖当前对话记忆；
+- 仓库中的原始 baseline 来源文件被移动或删除，不代表任务消失；`.ai-dev-loop/<task-id>/baseline.md` 或 `light-brief.md` 及其冻结指纹仍是该版本的权威副本，不得删除、重命名或用另一个任务覆盖；
+- `state.json` 只表示冻结包阶段，不能单独证明任务已经完成；结合 `progress.md`、最终验收报告和轮次证据判断是否仍在等待开发、门禁、验收或人工决定；
+- 无法唯一恢复时进入 `WAITING_FOR_TASK_SELECTION` 或 `NEED_HUMAN_REVIEW`，不得用新描述的哈希静默创建任务。
+
+只有确认不存在应续接的任务，或用户按 [post-acceptance-feedback.md](references/post-acceptance-feedback.md) 明确批准创建关联或独立任务后，才能进入“写入前路由”。
 
 ## 冻结唯一开发授权
 
@@ -75,6 +96,16 @@ description: 将任意形式的软件需求路由为 Full、Light 或 None，通
 初始化任务目录后读取 [tracking.md](references/tracking.md)。在请求用户确认需求前生成 `development-overview.md`，并创建 `progress.md`。每次状态转换后以及向用户交还控制权前，由宿主更新进度；开发者和审查者保持只读。
 
 总览和进度只是冻结基线、结构化状态与轮次证据的人可读投影，不得作为开发授权或单独证明任务完成。人工验收时先展示这两个入口以及最新门禁、独立审查证据。
+
+如果需求分析确认工作规模是 `Project`，选择 `Full · Project · 主要变更类型`，并在需求确认前读取 [project-planning.md](references/project-planning.md)：
+
+- 把 `development-overview.md` 提升为项目开发总纲，写清最终结果、边界、架构约束、里程碑、工作流、依赖、集成顺序、验收节奏和关键风险；
+- 在 `rounds/planning/project-plan.md` 建立 `M-NNN → W-NNN → T-NNN` 分层任务拆解，每个可执行任务必须关联 R/A、工作区与允许路径、依赖、输入输出、测试和完成定义；
+- 禁止使用“完成整个后端”“实现全部接口”这类无法独立验收的粗任务；拆解未覆盖全部需求、验收、工作区和集成依赖时不得请求冻结确认；
+- 在 `progress.md` 分别跟踪里程碑、执行任务和 `S-NNN` SOP 步骤，不使用主观百分比；
+- 每个 SOP 步骤或执行任务开始、完成、阻断、跳过后立即由宿主回写 `progress.md` 的状态、时间、责任方和证据，再继续下一步。不能等整轮结束后批量补写，也不能只在对话里口头报告。
+
+Task 和 Capability 也必须有可执行的 R/A/T 拆解；Capability 额外展示工作流、依赖和集成门禁，Project 再增加项目级总纲、里程碑和完整 SOP 看板。工作规模和变更类型不替代冻结基线。
 
 ## 选择开发方式并隔离实现
 
@@ -142,6 +173,18 @@ CLI `self-check` 原生支持单工作区 schema v1 和多工作区 schema v2。
 
 收到 `FAIL` 后只基于 P0/P1 建立最小修复交接，交给任意新的隔离开发 Agent，或输出通用手动提示词；P2 不自动修复，除非用户授权。重新运行全部机械门禁和语义验收，最多三轮。独立审查者 `PASS` 后，先向用户展示根级 `final-acceptance-report.md`，再按需展开轮次报告和 JSON 证据，并取得明确验收。人工路径必须明确展示“尚未完成独立语义验收”，由用户查看验收包后决定后续动作。
 
+## 分流人工验收反馈
+
+用户在最终确认时没有简单接受，而是要求修改、调整目标、采纳建议、追加功能或开始另一个需求时，读取 [post-acceptance-feedback.md](references/post-acceptance-feedback.md)。先展示分类建议和将发生的磁盘动作，再等待用户明确确认；这一步不是新的开发授权。
+
+- 冻结 R/A/T 已要求但实现未满足：`REPAIR_CURRENT`，保留 task ID、冻结授权和业务工作区，只增加修复轮次；
+- 改变目标、范围、非目标、验收、任务或工作区授权：`REVISE_CURRENT`，保留原任务包和证据，创建显式关联的修订任务包并重新确认基线；不得把旧 baseline 改名、删除或替换；
+- P2 或普通建议：让用户明确选择 `DEFER`、`DISMISS`、`IMPLEMENT_AS_REVISION` 或 `CREATE_FOLLOW_UP`，不得默认实现；
+- 完全不同的目标：`NEW_TASK`，先确认原任务是接受、继续等待还是放弃，再确认新 task ID、关系和工作区；
+- 无法判断：保持 `WAITING_FOR_FEEDBACK_CONFIRMATION`，不得创建任务、轮次或开发交接。
+
+后续消息改变了措辞不等于用户批准新任务。只有确认后的 `manual-feedback.json` 才能触发修复轮次、修订包或关联任务；创建修订或新任务后，原任务目录仍必须可恢复。
+
 ## 保持安全与可见
 
 - 展示任务模式、开发方式、宿主 Agent、实际开发 Agent、冻结文件、通用交接提示词、证据和审查者身份。
@@ -155,8 +198,11 @@ CLI `self-check` 原生支持单工作区 schema v1 和多工作区 schema v2。
 
 - 需要理解、展示或解释完整流程时读取 [workflow.md](references/workflow.md)。
 - 路由、起草或冻结时读取 [baselines.md](references/baselines.md)。
+- 判定门禁等级、Micro/Task/Capability/Project 工作规模和主要变更类型时读取 [routing-profiles.md](references/routing-profiles.md)。
 - AI 分析后发现跨目录、跨仓库、跨微服务或提供方/消费方联动时读取 [multi-workspace.md](references/multi-workspace.md)。
 - 创建开发总览、更新进度或进入人工验收时读取 [tracking.md](references/tracking.md)。
+- 需求分析确认是大型项目完整开发、包含多个里程碑或多个相互依赖工作流时读取 [project-planning.md](references/project-planning.md)。
 - 选择开发方式、生成交接或执行机械门禁时读取 [development.md](references/development.md)。
 - 评估并行资格、拆分任务、启动多子 Agent 或集成结果时读取 [parallel-development.md](references/parallel-development.md)。
 - 选择验收能力、执行独立或人工语义验收、准备修复轮次时读取 [acceptance.md](references/acceptance.md)。
+- 人工验收时修改需求、提出建议、采纳 P2、切换任务或在后续对话恢复已有任务时读取 [post-acceptance-feedback.md](references/post-acceptance-feedback.md)。

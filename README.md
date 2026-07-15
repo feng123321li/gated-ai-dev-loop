@@ -1,35 +1,50 @@
 # 门禁式 AI 开发循环
 
-一套适用于任意 AI Agent 的通用开发 Skill。前期需求可以来自对话、Issue、PRD、截图、原型或代码分析；AI 分析后发现跨目录、跨仓库或跨微服务时，先完成全部工作区的授权与覆盖门禁，再通过宿主自动派遣或通用手动提示词完成实现，最后按宿主能力选择其他独立 Agent、同宿主全新子 Agent 或人工语义验收。
+一套适用于任意 AI Agent 的通用开发 Skill。前期需求可以来自对话、Issue、PRD、截图、原型或代码分析；后续对话会先恢复已有任务，再处理人工验收时的修改、建议或新目标。大型完整项目在开发前必须提供总纲、里程碑、工作流、细粒度任务拆解和实时 SOP 进度。
 
 这不是某个需求框架的插件，也不限制 Windows。核心 Skill 是纯 Markdown，安装器和辅助 CLI 使用 Node.js，可在 Windows、macOS 和 Linux 运行。
 
 ## 工作方式
 
-1. 当前任意宿主 Agent 采集、分析并审核需求，自动选择 `Full`、`Light` 或 `None`。
-2. 用户确认 Full 基线或 Light 简报后冻结，开发授权不再漂移。
-3. 宿主生成 `development-overview.md` 并持续维护 `progress.md`，供用户查看当前阶段、任务、阻断项、证据和下一步。
-4. 跨目录、跨仓库或跨微服务时，宿主为每个写入任务绑定绝对工作区、允许路径、测试目录与依赖顺序；覆盖不完整就停在 `WAITING_FOR_WORKSPACE_AUTHORIZATION`，不生成交接提示词。
-5. 工作区覆盖通过后、写代码前，由用户明确选择 active 或 manual；需求确认不代替工作区授权或开发方式确认。
-6. active 模式由宿主自动启动可调度的全新隔离开发 Agent；manual 模式只返回可交给任意 Agent 的通用后续提示词。开发 Agent 均不继承前期对话。
-7. Light 固定单 Agent；可证明任务和写入范围互斥的 Full 可由用户选择 single 或 parallel。提供方契约尚未就绪时，消费方进入后续波次。
-8. 宿主先逐工作区检查各 Agent 的改动归属和冻结测试，再对聚合 diff 执行跨服务检查，生成机械自检报告。
-9. 优先使用与开发者分离的全新只读其他 Agent 验收；没有其他产品时使用宿主的全新验收子 Agent；两者均不继承开发上下文。两者都不可用时生成完整人工验收包，不阻止开发和机械门禁，也不声称独立语义验收通过。
-10. 开发完成后，任意新宿主 Agent 都可读取 `gate-continuation.md` 和开发结果接管机械门禁，无需返回原对话；`accept` 在任务根目录刷新最终验收报告。
+1. 每次开发类消息先扫描 `.ai-dev-loop/`：唯一活动任务直接续接，多个候选让用户选择；不得因措辞变化静默创建新任务。
+2. 新任务分别记录 `None/Light/Full` 门禁等级、`Micro/Task/Capability/Project` 工作规模和主要变更类型，并显示固定中文代表说明及当前任务的具体说明。
+3. `Full · Project · 主要变更类型` 在确认前生成开发总纲和 `rounds/planning/project-plan.md`，按 M/W/T 拆解并检查依赖、工作区、测试与完成定义。
+4. 用户确认 Full 基线或 Light 简报后冻结，开发授权不再漂移。
+5. 宿主生成 `development-overview.md` 并持续维护 `progress.md`；每个业务任务和 SOP 步骤状态变化后立即回写时间、责任方和证据。
+6. 跨目录、跨仓库或跨微服务时，宿主为每个写入任务绑定绝对工作区、允许路径、测试目录与依赖顺序；覆盖不完整就停在 `WAITING_FOR_WORKSPACE_AUTHORIZATION`。
+7. 工作区覆盖通过后、写代码前，由用户明确选择 active 或 manual，再按资格选择 single 或 parallel；这些选择不是任务模式。
+8. active 自动启动全新隔离开发 Agent；manual 只返回可交给任意 Agent 的通用后续提示词。开发 Agent 均不继承前期对话。
+9. 宿主逐任务、逐工作区检查改动归属和冻结测试，再对聚合 diff 执行跨服务机械门禁。
+10. 优先使用与开发者分离的全新只读其他 Agent 验收；没有其他产品时使用全新验收子 Agent；均不可用时生成明确的人工验收包。
+11. 开发完成后，任意新宿主可读取 `gate-continuation.md`、进度和开发结果接管门禁，无需返回原对话。
+12. 人工验收时提出修改或建议，先分类为同任务修复、关联修订、建议处置或新任务，并在用户确认前禁止创建目标任务包。
 
 完整的角色、门禁、升级和修复循环见：[工作流程图](skills/gated-ai-dev-loop/references/workflow.md)。
 
-`gated-loop` 0.2.0 已实现路由、基线准备、冻结、schema v1/v2 机械自检和能力驱动的验收落盘。开发方式选择、Agent 派遣、`development-overview.md`、`progress.md` 与修复轮次仍由宿主按 Skill 维护；CLI 只执行可确定验证，不代替宿主协调或用户确认。
+`gated-loop` 0.2.0 已实现 None/Light/Full 路由、基线准备、冻结、schema v1/v2 机械自检和能力驱动的验收落盘。工作规模、变更类型、任务恢复、项目总纲、进度回写、人工反馈分流、开发方式选择和 Agent 派遣由宿主按 Skill 维护；不要伪称 CLI 已原生实现工作规模或变更类型。
+
+## 三维路由
+
+| 工作规模 | 固定代表说明 | 典型组合 | 规划要求 |
+| --- | --- | --- | --- |
+| `Micro（微改）` | 修改一个局部点，不形成独立功能包 | `Light · Micro · Bugfix`；高风险时也可 Full | 简报或 baseline、一个 T 和适用 SOP |
+| `Task（单任务）` | 交付一个可独立验收的结果 | `Full · Task · Feature` | 完整 R/A/T、总览和 SOP 进度 |
+| `Capability（完整能力）` | 多个任务协同形成一项完整业务能力 | `Full · Capability · Feature` | 工作流、依赖波次、集成门禁和逐任务进度 |
+| `Project（完整项目）` | 多个能力和里程碑组成一个完整项目 | `Full · Project · Feature` | 开发总纲、project-plan、M/W/T 拆解和完整 SOP 看板 |
+
+变更类型独立记录为 `Feature/Bugfix/Refactor/Migration/Maintenance/Docs/Test`；`single/parallel` 仍是冻结后的执行拓扑。详细判定见[三维路由模型](skills/gated-ai-dev-loop/references/routing-profiles.md)。
 
 ## 开发总览与进度
 
 每个任务都在 `.ai-dev-loop/<task-id>/` 中维护：
 
 - `development-overview.md`：目标、范围、R/A/T 追踪、开发与验收安排、风险和产物导航；
-- `progress.md`：当前阶段、精确任务完成数、当前轮次、门禁与审查结论、阻断项、下一步和追加式时间线；
+- `progress.md`：当前阶段、门禁等级、工作规模、固定/具体代表说明、变更类型、M/W/T 或普通任务状态、SOP 看板、精确完成数、门禁结论、阻断项、下一步和追加式时间线；
 - `final-acceptance-report.md`：最新验收轮次的人可读总入口，由 `gated-loop accept` 自动刷新。
 
-两者由宿主维护，开发和审查上下文只读。它们是人可读视图，不替代冻结基线、真实 diff、测试或独立审查。进入人工验收时，宿主必须先展示这两个文件及最新证据，方便逐项查看进度。
+Project 规模另有 `rounds/planning/project-plan.md`，保存详细里程碑、工作流、任务依赖、关键路径、阶段门禁和风险。
+
+这些人可读文件由宿主维护，开发和审查上下文只读；它们不替代冻结基线、真实 diff、测试或独立审查。
 
 ## 跨目录与多微服务交接
 

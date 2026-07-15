@@ -140,13 +140,13 @@ single 每轮默认只进行一次主动调用；parallel 的每个 assignment �
 
 任意宿主 Agent 都可以接管本轮，不需要原需求或开发对话。
 
-1. 读取任务根目录的 mode、冻结授权、acceptance、tasks、state、development-overview 和 progress。
+1. 读取任务根目录的 mode、冻结授权、acceptance、tasks、state、development-overview 和 progress；Project 规模同时读取 rounds/planning/project-plan.md。
 2. 读取本轮 development-mode、development-snapshot、prompt，以及用户提供的开发 Agent 结构化结果。
 3. 验证冻结指纹、HEAD、开发前已有改动和真实 diff；无法归属时返回 NEED_HUMAN_REVIEW。
-4. 由接管宿主把已校验的开发结果保存为 result.json，并更新 progress.md；不得让开发 Agent 写 .ai-dev-loop/**。
-5. 运行 gated-loop self-check --task <task-id> --round <NN>；非 PASS 时停止。
-6. 机械门禁 PASS 后按验收能力路由：其他独立 Agent、同宿主全新只读子 Agent，或没有隔离能力时生成完整人工验收包；再运行 gated-loop accept 落盘结果。
-7. 不重新分析或改写冻结需求，不自动提交、推送、合并或发布。
+4. 由接管宿主把已校验的开发结果保存为 result.json，逐 T 把 progress.md 更新为 IMPLEMENTED 或 BLOCKED，并完成 S-008 回写；不得让开发 Agent 写 .ai-dev-loop/**。
+5. 运行 gated-loop self-check --task <task-id> --round <NN>；非 PASS 时停止，并立即回写 S-009、阻断项和证据。
+6. 机械门禁 PASS 后按验收能力路由：其他独立 Agent、同宿主全新只读子 Agent，或没有隔离能力时生成完整人工验收包；再运行 gated-loop accept 落盘结果，并立即回写 S-010 和符合证据的 VERIFIED 任务。
+7. 每个 SOP 状态变化都先按 tracking.md 回写 progress，再继续；不重新分析或改写冻结需求，不自动提交、推送、合并或发布。
 ```
 
 开发完成后，用户可以把开发结果交给任意新的宿主 Agent，并输入：
@@ -166,12 +166,20 @@ single 每轮默认只进行一次主动调用；parallel 的每个 assignment �
 {
   "status": "COMPLETED",
   "changedFiles": ["relative/path"],
+  "taskResults": [
+    {
+      "task": "T-001",
+      "status": "IMPLEMENTED",
+      "facts": ["该任务的可观察实现事实"],
+      "blockers": []
+    }
+  ],
   "facts": ["可观察的实现事实"],
   "blockers": []
 }
 ```
 
-`status` 只能是 `COMPLETED` 或 `BLOCKED`。宿主把声明保存为 `rounds/round-NN/result.json`；开发者不得直接写该文件。真实 diff 和测试才是权威证据。
+总体 `status` 只能是 `COMPLETED` 或 `BLOCKED`；每个已分配的 T 必须且只能出现一次，任务状态只能是 `IMPLEMENTED` 或 `BLOCKED`。宿主把声明保存为 `rounds/round-NN/result.json`，随后逐项回写 `progress.md`；开发者不得直接写这些文件。真实 diff 和测试才是权威证据，`IMPLEMENTED` 不能被表述为已验收。
 
 ## 开发前快照
 

@@ -252,4 +252,6 @@ CLI 默认不扫描或启动外部 Agent，而是写入人工验收计划和待�
 
 收到 `FAIL` 后，只把 P0/P1 finding、关联 ID、允许路径和必须重跑的测试交给新的隔离开发上下文，或通过明确 manual 方式交接。P2 默认不进入自动修复，除非用户明确授权。修复后重新运行全部机械门禁和独立验收，最多三轮。
 
-进入 `WAITING_FOR_MANUAL_ACCEPTANCE` 前，更新 `progress.md`，刷新并优先展示任务根目录的 `final-acceptance-report.md`。用户需要追溯时再展示 `development-overview.md`、轮次级报告和原始 JSON 证据。只有用户明确确认后才能完成；用户拒绝时记录关联 finding 或验收 ID 并进入修复轮次。
+进入 `WAITING_FOR_MANUAL_ACCEPTANCE` 前，更新 `progress.md`，刷新并优先展示任务根目录的 `final-acceptance-report.md`。用户需要追溯时再展示 `development-overview.md`、轮次级报告和原始 JSON 证据。只有用户明确确认后才能完成。
+
+用户没有直接接受，而是要求修改、调整目标、采纳 P2、补充建议或开始另一个需求时，不得把所有反馈一律视为修复，也不得立即创建新任务。先按 [post-acceptance-feedback.md](post-acceptance-feedback.md) 恢复原任务并区分：冻结授权未满足的同任务修复、需要重新冻结的当前任务修订、建议处置或明确的新任务。展示分类和原任务处置并取得用户确认后，才写入 `manual-feedback.json`；分类不明时保持 `WAITING_FOR_FEEDBACK_CONFIRMATION`。

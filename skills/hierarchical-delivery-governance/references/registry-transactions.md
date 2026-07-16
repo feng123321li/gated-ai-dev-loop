@@ -18,9 +18,9 @@
 
 ## Claim
 
-Task claim 包含 `owner`、`operationId` 和 `claimedAt`。claim 前重新计算 READY。相同 Task 不能重复认领；写入范围与任何活动 Task 重叠时也不能认领。
+Task claim 包含 `owner`、`operationId` 和 `claimedAt`。正常流程用 `dispatch-task` 在返回给用户前完成 READY 校验、claim 和绑定 operationId 的 handoff 生成；`claim-task` 仅用于恢复。相同 Task 不能重复认领；写入范围与任何活动 Task 重叠时也不能认领。
 
-Agent 返回结果时必须提交相同 operationId。成功写 `IMPLEMENTED` 和证据，失败写 `BLOCKED` 和阻断证据，然后清除 claim。无法确认外部 Agent 是否已启动或写入时，不重复派遣，转人工核对。
+Agent 返回结果时必须提交相同 operationId。成功写 `IMPLEMENTED` 和证据，失败写 `BLOCKED` 和阻断证据，然后清除 claim，并生成或更新验收报告。无法确认外部 Agent 是否已启动或写入时，不重复派遣，转人工核对。正常 PASS 必须通过 `accept-item` 校验 evidence 后写 gate 与报告；不能用自然语言补写 PASS。
 
 ## 修订并发
 

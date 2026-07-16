@@ -33,6 +33,9 @@ test('Skill defines one stable hierarchy without repository-maintenance instruct
   assert.match(skill, /scripts\/hdg\.mjs/);
   assert.match(skill, /全局 `hdg` 只是可选快捷别名，不是前置条件/);
   assert.match(skill, /schema v3/);
+  assert.match(skill, /upgrade-registry/);
+  assert.match(skill, /migrationHistory/);
+  assert.match(skill, /不得静默改写/);
   assert.match(skill, /`gateLevel` 必须是 `LIGHT` 或 `FULL`/);
   assert.match(skill, /根 `TASK → CAPABILITY` 或根 `CAPABILITY → DELIVERY`/);
   assert.match(skill, /promotionHistory/);
@@ -40,6 +43,10 @@ test('Skill defines one stable hierarchy without repository-maintenance instruct
   assert.match(skill, /确认 baseline.*不能.*开发方式|baseline.*开发方式/);
   assert.match(skill, /retry-item/);
   assert.match(skill, /真实、hash 匹配、结构合法且不可复用的 evidence/);
+  assert.match(skill, /dispatch-task → task-result → accept-item → acceptance-item|dispatch-task.*task-result.*accept-item.*acceptance-item/s);
+  assert.match(skill, /acceptance-report\.md/);
+  assert.match(skill, /面向用户与协作者的中文工作台/);
+  assert.match(skill, /根 Task、根 Capability、Delivery.*COMPLETED/);
 });
 
 test('repository maintenance constraints live in AGENTS.md instead of the distributed Skill', async () => {
@@ -57,11 +64,10 @@ test('Skill interface uses one baseline approval and emits a reusable manual pro
   const agentInterface = await readFile(interfaceUrl, 'utf8');
 
   assert.match(agentInterface, /分层式 AI 交付治理/);
-  assert.match(agentInterface, /可独立交付工作单元/);
-  assert.match(agentInterface, /根 Task、Capability→Task 或 Delivery→Capability→Task/);
-  assert.match(agentInterface, /LIGHT\/FULL/);
-  assert.match(agentInterface, /只请求一次覆盖具体 ID、内容以及持久化并冻结的批准/);
-  assert.match(agentInterface, /批准前不落盘/);
-  assert.match(agentInterface, /manual 模式返回可直接粘贴到新会话的完整提示词/);
+  assert.match(agentInterface, /开发回收、门禁、验收报告和最终确认/);
+  assert.match(agentInterface, /一次批准冻结 baseline/);
+  assert.match(agentInterface, /原子调度 manual\/active 开发/);
+  assert.match(agentInterface, /生成用户验收报告/);
+  assert.match(agentInterface, /独立验收和用户确认/);
   assert.doesNotMatch(agentInterface, /并为每一级冻结独立 baseline/);
 });

@@ -37,6 +37,13 @@ const DELIVERY_STATUSES = Object.freeze([
   'WAITING_FOR_USER_CONFIRMATION',
   'COMPLETED',
 ]);
+const ACCEPTANCE_STATUSES = DELIVERY_STATUSES;
+const ACCEPTANCE_REPORT_STATUSES = Object.freeze([
+  ...ACCEPTANCE_STATUSES,
+  'WAITING_FOR_GATE',
+  'BLOCKED',
+  'VERIFIED',
+]);
 const DEVELOPMENT_MODES = Object.freeze(['active', 'manual']);
 
 function fail(code, message, details = {}) {
@@ -77,6 +84,7 @@ function emptyRegistry(root, at) {
     currentFocus: { workItemId: null, purpose: null },
     workItems: [],
     promotionHistory: [],
+    migrationHistory: [],
     updatedAt: at,
   };
 }
@@ -115,6 +123,13 @@ function validEvidenceReference(value) {
 
 function nonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function safeWorkItemId(value) {
+  return typeof value === 'string'
+    && /^[a-z0-9][a-z0-9._-]*$/.test(value)
+    && !value.endsWith('.')
+    && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/.test(value);
 }
 
 function validDevelopmentMode(value, entry) {
@@ -174,6 +189,26 @@ function validDelivery(value) {
   return reviewValid && validDeliveryEvidence(value.userConfirmation, ['USER_CONFIRMED']);
 }
 
+function validAcceptance(value) {
+  return validDelivery(value);
+}
+
+function validAcceptanceReport(value, entry) {
+  if (value === undefined || value === null) return true;
+  const expectedDirectory = path.posix.join(
+    GOVERNANCE_DIRECTORY,
+    WORK_ITEMS_DIRECTORY,
+    entry.id,
+  );
+  return value && typeof value === 'object' && !Array.isArray(value)
+    && value.schemaVersion === 1
+    && ACCEPTANCE_REPORT_STATUSES.includes(value.status)
+    && value.jsonPath === path.posix.join(expectedDirectory, 'acceptance-report.json')
+    && value.markdownPath === path.posix.join(expectedDirectory, 'acceptance-report.md')
+    && typeof value.generatedAt === 'string'
+    && !Number.isNaN(Date.parse(value.generatedAt));
+}
+
 function validateRegistry(registry, root) {
   const valid = registry && typeof registry === 'object' && !Array.isArray(registry)
     && registry.schemaVersion === WORK_ITEM_REGISTRY_SCHEMA_VERSION
@@ -181,13 +216,11 @@ function validateRegistry(registry, root) {
     && Number.isInteger(registry.revision) && registry.revision >= 0
     && Array.isArray(registry.workItems)
     && Array.isArray(registry.promotionHistory)
+    && (registry.migrationHistory === undefined || Array.isArray(registry.migrationHistory))
     && registry.currentFocus && typeof registry.currentFocus === 'object';
   if (!valid) fail('WORK_ITEM_REGISTRY_INVALID', 'Work item registry is invalid');
   const ids = registry.workItems.map(({ id }) => id);
-  const safeId = (value) => typeof value === 'string'
-    && /^[a-z0-9][a-z0-9._-]*$/.test(value)
-    && !value.endsWith('.')
-    && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/.test(value);
+  const safeId = safeWorkItemId;
   if (new Set(ids).size !== ids.length || ids.some((id) => !safeId(id))) {
     fail('WORK_ITEM_REGISTRY_INVALID', 'Work item registry contains duplicate or unsafe IDs');
   }
@@ -209,6 +242,20 @@ function validateRegistry(registry, root) {
       && typeof promotion.promotedAt === 'string'
       && !Number.isNaN(Date.parse(promotion.promotedAt));
     if (!promotionValid) fail('WORK_ITEM_REGISTRY_INVALID', 'Work item promotion history is invalid');
+  }
+  for (const migration of registry.migrationHistory ?? []) {
+    const migrationValid = migration && typeof migration === 'object' && !Array.isArray(migration)
+      && migration.schemaVersion === 1
+      && migration.fromSchemaVersion === 2
+      && migration.toSchemaVersion === WORK_ITEM_REGISTRY_SCHEMA_VERSION
+      && safeId(migration.workItemId)
+      && WORK_ITEM_GATE_LEVELS.includes(migration.taskGateLevel)
+      && fingerprint(migration.previousBaselineFingerprint)
+      && fingerprint(migration.migratedBaselineFingerprint)
+      && fingerprint(migration.previousRegistryFingerprint)
+      && typeof migration.migratedAt === 'string'
+      && !Number.isNaN(Date.parse(migration.migratedAt));
+    if (!migrationValid) fail('WORK_ITEM_REGISTRY_INVALID', 'Work item migration history is invalid');
   }
   for (const entry of registry.workItems) {
     const validEntry = WORK_ITEM_KINDS.includes(entry.kind)
@@ -238,6 +285,12 @@ function validateRegistry(registry, root) {
       ? (entry.delivery === undefined || validDelivery(entry.delivery))
       : entry.delivery === undefined || entry.delivery === null;
     if (!deliveryValid) fail('WORK_ITEM_REGISTRY_INVALID', `Work item delivery state is invalid: ${entry.id}`);
+    const acceptanceValid = entry.parentId === null
+      ? entry.acceptance === undefined || validAcceptance(entry.acceptance)
+      : entry.acceptance === undefined || entry.acceptance === null;
+    if (!acceptanceValid || !validAcceptanceReport(entry.acceptanceReport, entry)) {
+      fail('WORK_ITEM_REGISTRY_INVALID', `Work item acceptance state is invalid: ${entry.id}`);
+    }
     if (entry.kind === 'DELIVERY' && entry.parentId !== null) {
       fail('WORK_ITEM_REGISTRY_INVALID', 'Delivery entries cannot have parents');
     }
@@ -272,12 +325,15 @@ async function ensureRuntimeRoot(root, fs) {
 }
 
 async function assertPersistedDeliveryEvidence(root, registry, fs) {
-  for (const entry of registry.workItems.filter(({ kind, delivery }) => (
-    kind === 'DELIVERY' && delivery && delivery.status !== 'NOT_READY'
-      && delivery.status !== 'WAITING_FOR_INDEPENDENT_REVIEW'
-  ))) {
-    const records = [entry.delivery.review];
-    if (entry.delivery.status === 'COMPLETED') records.push(entry.delivery.userConfirmation);
+  for (const entry of registry.workItems.filter((candidate) => {
+    const acceptance = candidate.acceptance ?? candidate.delivery;
+    return candidate.parentId === null && acceptance
+      && acceptance.status !== 'NOT_READY'
+      && acceptance.status !== 'WAITING_FOR_INDEPENDENT_REVIEW';
+  })) {
+    const acceptance = entry.acceptance ?? entry.delivery;
+    const records = [acceptance.review];
+    if (acceptance.status === 'COMPLETED') records.push(acceptance.userConfirmation);
     for (const record of records) {
       let bytes;
       try { bytes = await readSafeRegularFile(root, record.evidence.path, { fs }); }
@@ -336,18 +392,45 @@ async function readRegistryUnlocked(root, fs, { allowMissing = false, now } = {}
   return validated;
 }
 
+function humanStatus(value) {
+  return ({
+    DELIVERY: '交付',
+    CAPABILITY: '能力',
+    TASK: '任务',
+    PREPARED: '等待基线确认',
+    WAITING_FOR_DEVELOPMENT_MODE_SELECTION: '等待选择开发方式',
+    FROZEN: '已冻结',
+    CLAIMED: '开发中',
+    IMPLEMENTED: '等待门禁验收',
+    BLOCKED: '已阻断',
+    VERIFIED: '门禁已通过',
+    NOT_READY: '尚未就绪',
+    WAITING_FOR_INDEPENDENT_REVIEW: '等待独立验收',
+    WAITING_FOR_USER_CONFIRMATION: '等待用户确认',
+    COMPLETED: '已完成',
+    NOT_RUN: '未运行',
+    PASS: '通过',
+    FAIL: '未通过',
+  })[value] ?? value ?? '无';
+}
+
 function renderWorkspaceOverview(registry) {
   const lines = [
-    '# Work Item Overview',
+    '# 工作项总览',
     '',
-    `> registry revision: ${registry.revision}`,
-    `> current focus: ${registry.currentFocus.workItemId ?? 'none'}`,
+    '> 本文件是面向用户和协作者的可读投影；机器权威为 `work-item-registry.json`。',
+    `> 注册表版本：${registry.revision}`,
+    `> 当前焦点：${registry.currentFocus.workItemId ?? '无'}`,
     '',
-    '| Work Item | Kind | Gate level | Parent | Stage | Status | Development mode | Delivery | Direct progress | Descendant progress | Gate | Claim |',
+    '| 工作项 | 类型 | 门禁等级 | 父级 | 当前状态 | 开发方式 | 最终验收 | 直接子级 | 全部后代 | 门禁 | 认领者 | 验收报告 |',
     '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
   ];
   for (const item of sortedItems(registry.workItems)) {
-    lines.push(`| ${item.id} | ${item.kind} | ${item.gateLevel} | ${item.parentId ?? 'none'} | ${item.stage} | ${item.status} | ${item.developmentMode?.mode ?? 'n/a'} | ${item.delivery?.status ?? 'n/a'} | ${item.progress.directChildren.verified}/${item.progress.directChildren.total} | ${item.progress.descendants.verified}/${item.progress.descendants.total} | ${item.gate.status} | ${item.claim?.owner ?? 'none'} |`);
+    const report = item.acceptanceReport
+      ? `[查看](${path.posix.relative(GOVERNANCE_DIRECTORY, item.acceptanceReport.markdownPath)})`
+      : '尚未生成';
+    const acceptance = item.acceptance ?? (item.parentId === null ? item.delivery : null);
+    lines.push(`| ${item.id} | ${humanStatus(item.kind)} | ${item.gateLevel} | ${item.parentId ?? '无'} | ${humanStatus(item.status)} | ${item.developmentMode?.mode ?? '不适用'} | ${acceptance ? humanStatus(acceptance.status) : '不适用'} | ${item.progress.directChildren.verified}/${item.progress.directChildren.total} | ${item.progress.descendants.verified}/${item.progress.descendants.total} | ${humanStatus(item.gate.status)} | ${item.claim?.owner ?? '无'} | ${report} |`);
   }
   lines.push('');
   return lines.join('\n');
@@ -355,34 +438,37 @@ function renderWorkspaceOverview(registry) {
 
 function renderItemOverview(entry) {
   return [
-    `# ${entry.id} Work Item Overview`,
+    `# ${entry.id} 工作项概览`,
     '',
-    `- Kind: ${entry.kind}`,
-    `- Gate level: ${entry.gateLevel}`,
-    `- Authority: ${entry.authorityKind}`,
-    `- Parent: ${entry.parentId ?? 'none'}`,
-    `- Baseline: [baseline.md](baseline.md)`,
-    `- Parent contract: ${entry.parentContractFingerprint ?? 'none'}`,
-    `- Children: ${entry.childIds.join(', ') || 'none'}`,
+    `- 类型：${entry.kind}`,
+    `- 门禁等级：${entry.gateLevel}`,
+    `- 权限性质：${entry.authorityKind}`,
+    `- 父级：${entry.parentId ?? '无'}`,
+    '- 基线：[baseline.md](baseline.md)',
+    `- 父契约指纹：${entry.parentContractFingerprint ?? '无'}`,
+    `- 子级：${entry.childIds.join(', ') || '无'}`,
+    `- 验收报告：${entry.acceptanceReport ? '[acceptance-report.md](acceptance-report.md)' : '尚未生成'}`,
     '',
   ].join('\n');
 }
 
 function renderItemProgress(entry) {
+  const acceptance = entry.acceptance ?? (entry.parentId === null ? entry.delivery : null);
   return [
-    `# ${entry.id} Progress`,
+    `# ${entry.id} 进度`,
     '',
-    `- Record revision: ${entry.recordRevision}`,
-    `- Stage: ${entry.stage}`,
-    `- Status: ${entry.status}`,
-    `- Gate level: ${entry.gateLevel}`,
-    `- Delivery: ${entry.delivery?.status ?? 'n/a'}`,
-    `- Gate: ${entry.gate.status}`,
-    `- Development mode: ${entry.developmentMode?.mode ?? 'not selected'}`,
-    `- Claim: ${entry.claim ? `${entry.claim.owner} / ${entry.claim.operationId}` : 'none'}`,
-    `- Direct children: ${entry.progress.directChildren.verified}/${entry.progress.directChildren.total} verified; ${entry.progress.directChildren.blocked} blocked; ${entry.progress.directChildren.active} active`,
-    `- Descendants: ${entry.progress.descendants.verified}/${entry.progress.descendants.total} verified; ${entry.progress.descendants.blocked} blocked; ${entry.progress.descendants.active} active`,
-    `- Updated at: ${entry.updatedAt}`,
+    `- 记录版本：${entry.recordRevision}`,
+    `- 阶段：${entry.stage}`,
+    `- 当前状态：${humanStatus(entry.status)}`,
+    `- 门禁等级：${entry.gateLevel}`,
+    `- 最终验收：${acceptance ? humanStatus(acceptance.status) : '不适用'}`,
+    `- 门禁：${humanStatus(entry.gate.status)}`,
+    `- 开发方式：${entry.developmentMode?.mode ?? '未选择'}`,
+    `- 认领：${entry.claim ? `${entry.claim.owner} / ${entry.claim.operationId}` : '无'}`,
+    `- 直接子级：${entry.progress.directChildren.verified}/${entry.progress.directChildren.total} 已验证；${entry.progress.directChildren.blocked} 阻断；${entry.progress.directChildren.active} 活动`,
+    `- 全部后代：${entry.progress.descendants.verified}/${entry.progress.descendants.total} 已验证；${entry.progress.descendants.blocked} 阻断；${entry.progress.descendants.active} 活动`,
+    `- 验收报告：${entry.acceptanceReport ? '[acceptance-report.md](acceptance-report.md)' : '尚未生成'}`,
+    `- 更新时间：${entry.updatedAt}`,
     '',
   ].join('\n');
 }
@@ -528,6 +614,9 @@ async function writeNewPackage(target, files, fs) {
 }
 
 function entryFromDefinition(definition, state, at) {
+  const rootAcceptance = definition.parentId === null
+    ? { status: 'NOT_READY', review: null, userConfirmation: null }
+    : null;
   return {
     id: definition.id,
     kind: definition.kind,
@@ -545,9 +634,12 @@ function entryFromDefinition(definition, state, at) {
     delivery: definition.kind === 'DELIVERY'
       ? { status: 'NOT_READY', review: null, userConfirmation: null }
       : null,
+    acceptance: rootAcceptance,
+    acceptanceReport: null,
     developmentMode: null,
     claim: null,
     latestEvidence: null,
+    latestResult: null,
     recordRevision: 1,
     createdAt: at,
     updatedAt: at,
@@ -784,9 +876,13 @@ async function retryBlockedWorkItem({
     if (entry.baselineFingerprint !== expectedBaselineFingerprint) {
       fail('WORK_ITEM_REVISION_CONFLICT', 'The retry baseline fingerprint is not current');
     }
-    await assertCurrentLineage(root, registry, entry, fs);
+    const own = await assertCurrentLineage(root, registry, entry, fs);
     entry.status = 'FROZEN';
     entry.gate = { status: 'NOT_RUN', evidence: null };
+    if (entry.parentId === null) {
+      entry.acceptance = { status: 'NOT_READY', review: null, userConfirmation: null };
+      if (entry.kind === 'DELIVERY') entry.delivery = entry.acceptance;
+    }
     entry.recordRevision += 1;
     entry.updatedAt = at;
     registry.currentFocus = {
@@ -795,6 +891,7 @@ async function retryBlockedWorkItem({
     };
     registry.revision += 1;
     registry.updatedAt = at;
+    if (entry.acceptanceReport) await writeAcceptanceReport(root, entry, own.definition, at, fs);
     await writeRegistryUnlocked(root, registry, fs);
     return { id, status: entry.status, baselineFingerprint: entry.baselineFingerprint };
   }, { now });
@@ -891,6 +988,9 @@ export async function reviseWorkItem({
           await fs.rm(path.join(staging, name), { force: true });
         }
       }
+      for (const name of ['acceptance-report.json', 'acceptance-report.md']) {
+        await fs.rm(path.join(staging, name), { force: true });
+      }
     }, { fs });
     entry.childIds = normalized.children?.map(({ id }) => id) ?? [];
     entry.baselineFingerprint = state.baselineFingerprint;
@@ -899,7 +999,13 @@ export async function reviseWorkItem({
     entry.status = entry.kind === 'TASK' ? 'WAITING_FOR_DEVELOPMENT_MODE_SELECTION' : 'FROZEN';
     entry.developmentMode = null;
     entry.gate = { status: 'NOT_RUN', evidence: null };
+    entry.acceptance = entry.parentId === null
+      ? { status: 'NOT_READY', review: null, userConfirmation: null }
+      : null;
+    if (entry.kind === 'DELIVERY') entry.delivery = entry.acceptance;
+    entry.acceptanceReport = null;
     entry.latestEvidence = null;
+    entry.latestResult = null;
     entry.recordRevision += 1;
     entry.updatedAt = at;
     registry.currentFocus = {
@@ -991,6 +1097,9 @@ export async function promoteWorkItem({
           await fs.rm(path.join(staging, name), { force: true });
         }
       }
+      for (const name of ['acceptance-report.json', 'acceptance-report.md']) {
+        await fs.rm(path.join(staging, name), { force: true });
+      }
     }, { fs });
 
     const previousBaselineFingerprint = entry.baselineFingerprint;
@@ -1001,7 +1110,10 @@ export async function promoteWorkItem({
     entry.status = entry.kind === 'TASK' ? 'WAITING_FOR_DEVELOPMENT_MODE_SELECTION' : 'FROZEN';
     entry.developmentMode = null;
     entry.gate = { status: 'NOT_RUN', evidence: null };
+    entry.acceptance = null;
+    entry.acceptanceReport = null;
     entry.latestEvidence = null;
+    entry.latestResult = null;
     entry.recordRevision += 1;
     entry.updatedAt = at;
     parentEntry.recordRevision += 1;
@@ -1038,6 +1150,262 @@ export async function promoteWorkItem({
 
 export async function readWorkItemRegistry({ root, fs = fsPromises } = {}) {
   return readRegistryUnlocked(root, fs);
+}
+
+function legacyWorkItemContractFingerprint(definition) {
+  const legacyContract = {
+    schemaVersion: definition.schemaVersion,
+    id: definition.id,
+    kind: definition.kind,
+    goal: definition.goal,
+    scope: [...definition.scope].sort(),
+    requirements: [...definition.requirements].sort((left, right) => left.id.localeCompare(right.id)),
+    acceptance: [...definition.acceptance].sort((left, right) => left.id.localeCompare(right.id)),
+    testCommands: definition.testCommands,
+  };
+  if (definition.children) legacyContract.children = [...definition.children].sort((left, right) => left.id.localeCompare(right.id));
+  if (definition.decomposition) legacyContract.decomposition = definition.decomposition;
+  if (definition.execution) legacyContract.execution = definition.execution;
+  return sha256Bytes(Buffer.from(canonicalJson(legacyContract), 'utf8'));
+}
+
+function validateLegacyRootTaskRegistry(registry, root) {
+  const entry = registry?.workItems?.[0];
+  const registryValid = registry && typeof registry === 'object' && !Array.isArray(registry)
+    && registry.schemaVersion === 2
+    && registry.coordinationRoot === path.resolve(root)
+    && Number.isInteger(registry.revision) && registry.revision >= 0
+    && Array.isArray(registry.workItems) && registry.workItems.length === 1
+    && (registry.promotionHistory === undefined
+      || (Array.isArray(registry.promotionHistory) && registry.promotionHistory.length === 0))
+    && registry.currentFocus && typeof registry.currentFocus === 'object';
+  const entryValid = entry && safeWorkItemId(entry.id)
+    && entry.kind === 'TASK'
+    && entry.authorityKind === WORK_ITEM_AUTHORITIES.TASK
+    && entry.parentId === null
+    && Array.isArray(entry.childIds) && entry.childIds.length === 0
+    && entry.packagePath === itemRelativePath(entry.id)
+    && entry.stage === 'BASELINE_FROZEN'
+    && ['FROZEN', 'WAITING_FOR_DEVELOPMENT_MODE_SELECTION'].includes(entry.status)
+    && typeof entry.baselineFingerprint === 'string' && /^[a-f0-9]{64}$/.test(entry.baselineFingerprint)
+    && typeof entry.contractFingerprint === 'string' && /^[a-f0-9]{64}$/.test(entry.contractFingerprint)
+    && entry.parentContractFingerprint === null
+    && entry.gate?.status === 'NOT_RUN' && entry.gate.evidence === null
+    && entry.claim === null
+    && entry.latestEvidence === null
+    && (entry.delivery === undefined || entry.delivery === null)
+    && Number.isInteger(entry.recordRevision) && entry.recordRevision >= 1;
+  if (!registryValid || !entryValid) {
+    fail(
+      'WORK_ITEM_SCHEMA_MIGRATION_UNSUPPORTED',
+      'Schema v2 migration currently supports one inactive frozen root Task with no gate result or claim',
+    );
+  }
+  const waitingForMode = entry.status === 'WAITING_FOR_DEVELOPMENT_MODE_SELECTION';
+  if (waitingForMode !== (entry.developmentMode === null)) {
+    fail('WORK_ITEM_SCHEMA_MIGRATION_UNSUPPORTED', 'Legacy Task development mode state is inconsistent');
+  }
+  if (entry.developmentMode !== null && !validDevelopmentMode(entry.developmentMode, entry)) {
+    fail('WORK_ITEM_SCHEMA_MIGRATION_UNSUPPORTED', 'Legacy Task development mode is invalid');
+  }
+  return entry;
+}
+
+export async function upgradeWorkItemRegistry({
+  root,
+  taskGateLevel,
+  confirmed = false,
+  explicitDogfood = false,
+  now,
+  fs = fsPromises,
+} = {}) {
+  await assertSelfHostingDogfood(root, explicitDogfood, fs);
+  const at = timestamp(now);
+  return withRuntimeDirectoryTransaction(registryPath(root), async () => {
+    let registryBytes;
+    try { registryBytes = await readSafeRegularFile(root, registryPath(root), { fs }); }
+    catch (error) {
+      if (error.code === 'ENOENT') fail('WORK_ITEM_REGISTRY_MISSING', 'Work item registry does not exist');
+      throw error;
+    }
+    let legacyRegistry;
+    try { legacyRegistry = JSON.parse(registryBytes.toString('utf8')); }
+    catch { fail('WORK_ITEM_REGISTRY_INVALID', 'Work item registry is not valid JSON'); }
+
+    if (legacyRegistry.schemaVersion === WORK_ITEM_REGISTRY_SCHEMA_VERSION) {
+      const current = await readRegistryUnlocked(root, fs);
+      return {
+        migrated: false,
+        idempotent: true,
+        fromSchemaVersion: WORK_ITEM_REGISTRY_SCHEMA_VERSION,
+        toSchemaVersion: WORK_ITEM_REGISTRY_SCHEMA_VERSION,
+        revision: current.revision,
+      };
+    }
+    if (confirmed !== true) {
+      fail('CONFIRMATION_REQUIRED', 'Schema v2 migration requires explicit confirmation of the Task gate level');
+    }
+    if (!WORK_ITEM_GATE_LEVELS.includes(taskGateLevel)) {
+      fail('WORK_ITEM_GATE_LEVEL_INVALID', 'Schema v2 migration requires taskGateLevel LIGHT or FULL');
+    }
+
+    const legacyEntry = validateLegacyRootTaskRegistry(legacyRegistry, root);
+    const target = itemPath(root, legacyEntry.id);
+    const targetStat = await fs.lstat(target).catch(() => null);
+    if (!targetStat?.isDirectory() || targetStat.isSymbolicLink()) {
+      fail('WORK_ITEM_PACKAGE_INVALID', `${legacyEntry.id} package path is invalid`);
+    }
+    const legacyDefinition = await readJsonFile(target, 'baseline.json', fs, 'WORK_ITEM_PACKAGE_INVALID');
+    const legacyState = await readJsonFile(target, 'state.json', fs, 'WORK_ITEM_PACKAGE_INVALID');
+    const legacyMetadata = await readJsonFile(target, 'work-item.json', fs, 'WORK_ITEM_PACKAGE_INVALID');
+    const legacyBaselineFingerprint = sha256Bytes(Buffer.from(canonicalJson(legacyDefinition), 'utf8'));
+    const legacyContractFingerprint = legacyWorkItemContractFingerprint(legacyDefinition);
+    const packageValid = legacyDefinition.schemaVersion === 2
+      && legacyDefinition.id === legacyEntry.id
+      && legacyDefinition.kind === 'TASK'
+      && legacyDefinition.authorityKind === WORK_ITEM_AUTHORITIES.TASK
+      && legacyDefinition.parentId === null
+      && legacyDefinition.parentContractFingerprint === null
+      && !Object.hasOwn(legacyDefinition, 'gateLevel')
+      && legacyState.schemaVersion === 2
+      && legacyState.id === legacyEntry.id
+      && legacyState.stage === legacyEntry.stage
+      && legacyState.baselineFingerprint === legacyBaselineFingerprint
+      && legacyState.contractFingerprint === legacyContractFingerprint
+      && legacyState.parentContractFingerprint === null
+      && legacyEntry.baselineFingerprint === legacyBaselineFingerprint
+      && legacyEntry.contractFingerprint === legacyContractFingerprint
+      && legacyMetadata.schemaVersion === 2
+      && legacyMetadata.id === legacyEntry.id
+      && legacyMetadata.kind === legacyEntry.kind
+      && legacyMetadata.parentId === null;
+    if (!packageValid) {
+      fail('WORK_ITEM_PACKAGE_CHANGED', `${legacyEntry.id} legacy package does not match its registry`);
+    }
+
+    let developmentMode = null;
+    if (legacyEntry.developmentMode !== null) {
+      const artifact = await readJsonFile(target, 'development-mode.json', fs, 'WORK_ITEM_DEVELOPMENT_MODE_INVALID');
+      if (canonicalJson(artifact) !== canonicalJson(legacyEntry.developmentMode)) {
+        fail('WORK_ITEM_DEVELOPMENT_MODE_CHANGED', `${legacyEntry.id} development-mode.json changed after confirmation`);
+      }
+      developmentMode = artifact;
+    }
+
+    const migratedDefinition = validateWorkItemDefinition({
+      ...rawDefinition(legacyDefinition),
+      schemaVersion: WORK_ITEM_SCHEMA_VERSION,
+      gateLevel: taskGateLevel,
+    });
+    const migratedState = {
+      ...legacyState,
+      schemaVersion: WORK_ITEM_SCHEMA_VERSION,
+      baselineFingerprint: workItemBaselineFingerprint(migratedDefinition),
+      contractFingerprint: workItemContractFingerprint(migratedDefinition),
+      parentContractFingerprint: migratedDefinition.parentContractFingerprint,
+      baselineRevision: (legacyState.baselineRevision ?? 1) + 1,
+      revisedAt: at,
+      schemaMigration: {
+        fromSchemaVersion: 2,
+        toSchemaVersion: WORK_ITEM_SCHEMA_VERSION,
+        migratedAt: at,
+      },
+    };
+    if (developmentMode) {
+      developmentMode = {
+        ...developmentMode,
+        baselineFingerprint: migratedState.baselineFingerprint,
+      };
+    }
+    const migratedEntry = {
+      ...legacyEntry,
+      gateLevel: taskGateLevel,
+      baselineFingerprint: migratedState.baselineFingerprint,
+      contractFingerprint: migratedState.contractFingerprint,
+      parentContractFingerprint: migratedState.parentContractFingerprint,
+      delivery: null,
+      acceptance: { status: 'NOT_READY', review: null, userConfirmation: null },
+      acceptanceReport: null,
+      developmentMode,
+      latestResult: null,
+      recordRevision: legacyEntry.recordRevision + 1,
+      updatedAt: at,
+    };
+    const migratedRegistry = {
+      ...legacyRegistry,
+      schemaVersion: WORK_ITEM_REGISTRY_SCHEMA_VERSION,
+      revision: legacyRegistry.revision + 1,
+      workItems: [migratedEntry],
+      promotionHistory: legacyRegistry.promotionHistory ?? [],
+      migrationHistory: [
+        ...(legacyRegistry.migrationHistory ?? []),
+        {
+          schemaVersion: 1,
+          fromSchemaVersion: 2,
+          toSchemaVersion: WORK_ITEM_REGISTRY_SCHEMA_VERSION,
+          workItemId: migratedEntry.id,
+          taskGateLevel,
+          previousBaselineFingerprint: legacyBaselineFingerprint,
+          migratedBaselineFingerprint: migratedState.baselineFingerprint,
+          previousRegistryFingerprint: sha256Bytes(registryBytes),
+          migratedAt: at,
+        },
+      ],
+      updatedAt: at,
+    };
+    validateRegistry(migratedRegistry, root);
+
+    await atomicReplaceDirectory(target, async (staging) => {
+      await copyPackageContents(target, staging, fs);
+      for (const [name, contents] of Object.entries(definitionFiles(migratedDefinition, migratedState))) {
+        await atomicWriteFile(path.join(staging, name), contents, { fs });
+      }
+      if (developmentMode) {
+        await atomicWriteFile(path.join(staging, 'development-mode.json'), json(developmentMode), { fs });
+      }
+      for (const name of [
+        'context-manifest.json',
+        'development-handoff.md',
+        'acceptance-report.json',
+        'acceptance-report.md',
+      ]) {
+        await fs.rm(path.join(staging, name), { force: true });
+      }
+    }, { fs });
+    await writeRegistryUnlocked(root, migratedRegistry, fs);
+    return {
+      migrated: true,
+      idempotent: false,
+      fromSchemaVersion: 2,
+      toSchemaVersion: WORK_ITEM_REGISTRY_SCHEMA_VERSION,
+      taskId: migratedEntry.id,
+      taskGateLevel,
+      previousBaselineFingerprint: legacyBaselineFingerprint,
+      baselineFingerprint: migratedState.baselineFingerprint,
+      revision: migratedRegistry.revision,
+    };
+  }, { fs, now });
+}
+
+export async function refreshWorkItemProjections({
+  root,
+  explicitDogfood = false,
+  fs = fsPromises,
+} = {}) {
+  await assertSelfHostingDogfood(root, explicitDogfood, fs);
+  await ensureRuntimeRoot(root, fs);
+  return withRuntimeDirectoryTransaction(registryPath(root), async () => {
+    const registry = await readRegistryUnlocked(root, fs);
+    await writeRegistryUnlocked(root, registry, fs);
+    return {
+      revision: registry.revision,
+      workspaceOverview: path.posix.join(GOVERNANCE_DIRECTORY, 'workspace-overview.md'),
+      workItems: registry.workItems.map(({ id, acceptanceReport }) => ({
+        id,
+        acceptanceReport: acceptanceReport?.markdownPath ?? null,
+      })),
+    };
+  }, { fs });
 }
 
 export async function selectDevelopmentMode({
@@ -1209,6 +1577,208 @@ function evidenceRecord(value) {
   return { path: value.path.replaceAll('\\', '/'), sha256: value.sha256 };
 }
 
+async function readEvidenceArtifact(root, evidence, fs, {
+  missingCode = 'WORK_ITEM_EVIDENCE_MISSING',
+  changedCode = 'WORK_ITEM_EVIDENCE_CHANGED',
+  invalidCode = 'WORK_ITEM_EVIDENCE_INVALID',
+} = {}) {
+  const reference = evidenceRecord(evidence);
+  let bytes;
+  try {
+    bytes = await readSafeRegularFile(root, reference.path, { fs });
+  } catch (error) {
+    if (error instanceof GatedLoopError) throw error;
+    fail(missingCode, `Unable to read evidence: ${reference.path}`);
+  }
+  if (sha256Bytes(bytes) !== reference.sha256) {
+    fail(changedCode, `Evidence hash does not match: ${reference.path}`);
+  }
+  let artifact;
+  try { artifact = JSON.parse(bytes.toString('utf8')); }
+  catch { fail(invalidCode, 'Evidence must be valid JSON'); }
+  return { reference, artifact };
+}
+
+async function optionalTaskResultArtifact(root, evidence, expected, fs, strict = false) {
+  const reference = evidenceRecord(evidence);
+  let bytes;
+  try { bytes = await readSafeRegularFile(root, reference.path, { fs }); }
+  catch {
+    if (strict) fail('WORK_ITEM_RESULT_EVIDENCE_MISSING', `Task result evidence is unavailable: ${reference.path}`);
+    return { reference, artifact: null };
+  }
+  if (sha256Bytes(bytes) !== reference.sha256) {
+    fail('WORK_ITEM_RESULT_EVIDENCE_CHANGED', `Task result evidence hash does not match: ${reference.path}`);
+  }
+  let artifact;
+  try { artifact = JSON.parse(bytes.toString('utf8')); }
+  catch { fail('WORK_ITEM_RESULT_EVIDENCE_INVALID', 'Task result evidence must be valid JSON'); }
+  if (!validTaskResultArtifact(artifact, expected)) {
+    fail('WORK_ITEM_RESULT_EVIDENCE_INVALID', 'Task result evidence does not match the active operation');
+  }
+  return { reference, artifact };
+}
+
+function validTaskResultArtifact(value, { id, operationId, status }) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    && value.schemaVersion === 1
+    && value.kind === 'TASK_RESULT'
+    && value.taskId === id
+    && value.operationId === operationId
+    && value.status === status
+    && nonEmptyString(value.summary)
+    && Array.isArray(value.changedFiles) && value.changedFiles.every(nonEmptyString)
+    && Array.isArray(value.tests)
+    && value.tests.every((test) => test && typeof test === 'object' && Array.isArray(test.argv)
+      && test.argv.every(nonEmptyString) && Number.isInteger(test.exitCode))
+    && Array.isArray(value.blockers);
+}
+
+function validGateArtifact(value, entry, definition) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+      || value.schemaVersion !== 1 || value.kind !== 'WORK_ITEM_GATE'
+      || value.workItemId !== entry.id
+      || value.baselineFingerprint !== entry.baselineFingerprint
+      || !['PASS', 'FAIL'].includes(value.verdict)
+      || !nonEmptyString(value.summary)
+      || !value.scope || typeof value.scope !== 'object' || Array.isArray(value.scope)
+      || !Array.isArray(value.scope.changedFiles) || !value.scope.changedFiles.every(nonEmptyString)
+      || !Array.isArray(value.scope.outOfScopeFiles) || !value.scope.outOfScopeFiles.every(nonEmptyString)
+      || !Array.isArray(value.acceptance) || !Array.isArray(value.tests)
+      || !value.findings || typeof value.findings !== 'object' || Array.isArray(value.findings)
+      || !Array.isArray(value.findings.p0) || !Array.isArray(value.findings.p1)
+      || !Array.isArray(value.findings.p2)) return false;
+  const acceptanceById = new Map(value.acceptance.map((result) => [result?.id, result]));
+  const testsByArgv = new Map(value.tests.map((result) => [canonicalJson(result?.argv), result]));
+  const acceptanceComplete = definition.acceptance.every(({ id }) => {
+    const result = acceptanceById.get(id);
+    return result && ['PASS', 'FAIL'].includes(result.status) && nonEmptyString(result.evidence);
+  });
+  const testsComplete = definition.testCommands.every((argv) => {
+    const result = testsByArgv.get(canonicalJson(argv));
+    return result && Number.isInteger(result.exitCode) && nonEmptyString(result.summary)
+      && (result.testsRun === undefined || (Number.isInteger(result.testsRun) && result.testsRun >= 0));
+  });
+  if (!acceptanceComplete || !testsComplete) return false;
+  if (value.verdict === 'PASS') {
+    return value.scope.outOfScopeFiles.length === 0
+      && definition.acceptance.every(({ id }) => acceptanceById.get(id).status === 'PASS')
+      && definition.testCommands.every((argv) => testsByArgv.get(canonicalJson(argv)).exitCode === 0)
+      && value.findings.p0.length === 0
+      && value.findings.p1.length === 0;
+  }
+  return true;
+}
+
+function reportStatus(entry) {
+  const acceptance = entry.acceptance ?? (entry.parentId === null ? entry.delivery : null);
+  if (acceptance && acceptance.status !== 'NOT_READY') return acceptance.status;
+  if (entry.status === 'IMPLEMENTED') return 'WAITING_FOR_GATE';
+  if (entry.status === 'BLOCKED') return 'BLOCKED';
+  if (entry.status === 'VERIFIED') return 'VERIFIED';
+  return 'NOT_READY';
+}
+
+function reportStatusText(status) {
+  return ({
+    NOT_READY: '尚未就绪',
+    WAITING_FOR_GATE: '等待门禁验收',
+    BLOCKED: '已阻断',
+    VERIFIED: '门禁已通过',
+    WAITING_FOR_INDEPENDENT_REVIEW: '等待独立验收',
+    WAITING_FOR_USER_CONFIRMATION: '等待用户确认',
+    COMPLETED: '已完成',
+  })[status] ?? status;
+}
+
+function gateStatusText(status) {
+  return ({ NOT_RUN: '未运行', PASS: '通过', FAIL: '未通过' })[status] ?? status;
+}
+
+function renderAcceptanceReport(report) {
+  const gateArtifact = report.gate.artifact;
+  const lines = [
+    `# 验收报告：${report.workItem.title}`,
+    '',
+    `- 工作项：${report.workItem.id}`,
+    `- 类型：${report.workItem.kind}`,
+    `- 门禁等级：${report.workItem.gateLevel}`,
+    `- 基线指纹：${report.workItem.baselineFingerprint}`,
+    `- 最终状态：${reportStatusText(report.status)}`,
+    `- 门禁结论：${gateStatusText(report.gate.status)}`,
+    `- 生成时间：${report.generatedAt}`,
+    '',
+    '## 验收项',
+    '',
+    '| 编号 | 预期结果 | 结论 | 证据 |',
+    '| --- | --- | --- | --- |',
+  ];
+  const results = new Map((gateArtifact?.acceptance ?? []).map((item) => [item.id, item]));
+  for (const item of report.criteria) {
+    const result = results.get(item.id);
+    lines.push(`| ${item.id} | ${item.expectedResult} | ${result ? gateStatusText(result.status) : '待验收'} | ${result?.evidence ?? '无'} |`);
+  }
+  lines.push('', '## 测试结果', '');
+  const tests = gateArtifact?.tests ?? report.development?.artifact?.tests ?? [];
+  if (tests.length === 0) lines.push('- 尚无测试证据。');
+  for (const result of tests) {
+    lines.push(`- \`${JSON.stringify(result.argv)}\`：退出码 ${result.exitCode}；${result.summary ?? `Tests run: ${result.testsRun ?? '未记录'}`}`);
+  }
+  lines.push('', '## 变更范围', '');
+  const scope = gateArtifact?.scope;
+  lines.push(`- 已记录变更：${scope?.changedFiles?.join('、') || report.development?.artifact?.changedFiles?.join('、') || '无'}`);
+  lines.push(`- 范围外变更：${scope?.outOfScopeFiles?.join('、') || '无'}`);
+  lines.push('', '## 问题与建议', '');
+  const findings = gateArtifact?.findings;
+  lines.push(`- P0：${findings?.p0?.length ?? 0}`);
+  lines.push(`- P1：${findings?.p1?.length ?? 0}`);
+  lines.push(`- P2：${findings?.p2?.length ?? 0}`);
+  lines.push('', '## 独立验收', '');
+  lines.push(report.review
+    ? `- ${report.review.artifact.reviewer}：${report.review.artifact.verdict}`
+    : '- 尚未完成。');
+  lines.push('', '## 用户确认', '');
+  lines.push(report.userConfirmation
+    ? `- ${report.userConfirmation.artifact.confirmedBy}：已确认`
+    : '- 尚未确认。');
+  lines.push('');
+  return lines.join('\n');
+}
+
+async function writeAcceptanceReport(root, entry, definition, at, fs) {
+  const acceptance = entry.acceptance ?? (entry.parentId === null ? entry.delivery : null);
+  const status = reportStatus(entry);
+  const report = {
+    schemaVersion: 1,
+    workItem: {
+      id: entry.id,
+      title: definition.title,
+      kind: entry.kind,
+      gateLevel: entry.gateLevel,
+      baselineFingerprint: entry.baselineFingerprint,
+      parentId: entry.parentId,
+    },
+    status,
+    development: entry.latestResult,
+    gate: entry.gate,
+    criteria: definition.acceptance,
+    review: acceptance?.review ?? null,
+    userConfirmation: acceptance?.userConfirmation ?? null,
+    generatedAt: at,
+  };
+  const directory = itemPath(root, entry.id);
+  await atomicWriteFile(path.join(directory, 'acceptance-report.json'), json(report), { fs });
+  await atomicWriteFile(path.join(directory, 'acceptance-report.md'), renderAcceptanceReport(report), { fs });
+  entry.acceptanceReport = {
+    schemaVersion: 1,
+    status,
+    jsonPath: path.posix.join(GOVERNANCE_DIRECTORY, WORK_ITEMS_DIRECTORY, entry.id, 'acceptance-report.json'),
+    markdownPath: path.posix.join(GOVERNANCE_DIRECTORY, WORK_ITEMS_DIRECTORY, entry.id, 'acceptance-report.md'),
+    generatedAt: at,
+  };
+  return report;
+}
+
 async function verifiedDeliveryEvidence(root, evidence, action, fs) {
   const reference = evidenceRecord(evidence);
   let bytes;
@@ -1236,6 +1806,7 @@ export async function recordTaskResult({
   operationId,
   status,
   evidence,
+  strictEvidence = false,
   explicitDogfood = false,
   now,
   fs = fsPromises,
@@ -1248,15 +1819,29 @@ export async function recordTaskResult({
     if (entry.kind !== 'TASK' || entry.status !== 'CLAIMED' || entry.claim?.operationId !== operationId) {
       fail('WORK_ITEM_OPERATION_INVALID', `${id} does not have the supplied active operation`);
     }
+    const own = await assertCurrentLineage(root, registry, entry, fs);
+    const verifiedEvidence = await optionalTaskResultArtifact(
+      root,
+      evidence,
+      { id, operationId, status },
+      fs,
+      strictEvidence,
+    );
     entry.status = status;
     entry.claim = null;
-    entry.latestEvidence = evidenceRecord(evidence);
+    entry.latestEvidence = verifiedEvidence.reference;
+    entry.latestResult = {
+      evidence: verifiedEvidence.reference,
+      artifact: verifiedEvidence.artifact,
+      recordedAt: at,
+    };
     entry.recordRevision += 1;
     entry.updatedAt = at;
     registry.revision += 1;
     registry.updatedAt = at;
+    await writeAcceptanceReport(root, entry, own.definition, at, fs);
     await writeRegistryUnlocked(root, registry, fs);
-    return { id, status };
+    return { id, status, acceptanceReport: entry.acceptanceReport };
   }, { now });
 }
 
@@ -1266,13 +1851,36 @@ function allChildrenVerified(registry, entry, definition) {
     && definition.children.every(({ id }) => actual.get(id)?.status === 'VERIFIED');
 }
 
-export async function recordWorkItemGate({ root, id, status, evidence, explicitDogfood = false, now, fs = fsPromises } = {}) {
+export async function recordWorkItemGate({
+  root,
+  id,
+  status,
+  evidence,
+  gateArtifact = null,
+  strictEvidence = false,
+  explicitDogfood = false,
+  now,
+  fs = fsPromises,
+} = {}) {
   await assertSelfHostingDogfood(root, explicitDogfood, fs);
   if (!['PASS', 'FAIL'].includes(status)) fail('WORK_ITEM_GATE_INVALID', 'Gate status must be PASS or FAIL');
   const at = timestamp(now);
   return withRegistry(root, fs, async (registry) => {
     const entry = itemById(registry, id);
     const taskPackage = await assertCurrentLineage(root, registry, entry, fs);
+    let verifiedGate = null;
+    if (strictEvidence) {
+      verifiedGate = await readEvidenceArtifact(root, evidence, fs, {
+        missingCode: 'WORK_ITEM_GATE_EVIDENCE_MISSING',
+        changedCode: 'WORK_ITEM_GATE_EVIDENCE_CHANGED',
+        invalidCode: 'WORK_ITEM_GATE_EVIDENCE_INVALID',
+      });
+      if (!validGateArtifact(verifiedGate.artifact, entry, taskPackage.definition)
+          || verifiedGate.artifact.verdict !== status
+          || (gateArtifact && canonicalJson(gateArtifact) !== canonicalJson(verifiedGate.artifact))) {
+        fail('WORK_ITEM_GATE_EVIDENCE_INVALID', 'Gate evidence does not prove the requested result');
+      }
+    }
     if (entry.status === 'BLOCKED') {
       fail('WORK_ITEM_RETRY_REQUIRED', `${id} must be explicitly retried before its gate can run again`);
     }
@@ -1292,29 +1900,79 @@ export async function recordWorkItemGate({ root, id, status, evidence, explicitD
         }
       }
     }
-    entry.gate = { status, evidence: evidenceRecord(evidence) };
+    entry.gate = {
+      status,
+      evidence: verifiedGate?.reference ?? evidenceRecord(evidence),
+      artifact: verifiedGate?.artifact ?? gateArtifact,
+    };
     entry.status = status === 'PASS' ? 'VERIFIED' : 'BLOCKED';
-    if (entry.kind === 'DELIVERY') {
-      entry.delivery = status === 'PASS'
+    if (entry.parentId === null) {
+      entry.acceptance = status === 'PASS'
         ? { status: 'WAITING_FOR_INDEPENDENT_REVIEW', review: null, userConfirmation: null }
         : { status: 'NOT_READY', review: null, userConfirmation: null };
+    }
+    if (entry.kind === 'DELIVERY') {
+      entry.delivery = entry.acceptance;
     }
     entry.latestEvidence = entry.gate.evidence;
     entry.recordRevision += 1;
     entry.updatedAt = at;
-    registry.currentFocus = { workItemId: id, purpose: status === 'PASS' ? 'AGGREGATION' : 'BLOCKER' };
+    registry.currentFocus = {
+      workItemId: id,
+      purpose: status === 'PASS' && entry.parentId === null ? 'INDEPENDENT_REVIEW' : (status === 'PASS' ? 'AGGREGATION' : 'BLOCKER'),
+    };
     registry.revision += 1;
     registry.updatedAt = at;
+    await writeAcceptanceReport(root, entry, taskPackage.definition, at, fs);
     await writeRegistryUnlocked(root, registry, fs);
-    return { id, status: entry.status, gate: entry.gate };
+    return {
+      id,
+      status: entry.status,
+      gate: entry.gate,
+      acceptance: entry.acceptance,
+      acceptanceReport: entry.acceptanceReport,
+    };
   }, { now });
 }
 
-export async function recordDelivery({
+export async function acceptWorkItem({
+  root,
+  id,
+  evidence,
+  explicitDogfood = false,
+  now,
+  fs = fsPromises,
+} = {}) {
+  const registry = await readRegistryUnlocked(root, fs);
+  const entry = itemById(registry, id);
+  const own = await assertCurrentLineage(root, registry, entry, fs);
+  const verified = await readEvidenceArtifact(root, evidence, fs, {
+    missingCode: 'WORK_ITEM_GATE_EVIDENCE_MISSING',
+    changedCode: 'WORK_ITEM_GATE_EVIDENCE_CHANGED',
+    invalidCode: 'WORK_ITEM_GATE_EVIDENCE_INVALID',
+  });
+  if (!validGateArtifact(verified.artifact, entry, own.definition)) {
+    fail('WORK_ITEM_GATE_EVIDENCE_INVALID', 'Gate evidence is incomplete or contradicts the requested verdict');
+  }
+  return recordWorkItemGate({
+    root,
+    id,
+    status: verified.artifact.verdict,
+    evidence: verified.reference,
+    gateArtifact: verified.artifact,
+    strictEvidence: true,
+    explicitDogfood,
+    now,
+    fs,
+  });
+}
+
+async function recordRootAcceptance({
   root,
   id,
   action,
   evidence,
+  deliveryOnly = false,
   explicitDogfood = false,
   now,
   fs = fsPromises,
@@ -1326,27 +1984,36 @@ export async function recordDelivery({
   const at = timestamp(now);
   return withRegistry(root, fs, async (registry) => {
     const entry = itemById(registry, id);
-    if (entry.kind !== 'DELIVERY' || entry.status !== 'VERIFIED') {
-      fail('WORK_ITEM_DELIVERY_INVALID', 'Only a verified Delivery can advance delivery');
+    if (entry.parentId !== null || entry.status !== 'VERIFIED' || (deliveryOnly && entry.kind !== 'DELIVERY')) {
+      fail(
+        deliveryOnly ? 'WORK_ITEM_DELIVERY_INVALID' : 'WORK_ITEM_ACCEPTANCE_INVALID',
+        'Only a verified root work item can advance final acceptance',
+      );
     }
-    await assertCurrentLineage(root, registry, entry, fs);
-    entry.delivery ??= {
+    const own = await assertCurrentLineage(root, registry, entry, fs);
+    entry.acceptance ??= entry.delivery ?? {
       status: 'WAITING_FOR_INDEPENDENT_REVIEW',
       review: null,
       userConfirmation: null,
     };
     if (action === 'USER_CONFIRMED') {
-      if (entry.delivery.status !== 'WAITING_FOR_USER_CONFIRMATION') {
-        fail('WORK_ITEM_DELIVERY_STAGE_INVALID', 'User confirmation requires a passed independent or accepted human review');
+      if (entry.acceptance.status !== 'WAITING_FOR_USER_CONFIRMATION') {
+        fail(
+          deliveryOnly ? 'WORK_ITEM_DELIVERY_STAGE_INVALID' : 'WORK_ITEM_ACCEPTANCE_STAGE_INVALID',
+          'User confirmation requires a passed independent or accepted human review',
+        );
       }
       const verifiedEvidence = await verifiedDeliveryEvidence(root, evidence, action, fs);
-      const reviewEvidence = entry.delivery.review.evidence;
+      const reviewEvidence = entry.acceptance.review.evidence;
       if (reviewEvidence.path === verifiedEvidence.reference.path
           || reviewEvidence.sha256 === verifiedEvidence.reference.sha256) {
-        fail('WORK_ITEM_DELIVERY_EVIDENCE_REUSED', 'User confirmation evidence must be distinct from review evidence');
+        fail(
+          deliveryOnly ? 'WORK_ITEM_DELIVERY_EVIDENCE_REUSED' : 'WORK_ITEM_ACCEPTANCE_EVIDENCE_REUSED',
+          'User confirmation evidence must be distinct from review evidence',
+        );
       }
-      entry.delivery = {
-        ...entry.delivery,
+      entry.acceptance = {
+        ...entry.acceptance,
         status: 'COMPLETED',
         userConfirmation: {
           action,
@@ -1356,12 +2023,15 @@ export async function recordDelivery({
         },
       };
     } else {
-      if (entry.delivery.status !== 'WAITING_FOR_INDEPENDENT_REVIEW') {
-        fail('WORK_ITEM_DELIVERY_STAGE_INVALID', 'Delivery is not waiting for independent review');
+      if (entry.acceptance.status !== 'WAITING_FOR_INDEPENDENT_REVIEW') {
+        fail(
+          deliveryOnly ? 'WORK_ITEM_DELIVERY_STAGE_INVALID' : 'WORK_ITEM_ACCEPTANCE_STAGE_INVALID',
+          'Work item is not waiting for independent review',
+        );
       }
       const verifiedEvidence = await verifiedDeliveryEvidence(root, evidence, action, fs);
-      entry.delivery = {
-        ...entry.delivery,
+      entry.acceptance = {
+        ...entry.acceptance,
         status: 'WAITING_FOR_USER_CONFIRMATION',
         review: {
           action,
@@ -1371,20 +2041,36 @@ export async function recordDelivery({
         },
       };
     }
+    if (entry.kind === 'DELIVERY') entry.delivery = entry.acceptance;
     entry.latestEvidence = action === 'USER_CONFIRMED'
-      ? entry.delivery.userConfirmation.evidence
-      : entry.delivery.review.evidence;
+      ? entry.acceptance.userConfirmation.evidence
+      : entry.acceptance.review.evidence;
     entry.recordRevision += 1;
     entry.updatedAt = at;
     registry.currentFocus = {
       workItemId: id,
-      purpose: entry.delivery.status === 'COMPLETED' ? 'DELIVERY_COMPLETE' : 'USER_CONFIRMATION',
+      purpose: entry.acceptance.status === 'COMPLETED' ? 'ACCEPTANCE_COMPLETE' : 'USER_CONFIRMATION',
     };
     registry.revision += 1;
     registry.updatedAt = at;
+    await writeAcceptanceReport(root, entry, own.definition, at, fs);
     await writeRegistryUnlocked(root, registry, fs);
-    return { id, action, delivery: entry.delivery };
+    return {
+      id,
+      action,
+      acceptance: entry.acceptance,
+      delivery: entry.kind === 'DELIVERY' ? entry.delivery : null,
+      acceptanceReport: entry.acceptanceReport,
+    };
   }, { now });
+}
+
+export async function recordAcceptance(options = {}) {
+  return recordRootAcceptance(options);
+}
+
+export async function recordDelivery(options = {}) {
+  return recordRootAcceptance({ ...options, deliveryOnly: true });
 }
 
 function parentContractSnapshot(parent, childId) {
@@ -1400,24 +2086,43 @@ function parentContractSnapshot(parent, childId) {
 }
 
 function renderTaskHandoff(context) {
+  const resultTemplate = {
+    schemaVersion: 1,
+    kind: 'TASK_RESULT',
+    taskId: context.task.id,
+    operationId: context.operation?.operationId ?? '<claim-required>',
+    status: 'IMPLEMENTED|BLOCKED',
+    summary: '<development facts>',
+    changedFiles: [],
+    tests: [{ argv: ['<exact frozen argv>'], exitCode: 0, testsRun: 0 }],
+    blockers: [],
+  };
   return [
-    'Implement the following frozen Task in a fresh development conversation.',
+    '请在一个全新的开发会话中实现以下已冻结 Task。',
     '',
-    `Task: ${context.task.id}`,
-    `Baseline fingerprint: ${context.task.baselineFingerprint}`,
-    `Gate level: ${context.gateLevel}`,
-    `Development mode: ${context.developmentMode}`,
+    `Task：${context.task.id}`,
+    `Baseline fingerprint：${context.task.baselineFingerprint}`,
+    `Gate level：${context.gateLevel}`,
+    `Development mode：${context.developmentMode}`,
+    `Operation ID：${context.operation?.operationId ?? '尚未认领；不得开始开发'}`,
     '',
-    'Use the embedded frozen context as the complete authority. Do not reanalyze the original request, change requirements, or inherit assumptions from another conversation.',
+    '以下冻结上下文是完整权威。不要重新分析原始需求、改变验收标准或继承其他会话的隐含假设。',
     '',
-    'Execution rules:',
-    '- Implement only this frozen leaf Task and write only within its scope.',
-    '- Do not modify governance artifacts, `.git/**`, or external state.',
-    '- Run the listed test commands and report only evidence that actually exists.',
-    '- Do not commit, push, publish, or report PASS.',
-    '- Return exactly one of IMPLEMENTED or BLOCKED.',
+    '执行规则：',
+    '- 只实现这个冻结的叶子 Task，并且只写入 Scope 中的路径。',
+    '- 不修改 baseline、registry、进度投影、`.git/**` 或外部状态。',
+    '- 运行列出的测试命令，只报告真实存在的证据。',
+    '- 不提交、推送、发布，也不得自行报告 PASS。',
+    '- 最终只返回 IMPLEMENTED 或 BLOCKED，并携带当前 Operation ID、变更文件和测试事实。',
+    '- 宿主必须用 task-result 回收结果；返回开发结果后必须继续验收，IMPLEMENTED 不是完成状态。',
+    '- 门禁通过后仍需独立验收、生成用户验收报告并取得用户确认。',
     '',
-    'Frozen context:',
+    '结果返回格式（由治理宿主保存为 evidence，并用相同 Operation ID 执行 task-result）：',
+    '```json',
+    JSON.stringify(resultTemplate, null, 2),
+    '```',
+    '',
+    '冻结上下文：',
     '```json',
     JSON.stringify(context, null, 2),
     '```',
@@ -1481,6 +2186,11 @@ export async function buildTaskContext({ root, id, explicitDogfood = false, fs =
     schemaVersion: 1,
     gateLevel: own.definition.gateLevel,
     developmentMode: entry.developmentMode.mode,
+    operation: entry.claim ? {
+      owner: entry.claim.owner,
+      operationId: entry.claim.operationId,
+      claimedAt: entry.claim.claimedAt,
+    } : null,
     task: {
       id: own.definition.id,
       title: own.definition.title,
@@ -1505,6 +2215,29 @@ export async function buildTaskContext({ root, id, explicitDogfood = false, fs =
   await atomicWriteFile(path.join(own.target, 'context-manifest.json'), json(context), { fs });
   await atomicWriteFile(path.join(own.target, 'development-handoff.md'), handoffPrompt, { fs });
   return { ...context, handoffPrompt };
+}
+
+export async function dispatchTask({
+  root,
+  id,
+  owner,
+  operationId,
+  explicitDogfood = false,
+  now,
+  fs = fsPromises,
+} = {}) {
+  await buildTaskContext({ root, id, explicitDogfood, fs });
+  const claim = await claimTask({
+    root,
+    id,
+    owner,
+    operationId,
+    explicitDogfood,
+    now,
+    fs,
+  });
+  const context = await buildTaskContext({ root, id, explicitDogfood, fs });
+  return { ...claim, ...context };
 }
 
 export function registryFingerprint(registry) {

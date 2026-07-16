@@ -22,10 +22,11 @@ test('a copied Skill folder carries a self-contained governance controller', asy
 
   const controller = path.join(installedSkill, 'scripts', 'hdg.mjs');
   const controllerSource = await readFile(controller, 'utf8');
-  assert.ok(Buffer.byteLength(controllerSource) < 160_000);
+  assert.ok(Buffer.byteLength(controllerSource) < 175_000);
   assert.doesNotMatch(controllerSource, /The historical start\/prepare\/freeze commands are v1 compatibility surfaces/);
   const help = await execFileAsync(process.execPath, [controller, '--help'], { cwd: workspace });
   assert.match(help.stdout, /ready-tasks --item <root-or-subtree-id>/);
+  assert.match(help.stdout, /upgrade-registry --task-gate-level LIGHT\|FULL --confirmed/);
   await assert.rejects(
     () => execFileAsync(process.execPath, [controller, 'route', 'legacy'], { cwd: workspace }),
     ({ stderr }) => /UNKNOWN_COMMAND/.test(stderr),

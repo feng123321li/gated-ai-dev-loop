@@ -2,7 +2,7 @@
 
 ## 投影原则
 
-`work-item-registry.json` 是机器权威；`workspace-overview.md` 和每个包的 `overview.md/progress.md` 都由它重建。投影不能授权开发或证明 PASS。
+`work-item-registry.json` 是 Agent 和控制器使用的机器权威。`workspace-overview.md` 和每个包的 `overview.md/progress.md` 是面向用户与协作者的中文工作台，由 registry 重建；它们展示状态、下一步和验收报告入口，但不能授权开发或证明 PASS。
 
 ## 层级事实卡投影
 
@@ -15,7 +15,8 @@
 - 自身 `stage/status/gateLevel/developmentMode/gate/claim/recordRevision`；
 - `directChildren`：直接子级 total、verified、blocked、active；
 - `descendants`：全部后代的同类精确计数。
-- Delivery 的 `delivery.status`：最终审查和用户确认阶段；非 Delivery 显示 `n/a`。
+- 根工作项的 `acceptance.status`：最终审查和用户确认阶段；非根显示“不适用”。Delivery 同步展示兼容的 `delivery.status`。
+- 已生成的 `acceptance-report.md` 入口；开发结果写回后不得缺失。
 
 Task 的子级计数为零。不要写主观百分比、故事点完成率或“基本完成”。计划但尚未物化的 child 计入 total，状态视为 planned。
 
@@ -27,14 +28,14 @@ Delivery overview 是顶层交付视图，不要求范围覆盖整个仓库或�
 
 Capability progress 展示计划 Task、依赖、READY/CLAIMED/IMPLEMENTED/VERIFIED/BLOCKED 状态和集成 gate。新增 Task 后 total 立即增加；既有 Task 状态不被兄弟追加重置。
 
-根 Capability 的父链为空，Delivery 状态显示 `n/a`；它在全部 Task 和自身 gate 通过后 VERIFIED。
+根 Capability 的父链为空；它在全部 Task 和自身 gate 通过后 VERIFIED，再进入独立验收和用户确认。
 
 ## Task 视图
 
 Task progress 展示父链、baseline 指纹、`gateLevel`、开发方式及确认记录、依赖、claim、实现证据、gate、下一动作和阻断解除条件。未选择时下一动作是明确选择 active/manual；开发 Agent 不更新控制投影，宿主验证返回结果后写入。
 
-根 Task 的父链和聚合依赖为空，直接以自身 gate 结果作为浅层交付状态。
+根 Task 的父链和聚合依赖为空，直接以自身 gate 结果作为浅层交付状态，再进入独立验收和用户确认。
 
 ## 写回时机
 
-准备、冻结、开发方式选择、修订、升层、claim、Task result、retry、gate、独立/人工审查和用户确认后立即写回，不在整轮结束后批量补写。每次写回增加 registry/record revision，并重建所有受影响投影。升层后父子投影立即变化，Task 下一动作重置为明确选择 active/manual，审计细节保留在 `promotionHistory`。
+准备、冻结、开发方式选择、修订、升层、dispatch、Task result、retry、gate、独立/人工审查和用户确认后立即写回，不在整轮结束后批量补写。Task result 后创建验收报告，后续每一步持续更新。每次写回增加 registry/record revision，并重建所有受影响投影。升层后父子投影立即变化，Task 下一动作重置为明确选择 active/manual，审计细节保留在 `promotionHistory`。

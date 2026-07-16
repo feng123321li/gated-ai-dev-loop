@@ -4,19 +4,24 @@ import { GatedLoopError } from '../core/errors.mjs';
 import { readSafeRegularFile } from '../core/fs-safe.mjs';
 import { isAgentRuntime } from '../mode/host-runtime.mjs';
 import {
+  acceptWorkItem,
   approveWorkItem,
   buildTaskContext,
   claimTask,
+  dispatchTask,
   freezeWorkItem,
   listReadyTasks,
   prepareWorkItem,
   promoteWorkItem,
+  refreshWorkItemProjections,
+  recordAcceptance,
   recordDelivery,
   recordTaskResult,
   recordWorkItemGate,
   retryWorkItem,
   reviseWorkItem,
   selectDevelopmentMode,
+  upgradeWorkItemRegistry,
 } from '../work-items/runtime.mjs';
 import { renderError, renderJson } from './output.mjs';
 
@@ -29,17 +34,23 @@ export const HIERARCHICAL_COMMANDS = Object.freeze([
   'select-development-mode',
   'ready-tasks',
   'task-context',
+  'dispatch-task',
   'claim-task',
   'task-result',
   'retry-item',
   'gate-item',
+  'accept-item',
+  'acceptance-item',
   'delivery-item',
+  'refresh-projections',
+  'upgrade-registry',
 ]);
 
 const VALUE_OPTIONS = new Set([
   '--definition', '--host-runtime', '--item', '--parent', '--owner', '--operation',
   '--status', '--evidence', '--expected-baseline', '--expected-parent-baseline',
   '--action', '--development-mode',
+  '--task-gate-level',
 ]);
 const FLAG_OPTIONS = new Set(['--json', '--help', '--confirmed', '--dogfood']);
 const COMMAND_OPTIONS = Object.freeze({
@@ -59,10 +70,15 @@ const COMMAND_OPTIONS = Object.freeze({
     '--json', '--help', '--item', '--development-mode', '--expected-baseline', '--confirmed', '--dogfood',
   ]),
   'claim-task': new Set(['--json', '--help', '--item', '--owner', '--operation', '--dogfood']),
+  'dispatch-task': new Set(['--json', '--help', '--item', '--owner', '--operation', '--dogfood']),
   'task-result': new Set(['--json', '--help', '--item', '--operation', '--status', '--evidence', '--dogfood']),
   'retry-item': new Set(['--json', '--help', '--item', '--expected-baseline', '--confirmed', '--dogfood']),
   'gate-item': new Set(['--json', '--help', '--item', '--status', '--evidence', '--dogfood']),
+  'accept-item': new Set(['--json', '--help', '--item', '--evidence', '--dogfood']),
+  'acceptance-item': new Set(['--json', '--help', '--item', '--action', '--evidence', '--dogfood']),
   'delivery-item': new Set(['--json', '--help', '--item', '--action', '--evidence', '--dogfood']),
+  'refresh-projections': new Set(['--json', '--help', '--dogfood']),
+  'upgrade-registry': new Set(['--json', '--help', '--task-gate-level', '--confirmed', '--dogfood']),
 });
 
 const usage = `Usage: hdg <command> [options]
@@ -78,11 +94,16 @@ ${HIERARCHICAL_COMMANDS.map((command) => `  ${command}`).join('\n')}
   select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
   ready-tasks --item <root-or-subtree-id>
   task-context --item <task-id>
+  dispatch-task --item <task-id> --owner <owner> --operation <id>
   claim-task --item <task-id> --owner <owner> --operation <id>
   task-result --item <task-id> --operation <id> --status IMPLEMENTED|BLOCKED --evidence <file>
   retry-item --item <id> --expected-baseline <sha256> --confirmed
   gate-item --item <id> --status PASS|FAIL --evidence <file>
+  accept-item --item <id> --evidence <file>
+  acceptance-item --item <root-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file>
   delivery-item --item <delivery-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file>
+  refresh-projections
+  upgrade-registry --task-gate-level LIGHT|FULL --confirmed
 
 In the hierarchical-delivery-governance implementation repository, every command that writes control state also requires --dogfood.
 `;
@@ -128,6 +149,10 @@ function parse(argv) {
   if (values['--development-mode'] !== undefined
       && !['active', 'manual'].includes(values['--development-mode'])) {
     throw new GatedLoopError('OPTION_VALUE_INVALID', '--development-mode must be active or manual');
+  }
+  if (values['--task-gate-level'] !== undefined
+      && !['LIGHT', 'FULL'].includes(values['--task-gate-level'])) {
+    throw new GatedLoopError('OPTION_VALUE_INVALID', '--task-gate-level must be LIGHT or FULL');
   }
   return {
     command,
@@ -244,11 +269,29 @@ async function runWorkItemCommand(parsed, io) {
       operationId: required(parsed, '--operation'),
     });
   }
+  if (parsed.command === 'dispatch-task') {
+    return dispatchTask({
+      ...common,
+      id: required(parsed, '--item'),
+      owner: required(parsed, '--owner'),
+      operationId: required(parsed, '--operation'),
+    });
+  }
   if (parsed.command === 'retry-item') {
     return retryWorkItem({
       ...common,
       id: required(parsed, '--item'),
       expectedBaselineFingerprint: required(parsed, '--expected-baseline'),
+      confirmed: parsed.confirmed,
+    });
+  }
+  if (parsed.command === 'refresh-projections') {
+    return refreshWorkItemProjections(common);
+  }
+  if (parsed.command === 'upgrade-registry') {
+    return upgradeWorkItemRegistry({
+      ...common,
+      taskGateLevel: required(parsed, '--task-gate-level'),
       confirmed: parsed.confirmed,
     });
   }
@@ -264,6 +307,7 @@ async function runWorkItemCommand(parsed, io) {
       operationId: required(parsed, '--operation'),
       status: required(parsed, '--status'),
       evidence,
+      strictEvidence: true,
     });
   }
   if (parsed.command === 'delivery-item') {
@@ -271,6 +315,21 @@ async function runWorkItemCommand(parsed, io) {
       ...common,
       id: required(parsed, '--item'),
       action: required(parsed, '--action'),
+      evidence,
+    });
+  }
+  if (parsed.command === 'acceptance-item') {
+    return recordAcceptance({
+      ...common,
+      id: required(parsed, '--item'),
+      action: required(parsed, '--action'),
+      evidence,
+    });
+  }
+  if (parsed.command === 'accept-item') {
+    return acceptWorkItem({
+      ...common,
+      id: required(parsed, '--item'),
       evidence,
     });
   }

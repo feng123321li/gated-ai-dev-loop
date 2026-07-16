@@ -69,10 +69,18 @@ test('CLI manages a hierarchical Task from preparation through verified evidence
   const root = await fixture(t);
   const delivery = await putJson(root, 'delivery.json', deliveryDefinition());
   const capability = await putJson(root, 'capability.json', capabilityDefinition());
-  const task = await putJson(root, 'task.json', issueTaskDefinition());
-  const evidence = await putJson(root, 'evidence.json', {
-    path: 'evidence/t-issue-token.json',
-    sha256: 'a'.repeat(64),
+  const taskValue = issueTaskDefinition();
+  const task = await putJson(root, 'task.json', taskValue);
+  const evidence = await putEvidenceReference(root, 'task-result-op-1', {
+    schemaVersion: 1,
+    kind: 'TASK_RESULT',
+    taskId: taskValue.id,
+    operationId: 'op-1',
+    status: 'IMPLEMENTED',
+    summary: 'Implemented the frozen Task.',
+    changedFiles: [...taskValue.scope],
+    tests: [{ argv: taskValue.testCommands[0], exitCode: 0, testsRun: 1 }],
+    blockers: [],
   });
 
   for (const definition of [delivery, capability, task]) {
@@ -132,8 +140,25 @@ test('CLI manages a hierarchical Task from preparation through verified evidence
   ]);
   assert.equal(implemented.exitCode, 0, implemented.err);
 
+  const gateRegistry = JSON.parse(await readFile(
+    path.join(root, '.hierarchical-delivery-governance', 'work-item-registry.json'),
+    'utf8',
+  ));
+  const gateEntry = gateRegistry.workItems.find(({ id }) => id === taskValue.id);
+  const gateEvidence = await putEvidenceReference(root, 'task-gate-op-1', {
+    schemaVersion: 1,
+    kind: 'WORK_ITEM_GATE',
+    workItemId: taskValue.id,
+    baselineFingerprint: gateEntry.baselineFingerprint,
+    verdict: 'PASS',
+    summary: 'All frozen acceptance criteria passed.',
+    scope: { changedFiles: [...taskValue.scope], outOfScopeFiles: [] },
+    acceptance: taskValue.acceptance.map(({ id }) => ({ id, status: 'PASS', evidence: 'test passed' })),
+    tests: [{ argv: taskValue.testCommands[0], exitCode: 0, testsRun: 1, summary: '1 test passed' }],
+    findings: { p0: [], p1: [], p2: [] },
+  });
   const gated = await invoke(root, [
-    'gate-item', '--item', 't-issue-token', '--status', 'PASS', '--evidence', evidence, '--json',
+    'accept-item', '--item', 't-issue-token', '--evidence', gateEvidence, '--json',
   ]);
   assert.equal(gated.exitCode, 0, gated.err);
   assert.equal(result(gated.out).status, 'VERIFIED');
@@ -194,13 +219,19 @@ test('CLI approves and freezes once, then emits a reusable manual development pr
   const selected = await selectMode(root, taskValue.id, 'manual');
   assert.equal(selected.exitCode, 0, selected.err);
 
-  const contextResult = await invoke(root, ['task-context', '--item', taskValue.id, '--json']);
+  const contextResult = await invoke(root, [
+    'dispatch-task', '--item', taskValue.id, '--owner', 'manual-user',
+    '--operation', 'op-manual-handoff', '--json',
+  ]);
   assert.equal(contextResult.exitCode, 0, contextResult.err);
   const context = result(contextResult.out);
-  assert.match(context.handoffPrompt, /Implement the following frozen Task/);
+  assert.match(context.handoffPrompt, /全新的开发会话/);
   assert.match(context.handoffPrompt, new RegExp(taskValue.id));
   assert.match(context.handoffPrompt, new RegExp(context.task.baselineFingerprint));
-  assert.match(context.handoffPrompt, /Return exactly one of IMPLEMENTED or BLOCKED/);
+  assert.match(context.handoffPrompt, /op-manual-handoff/);
+  assert.match(context.handoffPrompt, /"kind": "TASK_RESULT"/);
+  assert.match(context.handoffPrompt, /IMPLEMENTED 或 BLOCKED/);
+  assert.match(context.handoffPrompt, /继续验收/);
   assert.match(context.handoffPrompt, /```json/);
 
   const handoff = await readFile(path.join(
@@ -211,6 +242,27 @@ test('CLI approves and freezes once, then emits a reusable manual development pr
     'development-handoff.md',
   ), 'utf8');
   assert.equal(handoff, context.handoffPrompt);
+
+  const beforeRefresh = JSON.parse(await readFile(path.join(
+    root,
+    '.hierarchical-delivery-governance',
+    'work-item-registry.json',
+  ), 'utf8'));
+  const refreshed = await invoke(root, ['refresh-projections', '--json']);
+  assert.equal(refreshed.exitCode, 0, refreshed.err);
+  const afterRefresh = JSON.parse(await readFile(path.join(
+    root,
+    '.hierarchical-delivery-governance',
+    'work-item-registry.json',
+  ), 'utf8'));
+  assert.equal(afterRefresh.revision, beforeRefresh.revision);
+  const workspaceOverview = await readFile(path.join(
+    root,
+    '.hierarchical-delivery-governance',
+    'workspace-overview.md',
+  ), 'utf8');
+  assert.match(workspaceOverview, /# 工作项总览/);
+  assert.match(workspaceOverview, /面向用户和协作者/);
 });
 
 test('CLI promotes a frozen root Task under a separately frozen Capability', async (t) => {
@@ -292,14 +344,22 @@ test('CLI retries a blocked coordination item and persists a reviewed user-confi
   const capabilityValue = capabilityDefinition({
     children: [capabilityDefinition().children[0]],
   });
+  const taskValue = issueTaskDefinition();
   const definitions = [
     await putJson(root, 'delivery.json', deliveryDefinition()),
     await putJson(root, 'capability.json', capabilityValue),
-    await putJson(root, 'task.json', issueTaskDefinition()),
+    await putJson(root, 'task.json', taskValue),
   ];
-  const evidence = await putJson(root, 'evidence.json', {
-    path: 'evidence/result.json',
-    sha256: 'b'.repeat(64),
+  const evidence = await putEvidenceReference(root, 'task-result-op-cli', {
+    schemaVersion: 1,
+    kind: 'TASK_RESULT',
+    taskId: taskValue.id,
+    operationId: 'op-cli',
+    status: 'IMPLEMENTED',
+    summary: 'Implemented the frozen Task.',
+    changedFiles: [...taskValue.scope],
+    tests: [{ argv: taskValue.testCommands[0], exitCode: 0, testsRun: 1 }],
+    blockers: [],
   });
   const reviewEvidence = await putEvidenceReference(root, 'independent-review', {
     schemaVersion: 1,
@@ -362,11 +422,11 @@ test('CLI retries a blocked coordination item and persists a reviewed user-confi
     'gate-item', '--item', 'd-identity-platform', '--status', 'PASS', '--evidence', evidence, '--json',
   ])).exitCode, 0);
   assert.equal((await invoke(root, [
-    'delivery-item', '--item', 'd-identity-platform', '--action', 'INDEPENDENT_REVIEW_PASS',
+    'acceptance-item', '--item', 'd-identity-platform', '--action', 'INDEPENDENT_REVIEW_PASS',
     '--evidence', reviewEvidence, '--json',
   ])).exitCode, 0);
   const delivered = await invoke(root, [
-    'delivery-item', '--item', 'd-identity-platform', '--action', 'USER_CONFIRMED',
+    'acceptance-item', '--item', 'd-identity-platform', '--action', 'USER_CONFIRMED',
     '--evidence', confirmationEvidence, '--json',
   ]);
   assert.equal(delivered.exitCode, 0, delivered.err);

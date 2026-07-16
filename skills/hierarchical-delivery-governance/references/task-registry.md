@@ -18,7 +18,7 @@
 }
 ```
 
-每个条目记录 `id/kind/gateLevel/authorityKind/parentId/childIds/packagePath/stage/status`、baseline 与 contract 指纹、父契约指纹、`developmentMode`、gate、claim、证据、record revision、时间和分级 progress；Task 的 `gateLevel` 为 `LIGHT|FULL`，Delivery/Capability 固定为 `FULL`。Task 的 `developmentMode` 是 `development-mode.json` 的结构化快照，非 Task 必须为 null。Delivery 还记录独立的 delivery 状态，以及已经复算 hash 的审查/用户确认 evidence 引用和结构化内容快照。
+每个条目记录 `id/kind/gateLevel/authorityKind/parentId/childIds/packagePath/stage/status`、baseline 与 contract 指纹、父契约指纹、`developmentMode`、gate、claim、开发结果、`acceptance`、验收报告入口、record revision、时间和分级 progress；Task 的 `gateLevel` 为 `LIGHT|FULL`，Delivery/Capability 固定为 `FULL`。Task 的 `developmentMode` 是 `development-mode.json` 的结构化快照，非 Task 必须为 null。每个治理根记录 acceptance 状态，以及已经复算 hash 的审查/用户确认 evidence 引用和内容快照；Delivery 同步保留 delivery 兼容投影。
 
 `promotionHistory` 是追加式升层审计记录。每条保存源/父 ID 和 kind、升层前源 baseline 指纹、升层后源 baseline 指纹、父 baseline 指纹及时间；只允许 `TASK→CAPABILITY` 或 `CAPABILITY→DELIVERY`。恢复时结构或指纹格式不合法即拒绝 registry。
 
@@ -44,4 +44,4 @@ Delivery 的 `parentId` 固定为 null；Capability 和 Task 的 `parentId` 可�
 
 `currentFocus` 只帮助恢复，不授予冻结、修订或开发权限。准备、冻结、认领、阻断和 gate 后可更新焦点；并行 Task 仍各自依赖 claim，不能把单一焦点当成全局锁。
 
-新 Skill 不扫描或解释其他历史控制目录。Skill 内置 `scripts/hdg.mjs` 的正常创建入口是 `approve-item`；另提供恢复/诊断用 `prepare-item/freeze-item`，以及 `revise-item/promote-item/select-development-mode/retry-item/gate-item/delivery-item`、`ready-tasks`、`task-context`、`claim-task` 和 `task-result`。`ready-tasks --item` 接受任意根或子树 ID。它从独立层级 CLI 构建，不打包历史 `route/start/prepare/freeze` 入口及其 YAML 配置实现。
+新 Skill 不扫描或解释其他历史控制目录。Skill 内置 `scripts/hdg.mjs` 的正常闭环入口是 `approve-item → select-development-mode → dispatch-task → task-result → accept-item → acceptance-item`；另提供恢复/诊断用 `prepare-item/freeze-item/task-context/claim-task/gate-item/delivery-item`，以及 `revise-item/promote-item/retry-item/ready-tasks/refresh-projections/upgrade-registry`。`ready-tasks --item` 接受任意根或子树 ID；`refresh-projections` 不改变 revision 或状态，只重建中文 Markdown 工作台。`upgrade-registry` 是同一控制目录内的显式兼容入口，不是新的流程层：仅接受无 claim、未运行 gate、包与 registry 指纹一致的单根 schema v2 Task，并要求用户确认 `LIGHT|FULL`。成功后保留 ID、冻结状态和开发方式，重新绑定 v3 指纹，清除旧 context/handoff，并在 `migrationHistory` 记录旧/新指纹、旧 registry hash 与时间。其他 v2 形态失败关闭。控制器不打包历史 `route/start/prepare/freeze` 入口及其 YAML 配置实现。

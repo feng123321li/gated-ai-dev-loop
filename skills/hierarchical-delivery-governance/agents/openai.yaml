@@ -1,6 +1,6 @@
 interface:
   display_name: "分层式 AI 交付治理"
-  short_description: "按最小必要层级治理可独立交付工作单元的基线、协作与验收"
-  default_prompt: "使用 $hierarchical-delivery-governance 评估当前可交付工作，选择根 Task、Capability→Task 或 Delivery→Capability→Task 的最浅合法形态和 LIGHT/FULL 门禁并起草 schema v3 baseline；对每个 baseline 只请求一次覆盖具体 ID、内容以及持久化并冻结的批准，批准前不落盘；manual 模式返回可直接粘贴到新会话的完整提示词。"
+  short_description: "分层治理开发回收、门禁、验收报告和最终确认"
+  default_prompt: "使用 $hierarchical-delivery-governance 以最浅合法层级治理当前工作：一次批准冻结 baseline，原子调度 manual/active 开发，回收结果后执行门禁，生成用户验收报告，并让治理根完成独立验收和用户确认。"
 policy:
   allow_implicit_invocation: true

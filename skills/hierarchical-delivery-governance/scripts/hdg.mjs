@@ -1396,6 +1396,13 @@ var DELIVERY_STATUSES = Object.freeze([
   "WAITING_FOR_USER_CONFIRMATION",
   "COMPLETED"
 ]);
+var ACCEPTANCE_STATUSES = DELIVERY_STATUSES;
+var ACCEPTANCE_REPORT_STATUSES = Object.freeze([
+  ...ACCEPTANCE_STATUSES,
+  "WAITING_FOR_GATE",
+  "BLOCKED",
+  "VERIFIED"
+]);
 var DEVELOPMENT_MODES = Object.freeze(["active", "manual"]);
 function fail2(code, message, details = {}) {
   throw new GatedLoopError(code, message, { details });
@@ -1432,6 +1439,7 @@ function emptyRegistry(root, at) {
     currentFocus: { workItemId: null, purpose: null },
     workItems: [],
     promotionHistory: [],
+    migrationHistory: [],
     updatedAt: at
   };
 }
@@ -1459,6 +1467,9 @@ function validEvidenceReference(value) {
 }
 function nonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
+}
+function safeWorkItemId(value) {
+  return typeof value === "string" && /^[a-z0-9][a-z0-9._-]*$/.test(value) && !value.endsWith(".") && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/.test(value);
 }
 function validDevelopmentMode(value, entry) {
   return value && typeof value === "object" && !Array.isArray(value) && value.schemaVersion === 1 && value.taskId === entry.id && value.baselineFingerprint === entry.baselineFingerprint && DEVELOPMENT_MODES.includes(value.mode) && value.confirmedBy === "user" && typeof value.confirmedAt === "string" && !Number.isNaN(Date.parse(value.confirmedAt));
@@ -1490,11 +1501,23 @@ function validDelivery(value) {
   }
   return reviewValid && validDeliveryEvidence(value.userConfirmation, ["USER_CONFIRMED"]);
 }
+function validAcceptance(value) {
+  return validDelivery(value);
+}
+function validAcceptanceReport(value, entry) {
+  if (value === void 0 || value === null) return true;
+  const expectedDirectory = path3.posix.join(
+    GOVERNANCE_DIRECTORY,
+    WORK_ITEMS_DIRECTORY,
+    entry.id
+  );
+  return value && typeof value === "object" && !Array.isArray(value) && value.schemaVersion === 1 && ACCEPTANCE_REPORT_STATUSES.includes(value.status) && value.jsonPath === path3.posix.join(expectedDirectory, "acceptance-report.json") && value.markdownPath === path3.posix.join(expectedDirectory, "acceptance-report.md") && typeof value.generatedAt === "string" && !Number.isNaN(Date.parse(value.generatedAt));
+}
 function validateRegistry(registry, root) {
-  const valid = registry && typeof registry === "object" && !Array.isArray(registry) && registry.schemaVersion === WORK_ITEM_REGISTRY_SCHEMA_VERSION && registry.coordinationRoot === path3.resolve(root) && Number.isInteger(registry.revision) && registry.revision >= 0 && Array.isArray(registry.workItems) && Array.isArray(registry.promotionHistory) && registry.currentFocus && typeof registry.currentFocus === "object";
+  const valid = registry && typeof registry === "object" && !Array.isArray(registry) && registry.schemaVersion === WORK_ITEM_REGISTRY_SCHEMA_VERSION && registry.coordinationRoot === path3.resolve(root) && Number.isInteger(registry.revision) && registry.revision >= 0 && Array.isArray(registry.workItems) && Array.isArray(registry.promotionHistory) && (registry.migrationHistory === void 0 || Array.isArray(registry.migrationHistory)) && registry.currentFocus && typeof registry.currentFocus === "object";
   if (!valid) fail2("WORK_ITEM_REGISTRY_INVALID", "Work item registry is invalid");
   const ids = registry.workItems.map(({ id }) => id);
-  const safeId2 = (value) => typeof value === "string" && /^[a-z0-9][a-z0-9._-]*$/.test(value) && !value.endsWith(".") && !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/.test(value);
+  const safeId2 = safeWorkItemId;
   if (new Set(ids).size !== ids.length || ids.some((id) => !safeId2(id))) {
     fail2("WORK_ITEM_REGISTRY_INVALID", "Work item registry contains duplicate or unsafe IDs");
   }
@@ -1505,6 +1528,10 @@ function validateRegistry(registry, root) {
     const kindsValid = recordValid && (promotion.childKind === "TASK" && promotion.parentKind === "CAPABILITY" || promotion.childKind === "CAPABILITY" && promotion.parentKind === "DELIVERY");
     const promotionValid = recordValid && promotion.schemaVersion === 1 && safeId2(promotion.childId) && safeId2(promotion.parentId) && kindsValid && fingerprint(promotion.previousBaselineFingerprint) && fingerprint(promotion.promotedBaselineFingerprint) && fingerprint(promotion.parentBaselineFingerprint) && typeof promotion.promotedAt === "string" && !Number.isNaN(Date.parse(promotion.promotedAt));
     if (!promotionValid) fail2("WORK_ITEM_REGISTRY_INVALID", "Work item promotion history is invalid");
+  }
+  for (const migration of registry.migrationHistory ?? []) {
+    const migrationValid = migration && typeof migration === "object" && !Array.isArray(migration) && migration.schemaVersion === 1 && migration.fromSchemaVersion === 2 && migration.toSchemaVersion === WORK_ITEM_REGISTRY_SCHEMA_VERSION && safeId2(migration.workItemId) && WORK_ITEM_GATE_LEVELS.includes(migration.taskGateLevel) && fingerprint(migration.previousBaselineFingerprint) && fingerprint(migration.migratedBaselineFingerprint) && fingerprint(migration.previousRegistryFingerprint) && typeof migration.migratedAt === "string" && !Number.isNaN(Date.parse(migration.migratedAt));
+    if (!migrationValid) fail2("WORK_ITEM_REGISTRY_INVALID", "Work item migration history is invalid");
   }
   for (const entry of registry.workItems) {
     const validEntry = WORK_ITEM_KINDS.includes(entry.kind) && entry.authorityKind === WORK_ITEM_AUTHORITIES[entry.kind] && WORK_ITEM_GATE_LEVELS.includes(entry.gateLevel) && (entry.kind === "TASK" || entry.gateLevel === "FULL") && (entry.parentId === null || safeId2(entry.parentId)) && Array.isArray(entry.childIds) && entry.childIds.every(safeId2) && entry.packagePath === itemRelativePath(entry.id) && typeof entry.baselineFingerprint === "string" && /^[a-f0-9]{64}$/.test(entry.baselineFingerprint) && typeof entry.contractFingerprint === "string" && /^[a-f0-9]{64}$/.test(entry.contractFingerprint);
@@ -1522,6 +1549,10 @@ function validateRegistry(registry, root) {
     }
     const deliveryValid = entry.kind === "DELIVERY" ? entry.delivery === void 0 || validDelivery(entry.delivery) : entry.delivery === void 0 || entry.delivery === null;
     if (!deliveryValid) fail2("WORK_ITEM_REGISTRY_INVALID", `Work item delivery state is invalid: ${entry.id}`);
+    const acceptanceValid = entry.parentId === null ? entry.acceptance === void 0 || validAcceptance(entry.acceptance) : entry.acceptance === void 0 || entry.acceptance === null;
+    if (!acceptanceValid || !validAcceptanceReport(entry.acceptanceReport, entry)) {
+      fail2("WORK_ITEM_REGISTRY_INVALID", `Work item acceptance state is invalid: ${entry.id}`);
+    }
     if (entry.kind === "DELIVERY" && entry.parentId !== null) {
       fail2("WORK_ITEM_REGISTRY_INVALID", "Delivery entries cannot have parents");
     }
@@ -1554,9 +1585,13 @@ async function ensureRuntimeRoot(root, fs) {
   return runtimeRoot;
 }
 async function assertPersistedDeliveryEvidence(root, registry, fs) {
-  for (const entry of registry.workItems.filter(({ kind, delivery }) => kind === "DELIVERY" && delivery && delivery.status !== "NOT_READY" && delivery.status !== "WAITING_FOR_INDEPENDENT_REVIEW")) {
-    const records = [entry.delivery.review];
-    if (entry.delivery.status === "COMPLETED") records.push(entry.delivery.userConfirmation);
+  for (const entry of registry.workItems.filter((candidate) => {
+    const acceptance = candidate.acceptance ?? candidate.delivery;
+    return candidate.parentId === null && acceptance && acceptance.status !== "NOT_READY" && acceptance.status !== "WAITING_FOR_INDEPENDENT_REVIEW";
+  })) {
+    const acceptance = entry.acceptance ?? entry.delivery;
+    const records = [acceptance.review];
+    if (acceptance.status === "COMPLETED") records.push(acceptance.userConfirmation);
     for (const record of records) {
       let bytes;
       try {
@@ -1618,51 +1653,78 @@ async function readRegistryUnlocked(root, fs, { allowMissing = false, now } = {}
   await assertPersistedDevelopmentModes(root, validated, fs);
   return validated;
 }
+function humanStatus(value) {
+  return {
+    DELIVERY: "\u4EA4\u4ED8",
+    CAPABILITY: "\u80FD\u529B",
+    TASK: "\u4EFB\u52A1",
+    PREPARED: "\u7B49\u5F85\u57FA\u7EBF\u786E\u8BA4",
+    WAITING_FOR_DEVELOPMENT_MODE_SELECTION: "\u7B49\u5F85\u9009\u62E9\u5F00\u53D1\u65B9\u5F0F",
+    FROZEN: "\u5DF2\u51BB\u7ED3",
+    CLAIMED: "\u5F00\u53D1\u4E2D",
+    IMPLEMENTED: "\u7B49\u5F85\u95E8\u7981\u9A8C\u6536",
+    BLOCKED: "\u5DF2\u963B\u65AD",
+    VERIFIED: "\u95E8\u7981\u5DF2\u901A\u8FC7",
+    NOT_READY: "\u5C1A\u672A\u5C31\u7EEA",
+    WAITING_FOR_INDEPENDENT_REVIEW: "\u7B49\u5F85\u72EC\u7ACB\u9A8C\u6536",
+    WAITING_FOR_USER_CONFIRMATION: "\u7B49\u5F85\u7528\u6237\u786E\u8BA4",
+    COMPLETED: "\u5DF2\u5B8C\u6210",
+    NOT_RUN: "\u672A\u8FD0\u884C",
+    PASS: "\u901A\u8FC7",
+    FAIL: "\u672A\u901A\u8FC7"
+  }[value] ?? value ?? "\u65E0";
+}
 function renderWorkspaceOverview(registry) {
   const lines = [
-    "# Work Item Overview",
+    "# \u5DE5\u4F5C\u9879\u603B\u89C8",
     "",
-    `> registry revision: ${registry.revision}`,
-    `> current focus: ${registry.currentFocus.workItemId ?? "none"}`,
+    "> \u672C\u6587\u4EF6\u662F\u9762\u5411\u7528\u6237\u548C\u534F\u4F5C\u8005\u7684\u53EF\u8BFB\u6295\u5F71\uFF1B\u673A\u5668\u6743\u5A01\u4E3A `work-item-registry.json`\u3002",
+    `> \u6CE8\u518C\u8868\u7248\u672C\uFF1A${registry.revision}`,
+    `> \u5F53\u524D\u7126\u70B9\uFF1A${registry.currentFocus.workItemId ?? "\u65E0"}`,
     "",
-    "| Work Item | Kind | Gate level | Parent | Stage | Status | Development mode | Delivery | Direct progress | Descendant progress | Gate | Claim |",
+    "| \u5DE5\u4F5C\u9879 | \u7C7B\u578B | \u95E8\u7981\u7B49\u7EA7 | \u7236\u7EA7 | \u5F53\u524D\u72B6\u6001 | \u5F00\u53D1\u65B9\u5F0F | \u6700\u7EC8\u9A8C\u6536 | \u76F4\u63A5\u5B50\u7EA7 | \u5168\u90E8\u540E\u4EE3 | \u95E8\u7981 | \u8BA4\u9886\u8005 | \u9A8C\u6536\u62A5\u544A |",
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
   ];
   for (const item of sortedItems(registry.workItems)) {
-    lines.push(`| ${item.id} | ${item.kind} | ${item.gateLevel} | ${item.parentId ?? "none"} | ${item.stage} | ${item.status} | ${item.developmentMode?.mode ?? "n/a"} | ${item.delivery?.status ?? "n/a"} | ${item.progress.directChildren.verified}/${item.progress.directChildren.total} | ${item.progress.descendants.verified}/${item.progress.descendants.total} | ${item.gate.status} | ${item.claim?.owner ?? "none"} |`);
+    const report = item.acceptanceReport ? `[\u67E5\u770B](${path3.posix.relative(GOVERNANCE_DIRECTORY, item.acceptanceReport.markdownPath)})` : "\u5C1A\u672A\u751F\u6210";
+    const acceptance = item.acceptance ?? (item.parentId === null ? item.delivery : null);
+    lines.push(`| ${item.id} | ${humanStatus(item.kind)} | ${item.gateLevel} | ${item.parentId ?? "\u65E0"} | ${humanStatus(item.status)} | ${item.developmentMode?.mode ?? "\u4E0D\u9002\u7528"} | ${acceptance ? humanStatus(acceptance.status) : "\u4E0D\u9002\u7528"} | ${item.progress.directChildren.verified}/${item.progress.directChildren.total} | ${item.progress.descendants.verified}/${item.progress.descendants.total} | ${humanStatus(item.gate.status)} | ${item.claim?.owner ?? "\u65E0"} | ${report} |`);
   }
   lines.push("");
   return lines.join("\n");
 }
 function renderItemOverview(entry) {
   return [
-    `# ${entry.id} Work Item Overview`,
+    `# ${entry.id} \u5DE5\u4F5C\u9879\u6982\u89C8`,
     "",
-    `- Kind: ${entry.kind}`,
-    `- Gate level: ${entry.gateLevel}`,
-    `- Authority: ${entry.authorityKind}`,
-    `- Parent: ${entry.parentId ?? "none"}`,
-    `- Baseline: [baseline.md](baseline.md)`,
-    `- Parent contract: ${entry.parentContractFingerprint ?? "none"}`,
-    `- Children: ${entry.childIds.join(", ") || "none"}`,
+    `- \u7C7B\u578B\uFF1A${entry.kind}`,
+    `- \u95E8\u7981\u7B49\u7EA7\uFF1A${entry.gateLevel}`,
+    `- \u6743\u9650\u6027\u8D28\uFF1A${entry.authorityKind}`,
+    `- \u7236\u7EA7\uFF1A${entry.parentId ?? "\u65E0"}`,
+    "- \u57FA\u7EBF\uFF1A[baseline.md](baseline.md)",
+    `- \u7236\u5951\u7EA6\u6307\u7EB9\uFF1A${entry.parentContractFingerprint ?? "\u65E0"}`,
+    `- \u5B50\u7EA7\uFF1A${entry.childIds.join(", ") || "\u65E0"}`,
+    `- \u9A8C\u6536\u62A5\u544A\uFF1A${entry.acceptanceReport ? "[acceptance-report.md](acceptance-report.md)" : "\u5C1A\u672A\u751F\u6210"}`,
     ""
   ].join("\n");
 }
 function renderItemProgress(entry) {
+  const acceptance = entry.acceptance ?? (entry.parentId === null ? entry.delivery : null);
   return [
-    `# ${entry.id} Progress`,
+    `# ${entry.id} \u8FDB\u5EA6`,
     "",
-    `- Record revision: ${entry.recordRevision}`,
-    `- Stage: ${entry.stage}`,
-    `- Status: ${entry.status}`,
-    `- Gate level: ${entry.gateLevel}`,
-    `- Delivery: ${entry.delivery?.status ?? "n/a"}`,
-    `- Gate: ${entry.gate.status}`,
-    `- Development mode: ${entry.developmentMode?.mode ?? "not selected"}`,
-    `- Claim: ${entry.claim ? `${entry.claim.owner} / ${entry.claim.operationId}` : "none"}`,
-    `- Direct children: ${entry.progress.directChildren.verified}/${entry.progress.directChildren.total} verified; ${entry.progress.directChildren.blocked} blocked; ${entry.progress.directChildren.active} active`,
-    `- Descendants: ${entry.progress.descendants.verified}/${entry.progress.descendants.total} verified; ${entry.progress.descendants.blocked} blocked; ${entry.progress.descendants.active} active`,
-    `- Updated at: ${entry.updatedAt}`,
+    `- \u8BB0\u5F55\u7248\u672C\uFF1A${entry.recordRevision}`,
+    `- \u9636\u6BB5\uFF1A${entry.stage}`,
+    `- \u5F53\u524D\u72B6\u6001\uFF1A${humanStatus(entry.status)}`,
+    `- \u95E8\u7981\u7B49\u7EA7\uFF1A${entry.gateLevel}`,
+    `- \u6700\u7EC8\u9A8C\u6536\uFF1A${acceptance ? humanStatus(acceptance.status) : "\u4E0D\u9002\u7528"}`,
+    `- \u95E8\u7981\uFF1A${humanStatus(entry.gate.status)}`,
+    `- \u5F00\u53D1\u65B9\u5F0F\uFF1A${entry.developmentMode?.mode ?? "\u672A\u9009\u62E9"}`,
+    `- \u8BA4\u9886\uFF1A${entry.claim ? `${entry.claim.owner} / ${entry.claim.operationId}` : "\u65E0"}`,
+    `- \u76F4\u63A5\u5B50\u7EA7\uFF1A${entry.progress.directChildren.verified}/${entry.progress.directChildren.total} \u5DF2\u9A8C\u8BC1\uFF1B${entry.progress.directChildren.blocked} \u963B\u65AD\uFF1B${entry.progress.directChildren.active} \u6D3B\u52A8`,
+    `- \u5168\u90E8\u540E\u4EE3\uFF1A${entry.progress.descendants.verified}/${entry.progress.descendants.total} \u5DF2\u9A8C\u8BC1\uFF1B${entry.progress.descendants.blocked} \u963B\u65AD\uFF1B${entry.progress.descendants.active} \u6D3B\u52A8`,
+    `- \u9A8C\u6536\u62A5\u544A\uFF1A${entry.acceptanceReport ? "[acceptance-report.md](acceptance-report.md)" : "\u5C1A\u672A\u751F\u6210"}`,
+    `- \u66F4\u65B0\u65F6\u95F4\uFF1A${entry.updatedAt}`,
     ""
   ].join("\n");
 }
@@ -1796,6 +1858,7 @@ async function writeNewPackage(target, files, fs) {
   }, { fs });
 }
 function entryFromDefinition(definition, state, at) {
+  const rootAcceptance = definition.parentId === null ? { status: "NOT_READY", review: null, userConfirmation: null } : null;
   return {
     id: definition.id,
     kind: definition.kind,
@@ -1811,9 +1874,12 @@ function entryFromDefinition(definition, state, at) {
     parentContractFingerprint: state.parentContractFingerprint,
     gate: { status: "NOT_RUN", evidence: null },
     delivery: definition.kind === "DELIVERY" ? { status: "NOT_READY", review: null, userConfirmation: null } : null,
+    acceptance: rootAcceptance,
+    acceptanceReport: null,
     developmentMode: null,
     claim: null,
     latestEvidence: null,
+    latestResult: null,
     recordRevision: 1,
     createdAt: at,
     updatedAt: at
@@ -2040,9 +2106,13 @@ async function retryBlockedWorkItem({
     if (entry.baselineFingerprint !== expectedBaselineFingerprint) {
       fail2("WORK_ITEM_REVISION_CONFLICT", "The retry baseline fingerprint is not current");
     }
-    await assertCurrentLineage(root, registry, entry, fs);
+    const own = await assertCurrentLineage(root, registry, entry, fs);
     entry.status = "FROZEN";
     entry.gate = { status: "NOT_RUN", evidence: null };
+    if (entry.parentId === null) {
+      entry.acceptance = { status: "NOT_READY", review: null, userConfirmation: null };
+      if (entry.kind === "DELIVERY") entry.delivery = entry.acceptance;
+    }
     entry.recordRevision += 1;
     entry.updatedAt = at;
     registry.currentFocus = {
@@ -2051,6 +2121,7 @@ async function retryBlockedWorkItem({
     };
     registry.revision += 1;
     registry.updatedAt = at;
+    if (entry.acceptanceReport) await writeAcceptanceReport(root, entry, own.definition, at, fs);
     await writeRegistryUnlocked(root, registry, fs);
     return { id, status: entry.status, baselineFingerprint: entry.baselineFingerprint };
   }, { now });
@@ -2142,6 +2213,9 @@ async function reviseWorkItem({
           await fs.rm(path3.join(staging, name), { force: true });
         }
       }
+      for (const name of ["acceptance-report.json", "acceptance-report.md"]) {
+        await fs.rm(path3.join(staging, name), { force: true });
+      }
     }, { fs });
     entry.childIds = normalized.children?.map(({ id }) => id) ?? [];
     entry.baselineFingerprint = state.baselineFingerprint;
@@ -2150,7 +2224,11 @@ async function reviseWorkItem({
     entry.status = entry.kind === "TASK" ? "WAITING_FOR_DEVELOPMENT_MODE_SELECTION" : "FROZEN";
     entry.developmentMode = null;
     entry.gate = { status: "NOT_RUN", evidence: null };
+    entry.acceptance = entry.parentId === null ? { status: "NOT_READY", review: null, userConfirmation: null } : null;
+    if (entry.kind === "DELIVERY") entry.delivery = entry.acceptance;
+    entry.acceptanceReport = null;
     entry.latestEvidence = null;
+    entry.latestResult = null;
     entry.recordRevision += 1;
     entry.updatedAt = at;
     registry.currentFocus = {
@@ -2232,6 +2310,9 @@ async function promoteWorkItem({
           await fs.rm(path3.join(staging, name), { force: true });
         }
       }
+      for (const name of ["acceptance-report.json", "acceptance-report.md"]) {
+        await fs.rm(path3.join(staging, name), { force: true });
+      }
     }, { fs });
     const previousBaselineFingerprint = entry.baselineFingerprint;
     entry.parentId = parentEntry.id;
@@ -2241,7 +2322,10 @@ async function promoteWorkItem({
     entry.status = entry.kind === "TASK" ? "WAITING_FOR_DEVELOPMENT_MODE_SELECTION" : "FROZEN";
     entry.developmentMode = null;
     entry.gate = { status: "NOT_RUN", evidence: null };
+    entry.acceptance = null;
+    entry.acceptanceReport = null;
     entry.latestEvidence = null;
+    entry.latestResult = null;
     entry.recordRevision += 1;
     entry.updatedAt = at;
     parentEntry.recordRevision += 1;
@@ -2274,6 +2358,217 @@ async function promoteWorkItem({
       status: entry.status
     };
   }, { now });
+}
+function legacyWorkItemContractFingerprint(definition) {
+  const legacyContract = {
+    schemaVersion: definition.schemaVersion,
+    id: definition.id,
+    kind: definition.kind,
+    goal: definition.goal,
+    scope: [...definition.scope].sort(),
+    requirements: [...definition.requirements].sort((left, right) => left.id.localeCompare(right.id)),
+    acceptance: [...definition.acceptance].sort((left, right) => left.id.localeCompare(right.id)),
+    testCommands: definition.testCommands
+  };
+  if (definition.children) legacyContract.children = [...definition.children].sort((left, right) => left.id.localeCompare(right.id));
+  if (definition.decomposition) legacyContract.decomposition = definition.decomposition;
+  if (definition.execution) legacyContract.execution = definition.execution;
+  return sha256Bytes(Buffer.from(canonicalJson(legacyContract), "utf8"));
+}
+function validateLegacyRootTaskRegistry(registry, root) {
+  const entry = registry?.workItems?.[0];
+  const registryValid = registry && typeof registry === "object" && !Array.isArray(registry) && registry.schemaVersion === 2 && registry.coordinationRoot === path3.resolve(root) && Number.isInteger(registry.revision) && registry.revision >= 0 && Array.isArray(registry.workItems) && registry.workItems.length === 1 && (registry.promotionHistory === void 0 || Array.isArray(registry.promotionHistory) && registry.promotionHistory.length === 0) && registry.currentFocus && typeof registry.currentFocus === "object";
+  const entryValid = entry && safeWorkItemId(entry.id) && entry.kind === "TASK" && entry.authorityKind === WORK_ITEM_AUTHORITIES.TASK && entry.parentId === null && Array.isArray(entry.childIds) && entry.childIds.length === 0 && entry.packagePath === itemRelativePath(entry.id) && entry.stage === "BASELINE_FROZEN" && ["FROZEN", "WAITING_FOR_DEVELOPMENT_MODE_SELECTION"].includes(entry.status) && typeof entry.baselineFingerprint === "string" && /^[a-f0-9]{64}$/.test(entry.baselineFingerprint) && typeof entry.contractFingerprint === "string" && /^[a-f0-9]{64}$/.test(entry.contractFingerprint) && entry.parentContractFingerprint === null && entry.gate?.status === "NOT_RUN" && entry.gate.evidence === null && entry.claim === null && entry.latestEvidence === null && (entry.delivery === void 0 || entry.delivery === null) && Number.isInteger(entry.recordRevision) && entry.recordRevision >= 1;
+  if (!registryValid || !entryValid) {
+    fail2(
+      "WORK_ITEM_SCHEMA_MIGRATION_UNSUPPORTED",
+      "Schema v2 migration currently supports one inactive frozen root Task with no gate result or claim"
+    );
+  }
+  const waitingForMode = entry.status === "WAITING_FOR_DEVELOPMENT_MODE_SELECTION";
+  if (waitingForMode !== (entry.developmentMode === null)) {
+    fail2("WORK_ITEM_SCHEMA_MIGRATION_UNSUPPORTED", "Legacy Task development mode state is inconsistent");
+  }
+  if (entry.developmentMode !== null && !validDevelopmentMode(entry.developmentMode, entry)) {
+    fail2("WORK_ITEM_SCHEMA_MIGRATION_UNSUPPORTED", "Legacy Task development mode is invalid");
+  }
+  return entry;
+}
+async function upgradeWorkItemRegistry({
+  root,
+  taskGateLevel,
+  confirmed = false,
+  explicitDogfood = false,
+  now,
+  fs = fsPromises2
+} = {}) {
+  await assertSelfHostingDogfood(root, explicitDogfood, fs);
+  const at = timestamp(now);
+  return withRuntimeDirectoryTransaction(registryPath(root), async () => {
+    let registryBytes;
+    try {
+      registryBytes = await readSafeRegularFile(root, registryPath(root), { fs });
+    } catch (error) {
+      if (error.code === "ENOENT") fail2("WORK_ITEM_REGISTRY_MISSING", "Work item registry does not exist");
+      throw error;
+    }
+    let legacyRegistry;
+    try {
+      legacyRegistry = JSON.parse(registryBytes.toString("utf8"));
+    } catch {
+      fail2("WORK_ITEM_REGISTRY_INVALID", "Work item registry is not valid JSON");
+    }
+    if (legacyRegistry.schemaVersion === WORK_ITEM_REGISTRY_SCHEMA_VERSION) {
+      const current = await readRegistryUnlocked(root, fs);
+      return {
+        migrated: false,
+        idempotent: true,
+        fromSchemaVersion: WORK_ITEM_REGISTRY_SCHEMA_VERSION,
+        toSchemaVersion: WORK_ITEM_REGISTRY_SCHEMA_VERSION,
+        revision: current.revision
+      };
+    }
+    if (confirmed !== true) {
+      fail2("CONFIRMATION_REQUIRED", "Schema v2 migration requires explicit confirmation of the Task gate level");
+    }
+    if (!WORK_ITEM_GATE_LEVELS.includes(taskGateLevel)) {
+      fail2("WORK_ITEM_GATE_LEVEL_INVALID", "Schema v2 migration requires taskGateLevel LIGHT or FULL");
+    }
+    const legacyEntry = validateLegacyRootTaskRegistry(legacyRegistry, root);
+    const target = itemPath(root, legacyEntry.id);
+    const targetStat = await fs.lstat(target).catch(() => null);
+    if (!targetStat?.isDirectory() || targetStat.isSymbolicLink()) {
+      fail2("WORK_ITEM_PACKAGE_INVALID", `${legacyEntry.id} package path is invalid`);
+    }
+    const legacyDefinition = await readJsonFile(target, "baseline.json", fs, "WORK_ITEM_PACKAGE_INVALID");
+    const legacyState = await readJsonFile(target, "state.json", fs, "WORK_ITEM_PACKAGE_INVALID");
+    const legacyMetadata = await readJsonFile(target, "work-item.json", fs, "WORK_ITEM_PACKAGE_INVALID");
+    const legacyBaselineFingerprint = sha256Bytes(Buffer.from(canonicalJson(legacyDefinition), "utf8"));
+    const legacyContractFingerprint = legacyWorkItemContractFingerprint(legacyDefinition);
+    const packageValid = legacyDefinition.schemaVersion === 2 && legacyDefinition.id === legacyEntry.id && legacyDefinition.kind === "TASK" && legacyDefinition.authorityKind === WORK_ITEM_AUTHORITIES.TASK && legacyDefinition.parentId === null && legacyDefinition.parentContractFingerprint === null && !Object.hasOwn(legacyDefinition, "gateLevel") && legacyState.schemaVersion === 2 && legacyState.id === legacyEntry.id && legacyState.stage === legacyEntry.stage && legacyState.baselineFingerprint === legacyBaselineFingerprint && legacyState.contractFingerprint === legacyContractFingerprint && legacyState.parentContractFingerprint === null && legacyEntry.baselineFingerprint === legacyBaselineFingerprint && legacyEntry.contractFingerprint === legacyContractFingerprint && legacyMetadata.schemaVersion === 2 && legacyMetadata.id === legacyEntry.id && legacyMetadata.kind === legacyEntry.kind && legacyMetadata.parentId === null;
+    if (!packageValid) {
+      fail2("WORK_ITEM_PACKAGE_CHANGED", `${legacyEntry.id} legacy package does not match its registry`);
+    }
+    let developmentMode = null;
+    if (legacyEntry.developmentMode !== null) {
+      const artifact = await readJsonFile(target, "development-mode.json", fs, "WORK_ITEM_DEVELOPMENT_MODE_INVALID");
+      if (canonicalJson(artifact) !== canonicalJson(legacyEntry.developmentMode)) {
+        fail2("WORK_ITEM_DEVELOPMENT_MODE_CHANGED", `${legacyEntry.id} development-mode.json changed after confirmation`);
+      }
+      developmentMode = artifact;
+    }
+    const migratedDefinition = validateWorkItemDefinition({
+      ...rawDefinition(legacyDefinition),
+      schemaVersion: WORK_ITEM_SCHEMA_VERSION,
+      gateLevel: taskGateLevel
+    });
+    const migratedState = {
+      ...legacyState,
+      schemaVersion: WORK_ITEM_SCHEMA_VERSION,
+      baselineFingerprint: workItemBaselineFingerprint(migratedDefinition),
+      contractFingerprint: workItemContractFingerprint(migratedDefinition),
+      parentContractFingerprint: migratedDefinition.parentContractFingerprint,
+      baselineRevision: (legacyState.baselineRevision ?? 1) + 1,
+      revisedAt: at,
+      schemaMigration: {
+        fromSchemaVersion: 2,
+        toSchemaVersion: WORK_ITEM_SCHEMA_VERSION,
+        migratedAt: at
+      }
+    };
+    if (developmentMode) {
+      developmentMode = {
+        ...developmentMode,
+        baselineFingerprint: migratedState.baselineFingerprint
+      };
+    }
+    const migratedEntry = {
+      ...legacyEntry,
+      gateLevel: taskGateLevel,
+      baselineFingerprint: migratedState.baselineFingerprint,
+      contractFingerprint: migratedState.contractFingerprint,
+      parentContractFingerprint: migratedState.parentContractFingerprint,
+      delivery: null,
+      acceptance: { status: "NOT_READY", review: null, userConfirmation: null },
+      acceptanceReport: null,
+      developmentMode,
+      latestResult: null,
+      recordRevision: legacyEntry.recordRevision + 1,
+      updatedAt: at
+    };
+    const migratedRegistry = {
+      ...legacyRegistry,
+      schemaVersion: WORK_ITEM_REGISTRY_SCHEMA_VERSION,
+      revision: legacyRegistry.revision + 1,
+      workItems: [migratedEntry],
+      promotionHistory: legacyRegistry.promotionHistory ?? [],
+      migrationHistory: [
+        ...legacyRegistry.migrationHistory ?? [],
+        {
+          schemaVersion: 1,
+          fromSchemaVersion: 2,
+          toSchemaVersion: WORK_ITEM_REGISTRY_SCHEMA_VERSION,
+          workItemId: migratedEntry.id,
+          taskGateLevel,
+          previousBaselineFingerprint: legacyBaselineFingerprint,
+          migratedBaselineFingerprint: migratedState.baselineFingerprint,
+          previousRegistryFingerprint: sha256Bytes(registryBytes),
+          migratedAt: at
+        }
+      ],
+      updatedAt: at
+    };
+    validateRegistry(migratedRegistry, root);
+    await atomicReplaceDirectory(target, async (staging) => {
+      await copyPackageContents(target, staging, fs);
+      for (const [name, contents] of Object.entries(definitionFiles(migratedDefinition, migratedState))) {
+        await atomicWriteFile(path3.join(staging, name), contents, { fs });
+      }
+      if (developmentMode) {
+        await atomicWriteFile(path3.join(staging, "development-mode.json"), json(developmentMode), { fs });
+      }
+      for (const name of [
+        "context-manifest.json",
+        "development-handoff.md",
+        "acceptance-report.json",
+        "acceptance-report.md"
+      ]) {
+        await fs.rm(path3.join(staging, name), { force: true });
+      }
+    }, { fs });
+    await writeRegistryUnlocked(root, migratedRegistry, fs);
+    return {
+      migrated: true,
+      idempotent: false,
+      fromSchemaVersion: 2,
+      toSchemaVersion: WORK_ITEM_REGISTRY_SCHEMA_VERSION,
+      taskId: migratedEntry.id,
+      taskGateLevel,
+      previousBaselineFingerprint: legacyBaselineFingerprint,
+      baselineFingerprint: migratedState.baselineFingerprint,
+      revision: migratedRegistry.revision
+    };
+  }, { fs, now });
+}
+async function refreshWorkItemProjections({
+  root,
+  explicitDogfood = false,
+  fs = fsPromises2
+} = {}) {
+  await assertSelfHostingDogfood(root, explicitDogfood, fs);
+  await ensureRuntimeRoot(root, fs);
+  return withRuntimeDirectoryTransaction(registryPath(root), async () => {
+    const registry = await readRegistryUnlocked(root, fs);
+    await writeRegistryUnlocked(root, registry, fs);
+    return {
+      revision: registry.revision,
+      workspaceOverview: path3.posix.join(GOVERNANCE_DIRECTORY, "workspace-overview.md"),
+      workItems: registry.workItems.map(({ id, acceptanceReport }) => ({
+        id,
+        acceptanceReport: acceptanceReport?.markdownPath ?? null
+      }))
+    };
+  }, { fs });
 }
 async function selectDevelopmentMode({
   root,
@@ -2428,6 +2723,174 @@ function evidenceRecord(value) {
   if (!valid) fail2("WORK_ITEM_EVIDENCE_INVALID", "Evidence must contain a safe relative path and sha256");
   return { path: value.path.replaceAll("\\", "/"), sha256: value.sha256 };
 }
+async function readEvidenceArtifact(root, evidence, fs, {
+  missingCode = "WORK_ITEM_EVIDENCE_MISSING",
+  changedCode = "WORK_ITEM_EVIDENCE_CHANGED",
+  invalidCode = "WORK_ITEM_EVIDENCE_INVALID"
+} = {}) {
+  const reference = evidenceRecord(evidence);
+  let bytes;
+  try {
+    bytes = await readSafeRegularFile(root, reference.path, { fs });
+  } catch (error) {
+    if (error instanceof GatedLoopError) throw error;
+    fail2(missingCode, `Unable to read evidence: ${reference.path}`);
+  }
+  if (sha256Bytes(bytes) !== reference.sha256) {
+    fail2(changedCode, `Evidence hash does not match: ${reference.path}`);
+  }
+  let artifact;
+  try {
+    artifact = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    fail2(invalidCode, "Evidence must be valid JSON");
+  }
+  return { reference, artifact };
+}
+async function optionalTaskResultArtifact(root, evidence, expected, fs, strict = false) {
+  const reference = evidenceRecord(evidence);
+  let bytes;
+  try {
+    bytes = await readSafeRegularFile(root, reference.path, { fs });
+  } catch {
+    if (strict) fail2("WORK_ITEM_RESULT_EVIDENCE_MISSING", `Task result evidence is unavailable: ${reference.path}`);
+    return { reference, artifact: null };
+  }
+  if (sha256Bytes(bytes) !== reference.sha256) {
+    fail2("WORK_ITEM_RESULT_EVIDENCE_CHANGED", `Task result evidence hash does not match: ${reference.path}`);
+  }
+  let artifact;
+  try {
+    artifact = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    fail2("WORK_ITEM_RESULT_EVIDENCE_INVALID", "Task result evidence must be valid JSON");
+  }
+  if (!validTaskResultArtifact(artifact, expected)) {
+    fail2("WORK_ITEM_RESULT_EVIDENCE_INVALID", "Task result evidence does not match the active operation");
+  }
+  return { reference, artifact };
+}
+function validTaskResultArtifact(value, { id, operationId, status }) {
+  return value && typeof value === "object" && !Array.isArray(value) && value.schemaVersion === 1 && value.kind === "TASK_RESULT" && value.taskId === id && value.operationId === operationId && value.status === status && nonEmptyString(value.summary) && Array.isArray(value.changedFiles) && value.changedFiles.every(nonEmptyString) && Array.isArray(value.tests) && value.tests.every((test) => test && typeof test === "object" && Array.isArray(test.argv) && test.argv.every(nonEmptyString) && Number.isInteger(test.exitCode)) && Array.isArray(value.blockers);
+}
+function validGateArtifact(value, entry, definition) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || value.schemaVersion !== 1 || value.kind !== "WORK_ITEM_GATE" || value.workItemId !== entry.id || value.baselineFingerprint !== entry.baselineFingerprint || !["PASS", "FAIL"].includes(value.verdict) || !nonEmptyString(value.summary) || !value.scope || typeof value.scope !== "object" || Array.isArray(value.scope) || !Array.isArray(value.scope.changedFiles) || !value.scope.changedFiles.every(nonEmptyString) || !Array.isArray(value.scope.outOfScopeFiles) || !value.scope.outOfScopeFiles.every(nonEmptyString) || !Array.isArray(value.acceptance) || !Array.isArray(value.tests) || !value.findings || typeof value.findings !== "object" || Array.isArray(value.findings) || !Array.isArray(value.findings.p0) || !Array.isArray(value.findings.p1) || !Array.isArray(value.findings.p2)) return false;
+  const acceptanceById = new Map(value.acceptance.map((result) => [result?.id, result]));
+  const testsByArgv = new Map(value.tests.map((result) => [canonicalJson(result?.argv), result]));
+  const acceptanceComplete = definition.acceptance.every(({ id }) => {
+    const result = acceptanceById.get(id);
+    return result && ["PASS", "FAIL"].includes(result.status) && nonEmptyString(result.evidence);
+  });
+  const testsComplete = definition.testCommands.every((argv) => {
+    const result = testsByArgv.get(canonicalJson(argv));
+    return result && Number.isInteger(result.exitCode) && nonEmptyString(result.summary) && (result.testsRun === void 0 || Number.isInteger(result.testsRun) && result.testsRun >= 0);
+  });
+  if (!acceptanceComplete || !testsComplete) return false;
+  if (value.verdict === "PASS") {
+    return value.scope.outOfScopeFiles.length === 0 && definition.acceptance.every(({ id }) => acceptanceById.get(id).status === "PASS") && definition.testCommands.every((argv) => testsByArgv.get(canonicalJson(argv)).exitCode === 0) && value.findings.p0.length === 0 && value.findings.p1.length === 0;
+  }
+  return true;
+}
+function reportStatus(entry) {
+  const acceptance = entry.acceptance ?? (entry.parentId === null ? entry.delivery : null);
+  if (acceptance && acceptance.status !== "NOT_READY") return acceptance.status;
+  if (entry.status === "IMPLEMENTED") return "WAITING_FOR_GATE";
+  if (entry.status === "BLOCKED") return "BLOCKED";
+  if (entry.status === "VERIFIED") return "VERIFIED";
+  return "NOT_READY";
+}
+function reportStatusText(status) {
+  return {
+    NOT_READY: "\u5C1A\u672A\u5C31\u7EEA",
+    WAITING_FOR_GATE: "\u7B49\u5F85\u95E8\u7981\u9A8C\u6536",
+    BLOCKED: "\u5DF2\u963B\u65AD",
+    VERIFIED: "\u95E8\u7981\u5DF2\u901A\u8FC7",
+    WAITING_FOR_INDEPENDENT_REVIEW: "\u7B49\u5F85\u72EC\u7ACB\u9A8C\u6536",
+    WAITING_FOR_USER_CONFIRMATION: "\u7B49\u5F85\u7528\u6237\u786E\u8BA4",
+    COMPLETED: "\u5DF2\u5B8C\u6210"
+  }[status] ?? status;
+}
+function gateStatusText(status) {
+  return { NOT_RUN: "\u672A\u8FD0\u884C", PASS: "\u901A\u8FC7", FAIL: "\u672A\u901A\u8FC7" }[status] ?? status;
+}
+function renderAcceptanceReport(report) {
+  const gateArtifact = report.gate.artifact;
+  const lines = [
+    `# \u9A8C\u6536\u62A5\u544A\uFF1A${report.workItem.title}`,
+    "",
+    `- \u5DE5\u4F5C\u9879\uFF1A${report.workItem.id}`,
+    `- \u7C7B\u578B\uFF1A${report.workItem.kind}`,
+    `- \u95E8\u7981\u7B49\u7EA7\uFF1A${report.workItem.gateLevel}`,
+    `- \u57FA\u7EBF\u6307\u7EB9\uFF1A${report.workItem.baselineFingerprint}`,
+    `- \u6700\u7EC8\u72B6\u6001\uFF1A${reportStatusText(report.status)}`,
+    `- \u95E8\u7981\u7ED3\u8BBA\uFF1A${gateStatusText(report.gate.status)}`,
+    `- \u751F\u6210\u65F6\u95F4\uFF1A${report.generatedAt}`,
+    "",
+    "## \u9A8C\u6536\u9879",
+    "",
+    "| \u7F16\u53F7 | \u9884\u671F\u7ED3\u679C | \u7ED3\u8BBA | \u8BC1\u636E |",
+    "| --- | --- | --- | --- |"
+  ];
+  const results = new Map((gateArtifact?.acceptance ?? []).map((item) => [item.id, item]));
+  for (const item of report.criteria) {
+    const result = results.get(item.id);
+    lines.push(`| ${item.id} | ${item.expectedResult} | ${result ? gateStatusText(result.status) : "\u5F85\u9A8C\u6536"} | ${result?.evidence ?? "\u65E0"} |`);
+  }
+  lines.push("", "## \u6D4B\u8BD5\u7ED3\u679C", "");
+  const tests = gateArtifact?.tests ?? report.development?.artifact?.tests ?? [];
+  if (tests.length === 0) lines.push("- \u5C1A\u65E0\u6D4B\u8BD5\u8BC1\u636E\u3002");
+  for (const result of tests) {
+    lines.push(`- \`${JSON.stringify(result.argv)}\`\uFF1A\u9000\u51FA\u7801 ${result.exitCode}\uFF1B${result.summary ?? `Tests run: ${result.testsRun ?? "\u672A\u8BB0\u5F55"}`}`);
+  }
+  lines.push("", "## \u53D8\u66F4\u8303\u56F4", "");
+  const scope = gateArtifact?.scope;
+  lines.push(`- \u5DF2\u8BB0\u5F55\u53D8\u66F4\uFF1A${scope?.changedFiles?.join("\u3001") || report.development?.artifact?.changedFiles?.join("\u3001") || "\u65E0"}`);
+  lines.push(`- \u8303\u56F4\u5916\u53D8\u66F4\uFF1A${scope?.outOfScopeFiles?.join("\u3001") || "\u65E0"}`);
+  lines.push("", "## \u95EE\u9898\u4E0E\u5EFA\u8BAE", "");
+  const findings = gateArtifact?.findings;
+  lines.push(`- P0\uFF1A${findings?.p0?.length ?? 0}`);
+  lines.push(`- P1\uFF1A${findings?.p1?.length ?? 0}`);
+  lines.push(`- P2\uFF1A${findings?.p2?.length ?? 0}`);
+  lines.push("", "## \u72EC\u7ACB\u9A8C\u6536", "");
+  lines.push(report.review ? `- ${report.review.artifact.reviewer}\uFF1A${report.review.artifact.verdict}` : "- \u5C1A\u672A\u5B8C\u6210\u3002");
+  lines.push("", "## \u7528\u6237\u786E\u8BA4", "");
+  lines.push(report.userConfirmation ? `- ${report.userConfirmation.artifact.confirmedBy}\uFF1A\u5DF2\u786E\u8BA4` : "- \u5C1A\u672A\u786E\u8BA4\u3002");
+  lines.push("");
+  return lines.join("\n");
+}
+async function writeAcceptanceReport(root, entry, definition, at, fs) {
+  const acceptance = entry.acceptance ?? (entry.parentId === null ? entry.delivery : null);
+  const status = reportStatus(entry);
+  const report = {
+    schemaVersion: 1,
+    workItem: {
+      id: entry.id,
+      title: definition.title,
+      kind: entry.kind,
+      gateLevel: entry.gateLevel,
+      baselineFingerprint: entry.baselineFingerprint,
+      parentId: entry.parentId
+    },
+    status,
+    development: entry.latestResult,
+    gate: entry.gate,
+    criteria: definition.acceptance,
+    review: acceptance?.review ?? null,
+    userConfirmation: acceptance?.userConfirmation ?? null,
+    generatedAt: at
+  };
+  const directory = itemPath(root, entry.id);
+  await atomicWriteFile(path3.join(directory, "acceptance-report.json"), json(report), { fs });
+  await atomicWriteFile(path3.join(directory, "acceptance-report.md"), renderAcceptanceReport(report), { fs });
+  entry.acceptanceReport = {
+    schemaVersion: 1,
+    status,
+    jsonPath: path3.posix.join(GOVERNANCE_DIRECTORY, WORK_ITEMS_DIRECTORY, entry.id, "acceptance-report.json"),
+    markdownPath: path3.posix.join(GOVERNANCE_DIRECTORY, WORK_ITEMS_DIRECTORY, entry.id, "acceptance-report.md"),
+    generatedAt: at
+  };
+  return report;
+}
 async function verifiedDeliveryEvidence(root, evidence, action, fs) {
   const reference = evidenceRecord(evidence);
   let bytes;
@@ -2457,6 +2920,7 @@ async function recordTaskResult({
   operationId,
   status,
   evidence,
+  strictEvidence = false,
   explicitDogfood = false,
   now,
   fs = fsPromises2
@@ -2469,28 +2933,63 @@ async function recordTaskResult({
     if (entry.kind !== "TASK" || entry.status !== "CLAIMED" || entry.claim?.operationId !== operationId) {
       fail2("WORK_ITEM_OPERATION_INVALID", `${id} does not have the supplied active operation`);
     }
+    const own = await assertCurrentLineage(root, registry, entry, fs);
+    const verifiedEvidence = await optionalTaskResultArtifact(
+      root,
+      evidence,
+      { id, operationId, status },
+      fs,
+      strictEvidence
+    );
     entry.status = status;
     entry.claim = null;
-    entry.latestEvidence = evidenceRecord(evidence);
+    entry.latestEvidence = verifiedEvidence.reference;
+    entry.latestResult = {
+      evidence: verifiedEvidence.reference,
+      artifact: verifiedEvidence.artifact,
+      recordedAt: at
+    };
     entry.recordRevision += 1;
     entry.updatedAt = at;
     registry.revision += 1;
     registry.updatedAt = at;
+    await writeAcceptanceReport(root, entry, own.definition, at, fs);
     await writeRegistryUnlocked(root, registry, fs);
-    return { id, status };
+    return { id, status, acceptanceReport: entry.acceptanceReport };
   }, { now });
 }
 function allChildrenVerified(registry, entry, definition) {
   const actual = new Map(registry.workItems.filter(({ parentId }) => parentId === entry.id).map((item) => [item.id, item]));
   return definition.children.length > 0 && definition.children.every(({ id }) => actual.get(id)?.status === "VERIFIED");
 }
-async function recordWorkItemGate({ root, id, status, evidence, explicitDogfood = false, now, fs = fsPromises2 } = {}) {
+async function recordWorkItemGate({
+  root,
+  id,
+  status,
+  evidence,
+  gateArtifact = null,
+  strictEvidence = false,
+  explicitDogfood = false,
+  now,
+  fs = fsPromises2
+} = {}) {
   await assertSelfHostingDogfood(root, explicitDogfood, fs);
   if (!["PASS", "FAIL"].includes(status)) fail2("WORK_ITEM_GATE_INVALID", "Gate status must be PASS or FAIL");
   const at = timestamp(now);
   return withRegistry(root, fs, async (registry) => {
     const entry = itemById(registry, id);
     const taskPackage = await assertCurrentLineage(root, registry, entry, fs);
+    let verifiedGate = null;
+    if (strictEvidence) {
+      verifiedGate = await readEvidenceArtifact(root, evidence, fs, {
+        missingCode: "WORK_ITEM_GATE_EVIDENCE_MISSING",
+        changedCode: "WORK_ITEM_GATE_EVIDENCE_CHANGED",
+        invalidCode: "WORK_ITEM_GATE_EVIDENCE_INVALID"
+      });
+      if (!validGateArtifact(verifiedGate.artifact, entry, taskPackage.definition) || verifiedGate.artifact.verdict !== status || gateArtifact && canonicalJson(gateArtifact) !== canonicalJson(verifiedGate.artifact)) {
+        fail2("WORK_ITEM_GATE_EVIDENCE_INVALID", "Gate evidence does not prove the requested result");
+      }
+    }
     if (entry.status === "BLOCKED") {
       fail2("WORK_ITEM_RETRY_REQUIRED", `${id} must be explicitly retried before its gate can run again`);
     }
@@ -2510,26 +3009,75 @@ async function recordWorkItemGate({ root, id, status, evidence, explicitDogfood 
         }
       }
     }
-    entry.gate = { status, evidence: evidenceRecord(evidence) };
+    entry.gate = {
+      status,
+      evidence: verifiedGate?.reference ?? evidenceRecord(evidence),
+      artifact: verifiedGate?.artifact ?? gateArtifact
+    };
     entry.status = status === "PASS" ? "VERIFIED" : "BLOCKED";
+    if (entry.parentId === null) {
+      entry.acceptance = status === "PASS" ? { status: "WAITING_FOR_INDEPENDENT_REVIEW", review: null, userConfirmation: null } : { status: "NOT_READY", review: null, userConfirmation: null };
+    }
     if (entry.kind === "DELIVERY") {
-      entry.delivery = status === "PASS" ? { status: "WAITING_FOR_INDEPENDENT_REVIEW", review: null, userConfirmation: null } : { status: "NOT_READY", review: null, userConfirmation: null };
+      entry.delivery = entry.acceptance;
     }
     entry.latestEvidence = entry.gate.evidence;
     entry.recordRevision += 1;
     entry.updatedAt = at;
-    registry.currentFocus = { workItemId: id, purpose: status === "PASS" ? "AGGREGATION" : "BLOCKER" };
+    registry.currentFocus = {
+      workItemId: id,
+      purpose: status === "PASS" && entry.parentId === null ? "INDEPENDENT_REVIEW" : status === "PASS" ? "AGGREGATION" : "BLOCKER"
+    };
     registry.revision += 1;
     registry.updatedAt = at;
+    await writeAcceptanceReport(root, entry, taskPackage.definition, at, fs);
     await writeRegistryUnlocked(root, registry, fs);
-    return { id, status: entry.status, gate: entry.gate };
+    return {
+      id,
+      status: entry.status,
+      gate: entry.gate,
+      acceptance: entry.acceptance,
+      acceptanceReport: entry.acceptanceReport
+    };
   }, { now });
 }
-async function recordDelivery({
+async function acceptWorkItem({
+  root,
+  id,
+  evidence,
+  explicitDogfood = false,
+  now,
+  fs = fsPromises2
+} = {}) {
+  const registry = await readRegistryUnlocked(root, fs);
+  const entry = itemById(registry, id);
+  const own = await assertCurrentLineage(root, registry, entry, fs);
+  const verified = await readEvidenceArtifact(root, evidence, fs, {
+    missingCode: "WORK_ITEM_GATE_EVIDENCE_MISSING",
+    changedCode: "WORK_ITEM_GATE_EVIDENCE_CHANGED",
+    invalidCode: "WORK_ITEM_GATE_EVIDENCE_INVALID"
+  });
+  if (!validGateArtifact(verified.artifact, entry, own.definition)) {
+    fail2("WORK_ITEM_GATE_EVIDENCE_INVALID", "Gate evidence is incomplete or contradicts the requested verdict");
+  }
+  return recordWorkItemGate({
+    root,
+    id,
+    status: verified.artifact.verdict,
+    evidence: verified.reference,
+    gateArtifact: verified.artifact,
+    strictEvidence: true,
+    explicitDogfood,
+    now,
+    fs
+  });
+}
+async function recordRootAcceptance({
   root,
   id,
   action,
   evidence,
+  deliveryOnly = false,
   explicitDogfood = false,
   now,
   fs = fsPromises2
@@ -2541,26 +3089,35 @@ async function recordDelivery({
   const at = timestamp(now);
   return withRegistry(root, fs, async (registry) => {
     const entry = itemById(registry, id);
-    if (entry.kind !== "DELIVERY" || entry.status !== "VERIFIED") {
-      fail2("WORK_ITEM_DELIVERY_INVALID", "Only a verified Delivery can advance delivery");
+    if (entry.parentId !== null || entry.status !== "VERIFIED" || deliveryOnly && entry.kind !== "DELIVERY") {
+      fail2(
+        deliveryOnly ? "WORK_ITEM_DELIVERY_INVALID" : "WORK_ITEM_ACCEPTANCE_INVALID",
+        "Only a verified root work item can advance final acceptance"
+      );
     }
-    await assertCurrentLineage(root, registry, entry, fs);
-    entry.delivery ??= {
+    const own = await assertCurrentLineage(root, registry, entry, fs);
+    entry.acceptance ??= entry.delivery ?? {
       status: "WAITING_FOR_INDEPENDENT_REVIEW",
       review: null,
       userConfirmation: null
     };
     if (action === "USER_CONFIRMED") {
-      if (entry.delivery.status !== "WAITING_FOR_USER_CONFIRMATION") {
-        fail2("WORK_ITEM_DELIVERY_STAGE_INVALID", "User confirmation requires a passed independent or accepted human review");
+      if (entry.acceptance.status !== "WAITING_FOR_USER_CONFIRMATION") {
+        fail2(
+          deliveryOnly ? "WORK_ITEM_DELIVERY_STAGE_INVALID" : "WORK_ITEM_ACCEPTANCE_STAGE_INVALID",
+          "User confirmation requires a passed independent or accepted human review"
+        );
       }
       const verifiedEvidence = await verifiedDeliveryEvidence(root, evidence, action, fs);
-      const reviewEvidence = entry.delivery.review.evidence;
+      const reviewEvidence = entry.acceptance.review.evidence;
       if (reviewEvidence.path === verifiedEvidence.reference.path || reviewEvidence.sha256 === verifiedEvidence.reference.sha256) {
-        fail2("WORK_ITEM_DELIVERY_EVIDENCE_REUSED", "User confirmation evidence must be distinct from review evidence");
+        fail2(
+          deliveryOnly ? "WORK_ITEM_DELIVERY_EVIDENCE_REUSED" : "WORK_ITEM_ACCEPTANCE_EVIDENCE_REUSED",
+          "User confirmation evidence must be distinct from review evidence"
+        );
       }
-      entry.delivery = {
-        ...entry.delivery,
+      entry.acceptance = {
+        ...entry.acceptance,
         status: "COMPLETED",
         userConfirmation: {
           action,
@@ -2570,12 +3127,15 @@ async function recordDelivery({
         }
       };
     } else {
-      if (entry.delivery.status !== "WAITING_FOR_INDEPENDENT_REVIEW") {
-        fail2("WORK_ITEM_DELIVERY_STAGE_INVALID", "Delivery is not waiting for independent review");
+      if (entry.acceptance.status !== "WAITING_FOR_INDEPENDENT_REVIEW") {
+        fail2(
+          deliveryOnly ? "WORK_ITEM_DELIVERY_STAGE_INVALID" : "WORK_ITEM_ACCEPTANCE_STAGE_INVALID",
+          "Work item is not waiting for independent review"
+        );
       }
       const verifiedEvidence = await verifiedDeliveryEvidence(root, evidence, action, fs);
-      entry.delivery = {
-        ...entry.delivery,
+      entry.acceptance = {
+        ...entry.acceptance,
         status: "WAITING_FOR_USER_CONFIRMATION",
         review: {
           action,
@@ -2585,18 +3145,32 @@ async function recordDelivery({
         }
       };
     }
-    entry.latestEvidence = action === "USER_CONFIRMED" ? entry.delivery.userConfirmation.evidence : entry.delivery.review.evidence;
+    if (entry.kind === "DELIVERY") entry.delivery = entry.acceptance;
+    entry.latestEvidence = action === "USER_CONFIRMED" ? entry.acceptance.userConfirmation.evidence : entry.acceptance.review.evidence;
     entry.recordRevision += 1;
     entry.updatedAt = at;
     registry.currentFocus = {
       workItemId: id,
-      purpose: entry.delivery.status === "COMPLETED" ? "DELIVERY_COMPLETE" : "USER_CONFIRMATION"
+      purpose: entry.acceptance.status === "COMPLETED" ? "ACCEPTANCE_COMPLETE" : "USER_CONFIRMATION"
     };
     registry.revision += 1;
     registry.updatedAt = at;
+    await writeAcceptanceReport(root, entry, own.definition, at, fs);
     await writeRegistryUnlocked(root, registry, fs);
-    return { id, action, delivery: entry.delivery };
+    return {
+      id,
+      action,
+      acceptance: entry.acceptance,
+      delivery: entry.kind === "DELIVERY" ? entry.delivery : null,
+      acceptanceReport: entry.acceptanceReport
+    };
   }, { now });
+}
+async function recordAcceptance(options = {}) {
+  return recordRootAcceptance(options);
+}
+async function recordDelivery(options = {}) {
+  return recordRootAcceptance({ ...options, deliveryOnly: true });
 }
 function parentContractSnapshot(parent, childId) {
   const child = parent.children.find(({ id }) => id === childId);
@@ -2610,24 +3184,43 @@ function parentContractSnapshot(parent, childId) {
   };
 }
 function renderTaskHandoff(context) {
+  const resultTemplate = {
+    schemaVersion: 1,
+    kind: "TASK_RESULT",
+    taskId: context.task.id,
+    operationId: context.operation?.operationId ?? "<claim-required>",
+    status: "IMPLEMENTED|BLOCKED",
+    summary: "<development facts>",
+    changedFiles: [],
+    tests: [{ argv: ["<exact frozen argv>"], exitCode: 0, testsRun: 0 }],
+    blockers: []
+  };
   return [
-    "Implement the following frozen Task in a fresh development conversation.",
+    "\u8BF7\u5728\u4E00\u4E2A\u5168\u65B0\u7684\u5F00\u53D1\u4F1A\u8BDD\u4E2D\u5B9E\u73B0\u4EE5\u4E0B\u5DF2\u51BB\u7ED3 Task\u3002",
     "",
-    `Task: ${context.task.id}`,
-    `Baseline fingerprint: ${context.task.baselineFingerprint}`,
-    `Gate level: ${context.gateLevel}`,
-    `Development mode: ${context.developmentMode}`,
+    `Task\uFF1A${context.task.id}`,
+    `Baseline fingerprint\uFF1A${context.task.baselineFingerprint}`,
+    `Gate level\uFF1A${context.gateLevel}`,
+    `Development mode\uFF1A${context.developmentMode}`,
+    `Operation ID\uFF1A${context.operation?.operationId ?? "\u5C1A\u672A\u8BA4\u9886\uFF1B\u4E0D\u5F97\u5F00\u59CB\u5F00\u53D1"}`,
     "",
-    "Use the embedded frozen context as the complete authority. Do not reanalyze the original request, change requirements, or inherit assumptions from another conversation.",
+    "\u4EE5\u4E0B\u51BB\u7ED3\u4E0A\u4E0B\u6587\u662F\u5B8C\u6574\u6743\u5A01\u3002\u4E0D\u8981\u91CD\u65B0\u5206\u6790\u539F\u59CB\u9700\u6C42\u3001\u6539\u53D8\u9A8C\u6536\u6807\u51C6\u6216\u7EE7\u627F\u5176\u4ED6\u4F1A\u8BDD\u7684\u9690\u542B\u5047\u8BBE\u3002",
     "",
-    "Execution rules:",
-    "- Implement only this frozen leaf Task and write only within its scope.",
-    "- Do not modify governance artifacts, `.git/**`, or external state.",
-    "- Run the listed test commands and report only evidence that actually exists.",
-    "- Do not commit, push, publish, or report PASS.",
-    "- Return exactly one of IMPLEMENTED or BLOCKED.",
+    "\u6267\u884C\u89C4\u5219\uFF1A",
+    "- \u53EA\u5B9E\u73B0\u8FD9\u4E2A\u51BB\u7ED3\u7684\u53F6\u5B50 Task\uFF0C\u5E76\u4E14\u53EA\u5199\u5165 Scope \u4E2D\u7684\u8DEF\u5F84\u3002",
+    "- \u4E0D\u4FEE\u6539 baseline\u3001registry\u3001\u8FDB\u5EA6\u6295\u5F71\u3001`.git/**` \u6216\u5916\u90E8\u72B6\u6001\u3002",
+    "- \u8FD0\u884C\u5217\u51FA\u7684\u6D4B\u8BD5\u547D\u4EE4\uFF0C\u53EA\u62A5\u544A\u771F\u5B9E\u5B58\u5728\u7684\u8BC1\u636E\u3002",
+    "- \u4E0D\u63D0\u4EA4\u3001\u63A8\u9001\u3001\u53D1\u5E03\uFF0C\u4E5F\u4E0D\u5F97\u81EA\u884C\u62A5\u544A PASS\u3002",
+    "- \u6700\u7EC8\u53EA\u8FD4\u56DE IMPLEMENTED \u6216 BLOCKED\uFF0C\u5E76\u643A\u5E26\u5F53\u524D Operation ID\u3001\u53D8\u66F4\u6587\u4EF6\u548C\u6D4B\u8BD5\u4E8B\u5B9E\u3002",
+    "- \u5BBF\u4E3B\u5FC5\u987B\u7528 task-result \u56DE\u6536\u7ED3\u679C\uFF1B\u8FD4\u56DE\u5F00\u53D1\u7ED3\u679C\u540E\u5FC5\u987B\u7EE7\u7EED\u9A8C\u6536\uFF0CIMPLEMENTED \u4E0D\u662F\u5B8C\u6210\u72B6\u6001\u3002",
+    "- \u95E8\u7981\u901A\u8FC7\u540E\u4ECD\u9700\u72EC\u7ACB\u9A8C\u6536\u3001\u751F\u6210\u7528\u6237\u9A8C\u6536\u62A5\u544A\u5E76\u53D6\u5F97\u7528\u6237\u786E\u8BA4\u3002",
     "",
-    "Frozen context:",
+    "\u7ED3\u679C\u8FD4\u56DE\u683C\u5F0F\uFF08\u7531\u6CBB\u7406\u5BBF\u4E3B\u4FDD\u5B58\u4E3A evidence\uFF0C\u5E76\u7528\u76F8\u540C Operation ID \u6267\u884C task-result\uFF09\uFF1A",
+    "```json",
+    JSON.stringify(resultTemplate, null, 2),
+    "```",
+    "",
+    "\u51BB\u7ED3\u4E0A\u4E0B\u6587\uFF1A",
     "```json",
     JSON.stringify(context, null, 2),
     "```",
@@ -2690,6 +3283,11 @@ async function buildTaskContext({ root, id, explicitDogfood = false, fs = fsProm
     schemaVersion: 1,
     gateLevel: own.definition.gateLevel,
     developmentMode: entry.developmentMode.mode,
+    operation: entry.claim ? {
+      owner: entry.claim.owner,
+      operationId: entry.claim.operationId,
+      claimedAt: entry.claim.claimedAt
+    } : null,
     task: {
       id: own.definition.id,
       title: own.definition.title,
@@ -2714,6 +3312,28 @@ async function buildTaskContext({ root, id, explicitDogfood = false, fs = fsProm
   await atomicWriteFile(path3.join(own.target, "context-manifest.json"), json(context), { fs });
   await atomicWriteFile(path3.join(own.target, "development-handoff.md"), handoffPrompt, { fs });
   return { ...context, handoffPrompt };
+}
+async function dispatchTask({
+  root,
+  id,
+  owner,
+  operationId,
+  explicitDogfood = false,
+  now,
+  fs = fsPromises2
+} = {}) {
+  await buildTaskContext({ root, id, explicitDogfood, fs });
+  const claim = await claimTask({
+    root,
+    id,
+    owner,
+    operationId,
+    explicitDogfood,
+    now,
+    fs
+  });
+  const context = await buildTaskContext({ root, id, explicitDogfood, fs });
+  return { ...claim, ...context };
 }
 
 // src/cli/output.mjs
@@ -2742,11 +3362,16 @@ var HIERARCHICAL_COMMANDS = Object.freeze([
   "select-development-mode",
   "ready-tasks",
   "task-context",
+  "dispatch-task",
   "claim-task",
   "task-result",
   "retry-item",
   "gate-item",
-  "delivery-item"
+  "accept-item",
+  "acceptance-item",
+  "delivery-item",
+  "refresh-projections",
+  "upgrade-registry"
 ]);
 var VALUE_OPTIONS = /* @__PURE__ */ new Set([
   "--definition",
@@ -2760,7 +3385,8 @@ var VALUE_OPTIONS = /* @__PURE__ */ new Set([
   "--expected-baseline",
   "--expected-parent-baseline",
   "--action",
-  "--development-mode"
+  "--development-mode",
+  "--task-gate-level"
 ]);
 var FLAG_OPTIONS = /* @__PURE__ */ new Set(["--json", "--help", "--confirmed", "--dogfood"]);
 var COMMAND_OPTIONS = Object.freeze({
@@ -2797,10 +3423,15 @@ var COMMAND_OPTIONS = Object.freeze({
     "--dogfood"
   ]),
   "claim-task": /* @__PURE__ */ new Set(["--json", "--help", "--item", "--owner", "--operation", "--dogfood"]),
+  "dispatch-task": /* @__PURE__ */ new Set(["--json", "--help", "--item", "--owner", "--operation", "--dogfood"]),
   "task-result": /* @__PURE__ */ new Set(["--json", "--help", "--item", "--operation", "--status", "--evidence", "--dogfood"]),
   "retry-item": /* @__PURE__ */ new Set(["--json", "--help", "--item", "--expected-baseline", "--confirmed", "--dogfood"]),
   "gate-item": /* @__PURE__ */ new Set(["--json", "--help", "--item", "--status", "--evidence", "--dogfood"]),
-  "delivery-item": /* @__PURE__ */ new Set(["--json", "--help", "--item", "--action", "--evidence", "--dogfood"])
+  "accept-item": /* @__PURE__ */ new Set(["--json", "--help", "--item", "--evidence", "--dogfood"]),
+  "acceptance-item": /* @__PURE__ */ new Set(["--json", "--help", "--item", "--action", "--evidence", "--dogfood"]),
+  "delivery-item": /* @__PURE__ */ new Set(["--json", "--help", "--item", "--action", "--evidence", "--dogfood"]),
+  "refresh-projections": /* @__PURE__ */ new Set(["--json", "--help", "--dogfood"]),
+  "upgrade-registry": /* @__PURE__ */ new Set(["--json", "--help", "--task-gate-level", "--confirmed", "--dogfood"])
 });
 var usage = `Usage: hdg <command> [options]
 
@@ -2815,11 +3446,16 @@ ${HIERARCHICAL_COMMANDS.map((command) => `  ${command}`).join("\n")}
   select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
   ready-tasks --item <root-or-subtree-id>
   task-context --item <task-id>
+  dispatch-task --item <task-id> --owner <owner> --operation <id>
   claim-task --item <task-id> --owner <owner> --operation <id>
   task-result --item <task-id> --operation <id> --status IMPLEMENTED|BLOCKED --evidence <file>
   retry-item --item <id> --expected-baseline <sha256> --confirmed
   gate-item --item <id> --status PASS|FAIL --evidence <file>
+  accept-item --item <id> --evidence <file>
+  acceptance-item --item <root-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file>
   delivery-item --item <delivery-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file>
+  refresh-projections
+  upgrade-registry --task-gate-level LIGHT|FULL --confirmed
 
 In the hierarchical-delivery-governance implementation repository, every command that writes control state also requires --dogfood.
 `;
@@ -2863,6 +3499,9 @@ function parse(argv) {
   }
   if (values["--development-mode"] !== void 0 && !["active", "manual"].includes(values["--development-mode"])) {
     throw new GatedLoopError("OPTION_VALUE_INVALID", "--development-mode must be active or manual");
+  }
+  if (values["--task-gate-level"] !== void 0 && !["LIGHT", "FULL"].includes(values["--task-gate-level"])) {
+    throw new GatedLoopError("OPTION_VALUE_INVALID", "--task-gate-level must be LIGHT or FULL");
   }
   return {
     command,
@@ -2976,11 +3615,29 @@ async function runWorkItemCommand(parsed, io) {
       operationId: required(parsed, "--operation")
     });
   }
+  if (parsed.command === "dispatch-task") {
+    return dispatchTask({
+      ...common,
+      id: required(parsed, "--item"),
+      owner: required(parsed, "--owner"),
+      operationId: required(parsed, "--operation")
+    });
+  }
   if (parsed.command === "retry-item") {
     return retryWorkItem({
       ...common,
       id: required(parsed, "--item"),
       expectedBaselineFingerprint: required(parsed, "--expected-baseline"),
+      confirmed: parsed.confirmed
+    });
+  }
+  if (parsed.command === "refresh-projections") {
+    return refreshWorkItemProjections(common);
+  }
+  if (parsed.command === "upgrade-registry") {
+    return upgradeWorkItemRegistry({
+      ...common,
+      taskGateLevel: required(parsed, "--task-gate-level"),
       confirmed: parsed.confirmed
     });
   }
@@ -2995,7 +3652,8 @@ async function runWorkItemCommand(parsed, io) {
       id: required(parsed, "--item"),
       operationId: required(parsed, "--operation"),
       status: required(parsed, "--status"),
-      evidence
+      evidence,
+      strictEvidence: true
     });
   }
   if (parsed.command === "delivery-item") {
@@ -3003,6 +3661,21 @@ async function runWorkItemCommand(parsed, io) {
       ...common,
       id: required(parsed, "--item"),
       action: required(parsed, "--action"),
+      evidence
+    });
+  }
+  if (parsed.command === "acceptance-item") {
+    return recordAcceptance({
+      ...common,
+      id: required(parsed, "--item"),
+      action: required(parsed, "--action"),
+      evidence
+    });
+  }
+  if (parsed.command === "accept-item") {
+    return acceptWorkItem({
+      ...common,
+      id: required(parsed, "--item"),
       evidence
     });
   }

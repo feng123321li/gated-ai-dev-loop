@@ -2,27 +2,39 @@
 
 ## Task gate
 
-Task 只有在状态为 IMPLEMENTED 时可运行 gate。宿主验证：
+Task 只有在状态为 IMPLEMENTED 时可运行 gate。`task-result` 写回后，控制器立即生成状态为“等待门禁验收”的 `acceptance-report.json/md`；宿主不能在此状态结束工作。正常 gate 使用 `accept-item`，由控制器验证：
 
 - baseline 与实际存在的父链指纹；根 Task 无父链；
-- 真实 diff 归属和 scope；
-- 冻结测试 argv 与退出码；
-- 依赖输出与验收项；
-- 结构化 evidence 路径和摘要。
+- 真实 diff 归属和 Scope；
+- 冻结测试 argv、退出码和适用的 Tests run；
+- 依赖输出和全部验收项；
+- evidence 文件存在、SHA-256 匹配，且内容覆盖当前工作项和当前 baseline；
+- PASS evidence 中 Scope 外变更为空、全部测试退出码为 0、全部验收项为 PASS、P0/P1 为空。
 
-PASS 后 Task 为 VERIFIED；FAIL 后为 BLOCKED。任何 gate FAIL 后都必须用当前 baseline 指纹和显式确认执行 `retry-item`，回到 FROZEN 后才能重跑；开发 Agent 的结论不能替代 gate。
+PASS 后 Task 为 VERIFIED；FAIL 后为 BLOCKED，并把范围、测试、验收项和 findings 写入用户报告。任何 gate FAIL 后都必须用当前 baseline 指纹和显式确认执行 `retry-item`，回到 FROZEN 后才能重跑；开发 Agent 的结论不能替代 gate。`gate-item` 是旧记录恢复入口，不得作为正常 PASS 路径。
 
-根 Task 在此 gate PASS 后达到浅层根 VERIFIED；它不需要虚构 Capability gate。
+根 Task 在此 gate PASS 后达到浅层根 VERIFIED 并进入最终验收；它不需要虚构 Capability gate。
 
 ## Capability gate
 
 decomposition 为 SEALED 且所有计划 Task VERIFIED 后，运行 Capability 集成测试和该级契约检查。Capability 需要自己的 evidence；不能因为子 Task 全绿自动 PASS。
 
-根 Capability 在此 gate PASS 后达到浅层根 VERIFIED；需要独立审查、用户确认或跨 Capability 聚合责任时应使用 Delivery。
+根 Capability 在此 gate PASS 后达到浅层根 VERIFIED 并进入最终验收；不需要为了独立审查和用户确认而虚构 Delivery。
 
 ## Delivery gate
 
 decomposition 为 SEALED 且所有计划 Capability VERIFIED 后，运行跨能力、端到端、兼容、性能或发布前顶层交付测试。Delivery 也需要独立 evidence 和明确 PASS。Delivery gate PASS 后记录 `VERIFIED / WAITING_FOR_INDEPENDENT_REVIEW`；这不是最终交付完成。
+
+## 用户验收报告
+
+每个实际工作项都维护一份 `acceptance-report.json` 和面向用户的 `acceptance-report.md`：
+
+- Task result 后显示开发摘要、变更文件、开发侧测试事实和“等待门禁验收”；
+- gate 后显示基线、验收项逐条结论、测试 argv/退出码/Tests run、Scope 外变更、P0/P1/P2 和门禁结论；
+- 根工作项继续显示独立/人工审查结论与用户确认，直到最终状态为“已完成”；
+- 子工作项报告在该级 VERIFIED 后结束，不重复请求用户确认。
+
+报告是 registry 和 evidence 的可重建人类投影，不取代机器权威。`workspace-overview.md` 必须提供报告入口。
 
 ## 语义审查能力
 
@@ -32,9 +44,9 @@ decomposition 为 SEALED 且所有计划 Capability VERIFIED 后，运行跨能�
 2. 没有其他产品时使用全新、无开发上下文的只读子 Agent；
 3. 两者都不可用时生成清晰人工验收包，结论为 `NEED_HUMAN_REVIEW`。
 
-审查者只读取 baseline、context、真实 diff、测试和 evidence，不继承开发对话。隔离审查 PASS，或用户明确接受人工审查结果后，记录 `WAITING_FOR_USER_CONFIRMATION`；只有随后独立记录 `USER_CONFIRMED`，delivery 才进入 `COMPLETED`。审查 evidence 与用户确认 evidence 必须是两个不同的真实文件，CLI 提交相对路径与 SHA-256，宿主在写回前读取文件、复算 hash 并把结构化内容快照写入 registry；每次恢复 registry 也重新核对文件存在、hash、结构和快照。不能只提交 action 标签，也不能复用同一路径或内容。
+审查者只读取 baseline、context、真实 diff、测试和 evidence，不继承开发对话。隔离审查 PASS，或用户明确接受人工审查结果后，记录 `WAITING_FOR_USER_CONFIRMATION`；只有随后独立记录 `USER_CONFIRMED`，治理根才进入 `COMPLETED`。审查 evidence 与用户确认 evidence 必须是两个不同的真实文件，CLI 提交相对路径与 SHA-256，宿主在写回前读取文件、复算 hash 并把结构化内容快照写入 registry；每次恢复 registry 也重新核对文件存在、hash、结构和快照。不能只提交 action 标签，也不能复用同一路径或内容。
 
-交付 evidence 使用 schemaVersion 1 JSON：独立审查必须包含 `kind=INDEPENDENT_REVIEW`、非空 reviewer、`isolation=FRESH_READ_ONLY`、`verdict=PASS` 和 `findings.p0/p1=0`；人工审查必须包含 `kind=HUMAN_REVIEW`、非空 reviewer 与 `verdict=ACCEPTED`；用户确认必须包含 `kind=USER_CONFIRMATION`、非空 confirmedBy 与 `decision=CONFIRMED`。
+最终验收 evidence 使用 schemaVersion 1 JSON：独立审查必须包含 `kind=INDEPENDENT_REVIEW`、非空 reviewer、`isolation=FRESH_READ_ONLY`、`verdict=PASS` 和 `findings.p0/p1=0`；人工审查必须包含 `kind=HUMAN_REVIEW`、非空 reviewer 与 `verdict=ACCEPTED`；用户确认必须包含 `kind=USER_CONFIRMATION`、非空 confirmedBy 与 `decision=CONFIRMED`。
 
 ## 严重级别
 

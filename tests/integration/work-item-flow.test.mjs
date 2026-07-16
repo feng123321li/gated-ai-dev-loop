@@ -12,6 +12,7 @@ import {
   listReadyTasks,
   prepareWorkItem,
   readWorkItemRegistry,
+  recordAcceptance,
   recordTaskResult,
   recordDelivery,
   recordWorkItemGate,
@@ -266,8 +267,39 @@ test('a root Capability aggregates child Tasks without an invented Delivery', as
     status: 'PASS',
     evidence: { path: 'results/capability-gate.json', sha256: 'e'.repeat(64) },
   });
-  const registry = await readWorkItemRegistry({ root });
-  assert.equal(registry.workItems.find(({ id }) => id === capability.id).status, 'VERIFIED');
+  let registry = await readWorkItemRegistry({ root });
+  let rootCapability = registry.workItems.find(({ id }) => id === capability.id);
+  assert.equal(rootCapability.status, 'VERIFIED');
+  assert.equal(rootCapability.acceptance.status, 'WAITING_FOR_INDEPENDENT_REVIEW');
+  const reviewEvidence = await putDeliveryEvidence(root, 'root-capability-review.json', {
+    schemaVersion: 1,
+    kind: 'INDEPENDENT_REVIEW',
+    reviewer: 'fresh-capability-reviewer',
+    isolation: 'FRESH_READ_ONLY',
+    verdict: 'PASS',
+    findings: { p0: 0, p1: 0 },
+  });
+  await recordAcceptance({
+    root,
+    id: capability.id,
+    action: 'INDEPENDENT_REVIEW_PASS',
+    evidence: reviewEvidence,
+  });
+  const confirmationEvidence = await putDeliveryEvidence(root, 'root-capability-confirmation.json', {
+    schemaVersion: 1,
+    kind: 'USER_CONFIRMATION',
+    confirmedBy: 'capability-owner',
+    decision: 'CONFIRMED',
+  });
+  await recordAcceptance({
+    root,
+    id: capability.id,
+    action: 'USER_CONFIRMED',
+    evidence: confirmationEvidence,
+  });
+  registry = await readWorkItemRegistry({ root });
+  rootCapability = registry.workItems.find(({ id }) => id === capability.id);
+  assert.equal(rootCapability.acceptance.status, 'COMPLETED');
 });
 
 test('hierarchical work items freeze independent baselines and roll up only after child and aggregate gates', async (t) => {

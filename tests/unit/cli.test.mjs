@@ -4,10 +4,11 @@ import { readFile, readdir } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runCli } from '../../src/cli/main.mjs';
+import { runCli, runHierarchicalCli } from '../../src/cli/main.mjs';
 import { redact, renderJson } from '../../src/cli/output.mjs';
 
 async function invoke(argv) { const out = []; const err = []; const exitCode = await runCli(argv, { stdout: (s) => out.push(s), stderr: (s) => err.push(s) }); return { exitCode, out: out.join(''), err: err.join('') }; }
+async function invokeHierarchical(argv) { const out = []; const err = []; const exitCode = await runHierarchicalCli(argv, { stdout: (s) => out.push(s), stderr: (s) => err.push(s) }); return { exitCode, out: out.join(''), err: err.join('') }; }
 
 test('help lists only implemented commands', async () => {
   const result = await invoke(['--help']);
@@ -35,7 +36,7 @@ test('parser requires exactly one command and rejects separators and extra posit
 });
 
 test('option values are consumed positionally even when repeated elsewhere', async () => {
-  const result = await invoke(['freeze', '--task', 'status']);
+  const result = await invoke(['freeze', '--task', 'status', '--dogfood']);
   assert.match(result.err, /CONFIRMATION_REQUIRED/);
   assert.doesNotMatch(result.err, /DUPLICATE_OPTION|UNKNOWN_OPTION/);
 });
@@ -54,15 +55,19 @@ test('recursive redaction covers sensitive keys and streams', () => {
   assert.equal(renderJson({ ok: true }), '{"ok":true}\n');
 });
 
-test('package exposes only the gated-loop executable and matching template', async () => {
+test('package exposes only the hdg executable and rejects old workflow commands', async () => {
   const root = fileURLToPath(new URL('../..', import.meta.url));
   const manifest = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8'));
-  assert.equal(manifest.name, 'gated-ai-dev-loop');
-  assert.deepEqual(manifest.bin, { 'gated-loop': 'bin/gated-loop.mjs' });
-  assert.deepEqual(await readdir(path.join(root, 'bin')), ['gated-loop.mjs']);
-  assert.deepEqual(await readdir(path.join(root, 'templates')), ['gated-loop.yml']);
-  const smoke = spawnSync(process.execPath, [path.join(root, 'bin', 'gated-loop.mjs'), '--help'], { encoding: 'utf8' });
+  assert.equal(manifest.name, 'hierarchical-delivery-governance');
+  assert.deepEqual(manifest.bin, { hdg: 'bin/hdg.mjs' });
+  assert.deepEqual(await readdir(path.join(root, 'bin')), ['hdg.mjs']);
+  await assert.rejects(readdir(path.join(root, 'templates')), { code: 'ENOENT' });
+  for (const command of ['route', 'start', 'prepare', 'freeze', 'self-check', 'accept', 'retry-task']) {
+    assert.match((await invokeHierarchical([command])).err, /UNKNOWN_COMMAND/);
+  }
+  assert.match((await invokeHierarchical(['ready-tasks', '--project', 'd-example'])).err, /UNKNOWN_OPTION/);
+  const smoke = spawnSync(process.execPath, [path.join(root, 'bin', 'hdg.mjs'), '--help'], { encoding: 'utf8' });
   assert.equal(smoke.status, 0);
-  assert.match(smoke.stdout, /^Usage: gated-loop <command>/);
+  assert.match(smoke.stdout, /^Usage: hdg <command>/);
   assert.equal(smoke.stderr, '');
 });

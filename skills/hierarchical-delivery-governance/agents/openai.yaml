@@ -1,0 +1,6 @@
+interface:
+  display_name: "分层式 AI 交付治理"
+  short_description: "分级治理项目或大型模块的基线、上下文、协作与验收流程"
+  default_prompt: "使用 $hierarchical-delivery-governance 评估当前可交付工作，起草 Delivery→Capability→Task 层级和各级 baseline；在我明确批准具体 ID、内容及持久化或冻结动作前，不创建或冻结工作项。"
+policy:
+  allow_implicit_invocation: true

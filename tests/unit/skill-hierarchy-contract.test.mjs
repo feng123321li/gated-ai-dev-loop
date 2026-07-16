@@ -24,6 +24,9 @@ test('Skill defines one stable hierarchy and a non-keyword self-hosting boundary
   assert.doesNotMatch(skill, /gated-ai-dev-loop/);
   assert.match(skill, /\.hierarchical-delivery-governance/);
   assert.match(skill, /WAITING_FOR_INDEPENDENT_REVIEW/);
+  assert.match(skill, /WAITING_FOR_DEVELOPMENT_MODE_SELECTION/);
+  assert.match(skill, /development-mode\.json/);
+  assert.match(skill, /确认 baseline.*不能.*开发方式|baseline.*开发方式/);
   assert.match(skill, /retry-item/);
   assert.match(skill, /真实、hash 匹配、结构合法且不可复用的 evidence/);
 });

@@ -22,22 +22,23 @@ import {
   recordWorkItemGate,
   retryWorkItem,
   reviseWorkItem,
+  selectDevelopmentMode,
 } from '../work-items/runtime.mjs';
 
 export const COMMANDS = Object.freeze([
   'route', 'start', 'prepare', 'freeze', 'self-check', 'accept',
-  'prepare-item', 'freeze-item', 'revise-item', 'ready-tasks', 'task-context',
-  'claim-task', 'task-result', 'retry-item', 'gate-item', 'delivery-item',
+  'prepare-item', 'freeze-item', 'revise-item', 'select-development-mode', 'ready-tasks',
+  'task-context', 'claim-task', 'task-result', 'retry-item', 'gate-item', 'delivery-item',
 ]);
 export const HIERARCHICAL_COMMANDS = Object.freeze([
-  'prepare-item', 'freeze-item', 'revise-item', 'ready-tasks', 'task-context',
-  'claim-task', 'task-result', 'retry-item', 'gate-item', 'delivery-item',
+  'prepare-item', 'freeze-item', 'revise-item', 'select-development-mode', 'ready-tasks',
+  'task-context', 'claim-task', 'task-result', 'retry-item', 'gate-item', 'delivery-item',
 ]);
 const VALUE_OPTIONS = new Set([
   '--mode', '--signals', '--task', '--brief', '--host-runtime', '--baseline', '--source',
   '--round', '--snapshot', '--timeout-ms', '--reviewer', '--review-result',
   '--definition', '--item', '--delivery', '--owner', '--operation', '--status', '--evidence',
-  '--expected-baseline', '--action',
+  '--expected-baseline', '--action', '--development-mode',
 ]);
 const REPEATABLE_OPTIONS = new Set(['--source']);
 const FLAG_OPTIONS = new Set(['--json', '--help', '--confirmed', '--dogfood']);
@@ -52,13 +53,16 @@ const FREEZE_ITEM_OPTIONS = new Set(['--json', '--help', '--item', '--expected-b
 const REVISE_ITEM_OPTIONS = new Set(['--json', '--help', '--definition', '--expected-baseline', '--confirmed', '--dogfood']);
 const READY_TASKS_OPTIONS = new Set(['--json', '--help', '--delivery']);
 const TASK_CONTEXT_OPTIONS = new Set(['--json', '--help', '--item', '--dogfood']);
+const SELECT_DEVELOPMENT_MODE_OPTIONS = new Set([
+  '--json', '--help', '--item', '--development-mode', '--expected-baseline', '--confirmed', '--dogfood',
+]);
 const CLAIM_TASK_OPTIONS = new Set(['--json', '--help', '--item', '--owner', '--operation', '--dogfood']);
 const TASK_RESULT_OPTIONS = new Set(['--json', '--help', '--item', '--operation', '--status', '--evidence', '--dogfood']);
 const GATE_ITEM_OPTIONS = new Set(['--json', '--help', '--item', '--status', '--evidence', '--dogfood']);
 const RETRY_ITEM_OPTIONS = new Set(['--json', '--help', '--item', '--expected-baseline', '--confirmed', '--dogfood']);
 const DELIVERY_ITEM_OPTIONS = new Set(['--json', '--help', '--item', '--action', '--evidence', '--dogfood']);
-const help = `Usage: gated-loop <command> [options]\n\nCommands:\n${COMMANDS.map((command) => `  ${command}`).join('\n')}\n\nHierarchical work items:\n  prepare-item --definition <file> --host-runtime <agent>\n  freeze-item --item <id> --expected-baseline <sha256> --confirmed\n  revise-item --definition <file> --expected-baseline <sha256> --confirmed\n  ready-tasks --delivery <id>\n  task-context --item <id>\n  claim-task --item <id> --owner <owner> --operation <id>\n  task-result --item <id> --operation <id> --status IMPLEMENTED|BLOCKED --evidence <file>\n  retry-item --item <id> --expected-baseline <sha256> --confirmed\n  gate-item --item <id> --status PASS|FAIL --evidence <file>\n  delivery-item --item <delivery-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file>\n\nIn the implementation repository, add --dogfood to every hierarchical command that writes runtime state.\n\nGate commands:\n  self-check --task <id> [--round 1] [--snapshot <file>]\n  accept --task <id> [--round 1] [--reviewer human|auto|codex|claude]\n\nThe historical start/prepare/freeze commands are v1 compatibility surfaces.\nAcceptance defaults to human handling unless a host reviewer result or reviewer capability is supplied.\n`;
-const hierarchicalHelp = `Usage: hdg <command> [options]\n\nCommands:\n${HIERARCHICAL_COMMANDS.map((command) => `  ${command}`).join('\n')}\n\n  prepare-item --definition <file> --host-runtime <agent>\n  freeze-item --item <id> --expected-baseline <sha256> --confirmed\n  revise-item --definition <file> --expected-baseline <sha256> --confirmed\n  ready-tasks --delivery <id>\n  task-context --item <id>\n  claim-task --item <id> --owner <owner> --operation <id>\n  task-result --item <id> --operation <id> --status IMPLEMENTED|BLOCKED --evidence <file>\n  retry-item --item <id> --expected-baseline <sha256> --confirmed\n  gate-item --item <id> --status PASS|FAIL --evidence <file>\n  delivery-item --item <delivery-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file>\n\nIn the hierarchical-delivery-governance implementation repository, every command that writes control state also requires --dogfood.\n`;
+const help = `Usage: gated-loop <command> [options]\n\nCommands:\n${COMMANDS.map((command) => `  ${command}`).join('\n')}\n\nHierarchical work items:\n  prepare-item --definition <file> --host-runtime <agent>\n  freeze-item --item <id> --expected-baseline <sha256> --confirmed\n  revise-item --definition <file> --expected-baseline <sha256> --confirmed\n  select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed\n  ready-tasks --delivery <id>\n  task-context --item <id>\n  claim-task --item <id> --owner <owner> --operation <id>\n  task-result --item <id> --operation <id> --status IMPLEMENTED|BLOCKED --evidence <file>\n  retry-item --item <id> --expected-baseline <sha256> --confirmed\n  gate-item --item <id> --status PASS|FAIL --evidence <file>\n  delivery-item --item <delivery-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file>\n\nIn the implementation repository, add --dogfood to every hierarchical command that writes runtime state.\n\nGate commands:\n  self-check --task <id> [--round 1] [--snapshot <file>]\n  accept --task <id> [--round 1] [--reviewer human|auto|codex|claude]\n\nThe historical start/prepare/freeze commands are v1 compatibility surfaces.\nAcceptance defaults to human handling unless a host reviewer result or reviewer capability is supplied.\n`;
+const hierarchicalHelp = `Usage: hdg <command> [options]\n\nCommands:\n${HIERARCHICAL_COMMANDS.map((command) => `  ${command}`).join('\n')}\n\n  prepare-item --definition <file> --host-runtime <agent>\n  freeze-item --item <id> --expected-baseline <sha256> --confirmed\n  revise-item --definition <file> --expected-baseline <sha256> --confirmed\n  select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed\n  ready-tasks --delivery <id>\n  task-context --item <id>\n  claim-task --item <id> --owner <owner> --operation <id>\n  task-result --item <id> --operation <id> --status IMPLEMENTED|BLOCKED --evidence <file>\n  retry-item --item <id> --expected-baseline <sha256> --confirmed\n  gate-item --item <id> --status PASS|FAIL --evidence <file>\n  delivery-item --item <delivery-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file>\n\nIn the hierarchical-delivery-governance implementation repository, every command that writes control state also requires --dogfood.\n`;
 
 function parse(argv) {
   const seen = new Set();
@@ -89,6 +93,7 @@ function parse(argv) {
     'prepare-item': PREPARE_ITEM_OPTIONS, 'freeze-item': FREEZE_ITEM_OPTIONS,
     'revise-item': REVISE_ITEM_OPTIONS,
     'ready-tasks': READY_TASKS_OPTIONS, 'task-context': TASK_CONTEXT_OPTIONS,
+    'select-development-mode': SELECT_DEVELOPMENT_MODE_OPTIONS,
     'claim-task': CLAIM_TASK_OPTIONS, 'task-result': TASK_RESULT_OPTIONS,
     'retry-item': RETRY_ITEM_OPTIONS,
     'gate-item': GATE_ITEM_OPTIONS,
@@ -104,6 +109,10 @@ function parse(argv) {
   }
   if (values['--host-runtime'] !== undefined && !isAgentRuntime(values['--host-runtime'])) {
     throw new GatedLoopError('OPTION_VALUE_INVALID', '--host-runtime must be a safe lowercase Agent identifier');
+  }
+  if (values['--development-mode'] !== undefined
+      && !['active', 'manual'].includes(values['--development-mode'])) {
+    throw new GatedLoopError('OPTION_VALUE_INVALID', '--development-mode must be active or manual');
   }
   if (values['--reviewer'] !== undefined && !['human', 'auto', 'codex', 'claude'].includes(values['--reviewer'])) {
     throw new GatedLoopError('OPTION_VALUE_INVALID', '--reviewer must be human, auto, codex, or claude');
@@ -293,6 +302,15 @@ async function runWorkItemCommand(parsed, io) {
   if (parsed.command === 'task-context') {
     return buildTaskContext({ ...common, id: required(parsed, '--item') });
   }
+  if (parsed.command === 'select-development-mode') {
+    return selectDevelopmentMode({
+      ...common,
+      id: required(parsed, '--item'),
+      mode: required(parsed, '--development-mode'),
+      expectedBaselineFingerprint: required(parsed, '--expected-baseline'),
+      confirmed: parsed.confirmed,
+    });
+  }
   if (parsed.command === 'claim-task') {
     return claimTask({
       ...common,
@@ -365,7 +383,7 @@ export async function runCli(argv, io = {}) {
     }
     if ([
       'prepare-item', 'freeze-item', 'revise-item', 'ready-tasks', 'task-context',
-      'claim-task', 'task-result', 'retry-item', 'gate-item', 'delivery-item',
+      'select-development-mode', 'claim-task', 'task-result', 'retry-item', 'gate-item', 'delivery-item',
     ].includes(parsed.command)) {
       const result = await runWorkItemCommand(parsed, io);
       stdout(jsonOutput ? renderJson({ ok: true, result }) : renderJson(result));

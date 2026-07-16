@@ -17,6 +17,7 @@ import {
   recordWorkItemGate,
   retryWorkItem,
   reviseWorkItem,
+  selectDevelopmentMode,
 } from '../../src/work-items/runtime.mjs';
 import {
   capabilityDefinition,
@@ -53,6 +54,19 @@ async function prepareAndFreeze(root, definition) {
   });
 }
 
+async function selectMode(root, id, mode = 'active') {
+  const registry = await readWorkItemRegistry({ root });
+  const entry = registry.workItems.find((candidate) => candidate.id === id);
+  return selectDevelopmentMode({
+    root,
+    id,
+    mode,
+    expectedBaselineFingerprint: entry.baselineFingerprint,
+    confirmed: true,
+    now: () => '2026-07-16T00:01:30.000Z',
+  });
+}
+
 test('hierarchical work items freeze independent baselines and roll up only after child and aggregate gates', async (t) => {
   const root = await fixture(t);
   await prepareAndFreeze(root, deliveryDefinition());
@@ -60,7 +74,7 @@ test('hierarchical work items freeze independent baselines and roll up only afte
   await prepareAndFreeze(root, issueTaskDefinition());
   await prepareAndFreeze(root, verifyTaskDefinition());
 
-  const registry = await readWorkItemRegistry({ root });
+  let registry = await readWorkItemRegistry({ root });
   assert.equal(registry.schemaVersion, 2);
   assert.deepEqual(
     registry.workItems.map(({ id, kind, parentId }) => ({ id, kind, parentId })),
@@ -77,8 +91,39 @@ test('hierarchical work items freeze independent baselines and roll up only afte
     assert.match(baseline, new RegExp(`Work Item: ${id}`));
   }
 
+  const waitingTask = registry.workItems.find(({ id }) => id === 't-issue-token');
+  assert.equal(waitingTask.status, 'WAITING_FOR_DEVELOPMENT_MODE_SELECTION');
+  assert.equal(waitingTask.developmentMode, null);
+  await assert.rejects(
+    () => buildTaskContext({ root, id: 't-issue-token' }),
+    { code: 'WORK_ITEM_DEVELOPMENT_MODE_REQUIRED' },
+  );
+  await assert.rejects(
+    () => claimTask({ root, id: 't-issue-token', owner: 'developer-a', operationId: 'op-premature' }),
+    { code: 'WORK_ITEM_DEVELOPMENT_MODE_REQUIRED' },
+  );
+
+  await selectMode(root, 't-issue-token');
+  await selectMode(root, 't-verify-token', 'manual');
+  const modeRecord = JSON.parse(await readFile(path.join(
+    root,
+    '.hierarchical-delivery-governance',
+    'work-items',
+    't-issue-token',
+    'development-mode.json',
+  ), 'utf8'));
+  assert.deepEqual(modeRecord, {
+    schemaVersion: 1,
+    taskId: 't-issue-token',
+    baselineFingerprint: waitingTask.baselineFingerprint,
+    mode: 'active',
+    confirmedBy: 'user',
+    confirmedAt: '2026-07-16T00:01:30.000Z',
+  });
+
   const context = await buildTaskContext({ root, id: 't-issue-token' });
   assert.equal(context.task.id, 't-issue-token');
+  assert.equal(context.developmentMode, 'active');
   assert.deepEqual(context.parentContracts.map(({ id }) => id), ['d-identity-platform', 'c-token-lifecycle']);
   assert.deepEqual(context.execution.dependsOn, []);
   assert.equal('conversation' in context, false);
@@ -293,11 +338,104 @@ test('hierarchical work items freeze independent baselines and roll up only afte
   );
 });
 
+test('development mode selection is explicit, baseline-bound, and tamper-evident', async (t) => {
+  const root = await fixture(t);
+  await prepareAndFreeze(root, deliveryDefinition());
+  await prepareAndFreeze(root, capabilityDefinition());
+  await prepareAndFreeze(root, issueTaskDefinition());
+  const before = await readWorkItemRegistry({ root });
+  const task = before.workItems.find(({ id }) => id === 't-issue-token');
+
+  await assert.rejects(
+    () => selectDevelopmentMode({
+      root,
+      id: task.id,
+      mode: 'active',
+      expectedBaselineFingerprint: task.baselineFingerprint,
+      confirmed: false,
+    }),
+    { code: 'CONFIRMATION_REQUIRED' },
+  );
+  await assert.rejects(
+    () => selectDevelopmentMode({
+      root,
+      id: task.id,
+      mode: 'active',
+      expectedBaselineFingerprint: '0'.repeat(64),
+      confirmed: true,
+    }),
+    { code: 'WORK_ITEM_REVISION_CONFLICT' },
+  );
+
+  await selectMode(root, task.id);
+  await assert.rejects(
+    () => selectDevelopmentMode({
+      root,
+      id: task.id,
+      mode: 'manual',
+      expectedBaselineFingerprint: task.baselineFingerprint,
+      confirmed: true,
+    }),
+    { code: 'WORK_ITEM_DEVELOPMENT_MODE_LOCKED' },
+  );
+  const modePath = path.join(
+    root,
+    '.hierarchical-delivery-governance',
+    'work-items',
+    task.id,
+    'development-mode.json',
+  );
+  const artifact = JSON.parse(await readFile(modePath, 'utf8'));
+  await writeFile(modePath, `${JSON.stringify({ ...artifact, mode: 'manual' }, null, 2)}\n`);
+  await assert.rejects(
+    () => readWorkItemRegistry({ root }),
+    { code: 'WORK_ITEM_DEVELOPMENT_MODE_CHANGED' },
+  );
+});
+
+test('revising a Task invalidates its development mode and returns to mode selection', async (t) => {
+  const root = await fixture(t);
+  await prepareAndFreeze(root, deliveryDefinition());
+  await prepareAndFreeze(root, capabilityDefinition());
+  await prepareAndFreeze(root, issueTaskDefinition());
+  await selectMode(root, 't-issue-token');
+  const before = await readWorkItemRegistry({ root });
+  const task = before.workItems.find(({ id }) => id === 't-issue-token');
+  const revised = issueTaskDefinition({ goal: 'Issue a signed token with the revised claim contract.' });
+
+  await reviseWorkItem({
+    root,
+    definition: revised,
+    expectedBaselineFingerprint: task.baselineFingerprint,
+    confirmed: true,
+  });
+
+  const after = await readWorkItemRegistry({ root });
+  const revisedTask = after.workItems.find(({ id }) => id === 't-issue-token');
+  assert.equal(revisedTask.status, 'WAITING_FOR_DEVELOPMENT_MODE_SELECTION');
+  assert.equal(revisedTask.developmentMode, null);
+  await assert.rejects(
+    () => readFile(path.join(
+      root,
+      '.hierarchical-delivery-governance',
+      'work-items',
+      revisedTask.id,
+      'development-mode.json',
+    )),
+    { code: 'ENOENT' },
+  );
+  await assert.rejects(
+    () => buildTaskContext({ root, id: revisedTask.id }),
+    { code: 'WORK_ITEM_DEVELOPMENT_MODE_REQUIRED' },
+  );
+});
+
 test('Task baselines reject parent drift before context creation or dispatch', async (t) => {
   const root = await fixture(t);
   await prepareAndFreeze(root, deliveryDefinition());
   await prepareAndFreeze(root, capabilityDefinition());
   await prepareAndFreeze(root, issueTaskDefinition());
+  await selectMode(root, 't-issue-token');
 
   const capabilityBaselinePath = path.join(
     root, '.hierarchical-delivery-governance', 'work-items', 'c-token-lifecycle', 'baseline.json',
@@ -324,6 +462,7 @@ test('Capability decomposition can append a Task without invalidating unchanged 
   await prepareAndFreeze(root, deliveryDefinition());
   await prepareAndFreeze(root, capabilityDefinition());
   await prepareAndFreeze(root, issueTaskDefinition());
+  await selectMode(root, 't-issue-token');
   const before = await readWorkItemRegistry({ root });
   const capability = before.workItems.find(({ id }) => id === 'c-token-lifecycle');
   const revised = capabilityDefinition();
@@ -363,6 +502,7 @@ test('a blocked Task requires an explicit fingerprint-bound retry before it beco
   await prepareAndFreeze(root, deliveryDefinition());
   await prepareAndFreeze(root, capabilityDefinition());
   await prepareAndFreeze(root, issueTaskDefinition());
+  await selectMode(root, 't-issue-token');
   await claimTask({ root, id: 't-issue-token', owner: 'developer-a', operationId: 'op-blocked' });
   await recordTaskResult({
     root,
@@ -432,6 +572,8 @@ test('Capability dependencies block all consumer Tasks until the provider Capabi
   await prepareAndFreeze(root, issueTaskDefinition());
   await prepareAndFreeze(root, consumerCapability);
   await prepareAndFreeze(root, consumerTask);
+  await selectMode(root, 't-issue-token');
+  await selectMode(root, 't-enforce-access', 'manual');
   assert.deepEqual(await listReadyTasks({ root, deliveryId: delivery.id }), ['t-issue-token']);
   await claimTask({ root, id: 't-issue-token', owner: 'provider', operationId: 'op-provider' });
   await recordTaskResult({

@@ -22,13 +22,13 @@ Delivery/Capability authority 为 `COORDINATION`，Task 为 `EXECUTION`。
 - 测试命令为安全 argv 数组；
 - baseline 和 contract 指纹。
 
-冻结后状态为 `BASELINE_FROZEN`。任何开发授权都来自 Task 冻结 baseline，不来自 Delivery 总览、聊天或进度投影。
+冻结后 stage 为 `BASELINE_FROZEN`。Delivery/Capability 状态进入 `FROZEN`；Task 状态进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`。Task baseline 只确定可开发契约，不代表已经选择开发方式；任何开发授权都不来自 Delivery 总览、聊天或进度投影。
 
 ## 父子指纹
 
 子 baseline 绑定“父级稳定契约 + 该子项契约”的指纹，不绑定无关兄弟列表。这样追加兄弟 Task 不会使现有 Task 失效，同时父目标、范围、R/A、测试或自己的子契约变化仍会被检测。
 
-每次生成 Task 上下文和每次 claim 前都重算整条父链。失配返回 `WORK_ITEM_BASELINE_STALE`。
+用户明确选择 active/manual 后，`development-mode.json` 绑定当前 Task baseline 指纹。每次生成 Task 上下文和每次 claim 前都校验开发方式记录并重算整条父链；未选择返回 `WORK_ITEM_DEVELOPMENT_MODE_REQUIRED`，记录被改动或不匹配时拒绝，父链失配返回 `WORK_ITEM_BASELINE_STALE`。
 
 ## 修订
 
@@ -40,7 +40,7 @@ Delivery/Capability authority 为 `COORDINATION`，Task 为 `EXECUTION`。
 - 工作项尚未 VERIFIED；
 - 不删除既有 child。
 
-修订生成新的 baseline 指纹和 revision，重置该工作项 gate。未变化子契约继续有效；变化子契约的后代在重新冻结前保持 stale。
+修订生成新的 baseline 指纹和 revision，重置该工作项 gate。Task 修订还会删除 `development-mode.json`、上下文和 handoff，要求用户针对新 baseline 重新选择开发方式。未变化子契约继续有效；变化子契约的后代在重新冻结前保持 stale。
 
 ## 兼容边界
 

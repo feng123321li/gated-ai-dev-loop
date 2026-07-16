@@ -2,13 +2,15 @@
 
 路由由门禁强度、机器工作项和可选规划投影三个正交维度组成。
 
-## 门禁等级
+## 门禁等级与持久化
 
-- `None`：只读问答或报告，无文件写入；
-- `Light`：低风险、小范围、影响已知的 Task，可精简非关键说明，但仍执行 baseline 确认、开发方式和 gate 三项机械门禁；
-- `Full`：高风险、影响未知、跨边界或协调工作项。Delivery/Capability 默认 Full。
+- `None`：只读问答或报告，无文件写入，也没有 registry 工作项；
+- `LIGHT`：低风险、小范围、影响已知的 Task，可精简非关键说明，但 baseline 字段仍完整，并执行 baseline 确认、开发方式确认和 gate 三项机械门禁；
+- `FULL`：高风险、影响未知、跨边界或协调工作项。Delivery/Capability 必须为 `FULL`。
 
-安全、认证、权限、迁移、兼容、事务、并发、外部契约、依赖变化、未知写路径等信号强制 Full。用户请求 Light 不能覆盖硬信号。Light 只降低材料和审查负担，不取消状态机。
+安全、认证、权限、迁移、兼容、事务、并发、外部契约、依赖变化、未知写路径等信号强制 `FULL`。用户请求 `LIGHT` 不能覆盖硬信号。`LIGHT` 只降低材料和审查负担，不取消状态机。
+
+一旦持久化，schema v3 的每个工作项都必须有 `gateLevel`。该值进入 baseline/contract 指纹、registry、上下文和进度投影；缺失或非法降级必须机械拒绝。`None` 不作为 `gateLevel` 值写入，因为它意味着没有工作项。
 
 ## 机器工作项种类与浅层根
 
@@ -27,6 +29,8 @@ Delivery → Capability → Task
 一个可独立执行结果使用 Task；多个 Task 共同形成一个聚合能力时使用 Capability；多个 Capability 共同形成一个独立交付目标且需要顶层聚合门禁时才使用 Delivery。不要创建空父级来满足固定深度。
 
 根 Task 的 Task `dependsOn` 必须为空；根 Capability 的 Capability `dependsOn` 必须为空。出现兄弟依赖时选择能承载该依赖的上一聚合层。
+
+后续事实证明需要更高聚合责任时，路由只建议升层，不直接修改。先独立准备并冻结包含现有根的父 baseline，再取得绑定双方当前指纹的明确确认，最后执行受控 `TASK → CAPABILITY` 或 `CAPABILITY → DELIVERY` 附着；不改变现有工作项的 kind，也不自动创建或冻结父级。
 
 ## Micro、Workstream 与 M/W/T
 
@@ -48,7 +52,7 @@ Delivery → Capability → Task
 - 命中的层级规则，以及为什么不是更小、更浅一级；
 - 仍缺失、待用户确认的事实。
 
-文件、接口或服务数量，以及公共契约、状态机、幂等、多工作区等 Full 风险信号，只影响门禁等级、拆分和审查强度，不能单独决定升级为 Delivery。缺失事实存在时只展示事实卡草案并等待需求确认；不得保守默认 Delivery，不得准备工作项包或冻结 baseline。
+文件、接口或服务数量，以及公共契约、状态机、幂等、多工作区等 `FULL` 风险信号，只影响门禁等级、拆分和审查强度，不能单独决定升级为 Delivery。缺失事实存在时只展示事实卡草案并等待需求确认；不得保守默认 Delivery，不得准备工作项包或冻结 baseline。
 
 ## 变更类型与创建授权
 

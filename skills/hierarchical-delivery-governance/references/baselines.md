@@ -2,7 +2,9 @@
 
 ## 共同字段
 
-所有工作项使用 schema v2，并包含：`id`、`kind`、`title`、`goal`、`scope`、`nonGoals`、`requirements`、`acceptance`、`testCommands`、`risks` 和 `decisions`。
+所有工作项使用 schema v3，并包含：`id`、`kind`、`gateLevel`、`title`、`goal`、`scope`、`nonGoals`、`requirements`、`acceptance`、`testCommands`、`risks` 和 `decisions`。
+
+`gateLevel` 只能是 `LIGHT|FULL`。只有 Task 可以选择 `LIGHT`；Delivery 和 Capability 必须为 `FULL`。该字段进入 baseline 与 contract 指纹，因此缺失、篡改或未经确认改变门禁等级都会被检测。`None` 是不创建工作项的路由结果，不进入 schema。
 
 - Delivery 额外包含 `decomposition.status` 和 Capability `children`；
 - Capability 额外包含可空 `parentId`、`decomposition.status`、`decomposition.dependsOn` 和 Task `children`；
@@ -17,6 +19,7 @@ Delivery/Capability authority 为 `COORDINATION`，Task 为 `EXECUTION`。
 准备只在用户批准 ID 和持久化后执行，状态为 `WAITING_FOR_BASELINE_CONFIRMATION`。冻结必须收到与该 baseline 对应的显式确认，并重新验证：
 
 - schema、ID 和字段集合；
+- `gateLevel` 合法且协调层没有降为 `LIGHT`；
 - R/A 追踪；
 - 安全相对范围；有父级时校验父范围包含；
 - 有父级时，父级已冻结且子契约存在；
@@ -43,6 +46,17 @@ Delivery/Capability authority 为 `COORDINATION`，Task 为 `EXECUTION`。
 - 不删除既有 child。
 
 修订生成新的 baseline 指纹和 revision，重置该工作项 gate。Task 修订还会删除 `development-mode.json`、上下文和 handoff，要求用户针对新 baseline 重新选择开发方式。未变化子契约继续有效；变化子契约的后代在重新冻结前保持 stale。
+
+## 受控升层
+
+升层不改变源工作项的 `kind`，而是把已冻结浅层根附着到单独准备、确认并冻结的聚合父级。只允许：
+
+- 根 Task 附着到根 Capability；
+- 根 Capability 附着到 Delivery。
+
+父 baseline 必须预先把源列为计划 child；源和父都必须尚未运行 gate，源子树不能有活动 claim。`promote-item` 同时比较源、父当前 baseline 指纹，并且必须有显式 `--confirmed`。成功后源 baseline revision 增加、父契约指纹进入源 baseline，registry 记录包含旧源指纹、新源指纹和父指纹的 `promotionHistory`。
+
+Task 升层会删除已选开发方式、上下文和 handoff，并回到 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`；因为新的父链属于新的执行授权上下文。Capability 升层不改变自身稳定 contract，未变化的现有 Task 子契约继续有效。升层不会代替父级准备或冻结，也不允许一次跳过 Capability 把 Task 直接附着到 Delivery。
 
 ## 兼容边界
 

@@ -34,11 +34,13 @@ description: "分层治理可独立交付的软件工作单元。按最小必要
 
 `Micro`、`Workstream`、`M-NNN/W-NNN/T-NNN` 不进入 `kind` 枚举，但不删除其用途：Micro 描述 Task 的规模/低风险执行特征；Workstream 是可选的跨工作项规划与汇报视图；M/W/T 是可选的人类可读规划编号或别名。它们不拥有 baseline、claim 或 gate，不能取代 registry ID 和 Delivery/Capability/Task 生命周期。
 
-门禁等级 `None/Light/Full` 与工作项层级正交：
+门禁等级路由与工作项层级正交。`None` 是不持久化工作项的路由结果；一旦创建工作项，schema v3 的 `gateLevel` 必须是 `LIGHT` 或 `FULL`：
 
-- `None`：只读回答，不创建工作项；
-- `Light`：低风险小型 Task，可用精简 baseline，但仍是 Task；
-- `Full`：完整 baseline 和全部适用门禁；Delivery、Capability 默认 Full。
+- `None`：只读回答，不创建工作项，因此不写入 registry；
+- `LIGHT`：仅允许低风险小型 Task；baseline 字段仍完整，但说明可保持精炼，且仍执行 baseline 确认、开发方式确认和 gate；
+- `FULL`：完整强度；Delivery、Capability 必须为 `FULL`。
+
+`gateLevel` 进入 baseline/contract 指纹、registry 条目、Task 独立上下文和 Markdown 投影。缺失、未知值或协调工作项声明 `LIGHT` 都必须机械拒绝，不能只停留在路由描述中。
 
 变更类型独立记录为 `Feature/Bugfix/Refactor/Migration/Maintenance/Docs/Test`，不改变层级。
 
@@ -75,8 +77,8 @@ description: "分层治理可独立交付的软件工作单元。按最小必要
 
 1. 先执行自举维护判断。
 2. 解析当前 Skill 的安装目录，并运行 `node <skill-root>/scripts/hdg.mjs --help` 做只读预检。内置控制器是主入口；全局 `hdg` 只是可选快捷别名，不是前置条件。
-3. 只读检查 `.hierarchical-delivery-governance/work-item-registry.json`；不存在表示尚未持久化工作项，不是 CLI 缺失或 schema 错误。
-4. 先起草层级事实卡，再判断消息是继续/修订/追加，还是新的根 Task、根 Capability 或 Delivery。
+3. 只读检查 `.hierarchical-delivery-governance/work-item-registry.json`；不存在表示尚未持久化工作项，不是 CLI 缺失或 schema 错误；存在时只接受 schema v3。
+4. 先起草层级事实卡和门禁等级，再判断消息是继续/修订/追加/升层，还是新的根 Task、根 Capability 或 Delivery。
 5. 只有用户明确批准工作项 ID 和 baseline 持久化后，才准备对应包；只有 `--confirmed` 才冻结。
 6. 不从“升级、优化、项目、任务、治理”等词推导创建或冻结授权。
 
@@ -93,6 +95,16 @@ description: "分层治理可独立交付的软件工作单元。按最小必要
 - 多个 Capability 需要跨能力约束和顶层交付门禁：Delivery。
 
 不允许 `Delivery → Task` 或 `Capability → Capability`。根 Task 不声明 Task 依赖；根 Capability 不声明 Capability 依赖。出现这些依赖时升级到能承载兄弟关系的聚合根。
+
+已经作为浅层根冻结后才发现真实聚合责任时，不通过改 `kind` 或伪造父级原地升级，而走受控升层：
+
+1. 先按普通门禁单独准备目标父级 baseline；父级必须把当前根列为计划 child，并保持根形态；
+2. 用户分别确认并冻结父级 baseline；这一步不自动附着当前根；
+3. 展示子、父两个当前 baseline 指纹和关系变化，取得明确升层确认；
+4. 执行 `promote-item`，只允许根 `TASK → CAPABILITY` 或根 `CAPABILITY → DELIVERY`；保留工作项 ID、kind 和 gateLevel，并把旧/新/父 baseline 指纹写入 `promotionHistory`；
+5. Task 升层会清除旧开发方式、上下文和 handoff，回到 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`；Capability 升层保留不受父契约变化影响的 Task 子契约。
+
+源或父已执行 gate、源子树有活动 claim、父未冻结、父未计划该 child、指纹过期或未明确确认时必须拒绝。升层不自动创建或冻结父级，也不能把用户说“需要 Capability/Delivery”当成执行授权。
 
 ### 2. Delivery baseline（按需）
 
@@ -175,6 +187,7 @@ Skill 自带单文件机械控制器。宿主从当前 `SKILL.md` 所在目录�
 node <skill-root>/scripts/hdg.mjs prepare-item --definition <json> --host-runtime <agent>
 node <skill-root>/scripts/hdg.mjs freeze-item --item <id> --expected-baseline <sha256> --confirmed
 node <skill-root>/scripts/hdg.mjs revise-item --definition <json> --expected-baseline <sha256> --confirmed
+node <skill-root>/scripts/hdg.mjs promote-item --item <root-id> --parent <frozen-parent-id> --expected-baseline <sha256> --expected-parent-baseline <sha256> --confirmed
 node <skill-root>/scripts/hdg.mjs select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
 node <skill-root>/scripts/hdg.mjs ready-tasks --item <root-or-subtree-id>
 node <skill-root>/scripts/hdg.mjs task-context --item <task-id>
@@ -186,7 +199,7 @@ node <skill-root>/scripts/hdg.mjs delivery-item --item <delivery-id> --action IN
 node <skill-root>/scripts/hdg.mjs delivery-item --item <delivery-id> --action USER_CONFIRMED --evidence <json>
 ```
 
-`task-context` 和 `claim-task` 都会机械校验 registry 与 `development-mode.json`；未选择、文件缺失、内容被改动或 baseline 不匹配时必须拒绝。内置控制器只暴露上述层级治理命令，不提供旧 `start/prepare/freeze` 入口。纯 Markdown 负责指引，真正硬门禁由该控制器和磁盘状态执行。维护本仓库时，所有写命令都会拒绝写入；只有在每个写命令上显式传入 `--dogfood` 才绕过自举保护，且其他确认条件仍然有效。
+`task-context` 和 `claim-task` 都会机械校验 registry 与 `development-mode.json`；未选择、文件缺失、内容被改动或 baseline 不匹配时必须拒绝。内置控制器使用独立的层级 CLI 入口，只打包层级 runtime，不导入历史 `route/start/prepare/freeze` CLI、旧 baseline 实现或 YAML 配置链；它只暴露上述层级治理命令。纯 Markdown 负责指引，真正硬门禁由该控制器和磁盘状态执行。维护本仓库时，所有写命令都会拒绝写入；只有在每个写命令上显式传入 `--dogfood` 才绕过自举保护，且其他确认条件仍然有效。
 
 ## 验收与反馈
 

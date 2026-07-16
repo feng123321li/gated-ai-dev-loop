@@ -38,6 +38,15 @@ Capability 不必一次物化全部 Task 包，但 baseline 必须先声明子�
 
 纯新增兄弟 Task 不使未改变 Task stale。修改 Capability 稳定契约或某个既有 Task 子契约时，只阻断受影响后代。
 
+## 从浅层根受控升层
+
+最初事实只支持根 Task 或根 Capability 时应先使用浅层治理；后续出现真实的兄弟聚合责任，不需要废弃原工作项，也不能直接改它的 kind。
+
+- Task 需要与其他 Task 形成能力聚合：起草一个把现有 Task 列为 child 的根 Capability，按普通流程准备、确认、冻结，再明确确认 `promote-item`；
+- Capability 需要与其他 Capability 形成顶层交付：起草一个把现有 Capability 列为 child 的 Delivery，准备、确认、冻结后再升层。
+
+升层前展示源和父的当前 baseline 指纹、父子契约、scope 以及 Task 开发方式失效影响。操作只允许附着一级，保留源 ID、kind、gateLevel 和历史；不能因将来可能扩展而提前创建空父级。
+
 ## 完整性检查
 
 - 层级事实卡已确认，没有靠实现数量或风险信号自动升级；
@@ -47,5 +56,6 @@ Capability 不必一次物化全部 Task 包，但 baseline 必须先声明子�
 - 所有写入路径落在实际父范围内；
 - 每个实际存在的聚合层都有自己的测试和 PASS 条件；
 - 跨仓库边界、提供方/消费方顺序和测试 cwd 明确。
+- 升层时父级已独立冻结并计划现有根，双方指纹和失效影响已由用户确认。
 
 Workstream、Micro 和 M/W/T 可以辅助规划或展示，但不作为治理实体，也不取代任一级 baseline。

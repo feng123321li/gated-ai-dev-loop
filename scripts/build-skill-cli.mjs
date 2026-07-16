@@ -23,9 +23,7 @@ export async function buildSkillCli({ outfile = defaultOutfile } = {}) {
     format: 'esm',
     target: 'node20',
     legalComments: 'none',
-    banner: {
-      js: "#!/usr/bin/env node\nimport { createRequire as __createRequire } from 'node:module';\nconst require = __createRequire(import.meta.url);",
-    },
+    banner: { js: '#!/usr/bin/env node' },
   });
   return outfile;
 }

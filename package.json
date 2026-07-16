@@ -1,7 +1,7 @@
 {
   "name": "hierarchical-delivery-governance",
-  "version": "0.3.0",
-  "description": "Delivery→Capability→Task 分层交付治理 Skill 与确定性 CLI",
+  "version": "0.4.0",
+  "description": "可浅化、可受控升层的分层交付治理 Skill 与独立机械控制器",
   "private": true,
   "type": "module",
   "license": "MIT",

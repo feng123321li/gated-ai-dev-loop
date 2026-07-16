@@ -12,7 +12,7 @@
 
 每个工作项都展示：
 
-- 自身 `stage/status/developmentMode/gate/claim/recordRevision`；
+- 自身 `stage/status/gateLevel/developmentMode/gate/claim/recordRevision`；
 - `directChildren`：直接子级 total、verified、blocked、active；
 - `descendants`：全部后代的同类精确计数。
 - Delivery 的 `delivery.status`：最终审查和用户确认阶段；非 Delivery 显示 `n/a`。
@@ -31,10 +31,10 @@ Capability progress 展示计划 Task、依赖、READY/CLAIMED/IMPLEMENTED/VERIF
 
 ## Task 视图
 
-Task progress 展示父链、baseline 指纹、开发方式及确认记录、依赖、claim、实现证据、gate、下一动作和阻断解除条件。未选择时下一动作是明确选择 active/manual；开发 Agent 不更新控制投影，宿主验证返回结果后写入。
+Task progress 展示父链、baseline 指纹、`gateLevel`、开发方式及确认记录、依赖、claim、实现证据、gate、下一动作和阻断解除条件。未选择时下一动作是明确选择 active/manual；开发 Agent 不更新控制投影，宿主验证返回结果后写入。
 
 根 Task 的父链和聚合依赖为空，直接以自身 gate 结果作为浅层交付状态。
 
 ## 写回时机
 
-准备、冻结、开发方式选择、修订、claim、Task result、retry、gate、独立/人工审查和用户确认后立即写回，不在整轮结束后批量补写。每次写回增加 registry/record revision，并重建所有受影响投影。
+准备、冻结、开发方式选择、修订、升层、claim、Task result、retry、gate、独立/人工审查和用户确认后立即写回，不在整轮结束后批量补写。每次写回增加 registry/record revision，并重建所有受影响投影。升层后父子投影立即变化，Task 下一动作重置为明确选择 active/manual，审计细节保留在 `promotionHistory`。

@@ -36,11 +36,15 @@ IMPLEMENTED --gate FAIL--> BLOCKED
 BLOCKED --retry-item(current fingerprint + confirmation)--> FROZEN
 DELIVERY/CAPABILITY FROZEN/BLOCKED --confirmed baseline revision--> FROZEN
 TASK FROZEN/BLOCKED --confirmed baseline revision--> WAITING_FOR_DEVELOPMENT_MODE_SELECTION
+ROOT TASK FROZEN --confirmed promotion to frozen root Capability--> WAITING_FOR_DEVELOPMENT_MODE_SELECTION
+ROOT CAPABILITY FROZEN --confirmed promotion to frozen Delivery--> FROZEN
 DELIVERY VERIFIED --independent/human review--> WAITING_FOR_USER_CONFIRMATION
 WAITING_FOR_USER_CONFIRMATION --user confirmation--> COMPLETED
 ```
 
 协调工作项没有 CLAIMED/IMPLEMENTED；它们通过 child 状态和自己的 gate 推进。
+
+升层只适用于尚未运行 gate 的冻结浅层根。父级必须已按自己的 baseline 确认流程冻结并计划该 child；操作同时校验源/父指纹、无活动 claim 和明确确认。它是父子附着，不把 Task 改成 Capability，也不把 Capability 改成 Delivery。Task 因父链改变而清除开发方式并重新等待选择；升层历史写入 registry。
 
 ## 完成条件
 

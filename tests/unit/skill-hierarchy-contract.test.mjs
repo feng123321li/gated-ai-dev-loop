@@ -30,6 +30,11 @@ test('Skill defines one stable hierarchy and a non-keyword self-hosting boundary
   assert.match(skill, /development-mode\.json/);
   assert.match(skill, /scripts\/hdg\.mjs/);
   assert.match(skill, /全局 `hdg` 只是可选快捷别名，不是前置条件/);
+  assert.match(skill, /schema v3/);
+  assert.match(skill, /`gateLevel` 必须是 `LIGHT` 或 `FULL`/);
+  assert.match(skill, /根 `TASK → CAPABILITY` 或根 `CAPABILITY → DELIVERY`/);
+  assert.match(skill, /promotionHistory/);
+  assert.match(skill, /不导入历史 `route\/start\/prepare\/freeze` CLI/);
   assert.match(skill, /确认 baseline.*不能.*开发方式|baseline.*开发方式/);
   assert.match(skill, /retry-item/);
   assert.match(skill, /真实、hash 匹配、结构合法且不可复用的 evidence/);
@@ -41,6 +46,7 @@ test('Skill interface drafts the shallowest legal root without authorizing persi
   assert.match(agentInterface, /分层式 AI 交付治理/);
   assert.match(agentInterface, /可独立交付工作单元/);
   assert.match(agentInterface, /根 Task、Capability→Task 或 Delivery→Capability→Task/);
-  assert.match(agentInterface, /明确批准具体 ID、内容及持久化或冻结动作前，不创建或冻结工作项/);
+  assert.match(agentInterface, /LIGHT\/FULL/);
+  assert.match(agentInterface, /明确批准具体 ID、内容及持久化、冻结或升层动作前，不创建、冻结或升层工作项/);
   assert.doesNotMatch(agentInterface, /并为每一级冻结独立 baseline/);
 });

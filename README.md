@@ -13,8 +13,10 @@ Delivery 和 Capability 管协调与聚合，Task 是唯一执行叶子。实际
 ## 核心能力
 
 - 小需求可直接使用根 Task，不虚构 Capability 或 Delivery；
+- `gateLevel` 作为 schema v3 机器契约进入 baseline、registry、上下文和投影；仅 Task 可为 `LIGHT`，协调层固定 `FULL`；
 - 多 Task 能力使用根 Capability，并可受控持续追加 Task；
 - 多 Capability 交付才创建 Delivery；它可以是完整项目、大型模块、子系统或跨服务需求；
+- 已冻结且尚未执行的根 Task/Capability 可在独立准备并冻结父 baseline 后，分别受控升层到 Capability/Delivery；
 - Task baseline 冻结后必须由用户显式选择 active/manual；
 - 按依赖、claim 和写入范围计算 READY Task，支持多人并行；
 - Task、Capability、Delivery 各自通过 gate，失败后绑定当前 baseline 显式重试；
@@ -58,6 +60,7 @@ npm run skill:install -- --target both --scope user
 node <skill-root>/scripts/hdg.mjs --help
 node <skill-root>/scripts/hdg.mjs prepare-item --definition task.json --host-runtime claude
 node <skill-root>/scripts/hdg.mjs freeze-item --item t-example --expected-baseline <sha256> --confirmed
+node <skill-root>/scripts/hdg.mjs promote-item --item t-example --parent c-example --expected-baseline <sha256> --expected-parent-baseline <sha256> --confirmed
 node <skill-root>/scripts/hdg.mjs select-development-mode --item t-example --development-mode active --expected-baseline <sha256> --confirmed
 node <skill-root>/scripts/hdg.mjs ready-tasks --item t-example
 node <skill-root>/scripts/hdg.mjs task-context --item t-example
@@ -71,6 +74,6 @@ npm test
 npm run test:coverage
 ```
 
-`npm install -g .` 提供可选的 `hdg` 快捷别名，但不是 Skill 工作流的依赖。
+内置控制器只打包层级 runtime，不再引入历史 `route/start/prepare/freeze` CLI 及其 YAML 配置链。`npm install -g .` 提供可选的 `hdg` 快捷别名，但不是 Skill 工作流的依赖。
 
 Skill、npm 包和运行控制目录统一使用 `hierarchical-delivery-governance`，不追加 `v2`，也不读取或迁移旧控制目录。

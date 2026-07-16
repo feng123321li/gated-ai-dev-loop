@@ -1,6 +1,7 @@
 export function deliveryDefinition(overrides = {}) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
+    gateLevel: 'FULL',
     id: 'd-identity-platform',
     kind: 'DELIVERY',
     title: 'Identity platform',
@@ -32,7 +33,8 @@ export function deliveryDefinition(overrides = {}) {
 
 export function capabilityDefinition(overrides = {}) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
+    gateLevel: 'FULL',
     id: 'c-token-lifecycle',
     kind: 'CAPABILITY',
     parentId: 'd-identity-platform',
@@ -72,7 +74,8 @@ export function capabilityDefinition(overrides = {}) {
 
 export function issueTaskDefinition(overrides = {}) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
+    gateLevel: 'FULL',
     id: 't-issue-token',
     kind: 'TASK',
     parentId: 'c-token-lifecycle',

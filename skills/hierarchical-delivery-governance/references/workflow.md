@@ -5,13 +5,14 @@
 1. 先判断是否为本 Skill 的 self-hosting maintenance；没有明确 dogfood 时短路运行包流程。
 2. 从当前 Skill 安装目录运行 `node <skill-root>/scripts/hdg.mjs --help`。全局 `hdg` 不是前置条件。
 3. 只读恢复 registry；不存在时表示尚未持久化工作项。
-4. 起草层级事实卡，选择能够承担当前聚合责任的最浅根：Task、Capability 或 Delivery。
+4. 起草层级事实卡，选择能够承担当前聚合责任的最浅根：Task、Capability 或 Delivery；同时选择不持久化的 `None`，或 schema v3 工作项的 `LIGHT|FULL`。只有 Task 可为 `LIGHT`。
 5. 用户批准具体 ID、baseline 内容和持久化后，逐级准备实际存在的工作项；每次冻结仍需单独确认。
-6. Task 冻结后进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`，等待用户明确选择 active/manual。
-7. 内置控制器持久化并校验 `development-mode.json` 后，才计算 READY、生成独立上下文并原子认领。
-8. 开发 Agent 返回实现事实或 BLOCKED；宿主运行 Task 门禁。
-9. 若存在 Capability，全部 Task VERIFIED 后运行 Capability 聚合门禁；若存在 Delivery，全部 Capability VERIFIED 后运行 Delivery 聚合门禁。
-10. Delivery gate PASS 后完成隔离/人工审查，再由用户确认最终交付。浅层根在自身 gate PASS 后为 VERIFIED。
+6. 如果已有浅层根后来需要真实聚合父级，先单独准备并冻结计划该根的父 baseline，再展示双方指纹并取得明确升层确认；`promote-item` 只附着 `Task→Capability` 或 `Capability→Delivery`，不自动创建/冻结父级。
+7. Task 冻结或升层后进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`，等待用户明确选择 active/manual。
+8. 内置控制器持久化并校验 `development-mode.json` 后，才计算 READY、生成独立上下文并原子认领。
+9. 开发 Agent 返回实现事实或 BLOCKED；宿主运行 Task 门禁。
+10. 若存在 Capability，全部 Task VERIFIED 后运行 Capability 聚合门禁；若存在 Delivery，全部 Capability VERIFIED 后运行 Delivery 聚合门禁。
+11. Delivery gate PASS 后完成隔离/人工审查，再由用户确认最终交付。浅层根在自身 gate PASS 后为 VERIFIED。
 
 任何步骤都不能从自然语言关键词推导“创建、冻结、修订或 dogfood”授权。
 
@@ -19,7 +20,10 @@
 
 ```mermaid
 flowchart TD
-    A["层级事实卡：边界、聚合责任、依赖、验收"] --> B{"最小必要治理根"}
+    A["层级事实卡：边界、聚合责任、依赖、验收"] --> L{"门禁等级"}
+    L -->|"None：不持久化"| N["只读结果"]
+    L -->|"LIGHT：仅低风险 Task"| B{"最小必要治理根"}
+    L -->|"FULL"| B
     B -->|"单一独立执行结果；无兄弟依赖"| T["根 Task"]
     B -->|"多个 Task 需要能力聚合门禁"| C["根 Capability"]
     B -->|"多个 Capability 需要顶层聚合门禁"| D["Delivery"]
@@ -33,11 +37,29 @@ flowchart TD
 
 不允许 `Delivery → Task` 或 `Capability → Capability`。根 Task 需要兄弟 Task 依赖时升级为根 Capability；根 Capability 需要兄弟 Capability 依赖时升级为 Delivery。
 
+## 受控升层图
+
+```mermaid
+flowchart LR
+    S["已冻结浅层根；未 gate；无活动 claim"] --> P["单独起草父 baseline，并计划现有根"]
+    P --> C1["批准父 ID/持久化"]
+    C1 --> F["单独确认并冻结父 baseline"]
+    F --> C2["展示源/父指纹与失效影响"]
+    C2 -->|"明确确认 promote-item"| K{"合法一级关系"}
+    K -->|"Task → Capability"| TC["附着并记录 promotionHistory；清除 Task mode/context"]
+    K -->|"Capability → Delivery"| CD["附着并记录 promotionHistory；保留未变化子契约"]
+    K -->|"其他关系"| X["机械拒绝"]
+```
+
+升层保留源 ID、kind 和 gateLevel。任何指纹过期、父未计划源、父未冻结、源/父已运行 gate 或源子树存在活动 claim，都返回阻断并要求重新确认当前事实。
+
 ## 生命周期图
 
 ```mermaid
 flowchart LR
     P["Task PREPARED"] -->|"baseline confirmation"| M["WAITING_FOR_DEVELOPMENT_MODE_SELECTION"]
+    RP["Root Task FROZEN"] -->|"confirmed promote to frozen Capability"| M
+    RC["Root Capability FROZEN"] -->|"confirmed promote to frozen Delivery"| CF["Capability FROZEN"]
     M -->|"explicit active/manual confirmation"| F["FROZEN"]
     F -->|"READY + claim"| C["CLAIMED"]
     C --> I["IMPLEMENTED"]

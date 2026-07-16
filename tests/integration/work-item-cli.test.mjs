@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { runHierarchicalCli } from '../../src/cli/main.mjs';
+import { runHierarchicalCli } from '../../src/cli/hierarchical.mjs';
 import { sha256Bytes } from '../../src/core/hash.mjs';
 import {
   capabilityDefinition,
@@ -161,6 +161,48 @@ test('CLI manages a hierarchical Task from preparation through verified evidence
   ]);
   assert.equal(revision.exitCode, 0, revision.err);
   assert.equal(result(revision.out).baselineRevision, 2);
+});
+
+test('CLI promotes a frozen root Task under a separately frozen Capability', async (t) => {
+  const root = await fixture(t);
+  const taskValue = issueTaskDefinition({ id: 't-standalone', parentId: null, gateLevel: 'LIGHT' });
+  const capabilityValue = capabilityDefinition({
+    parentId: null,
+    children: [{
+      id: taskValue.id,
+      kind: 'TASK',
+      title: taskValue.title,
+      requirementIds: ['R-001'],
+      acceptanceIds: ['A-001'],
+    }],
+  });
+  for (const [name, definition] of [['task.json', taskValue], ['capability.json', capabilityValue]]) {
+    await putJson(root, name, definition);
+    const prepared = await invoke(root, [
+      'prepare-item', '--definition', name, '--host-runtime', 'codex', '--json',
+    ]);
+    assert.equal(prepared.exitCode, 0, prepared.err);
+    const item = result(prepared.out);
+    const frozen = await invoke(root, [
+      'freeze-item', '--item', item.id, '--expected-baseline', item.baselineFingerprint,
+      '--confirmed', '--json',
+    ]);
+    assert.equal(frozen.exitCode, 0, frozen.err);
+  }
+  const registry = JSON.parse(await readFile(
+    path.join(root, '.hierarchical-delivery-governance', 'work-item-registry.json'),
+    'utf8',
+  ));
+  const task = registry.workItems.find(({ id }) => id === taskValue.id);
+  const capability = registry.workItems.find(({ id }) => id === capabilityValue.id);
+  const promoted = await invoke(root, [
+    'promote-item', '--item', task.id, '--parent', capability.id,
+    '--expected-baseline', task.baselineFingerprint,
+    '--expected-parent-baseline', capability.baselineFingerprint,
+    '--confirmed', '--json',
+  ]);
+  assert.equal(promoted.exitCode, 0, promoted.err);
+  assert.equal(result(promoted.out).parentId, capability.id);
 });
 
 test('hierarchical writes in the implementation repository require explicit dogfood on every mutation', async (t) => {

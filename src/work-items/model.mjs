@@ -5,8 +5,9 @@ import { normalizeTestArgv } from '../baseline/test-command.mjs';
 import { GatedLoopError } from '../core/errors.mjs';
 import { sha256Bytes } from '../core/hash.mjs';
 
-export const WORK_ITEM_SCHEMA_VERSION = 2;
+export const WORK_ITEM_SCHEMA_VERSION = 3;
 export const WORK_ITEM_KINDS = Object.freeze(['DELIVERY', 'CAPABILITY', 'TASK']);
+export const WORK_ITEM_GATE_LEVELS = Object.freeze(['LIGHT', 'FULL']);
 export const WORK_ITEM_AUTHORITIES = Object.freeze({
   DELIVERY: 'COORDINATION',
   CAPABILITY: 'COORDINATION',
@@ -38,6 +39,13 @@ function safeId(value, field = 'id') {
   const reserved = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/;
   if (typeof value !== 'string' || !ITEM_ID.test(value) || value.endsWith('.') || reserved.test(value)) {
     fail('WORK_ITEM_ID_INVALID', `${field} must be a safe lowercase identifier`, { field, value });
+  }
+  return value;
+}
+
+function gateLevel(value, kind) {
+  if (!WORK_ITEM_GATE_LEVELS.includes(value) || (kind !== 'TASK' && value !== 'FULL')) {
+    fail('WORK_ITEM_GATE_LEVEL_INVALID', 'gateLevel must be LIGHT or FULL, and coordination work items must be FULL');
   }
   return value;
 }
@@ -254,7 +262,7 @@ export function validateWorkItemDefinition(definition, { parent } = {}) {
     fail('WORK_ITEM_EXECUTION_INVALID', 'Only Task work items can contain execution metadata');
   }
   const commonKeys = [
-    'schemaVersion', 'id', 'kind', 'title', 'goal', 'scope', 'nonGoals', 'requirements',
+    'schemaVersion', 'id', 'kind', 'gateLevel', 'title', 'goal', 'scope', 'nonGoals', 'requirements',
     'acceptance', 'testCommands', 'risks', 'decisions',
   ];
   const expectedKeys = definition.kind === 'DELIVERY'
@@ -271,6 +279,7 @@ export function validateWorkItemDefinition(definition, { parent } = {}) {
     schemaVersion: WORK_ITEM_SCHEMA_VERSION,
     id: safeId(definition.id),
     kind: definition.kind,
+    gateLevel: gateLevel(definition.gateLevel, definition.kind),
     authorityKind: WORK_ITEM_AUTHORITIES[definition.kind],
     title: text(definition.title, 'title'),
     goal: text(definition.goal, 'goal'),
@@ -297,6 +306,7 @@ function contract(definition) {
     schemaVersion: definition.schemaVersion,
     id: definition.id,
     kind: definition.kind,
+    gateLevel: definition.gateLevel,
     goal: definition.goal,
     scope: [...definition.scope].sort(),
     requirements: [...definition.requirements].sort((left, right) => left.id.localeCompare(right.id)),
@@ -339,6 +349,7 @@ export function renderWorkItemBaseline(definition) {
     '',
     `Work Item: ${definition.id}`,
     `Kind: ${definition.kind}`,
+    `Gate Level: ${definition.gateLevel}`,
     `Authority: ${definition.authorityKind}`,
     `Parent: ${definition.parentId ?? 'none'}`,
     `Parent Contract: ${definition.parentContractFingerprint ?? 'none'}`,

@@ -11,34 +11,13 @@ import { runSelfCheck } from '../acceptance/self-check.mjs';
 import { runAcceptance } from '../acceptance/accept.mjs';
 import { isAgentRuntime } from '../mode/host-runtime.mjs';
 import { resolveSelfHostingPolicy } from '../work-items/model.mjs';
-import {
-  buildTaskContext,
-  claimTask,
-  freezeWorkItem,
-  listReadyTasks,
-  prepareWorkItem,
-  recordDelivery,
-  recordTaskResult,
-  recordWorkItemGate,
-  retryWorkItem,
-  reviseWorkItem,
-  selectDevelopmentMode,
-} from '../work-items/runtime.mjs';
 
 export const COMMANDS = Object.freeze([
   'route', 'start', 'prepare', 'freeze', 'self-check', 'accept',
-  'prepare-item', 'freeze-item', 'revise-item', 'select-development-mode', 'ready-tasks',
-  'task-context', 'claim-task', 'task-result', 'retry-item', 'gate-item', 'delivery-item',
-]);
-export const HIERARCHICAL_COMMANDS = Object.freeze([
-  'prepare-item', 'freeze-item', 'revise-item', 'select-development-mode', 'ready-tasks',
-  'task-context', 'claim-task', 'task-result', 'retry-item', 'gate-item', 'delivery-item',
 ]);
 const VALUE_OPTIONS = new Set([
   '--mode', '--signals', '--task', '--brief', '--host-runtime', '--baseline', '--source',
   '--round', '--snapshot', '--timeout-ms', '--reviewer', '--review-result',
-  '--definition', '--item', '--owner', '--operation', '--status', '--evidence',
-  '--expected-baseline', '--action', '--development-mode',
 ]);
 const REPEATABLE_OPTIONS = new Set(['--source']);
 const FLAG_OPTIONS = new Set(['--json', '--help', '--confirmed', '--dogfood']);
@@ -48,39 +27,10 @@ const PREPARE_OPTIONS = new Set(['--json', '--help', '--task', '--baseline', '--
 const FREEZE_OPTIONS = new Set(['--json', '--help', '--task', '--confirmed', '--dogfood']);
 const SELF_CHECK_OPTIONS = new Set(['--json', '--help', '--task', '--round', '--snapshot', '--timeout-ms', '--dogfood']);
 const ACCEPT_OPTIONS = new Set(['--json', '--help', '--task', '--round', '--snapshot', '--timeout-ms', '--reviewer', '--review-result', '--dogfood']);
-const PREPARE_ITEM_OPTIONS = new Set(['--json', '--help', '--definition', '--host-runtime', '--dogfood']);
-const FREEZE_ITEM_OPTIONS = new Set(['--json', '--help', '--item', '--expected-baseline', '--confirmed', '--dogfood']);
-const REVISE_ITEM_OPTIONS = new Set(['--json', '--help', '--definition', '--expected-baseline', '--confirmed', '--dogfood']);
-const READY_TASKS_OPTIONS = new Set(['--json', '--help', '--item']);
-const TASK_CONTEXT_OPTIONS = new Set(['--json', '--help', '--item', '--dogfood']);
-const SELECT_DEVELOPMENT_MODE_OPTIONS = new Set([
-  '--json', '--help', '--item', '--development-mode', '--expected-baseline', '--confirmed', '--dogfood',
-]);
-const CLAIM_TASK_OPTIONS = new Set(['--json', '--help', '--item', '--owner', '--operation', '--dogfood']);
-const TASK_RESULT_OPTIONS = new Set(['--json', '--help', '--item', '--operation', '--status', '--evidence', '--dogfood']);
-const GATE_ITEM_OPTIONS = new Set(['--json', '--help', '--item', '--status', '--evidence', '--dogfood']);
-const RETRY_ITEM_OPTIONS = new Set(['--json', '--help', '--item', '--expected-baseline', '--confirmed', '--dogfood']);
-const DELIVERY_ITEM_OPTIONS = new Set(['--json', '--help', '--item', '--action', '--evidence', '--dogfood']);
-const hierarchicalUsage = `  prepare-item --definition <file> --host-runtime <agent>
-  freeze-item --item <id> --expected-baseline <sha256> --confirmed
-  revise-item --definition <file> --expected-baseline <sha256> --confirmed
-  select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
-  ready-tasks --item <root-or-subtree-id>
-  task-context --item <task-id>
-  claim-task --item <task-id> --owner <owner> --operation <id>
-  task-result --item <task-id> --operation <id> --status IMPLEMENTED|BLOCKED --evidence <file>
-  retry-item --item <id> --expected-baseline <sha256> --confirmed
-  gate-item --item <id> --status PASS|FAIL --evidence <file>
-  delivery-item --item <delivery-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file>`;
 const help = `Usage: gated-loop <command> [options]
 
 Commands:
 ${COMMANDS.map((command) => `  ${command}`).join('\n')}
-
-Hierarchical work items:
-${hierarchicalUsage}
-
-In the implementation repository, add --dogfood to every hierarchical command that writes runtime state.
 
 Gate commands:
   self-check --task <id> [--round 1] [--snapshot <file>]
@@ -88,15 +38,6 @@ Gate commands:
 
 The historical start/prepare/freeze commands are v1 compatibility surfaces.
 Acceptance defaults to human handling unless a host reviewer result or reviewer capability is supplied.
-`;
-const hierarchicalHelp = `Usage: hdg <command> [options]
-
-Commands:
-${HIERARCHICAL_COMMANDS.map((command) => `  ${command}`).join('\n')}
-
-${hierarchicalUsage}
-
-In the hierarchical-delivery-governance implementation repository, every command that writes control state also requires --dogfood.
 `;
 
 function parse(argv) {
@@ -125,14 +66,6 @@ function parse(argv) {
   const commandOptions = {
     route: ROUTE_OPTIONS, start: START_OPTIONS, prepare: PREPARE_OPTIONS, freeze: FREEZE_OPTIONS,
     'self-check': SELF_CHECK_OPTIONS, accept: ACCEPT_OPTIONS,
-    'prepare-item': PREPARE_ITEM_OPTIONS, 'freeze-item': FREEZE_ITEM_OPTIONS,
-    'revise-item': REVISE_ITEM_OPTIONS,
-    'ready-tasks': READY_TASKS_OPTIONS, 'task-context': TASK_CONTEXT_OPTIONS,
-    'select-development-mode': SELECT_DEVELOPMENT_MODE_OPTIONS,
-    'claim-task': CLAIM_TASK_OPTIONS, 'task-result': TASK_RESULT_OPTIONS,
-    'retry-item': RETRY_ITEM_OPTIONS,
-    'gate-item': GATE_ITEM_OPTIONS,
-    'delivery-item': DELIVERY_ITEM_OPTIONS,
   };
   if (commandOptions[command]) {
     for (const option of seen) if (!commandOptions[command].has(option)) {
@@ -144,10 +77,6 @@ function parse(argv) {
   }
   if (values['--host-runtime'] !== undefined && !isAgentRuntime(values['--host-runtime'])) {
     throw new GatedLoopError('OPTION_VALUE_INVALID', '--host-runtime must be a safe lowercase Agent identifier');
-  }
-  if (values['--development-mode'] !== undefined
-      && !['active', 'manual'].includes(values['--development-mode'])) {
-    throw new GatedLoopError('OPTION_VALUE_INVALID', '--development-mode must be active or manual');
   }
   if (values['--reviewer'] !== undefined && !['human', 'auto', 'codex', 'claude'].includes(values['--reviewer'])) {
     throw new GatedLoopError('OPTION_VALUE_INVALID', '--reviewer must be human, auto, codex, or claude');
@@ -294,104 +223,6 @@ async function runGateCommand(parsed, io) {
   });
 }
 
-async function runWorkItemCommand(parsed, io) {
-  const root = io.cwd ?? process.cwd();
-  const fs = io.fs ?? fsPromises;
-  const common = { root, fs, now: io.now, explicitDogfood: parsed.dogfood };
-  if (parsed.command === 'prepare-item') {
-    const definition = await readStructured(
-      required(parsed, '--definition'),
-      'WORK_ITEM_DEFINITION',
-      { cwd: root, fs, stdin: io.stdin },
-    );
-    return prepareWorkItem({
-      ...common,
-      definition,
-      hostRuntime: required(parsed, '--host-runtime'),
-    });
-  }
-  if (parsed.command === 'freeze-item') {
-    return freezeWorkItem({
-      ...common,
-      id: required(parsed, '--item'),
-      expectedBaselineFingerprint: required(parsed, '--expected-baseline'),
-      confirmed: parsed.confirmed,
-    });
-  }
-  if (parsed.command === 'revise-item') {
-    const definition = await readStructured(
-      required(parsed, '--definition'),
-      'WORK_ITEM_DEFINITION',
-      { cwd: root, fs, stdin: io.stdin },
-    );
-    return reviseWorkItem({
-      ...common,
-      definition,
-      expectedBaselineFingerprint: required(parsed, '--expected-baseline'),
-      confirmed: parsed.confirmed,
-    });
-  }
-  if (parsed.command === 'ready-tasks') {
-    return listReadyTasks({ ...common, workItemId: required(parsed, '--item') });
-  }
-  if (parsed.command === 'task-context') {
-    return buildTaskContext({ ...common, id: required(parsed, '--item') });
-  }
-  if (parsed.command === 'select-development-mode') {
-    return selectDevelopmentMode({
-      ...common,
-      id: required(parsed, '--item'),
-      mode: required(parsed, '--development-mode'),
-      expectedBaselineFingerprint: required(parsed, '--expected-baseline'),
-      confirmed: parsed.confirmed,
-    });
-  }
-  if (parsed.command === 'claim-task') {
-    return claimTask({
-      ...common,
-      id: required(parsed, '--item'),
-      owner: required(parsed, '--owner'),
-      operationId: required(parsed, '--operation'),
-    });
-  }
-  if (parsed.command === 'retry-item') {
-    return retryWorkItem({
-      ...common,
-      id: required(parsed, '--item'),
-      expectedBaselineFingerprint: required(parsed, '--expected-baseline'),
-      confirmed: parsed.confirmed,
-    });
-  }
-  const evidence = await readStructured(
-    required(parsed, '--evidence'),
-    'WORK_ITEM_EVIDENCE',
-    { cwd: root, fs, stdin: io.stdin },
-  );
-  if (parsed.command === 'task-result') {
-    return recordTaskResult({
-      ...common,
-      id: required(parsed, '--item'),
-      operationId: required(parsed, '--operation'),
-      status: required(parsed, '--status'),
-      evidence,
-    });
-  }
-  if (parsed.command === 'delivery-item') {
-    return recordDelivery({
-      ...common,
-      id: required(parsed, '--item'),
-      action: required(parsed, '--action'),
-      evidence,
-    });
-  }
-  return recordWorkItemGate({
-    ...common,
-    id: required(parsed, '--item'),
-    status: required(parsed, '--status'),
-    evidence,
-  });
-}
-
 export async function runCli(argv, io = {}) {
   const stdout = io.stdout ?? ((value) => process.stdout.write(value));
   const stderr = io.stderr ?? ((value) => process.stderr.write(value));
@@ -419,37 +250,10 @@ export async function runCli(argv, io = {}) {
       stdout(jsonOutput ? renderJson({ ok: result.status === 'PASS', result }) : renderJson(result));
       return result.status === 'PASS' ? 0 : 2;
     }
-    if ([
-      'prepare-item', 'freeze-item', 'revise-item', 'ready-tasks', 'task-context',
-      'select-development-mode', 'claim-task', 'task-result', 'retry-item', 'gate-item', 'delivery-item',
-    ].includes(parsed.command)) {
-      const result = await runWorkItemCommand(parsed, io);
-      stdout(jsonOutput ? renderJson({ ok: true, result }) : renderJson(result));
-      return 0;
-    }
     throw new GatedLoopError('UNKNOWN_COMMAND', `Unknown command: ${parsed.command}`);
   } catch (error) {
     const stable = error instanceof GatedLoopError ? error : new GatedLoopError('INTERNAL_ERROR', 'Unexpected error');
     stderr(jsonOutput ? renderJson({ ok: false, error: { code: stable.code, message: stable.message, details: stable.details } }) : renderError(stable));
     return stable.exitCode;
   }
-}
-
-export async function runHierarchicalCli(argv, io = {}) {
-  const stdout = io.stdout ?? ((value) => process.stdout.write(value));
-  const stderr = io.stderr ?? ((value) => process.stderr.write(value));
-  const command = argv.find((value) => !value.startsWith('--'));
-  if (!command || argv.includes('--help')) {
-    stdout(hierarchicalHelp);
-    return 0;
-  }
-  if (!HIERARCHICAL_COMMANDS.includes(command)) {
-    const error = new GatedLoopError('UNKNOWN_COMMAND', `Unknown hdg command: ${command}`);
-    const jsonOutput = argv.includes('--json');
-    stderr(jsonOutput
-      ? renderJson({ ok: false, error: { code: error.code, message: error.message, details: error.details } })
-      : renderError(error));
-    return error.exitCode;
-  }
-  return runCli(argv, io);
 }

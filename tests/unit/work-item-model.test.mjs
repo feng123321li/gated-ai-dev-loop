@@ -58,6 +58,27 @@ test('shallow roots cannot declare dependencies that require a missing aggregati
   );
 });
 
+test('gate level is a required machine contract and LIGHT is valid only for Task', () => {
+  const light = validateWorkItemDefinition(issueTaskDefinition({ parentId: null, gateLevel: 'LIGHT' }));
+  assert.equal(light.gateLevel, 'LIGHT');
+  assert.match(renderWorkItemBaseline(light), /Gate Level: LIGHT/);
+
+  assert.throws(
+    () => validateWorkItemDefinition(issueTaskDefinition({ parentId: null, gateLevel: 'NONE' })),
+    { code: 'WORK_ITEM_GATE_LEVEL_INVALID' },
+  );
+  assert.throws(
+    () => validateWorkItemDefinition(capabilityDefinition({ parentId: null, gateLevel: 'LIGHT' })),
+    { code: 'WORK_ITEM_GATE_LEVEL_INVALID' },
+  );
+  const missing = issueTaskDefinition({ parentId: null });
+  delete missing.gateLevel;
+  assert.throws(
+    () => validateWorkItemDefinition(missing),
+    { code: 'WORK_ITEM_DEFINITION_INVALID' },
+  );
+});
+
 test('hierarchy validation rejects Workstream entities, unplanned children, scope expansion, and Task children', () => {
   const delivery = validateWorkItemDefinition(deliveryDefinition());
   const capability = validateWorkItemDefinition(capabilityDefinition(), { parent: delivery });

@@ -15,6 +15,7 @@ import {
   recordTaskResult,
   recordDelivery,
   recordWorkItemGate,
+  promoteWorkItem,
   retryWorkItem,
   reviseWorkItem,
   selectDevelopmentMode,
@@ -69,12 +70,13 @@ async function selectMode(root, id, mode = 'active') {
 
 test('a standalone root Task has its own baseline, dispatch, context, and gate', async (t) => {
   const root = await fixture(t);
-  const task = issueTaskDefinition({ id: 't-standalone', parentId: null });
+  const task = issueTaskDefinition({ id: 't-standalone', parentId: null, gateLevel: 'LIGHT' });
   await prepareAndFreeze(root, task);
   await selectMode(root, task.id);
 
   assert.deepEqual(await listReadyTasks({ root, workItemId: task.id }), [task.id]);
   const context = await buildTaskContext({ root, id: task.id });
+  assert.equal(context.gateLevel, 'LIGHT');
   assert.deepEqual(context.parentContracts, []);
   assert.deepEqual(context.capabilityDependencies, []);
 
@@ -93,7 +95,140 @@ test('a standalone root Task has its own baseline, dispatch, context, and gate',
     evidence: { path: 'results/standalone-gate.json', sha256: 'b'.repeat(64) },
   });
   const registry = await readWorkItemRegistry({ root });
+  assert.equal(registry.workItems.find(({ id }) => id === task.id).gateLevel, 'LIGHT');
   assert.equal(registry.workItems.find(({ id }) => id === task.id).status, 'VERIFIED');
+});
+
+test('a frozen root Task is promoted under a pre-frozen Capability with auditable history', async (t) => {
+  const root = await fixture(t);
+  const task = issueTaskDefinition({ id: 't-standalone', parentId: null, gateLevel: 'LIGHT' });
+  const capability = capabilityDefinition({
+    parentId: null,
+    children: [{
+      id: task.id,
+      kind: 'TASK',
+      title: task.title,
+      requirementIds: ['R-001'],
+      acceptanceIds: ['A-001'],
+    }],
+  });
+  await prepareAndFreeze(root, task);
+  await selectMode(root, task.id);
+  await prepareWorkItem({ root, definition: capability, hostRuntime: 'codex' });
+
+  let registry = await readWorkItemRegistry({ root });
+  const sourceBefore = registry.workItems.find(({ id }) => id === task.id);
+  const parentBefore = registry.workItems.find(({ id }) => id === capability.id);
+  await assert.rejects(
+    () => promoteWorkItem({
+      root,
+      id: task.id,
+      parentId: capability.id,
+      expectedBaselineFingerprint: sourceBefore.baselineFingerprint,
+      expectedParentBaselineFingerprint: parentBefore.baselineFingerprint,
+      confirmed: true,
+    }),
+    { code: 'WORK_ITEM_PROMOTION_PARENT_NOT_FROZEN' },
+  );
+  await freezeWorkItem({ root, id: capability.id, confirmed: true });
+  registry = await readWorkItemRegistry({ root });
+  const frozenParent = registry.workItems.find(({ id }) => id === capability.id);
+  await assert.rejects(
+    () => promoteWorkItem({
+      root,
+      id: task.id,
+      parentId: capability.id,
+      expectedBaselineFingerprint: sourceBefore.baselineFingerprint,
+      expectedParentBaselineFingerprint: frozenParent.baselineFingerprint,
+      confirmed: false,
+    }),
+    { code: 'CONFIRMATION_REQUIRED' },
+  );
+
+  const promoted = await promoteWorkItem({
+    root,
+    id: task.id,
+    parentId: capability.id,
+    expectedBaselineFingerprint: sourceBefore.baselineFingerprint,
+    expectedParentBaselineFingerprint: frozenParent.baselineFingerprint,
+    confirmed: true,
+    now: () => '2026-07-16T00:05:00.000Z',
+  });
+  assert.equal(promoted.kind, 'TASK');
+  assert.equal(promoted.parentId, capability.id);
+  assert.equal(promoted.gateLevel, 'LIGHT');
+
+  registry = await readWorkItemRegistry({ root });
+  const sourceAfter = registry.workItems.find(({ id }) => id === task.id);
+  const parentAfter = registry.workItems.find(({ id }) => id === capability.id);
+  assert.equal(sourceAfter.parentId, capability.id);
+  assert.ok(parentAfter.childIds.includes(task.id));
+  assert.equal(sourceAfter.status, 'WAITING_FOR_DEVELOPMENT_MODE_SELECTION');
+  assert.equal(sourceAfter.developmentMode, null);
+  assert.equal(registry.promotionHistory.length, 1);
+  assert.deepEqual(registry.promotionHistory[0], {
+    schemaVersion: 1,
+    childId: task.id,
+    childKind: 'TASK',
+    parentId: capability.id,
+    parentKind: 'CAPABILITY',
+    previousBaselineFingerprint: sourceBefore.baselineFingerprint,
+    promotedBaselineFingerprint: sourceAfter.baselineFingerprint,
+    parentBaselineFingerprint: frozenParent.baselineFingerprint,
+    promotedAt: '2026-07-16T00:05:00.000Z',
+  });
+  const baseline = JSON.parse(await readFile(path.join(
+    root,
+    '.hierarchical-delivery-governance',
+    'work-items',
+    task.id,
+    'baseline.json',
+  ), 'utf8'));
+  assert.equal(baseline.parentId, capability.id);
+  assert.equal(baseline.gateLevel, 'LIGHT');
+  await assert.rejects(
+    () => readFile(path.join(
+      root,
+      '.hierarchical-delivery-governance',
+      'work-items',
+      task.id,
+      'development-mode.json',
+    )),
+    { code: 'ENOENT' },
+  );
+  await selectMode(root, task.id);
+  assert.deepEqual(
+    (await buildTaskContext({ root, id: task.id })).parentContracts.map(({ id }) => id),
+    [capability.id],
+  );
+});
+
+test('a frozen root Capability is promoted under a pre-frozen Delivery', async (t) => {
+  const root = await fixture(t);
+  const capability = capabilityDefinition({ parentId: null });
+  const delivery = deliveryDefinition();
+  await prepareAndFreeze(root, capability);
+  await prepareAndFreeze(root, delivery);
+  const before = await readWorkItemRegistry({ root });
+  const source = before.workItems.find(({ id }) => id === capability.id);
+  const parent = before.workItems.find(({ id }) => id === delivery.id);
+
+  await promoteWorkItem({
+    root,
+    id: capability.id,
+    parentId: delivery.id,
+    expectedBaselineFingerprint: source.baselineFingerprint,
+    expectedParentBaselineFingerprint: parent.baselineFingerprint,
+    confirmed: true,
+  });
+
+  const after = await readWorkItemRegistry({ root });
+  assert.equal(after.workItems.find(({ id }) => id === capability.id).parentId, delivery.id);
+  assert.equal(after.workItems.find(({ id }) => id === capability.id).gateLevel, 'FULL');
+  assert.deepEqual(
+    after.promotionHistory.map(({ childKind, parentKind }) => ({ childKind, parentKind })),
+    [{ childKind: 'CAPABILITY', parentKind: 'DELIVERY' }],
+  );
 });
 
 test('a root Capability aggregates child Tasks without an invented Delivery', async (t) => {
@@ -143,7 +278,7 @@ test('hierarchical work items freeze independent baselines and roll up only afte
   await prepareAndFreeze(root, verifyTaskDefinition());
 
   let registry = await readWorkItemRegistry({ root });
-  assert.equal(registry.schemaVersion, 2);
+  assert.equal(registry.schemaVersion, 3);
   assert.deepEqual(
     registry.workItems.map(({ id, kind, parentId }) => ({ id, kind, parentId })),
     [
@@ -712,6 +847,27 @@ test('registry recovery rejects unsafe work item identities before any package p
   const registryPath = path.join(root, '.hierarchical-delivery-governance', 'work-item-registry.json');
   const registry = JSON.parse(await readFile(registryPath, 'utf8'));
   registry.workItems[0].id = '../../outside';
+  await writeFile(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+  await assert.rejects(
+    () => readWorkItemRegistry({ root }),
+    { code: 'WORK_ITEM_REGISTRY_INVALID' },
+  );
+});
+
+test('registry recovery requires schema v3 gate levels and valid promotion history', async (t) => {
+  const root = await fixture(t);
+  await prepareAndFreeze(root, issueTaskDefinition({ parentId: null, gateLevel: 'LIGHT' }));
+  const registryPath = path.join(root, '.hierarchical-delivery-governance', 'work-item-registry.json');
+  const registry = JSON.parse(await readFile(registryPath, 'utf8'));
+  delete registry.workItems[0].gateLevel;
+  await writeFile(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+  await assert.rejects(
+    () => readWorkItemRegistry({ root }),
+    { code: 'WORK_ITEM_REGISTRY_INVALID' },
+  );
+
+  registry.workItems[0].gateLevel = 'LIGHT';
+  registry.promotionHistory = [null];
   await writeFile(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
   await assert.rejects(
     () => readWorkItemRegistry({ root }),

@@ -22,12 +22,15 @@ import {
   workItemChildContractFingerprint,
   workItemContractFingerprint,
   WORK_ITEM_AUTHORITIES,
+  WORK_ITEM_GATE_LEVELS,
   WORK_ITEM_KINDS,
+  WORK_ITEM_SCHEMA_VERSION,
 } from './model.mjs';
 
 export const WORK_ITEM_REGISTRY_FILE = 'work-item-registry.json';
 export const WORK_ITEMS_DIRECTORY = 'work-items';
 export const GOVERNANCE_DIRECTORY = '.hierarchical-delivery-governance';
+export const WORK_ITEM_REGISTRY_SCHEMA_VERSION = 3;
 const DELIVERY_STATUSES = Object.freeze([
   'NOT_READY',
   'WAITING_FOR_INDEPENDENT_REVIEW',
@@ -68,11 +71,12 @@ async function assertSelfHostingDogfood(root, explicitDogfood, fs) {
 
 function emptyRegistry(root, at) {
   return {
-    schemaVersion: 2,
+    schemaVersion: WORK_ITEM_REGISTRY_SCHEMA_VERSION,
     coordinationRoot: path.resolve(root),
     revision: 0,
     currentFocus: { workItemId: null, purpose: null },
     workItems: [],
+    promotionHistory: [],
     updatedAt: at,
   };
 }
@@ -172,10 +176,11 @@ function validDelivery(value) {
 
 function validateRegistry(registry, root) {
   const valid = registry && typeof registry === 'object' && !Array.isArray(registry)
-    && registry.schemaVersion === 2
+    && registry.schemaVersion === WORK_ITEM_REGISTRY_SCHEMA_VERSION
     && registry.coordinationRoot === path.resolve(root)
     && Number.isInteger(registry.revision) && registry.revision >= 0
     && Array.isArray(registry.workItems)
+    && Array.isArray(registry.promotionHistory)
     && registry.currentFocus && typeof registry.currentFocus === 'object';
   if (!valid) fail('WORK_ITEM_REGISTRY_INVALID', 'Work item registry is invalid');
   const ids = registry.workItems.map(({ id }) => id);
@@ -187,9 +192,29 @@ function validateRegistry(registry, root) {
     fail('WORK_ITEM_REGISTRY_INVALID', 'Work item registry contains duplicate or unsafe IDs');
   }
   const byId = new Map(registry.workItems.map((entry) => [entry.id, entry]));
+  const fingerprint = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+  for (const promotion of registry.promotionHistory) {
+    const recordValid = promotion && typeof promotion === 'object' && !Array.isArray(promotion);
+    const kindsValid = recordValid && (
+      (promotion.childKind === 'TASK' && promotion.parentKind === 'CAPABILITY')
+      || (promotion.childKind === 'CAPABILITY' && promotion.parentKind === 'DELIVERY')
+    );
+    const promotionValid = recordValid
+      && promotion.schemaVersion === 1
+      && safeId(promotion.childId) && safeId(promotion.parentId)
+      && kindsValid
+      && fingerprint(promotion.previousBaselineFingerprint)
+      && fingerprint(promotion.promotedBaselineFingerprint)
+      && fingerprint(promotion.parentBaselineFingerprint)
+      && typeof promotion.promotedAt === 'string'
+      && !Number.isNaN(Date.parse(promotion.promotedAt));
+    if (!promotionValid) fail('WORK_ITEM_REGISTRY_INVALID', 'Work item promotion history is invalid');
+  }
   for (const entry of registry.workItems) {
     const validEntry = WORK_ITEM_KINDS.includes(entry.kind)
       && entry.authorityKind === WORK_ITEM_AUTHORITIES[entry.kind]
+      && WORK_ITEM_GATE_LEVELS.includes(entry.gateLevel)
+      && (entry.kind === 'TASK' || entry.gateLevel === 'FULL')
       && (entry.parentId === null || safeId(entry.parentId))
       && Array.isArray(entry.childIds) && entry.childIds.every(safeId)
       && entry.packagePath === itemRelativePath(entry.id)
@@ -318,11 +343,11 @@ function renderWorkspaceOverview(registry) {
     `> registry revision: ${registry.revision}`,
     `> current focus: ${registry.currentFocus.workItemId ?? 'none'}`,
     '',
-    '| Work Item | Kind | Parent | Stage | Status | Development mode | Delivery | Direct progress | Descendant progress | Gate | Claim |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| Work Item | Kind | Gate level | Parent | Stage | Status | Development mode | Delivery | Direct progress | Descendant progress | Gate | Claim |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
   ];
   for (const item of sortedItems(registry.workItems)) {
-    lines.push(`| ${item.id} | ${item.kind} | ${item.parentId ?? 'none'} | ${item.stage} | ${item.status} | ${item.developmentMode?.mode ?? 'n/a'} | ${item.delivery?.status ?? 'n/a'} | ${item.progress.directChildren.verified}/${item.progress.directChildren.total} | ${item.progress.descendants.verified}/${item.progress.descendants.total} | ${item.gate.status} | ${item.claim?.owner ?? 'none'} |`);
+    lines.push(`| ${item.id} | ${item.kind} | ${item.gateLevel} | ${item.parentId ?? 'none'} | ${item.stage} | ${item.status} | ${item.developmentMode?.mode ?? 'n/a'} | ${item.delivery?.status ?? 'n/a'} | ${item.progress.directChildren.verified}/${item.progress.directChildren.total} | ${item.progress.descendants.verified}/${item.progress.descendants.total} | ${item.gate.status} | ${item.claim?.owner ?? 'none'} |`);
   }
   lines.push('');
   return lines.join('\n');
@@ -333,6 +358,7 @@ function renderItemOverview(entry) {
     `# ${entry.id} Work Item Overview`,
     '',
     `- Kind: ${entry.kind}`,
+    `- Gate level: ${entry.gateLevel}`,
     `- Authority: ${entry.authorityKind}`,
     `- Parent: ${entry.parentId ?? 'none'}`,
     `- Baseline: [baseline.md](baseline.md)`,
@@ -349,6 +375,7 @@ function renderItemProgress(entry) {
     `- Record revision: ${entry.recordRevision}`,
     `- Stage: ${entry.stage}`,
     `- Status: ${entry.status}`,
+    `- Gate level: ${entry.gateLevel}`,
     `- Delivery: ${entry.delivery?.status ?? 'n/a'}`,
     `- Gate: ${entry.gate.status}`,
     `- Development mode: ${entry.developmentMode?.mode ?? 'not selected'}`,
@@ -434,7 +461,7 @@ async function readPackageDefinition(root, entry, fs) {
   const definition = await readJsonFile(target, 'baseline.json', fs, 'WORK_ITEM_PACKAGE_INVALID');
   const state = await readJsonFile(target, 'state.json', fs, 'WORK_ITEM_PACKAGE_INVALID');
   const fingerprint = workItemBaselineFingerprint(definition);
-  const valid = state.schemaVersion === 2
+  const valid = state.schemaVersion === WORK_ITEM_SCHEMA_VERSION
     && state.id === entry.id
     && state.baselineFingerprint === fingerprint
     && state.contractFingerprint === workItemContractFingerprint(definition)
@@ -471,17 +498,25 @@ function definitionFiles(definition, state) {
     'baseline.json': json(definition),
     'baseline.md': renderWorkItemBaseline(definition),
     'work-item.json': json({
-      schemaVersion: 2,
+      schemaVersion: WORK_ITEM_SCHEMA_VERSION,
       id: definition.id,
       kind: definition.kind,
+      gateLevel: definition.gateLevel,
       authorityKind: definition.authorityKind,
       parentId: definition.parentId,
     }),
     'state.json': json(state),
   };
-  if (definition.children) files['children.json'] = json({ schemaVersion: 2, children: definition.children });
-  if (definition.execution) files['execution.json'] = json({ schemaVersion: 2, ...definition.execution });
+  if (definition.children) files['children.json'] = json({ schemaVersion: WORK_ITEM_SCHEMA_VERSION, children: definition.children });
+  if (definition.execution) files['execution.json'] = json({ schemaVersion: WORK_ITEM_SCHEMA_VERSION, ...definition.execution });
   return files;
+}
+
+function rawDefinition(definition) {
+  const raw = { ...definition };
+  delete raw.authorityKind;
+  delete raw.parentContractFingerprint;
+  return raw;
 }
 
 async function writeNewPackage(target, files, fs) {
@@ -496,6 +531,7 @@ function entryFromDefinition(definition, state, at) {
   return {
     id: definition.id,
     kind: definition.kind,
+    gateLevel: definition.gateLevel,
     authorityKind: definition.authorityKind,
     parentId: definition.parentId,
     childIds: definition.children?.map(({ id }) => id) ?? [],
@@ -597,7 +633,7 @@ export async function prepareWorkItem({
     validateTaskDependencies(normalized, parent);
     await validateCapabilityDependencyGraph(root, registry, normalized, fs);
     const state = {
-      schemaVersion: 2,
+      schemaVersion: WORK_ITEM_SCHEMA_VERSION,
       id: normalized.id,
       stage: 'WAITING_FOR_BASELINE_CONFIRMATION',
       baselineFingerprint: workItemBaselineFingerprint(normalized),
@@ -830,6 +866,123 @@ export async function reviseWorkItem({
       kind: entry.kind,
       baselineRevision: state.baselineRevision,
       baselineFingerprint: state.baselineFingerprint,
+      status: entry.status,
+    };
+  }, { now });
+}
+
+export async function promoteWorkItem({
+  root,
+  id,
+  parentId,
+  expectedBaselineFingerprint,
+  expectedParentBaselineFingerprint,
+  confirmed = false,
+  explicitDogfood = false,
+  now,
+  fs = fsPromises,
+} = {}) {
+  await assertSelfHostingDogfood(root, explicitDogfood, fs);
+  if (confirmed !== true) fail('CONFIRMATION_REQUIRED', 'Work item promotion requires explicit confirmation');
+  const at = timestamp(now);
+  return withRegistry(root, fs, async (registry) => {
+    const entry = itemById(registry, id);
+    const parentEntry = itemById(registry, parentId);
+    if (entry.id === parentEntry.id) fail('WORK_ITEM_PROMOTION_INVALID', 'A work item cannot promote under itself');
+    if (entry.parentId !== null || !['TASK', 'CAPABILITY'].includes(entry.kind)) {
+      fail('WORK_ITEM_PROMOTION_ROOT_REQUIRED', 'Only a root Task or root Capability can be promoted');
+    }
+    const expectedParentKind = entry.kind === 'TASK' ? 'CAPABILITY' : 'DELIVERY';
+    if (parentEntry.kind !== expectedParentKind || parentEntry.parentId !== null) {
+      fail('WORK_ITEM_PROMOTION_PARENT_INVALID', `${entry.kind} promotion requires a root ${expectedParentKind} parent`);
+    }
+    if (entry.stage !== 'BASELINE_FROZEN'
+        || !['FROZEN', 'WAITING_FOR_DEVELOPMENT_MODE_SELECTION'].includes(entry.status)
+        || entry.gate.status !== 'NOT_RUN') {
+      fail('WORK_ITEM_PROMOTION_SOURCE_NOT_FROZEN', 'Promotion source must be an unblocked, unverified frozen root');
+    }
+    if (parentEntry.stage !== 'BASELINE_FROZEN'
+        || parentEntry.status !== 'FROZEN'
+        || parentEntry.gate.status !== 'NOT_RUN') {
+      fail('WORK_ITEM_PROMOTION_PARENT_NOT_FROZEN', 'Promotion parent baseline must be frozen before attachment');
+    }
+    if (entry.baselineFingerprint !== expectedBaselineFingerprint
+        || parentEntry.baselineFingerprint !== expectedParentBaselineFingerprint) {
+      fail('WORK_ITEM_REVISION_CONFLICT', 'Promotion fingerprints are not current');
+    }
+    const active = registry.workItems.find((candidate) => (
+      candidate.claim && isDescendantOf(registry, candidate, entry.id)
+    ));
+    if (active) fail('WORK_ITEM_PROMOTION_ACTIVE_CLAIM', 'A promoted subtree cannot contain an active claim');
+
+    const current = await assertCurrentLineage(root, registry, entry, fs);
+    const parentPackage = await assertCurrentLineage(root, registry, parentEntry, fs);
+    const normalized = validateWorkItemDefinition({
+      ...rawDefinition(current.definition),
+      parentId: parentEntry.id,
+    }, { parent: parentPackage.definition });
+    validateTaskDependencies(normalized, parentPackage.definition);
+    await validateCapabilityDependencyGraph(root, registry, normalized, fs);
+
+    const state = {
+      ...current.state,
+      baselineFingerprint: workItemBaselineFingerprint(normalized),
+      contractFingerprint: workItemContractFingerprint(normalized),
+      parentContractFingerprint: normalized.parentContractFingerprint,
+      baselineRevision: (current.state.baselineRevision ?? 1) + 1,
+      revisedAt: at,
+    };
+    const files = definitionFiles(normalized, state);
+    await atomicReplaceDirectory(current.target, async (staging) => {
+      await copyPackageContents(current.target, staging, fs);
+      for (const [name, contents] of Object.entries(files)) {
+        await atomicWriteFile(path.join(staging, name), contents, { fs });
+      }
+      if (entry.kind === 'TASK') {
+        for (const name of ['development-mode.json', 'context-manifest.json', 'development-handoff.md']) {
+          await fs.rm(path.join(staging, name), { force: true });
+        }
+      }
+    }, { fs });
+
+    const previousBaselineFingerprint = entry.baselineFingerprint;
+    entry.parentId = parentEntry.id;
+    entry.baselineFingerprint = state.baselineFingerprint;
+    entry.contractFingerprint = state.contractFingerprint;
+    entry.parentContractFingerprint = state.parentContractFingerprint;
+    entry.status = entry.kind === 'TASK' ? 'WAITING_FOR_DEVELOPMENT_MODE_SELECTION' : 'FROZEN';
+    entry.developmentMode = null;
+    entry.gate = { status: 'NOT_RUN', evidence: null };
+    entry.latestEvidence = null;
+    entry.recordRevision += 1;
+    entry.updatedAt = at;
+    parentEntry.recordRevision += 1;
+    parentEntry.updatedAt = at;
+    registry.promotionHistory.push({
+      schemaVersion: 1,
+      childId: entry.id,
+      childKind: entry.kind,
+      parentId: parentEntry.id,
+      parentKind: parentEntry.kind,
+      previousBaselineFingerprint,
+      promotedBaselineFingerprint: entry.baselineFingerprint,
+      parentBaselineFingerprint: parentEntry.baselineFingerprint,
+      promotedAt: at,
+    });
+    registry.currentFocus = {
+      workItemId: entry.id,
+      purpose: entry.kind === 'TASK' ? 'DEVELOPMENT_MODE_SELECTION' : 'DECOMPOSITION',
+    };
+    registry.revision += 1;
+    registry.updatedAt = at;
+    await writeRegistryUnlocked(root, registry, fs);
+    return {
+      id: entry.id,
+      kind: entry.kind,
+      gateLevel: entry.gateLevel,
+      parentId: entry.parentId,
+      baselineRevision: state.baselineRevision,
+      baselineFingerprint: entry.baselineFingerprint,
       status: entry.status,
     };
   }, { now });
@@ -1203,6 +1356,7 @@ function renderTaskHandoff(context) {
     '# Task Development Handoff',
     '',
     `Task: ${context.task.id}`,
+    `Gate level: ${context.gateLevel}`,
     `Development mode: ${context.developmentMode}`,
     'Frozen authority: `baseline.json`',
     'Independent context: `context-manifest.json`',
@@ -1277,6 +1431,7 @@ export async function buildTaskContext({ root, id, explicitDogfood = false, fs =
   }
   const context = {
     schemaVersion: 1,
+    gateLevel: own.definition.gateLevel,
     developmentMode: entry.developmentMode.mode,
     task: {
       id: own.definition.id,

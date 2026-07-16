@@ -4,7 +4,8 @@ import { readFile, readdir } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runCli, runHierarchicalCli } from '../../src/cli/main.mjs';
+import { runCli } from '../../src/cli/main.mjs';
+import { runHierarchicalCli } from '../../src/cli/hierarchical.mjs';
 import { redact, renderJson } from '../../src/cli/output.mjs';
 
 async function invoke(argv) { const out = []; const err = []; const exitCode = await runCli(argv, { stdout: (s) => out.push(s), stderr: (s) => err.push(s) }); return { exitCode, out: out.join(''), err: err.join('') }; }
@@ -16,6 +17,7 @@ test('help lists only implemented commands', async () => {
   assert.match(result.out, /^Usage: gated-loop <command> \[options\]/);
   for (const command of ['route', 'start', 'prepare', 'freeze', 'self-check', 'accept']) assert.match(result.out, new RegExp(`\\b${command}\\b`));
   for (const command of ['install', 'doctor', 'develop', 'review']) assert.doesNotMatch(result.out, new RegExp(`\\b${command}\\b`));
+  for (const command of ['prepare-item', 'promote-item', 'ready-tasks']) assert.doesNotMatch(result.out, new RegExp(`\\b${command}\\b`));
 });
 
 test('unknown and unimplemented commands have stable errors', async () => {
@@ -65,6 +67,8 @@ test('package exposes only the hdg executable and rejects old workflow commands'
   for (const command of ['route', 'start', 'prepare', 'freeze', 'self-check', 'accept', 'retry-task']) {
     assert.match((await invokeHierarchical([command])).err, /UNKNOWN_COMMAND/);
   }
+  assert.match((await invoke(['prepare-item'])).err, /UNKNOWN_COMMAND/);
+  assert.match((await invokeHierarchical(['--help'])).out, /promote-item/);
   assert.match((await invokeHierarchical(['ready-tasks', '--project', 'd-example'])).err, /UNKNOWN_OPTION/);
   const smoke = spawnSync(process.execPath, [path.join(root, 'bin', 'hdg.mjs'), '--help'], { encoding: 'utf8' });
   assert.equal(smoke.status, 0);

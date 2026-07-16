@@ -620,7 +620,15 @@ export async function prepareWorkItem({
       if (workItemBaselineFingerprint(candidate) !== current.state.baselineFingerprint) {
         fail('WORK_ITEM_SOURCE_CHANGED', `${existing.id} prepared baseline differs from the requested definition`);
       }
-      return { created: false, idempotent: true, id: existing.id, stage: existing.stage };
+      return {
+        created: false,
+        idempotent: true,
+        id: existing.id,
+        kind: existing.kind,
+        stage: existing.stage,
+        baselineFingerprint: existing.baselineFingerprint,
+        artifactDir: itemPath(root, existing.id),
+      };
     }
 
     let parent = null;
@@ -714,6 +722,46 @@ export async function freezeWorkItem({
     await writeRegistryUnlocked(root, registry, fs);
     return { created: true, idempotent: false, id, stage: entry.stage, baselineFingerprint: entry.baselineFingerprint };
   }, { now });
+}
+
+export async function approveWorkItem({
+  root,
+  definition,
+  hostRuntime,
+  confirmed = false,
+  explicitDogfood = false,
+  now,
+  fs = fsPromises,
+} = {}) {
+  if (confirmed !== true) {
+    fail('CONFIRMATION_REQUIRED', 'Work item approval must explicitly authorize persistence and baseline freeze');
+  }
+  const prepared = await prepareWorkItem({
+    root,
+    definition,
+    hostRuntime,
+    explicitDogfood,
+    now,
+    fs,
+  });
+  const frozen = await freezeWorkItem({
+    root,
+    id: prepared.id,
+    expectedBaselineFingerprint: prepared.baselineFingerprint,
+    confirmed: true,
+    explicitDogfood,
+    now,
+    fs,
+  });
+  return {
+    ...frozen,
+    approved: true,
+    prepared: {
+      created: prepared.created,
+      idempotent: prepared.idempotent,
+    },
+    artifactDir: prepared.artifactDir,
+  };
 }
 
 async function retryBlockedWorkItem({
@@ -1353,26 +1401,26 @@ function parentContractSnapshot(parent, childId) {
 
 function renderTaskHandoff(context) {
   return [
-    '# Task Development Handoff',
+    'Implement the following frozen Task in a fresh development conversation.',
     '',
     `Task: ${context.task.id}`,
+    `Baseline fingerprint: ${context.task.baselineFingerprint}`,
     `Gate level: ${context.gateLevel}`,
     `Development mode: ${context.developmentMode}`,
-    'Frozen authority: `baseline.json`',
-    'Independent context: `context-manifest.json`',
     '',
-    '## Rules',
-    '- Implement only this frozen leaf Task.',
-    '- Do not reinterpret parent contracts or acceptance criteria.',
-    '- Write only within the listed Scope.',
-    '- Return BLOCKED when a dependency, contract, or workspace is unavailable.',
+    'Use the embedded frozen context as the complete authority. Do not reanalyze the original request, change requirements, or inherit assumptions from another conversation.',
+    '',
+    'Execution rules:',
+    '- Implement only this frozen leaf Task and write only within its scope.',
+    '- Do not modify governance artifacts, `.git/**`, or external state.',
+    '- Run the listed test commands and report only evidence that actually exists.',
     '- Do not commit, push, publish, or report PASS.',
+    '- Return exactly one of IMPLEMENTED or BLOCKED.',
     '',
-    '## Scope',
-    ...context.task.scope.map((entry) => `- ${entry}`),
-    '',
-    '## Test Commands',
-    ...context.testCommands.map((argv) => `- ${JSON.stringify(argv)}`),
+    'Frozen context:',
+    '```json',
+    JSON.stringify(context, null, 2),
+    '```',
     '',
   ].join('\n');
 }
@@ -1453,9 +1501,10 @@ export async function buildTaskContext({ root, id, explicitDogfood = false, fs =
       allowExternalStateChanges: false,
     },
   };
+  const handoffPrompt = renderTaskHandoff(context);
   await atomicWriteFile(path.join(own.target, 'context-manifest.json'), json(context), { fs });
-  await atomicWriteFile(path.join(own.target, 'development-handoff.md'), renderTaskHandoff(context), { fs });
-  return context;
+  await atomicWriteFile(path.join(own.target, 'development-handoff.md'), handoffPrompt, { fs });
+  return { ...context, handoffPrompt };
 }
 
 export function registryFingerprint(registry) {

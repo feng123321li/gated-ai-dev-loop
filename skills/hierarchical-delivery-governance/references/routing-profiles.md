@@ -56,6 +56,4 @@ Delivery → Capability → Task
 
 ## 变更类型与创建授权
 
-`Feature/Bugfix/Refactor/Migration/Maintenance/Docs/Test` 只描述主要改动性质，不决定父子层级。路由只返回建议，不创建包、不生成 ID、不冻结 baseline。用户必须明确批准 ID 和持久化；冻结、修订和 dogfood 分别需要独立明确授权。
-
-维护 `hierarchical-delivery-governance` 实现仓库时，无论描述中出现什么关键词，都优先进入 `SELF_HOSTING_MAINTENANCE`。只有显式 dogfood 才使用标准运行包路线。
+`Feature/Bugfix/Refactor/Migration/Maintenance/Docs/Test` 只描述主要改动性质，不决定父子层级。路由只返回建议，不创建包、不生成 ID、不冻结 baseline。用户必须一次明确批准具体 ID、完整 baseline 内容以及持久化并冻结；修订和升层仍分别需要独立明确授权。

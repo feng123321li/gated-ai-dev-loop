@@ -16,7 +16,7 @@ Delivery/Capability authority 为 `COORDINATION`，Task 为 `EXECUTION`。
 
 ## 准备和冻结
 
-准备只在用户批准 ID 和持久化后执行，状态为 `WAITING_FOR_BASELINE_CONFIRMATION`。冻结必须收到与该 baseline 对应的显式确认，并重新验证：
+正常交互只请求一次批准。批准必须绑定刚刚展示的具体 ID、完整 baseline 内容以及“持久化并冻结”动作；宿主随后调用 `approve-item --confirmed`，控制器内部依次准备并冻结，不再向用户请求第二次确认。`prepare-item` 产生的 `WAITING_FOR_BASELINE_CONFIRMATION` 仅作为恢复/诊断中间态。冻结时仍重新验证：
 
 - schema、ID 和字段集合；
 - `gateLevel` 合法且协调层没有降为 `LIGHT`；

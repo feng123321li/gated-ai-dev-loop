@@ -4,6 +4,7 @@ import { GatedLoopError } from '../core/errors.mjs';
 import { readSafeRegularFile } from '../core/fs-safe.mjs';
 import { isAgentRuntime } from '../mode/host-runtime.mjs';
 import {
+  approveWorkItem,
   buildTaskContext,
   claimTask,
   freezeWorkItem,
@@ -20,6 +21,7 @@ import {
 import { renderError, renderJson } from './output.mjs';
 
 export const HIERARCHICAL_COMMANDS = Object.freeze([
+  'approve-item',
   'prepare-item',
   'freeze-item',
   'revise-item',
@@ -41,6 +43,9 @@ const VALUE_OPTIONS = new Set([
 ]);
 const FLAG_OPTIONS = new Set(['--json', '--help', '--confirmed', '--dogfood']);
 const COMMAND_OPTIONS = Object.freeze({
+  'approve-item': new Set([
+    '--json', '--help', '--definition', '--host-runtime', '--confirmed', '--dogfood',
+  ]),
   'prepare-item': new Set(['--json', '--help', '--definition', '--host-runtime', '--dogfood']),
   'freeze-item': new Set(['--json', '--help', '--item', '--expected-baseline', '--confirmed', '--dogfood']),
   'revise-item': new Set(['--json', '--help', '--definition', '--expected-baseline', '--confirmed', '--dogfood']),
@@ -65,6 +70,7 @@ const usage = `Usage: hdg <command> [options]
 Commands:
 ${HIERARCHICAL_COMMANDS.map((command) => `  ${command}`).join('\n')}
 
+  approve-item --definition <file> --host-runtime <agent> --confirmed
   prepare-item --definition <file> --host-runtime <agent>
   freeze-item --item <id> --expected-baseline <sha256> --confirmed
   revise-item --definition <file> --expected-baseline <sha256> --confirmed
@@ -169,12 +175,20 @@ async function runWorkItemCommand(parsed, io) {
   const root = io.cwd ?? process.cwd();
   const fs = io.fs ?? fsPromises;
   const common = { root, fs, now: io.now, explicitDogfood: parsed.dogfood };
-  if (parsed.command === 'prepare-item' || parsed.command === 'revise-item') {
+  if (['approve-item', 'prepare-item', 'revise-item'].includes(parsed.command)) {
     const definition = await readStructured(
       required(parsed, '--definition'),
       'WORK_ITEM_DEFINITION',
       { cwd: root, fs, stdin: io.stdin },
     );
+    if (parsed.command === 'approve-item') {
+      return approveWorkItem({
+        ...common,
+        definition,
+        hostRuntime: required(parsed, '--host-runtime'),
+        confirmed: parsed.confirmed,
+      });
+    }
     if (parsed.command === 'prepare-item') {
       return prepareWorkItem({
         ...common,

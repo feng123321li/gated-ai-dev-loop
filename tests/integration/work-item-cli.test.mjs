@@ -163,6 +163,56 @@ test('CLI manages a hierarchical Task from preparation through verified evidence
   assert.equal(result(revision.out).baselineRevision, 2);
 });
 
+test('CLI approves and freezes once, then emits a reusable manual development prompt', async (t) => {
+  const root = await fixture(t);
+  const taskValue = issueTaskDefinition({
+    id: 't-manual-handoff',
+    parentId: null,
+    gateLevel: 'LIGHT',
+  });
+  const task = await putJson(root, 'manual-task.json', taskValue);
+
+  const unconfirmed = await invoke(root, [
+    'approve-item', '--definition', task, '--host-runtime', 'codex', '--json',
+  ]);
+  assert.equal(unconfirmed.exitCode, 1);
+  assert.match(unconfirmed.err, /CONFIRMATION_REQUIRED/);
+  assert.equal((await readdir(root)).includes('.hierarchical-delivery-governance'), false);
+
+  const approved = await invoke(root, [
+    'approve-item', '--definition', task, '--host-runtime', 'codex', '--confirmed', '--json',
+  ]);
+  assert.equal(approved.exitCode, 0, approved.err);
+  assert.equal(result(approved.out).stage, 'BASELINE_FROZEN');
+
+  const repeatedApproval = await invoke(root, [
+    'approve-item', '--definition', task, '--host-runtime', 'codex', '--confirmed', '--json',
+  ]);
+  assert.equal(repeatedApproval.exitCode, 0, repeatedApproval.err);
+  assert.equal(result(repeatedApproval.out).idempotent, true);
+
+  const selected = await selectMode(root, taskValue.id, 'manual');
+  assert.equal(selected.exitCode, 0, selected.err);
+
+  const contextResult = await invoke(root, ['task-context', '--item', taskValue.id, '--json']);
+  assert.equal(contextResult.exitCode, 0, contextResult.err);
+  const context = result(contextResult.out);
+  assert.match(context.handoffPrompt, /Implement the following frozen Task/);
+  assert.match(context.handoffPrompt, new RegExp(taskValue.id));
+  assert.match(context.handoffPrompt, new RegExp(context.task.baselineFingerprint));
+  assert.match(context.handoffPrompt, /Return exactly one of IMPLEMENTED or BLOCKED/);
+  assert.match(context.handoffPrompt, /```json/);
+
+  const handoff = await readFile(path.join(
+    root,
+    '.hierarchical-delivery-governance',
+    'work-items',
+    taskValue.id,
+    'development-handoff.md',
+  ), 'utf8');
+  assert.equal(handoff, context.handoffPrompt);
+});
+
 test('CLI promotes a frozen root Task under a separately frozen Capability', async (t) => {
   const root = await fixture(t);
   const taskValue = issueTaskDefinition({ id: 't-standalone', parentId: null, gateLevel: 'LIGHT' });

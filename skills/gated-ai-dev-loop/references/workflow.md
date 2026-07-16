@@ -69,11 +69,14 @@ flowchart TD
 
     RECOVER -->|无合格候选且已确认新任务| ROUTE{"写入门禁等级"}
     ROUTE -->|Light| MICRO_LIGHT["Light · Micro<br/>四段式简报"]
-    ROUTE -->|Full| SCALE{"工作规模"}
+    ROUTE -->|Full| SCALE_FACTS["抽取规模事实<br/>能力与验收、里程碑与阶段映射"]
+    SCALE_FACTS --> SCALE{"工作规模"}
     SCALE -->|Micro| MICRO_FULL["Full · Micro<br/>高风险局部改动"]
     SCALE -->|Task| TASK["Full · Task<br/>一个独立验收结果"]
-    SCALE -->|Capability| CAPABILITY["Full · Capability<br/>多任务协同的完整能力"]
-    SCALE -->|Project| PROJECT["Full · Project<br/>总纲、M / W / T 与 project-plan"]
+    SCALE -->|Capability| CAPABILITY["Full · Capability<br/>一个完整能力 + 一个聚合验收<br/>W / T / S"]
+    SCALE -->|Project| PROJECT["Full · Project<br/>完整大模块或多能力 / 多里程碑<br/>总纲、M / W / T / S 与 project-plan"]
+    SCALE -->|事实未知| SCALE_WAIT["暂定 Full · Project<br/>WAITING_FOR_REQUIREMENT_CONFIRMATION<br/>补齐规模事实后再确认"]
+    SCALE_WAIT --> HOST
 
     MICRO_LIGHT --> KIND["记录主要变更类型<br/>和固定/具体代表说明"]
     MICRO_FULL --> KIND
@@ -91,9 +94,9 @@ flowchart TD
     classDef gate fill:#ffedd5,stroke:#ea580c,color:#431407;
     classDef human fill:#f3f4f6,stroke:#4b5563,color:#111827;
 
-    class INPUT,HOST,REGISTRY,READ_ONLY,RECOVER,RESUME,TASK_SELECT,CLASSIFY,RECOVERED_ACTION,NEXT_ACTION,STAGE1,STAGE2,STAGE3,STAGE4,ROUTE,SCALE,MICRO_LIGHT,MICRO_FULL,TASK,CAPABILITY,PROJECT,KIND,RUNTIME,AUTHORIZE,TRACK host;
+    class INPUT,HOST,REGISTRY,READ_ONLY,RECOVER,RESUME,TASK_SELECT,CLASSIFY,RECOVERED_ACTION,NEXT_ACTION,STAGE1,STAGE2,STAGE3,STAGE4,ROUTE,SCALE_FACTS,SCALE,MICRO_LIGHT,MICRO_FULL,TASK,CAPABILITY,PROJECT,KIND,RUNTIME,AUTHORIZE,TRACK host;
     class FREEZE gate;
-    class NONE,END,CONFIRM human;
+    class NONE,END,SCALE_WAIT,CONFIRM human;
 ```
 
 ## 图 2：工作区覆盖与隔离开发
@@ -240,7 +243,11 @@ flowchart TD
 - 每次开发类消息按精确 ID / 路径、有效当前焦点、唯一 `ACTIVE/WAITING_USER` 候选恢复；多个候选让用户选择，`BLOCKED/DEFERRED/TERMINAL/UNKNOWN` 不参与自动唯一选择。
 - 恢复任务后按注册表 `phase` 和 `nextAction` 进入对应阶段，不得按目录时间或名称选择，也不得重新 `start` 或替换冻结 baseline。
 - 路由分别记录门禁等级、Micro / Task / Capability / Project 工作规模和主要变更类型；CLI 仍只使用 None / Light / Full，执行拓扑另行选择。
-- 总览和进度必须显示规模的固定中文代表说明及当前任务的具体说明；Capability 展示工作流、依赖和集成门禁，Project 提供开发总纲、project-plan、M / W / T 拆解和 SOP 进度看板。
+- Full 工作规模判定前先形成可读的规模事实记录，至少列出完整交付边界、独立能力及其聚合验收、用户可验收里程碑或阶段，以及工作流和依赖到这些边界的映射。
+- 接口、文件或服务数量，以及公共契约、状态机、幂等、多工作区等 Full 风险信号，都不能单独推出 Project；它们只决定门禁强度或触发规模复核。
+- 一个完整能力和一个聚合验收使用 Capability，并按 W/T/S 跟踪工作流、任务与 SOP；完整大模块或多个能力、多个用户可验收里程碑使用 Project，并提供开发总纲、project-plan 和 M/W/T/S 看板。
+- 规模事实未知时保守暂定 Project，保持 `WAITING_FOR_REQUIREMENT_CONFIRMATION` 并展示缺失事实；补齐并确认前不得冻结。
+- 总览和进度必须显示规模的固定中文代表说明、当前任务的具体说明和上述判定事实。
 
 ### 工作区与开发执行
 

@@ -7,8 +7,8 @@
 ## 工作方式
 
 1. 每次开发类消息先校验根级 `task-registry.json`：精确 ID / 路径优先，其次是有效当前焦点，再次是唯一 `ACTIVE/WAITING_USER` 候选；多个候选让用户选择，不按目录时间、名称或措辞相似度猜测。
-2. 新任务分别记录 `None/Light/Full` 门禁等级、`Micro/Task/Capability/Project` 工作规模和主要变更类型，并显示固定中文代表说明及当前任务的具体说明。
-3. `Full · Project · 主要变更类型` 在确认前生成开发总纲和 `rounds/planning/project-plan.md`，按 M/W/T 拆解并检查依赖、工作区、测试与完成定义。
+2. 新任务先形成一份人可读的规模判定记录，列出整体交付边界、能力与验收映射、里程碑或阶段边界，再分别记录 `None/Light/Full` 门禁等级、`Micro/Task/Capability/Project` 工作规模和主要变更类型，并显示固定中文代表说明及当前任务的具体说明。
+3. `Capability` 以一个完整能力和一个聚合验收为边界，按 W/T/S 跟踪工作流、可执行任务与 SOP；`Full · Project · 主要变更类型` 面向完整大模块或多能力、多里程碑交付，在确认前生成开发总纲和 `rounds/planning/project-plan.md`，按 M/W/T/S 拆解并检查依赖、工作区、测试与完成定义。
 4. 用户确认 Full 基线或 Light 简报后冻结，开发授权不再漂移。
 5. 宿主维护根级工作区总纲以及任务内 `development-overview.md`、`progress.md`；每个业务任务和 SOP 状态变化后按“不可变事件 → 注册表 → 总纲与进度”立即回写周期、精确计数、责任方和证据。
 6. 跨目录、跨仓库或跨微服务时，宿主为每个写入任务绑定绝对工作区、允许路径、测试目录与依赖顺序；覆盖不完整就停在 `WAITING_FOR_WORKSPACE_AUTHORIZATION`。
@@ -29,24 +29,26 @@
 | --- | --- | --- | --- |
 | `Micro（微改）` | 修改一个局部点，不形成独立功能包 | `Light · Micro · Bugfix`；高风险时也可 Full | 简报或 baseline、一个 T 和适用 SOP |
 | `Task（单任务）` | 交付一个可独立验收的结果 | `Full · Task · Feature` | 完整 R/A/T、总览和 SOP 进度 |
-| `Capability（完整能力）` | 多个任务协同形成一项完整业务能力 | `Full · Capability · Feature` | 工作流、依赖波次、集成门禁和逐任务进度 |
-| `Project（完整项目）` | 多个能力和里程碑组成一个完整项目 | `Full · Project · Feature` | 开发总纲、project-plan、M/W/T 拆解和完整 SOP 看板 |
+| `Capability（完整能力）` | 多个任务协同形成一项完整业务能力 | `Full · Capability · Feature` | W/T/S：工作流、依赖波次、集成门禁、逐任务与 SOP 进度 |
+| `Project（完整项目）` | 多个能力和里程碑组成一个完整项目 | `Full · Project · Feature` | M/W/T/S：开发总纲、project-plan、里程碑、工作流、任务和完整 SOP 看板 |
 
 变更类型独立记录为 `Feature/Bugfix/Refactor/Migration/Maintenance/Docs/Test`；`single/parallel` 仍是冻结后的执行拓扑。详细判定见[三维路由模型](skills/gated-ai-dev-loop/references/routing-profiles.md)。
+
+选择 `Capability` 或 `Project` 前，宿主必须保留人可读判定记录：完整交付边界、独立能力及其聚合验收、用户可验收里程碑或阶段，以及工作流和依赖如何映射到这些边界。接口、文件或服务数量，以及公共契约、状态机、幂等、多工作区等 Full 风险信号，都不能单独推出 `Project`。事实明确为一个完整能力和一个聚合验收时使用 `Capability` 并按 W/T/S 管理；明确为完整大模块或多个能力、多个用户可验收里程碑时使用 `Project` 并按 M/W/T/S 管理。关键事实未知时保守暂定 `Project`，停在需求确认阶段补齐事实，不得冻结。
 
 ## 开发总览与进度
 
 协调工作区的 `.ai-dev-loop/` 根级维护：
 
 - `task-registry.json`：全部任务的机器索引、生命周期、当前焦点、关系、周期和精确完成计数；状态迁移必须引用真实轮次或用户确认 evidence；
-- `workspace-overview.md`：给人看的工作区任务总纲，显示当前焦点、全部非终态与异常任务、最近终态、关系链、周期、M/W/T/SOP 完成数、下一步和证据入口。
+- `workspace-overview.md`：给人看的工作区任务总纲，显示当前焦点、全部非终态与异常任务、最近终态、关系链、周期、适用的 M/W/T/S 完成数、下一步和证据入口。
 
 注册表是生命周期规范记录，但不能覆盖冻结授权；工作区总纲是可重建投影。现有 CLI 严格校验任务包和受保护路径，因此本次只增加这两个持久根级文件，并使用临时 `.host-staging/` 与 `.task-registry.lock` 完成冻结兼容和单写保护；不向已冻结任务根新增生命周期文件，也不修改 `state.json`。初始化前必须确认这些控制路径和目标 task 路径未被 Git 跟踪且已被忽略；控制名称不能用作 task ID。
 
 每个任务都在 `.ai-dev-loop/<task-id>/` 中维护：
 
 - `development-overview.md`：目标、范围、R/A/T 追踪、开发与验收安排、风险和产物导航；
-- `progress.md`：当前阶段、门禁等级、工作规模、固定/具体代表说明、变更类型、M/W/T 或普通任务状态、SOP 看板、精确完成数、门禁结论、阻断项、下一步和追加式时间线；
+- `progress.md`：当前阶段、门禁等级、工作规模、固定/具体代表说明、变更类型、工作规模判定记录、适用的 M/W/T/S 状态、精确完成数、门禁结论、阻断项、下一步和追加式时间线；
 - `final-acceptance-report.md`：最新验收轮次的人可读总入口；`gated-loop accept` 生成首次汇总，人工语义审查或最终确认变化后由宿主按规范状态重渲染。
 
 Project 规模另有 `rounds/planning/project-plan.md`，保存详细里程碑、工作流、任务依赖、关键路径、阶段门禁和风险。

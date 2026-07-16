@@ -25,7 +25,7 @@
 - `progress.md`：实时进度视图，展示当前阶段、任务状态、轮次证据、阻断项和下一步。
 - `final-acceptance-report.md`：最新一次独立或人工语义验收的汇总入口；首次执行 `gated-loop accept` 或等价验收路由后生成，人工语义审查和最终确认变化时由宿主继续重渲染。
 
-Project 规模还必须维护 `rounds/planning/project-plan.md`，作为详细里程碑、工作流、任务依赖与集成计划。Capability 可把同类信息直接写入总览；内容较长时也可使用 `rounds/planning/capability-plan.md` 并从总览链接。
+Project 规模还必须维护 `rounds/planning/project-plan.md`，作为详细里程碑、工作流、任务依赖与集成计划。Capability 的工作流、依赖波次和集成门禁直接写入总览与进度，不另建未受注册表和投影事务管理的计划文件。
 
 人工语义审查完成后，当前轮次还必须 create-new 保留 `rounds/round-NN/human-semantic-review.json`；它是用户审查结论证据，不是人可读投影，也不是当前 CLI 原生产物。
 
@@ -63,6 +63,19 @@ Project 规模还必须维护 `rounds/planning/project-plan.md`，作为详细�
 | 实时进度 | [progress.md](progress.md) |
 | 详细计划 | 普通任务不适用 / [project-plan.md](rounds/planning/project-plan.md) |
 
+## 工作规模判定记录
+| 判定项 | 事实与结论 |
+| --- | --- |
+| 交付对象 | <局部点 / 独立验收结果 / 完整能力 / 完整项目，以及具体对象> |
+| 是否完整交付 | <是 / 否；相对于上述交付对象说明本次是否覆盖完整结果> |
+| 独立能力及验收边界 | <能力清单、每项可观察结果及对应 R/A；没有时明确“不适用”> |
+| 里程碑 / 发布边界 | <Project 的 M-NNN、阶段交付或发布边界；其他规模明确“不适用”> |
+| 工作流 / 依赖波次 | <Capability / Project 的 W-NNN、dependsOn 与波次；Micro / Task 明确“不适用”> |
+| 单轮安全性 | <单一实现轮次可安全覆盖 / 需要多个依赖波次，并给出事实> |
+| 命中规则 | <routing-profiles.md 中实际命中的规模规则> |
+| 为什么不是更小一级 | <按验收边界和依赖结构排除相邻较小规模> |
+| 缺失事实 | <无；或列出尚待确认且会阻止冻结的事实> |
+
 ## 目标与边界
 - 目标：<一段可观察结果>
 - 范围：<路径或行为摘要>
@@ -73,15 +86,24 @@ Project 规模还必须维护 `rounds/planning/project-plan.md`，作为详细�
 | --- | --- | --- | --- |
 | R-001 | A-001 | T-001 | <简要说明> |
 
-## 里程碑与工作流（Capability / Project）
-| 里程碑 | 工作流 | 可观察结果 | 任务 | 依赖 | 完成门禁 |
+## 里程碑（仅 Project）
+| 里程碑 | 可观察阶段结果 | 工作流 | 任务 | 进入条件 | 完成门禁 / 发布边界 |
 | --- | --- | --- | --- | --- | --- |
-| M-001 | W-001 | <阶段结果> | T-001、T-002 | 无 | A-001、<测试> |
+| M-001 | <阶段结果> | W-001 | T-001、T-002 | <事实> | A-001、<测试或发布门禁> |
+
+Micro、Task 和 Capability 的里程碑不适用，注册表计数固定为 `0 / 0`；不得为了填充模板伪造 `M-NNN`。
+
+## 工作流与依赖波次（Capability / Project）
+| 工作流 | 目标 / 独立能力 | 任务 | dependsOn | 依赖波次 | 集成门禁 |
+| --- | --- | --- | --- | --- | --- |
+| W-001 | <单一工作流目标及其能力边界> | T-001、T-002 | 无 | wave-1 | <聚合测试或可观察结果> |
 
 ## 任务拆解摘要
 | 任务 | M / W | R / A | 工作区与允许路径 | dependsOn | 输出 | 完成定义 |
 | --- | --- | --- | --- | --- | --- | --- |
 | T-001 | M-001 / W-001 | R-001 / A-001 | service-a: src/** | 无 | <产物> | <测试与观察结果> |
+
+Micro 和 Task 的 M/W 均为“不适用”；Capability 使用 `不适用 / W-NNN`；Project 使用 `M-NNN / W-NNN`。Capability 必须初始化并跟踪 W/T/S，Project 必须初始化并跟踪 M/W/T/S。
 
 ## 开发与验收安排
 - 开发者：<自动派遣规则、手动交接或实际 Agent 标识>
@@ -126,7 +148,8 @@ Project 规模在需求确认前创建最终位于 `rounds/planning/project-plan
 | 规模代表说明 | <固定代表说明；None 时不适用> |
 | 当前任务说明 | <本任务规模的具体代表说明> |
 | 变更类型 | N/A / Feature / Bugfix / Refactor / Migration / Maintenance / Docs / Test |
-| 当前里程碑 / 工作流 | 不适用 / M-NNN / W-NNN |
+| 当前里程碑 | 不适用 / M-NNN；仅 Project 适用 |
+| 当前工作流 | 不适用 / W-NNN；Capability / Project 适用 |
 | 生命周期状态 | <task-registry.json 投影：ACTIVE / WAITING_USER / BLOCKED / DEFERRED / TERMINAL / UNKNOWN> |
 | 当前阶段 | <task-registry.json 的 phase 投影；state.json 仅显示冻结包阶段> |
 | 当前轮次 | round-NN / 尚未开始 |
@@ -139,16 +162,37 @@ Project 规模在需求确认前创建最终位于 `rounds/planning/project-plan
 | 活跃开发 Agent | <agent-id 列表或无> |
 | 下一责任方 | 用户 / 宿主 Agent / developer Agent / reviewer Agent |
 
-## 里程碑与工作流进度（Capability / Project）
-| ID | 类型 | 状态 | 已验证任务 / 总任务 | 当前阻断 | 证据 |
+## 工作规模判定记录
+| 判定项 | 事实与结论 |
+| --- | --- |
+| 交付对象 | <局部点 / 独立验收结果 / 完整能力 / 完整项目，以及具体对象> |
+| 是否完整交付 | <是 / 否；相对于上述交付对象说明本次是否覆盖完整结果> |
+| 独立能力及验收边界 | <能力清单、每项可观察结果及对应 R/A；没有时明确“不适用”> |
+| 里程碑 / 发布边界 | <Project 的 M-NNN、阶段交付或发布边界；其他规模明确“不适用”> |
+| 工作流 / 依赖波次 | <Capability / Project 的 W-NNN、dependsOn 与波次；Micro / Task 明确“不适用”> |
+| 单轮安全性 | <单一实现轮次可安全覆盖 / 需要多个依赖波次，并给出事实> |
+| 命中规则 | <routing-profiles.md 中实际命中的规模规则> |
+| 为什么不是更小一级 | <按验收边界和依赖结构排除相邻较小规模> |
+| 缺失事实 | <无；或列出尚待确认且会阻止冻结的事实> |
+
+## 里程碑进度（仅 Project）
+| ID | 状态 | 已验证任务 / 总任务 | 当前阻断 | 证据 |
+| --- | --- | --- | --- | --- |
+| M-001 | PENDING / IN_PROGRESS / VERIFIED / BLOCKED / DEFERRED | 0/2 | 无 | <链接> |
+
+Micro、Task 和 Capability 不生成里程碑行，注册表里程碑计数固定为 `0 / 0`。
+
+## 工作流进度（Capability / Project）
+| ID | 状态 | 已验证任务 / 总任务 | 依赖波次 | 当前阻断 | 证据 |
 | --- | --- | --- | --- | --- | --- |
-| M-001 | MILESTONE | PENDING / IN_PROGRESS / VERIFIED / BLOCKED / DEFERRED | 0/2 | 无 | <链接> |
-| W-001 | WORKSTREAM | PENDING / IN_PROGRESS / VERIFIED / BLOCKED / DEFERRED | 0/2 | 无 | <链接> |
+| W-001 | PENDING / IN_PROGRESS / VERIFIED / BLOCKED / DEFERRED | 0/2 | wave-1 | 无 | <链接> |
 
 ## 执行任务进度
 | 任务 | M / W | 波次 / Agent | 状态 | 更新时间 | 证据 | 下一步 / 阻断 |
 | --- | --- | --- | --- | --- | --- | --- |
 | T-001 | M-001 / W-001 | wave-1 / agent-01 | PENDING / IN_PROGRESS / IMPLEMENTED / VERIFIED / BLOCKED / DEFERRED | <ISO-8601> | <相对链接> | <事实> |
+
+Micro 和 Task 的 M/W 均为“不适用”；Capability 使用 `不适用 / W-NNN` 并跟踪 W/T/S；Project 使用 `M-NNN / W-NNN` 并跟踪 M/W/T/S。
 
 ## SOP 进度
 | SOP | 步骤 | 状态 | 更新时间 | 责任方 | 证据 / 说明 |

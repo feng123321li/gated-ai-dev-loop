@@ -1,4 +1,4 @@
 interface:
   display_name: "门禁式 AI 开发循环"
   short_description: "支持根级任务索引、确定性恢复、三维分级、进度与验收反馈的门禁流程"
-  default_prompt: "使用 $gated-ai-dev-loop 先校验根级任务注册表并恢复当前焦点，再显示门禁等级、工作规模、固定代表说明和变更类型；Project 规模生成总纲、M/W/T 拆解和实时 SOP 进度；验收后的修改或建议先分类确认，禁止按目录时间或措辞静默新建任务。"
+  default_prompt: "使用 $gated-ai-dev-loop 先恢复当前任务，再为写入需求生成人可读工作规模判定记录并解释 Capability/Project 边界；Project 生成总纲、M/W/T/S 拆解和实时进度，验收反馈先分类确认。"

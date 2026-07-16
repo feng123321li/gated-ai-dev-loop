@@ -35,6 +35,8 @@ description: 将任意形式的软件需求按 None/Light/Full 门禁等级、Mi
 
 固定代表说明和当前任务的具体代表例子必须同时写入总览与进度，不能只显示英文枚举。
 
+选择 `Task/Capability/Project` 前必须按 [routing-profiles.md](references/routing-profiles.md#工作规模事实卡与判定规则) 生成人可读“工作规模判定记录”，先抽取交付对象、完整交付、独立能力、验收/里程碑、工作流与依赖波次、单轮安全性、中性数量信号和缺失事实，再记录命中规则及为什么不是更小一级。用户明确确认完整系统、平台、应用或大模块交付时按 `WS-P01` 使用 Project；只有完整证明单一能力、单一聚合验收且排除全部 Project 规则时才能使用 Capability。接口数、文件数、服务数以及公共契约、状态机、幂等等 Full 信号不得单独决定 Project；已有强 Project 信号但事实未知时暂按 Project 并等待确认，不得向下猜测或冻结。
+
 以下任一情况强制使用 `Full`：
 
 - 公共契约或承重契约；
@@ -100,17 +102,17 @@ description: 将任意形式的软件需求按 None/Light/Full 门禁等级、Mi
 
 CLI、开发 Agent 或 reviewer 等长时间外部动作不持续占用根锁，但调用前必须在锁内写 `ACTION_CLAIMED` 并加入 `activeOperations`；parallel 在同一事务声明整波成员。取得可查询的运行时 run/session handle 后立即用同一 operationId 写 `ACTION_DISPATCH_CONFIRMED`，调用后再逐 operation 锁内校验结果并清除；看到未完成 operation 的其他宿主只能核对和续提，无法证明已启动或未启动时必须阻断，不能重复执行。
 
-`task-registry.json` 是生命周期、当前焦点、周期和完成计数的规范记录，但状态迁移必须有轮次或用户确认 evidence；它不能覆盖冻结授权。根级 `workspace-overview.md` 和任务内总览、进度都是可重建的人可读投影，不得单独证明授权或完成。人工验收时先展示工作区总纲和当前任务入口，再展示最新门禁、独立审查证据。
+`task-registry.json` 是生命周期、当前焦点、周期和完成计数的规范记录，但状态迁移必须有轮次或用户确认 evidence；它不能覆盖冻结授权。根级 `workspace-overview.md` 和任务内总览、进度都是可重建的人可读投影，不得单独证明授权或完成。`development-overview.md` 与 `progress.md` 必须包含完整工作规模判定记录，让用户无需读取 JSON 即可复核 Agent 的事实、规则和排除理由。人工验收时先展示工作区总纲和当前任务入口，再展示最新门禁、独立审查证据。
 
-如果需求分析确认工作规模是 `Project`，选择 `Full · Project · 主要变更类型`，并在需求确认前读取 [project-planning.md](references/project-planning.md)：
+如果工作规模事实命中 `WS-P01` 至 `WS-P04`，选择 `Full · Project · 主要变更类型`，并在需求确认前读取 [project-planning.md](references/project-planning.md)；命中 `WS-P05` 时只起草规划并保持等待确认，不得冻结：
 
 - 把 `development-overview.md` 提升为项目开发总纲，写清最终结果、边界、架构约束、里程碑、工作流、依赖、集成顺序、验收节奏和关键风险；冻结前写入 staging，冻结后物化到任务根；
 - 在 `rounds/planning/project-plan.md` 建立 `M-NNN → W-NNN → T-NNN` 分层任务拆解，每个可执行任务必须关联 R/A、工作区与允许路径、依赖、输入输出、测试和完成定义；冻结前同样写入 staging；
 - 禁止使用“完成整个后端”“实现全部接口”这类无法独立验收的粗任务；拆解未覆盖全部需求、验收、工作区和集成依赖时不得请求冻结确认；
-- 在 `progress.md` 分别跟踪里程碑、执行任务和 `S-NNN` SOP 步骤，不使用主观百分比；
-- 每个 SOP 步骤或执行任务开始、完成、阻断、跳过后立即由宿主落盘证据，更新注册表的阶段、周期与精确完成计数，再刷新根级总纲和 `progress.md`，然后继续下一步。不能等整轮结束后批量补写，也不能只在对话里口头报告。
+- 在 `progress.md` 分别跟踪适用的 M/W/T 与 `S-NNN` SOP 步骤，不使用主观百分比；
+- 每个适用的 M/W/T/S 步骤开始、完成、阻断、跳过后立即由宿主落盘证据，更新注册表的阶段、周期与精确完成计数，再刷新根级总纲和 `progress.md`，然后继续下一步。不能等整轮结束后批量补写，也不能只在对话里口头报告。
 
-Task 和 Capability 也必须有可执行的 R/A/T 拆解；Capability 额外展示工作流、依赖和集成门禁，Project 再增加项目级总纲、里程碑和完整 SOP 看板。工作规模和变更类型不替代冻结基线。
+Task 和 Capability 也必须有可执行的 R/A/T 拆解；Task 跟踪 T/S，Capability 跟踪 W/T/S 并额外展示工作流、依赖和集成门禁，Project 跟踪 M/W/T/S 并增加项目级总纲、里程碑和完整 SOP 看板。工作规模和变更类型不替代冻结基线。
 
 ## 选择开发方式并隔离实现
 
@@ -211,7 +213,7 @@ CLI `self-check` 原生支持单工作区 schema v1 和多工作区 schema v2。
 - 判定门禁等级、Micro/Task/Capability/Project 工作规模和主要变更类型时读取 [routing-profiles.md](references/routing-profiles.md)。
 - AI 分析后发现跨目录、跨仓库、跨微服务或提供方/消费方联动时读取 [multi-workspace.md](references/multi-workspace.md)。
 - 创建开发总览、更新进度或进入人工验收时读取 [tracking.md](references/tracking.md)。
-- 需求分析确认是大型项目完整开发、包含多个里程碑或多个相互依赖工作流时读取 [project-planning.md](references/project-planning.md)。
+- 工作规模事实命中 `WS-P01` 至 `WS-P05`、已经或暂时判为 Project 时读取 [project-planning.md](references/project-planning.md)。
 - 选择开发方式、生成交接或执行机械门禁时读取 [development.md](references/development.md)。
 - 评估并行资格、拆分任务、启动多子 Agent 或集成结果时读取 [parallel-development.md](references/parallel-development.md)。
 - 选择验收能力、执行独立或人工语义验收、准备修复轮次时读取 [acceptance.md](references/acceptance.md)。

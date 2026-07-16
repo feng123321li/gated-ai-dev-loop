@@ -46,10 +46,14 @@
 
 路由后先把工作规模、固定代表说明、当前任务说明和主要变更类型写入根级 registry 的 provisional 任务记录，再投影到 `development-overview.md` 与 `progress.md`；`mode.json` 仍只保存 CLI 支持的 None、Light 或 Full：
 
-- `Micro`：只授权一个局部点；低风险时使用 Light 简报，命中硬条件时仍使用 Full baseline；
-- `Task`：Full baseline 的每个 T 都必须是可独立验证的执行任务；
-- `Capability`：除 R/A/T 外，在总览中列出工作流、任务依赖波次、组件或服务集成点和能力级聚合门禁；
-- `Project`：按 [project-planning.md](project-planning.md) 创建项目开发总纲和 `rounds/planning/project-plan.md`，使用 M/W/T 分层拆解。
+| 工作规模 | 授权与拆解 | 必须初始化并跟踪 |
+| --- | --- | --- |
+| `Micro` | 只授权一个局部点；低风险时使用 Light 简报，命中硬条件时仍使用 Full baseline | T/S；M/W 不适用 |
+| `Task` | 一个独立验收边界；Full baseline 的每个 T 都必须是可独立验证的执行任务 | T/S；M/W 不适用 |
+| `Capability` | 除 R/A/T 外，在总览中列出工作流、任务依赖波次、组件或服务集成点和能力级聚合门禁 | W/T/S；M 不适用且计数为 `0 / 0` |
+| `Project` | 按 [project-planning.md](project-planning.md) 创建项目开发总纲和 `rounds/planning/project-plan.md`，使用 M/W/T 分层拆解 | M/W/T/S |
+
+请求冻结确认前，`development-overview.md` 与 `progress.md` 必须都按 [tracking.md](tracking.md) 写出完整的“工作规模判定记录”，逐项展示交付对象、是否完整交付、独立能力及验收边界、里程碑/发布边界、工作流/依赖波次、单轮安全性、命中规则、为什么不是更小一级和缺失事实。每项都必须有明确事实或“不适用”；`缺失事实` 必须为“无”。存在未知、占位符或无法解释规模边界时保持 `WAITING_FOR_REQUIREMENT_CONFIRMATION`，不得冻结。
 
 禁止把“完成整个后端”“实现全部接口”“完成项目开发”作为一个 T。一个 T 必须有单一可观察结果、关联 R/A、工作区与允许范围、依赖、输入输出、测试和完成定义；否则继续拆分后再请求确认。
 
@@ -106,10 +110,10 @@ CLI 负责确定性路由、任务包准备/冻结、指纹与 schema 校验、`
 - 确认每条测试命令是 argv 数组，并指向项目真实测试。
 - 使用安全的小写 Agent 标识如实记录宿主，例如 `codex`、`claude`、`opencode`。
 - Full 可能并行时，为每个任务记录精确允许路径和依赖；路径或依赖不明确时不得提供 parallel。
-- 记录工作规模、固定代表说明、当前任务说明和主要变更类型；Capability 检查工作流、依赖和集成门禁，Project 额外通过 project-planning.md 的全部拆解质量门禁。
+- 记录工作规模、固定代表说明、当前任务说明和主要变更类型；确认 `development-overview.md` 与 `progress.md` 的“工作规模判定记录”九项事实齐全且 `缺失事实=无`；Capability 检查工作流、依赖和集成门禁，Project 额外通过 project-planning.md 的全部拆解质量门禁。
 - 用户批准 task ID 后，先取得单写锁，在 `.host-staging/<task-id>/` 以 create-new 写 `TASK_CREATION_APPROVED` event，并登记 `PROVISIONAL / CREATING_TASK_PACKAGE`，再刷新工作区总纲；反馈派生任务只有用户确认后才执行这一步。
 - 按 `tracking.md` 在 staging 创建 `development-overview.md`、`progress.md` 和适用的 Project plan，把 provisional 记录推进为 `WAITING_USER / WAITING_FOR_REQUIREMENT_CONFIRMATION`；用户确认后调用 CLI 冻结，成功物化到任务目录，再把 registry 改为 `HEALTHY` 并进入工作区授权或开发方式选择。
-- 初始化 `progress.md` 的全部业务任务和 SOP 步骤；大型项目同时初始化全部 M/W/T，不能只写一个总任务。
+- 按规模初始化 `progress.md`：Micro/Task 初始化 T/S，Capability 初始化 W/T/S 且里程碑不适用，Project 初始化 M/W/T/S；不能只写一个总任务，也不能为不适用层级伪造占位行。
 - 展示授权并取得用户明确确认。
 - 在任何实现写入前冻结。
 - 冻结完成后，单工作区可进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`；跨工作区先按 `multi-workspace.md` 完成授权和覆盖门禁，未通过时进入 `WAITING_FOR_WORKSPACE_AUTHORIZATION`。需求确认不能代替工作区授权或开发方式确认。

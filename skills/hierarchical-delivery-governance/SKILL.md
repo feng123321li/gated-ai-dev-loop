@@ -7,28 +7,15 @@ description: "分层治理可独立交付的软件工作单元。按最小必要
 
 把可独立交付的软件工作治理为稳定但可浅化的层级。机器权威种类仍是 `Delivery → Capability → Task`，合法根形态是独立 `Task`、`Capability → Task` 或完整 `Delivery → Capability → Task`；只创建实际承担聚合责任的层级。Delivery 可以代表完整项目、大型模块、子系统或跨服务需求，不表示必须覆盖整个代码仓库或完整产品。Delivery 与 Capability 是协调单元，Task 是唯一可执行叶子。实际存在的每一级有自己的 baseline、状态、门禁和进度，任何 Task 都能从磁盘材料恢复，不依赖创建它的对话。
 
-## 首先判断是否在维护本 Skill
-
-如果当前仓库 `package.json.name` 是 `hierarchical-delivery-governance`，默认进入 `SELF_HOSTING_MAINTENANCE`：
-
-- 不创建 `.hierarchical-delivery-governance/**`；
-- 不调用 `start`、`prepare-item`、`freeze-item`；
-- 直接在仓库内按测试优先方式维护 Skill、CLI、文档和测试；
-- 只有用户明确要求“dogfood/演练运行任务包”时，才允许使用 `--dogfood` 创建运行包。
-
-命中该分支后立即短路普通 registry 恢复和工作项创建流程。dogfood 时重新进入标准流程；所有会写控制面的层级命令都必须显式带 `--dogfood`，并且仍要分别满足 ID/baseline 持久化批准和冻结/修订确认。三个条件是累积条件，不可互相替代。
-
-“升级 Skill”“优化流程”“Delivery”“Capability”“governance”以及任务名称都不是 dogfood 授权，也不会触发创建或冻结任务包。规范 Skill 名是 `hierarchical-delivery-governance`，不追加 `v2`。
-
 ## 统一概念
 
 只使用以下三个工作项种类：
 
-| Kind | Authority | 作用 | 子级 |
+| 类型 | 权限性质 | 作用 | 子级 |
 | --- | --- | --- | --- |
-| `DELIVERY` | `COORDINATION` | 多个 Capability 的交付总览、跨能力约束、交付级验收 | Capability |
-| `CAPABILITY` | `COORDINATION` | 多个 Task 的能力聚合、依赖、集成门禁、持续拆分；可作为治理根 | Task |
-| `TASK` | `EXECUTION` | 可独立开发、测试和交付的最小叶子；可作为治理根 | 无 |
+| 交付（`DELIVERY`） | 协调 | 多个 Capability 的交付总览、跨能力约束、交付级验收 | Capability |
+| 能力（`CAPABILITY`） | 协调 | 多个 Task 的能力聚合、依赖、集成门禁、持续拆分；可作为治理根 | Task |
+| 任务（`TASK`） | 执行 | 可独立开发、测试和交付的最小叶子；可作为治理根 | 无 |
 
 `DELIVERY` 是层级中的稳定类型名，不是工作范围大小的硬编码判断。只要某项工作有独立交付目标、需要拆成多个 Capability，并需要顶层聚合验收，就可以作为 Delivery；不要为了大型模块再增加 Module/Initiative 等平行根类型。
 
@@ -66,7 +53,7 @@ description: "分层治理可独立交付的软件工作单元。按最小必要
         ├── execution.json         # Task
         ├── development-mode.json  # Task baseline 冻结后由显式选择生成
         ├── context-manifest.json  # Task 调度时生成
-        └── development-handoff.md # Task 调度时生成
+        └── development-handoff.md # Task 调度时生成的可直接复制提示词
 ```
 
 `work-item-registry.json` 是机器权威；Markdown 是可重建投影。新 Skill 不读取、迁移或回写其他历史控制目录。
@@ -75,14 +62,13 @@ description: "分层治理可独立交付的软件工作单元。按最小必要
 
 ## 每次开发消息的入口
 
-1. 先执行自举维护判断。
-2. 解析当前 Skill 的安装目录，并运行 `node <skill-root>/scripts/hdg.mjs --help` 做只读预检。内置控制器是主入口；全局 `hdg` 只是可选快捷别名，不是前置条件。
-3. 只读检查 `.hierarchical-delivery-governance/work-item-registry.json`；不存在表示尚未持久化工作项，不是 CLI 缺失或 schema 错误；存在时只接受 schema v3。
-4. 先起草层级事实卡和门禁等级，再判断消息是继续/修订/追加/升层，还是新的根 Task、根 Capability 或 Delivery。
-5. 只有用户明确批准工作项 ID 和 baseline 持久化后，才准备对应包；只有 `--confirmed` 才冻结。
-6. 不从“升级、优化、项目、任务、治理”等词推导创建或冻结授权。
+1. 解析当前 Skill 的安装目录，并运行 `node <skill-root>/scripts/hdg.mjs --help` 做只读预检。内置控制器是主入口；全局 `hdg` 只是可选快捷别名，不是前置条件。
+2. 只读检查 `.hierarchical-delivery-governance/work-item-registry.json`；不存在表示尚未持久化工作项，不是 CLI 缺失或 schema 错误；存在时只接受 schema v3。
+3. 先起草层级事实卡和门禁等级，再判断消息是继续/修订/追加/升层，还是新的根 Task、根 Capability 或 Delivery。
+4. 展示完整 baseline 后，只请求一次批准；该批准必须同时覆盖具体 ID、baseline 内容、持久化和冻结。收到批准后调用 `approve-item --confirmed`，一次完成准备与冻结，不得再请求“确认冻结”。
+5. 不从“升级、优化、项目、任务、治理”等词推导创建或冻结授权。
 
-第 2–6 步只在未命中自举短路，或用户已经明确 dogfood 时执行。“明确批准”必须是用户直接确认具体 ID、baseline 指纹/内容和将执行的动作；Agent 不得把用户提供的标题、建议任务名或自己添加的 `--confirmed` 当作确认。内置控制器缺失或预检失败表示 Skill 安装损坏，保持阻断并报告重装 Skill；不得要求用户另装全局 CLI，也不得用纯对话模拟硬门禁。
+“明确批准”必须绑定刚刚唯一展示的具体 ID、完整 baseline 内容和“持久化并冻结”动作；当用户按该明确请求回复“批准/同意”时，应视为对这三个要素的一次确认。Agent 不得把用户提供的标题、建议任务名或自己添加的 `--confirmed` 当作确认。内置控制器缺失或预检失败表示 Skill 安装损坏，保持阻断并报告重装 Skill；不得要求用户另装全局 CLI，也不得用纯对话模拟硬门禁。
 
 多个候选无法确定时请求用户选择。不得按目录时间、名称相似度或自然语言猜测当前焦点。
 
@@ -98,8 +84,8 @@ description: "分层治理可独立交付的软件工作单元。按最小必要
 
 已经作为浅层根冻结后才发现真实聚合责任时，不通过改 `kind` 或伪造父级原地升级，而走受控升层：
 
-1. 先按普通门禁单独准备目标父级 baseline；父级必须把当前根列为计划 child，并保持根形态；
-2. 用户分别确认并冻结父级 baseline；这一步不自动附着当前根；
+1. 先按普通门禁起草目标父级 baseline；父级必须把当前根列为计划 child，并保持根形态；
+2. 用户一次批准父级 ID、内容以及持久化并冻结后执行 `approve-item`；这一步不自动附着当前根；
 3. 展示子、父两个当前 baseline 指纹和关系变化，取得明确升层确认；
 4. 执行 `promote-item`，只允许根 `TASK → CAPABILITY` 或根 `CAPABILITY → DELIVERY`；保留工作项 ID、kind 和 gateLevel，并把旧/新/父 baseline 指纹写入 `promotionHistory`；
 5. Task 升层会清除旧开发方式、上下文和 handoff，回到 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`；Capability 升层保留不受父契约变化影响的 Task 子契约。
@@ -139,7 +125,7 @@ node <skill-root>/scripts/hdg.mjs select-development-mode --item <task-id> --dev
 
 ### 6. 独立上下文
 
-验证开发方式记录后，调度 Task 前才能生成 `context-manifest.json` 和 `development-handoff.md`。上下文只包含：
+验证开发方式记录后，调度 Task 前才能生成 `context-manifest.json` 和 `development-handoff.md`。`development-handoff.md` 必须是一段自包含、可直接粘贴到全新开发会话的提示词；`task-context --json` 同时返回完全一致的 `handoffPrompt`。上下文只包含：
 
 - Task baseline 指纹与授权范围；
 - 实际存在的 Capability/Delivery 父契约快照；根 Task 为空数组；
@@ -147,6 +133,8 @@ node <skill-root>/scripts/hdg.mjs select-development-mode --item <task-id> --dev
 - R/A、测试 argv、输入输出及执行规则。
 
 不得继承需求分析对话、其他 Task 的对话或开发 Agent 的隐式记忆。上下文不完整、父契约漂移或依赖未验证时返回 `BLOCKED`。
+
+选择 `manual` 后，宿主必须立即运行 `task-context --json`，并在同一回复中原样输出 `handoffPrompt` 供复制；文件链接只能作为补充，不得只返回 `development-handoff.md` 或 `context-manifest.json` 链接。该提示词就是交给其他全新会话的完整输入，不要求新会话读取原分析对话。
 
 ## READY、认领与多人协作
 
@@ -184,8 +172,9 @@ Skill 自带单文件机械控制器。宿主从当前 `SKILL.md` 所在目录�
 层级流程使用以下命令：
 
 ```text
-node <skill-root>/scripts/hdg.mjs prepare-item --definition <json> --host-runtime <agent>
-node <skill-root>/scripts/hdg.mjs freeze-item --item <id> --expected-baseline <sha256> --confirmed
+node <skill-root>/scripts/hdg.mjs approve-item --definition <json> --host-runtime <agent> --confirmed
+node <skill-root>/scripts/hdg.mjs prepare-item --definition <json> --host-runtime <agent> # 仅恢复/诊断低级入口
+node <skill-root>/scripts/hdg.mjs freeze-item --item <id> --expected-baseline <sha256> --confirmed # 仅恢复/诊断低级入口
 node <skill-root>/scripts/hdg.mjs revise-item --definition <json> --expected-baseline <sha256> --confirmed
 node <skill-root>/scripts/hdg.mjs promote-item --item <root-id> --parent <frozen-parent-id> --expected-baseline <sha256> --expected-parent-baseline <sha256> --confirmed
 node <skill-root>/scripts/hdg.mjs select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
@@ -199,7 +188,7 @@ node <skill-root>/scripts/hdg.mjs delivery-item --item <delivery-id> --action IN
 node <skill-root>/scripts/hdg.mjs delivery-item --item <delivery-id> --action USER_CONFIRMED --evidence <json>
 ```
 
-`task-context` 和 `claim-task` 都会机械校验 registry 与 `development-mode.json`；未选择、文件缺失、内容被改动或 baseline 不匹配时必须拒绝。内置控制器使用独立的层级 CLI 入口，只打包层级 runtime，不导入历史 `route/start/prepare/freeze` CLI、旧 baseline 实现或 YAML 配置链；它只暴露上述层级治理命令。纯 Markdown 负责指引，真正硬门禁由该控制器和磁盘状态执行。维护本仓库时，所有写命令都会拒绝写入；只有在每个写命令上显式传入 `--dogfood` 才绕过自举保护，且其他确认条件仍然有效。
+正常交互必须使用 `approve-item`，让一次用户批准同时完成准备与冻结；`prepare-item`、`freeze-item` 仅用于恢复、诊断和向后兼容，不得据此制造第二次用户确认。`task-context` 和 `claim-task` 都会机械校验 registry 与 `development-mode.json`；未选择、文件缺失、内容被改动或 baseline 不匹配时必须拒绝。`task-context --json` 返回 `handoffPrompt`，其内容与 `development-handoff.md` 完全一致。内置控制器使用独立的层级 CLI 入口，只打包层级 runtime，不导入历史 `route/start/prepare/freeze` CLI、旧 baseline 实现或 YAML 配置链；它只暴露上述层级治理命令。纯 Markdown 负责指引，真正硬门禁由该控制器和磁盘状态执行。
 
 ## 验收与反馈
 

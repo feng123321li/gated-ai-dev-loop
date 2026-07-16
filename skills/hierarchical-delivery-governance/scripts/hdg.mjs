@@ -1878,7 +1878,15 @@ async function prepareWorkItem({
       if (workItemBaselineFingerprint(candidate) !== current.state.baselineFingerprint) {
         fail2("WORK_ITEM_SOURCE_CHANGED", `${existing.id} prepared baseline differs from the requested definition`);
       }
-      return { created: false, idempotent: true, id: existing.id, stage: existing.stage };
+      return {
+        created: false,
+        idempotent: true,
+        id: existing.id,
+        kind: existing.kind,
+        stage: existing.stage,
+        baselineFingerprint: existing.baselineFingerprint,
+        artifactDir: itemPath(root, existing.id)
+      };
     }
     let parent = null;
     if (definition.kind !== "DELIVERY" && definition.parentId !== null) {
@@ -1972,6 +1980,45 @@ async function freezeWorkItem({
     await writeRegistryUnlocked(root, registry, fs);
     return { created: true, idempotent: false, id, stage: entry.stage, baselineFingerprint: entry.baselineFingerprint };
   }, { now });
+}
+async function approveWorkItem({
+  root,
+  definition,
+  hostRuntime,
+  confirmed = false,
+  explicitDogfood = false,
+  now,
+  fs = fsPromises2
+} = {}) {
+  if (confirmed !== true) {
+    fail2("CONFIRMATION_REQUIRED", "Work item approval must explicitly authorize persistence and baseline freeze");
+  }
+  const prepared = await prepareWorkItem({
+    root,
+    definition,
+    hostRuntime,
+    explicitDogfood,
+    now,
+    fs
+  });
+  const frozen = await freezeWorkItem({
+    root,
+    id: prepared.id,
+    expectedBaselineFingerprint: prepared.baselineFingerprint,
+    confirmed: true,
+    explicitDogfood,
+    now,
+    fs
+  });
+  return {
+    ...frozen,
+    approved: true,
+    prepared: {
+      created: prepared.created,
+      idempotent: prepared.idempotent
+    },
+    artifactDir: prepared.artifactDir
+  };
 }
 async function retryBlockedWorkItem({
   root,
@@ -2564,26 +2611,26 @@ function parentContractSnapshot(parent, childId) {
 }
 function renderTaskHandoff(context) {
   return [
-    "# Task Development Handoff",
+    "Implement the following frozen Task in a fresh development conversation.",
     "",
     `Task: ${context.task.id}`,
+    `Baseline fingerprint: ${context.task.baselineFingerprint}`,
     `Gate level: ${context.gateLevel}`,
     `Development mode: ${context.developmentMode}`,
-    "Frozen authority: `baseline.json`",
-    "Independent context: `context-manifest.json`",
     "",
-    "## Rules",
-    "- Implement only this frozen leaf Task.",
-    "- Do not reinterpret parent contracts or acceptance criteria.",
-    "- Write only within the listed Scope.",
-    "- Return BLOCKED when a dependency, contract, or workspace is unavailable.",
+    "Use the embedded frozen context as the complete authority. Do not reanalyze the original request, change requirements, or inherit assumptions from another conversation.",
+    "",
+    "Execution rules:",
+    "- Implement only this frozen leaf Task and write only within its scope.",
+    "- Do not modify governance artifacts, `.git/**`, or external state.",
+    "- Run the listed test commands and report only evidence that actually exists.",
     "- Do not commit, push, publish, or report PASS.",
+    "- Return exactly one of IMPLEMENTED or BLOCKED.",
     "",
-    "## Scope",
-    ...context.task.scope.map((entry) => `- ${entry}`),
-    "",
-    "## Test Commands",
-    ...context.testCommands.map((argv) => `- ${JSON.stringify(argv)}`),
+    "Frozen context:",
+    "```json",
+    JSON.stringify(context, null, 2),
+    "```",
     ""
   ].join("\n");
 }
@@ -2663,9 +2710,10 @@ async function buildTaskContext({ root, id, explicitDogfood = false, fs = fsProm
       allowExternalStateChanges: false
     }
   };
+  const handoffPrompt = renderTaskHandoff(context);
   await atomicWriteFile(path3.join(own.target, "context-manifest.json"), json(context), { fs });
-  await atomicWriteFile(path3.join(own.target, "development-handoff.md"), renderTaskHandoff(context), { fs });
-  return context;
+  await atomicWriteFile(path3.join(own.target, "development-handoff.md"), handoffPrompt, { fs });
+  return { ...context, handoffPrompt };
 }
 
 // src/cli/output.mjs
@@ -2686,6 +2734,7 @@ function renderError(error) {
 
 // src/cli/hierarchical.mjs
 var HIERARCHICAL_COMMANDS = Object.freeze([
+  "approve-item",
   "prepare-item",
   "freeze-item",
   "revise-item",
@@ -2715,6 +2764,14 @@ var VALUE_OPTIONS = /* @__PURE__ */ new Set([
 ]);
 var FLAG_OPTIONS = /* @__PURE__ */ new Set(["--json", "--help", "--confirmed", "--dogfood"]);
 var COMMAND_OPTIONS = Object.freeze({
+  "approve-item": /* @__PURE__ */ new Set([
+    "--json",
+    "--help",
+    "--definition",
+    "--host-runtime",
+    "--confirmed",
+    "--dogfood"
+  ]),
   "prepare-item": /* @__PURE__ */ new Set(["--json", "--help", "--definition", "--host-runtime", "--dogfood"]),
   "freeze-item": /* @__PURE__ */ new Set(["--json", "--help", "--item", "--expected-baseline", "--confirmed", "--dogfood"]),
   "revise-item": /* @__PURE__ */ new Set(["--json", "--help", "--definition", "--expected-baseline", "--confirmed", "--dogfood"]),
@@ -2750,6 +2807,7 @@ var usage = `Usage: hdg <command> [options]
 Commands:
 ${HIERARCHICAL_COMMANDS.map((command) => `  ${command}`).join("\n")}
 
+  approve-item --definition <file> --host-runtime <agent> --confirmed
   prepare-item --definition <file> --host-runtime <agent>
   freeze-item --item <id> --expected-baseline <sha256> --confirmed
   revise-item --definition <file> --expected-baseline <sha256> --confirmed
@@ -2849,12 +2907,20 @@ async function runWorkItemCommand(parsed, io) {
   const root = io.cwd ?? process.cwd();
   const fs = io.fs ?? fsPromises3;
   const common = { root, fs, now: io.now, explicitDogfood: parsed.dogfood };
-  if (parsed.command === "prepare-item" || parsed.command === "revise-item") {
+  if (["approve-item", "prepare-item", "revise-item"].includes(parsed.command)) {
     const definition = await readStructured(
       required(parsed, "--definition"),
       "WORK_ITEM_DEFINITION",
       { cwd: root, fs, stdin: io.stdin }
     );
+    if (parsed.command === "approve-item") {
+      return approveWorkItem({
+        ...common,
+        definition,
+        hostRuntime: required(parsed, "--host-runtime"),
+        confirmed: parsed.confirmed
+      });
+    }
     if (parsed.command === "prepare-item") {
       return prepareWorkItem({
         ...common,

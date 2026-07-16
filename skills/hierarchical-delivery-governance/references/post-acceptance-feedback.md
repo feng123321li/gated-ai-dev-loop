@@ -22,5 +22,3 @@ VERIFIED 工作项不直接原地改写。需要修改时，用户明确选择�
 ## 新目标
 
 “顺便做”“再优化一下”“升级一下”不自动成为新 Delivery，也不自动继承原 scope。先确认层级、父项、ID、范围和 baseline，再持久化。
-
-维护本 Skill 仓库的反馈仍受 self-hosting 边界约束：除非用户明确 dogfood，不创建 `.hierarchical-delivery-governance`。

@@ -44,4 +44,4 @@ Delivery 的 `parentId` 固定为 null；Capability 和 Task 的 `parentId` 可�
 
 `currentFocus` 只帮助恢复，不授予冻结、修订或开发权限。准备、冻结、认领、阻断和 gate 后可更新焦点；并行 Task 仍各自依赖 claim，不能把单一焦点当成全局锁。
 
-新 Skill 不扫描或解释其他历史控制目录。Skill 内置 `scripts/hdg.mjs` 只使用 `prepare-item/freeze-item/revise-item/promote-item/select-development-mode/retry-item/gate-item/delivery-item`、`ready-tasks`、`task-context`、`claim-task` 和 `task-result`；`ready-tasks --item` 接受任意根或子树 ID。它从独立层级 CLI 构建，不打包历史 `route/start/prepare/freeze` 入口及其 YAML 配置实现。
+新 Skill 不扫描或解释其他历史控制目录。Skill 内置 `scripts/hdg.mjs` 的正常创建入口是 `approve-item`；另提供恢复/诊断用 `prepare-item/freeze-item`，以及 `revise-item/promote-item/select-development-mode/retry-item/gate-item/delivery-item`、`ready-tasks`、`task-context`、`claim-task` 和 `task-result`。`ready-tasks --item` 接受任意根或子树 ID。它从独立层级 CLI 构建，不打包历史 `route/start/prepare/freeze` 入口及其 YAML 配置实现。

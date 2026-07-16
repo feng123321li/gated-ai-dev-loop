@@ -34,6 +34,7 @@ const DELIVERY_STATUSES = Object.freeze([
   'WAITING_FOR_USER_CONFIRMATION',
   'COMPLETED',
 ]);
+const DEVELOPMENT_MODES = Object.freeze(['active', 'manual']);
 
 function fail(code, message, details = {}) {
   throw new GatedLoopError(code, message, { details });
@@ -112,6 +113,17 @@ function nonEmptyString(value) {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function validDevelopmentMode(value, entry) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    && value.schemaVersion === 1
+    && value.taskId === entry.id
+    && value.baselineFingerprint === entry.baselineFingerprint
+    && DEVELOPMENT_MODES.includes(value.mode)
+    && value.confirmedBy === 'user'
+    && typeof value.confirmedAt === 'string'
+    && !Number.isNaN(Date.parse(value.confirmedAt));
+}
+
 function validDeliveryArtifact(action, value) {
   if (!value || typeof value !== 'object' || Array.isArray(value) || value.schemaVersion !== 1) return false;
   if (action === 'INDEPENDENT_REVIEW_PASS') {
@@ -184,6 +196,19 @@ function validateRegistry(registry, root) {
       && typeof entry.baselineFingerprint === 'string' && /^[a-f0-9]{64}$/.test(entry.baselineFingerprint)
       && typeof entry.contractFingerprint === 'string' && /^[a-f0-9]{64}$/.test(entry.contractFingerprint);
     if (!validEntry) fail('WORK_ITEM_REGISTRY_INVALID', `Work item registry entry is invalid: ${entry.id}`);
+    const developmentModeValid = entry.kind === 'TASK'
+      ? entry.developmentMode === null || validDevelopmentMode(entry.developmentMode, entry)
+      : entry.developmentMode === null;
+    if (!developmentModeValid) {
+      fail('WORK_ITEM_REGISTRY_INVALID', `Work item development mode is invalid: ${entry.id}`);
+    }
+    if (entry.kind === 'TASK') {
+      const waitingForMode = entry.status === 'WAITING_FOR_DEVELOPMENT_MODE_SELECTION';
+      const frozenWithoutMode = entry.developmentMode === null && entry.stage === 'BASELINE_FROZEN';
+      if (waitingForMode !== frozenWithoutMode) {
+        fail('WORK_ITEM_REGISTRY_INVALID', `Task development mode state is inconsistent: ${entry.id}`);
+      }
+    }
     const deliveryValid = entry.kind === 'DELIVERY'
       ? (entry.delivery === undefined || validDelivery(entry.delivery))
       : entry.delivery === undefined || entry.delivery === null;
@@ -246,6 +271,28 @@ async function assertPersistedDeliveryEvidence(root, registry, fs) {
   }
 }
 
+async function assertPersistedDevelopmentModes(root, registry, fs) {
+  for (const entry of registry.workItems.filter(({ kind, developmentMode }) => (
+    kind === 'TASK' && developmentMode !== null
+  ))) {
+    let artifact;
+    try {
+      artifact = await readJsonFile(
+        itemPath(root, entry.id),
+        'development-mode.json',
+        fs,
+        'WORK_ITEM_DEVELOPMENT_MODE_INVALID',
+      );
+    } catch {
+      fail('WORK_ITEM_DEVELOPMENT_MODE_INVALID', `${entry.id} development-mode.json is missing or unreadable`);
+    }
+    if (!validDevelopmentMode(artifact, entry)
+        || canonicalJson(artifact) !== canonicalJson(entry.developmentMode)) {
+      fail('WORK_ITEM_DEVELOPMENT_MODE_CHANGED', `${entry.id} development-mode.json changed after confirmation`);
+    }
+  }
+}
+
 async function readRegistryUnlocked(root, fs, { allowMissing = false, now } = {}) {
   const target = registryPath(root);
   let bytes;
@@ -260,6 +307,7 @@ async function readRegistryUnlocked(root, fs, { allowMissing = false, now } = {}
   catch { fail('WORK_ITEM_REGISTRY_INVALID', 'Work item registry is not valid JSON'); }
   const validated = validateRegistry(registry, root);
   await assertPersistedDeliveryEvidence(root, validated, fs);
+  await assertPersistedDevelopmentModes(root, validated, fs);
   return validated;
 }
 
@@ -270,11 +318,11 @@ function renderWorkspaceOverview(registry) {
     `> registry revision: ${registry.revision}`,
     `> current focus: ${registry.currentFocus.workItemId ?? 'none'}`,
     '',
-    '| Work Item | Kind | Parent | Stage | Status | Delivery | Direct progress | Descendant progress | Gate | Claim |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| Work Item | Kind | Parent | Stage | Status | Development mode | Delivery | Direct progress | Descendant progress | Gate | Claim |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
   ];
   for (const item of sortedItems(registry.workItems)) {
-    lines.push(`| ${item.id} | ${item.kind} | ${item.parentId ?? 'none'} | ${item.stage} | ${item.status} | ${item.delivery?.status ?? 'n/a'} | ${item.progress.directChildren.verified}/${item.progress.directChildren.total} | ${item.progress.descendants.verified}/${item.progress.descendants.total} | ${item.gate.status} | ${item.claim?.owner ?? 'none'} |`);
+    lines.push(`| ${item.id} | ${item.kind} | ${item.parentId ?? 'none'} | ${item.stage} | ${item.status} | ${item.developmentMode?.mode ?? 'n/a'} | ${item.delivery?.status ?? 'n/a'} | ${item.progress.directChildren.verified}/${item.progress.directChildren.total} | ${item.progress.descendants.verified}/${item.progress.descendants.total} | ${item.gate.status} | ${item.claim?.owner ?? 'none'} |`);
   }
   lines.push('');
   return lines.join('\n');
@@ -303,6 +351,7 @@ function renderItemProgress(entry) {
     `- Status: ${entry.status}`,
     `- Delivery: ${entry.delivery?.status ?? 'n/a'}`,
     `- Gate: ${entry.gate.status}`,
+    `- Development mode: ${entry.developmentMode?.mode ?? 'not selected'}`,
     `- Claim: ${entry.claim ? `${entry.claim.owner} / ${entry.claim.operationId}` : 'none'}`,
     `- Direct children: ${entry.progress.directChildren.verified}/${entry.progress.directChildren.total} verified; ${entry.progress.directChildren.blocked} blocked; ${entry.progress.directChildren.active} active`,
     `- Descendants: ${entry.progress.descendants.verified}/${entry.progress.descendants.total} verified; ${entry.progress.descendants.blocked} blocked; ${entry.progress.descendants.active} active`,
@@ -460,6 +509,7 @@ function entryFromDefinition(definition, state, at) {
     delivery: definition.kind === 'DELIVERY'
       ? { status: 'NOT_READY', review: null, userConfirmation: null }
       : null,
+    developmentMode: null,
     claim: null,
     latestEvidence: null,
     recordRevision: 1,
@@ -608,10 +658,13 @@ export async function freezeWorkItem({
     };
     await atomicWriteFile(path.join(taskPackage.target, 'state.json'), json(state), { fs });
     entry.stage = 'BASELINE_FROZEN';
-    entry.status = 'FROZEN';
+    entry.status = entry.kind === 'TASK' ? 'WAITING_FOR_DEVELOPMENT_MODE_SELECTION' : 'FROZEN';
     entry.recordRevision += 1;
     entry.updatedAt = at;
-    registry.currentFocus = { workItemId: id, purpose: entry.kind === 'TASK' ? 'EXECUTION' : 'DECOMPOSITION' };
+    registry.currentFocus = {
+      workItemId: id,
+      purpose: entry.kind === 'TASK' ? 'DEVELOPMENT_MODE_SELECTION' : 'DECOMPOSITION',
+    };
     registry.revision += 1;
     registry.updatedAt = at;
     await writeRegistryUnlocked(root, registry, fs);
@@ -741,17 +794,26 @@ export async function reviseWorkItem({
       for (const [name, contents] of Object.entries(files)) {
         await atomicWriteFile(path.join(staging, name), contents, { fs });
       }
+      if (entry.kind === 'TASK') {
+        for (const name of ['development-mode.json', 'context-manifest.json', 'development-handoff.md']) {
+          await fs.rm(path.join(staging, name), { force: true });
+        }
+      }
     }, { fs });
     entry.childIds = normalized.children?.map(({ id }) => id) ?? [];
     entry.baselineFingerprint = state.baselineFingerprint;
     entry.contractFingerprint = state.contractFingerprint;
     entry.parentContractFingerprint = state.parentContractFingerprint;
-    entry.status = 'FROZEN';
+    entry.status = entry.kind === 'TASK' ? 'WAITING_FOR_DEVELOPMENT_MODE_SELECTION' : 'FROZEN';
+    entry.developmentMode = null;
     entry.gate = { status: 'NOT_RUN', evidence: null };
     entry.latestEvidence = null;
     entry.recordRevision += 1;
     entry.updatedAt = at;
-    registry.currentFocus = { workItemId: entry.id, purpose: entry.kind === 'TASK' ? 'EXECUTION' : 'DECOMPOSITION' };
+    registry.currentFocus = {
+      workItemId: entry.id,
+      purpose: entry.kind === 'TASK' ? 'DEVELOPMENT_MODE_SELECTION' : 'DECOMPOSITION',
+    };
     registry.revision += 1;
     registry.updatedAt = at;
     await writeRegistryUnlocked(root, registry, fs);
@@ -767,6 +829,83 @@ export async function reviseWorkItem({
 
 export async function readWorkItemRegistry({ root, fs = fsPromises } = {}) {
   return readRegistryUnlocked(root, fs);
+}
+
+export async function selectDevelopmentMode({
+  root,
+  id,
+  mode,
+  expectedBaselineFingerprint,
+  confirmed = false,
+  explicitDogfood = false,
+  now,
+  fs = fsPromises,
+} = {}) {
+  await assertSelfHostingDogfood(root, explicitDogfood, fs);
+  if (confirmed !== true) {
+    fail('CONFIRMATION_REQUIRED', 'Development mode selection requires explicit user confirmation');
+  }
+  if (!DEVELOPMENT_MODES.includes(mode)) {
+    fail('WORK_ITEM_DEVELOPMENT_MODE_INVALID', 'Development mode must be active or manual');
+  }
+  const at = timestamp(now);
+  return withRegistry(root, fs, async (registry) => {
+    const entry = itemById(registry, id);
+    if (entry.kind !== 'TASK' || entry.stage !== 'BASELINE_FROZEN') {
+      fail('WORK_ITEM_TASK_REQUIRED', 'Development mode can only be selected for a frozen Task');
+    }
+    if (entry.baselineFingerprint !== expectedBaselineFingerprint) {
+      fail('WORK_ITEM_REVISION_CONFLICT', 'The development mode confirmation is not bound to the current baseline');
+    }
+    if (entry.claim || !['WAITING_FOR_DEVELOPMENT_MODE_SELECTION', 'FROZEN'].includes(entry.status)) {
+      fail('WORK_ITEM_DEVELOPMENT_MODE_LOCKED', 'Development mode cannot change after Task dispatch begins');
+    }
+    if (entry.developmentMode?.mode === mode) {
+      return {
+        created: false,
+        idempotent: true,
+        id,
+        status: entry.status,
+        developmentMode: entry.developmentMode,
+      };
+    }
+    if (entry.developmentMode !== null) {
+      fail('WORK_ITEM_DEVELOPMENT_MODE_LOCKED', 'Development mode is fixed for the current Task baseline');
+    }
+    const record = {
+      schemaVersion: 1,
+      taskId: id,
+      baselineFingerprint: entry.baselineFingerprint,
+      mode,
+      confirmedBy: 'user',
+      confirmedAt: at,
+    };
+    const target = itemPath(root, id);
+    await atomicWriteFile(path.join(target, 'development-mode.json'), json(record), { fs });
+    entry.developmentMode = record;
+    entry.status = 'FROZEN';
+    entry.recordRevision += 1;
+    entry.updatedAt = at;
+    registry.currentFocus = {
+      workItemId: id,
+      purpose: mode === 'active' ? 'ACTIVE_DISPATCH' : 'MANUAL_HANDOFF',
+    };
+    registry.revision += 1;
+    registry.updatedAt = at;
+    try {
+      await writeRegistryUnlocked(root, registry, fs);
+    } catch (error) {
+      await fs.rm(path.join(target, 'development-mode.json'), { force: true });
+      throw error;
+    }
+    return {
+      created: true,
+      idempotent: false,
+      id,
+      status: entry.status,
+      developmentMode: record,
+    };
+  }, { now });
 }
 
 function isDescendantOf(registry, entry, ancestorId) {
@@ -829,6 +968,9 @@ export async function claimTask({ root, id, owner, operationId, explicitDogfood 
   const at = timestamp(now);
   return withRegistry(root, fs, async (registry) => {
     const entry = itemById(registry, id);
+    if (entry.kind === 'TASK' && entry.developmentMode === null) {
+      fail('WORK_ITEM_DEVELOPMENT_MODE_REQUIRED', `${id} requires an explicitly confirmed development mode`);
+    }
     if (!await taskReady(root, registry, entry, fs)) fail('WORK_ITEM_NOT_READY', `${id} is not ready for dispatch`);
     entry.claim = {
       owner: safeOperationId(owner, 'owner'),
@@ -1051,6 +1193,7 @@ function renderTaskHandoff(context) {
     '# Task Development Handoff',
     '',
     `Task: ${context.task.id}`,
+    `Development mode: ${context.developmentMode}`,
     'Frozen authority: `baseline.json`',
     'Independent context: `context-manifest.json`',
     '',
@@ -1076,6 +1219,9 @@ export async function buildTaskContext({ root, id, explicitDogfood = false, fs =
   const entry = itemById(registry, id);
   if (entry.kind !== 'TASK' || entry.stage !== 'BASELINE_FROZEN') {
     fail('WORK_ITEM_TASK_REQUIRED', 'Independent context can only be built for a frozen Task');
+  }
+  if (entry.developmentMode === null) {
+    fail('WORK_ITEM_DEVELOPMENT_MODE_REQUIRED', `${id} requires an explicitly confirmed development mode`);
   }
   const own = await assertCurrentLineage(root, registry, entry, fs);
   const parents = [];
@@ -1118,6 +1264,7 @@ export async function buildTaskContext({ root, id, explicitDogfood = false, fs =
   }
   const context = {
     schemaVersion: 1,
+    developmentMode: entry.developmentMode.mode,
     task: {
       id: own.definition.id,
       title: own.definition.title,

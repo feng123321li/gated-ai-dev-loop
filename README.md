@@ -7,6 +7,7 @@
 - 为完整项目或可独立交付的大型模块生成 Delivery 总览，并拆分为多个 Capability；
 - Capability 可通过受控 baseline 修订持续追加 Task；
 - 每个 Delivery、Capability、Task 都冻结自己的 baseline；
+- Task baseline 冻结后必须由用户显式选择 active/manual，并由 CLI 持久化开发方式门禁；
 - Task 只携带磁盘化独立上下文，不继承前期对话；
 - 按依赖、claim 和写入范围计算 READY Task，支持多人并行开发；
 - Task、Capability、Delivery 分级验收，父级必须通过自己的聚合门禁；
@@ -27,7 +28,8 @@
         ├── state.json
         ├── overview.md
         ├── progress.md
-        └── children.json | execution.json
+        ├── children.json | execution.json
+        └── development-mode.json # Task 显式选择后生成
 ```
 
 完整规则见 [Skill 入口](skills/hierarchical-delivery-governance/SKILL.md) 和 [层级规划](skills/hierarchical-delivery-governance/references/delivery-planning.md)。
@@ -66,6 +68,7 @@ node bin/hdg.mjs --help
 ```text
 hdg prepare-item --definition delivery.json --host-runtime codex
 hdg freeze-item --item d-example --expected-baseline <sha256> --confirmed
+hdg select-development-mode --item t-example --development-mode active --expected-baseline <sha256> --confirmed
 hdg ready-tasks --delivery d-example
 hdg task-context --item t-example
 hdg retry-item --item c-example --expected-baseline <sha256> --confirmed

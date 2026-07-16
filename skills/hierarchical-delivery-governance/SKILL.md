@@ -62,6 +62,7 @@ description: "分层治理可独立交付的软件工作单元。用于把完整
         ├── progress.md
         ├── children.json          # Delivery / Capability
         ├── execution.json         # Task
+        ├── development-mode.json  # Task baseline 冻结后由显式选择生成
         ├── context-manifest.json  # Task 调度时生成
         └── development-handoff.md # Task 调度时生成
 ```
@@ -103,9 +104,21 @@ description: "分层治理可独立交付的软件工作单元。用于把完整
 
 Task 是叶子，必须包含：目标、精确写入范围、非目标、R/A、依赖、输入、输出、安全 argv 测试和完成定义。Task 只能引用同一 Capability 中已计划的兄弟依赖，范围不能超出 Capability。
 
-### 4. 独立上下文
+### 4. 开发方式机械门禁
 
-调度 Task 前生成 `context-manifest.json` 和 `development-handoff.md`。上下文只包含：
+Task baseline 冻结后必须持久化为 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`，此时不得计算为 READY、生成上下文或认领。宿主只展示 `active` 与 `manual` 两种方式并等待用户明确选择；baseline 确认、普通“确认”或宿主推断都不能代替开发方式确认。
+
+只有用户明确选择后，宿主才执行绑定当前 Task baseline 指纹的命令：
+
+```text
+hdg select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
+```
+
+命令成功后写入 `development-mode.json`，并把 Task 状态推进为 `FROZEN`。该记录必须与 registry 中的快照、Task ID 和当前 baseline 指纹完全一致；Task baseline 修订会删除旧记录并回到等待状态。`hdg` 不可用或命令失败时保持阻断，不能用“等价流程”直接开始开发。
+
+### 5. 独立上下文
+
+验证开发方式记录后，调度 Task 前才能生成 `context-manifest.json` 和 `development-handoff.md`。上下文只包含：
 
 - Task baseline 指纹与授权范围；
 - Delivery/Capability 中与该 Task 相关的父契约快照；
@@ -119,6 +132,7 @@ Task 是叶子，必须包含：目标、精确写入范围、非目标、R/A、
 `READY` 是每次调度时计算的派生谓词，不是持久状态。Task 只有同时满足以下条件才是 `READY`：
 
 - 自己及父链 baseline 已冻结且指纹有效；
+- 已有与当前 Task baseline 绑定且通过校验的 `development-mode.json`；
 - 所有 `dependsOn` Task 为 `VERIFIED`；
 - 所属 Capability 的所有 `dependsOn` Capability 为 `VERIFIED`；
 - 没有活动 claim；
@@ -134,7 +148,7 @@ scope 只接受精确相对路径或尾部 `/**` 的目录前缀，不接受中�
 
 每次写回都更新工作项自身状态、直接子级计数和全部后代计数；只记录精确数量，不写主观百分比。
 
-- Task：`FROZEN → CLAIMED → IMPLEMENTED/BLOCKED → VERIFIED`；
+- Task：`WAITING_FOR_DEVELOPMENT_MODE_SELECTION → FROZEN → CLAIMED → IMPLEMENTED/BLOCKED → VERIFIED`；
 - Capability：拆分为 `SEALED` 且所有计划 Task 都 `VERIFIED` 后才能运行自己的集成门禁；门禁 PASS 后才 `VERIFIED`；
 - Delivery：拆分为 `SEALED` 且所有计划 Capability 都 `VERIFIED` 后才能运行顶层交付门禁；门禁 PASS 后进入 `VERIFIED / WAITING_FOR_INDEPENDENT_REVIEW`，通过隔离审查或显式人工审查后等待用户确认，只有用户确认后 delivery 才是 `COMPLETED`。
 
@@ -148,6 +162,7 @@ scope 只接受精确相对路径或尾部 `/**` 的目录前缀，不接受中�
 hdg prepare-item --definition <json> --host-runtime <agent>
 hdg freeze-item --item <id> --expected-baseline <sha256> --confirmed
 hdg revise-item --definition <json> --expected-baseline <sha256> --confirmed
+hdg select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
 hdg ready-tasks --delivery <delivery-id>
 hdg task-context --item <task-id>
 hdg claim-task --item <task-id> --owner <owner> --operation <operation-id>
@@ -158,7 +173,7 @@ hdg delivery-item --item <delivery-id> --action INDEPENDENT_REVIEW_PASS --eviden
 hdg delivery-item --item <delivery-id> --action USER_CONFIRMED --evidence <json>
 ```
 
-`hdg` 只暴露上述层级治理命令，不提供旧 `start/prepare/freeze` 入口。维护本仓库时，所有写命令都会拒绝写入；只有在每个写命令上显式传入 `--dogfood` 才绕过自举保护，且其他确认条件仍然有效。
+`task-context` 和 `claim-task` 都会机械校验 registry 与 `development-mode.json`；未选择、文件缺失、内容被改动或 baseline 不匹配时必须拒绝。`hdg` 只暴露上述层级治理命令，不提供旧 `start/prepare/freeze` 入口。维护本仓库时，所有写命令都会拒绝写入；只有在每个写命令上显式传入 `--dogfood` 才绕过自举保护，且其他确认条件仍然有效。
 
 ## 验收与反馈
 

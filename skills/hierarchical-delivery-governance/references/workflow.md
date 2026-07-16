@@ -7,11 +7,12 @@
 3. 对新工作生成顶层交付单元的 Delivery 总览草案，不先写磁盘；该单元可以是完整项目或可独立交付的大型模块、子系统、跨服务需求。
 4. 用户批准 Delivery ID 和 baseline 持久化后准备并冻结 Delivery。
 5. 逐个准备、确认和冻结 Capability。
-6. Capability 持续拆分并冻结 Task；需要新增 Task 时显式修订 Capability baseline。
-7. 计算 READY Task，生成独立上下文并原子认领。
-8. 开发 Agent 返回实现事实或 BLOCKED；宿主运行 Task 门禁。
-9. 全部 Task 验证后运行 Capability 门禁；全部 Capability 验证后运行 Delivery 门禁。
-10. Delivery gate PASS 后持久化待独立审查；隔离审查 PASS 或显式接受人工审查结果后，再由用户确认完成交付。
+6. Capability 持续拆分并冻结 Task；需要新增 Task 时显式修订 Capability baseline。Task 冻结后进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`。
+7. 宿主展示 `active/manual`，等待用户明确选择，再用当前 Task baseline 指纹和 `--confirmed` 持久化 `development-mode.json`；baseline 确认不能兼作开发方式确认。
+8. 只有开发方式记录通过机械校验后，才计算 READY Task、生成独立上下文并原子认领。
+9. 开发 Agent 返回实现事实或 BLOCKED；宿主运行 Task 门禁。
+10. 全部 Task 验证后运行 Capability 门禁；全部 Capability 验证后运行 Delivery 门禁。
+11. Delivery gate PASS 后持久化待独立审查；隔离审查 PASS 或显式接受人工审查结果后，再由用户确认完成交付。
 
 任何步骤都不能从自然语言关键词推导“创建、冻结、修订或 dogfood”授权。
 
@@ -22,7 +23,9 @@ Delivery:    PREPARED → FROZEN → VERIFIED → REVIEWED → USER_CONFIRMED
                          │
 Capability:              └→ PREPARED → FROZEN → VERIFIED
                                               │
-Task:                                         └→ PREPARED → FROZEN
+Task:                                         └→ PREPARED → WAITING_FOR_DEVELOPMENT_MODE_SELECTION
+                                                               ↓ explicit active/manual confirmation
+                                                             FROZEN
                                                                ↓
                                   [READY 派生谓词] → CLAIMED → IMPLEMENTED → VERIFIED
                                                          └────→ BLOCKED
@@ -53,6 +56,8 @@ Delivery/Capability 的 decomposition 必须先从 `OPEN` 显式变为 `SEALED`�
 
 - 基线不完整：不准备包；
 - 未确认：不冻结；
+- 未明确选择开发方式：保持 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`，不生成上下文、不认领；
+- `hdg` 不可用或 `development-mode.json` 校验失败：保持阻断，不用对话内“等价流程”绕过；
 - 父链漂移：不生成上下文、不认领；
 - 依赖未验证：Task 不 READY；
 - 范围冲突：不并行；

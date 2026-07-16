@@ -45,6 +45,22 @@ async function invoke(root, argv) {
   return { exitCode, out: out.join(''), err: err.join('') };
 }
 
+async function selectMode(root, id, mode = 'active', confirmed = true) {
+  const registry = JSON.parse(await readFile(
+    path.join(root, '.hierarchical-delivery-governance', 'work-item-registry.json'),
+    'utf8',
+  ));
+  const entry = registry.workItems.find((candidate) => candidate.id === id);
+  const argv = [
+    'select-development-mode', '--item', id,
+    '--development-mode', mode,
+    '--expected-baseline', entry.baselineFingerprint,
+  ];
+  if (confirmed) argv.push('--confirmed');
+  argv.push('--json');
+  return invoke(root, argv);
+}
+
 function result(output) {
   return JSON.parse(output).result;
 }
@@ -73,7 +89,30 @@ test('CLI manages a hierarchical Task from preparation through verified evidence
     assert.equal(frozen.exitCode, 0, frozen.err);
   }
 
-  const ready = await invoke(root, ['ready-tasks', '--delivery', 'd-identity-platform', '--json']);
+  let ready = await invoke(root, ['ready-tasks', '--delivery', 'd-identity-platform', '--json']);
+  assert.equal(ready.exitCode, 0, ready.err);
+  assert.deepEqual(result(ready.out), []);
+
+  const blockedContext = await invoke(root, ['task-context', '--item', 't-issue-token', '--json']);
+  assert.equal(blockedContext.exitCode, 1);
+  assert.match(blockedContext.err, /WORK_ITEM_DEVELOPMENT_MODE_REQUIRED/);
+
+  const blockedClaim = await invoke(root, [
+    'claim-task', '--item', 't-issue-token', '--owner', 'agent-a', '--operation', 'op-premature', '--json',
+  ]);
+  assert.equal(blockedClaim.exitCode, 1);
+  assert.match(blockedClaim.err, /WORK_ITEM_DEVELOPMENT_MODE_REQUIRED/);
+
+  const unconfirmed = await selectMode(root, 't-issue-token', 'active', false);
+  assert.equal(unconfirmed.exitCode, 1);
+  assert.match(unconfirmed.err, /CONFIRMATION_REQUIRED/);
+
+  const selected = await selectMode(root, 't-issue-token');
+  assert.equal(selected.exitCode, 0, selected.err);
+  assert.equal(result(selected.out).status, 'FROZEN');
+  assert.equal(result(selected.out).developmentMode.mode, 'active');
+
+  ready = await invoke(root, ['ready-tasks', '--delivery', 'd-identity-platform', '--json']);
   assert.equal(ready.exitCode, 0, ready.err);
   assert.deepEqual(result(ready.out), ['t-issue-token']);
 
@@ -196,6 +235,9 @@ test('CLI retries a blocked coordination item and persists a reviewed user-confi
     ]);
     assert.equal(frozen.exitCode, 0, frozen.err);
   }
+
+  const selected = await selectMode(root, 't-issue-token');
+  assert.equal(selected.exitCode, 0, selected.err);
 
   assert.equal((await invoke(root, [
     'claim-task', '--item', 't-issue-token', '--owner', 'agent-a', '--operation', 'op-cli', '--json',

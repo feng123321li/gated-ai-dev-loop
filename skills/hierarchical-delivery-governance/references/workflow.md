@@ -1,67 +1,75 @@
-# 分层交付治理工作流
+# 分层交付工作流
 
-## 入口顺序
+## 主流程
 
-1. 判断是否为 `hierarchical-delivery-governance` 实现仓库；是则进入 `SELF_HOSTING_MAINTENANCE`，默认不创建运行包。
-2. 未命中自举短路，或用户已明确 dogfood 时，才只读恢复 `.hierarchical-delivery-governance/work-item-registry.json`。
-3. 对新工作生成顶层交付单元的 Delivery 总览草案，不先写磁盘；该单元可以是完整项目或可独立交付的大型模块、子系统、跨服务需求。
-4. 用户批准 Delivery ID 和 baseline 持久化后准备并冻结 Delivery。
-5. 逐个准备、确认和冻结 Capability。
-6. Capability 持续拆分并冻结 Task；需要新增 Task 时显式修订 Capability baseline。Task 冻结后进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`。
-7. 宿主展示 `active/manual`，等待用户明确选择，再用当前 Task baseline 指纹和 `--confirmed` 持久化 `development-mode.json`；baseline 确认不能兼作开发方式确认。
-8. 只有开发方式记录通过机械校验后，才计算 READY Task、生成独立上下文并原子认领。
-9. 开发 Agent 返回实现事实或 BLOCKED；宿主运行 Task 门禁。
-10. 全部 Task 验证后运行 Capability 门禁；全部 Capability 验证后运行 Delivery 门禁。
-11. Delivery gate PASS 后持久化待独立审查；隔离审查 PASS 或显式接受人工审查结果后，再由用户确认完成交付。
+1. 先判断是否为本 Skill 的 self-hosting maintenance；没有明确 dogfood 时短路运行包流程。
+2. 从当前 Skill 安装目录运行 `node <skill-root>/scripts/hdg.mjs --help`。全局 `hdg` 不是前置条件。
+3. 只读恢复 registry；不存在时表示尚未持久化工作项。
+4. 起草层级事实卡，选择能够承担当前聚合责任的最浅根：Task、Capability 或 Delivery。
+5. 用户批准具体 ID、baseline 内容和持久化后，逐级准备实际存在的工作项；每次冻结仍需单独确认。
+6. Task 冻结后进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`，等待用户明确选择 active/manual。
+7. 内置控制器持久化并校验 `development-mode.json` 后，才计算 READY、生成独立上下文并原子认领。
+8. 开发 Agent 返回实现事实或 BLOCKED；宿主运行 Task 门禁。
+9. 若存在 Capability，全部 Task VERIFIED 后运行 Capability 聚合门禁；若存在 Delivery，全部 Capability VERIFIED 后运行 Delivery 聚合门禁。
+10. Delivery gate PASS 后完成隔离/人工审查，再由用户确认最终交付。浅层根在自身 gate PASS 后为 VERIFIED。
 
 任何步骤都不能从自然语言关键词推导“创建、冻结、修订或 dogfood”授权。
 
-## 状态流
+## 层级路由图
 
-```text
-Delivery:    PREPARED → FROZEN → VERIFIED → REVIEWED → USER_CONFIRMED
-                         │
-Capability:              └→ PREPARED → FROZEN → VERIFIED
-                                              │
-Task:                                         └→ PREPARED → WAITING_FOR_DEVELOPMENT_MODE_SELECTION
-                                                               ↓ explicit active/manual confirmation
-                                                             FROZEN
-                                                               ↓
-                                  [READY 派生谓词] → CLAIMED → IMPLEMENTED → VERIFIED
-                                                         └────→ BLOCKED
+```mermaid
+flowchart TD
+    A["层级事实卡：边界、聚合责任、依赖、验收"] --> B{"最小必要治理根"}
+    B -->|"单一独立执行结果；无兄弟依赖"| T["根 Task"]
+    B -->|"多个 Task 需要能力聚合门禁"| C["根 Capability"]
+    B -->|"多个 Capability 需要顶层聚合门禁"| D["Delivery"]
+    C --> CT["Task 1..N"]
+    D --> DC["Capability 1..N"]
+    DC --> DT["Task 1..N"]
+    T --> G["Task baseline / mode / context / claim / gate"]
+    CT --> G
+    DT --> G
 ```
 
-Delivery/Capability 的 `VERIFIED` 不是子级状态的简单别名：子级全部 VERIFIED 只是运行父级 gate 的前置条件。
+不允许 `Delivery → Task` 或 `Capability → Capability`。根 Task 需要兄弟 Task 依赖时升级为根 Capability；根 Capability 需要兄弟 Capability 依赖时升级为 Delivery。
 
-Delivery/Capability 的 decomposition 必须先从 `OPEN` 显式变为 `SEALED`。READY 不写入 lifecycle；依赖或 claim 变化后立即重算。
+## 生命周期图
 
-任何 gate FAIL 都进入 BLOCKED。必须用 `retry-item` 提交当前 baseline 指纹并显式确认，才能回到 FROZEN 重跑；不能直接用下一次 PASS 覆盖失败记录。
+```mermaid
+flowchart LR
+    P["Task PREPARED"] -->|"baseline confirmation"| M["WAITING_FOR_DEVELOPMENT_MODE_SELECTION"]
+    M -->|"explicit active/manual confirmation"| F["FROZEN"]
+    F -->|"READY + claim"| C["CLAIMED"]
+    C --> I["IMPLEMENTED"]
+    C --> B["BLOCKED"]
+    I -->|"Task gate PASS"| V["Task VERIFIED"]
+    I -->|"Task gate FAIL"| B
+    B -->|"retry-item + current fingerprint + confirmation"| F
+    V --> Q{"存在聚合父级？"}
+    Q -->|"Capability"| CV["全部 Task VERIFIED + Capability gate PASS"]
+    CV --> Q2{"存在 Delivery？"}
+    Q2 -->|"是"| DV["全部 Capability VERIFIED + Delivery gate PASS"]
+    DV --> R["独立/人工审查"]
+    R --> U["用户确认 COMPLETED"]
+    Q -->|"根 Task"| SV["浅层根 VERIFIED"]
+    Q2 -->|"根 Capability"| SV
+```
 
-## 恢复
+READY 是派生谓词，不写入 lifecycle。协调工作项的 VERIFIED 不是子级状态别名：子级全部 VERIFIED 只是运行自身 gate 的前置条件；decomposition 也必须先显式 SEALED。
 
-恢复优先级固定为：
+## 恢复与修订
 
-1. 用户给出的精确 work item ID 或包路径；
-2. 注册表中仍有效的 `currentFocus.workItemId`；
-3. 唯一非终态候选；
-4. 多个候选时请用户选择。
+恢复优先级固定为：用户给出的精确 ID/包路径、有效 `currentFocus.workItemId`、唯一非终态候选；多个候选时请用户选择。恢复后验证包指纹、实际父链、依赖、claim 和工作区授权。
 
-恢复后验证包指纹、父链指纹、依赖、claim 和工作区授权。任何一项不确定都保持只读并报告阻断，不重新创建同名包。
-
-## 修订
-
-修订必须携带当前 baseline 指纹和显式确认。新增兄弟子项不影响现有子项；父稳定契约或该子项契约变化会使对应后代 stale。已 VERIFIED 的工作项不能直接修订，应创建后续工作项或按反馈流程明确重新打开。
+修订必须携带当前 baseline 指纹和显式确认。新增兄弟子项不影响未变化子项；父稳定契约或目标子契约变化只使对应后代 stale。已 VERIFIED 工作项不能直接修订。
 
 ## 失败关闭
 
-- 基线不完整：不准备包；
-- 未确认：不冻结；
-- 未明确选择开发方式：保持 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`，不生成上下文、不认领；
-- `hdg` 不可用或 `development-mode.json` 校验失败：保持阻断，不用对话内“等价流程”绕过；
-- 父链漂移：不生成上下文、不认领；
-- 依赖未验证：Task 不 READY；
-- 范围冲突：不并行；
+- 基线不完整：不准备包；未确认：不冻结；
+- 未明确选择开发方式：不生成上下文、不认领；
+- Skill 内置控制器缺失或校验失败：报告 Skill 安装损坏，不要求另装全局 CLI，不用对话模拟硬门禁；
+- 父链漂移、依赖未验证或范围冲突：Task 不 READY；
 - 测试或证据缺失：gate 不 PASS；
-- 无独立语义审查能力：保持 `WAITING_FOR_INDEPENDENT_REVIEW` 并生成 `NEED_HUMAN_REVIEW` 验收包；
+- 无独立语义审查能力：Delivery 保持 `WAITING_FOR_INDEPENDENT_REVIEW`；
 - 未取得用户确认：不得把 Delivery 标为 `COMPLETED`；
 - 外部状态变更未授权：停止并请求授权。

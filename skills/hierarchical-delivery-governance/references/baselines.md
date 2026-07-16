@@ -5,8 +5,10 @@
 所有工作项使用 schema v2，并包含：`id`、`kind`、`title`、`goal`、`scope`、`nonGoals`、`requirements`、`acceptance`、`testCommands`、`risks` 和 `decisions`。
 
 - Delivery 额外包含 `decomposition.status` 和 Capability `children`；
-- Capability 额外包含 `parentId`、`decomposition.status`、同 Delivery Capability `decomposition.dependsOn` 和 Task `children`；
-- Task 额外包含 `parentId` 与 `execution {dependsOn, inputs, outputs}`。
+- Capability 额外包含可空 `parentId`、`decomposition.status`、`decomposition.dependsOn` 和 Task `children`；
+- Task 额外包含可空 `parentId` 与 `execution {dependsOn, inputs, outputs}`。
+
+`parentId: null` 表示浅层治理根。根 Task 的 Task 依赖必须为空；根 Capability 的 Capability 依赖必须为空。非空 parentId 仍必须绑定已冻结、已计划且范围包含当前项的父契约。
 
 Delivery/Capability authority 为 `COORDINATION`，Task 为 `EXECUTION`。
 
@@ -16,9 +18,9 @@ Delivery/Capability authority 为 `COORDINATION`，Task 为 `EXECUTION`。
 
 - schema、ID 和字段集合；
 - R/A 追踪；
-- 安全相对范围和父范围包含；
-- 父级已冻结且子契约存在；
-- Task 依赖属于同一 Capability；
+- 安全相对范围；有父级时校验父范围包含；
+- 有父级时，父级已冻结且子契约存在；
+- 有父级的 Task 依赖属于同一 Capability；浅层根不得声明缺失聚合层才能承载的兄弟依赖；
 - 测试命令为安全 argv 数组；
 - baseline 和 contract 指纹。
 

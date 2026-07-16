@@ -29,6 +29,35 @@ test('Delivery, Capability, and Task definitions use distinct coordination and e
   assert.doesNotMatch(renderWorkItemBaseline(task), /## Children/);
 });
 
+test('shallow governance accepts a root Task or root Capability without invented ancestors', () => {
+  const rootTask = validateWorkItemDefinition(issueTaskDefinition({ parentId: null }));
+  const rootCapability = validateWorkItemDefinition(capabilityDefinition({ parentId: null }));
+  const nestedTask = validateWorkItemDefinition(issueTaskDefinition(), { parent: rootCapability });
+
+  assert.equal(rootTask.parentId, null);
+  assert.equal(rootTask.parentContractFingerprint, null);
+  assert.equal(rootCapability.parentId, null);
+  assert.equal(rootCapability.parentContractFingerprint, null);
+  assert.equal(nestedTask.parentId, rootCapability.id);
+});
+
+test('shallow roots cannot declare dependencies that require a missing aggregation level', () => {
+  assert.throws(
+    () => validateWorkItemDefinition(issueTaskDefinition({
+      parentId: null,
+      execution: { ...issueTaskDefinition().execution, dependsOn: ['t-contract-provider'] },
+    })),
+    { code: 'WORK_ITEM_DEPENDENCY_INVALID' },
+  );
+  assert.throws(
+    () => validateWorkItemDefinition(capabilityDefinition({
+      parentId: null,
+      decomposition: { status: 'SEALED', dependsOn: ['c-contract-provider'] },
+    })),
+    { code: 'WORK_ITEM_DEPENDENCY_INVALID' },
+  );
+});
+
 test('hierarchy validation rejects Workstream entities, unplanned children, scope expansion, and Task children', () => {
   const delivery = validateWorkItemDefinition(deliveryDefinition());
   const capability = validateWorkItemDefinition(capabilityDefinition(), { parent: delivery });

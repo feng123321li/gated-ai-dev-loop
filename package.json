@@ -5,12 +5,22 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "engines": { "node": ">=20.19" },
-  "bin": { "hdg": "bin/hdg.mjs" },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "bin": {
+    "hdg": "bin/hdg.mjs"
+  },
   "scripts": {
+    "skill:bundle": "node scripts/build-skill-cli.mjs",
     "skill:install": "node scripts/install-skill.mjs",
     "test": "node --preserve-symlinks --preserve-symlinks-main --test \"tests/**/*.test.mjs\"",
     "test:coverage": "node --preserve-symlinks --preserve-symlinks-main --experimental-test-coverage --test \"tests/**/*.test.mjs\""
   },
-  "dependencies": { "yaml": "^2.8.1" }
+  "dependencies": {
+    "yaml": "^2.8.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1"
+  }
 }

@@ -19,6 +19,8 @@
 
 每个条目记录 `id/kind/authorityKind/parentId/childIds/packagePath/stage/status`、baseline 与 contract 指纹、父契约指纹、`developmentMode`、gate、claim、证据、record revision、时间和分级 progress；Task 的 `developmentMode` 是 `development-mode.json` 的结构化快照，非 Task 必须为 null。Delivery 还记录独立的 delivery 状态，以及已经复算 hash 的审查/用户确认 evidence 引用和结构化内容快照。
 
+Delivery 的 `parentId` 固定为 null；Capability 和 Task 的 `parentId` 可以为 null，分别表示根 Capability 和根 Task。非空父级仍必须遵守 Delivery→Capability→Task 种类、计划 child 和范围包含关系。
+
 ## 确定性恢复
 
 恢复只使用显式 ID/路径、有效焦点或唯一候选。候选多于一个时请求用户选择。不得用目录 mtime、名称相似度、描述关键词或“最近看起来像”进行恢复。
@@ -38,4 +40,4 @@
 
 `currentFocus` 只帮助恢复，不授予冻结、修订或开发权限。准备、冻结、认领、阻断和 gate 后可更新焦点；并行 Task 仍各自依赖 claim，不能把单一焦点当成全局锁。
 
-新 Skill 不扫描或解释其他历史控制目录。`hdg` 只使用 `prepare-item/freeze-item/revise-item/select-development-mode/retry-item/gate-item/delivery-item`、`ready-tasks`、`task-context`、`claim-task` 和 `task-result`。
+新 Skill 不扫描或解释其他历史控制目录。Skill 内置 `scripts/hdg.mjs` 只使用 `prepare-item/freeze-item/revise-item/select-development-mode/retry-item/gate-item/delivery-item`、`ready-tasks`、`task-context`、`claim-task` 和 `task-result`；`ready-tasks --item` 接受任意根或子树 ID。

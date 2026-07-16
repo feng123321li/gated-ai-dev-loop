@@ -89,7 +89,7 @@ test('CLI manages a hierarchical Task from preparation through verified evidence
     assert.equal(frozen.exitCode, 0, frozen.err);
   }
 
-  let ready = await invoke(root, ['ready-tasks', '--delivery', 'd-identity-platform', '--json']);
+  let ready = await invoke(root, ['ready-tasks', '--item', 'd-identity-platform', '--json']);
   assert.equal(ready.exitCode, 0, ready.err);
   assert.deepEqual(result(ready.out), []);
 
@@ -112,7 +112,7 @@ test('CLI manages a hierarchical Task from preparation through verified evidence
   assert.equal(result(selected.out).status, 'FROZEN');
   assert.equal(result(selected.out).developmentMode.mode, 'active');
 
-  ready = await invoke(root, ['ready-tasks', '--delivery', 'd-identity-platform', '--json']);
+  ready = await invoke(root, ['ready-tasks', '--item', 'd-identity-platform', '--json']);
   assert.equal(ready.exitCode, 0, ready.err);
   assert.deepEqual(result(ready.out), ['t-issue-token']);
 

@@ -67,6 +67,74 @@ async function selectMode(root, id, mode = 'active') {
   });
 }
 
+test('a standalone root Task has its own baseline, dispatch, context, and gate', async (t) => {
+  const root = await fixture(t);
+  const task = issueTaskDefinition({ id: 't-standalone', parentId: null });
+  await prepareAndFreeze(root, task);
+  await selectMode(root, task.id);
+
+  assert.deepEqual(await listReadyTasks({ root, workItemId: task.id }), [task.id]);
+  const context = await buildTaskContext({ root, id: task.id });
+  assert.deepEqual(context.parentContracts, []);
+  assert.deepEqual(context.capabilityDependencies, []);
+
+  await claimTask({ root, id: task.id, owner: 'developer-a', operationId: 'op-standalone' });
+  await recordTaskResult({
+    root,
+    id: task.id,
+    operationId: 'op-standalone',
+    status: 'IMPLEMENTED',
+    evidence: { path: 'results/standalone.json', sha256: 'a'.repeat(64) },
+  });
+  await recordWorkItemGate({
+    root,
+    id: task.id,
+    status: 'PASS',
+    evidence: { path: 'results/standalone-gate.json', sha256: 'b'.repeat(64) },
+  });
+  const registry = await readWorkItemRegistry({ root });
+  assert.equal(registry.workItems.find(({ id }) => id === task.id).status, 'VERIFIED');
+});
+
+test('a root Capability aggregates child Tasks without an invented Delivery', async (t) => {
+  const root = await fixture(t);
+  const capability = capabilityDefinition({
+    parentId: null,
+    children: [capabilityDefinition().children[0]],
+  });
+  await prepareAndFreeze(root, capability);
+  await prepareAndFreeze(root, issueTaskDefinition());
+  await selectMode(root, 't-issue-token');
+
+  assert.deepEqual(await listReadyTasks({ root, workItemId: capability.id }), ['t-issue-token']);
+  const context = await buildTaskContext({ root, id: 't-issue-token' });
+  assert.deepEqual(context.parentContracts.map(({ id }) => id), [capability.id]);
+  assert.deepEqual(context.capabilityDependencies, []);
+
+  await claimTask({ root, id: 't-issue-token', owner: 'developer-a', operationId: 'op-capability-task' });
+  await recordTaskResult({
+    root,
+    id: 't-issue-token',
+    operationId: 'op-capability-task',
+    status: 'IMPLEMENTED',
+    evidence: { path: 'results/capability-task.json', sha256: 'c'.repeat(64) },
+  });
+  await recordWorkItemGate({
+    root,
+    id: 't-issue-token',
+    status: 'PASS',
+    evidence: { path: 'results/capability-task-gate.json', sha256: 'd'.repeat(64) },
+  });
+  await recordWorkItemGate({
+    root,
+    id: capability.id,
+    status: 'PASS',
+    evidence: { path: 'results/capability-gate.json', sha256: 'e'.repeat(64) },
+  });
+  const registry = await readWorkItemRegistry({ root });
+  assert.equal(registry.workItems.find(({ id }) => id === capability.id).status, 'VERIFIED');
+});
+
 test('hierarchical work items freeze independent baselines and roll up only after child and aggregate gates', async (t) => {
   const root = await fixture(t);
   await prepareAndFreeze(root, deliveryDefinition());
@@ -128,7 +196,7 @@ test('hierarchical work items freeze independent baselines and roll up only afte
   assert.deepEqual(context.execution.dependsOn, []);
   assert.equal('conversation' in context, false);
 
-  assert.deepEqual(await listReadyTasks({ root, deliveryId: 'd-identity-platform' }), ['t-issue-token']);
+  assert.deepEqual(await listReadyTasks({ root, workItemId: 'd-identity-platform' }), ['t-issue-token']);
   await claimTask({
     root,
     id: 't-issue-token',
@@ -160,7 +228,7 @@ test('hierarchical work items freeze independent baselines and roll up only afte
     partiallyComplete.workItems.find(({ id }) => id === 'c-token-lifecycle').progress.directChildren,
     { total: 2, verified: 1, blocked: 0, active: 0 },
   );
-  assert.deepEqual(await listReadyTasks({ root, deliveryId: 'd-identity-platform' }), ['t-verify-token']);
+  assert.deepEqual(await listReadyTasks({ root, workItemId: 'd-identity-platform' }), ['t-verify-token']);
 
   await assert.rejects(
     () => recordWorkItemGate({
@@ -511,7 +579,7 @@ test('a blocked Task requires an explicit fingerprint-bound retry before it beco
     status: 'BLOCKED',
     evidence: { path: 'results/blocked.json', sha256: '9'.repeat(64) },
   });
-  assert.deepEqual(await listReadyTasks({ root, deliveryId: 'd-identity-platform' }), []);
+  assert.deepEqual(await listReadyTasks({ root, workItemId: 'd-identity-platform' }), []);
   const registry = await readWorkItemRegistry({ root });
   const task = registry.workItems.find(({ id }) => id === 't-issue-token');
   await assert.rejects(
@@ -529,7 +597,7 @@ test('a blocked Task requires an explicit fingerprint-bound retry before it beco
     expectedBaselineFingerprint: task.baselineFingerprint,
     confirmed: true,
   });
-  assert.deepEqual(await listReadyTasks({ root, deliveryId: 'd-identity-platform' }), ['t-issue-token']);
+  assert.deepEqual(await listReadyTasks({ root, workItemId: 'd-identity-platform' }), ['t-issue-token']);
 });
 
 test('Capability dependencies block all consumer Tasks until the provider Capability is verified', async (t) => {
@@ -574,7 +642,7 @@ test('Capability dependencies block all consumer Tasks until the provider Capabi
   await prepareAndFreeze(root, consumerTask);
   await selectMode(root, 't-issue-token');
   await selectMode(root, 't-enforce-access', 'manual');
-  assert.deepEqual(await listReadyTasks({ root, deliveryId: delivery.id }), ['t-issue-token']);
+  assert.deepEqual(await listReadyTasks({ root, workItemId: delivery.id }), ['t-issue-token']);
   await claimTask({ root, id: 't-issue-token', owner: 'provider', operationId: 'op-provider' });
   await recordTaskResult({
     root,
@@ -595,7 +663,7 @@ test('Capability dependencies block all consumer Tasks until the provider Capabi
     status: 'PASS',
     evidence: { path: 'results/provider-capability-gate.json', sha256: '5'.repeat(64) },
   });
-  assert.deepEqual(await listReadyTasks({ root, deliveryId: delivery.id }), ['t-enforce-access']);
+  assert.deepEqual(await listReadyTasks({ root, workItemId: delivery.id }), ['t-enforce-access']);
   const consumerContext = await buildTaskContext({ root, id: 't-enforce-access' });
   assert.deepEqual(
     consumerContext.capabilityDependencies.map(({ id, status }) => ({ id, status })),

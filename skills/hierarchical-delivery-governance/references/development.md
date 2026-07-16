@@ -2,7 +2,7 @@
 
 ## 上下文生成
 
-只有开发方式已明确确认、`development-mode.json` 与 registry 快照及当前 Task baseline 指纹一致、父链有效且 Task/Capability 依赖都 VERIFIED 的 Task 才能执行 `task-context`。生成的 `context-manifest.json` 包含开发方式、Task baseline、相关父契约、Capability 依赖证据、Task 依赖输出/证据、R/A、输入输出、测试 argv 和禁止事项；`inheritConversation` 固定为 false。
+只有开发方式已明确确认、`development-mode.json` 与 registry 快照及当前 Task baseline 指纹一致、实际父链有效且 Task/Capability 依赖都 VERIFIED 的 Task 才能执行 `task-context`。生成的 `context-manifest.json` 包含开发方式、Task baseline、实际存在的父契约、Capability 依赖证据、Task 依赖输出/证据、R/A、输入输出、测试 argv 和禁止事项；根 Task 的父契约和聚合依赖数组为空，`inheritConversation` 固定为 false。
 
 `development-handoff.md` 是人可读交接。开发 Agent 不接收 Delivery 分析对话、Capability 讨论、其他 Task 对话或宿主隐式记忆。
 
@@ -27,7 +27,7 @@
 Task baseline 冻结后状态固定为 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`。宿主必须展示两种方式并等待用户明确选择，然后调用：
 
 ```text
-hdg select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
+node <skill-root>/scripts/hdg.mjs select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
 ```
 
 成功后写入 `development-mode.json`：
@@ -43,7 +43,7 @@ hdg select-development-mode --item <task-id> --development-mode active|manual --
 }
 ```
 
-两者使用相同 baseline、scope、operationId、结果 schema 和 gate。不得把“确认 baseline”或没有指明方式的“确认”解释成选择 active/manual，也不得默认选择执行方式。选择前 `task-context` 与 `claim-task` 必须返回 `WORK_ITEM_DEVELOPMENT_MODE_REQUIRED`；文件缺失、被改动或与 registry/baseline 不一致也必须拒绝。开发方式一旦绑定当前 baseline 就不能原地切换；Task baseline 修订会删除旧选择并重新进入等待状态。CLI 不可用时保持阻断，不在对话内模拟成功。
+两者使用相同 baseline、scope、operationId、结果 schema 和 gate。不得把“确认 baseline”或没有指明方式的“确认”解释成选择 active/manual，也不得默认选择执行方式。选择前 `task-context` 与 `claim-task` 必须返回 `WORK_ITEM_DEVELOPMENT_MODE_REQUIRED`；文件缺失、被改动或与 registry/baseline 不一致也必须拒绝。开发方式一旦绑定当前 baseline 就不能原地切换；Task baseline 修订会删除旧选择并重新进入等待状态。Skill 内置控制器不可用时保持阻断并报告安装损坏，不在对话内模拟成功，也不把全局 CLI 当必装依赖。
 
 ## 结果接收
 

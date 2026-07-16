@@ -4,7 +4,7 @@
 
 Task 只有在状态为 IMPLEMENTED 时可运行 gate。宿主验证：
 
-- baseline 与父链指纹；
+- baseline 与实际存在的父链指纹；根 Task 无父链；
 - 真实 diff 归属和 scope；
 - 冻结测试 argv 与退出码；
 - 依赖输出与验收项；
@@ -12,9 +12,13 @@ Task 只有在状态为 IMPLEMENTED 时可运行 gate。宿主验证：
 
 PASS 后 Task 为 VERIFIED；FAIL 后为 BLOCKED。任何 gate FAIL 后都必须用当前 baseline 指纹和显式确认执行 `retry-item`，回到 FROZEN 后才能重跑；开发 Agent 的结论不能替代 gate。
 
+根 Task 在此 gate PASS 后达到浅层根 VERIFIED；它不需要虚构 Capability gate。
+
 ## Capability gate
 
 decomposition 为 SEALED 且所有计划 Task VERIFIED 后，运行 Capability 集成测试和该级契约检查。Capability 需要自己的 evidence；不能因为子 Task 全绿自动 PASS。
+
+根 Capability 在此 gate PASS 后达到浅层根 VERIFIED；需要独立审查、用户确认或跨 Capability 聚合责任时应使用 Delivery。
 
 ## Delivery gate
 

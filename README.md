@@ -1,21 +1,29 @@
 # Hierarchical Delivery Governance
 
-面向 AI Agent 的分层交付治理 Skill 与确定性 CLI。它把可独立交付的软件工作组织为 `Delivery → Capability → Task`：顶层 Delivery 可以是完整项目、大型模块、子系统或跨服务需求，不要求覆盖整个仓库或产品；Delivery 和 Capability 管协调，Task 是唯一可执行叶子，每一级都有独立 baseline、门禁和进度。
+面向 AI Agent 的分层交付治理 Skill。它按最小必要深度把可独立交付的软件工作组织为：
+
+```text
+Task
+Capability → Task
+Delivery → Capability → Task
+```
+
+Delivery 和 Capability 管协调与聚合，Task 是唯一执行叶子。实际存在的每一级都有独立 baseline、门禁和进度；每个 Task 使用磁盘化独立上下文，不继承前期对话。
 
 ## 核心能力
 
-- 为完整项目或可独立交付的大型模块生成 Delivery 总览，并拆分为多个 Capability；
-- Capability 可通过受控 baseline 修订持续追加 Task；
-- 每个 Delivery、Capability、Task 都冻结自己的 baseline；
-- Task baseline 冻结后必须由用户显式选择 active/manual，并由 CLI 持久化开发方式门禁；
-- Task 只携带磁盘化独立上下文，不继承前期对话；
-- 按依赖、claim 和写入范围计算 READY Task，支持多人并行开发；
-- Task、Capability、Delivery 分级验收，父级必须通过自己的聚合门禁；
-- 任一层级门禁失败后都必须绑定当前 baseline 显式重试；
-- Delivery 门禁通过后仍要完成隔离/人工审查和用户确认，才算最终交付；
-- 维护本仓库时默认进入 self-hosting maintenance，不创建 `.hierarchical-delivery-governance`；只有用户明确 dogfood，且每个会写控制面的层级命令都显式带 `--dogfood`，才允许演练运行包。
+- 小需求可直接使用根 Task，不虚构 Capability 或 Delivery；
+- 多 Task 能力使用根 Capability，并可受控持续追加 Task；
+- 多 Capability 交付才创建 Delivery；它可以是完整项目、大型模块、子系统或跨服务需求；
+- Task baseline 冻结后必须由用户显式选择 active/manual；
+- 按依赖、claim 和写入范围计算 READY Task，支持多人并行；
+- Task、Capability、Delivery 各自通过 gate，失败后绑定当前 baseline 显式重试；
+- Delivery gate 后仍需隔离/人工审查和用户确认；
+- 维护本仓库默认进入 self-hosting maintenance，只有用户明确 dogfood 才创建运行包。
 
-## 目录
+Micro、Workstream 和 M/W/T 可作为规模特征、规划视图和人类可读编号，但不进入机器 `kind`，也不拥有 baseline、claim 或 gate。
+
+## 运行目录
 
 ```text
 .hierarchical-delivery-governance/
@@ -32,54 +40,37 @@
         └── development-mode.json # Task 显式选择后生成
 ```
 
-完整规则见 [Skill 入口](skills/hierarchical-delivery-governance/SKILL.md) 和 [层级规划](skills/hierarchical-delivery-governance/references/delivery-planning.md)。
+完整规则见 [Skill 入口](skills/hierarchical-delivery-governance/SKILL.md)、[工作流与流程图](skills/hierarchical-delivery-governance/references/workflow.md) 和 [可变深度规划](skills/hierarchical-delivery-governance/references/delivery-planning.md)。
 
-## 安装与验证
+## 安装 Skill
+
+只安装 Skill 是主路径；安装目录内已经包含自给自足的 `scripts/hdg.mjs` 机械控制器，不要求全局 CLI。
 
 ```text
 npm install
+npm run skill:install -- --target both --scope user --dry-run
+npm run skill:install -- --target both --scope user
+```
+
+安装后的宿主从 `SKILL.md` 所在目录执行：
+
+```text
+node <skill-root>/scripts/hdg.mjs --help
+node <skill-root>/scripts/hdg.mjs prepare-item --definition task.json --host-runtime claude
+node <skill-root>/scripts/hdg.mjs freeze-item --item t-example --expected-baseline <sha256> --confirmed
+node <skill-root>/scripts/hdg.mjs select-development-mode --item t-example --development-mode active --expected-baseline <sha256> --confirmed
+node <skill-root>/scripts/hdg.mjs ready-tasks --item t-example
+node <skill-root>/scripts/hdg.mjs task-context --item t-example
+```
+
+开发本仓库时，修改运行时代码后重新生成 Skill 控制器并验证：
+
+```text
+npm run skill:bundle
 npm test
 npm run test:coverage
 ```
 
-预览 Skill 安装：
+`npm install -g .` 提供可选的 `hdg` 快捷别名，但不是 Skill 工作流的依赖。
 
-```text
-npm run skill:install -- --target both --scope user --dry-run
-```
-
-安装到当前用户的 Codex 与 Claude Code：
-
-```text
-npm run skill:install -- --target both --scope user
-```
-
-全局安装 CLI，或直接使用仓库入口：
-
-```text
-npm install -g .
-hdg --help
-
-node bin/hdg.mjs --help
-```
-
-## 层级 CLI
-
-```text
-hdg prepare-item --definition delivery.json --host-runtime codex
-hdg freeze-item --item d-example --expected-baseline <sha256> --confirmed
-hdg select-development-mode --item t-example --development-mode active --expected-baseline <sha256> --confirmed
-hdg ready-tasks --delivery d-example
-hdg task-context --item t-example
-hdg retry-item --item c-example --expected-baseline <sha256> --confirmed
-hdg delivery-item --item d-example --action INDEPENDENT_REVIEW_PASS --evidence review.json
-hdg delivery-item --item d-example --action USER_CONFIRMED --evidence confirmation.json
-```
-
-查看完整命令：
-
-```text
-hdg --help
-```
-
-Skill、npm 包和运行控制目录统一使用 `hierarchical-delivery-governance`，CLI 使用 `hdg`，不追加 `v2`，也不读取或迁移旧控制目录。
+Skill、npm 包和运行控制目录统一使用 `hierarchical-delivery-governance`，不追加 `v2`，也不读取或迁移旧控制目录。

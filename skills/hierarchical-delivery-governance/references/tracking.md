@@ -6,7 +6,7 @@
 
 ## 层级事实卡投影
 
-在任何工作项持久化前，协调视图先展示人可读的层级事实卡：交付对象和独立验收边界、计划 Capability 与各自聚合验收、可执行叶子、依赖和集成波次、命中规则、为什么不是更小一级、缺失事实及待确认项。它是路由依据，不是创建授权；事实不足时保持草案，不生成 ID、不准备包、不冻结 baseline。
+在任何工作项持久化前，协调视图先展示人可读的层级事实卡：交付对象和独立验收边界、实际需要的 Task/Capability 聚合责任及各自聚合验收、可执行叶子、依赖和集成波次、命中规则、为什么不是更小一级、缺失事实及待确认项。它是路由依据，不是创建授权；事实不足时保持草案，不生成 ID、不准备包、不冻结 baseline。
 
 ## 三种进度
 
@@ -27,9 +27,13 @@ Delivery overview 是顶层交付视图，不要求范围覆盖整个仓库或�
 
 Capability progress 展示计划 Task、依赖、READY/CLAIMED/IMPLEMENTED/VERIFIED/BLOCKED 状态和集成 gate。新增 Task 后 total 立即增加；既有 Task 状态不被兄弟追加重置。
 
+根 Capability 的父链为空，Delivery 状态显示 `n/a`；它在全部 Task 和自身 gate 通过后 VERIFIED。
+
 ## Task 视图
 
 Task progress 展示父链、baseline 指纹、开发方式及确认记录、依赖、claim、实现证据、gate、下一动作和阻断解除条件。未选择时下一动作是明确选择 active/manual；开发 Agent 不更新控制投影，宿主验证返回结果后写入。
+
+根 Task 的父链和聚合依赖为空，直接以自身 gate 结果作为浅层交付状态。
 
 ## 写回时机
 

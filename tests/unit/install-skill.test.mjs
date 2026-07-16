@@ -11,8 +11,10 @@ async function fixture(t) {
   t.after(() => rm(root, { recursive: true, force: true }));
   const sourceDir = path.join(root, 'source');
   await mkdir(path.join(sourceDir, 'references'), { recursive: true });
+  await mkdir(path.join(sourceDir, 'scripts'), { recursive: true });
   await writeFile(path.join(sourceDir, 'SKILL.md'), '---\nname: hierarchical-delivery-governance\ndescription: test\n---\n');
   await writeFile(path.join(sourceDir, 'references', 'guide.md'), '# guide\n');
+  await writeFile(path.join(sourceDir, 'scripts', 'hdg.mjs'), '#!/usr/bin/env node\n');
   return { root, sourceDir };
 }
 
@@ -57,6 +59,7 @@ test('同时安装完整 Skill，并默认拒绝覆盖', async (t) => {
   const result = await installSkill(options, { sourceDir, home, env: {} });
   assert.deepEqual(result.results.map(({ action }) => action), ['created', 'created']);
   assert.equal(await readFile(path.join(home, '.codex', 'skills', 'hierarchical-delivery-governance', 'references', 'guide.md'), 'utf8'), '# guide\n');
+  assert.equal(await readFile(path.join(home, '.codex', 'skills', 'hierarchical-delivery-governance', 'scripts', 'hdg.mjs'), 'utf8'), '#!/usr/bin/env node\n');
   assert.equal(await readFile(path.join(home, '.claude', 'skills', 'hierarchical-delivery-governance', 'SKILL.md'), 'utf8'), '---\nname: hierarchical-delivery-governance\ndescription: test\n---\n');
   await assert.rejects(() => installSkill(options, { sourceDir, home, env: {} }), /--force/);
 });

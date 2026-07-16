@@ -37,7 +37,7 @@ export const HIERARCHICAL_COMMANDS = Object.freeze([
 const VALUE_OPTIONS = new Set([
   '--mode', '--signals', '--task', '--brief', '--host-runtime', '--baseline', '--source',
   '--round', '--snapshot', '--timeout-ms', '--reviewer', '--review-result',
-  '--definition', '--item', '--delivery', '--owner', '--operation', '--status', '--evidence',
+  '--definition', '--item', '--owner', '--operation', '--status', '--evidence',
   '--expected-baseline', '--action', '--development-mode',
 ]);
 const REPEATABLE_OPTIONS = new Set(['--source']);
@@ -51,7 +51,7 @@ const ACCEPT_OPTIONS = new Set(['--json', '--help', '--task', '--round', '--snap
 const PREPARE_ITEM_OPTIONS = new Set(['--json', '--help', '--definition', '--host-runtime', '--dogfood']);
 const FREEZE_ITEM_OPTIONS = new Set(['--json', '--help', '--item', '--expected-baseline', '--confirmed', '--dogfood']);
 const REVISE_ITEM_OPTIONS = new Set(['--json', '--help', '--definition', '--expected-baseline', '--confirmed', '--dogfood']);
-const READY_TASKS_OPTIONS = new Set(['--json', '--help', '--delivery']);
+const READY_TASKS_OPTIONS = new Set(['--json', '--help', '--item']);
 const TASK_CONTEXT_OPTIONS = new Set(['--json', '--help', '--item', '--dogfood']);
 const SELECT_DEVELOPMENT_MODE_OPTIONS = new Set([
   '--json', '--help', '--item', '--development-mode', '--expected-baseline', '--confirmed', '--dogfood',
@@ -61,8 +61,43 @@ const TASK_RESULT_OPTIONS = new Set(['--json', '--help', '--item', '--operation'
 const GATE_ITEM_OPTIONS = new Set(['--json', '--help', '--item', '--status', '--evidence', '--dogfood']);
 const RETRY_ITEM_OPTIONS = new Set(['--json', '--help', '--item', '--expected-baseline', '--confirmed', '--dogfood']);
 const DELIVERY_ITEM_OPTIONS = new Set(['--json', '--help', '--item', '--action', '--evidence', '--dogfood']);
-const help = `Usage: gated-loop <command> [options]\n\nCommands:\n${COMMANDS.map((command) => `  ${command}`).join('\n')}\n\nHierarchical work items:\n  prepare-item --definition <file> --host-runtime <agent>\n  freeze-item --item <id> --expected-baseline <sha256> --confirmed\n  revise-item --definition <file> --expected-baseline <sha256> --confirmed\n  select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed\n  ready-tasks --delivery <id>\n  task-context --item <id>\n  claim-task --item <id> --owner <owner> --operation <id>\n  task-result --item <id> --operation <id> --status IMPLEMENTED|BLOCKED --evidence <file>\n  retry-item --item <id> --expected-baseline <sha256> --confirmed\n  gate-item --item <id> --status PASS|FAIL --evidence <file>\n  delivery-item --item <delivery-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file>\n\nIn the implementation repository, add --dogfood to every hierarchical command that writes runtime state.\n\nGate commands:\n  self-check --task <id> [--round 1] [--snapshot <file>]\n  accept --task <id> [--round 1] [--reviewer human|auto|codex|claude]\n\nThe historical start/prepare/freeze commands are v1 compatibility surfaces.\nAcceptance defaults to human handling unless a host reviewer result or reviewer capability is supplied.\n`;
-const hierarchicalHelp = `Usage: hdg <command> [options]\n\nCommands:\n${HIERARCHICAL_COMMANDS.map((command) => `  ${command}`).join('\n')}\n\n  prepare-item --definition <file> --host-runtime <agent>\n  freeze-item --item <id> --expected-baseline <sha256> --confirmed\n  revise-item --definition <file> --expected-baseline <sha256> --confirmed\n  select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed\n  ready-tasks --delivery <id>\n  task-context --item <id>\n  claim-task --item <id> --owner <owner> --operation <id>\n  task-result --item <id> --operation <id> --status IMPLEMENTED|BLOCKED --evidence <file>\n  retry-item --item <id> --expected-baseline <sha256> --confirmed\n  gate-item --item <id> --status PASS|FAIL --evidence <file>\n  delivery-item --item <delivery-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file>\n\nIn the hierarchical-delivery-governance implementation repository, every command that writes control state also requires --dogfood.\n`;
+const hierarchicalUsage = `  prepare-item --definition <file> --host-runtime <agent>
+  freeze-item --item <id> --expected-baseline <sha256> --confirmed
+  revise-item --definition <file> --expected-baseline <sha256> --confirmed
+  select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
+  ready-tasks --item <root-or-subtree-id>
+  task-context --item <task-id>
+  claim-task --item <task-id> --owner <owner> --operation <id>
+  task-result --item <task-id> --operation <id> --status IMPLEMENTED|BLOCKED --evidence <file>
+  retry-item --item <id> --expected-baseline <sha256> --confirmed
+  gate-item --item <id> --status PASS|FAIL --evidence <file>
+  delivery-item --item <delivery-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file>`;
+const help = `Usage: gated-loop <command> [options]
+
+Commands:
+${COMMANDS.map((command) => `  ${command}`).join('\n')}
+
+Hierarchical work items:
+${hierarchicalUsage}
+
+In the implementation repository, add --dogfood to every hierarchical command that writes runtime state.
+
+Gate commands:
+  self-check --task <id> [--round 1] [--snapshot <file>]
+  accept --task <id> [--round 1] [--reviewer human|auto|codex|claude]
+
+The historical start/prepare/freeze commands are v1 compatibility surfaces.
+Acceptance defaults to human handling unless a host reviewer result or reviewer capability is supplied.
+`;
+const hierarchicalHelp = `Usage: hdg <command> [options]
+
+Commands:
+${HIERARCHICAL_COMMANDS.map((command) => `  ${command}`).join('\n')}
+
+${hierarchicalUsage}
+
+In the hierarchical-delivery-governance implementation repository, every command that writes control state also requires --dogfood.
+`;
 
 function parse(argv) {
   const seen = new Set();
@@ -297,7 +332,7 @@ async function runWorkItemCommand(parsed, io) {
     });
   }
   if (parsed.command === 'ready-tasks') {
-    return listReadyTasks({ ...common, deliveryId: required(parsed, '--delivery') });
+    return listReadyTasks({ ...common, workItemId: required(parsed, '--item') });
   }
   if (parsed.command === 'task-context') {
     return buildTaskContext({ ...common, id: required(parsed, '--item') });
@@ -364,7 +399,10 @@ export async function runCli(argv, io = {}) {
   try {
     const parsed = parse(argv);
     jsonOutput = parsed.json;
-    if (parsed.help || !parsed.command) { stdout(help); return 0; }
+    if (parsed.help || !parsed.command) {
+      stdout(help);
+      return 0;
+    }
     if (!COMMANDS.includes(parsed.command)) throw new GatedLoopError('UNKNOWN_COMMAND', `Unknown command: ${parsed.command}`);
     if (parsed.command === 'route' || parsed.command === 'start') {
       const result = await runModeCommand(parsed, io);

@@ -216,7 +216,7 @@ function validateRegistry(registry, root) {
     if (entry.kind === 'DELIVERY' && entry.parentId !== null) {
       fail('WORK_ITEM_REGISTRY_INVALID', 'Delivery entries cannot have parents');
     }
-    if (entry.kind !== 'DELIVERY') {
+    if (entry.kind !== 'DELIVERY' && entry.parentId !== null) {
       const parent = byId.get(entry.parentId);
       const expectedParentKind = entry.kind === 'CAPABILITY' ? 'DELIVERY' : 'CAPABILITY';
       if (!parent || parent.kind !== expectedParentKind || !parent.childIds.includes(entry.id)) {
@@ -233,10 +233,10 @@ function validateRegistry(registry, root) {
 
 async function ensureRuntimeRoot(root, fs) {
   const rootStat = await fs.lstat(root).catch((error) => {
-    if (error.code === 'ENOENT') fail('WORK_ITEM_ROOT_INVALID', 'Delivery root must already exist');
+    if (error.code === 'ENOENT') fail('WORK_ITEM_ROOT_INVALID', 'Coordination root must already exist');
     throw error;
   });
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) fail('WORK_ITEM_ROOT_INVALID', 'Delivery root must be a regular directory');
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) fail('WORK_ITEM_ROOT_INVALID', 'Coordination root must be a regular directory');
   const runtimeRoot = await assertSafePath(root, GOVERNANCE_DIRECTORY, { fs });
   await fs.mkdir(runtimeRoot, { recursive: true });
   await assertSafePath(root, GOVERNANCE_DIRECTORY, { fs });
@@ -520,6 +520,12 @@ function entryFromDefinition(definition, state, at) {
 
 function validateTaskDependencies(definition, parent) {
   if (definition.kind !== 'TASK') return;
+  if (!parent) {
+    if (definition.execution.dependsOn.length > 0) {
+      fail('WORK_ITEM_DEPENDENCY_INVALID', 'A root Task cannot depend on sibling Tasks; use a Capability root');
+    }
+    return;
+  }
   const siblingIds = new Set(parent.children.map(({ id }) => id));
   if (definition.execution.dependsOn.some((id) => !siblingIds.has(id))) {
     fail('WORK_ITEM_DEPENDENCY_INVALID', 'Task dependsOn must reference planned sibling Tasks');
@@ -567,7 +573,9 @@ export async function prepareWorkItem({
     if (existing) {
       const current = await readPackageDefinition(root, existing, fs);
       let candidate;
-      if (definition.kind === 'DELIVERY') candidate = validateWorkItemDefinition(definition);
+      if (definition.kind === 'DELIVERY' || definition.parentId === null) {
+        candidate = validateWorkItemDefinition(definition);
+      }
       else {
         const parentEntry = itemById(registry, definition.parentId);
         const parent = (await readPackageDefinition(root, parentEntry, fs)).definition;
@@ -580,7 +588,7 @@ export async function prepareWorkItem({
     }
 
     let parent = null;
-    if (definition.kind !== 'DELIVERY') {
+    if (definition.kind !== 'DELIVERY' && definition.parentId !== null) {
       const parentEntry = itemById(registry, definition.parentId);
       if (parentEntry.stage !== 'BASELINE_FROZEN') fail('WORK_ITEM_PARENT_NOT_FROZEN', 'Parent baseline must be frozen first');
       parent = (await assertCurrentLineage(root, registry, parentEntry, fs)).definition;
@@ -928,11 +936,14 @@ async function taskReady(root, registry, entry, fs) {
   if (entry.kind !== 'TASK' || entry.stage !== 'BASELINE_FROZEN' || entry.status !== 'FROZEN' || entry.claim) return false;
   await assertCurrentLineage(root, registry, entry, fs);
   const definition = await taskDefinition(root, entry, fs);
-  const capabilityEntry = itemById(registry, entry.parentId);
-  const capability = (await readPackageDefinition(root, capabilityEntry, fs)).definition;
-  const capabilitiesReady = capability.decomposition.dependsOn.every((id) => (
-    registry.workItems.find((candidate) => candidate.id === id)?.status === 'VERIFIED'
-  ));
+  let capabilitiesReady = true;
+  if (entry.parentId !== null) {
+    const capabilityEntry = itemById(registry, entry.parentId);
+    const capability = (await readPackageDefinition(root, capabilityEntry, fs)).definition;
+    capabilitiesReady = capability.decomposition.dependsOn.every((id) => (
+      registry.workItems.find((candidate) => candidate.id === id)?.status === 'VERIFIED'
+    ));
+  }
   if (!capabilitiesReady) return false;
   const dependenciesReady = definition.execution.dependsOn.every((id) => (
     registry.workItems.find((candidate) => candidate.id === id)?.status === 'VERIFIED'
@@ -945,13 +956,12 @@ async function taskReady(root, registry, entry, fs) {
   return true;
 }
 
-export async function listReadyTasks({ root, deliveryId, fs = fsPromises } = {}) {
+export async function listReadyTasks({ root, workItemId, fs = fsPromises } = {}) {
   const registry = await readRegistryUnlocked(root, fs);
-  const delivery = itemById(registry, deliveryId);
-  if (delivery.kind !== 'DELIVERY') fail('WORK_ITEM_DELIVERY_REQUIRED', 'ready task listing requires a Delivery ID');
+  itemById(registry, workItemId);
   const ready = [];
   for (const entry of sortedItems(registry.workItems)) {
-    if (isDescendantOf(registry, entry, deliveryId) && await taskReady(root, registry, entry, fs)) ready.push(entry.id);
+    if (isDescendantOf(registry, entry, workItemId) && await taskReady(root, registry, entry, fs)) ready.push(entry.id);
   }
   return ready;
 }
@@ -1248,17 +1258,20 @@ export async function buildTaskContext({ root, id, explicitDogfood = false, fs =
   if (dependencies.some(({ status }) => status !== 'VERIFIED')) {
     fail('WORK_ITEM_NOT_READY', `${id} has unverified Task dependencies`);
   }
-  const capabilityEntry = itemById(registry, entry.parentId);
-  const capabilityDefinition = (await readPackageDefinition(root, capabilityEntry, fs)).definition;
-  const capabilityDependencies = capabilityDefinition.decomposition.dependsOn.map((dependencyId) => {
-    const dependency = itemById(registry, dependencyId);
-    return {
-      id: dependency.id,
-      status: dependency.status,
-      contractFingerprint: dependency.contractFingerprint,
-      evidence: dependency.latestEvidence,
-    };
-  });
+  let capabilityDependencies = [];
+  if (entry.parentId !== null) {
+    const capabilityEntry = itemById(registry, entry.parentId);
+    const capabilityDefinition = (await readPackageDefinition(root, capabilityEntry, fs)).definition;
+    capabilityDependencies = capabilityDefinition.decomposition.dependsOn.map((dependencyId) => {
+      const dependency = itemById(registry, dependencyId);
+      return {
+        id: dependency.id,
+        status: dependency.status,
+        contractFingerprint: dependency.contractFingerprint,
+        evidence: dependency.latestEvidence,
+      };
+    });
+  }
   if (capabilityDependencies.some(({ status }) => status !== 'VERIFIED')) {
     fail('WORK_ITEM_NOT_READY', `${id} has unverified Capability dependencies`);
   }

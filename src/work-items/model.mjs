@@ -209,6 +209,16 @@ function normalizeParent(definition, parent) {
     }
     return { parentId: null, parentContractFingerprint: null };
   }
+  if (definition.parentId === null) {
+    if (parent) fail('WORK_ITEM_PARENT_INVALID', `Root ${definition.kind} cannot receive a parent contract`);
+    if (definition.kind === 'TASK' && definition.execution.dependsOn.length > 0) {
+      fail('WORK_ITEM_DEPENDENCY_INVALID', 'A root Task cannot depend on sibling Tasks; use a Capability root');
+    }
+    if (definition.kind === 'CAPABILITY' && definition.decomposition.dependsOn.length > 0) {
+      fail('WORK_ITEM_DEPENDENCY_INVALID', 'A root Capability cannot depend on sibling Capabilities; use a Delivery root');
+    }
+    return { parentId: null, parentContractFingerprint: null };
+  }
   if (!parent || definition.parentId !== parent.id) {
     fail('WORK_ITEM_PARENT_INVALID', `${definition.kind} must reference its supplied parent`);
   }

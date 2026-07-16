@@ -46,7 +46,18 @@ test('Delivery、Capability 和 Task 由交付边界与聚合责任决定', asyn
   assert.match(routing, /一个可独立执行结果使用 Task/);
   assert.match(routing, /多个 Task 共同形成一个聚合能力时使用 Capability/);
   assert.match(routing, /多个 Capability 共同形成一个独立交付目标且需要顶层聚合门禁时才使用 Delivery/);
-  assert.match(deliveryPlanning, /独立交付目标、多个 Capability 和顶层聚合验收/);
+  assert.match(deliveryPlanning, /多个 Capability 并需要顶层聚合验收时才创建 Delivery/);
+  assert.match(deliveryPlanning, /根 Task/);
+  assert.match(deliveryPlanning, /根 Capability/);
+});
+
+test('浅层治理只允许三种合法形态，并禁止为 schema 虚构父级', async () => {
+  const [skill, routing, deliveryPlanning] = await readContracts();
+
+  assert.match(skill, /根 Task、根 Capability 或 Delivery/);
+  assert.match(routing, /Task\nCapability → Task\nDelivery → Capability → Task/);
+  assert.match(routing, /不要创建空父级来满足固定深度/);
+  assert.match(deliveryPlanning, /不允许 Delivery 直接包含 Task/);
 });
 
 test('实现数量和 Full 风险信号不能单独把工作项升级为 Delivery', async () => {

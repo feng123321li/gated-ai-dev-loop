@@ -17,9 +17,9 @@ Task 执行状态：
 - `BLOCKED`：开发或 gate 阻断；
 - `VERIFIED`：Task gate PASS。
 
-Capability `dependsOn` 未全部 VERIFIED 时，其后代 Task 即使自身 Task 依赖满足也不 READY。
+有 Delivery 父级的 Capability，其 `dependsOn` 未全部 VERIFIED 时，后代 Task 即使自身 Task 依赖满足也不 READY。根 Capability 不声明 Capability 依赖，根 Task 不声明 Task 依赖。
 
-Delivery/Capability 保持 `FROZEN`，直到 decomposition 为 SEALED、全部计划直接子级 VERIFIED 且自身 gate PASS，之后为 `VERIFIED`。READY 是 Task 的派生谓词，不是这里的持久状态。
+Delivery/Capability 保持 `FROZEN`，直到 decomposition 为 SEALED、全部计划直接子级 VERIFIED 且自身 gate PASS，之后为 `VERIFIED`。根 Task 在自身 gate PASS 后 VERIFIED；根 Capability 在自己的聚合 gate PASS 后 VERIFIED。READY 是 Task 的派生谓词，不是这里的持久状态。
 
 Delivery 另有 delivery 状态：`NOT_READY → WAITING_FOR_INDEPENDENT_REVIEW → WAITING_FOR_USER_CONFIRMATION → COMPLETED`。工作项 `VERIFIED` 与最终交付 `COMPLETED` 不合并。
 
@@ -47,7 +47,7 @@ WAITING_FOR_USER_CONFIRMATION --user confirmation--> COMPLETED
 - Task：实现证据存在、冻结测试执行、Task gate PASS；
 - Capability：所有计划 Task VERIFIED，集成测试与 Capability gate PASS；
 - Delivery：所有计划 Capability VERIFIED，顶层交付测试与 Delivery gate PASS；
-- 用户交付：独立语义验收 PASS 或明确接受人工验收结果，并且用户随后确认交付。
+- Delivery 最终交付：独立语义验收 PASS 或明确接受人工验收结果，并且用户随后确认交付。需要这一级责任时不要浅化掉 Delivery。
 
 不得根据百分比、对话陈述、子级数量相等或文件存在推断 PASS。
 

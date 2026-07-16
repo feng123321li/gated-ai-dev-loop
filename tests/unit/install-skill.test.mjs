@@ -11,7 +11,7 @@ async function fixture(t) {
   t.after(() => rm(root, { recursive: true, force: true }));
   const sourceDir = path.join(root, 'source');
   await mkdir(path.join(sourceDir, 'references'), { recursive: true });
-  await writeFile(path.join(sourceDir, 'SKILL.md'), '---\nname: gated-ai-dev-loop\ndescription: test\n---\n');
+  await writeFile(path.join(sourceDir, 'SKILL.md'), '---\nname: hierarchical-delivery-governance\ndescription: test\n---\n');
   await writeFile(path.join(sourceDir, 'references', 'guide.md'), '# guide\n');
   return { root, sourceDir };
 }
@@ -31,15 +31,15 @@ test('用户级目标分别使用 Codex 和 Claude 的发现目录', () => {
   const targets = resolveTargets({ target: 'both', scope: 'user' }, {
     home, env: { CODEX_HOME: codexHome }, cwd: path.resolve('test-repo'),
   });
-  assert.equal(targets[0].destination, path.join(codexHome, 'skills', 'gated-ai-dev-loop'));
-  assert.equal(targets[1].destination, path.join(home, '.claude', 'skills', 'gated-ai-dev-loop'));
+  assert.equal(targets[0].destination, path.join(codexHome, 'skills', 'hierarchical-delivery-governance'));
+  assert.equal(targets[1].destination, path.join(home, '.claude', 'skills', 'hierarchical-delivery-governance'));
 });
 
 test('项目级 Codex 使用 .agents，Claude 使用 .claude', () => {
   const repo = path.resolve('example-repo');
   const targets = resolveTargets({ target: 'both', scope: 'project', projectRoot: repo });
-  assert.equal(targets[0].destination, path.join(repo, '.agents', 'skills', 'gated-ai-dev-loop'));
-  assert.equal(targets[1].destination, path.join(repo, '.claude', 'skills', 'gated-ai-dev-loop'));
+  assert.equal(targets[0].destination, path.join(repo, '.agents', 'skills', 'hierarchical-delivery-governance'));
+  assert.equal(targets[1].destination, path.join(repo, '.claude', 'skills', 'hierarchical-delivery-governance'));
 });
 
 test('dry-run 不创建目标目录', async (t) => {
@@ -47,7 +47,7 @@ test('dry-run 不创建目标目录', async (t) => {
   const home = path.join(root, 'home');
   const result = await installSkill({ target: 'both', scope: 'user', dryRun: true, force: false }, { sourceDir, home, env: {} });
   assert.deepEqual(result.results.map(({ action }) => action), ['create', 'create']);
-  await assert.rejects(() => readFile(path.join(home, '.claude', 'skills', 'gated-ai-dev-loop', 'SKILL.md')), { code: 'ENOENT' });
+  await assert.rejects(() => readFile(path.join(home, '.claude', 'skills', 'hierarchical-delivery-governance', 'SKILL.md')), { code: 'ENOENT' });
 });
 
 test('同时安装完整 Skill，并默认拒绝覆盖', async (t) => {
@@ -56,8 +56,8 @@ test('同时安装完整 Skill，并默认拒绝覆盖', async (t) => {
   const options = { target: 'both', scope: 'user', dryRun: false, force: false };
   const result = await installSkill(options, { sourceDir, home, env: {} });
   assert.deepEqual(result.results.map(({ action }) => action), ['created', 'created']);
-  assert.equal(await readFile(path.join(home, '.codex', 'skills', 'gated-ai-dev-loop', 'references', 'guide.md'), 'utf8'), '# guide\n');
-  assert.equal(await readFile(path.join(home, '.claude', 'skills', 'gated-ai-dev-loop', 'SKILL.md'), 'utf8'), '---\nname: gated-ai-dev-loop\ndescription: test\n---\n');
+  assert.equal(await readFile(path.join(home, '.codex', 'skills', 'hierarchical-delivery-governance', 'references', 'guide.md'), 'utf8'), '# guide\n');
+  assert.equal(await readFile(path.join(home, '.claude', 'skills', 'hierarchical-delivery-governance', 'SKILL.md'), 'utf8'), '---\nname: hierarchical-delivery-governance\ndescription: test\n---\n');
   await assert.rejects(() => installSkill(options, { sourceDir, home, env: {} }), /--force/);
 });
 
@@ -69,5 +69,5 @@ test('--force 原子替换已有安装', async (t) => {
   await writeFile(path.join(sourceDir, 'SKILL.md'), 'new version\n');
   const result = await installSkill({ target: 'claude', scope: 'user', dryRun: false, force: true }, runtime);
   assert.equal(result.results[0].action, 'replaced');
-  assert.equal(await readFile(path.join(home, '.claude', 'skills', 'gated-ai-dev-loop', 'SKILL.md'), 'utf8'), 'new version\n');
+  assert.equal(await readFile(path.join(home, '.claude', 'skills', 'hierarchical-delivery-governance', 'SKILL.md'), 'utf8'), 'new version\n');
 });

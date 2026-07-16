@@ -141,6 +141,33 @@ test('CLI start leaves None artifact-free', async (t) => {
   assert.equal(result.modelCalls, 0);
 });
 
+test('legacy start still treats the implementation repository as artifact-free unless dogfooding is explicit', async (t) => {
+  const root = await fixture(t);
+  await putJson(root, 'package.json', { name: 'hierarchical-delivery-governance', private: true });
+  const signalFile = await putJson(root, 'signals.json', signals({ authentication: true }));
+
+  const maintenance = await invoke([
+    'start', 'upgrade the gated workflow', '--signals', signalFile,
+    '--host-runtime', 'codex', '--json',
+  ], { cwd: root, generateTaskId: () => { throw new Error('Self-hosting maintenance must not allocate a task ID'); } });
+
+  assert.equal(maintenance.exitCode, 0);
+  const maintenancePayload = JSON.parse(maintenance.out).result;
+  assert.equal(maintenancePayload.nextAction, 'self-hosting-maintenance');
+  assert.equal(maintenancePayload.policy.route, 'SELF_HOSTING_MAINTENANCE');
+  assert.deepEqual(maintenancePayload.artifacts, []);
+  assert.equal((await readdir(root)).includes('.ai-dev-loop'), false);
+
+  const dogfood = await invoke([
+    'start', 'exercise the runtime package', '--signals', signalFile,
+    '--host-runtime', 'codex', '--dogfood', '--json',
+  ], { cwd: root, generateTaskId: () => 'explicit-dogfood' });
+
+  assert.equal(dogfood.exitCode, 0);
+  assert.equal(JSON.parse(dogfood.out).result.task, 'explicit-dogfood');
+  assert.equal((await readdir(path.join(root, '.ai-dev-loop'))).includes('explicit-dogfood'), true);
+});
+
 test('CLI start persists a generic Agent host without creating framework-specific paths', async (t) => {
   const root = await fixture(t);
   const signalFile = await putJson(root, 'signals.json', signals({ authentication: true }));

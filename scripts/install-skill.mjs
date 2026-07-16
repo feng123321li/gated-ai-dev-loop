@@ -5,7 +5,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
-const SKILL_NAME = 'gated-ai-dev-loop';
+const SKILL_NAME = 'hierarchical-delivery-governance';
 const VALID_TARGETS = new Set(['codex', 'claude', 'both']);
 const VALID_SCOPES = new Set(['user', 'project']);
 
@@ -131,7 +131,7 @@ async function installOne(sourceDir, target, options) {
 }
 
 export async function installSkill(options, runtime = {}) {
-  const sourceDir = path.resolve(runtime.sourceDir ?? fileURLToPath(new URL('../skills/gated-ai-dev-loop', import.meta.url)));
+  const sourceDir = path.resolve(runtime.sourceDir ?? fileURLToPath(new URL('../skills/hierarchical-delivery-governance', import.meta.url)));
   await assertPlainSource(sourceDir);
   const targets = resolveTargets(options, runtime);
   const results = [];
@@ -139,7 +139,7 @@ export async function installSkill(options, runtime = {}) {
   return { skill: SKILL_NAME, scope: options.scope, results };
 }
 
-const help = `安装门禁式 AI 开发 Skill\n\n用法:\n  node scripts/install-skill.mjs [选项]\n\n选项:\n  --target codex|claude|both   安装目标，默认 both\n  --scope user|project         安装范围，默认 user\n  --project-root <path>        项目级安装根目录\n  --dry-run                    只显示计划，不写入\n  --force                      安全替换已有安装\n  --help                       显示帮助\n`;
+const help = `安装分层交付治理 Skill\n\n用法:\n  node scripts/install-skill.mjs [选项]\n\n选项:\n  --target codex|claude|both   安装目标，默认 both\n  --scope user|project         安装范围，默认 user\n  --project-root <path>        项目级安装根目录\n  --dry-run                    只显示计划，不写入\n  --force                      安全替换已有安装\n  --help                       显示帮助\n`;
 
 async function main() {
   try {

@@ -32,6 +32,16 @@ class WorkItemFlowTests(unittest.TestCase):
                 confirmed=True,
             )
             self.assertEqual(frozen["stage"], "BASELINE_FROZEN")
+            self.assertEqual(
+                frozen["humanArtifacts"]["requirementHandoff"],
+                ".hierarchical-delivery-governance/work-items/t-python-controller/requirement-handoff.md",
+            )
+            self.assertIn("一次接管整棵需求树", frozen["handoffPrompt"])
+            self.assertIn("不要要求用户逐 Task 回复启动", frozen["handoffPrompt"])
+            self.assertEqual(
+                (package / "requirement-handoff.md").read_text(encoding="utf-8"),
+                frozen["handoffPrompt"],
+            )
 
             self.assertEqual(list_ready_tasks(root=temporary, work_item_id=result["rootId"]), [result["rootId"]])
 
@@ -45,7 +55,9 @@ class WorkItemFlowTests(unittest.TestCase):
             )
             progress = (package / "progress.md").read_text(encoding="utf-8")
             self.assertIn("开发建议：manual", progress)
-            self.assertIn("按需生成可复制的独立开发 handoff", progress)
+            self.assertIn("需求级交接：[requirement-handoff.md](requirement-handoff.md)", progress)
+            self.assertIn("一次性交接整棵需求树", progress)
+            self.assertNotIn("按需生成可复制的独立开发 handoff", progress)
 
 
 if __name__ == "__main__":

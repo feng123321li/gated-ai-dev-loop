@@ -9,7 +9,7 @@
 5. 运行 `prepare-hierarchy`。一个需求只生成 `work-items/<root-id>/` 一个顶层目录，子节点按 `children/<id>/` 递归嵌套；根级 `development-plan.md/progress.md` 聚合完整树，每个实际子节点也生成自己的 `development-plan.md/progress.md`。
 6. 人工查看根级 `development-plan.md`，同时选择 active/manual。需要修改就重新准备整棵树；同意时只需确认当前方案和所选方式，无需知道或复述指纹。
 7. Agent 使用准备结果中的 `hierarchyFingerprint`，调用一次 `freeze-hierarchy --expected-hierarchy ... --development-mode ... --confirmed`。控制器在同一事务中记录方式并冻结全部节点；指纹已变化则拒绝旧确认。
-8. active 下由 Agent 自主决定多子 Agent、单 Agent 或当前 Agent 串行，循环实现、回归、修复和复测；运行能力变化时自动调整，不再次询问开发方式。manual 只生成可复制 handoff。
+8. active 下由当前 Agent 冻结后直接自主推进；manual 在需求根生成一份 `requirement-handoff.md`，用户只需一次复制到新会话，接收 Agent 即成为整树执行宿主。两种宿主都自主决定多子 Agent、单 Agent 或当前 Agent 串行，循环实现、回归、修复和复测；运行能力变化时自动调整，不再次询问开发方式或要求人工逐 Task 启动。
 9. 开发结果由 `task-result` 写回并生成 `development-review.json/md`，对照冻结计划与实际改动、接口和测试，但不代表 PASS。
 10. 全部相关回归和复测通过后，宿主形成严格 gate evidence 并执行 `accept-item`。门禁阶段生成 `acceptance-report.json/md`；Task 全部 VERIFIED 后依次运行 Capability、Delivery 自身聚合门禁。
 11. 治理根 gate PASS 后向用户提交交付，由用户人工验收并确认；验收报告持续更新至 `COMPLETED`。
@@ -38,6 +38,7 @@ work-items/
     ├── hierarchy.json
     ├── development-plan.md
     ├── progress.md
+    ├── requirement-handoff.md  # 仅 manual 冻结后生成
     ├── baseline.*
     └── children/
         └── <child-id>/
@@ -66,10 +67,12 @@ flowchart TD
     F -->|"主动开发"| G["所有任务进入已冻结状态"]
     G --> H["智能体自主调度并循环开发与测试"]
     F -->|"手动开发"| I["所有任务进入已冻结状态"]
-    I --> J["按需生成可复制的开发交接"]
+    I --> J["生成一份根级需求交接"]
+    J --> K["人工一次复制到新会话"]
+    K --> H
 ```
 
-人工在同一次前期评审中确认当前根级计划和开发方式；层级指纹由 Agent 和控制器绑定，无需人工复述。主动开发的 Agent 数量、并发度、调度顺序和降级路径由运行中的 Agent 决定，不进入冻结方案。
+人工在同一次前期评审中确认当前根级计划和开发方式；层级指纹由 Agent 和控制器绑定，无需人工复述。manual 的“一次交接”不表示一次认领全部 Task：接收会话仍按依赖即时认领各 Task，但不再让人逐个转交。Agent 数量、并发度、调度顺序和降级路径由执行宿主决定，不进入冻结方案。
 
 ### 2. 单个任务的开发与门禁
 

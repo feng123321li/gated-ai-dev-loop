@@ -41,6 +41,7 @@ from .projections import (
     render_development_review,
     render_item_overview,
     render_item_progress,
+    render_requirement_handoff,
     render_workspace_overview,
     report_status,
 )
@@ -638,6 +639,15 @@ class GovernanceRepository:
                 fail("WORK_ITEM_PACKAGE_INVALID", f"{entry['id']} package path is invalid")
             atomic_write(target / "overview.md", render_item_overview(entry, by_id))
             atomic_write(target / "progress.md", render_item_progress(entry, by_id))
+            if (
+                entry["parentId"] is None
+                and entry["stage"] == "BASELINE_FROZEN"
+                and (entry.get("developmentMode") or {}).get("mode") == "manual"
+            ):
+                atomic_write(
+                    target / "requirement-handoff.md",
+                    render_requirement_handoff(entry, by_id),
+                )
 
     def write_acceptance_report(
         self,

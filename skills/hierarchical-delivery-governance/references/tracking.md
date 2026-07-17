@@ -14,7 +14,7 @@
 - `directChildren` 的 total、verified、blocked、active；
 - `descendants` 的同类精确计数；
 - 根节点的最终 `acceptance.status`；
-- 开发前 `development-plan.md`、开发后 `development-review.md`、门禁后 `acceptance-report.md` 的对应入口。
+- 开发前 `development-plan.md`、manual 冻结后的根级 `requirement-handoff.md`、开发后 `development-review.md`、门禁后 `acceptance-report.md` 的对应入口。
 
 Task 子级计数为零。不写主观百分比。协调节点声明的全部 child 必须已物化，因此不存在“计划但尚未生成”的占位进度。
 
@@ -26,7 +26,7 @@ Task 子级计数为零。不写主观百分比。协调节点声明的全部 ch
 - 阶段、状态、门禁和“当前执行”各自使用独立列，不把全部信息拼成一个长行；
 - “当前执行”是 claim 的可读投影：协调节点为“不适用”，无 claim 的待执行 Task 为“未认领”，活动 claim 显示 `owner / operationId`，结果已写回的 Task 为“已释放”；
 - “节点文件”列链接该节点自己的 `development-plan.md/progress.md`；
-- “阶段产物”列在开发结果或门禁证据存在后增加 `development-review.md` 或 `acceptance-report.md` 入口，尚未生成时显示“无”；
+- “阶段产物”列为 manual 需求根增加一次性交接入口，并在开发结果或门禁证据存在后增加 `development-review.md` 或 `acceptance-report.md` 入口，尚未生成时显示“无”；
 - 明细只由 registry 重建，Agent 不直接编辑投影文件。
 
 ## 分层视图
@@ -40,7 +40,7 @@ Task 子级计数为零。不写主观百分比。协调节点声明的全部 ch
 ## 写回时机
 
 - `prepare-hierarchy`：一次写入完整嵌套目录、根计划、树形总览和待确认的整树进度明细。
-- `freeze-hierarchy`：用同一次确认记录根级开发方式，并更新全部节点确认记录和状态。
+- `freeze-hierarchy`：用同一次确认记录根级开发方式，并更新全部节点确认记录和状态；manual 同时生成根级 `requirement-handoff.md`。
 - `dispatch-task`：更新单个 Task 的 claim、上下文与 handoff。
 - `task-result`：生成 `development-review.json/md`，明确 IMPLEMENTED 不是完成。
 - `accept-item`：生成或更新 `acceptance-report.json/md`。

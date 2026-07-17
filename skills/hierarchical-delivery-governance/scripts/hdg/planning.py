@@ -16,7 +16,7 @@ from .model import (
     work_item_baseline_fingerprint,
     work_item_contract_fingerprint,
 )
-from .projections import item_human_artifacts
+from .projections import item_human_artifacts, render_requirement_handoff
 from .repository import (
     GOVERNANCE_DIRECTORY,
     WORK_ITEMS_DIRECTORY,
@@ -318,6 +318,32 @@ def prepare_hierarchy(
         }
 
 
+def _manual_requirement_handoff(
+    root_entry: dict[str, Any],
+    registry: dict[str, Any],
+) -> str | None:
+    if (root_entry.get("developmentMode") or {}).get("mode") != "manual":
+        return None
+    by_id = {entry["id"]: entry for entry in registry["workItems"]}
+    return render_requirement_handoff(root_entry, by_id)
+
+
+def _frozen_human_artifacts(root_id: str, handoff: str | None) -> dict[str, str | None]:
+    base = f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}"
+    return {
+        "developmentPlan": f"{base}/development-plan.md",
+        "progress": f"{base}/progress.md",
+        "requirementHandoff": f"{base}/requirement-handoff.md" if handoff is not None else None,
+        "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
+    }
+
+
+def _frozen_next_action(development_mode: str) -> str:
+    if development_mode == "active":
+        return "Agent 自主循环实现、回归测试和复测；可安全并发时使用隔离子 Agent，否则自动串行。"
+    return "把 requirement-handoff.md 一次交给新会话；接收会话自行推进整棵需求树，无需人工逐 Task 启动。"
+
+
 def freeze_hierarchy(
     *,
     root: str,
@@ -345,6 +371,8 @@ def freeze_hierarchy(
         if hierarchy_state["stage"] == "BASELINE_FROZEN":
             if (root_entry.get("developmentMode") or {}).get("mode") != development_mode:
                 fail("WORK_ITEM_DEVELOPMENT_MODE_LOCKED", "Development mode is fixed by the requirement freeze")
+            repository.write_registry(registry)
+            handoff = _manual_requirement_handoff(root_entry, registry)
             return {
                 "created": False,
                 "idempotent": True,
@@ -353,6 +381,9 @@ def freeze_hierarchy(
                 "frozenItemIds": [record["definition"]["id"] for record in records],
                 "rootBaselineFingerprint": states[root_id]["baselineFingerprint"],
                 "developmentMode": root_entry["developmentMode"],
+                "humanArtifacts": _frozen_human_artifacts(root_id, handoff),
+                "handoffPrompt": handoff,
+                "nextAction": _frozen_next_action(development_mode),
             }
         if any(states[record["definition"]["id"]]["stage"] != "WAITING_FOR_BASELINE_CONFIRMATION" for record in records):
             fail("WORK_ITEM_STAGE_INVALID", "Every hierarchy node must be waiting for the same freeze")
@@ -405,6 +436,7 @@ def freeze_hierarchy(
         registry["revision"] += 1
         registry["updatedAt"] = at
         repository.write_registry(registry)
+        handoff = _manual_requirement_handoff(root_entry, registry)
         return {
             "created": True,
             "idempotent": False,
@@ -419,15 +451,9 @@ def freeze_hierarchy(
                 for record in records
                 if record["definition"]["kind"] == "TASK"
             },
-            "humanArtifacts": {
-                "developmentPlan": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/development-plan.md",
-                "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
-            },
-            "nextAction": (
-                "Agent 自主循环实现、回归测试和复测；可安全并发时使用隔离子 Agent，否则自动串行。"
-                if development_mode == "active"
-                else "为 READY Task 生成可复制的独立开发 handoff。"
-            ),
+            "humanArtifacts": _frozen_human_artifacts(root_id, handoff),
+            "handoffPrompt": handoff,
+            "nextAction": _frozen_next_action(development_mode),
         }
 
 

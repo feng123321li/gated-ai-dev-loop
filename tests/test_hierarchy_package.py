@@ -6,10 +6,11 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from hdg.acceptance import record_work_item_gate
 from hdg.errors import GatedLoopError
-from hdg.execution import build_task_context, dispatch_task, list_ready_tasks
+from hdg.execution import build_task_context, dispatch_task, list_ready_tasks, record_task_result
 from hdg import execution
-from hdg.planning import freeze_hierarchy, prepare_hierarchy
+from hdg.planning import freeze_hierarchy, prepare_hierarchy, refresh_work_item_projections
 from hdg.repository import GovernanceRepository
 
 from .fixtures import (
@@ -77,7 +78,7 @@ class HierarchyPackageTests(unittest.TestCase):
                 registry = GovernanceRepository(temporary).read_registry()
                 self.assertIn(deepest_path, {item["packagePath"] for item in registry["workItems"]})
 
-    def test_prepare_writes_a_single_plan_for_the_complete_tree(self) -> None:
+    def test_prepare_writes_a_root_aggregate_plan_for_the_complete_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepared = prepare_hierarchy(
                 root=temporary,
@@ -310,6 +311,119 @@ class HierarchyPackageTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
             self.assertIn("## 需求：c-python-runtime", overview)
             self.assertIn("└─ 任务 `t-python-controller`", overview)
+
+    def test_root_progress_tracks_the_development_plan_tree_after_each_state_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=two_task_capability_hierarchy(),
+                host_runtime="codex",
+            )
+            root = Path(prepared["artifactDir"])
+            plan = (root / "development-plan.md").read_text(encoding="utf-8")
+            prepared_progress = (root / "progress.md").read_text(encoding="utf-8")
+            child = root / "children" / "t-python-controller"
+            child_plan = (child / "development-plan.md").read_text(encoding="utf-8")
+            child_progress = (child / "progress.md").read_text(encoding="utf-8")
+
+            self.assertIn('<a id="work-item-c-python-runtime"></a>', plan)
+            self.assertIn('<a id="work-item-t-python-controller"></a>', plan)
+            self.assertIn("# 开发方案：Python controller", child_plan)
+            self.assertIn("- 开发方案：[development-plan.md](development-plan.md)", child_progress)
+            self.assertIn("## 整树进度明细", prepared_progress)
+            self.assertIn("[能力 `c-python-runtime`](development-plan.md#work-item-c-python-runtime)", prepared_progress)
+            self.assertIn("├─ [任务 `t-python-controller`](development-plan.md#work-item-t-python-controller)", prepared_progress)
+            self.assertIn("└─ [任务 `t-python-worker`](development-plan.md#work-item-t-python-worker)", prepared_progress)
+            self.assertIn(
+                "[节点方案](children/t-python-controller/development-plan.md)",
+                prepared_progress,
+            )
+            refreshed = refresh_work_item_projections(root=temporary)
+            task_artifacts = next(
+                item["humanArtifacts"]
+                for item in refreshed["workItems"]
+                if item["id"] == "t-python-controller"
+            )
+            self.assertEqual(
+                task_artifacts["developmentPlan"],
+                ".hierarchical-delivery-governance/work-items/c-python-runtime/children/"
+                "t-python-controller/development-plan.md",
+            )
+            self.assertEqual(
+                task_artifacts["hierarchyDevelopmentPlan"],
+                ".hierarchical-delivery-governance/work-items/c-python-runtime/development-plan.md",
+            )
+            self.assertIn("状态 等待开发方案评审", prepared_progress)
+
+            freeze_hierarchy(
+                root=temporary,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                development_mode="active",
+                confirmed=True,
+            )
+            frozen_progress = (root / "progress.md").read_text(encoding="utf-8")
+            self.assertEqual(frozen_progress.count("状态 已冻结"), 3)
+
+            dispatch_task(
+                root=temporary,
+                item_id="t-python-controller",
+                owner="developer",
+                operation_id="op-progress",
+            )
+            claimed_progress = (root / "progress.md").read_text(encoding="utf-8")
+            self.assertRegex(claimed_progress, r"t-python-controller.*状态 开发中.*认领 developer / op-progress")
+            self.assertRegex(claimed_progress, r"t-python-worker.*状态 已冻结")
+
+            record_task_result(
+                root=temporary,
+                item_id="t-python-controller",
+                operation_id="op-progress",
+                status="IMPLEMENTED",
+                evidence={"path": "missing-progress-evidence.json", "sha256": "0" * 64},
+            )
+            implemented_progress = (root / "progress.md").read_text(encoding="utf-8")
+            self.assertRegex(implemented_progress, r"t-python-controller.*状态 等待门禁验收")
+            self.assertIn(
+                "[开发复核](children/t-python-controller/development-review.md)",
+                implemented_progress,
+            )
+
+            record_work_item_gate(
+                root=temporary,
+                item_id="t-python-controller",
+                status="PASS",
+                evidence={"path": "missing-progress-gate.json", "sha256": "1" * 64},
+            )
+            verified_progress = (root / "progress.md").read_text(encoding="utf-8")
+            self.assertRegex(verified_progress, r"t-python-controller.*状态 门禁已通过.*门禁 通过")
+            self.assertIn(
+                "[验收报告](children/t-python-controller/acceptance-report.md)",
+                verified_progress,
+            )
+
+    def test_delivery_progress_preserves_the_three_level_plan_hierarchy(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=delivery_hierarchy(),
+                host_runtime="codex",
+            )
+            root = Path(prepared["artifactDir"])
+            plan = (root / "development-plan.md").read_text(encoding="utf-8")
+            progress = (root / "progress.md").read_text(encoding="utf-8")
+
+            ids = ("d-python-governance", "c-python-runtime", "t-python-controller")
+            self.assertEqual(
+                sorted((plan.index(f'work-item-{item_id}'), item_id) for item_id in ids),
+                [(plan.index(f"work-item-{item_id}"), item_id) for item_id in ids],
+            )
+            self.assertLess(progress.index(ids[0]), progress.index(ids[1]))
+            self.assertLess(progress.index(ids[1]), progress.index(ids[2]))
+            self.assertIn("\n└─ [能力 `c-python-runtime`]", progress)
+            self.assertIn("\n   └─ [任务 `t-python-controller`]", progress)
+            self.assertIn("\n└─ 能力 [`c-python-runtime`]", plan)
+            self.assertIn("\n   └─ 任务 [`t-python-controller`]", plan)
 
 
 if __name__ == "__main__":

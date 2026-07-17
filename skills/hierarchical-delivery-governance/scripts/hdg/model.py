@@ -975,12 +975,15 @@ def render_hierarchy_plan(
     def append_tree(node: dict[str, Any], prefix: str, connector: str) -> None:
         definition = node["definition"]
         lines.append(
-            f"{prefix}{connector}{kind_text[definition['kind']]} `{definition['id']}`：{definition['title']}"
+            f"{prefix}{connector}{kind_text[definition['kind']]} "
+            f"[`{definition['id']}`](#work-item-{definition['id']})：{definition['title']}"
         )
         children = node["children"]
         for index, child in enumerate(children):
             last = index == len(children) - 1
-            child_prefix = prefix + ("   " if connector in {"", "└─ "} else "│  ")
+            child_prefix = prefix + (
+                "" if connector == "" else ("   " if connector == "└─ " else "│  ")
+            )
             append_tree(child, child_prefix, "└─ " if last else "├─ ")
 
     append_tree(hierarchy["root"], "", "")
@@ -989,6 +992,8 @@ def render_hierarchy_plan(
         definition = node["definition"]
         item_plan = render_development_plan(definition, states[definition["id"]]).splitlines()
         lines.extend([
+            "",
+            f'<a id="work-item-{definition["id"]}"></a>',
             "",
             f"## {kind_text[definition['kind']]}：{definition['id']} — {definition['title']}",
             "",

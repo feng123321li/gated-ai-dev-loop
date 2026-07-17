@@ -2,9 +2,9 @@
 
 ## 投影原则
 
-`work-item-registry.json` 是节点状态机器权威，根目录 `hierarchy.json` 绑定整棵需求树。`workspace-overview.md` 必须按需求根分组并使用树形结构展示 Delivery→Capability→Task；不能把父子节点渲染成彼此并列的需求行。
+`work-item-registry.json` 是节点状态机器权威，根目录 `hierarchy.json` 绑定整棵需求树。`workspace-overview.md` 按需求根分组展示所有需求；每个需求根的 `progress.md` 使用与该根 `development-plan.md` 相同的工作项 ID、父子顺序和 Delivery→Capability→Task 层级。两个投影都不能把父子节点渲染成彼此并列的需求行。
 
-一个需求只显示一个根级 `development-plan.md` 入口。各节点仍有自己的 baseline、状态、进度、门禁和后续开发复核。
+每个需求根只有一个整树 `development-plan.md` 作为统一人工冻结入口。各实际节点仍有自己的 `development-plan.md`、`progress.md`、baseline、状态、门禁和后续开发复核；节点进度必须直接链接本节点方案。
 
 ## 三种进度
 
@@ -18,6 +18,15 @@
 
 Task 子级计数为零。不写主观百分比。协调节点声明的全部 child 必须已物化，因此不存在“计划但尚未生成”的占位进度。
 
+## 根级整树明细
+
+需求根 `progress.md` 在汇总计数之后递归展示整棵需求树：
+
+- 节点顺序与 `development-plan.md` 一致，并使用稳定工作项 ID 链接到该节点开发方案；
+- 每行展示 kind、stage、status、gate、claim，并链接该节点自己的 `development-plan.md/progress.md`；
+- 开发结果或门禁证据存在后，同行增加 `development-review.md` 或 `acceptance-report.md` 入口；
+- 明细只由 registry 重建，Agent 不直接编辑投影文件。
+
 ## 分层视图
 
 - Delivery：展示 Capability 目的、跨能力契约、交付波次、子级进度和顶层 gate。
@@ -28,11 +37,11 @@ Task 子级计数为零。不写主观百分比。协调节点声明的全部 ch
 
 ## 写回时机
 
-- `prepare-hierarchy`：一次写入完整嵌套目录、根计划和树形总览。
+- `prepare-hierarchy`：一次写入完整嵌套目录、根计划、树形总览和待确认的整树进度明细。
 - `freeze-hierarchy`：用同一次确认记录根级开发方式，并更新全部节点确认记录和状态。
 - `dispatch-task`：更新单个 Task 的 claim、上下文与 handoff。
 - `task-result`：生成 `development-review.json/md`，明确 IMPLEMENTED 不是完成。
 - `accept-item`：生成或更新 `acceptance-report.json/md`。
 - retry、聚合 gate、独立审查和用户确认：立即更新 registry 和投影。
 
-每次写回增加 registry/record revision，并重建所有受影响的树形投影。
+每次写回增加 registry/record revision，并重建 `workspace-overview.md`、需求根整树明细和每个已物化节点的 `overview.md/progress.md`。因此 Task 被认领、写回实现或阻断、重试、门禁验证，以及父级聚合和最终验收后，根级明细都立即反映新状态。

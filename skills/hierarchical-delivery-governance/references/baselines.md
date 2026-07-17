@@ -43,7 +43,7 @@
 
 1. `prepare-hierarchy` 校验完整 definition，计算各节点 baseline 指纹和一个绑定整树结构的 `hierarchyFingerprint`。
 2. 一个需求只写 `work-items/<root-id>/` 一个顶层目录；后代包按 `children/<id>/` 递归嵌套。
-3. 根级 `development-plan.md` 是唯一人工评审入口，一次展示完整层级、开发目的、文件、接口/共享契约、依赖波次和测试映射。
+3. 每个节点目录都写入自己的 `development-plan.json/md`；根级 `development-plan.md` 额外聚合整棵树，是唯一人工冻结评审入口。
 4. 用户评审当前文件并选择 active/manual，不抄写 SHA256。Agent 使用准备结果里的层级指纹和所选方式调用 `freeze-hierarchy`。
 5. `freeze-hierarchy` 重新验证层级、所有节点包和根计划文件，然后用同一次确认记录根级方式并冻结全部节点。
 
@@ -62,7 +62,7 @@
 
 ## 计划、复核与验收文件
 
-- `development-plan.json/md`：开发前；作为冻结依据。
+- `development-plan.json/md`：开发前；各节点保留独立计划，根级 Markdown 同时作为整树冻结依据。
 - `development-review.json/md`：开发结果写回后；对照计划与实际，不代表门禁 PASS。
 - `acceptance-report.json/md`：门禁及最终验收阶段；记录证据、结论和用户确认。
 

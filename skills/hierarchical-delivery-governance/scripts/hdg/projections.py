@@ -15,6 +15,8 @@ def human_status(value: object) -> str:
         "DELIVERY": "交付",
         "CAPABILITY": "能力",
         "TASK": "任务",
+        "WAITING_FOR_BASELINE_CONFIRMATION": "等待开发方案确认",
+        "BASELINE_FROZEN": "开发方案已冻结",
         "PREPARED": "等待开发方案评审",
         "FROZEN": "已冻结",
         "CLAIMED": "开发中",
@@ -60,7 +62,8 @@ def item_human_artifacts(
     plan_base = posixpath.join(GOVERNANCE_DIRECTORY, root_package_path or package_path)
     return {
         "overview": posixpath.join(base, "overview.md"),
-        "developmentPlan": posixpath.join(plan_base, "development-plan.md"),
+        "developmentPlan": posixpath.join(base, "development-plan.md"),
+        "hierarchyDevelopmentPlan": posixpath.join(plan_base, "development-plan.md"),
         "baseline": posixpath.join(base, "baseline.md"),
         "progress": posixpath.join(base, "progress.md"),
         "developmentReview": posixpath.join(base, "development-review.md")
@@ -118,7 +121,9 @@ def render_workspace_overview(registry: dict[str, Any]) -> str:
         children = [by_id[child_id] for child_id in item["childIds"]]
         for index, child in enumerate(children):
             last = index == len(children) - 1
-            child_prefix = prefix + ("   " if connector in {"", "└─ "} else "│  ")
+            child_prefix = prefix + (
+                "" if connector == "" else ("   " if connector == "└─ " else "│  ")
+            )
             append_node(child, child_prefix, "└─ " if last else "├─ ")
 
     roots = sorted(
@@ -182,7 +187,7 @@ def render_item_progress(
     acceptance = entry.get("acceptance") if entry["parentId"] is None else None
     mode = _development_mode(entry, by_id)
     claim = f"{entry['claim']['owner']} / {entry['claim']['operationId']}" if entry.get("claim") else "无"
-    return "\n".join([
+    lines = [
         f"# {entry['id']} 进度",
         "",
         f"- 记录版本：{entry['recordRevision']}",
@@ -192,6 +197,7 @@ def render_item_progress(
         f"- 最终验收：{human_status(acceptance['status']) if acceptance else '不适用'}",
         f"- 门禁：{human_status(entry['gate']['status'])}",
         f"- 开发建议：{mode}",
+        "- 开发方案：[development-plan.md](development-plan.md)",
         f"- 认领：{claim}",
         f"- 直接子级：{entry['progress']['directChildren']['verified']}/{entry['progress']['directChildren']['total']} 已验证；"
         f"{entry['progress']['directChildren']['blocked']} 阻断；{entry['progress']['directChildren']['active']} 活动",
@@ -201,7 +207,72 @@ def render_item_progress(
         f"- 下一步：{next_action(entry, by_id)}",
         f"- 更新时间：{entry['updatedAt']}",
         "",
-    ])
+    ]
+    if entry["parentId"] is None:
+        lines.extend(_render_hierarchy_progress(entry, by_id))
+    return "\n".join(lines)
+
+
+def _render_hierarchy_progress(
+    root: dict[str, Any],
+    by_id: dict[str, dict[str, Any]],
+) -> list[str]:
+    lines = [
+        "## 整树进度明细",
+        "",
+        "> 本明细与 [development-plan.md](development-plan.md) 使用相同的工作项 ID、父子顺序和层级结构。",
+        "> 点击工作项可跳转到对应开发方案；每次控制器状态写回都会重建本文件。",
+        "",
+    ]
+
+    def artifact_links(item: dict[str, Any]) -> str:
+        package_path = item["packagePath"]
+        progress_path = posixpath.relpath(
+            posixpath.join(package_path, "progress.md"),
+            root["packagePath"],
+        )
+        plan_path = posixpath.relpath(
+            posixpath.join(package_path, "development-plan.md"),
+            root["packagePath"],
+        )
+        links = [f"[节点方案]({plan_path})", f"[节点进度]({progress_path})"]
+        if item.get("latestResult"):
+            review_path = posixpath.relpath(
+                posixpath.join(package_path, "development-review.md"),
+                root["packagePath"],
+            )
+            links.append(f"[开发复核]({review_path})")
+        if item.get("acceptanceReport"):
+            report_path = posixpath.relpath(
+                posixpath.join(package_path, "acceptance-report.md"),
+                root["packagePath"],
+            )
+            links.append(f"[验收报告]({report_path})")
+        return "、".join(links)
+
+    def append_node(item: dict[str, Any], prefix: str, connector: str) -> None:
+        claim = (
+            f"{item['claim']['owner']} / {item['claim']['operationId']}"
+            if item.get("claim")
+            else "无"
+        )
+        plan_anchor = f"development-plan.md#work-item-{item['id']}"
+        lines.append(
+            f"{prefix}{connector}[{human_status(item['kind'])} `{item['id']}`]({plan_anchor}) — "
+            f"阶段 {human_status(item['stage'])}；状态 {human_status(item['status'])}；"
+            f"门禁 {human_status(item['gate']['status'])}；认领 {claim}；{artifact_links(item)}"
+        )
+        children = [by_id[child_id] for child_id in item["childIds"]]
+        for index, child in enumerate(children):
+            last = index == len(children) - 1
+            child_prefix = prefix + (
+                "" if connector == "" else ("   " if connector == "└─ " else "│  ")
+            )
+            append_node(child, child_prefix, "└─ " if last else "├─ ")
+
+    append_node(root, "", "")
+    lines.append("")
+    return lines
 
 
 def report_status(entry: dict[str, Any]) -> str:

@@ -6,7 +6,7 @@
 2. 只读恢复当前 schema v3 registry 和每个需求根的 `hierarchy.json`。字段、指纹、完整树或磁盘投影不一致时保持阻断，不迁移、不猜测。
 3. 起草层级事实卡，选择最浅合法形态：独立 Task、Capability→Task 或 Delivery→Capability→Task。为每个实际节点起草自己的 baseline 与 `developmentPlan`。
 4. 把整棵需求树组织成 `{"schemaVersion":3,"root":{"definition":{...},"children":[...]}}`。协调节点声明的每个 child 必须在这棵树里完整物化。
-5. 运行 `prepare-hierarchy`。一个需求只生成 `work-items/<root-id>/` 一个顶层目录，子节点按 `children/<id>/` 递归嵌套；根级 `development-plan.md` 一次展示完整树。
+5. 运行 `prepare-hierarchy`。一个需求只生成 `work-items/<root-id>/` 一个顶层目录，子节点按 `children/<id>/` 递归嵌套；根级 `development-plan.md/progress.md` 聚合完整树，每个实际子节点也生成自己的 `development-plan.md/progress.md`。
 6. 人工查看根级 `development-plan.md`，同时选择 active/manual。需要修改就重新准备整棵树；同意时只需确认当前方案和所选方式，无需知道或复述指纹。
 7. Agent 使用准备结果中的 `hierarchyFingerprint`，调用一次 `freeze-hierarchy --expected-hierarchy ... --development-mode ... --confirmed`。控制器在同一事务中记录方式并冻结全部节点；指纹已变化则拒绝旧确认。
 8. active 下由 Agent 自主决定多子 Agent、单 Agent 或当前 Agent 串行，循环实现、回归、修复和复测；运行能力变化时自动调整，不再次询问开发方式。manual 只生成可复制 handoff。
@@ -27,7 +27,7 @@ flowchart TD
     C --> CT["任务一至多个"]
     D --> DC["能力一至多个"]
     DC --> DT["任务一至多个"]
-    T --> P["一个根目录 + 一份开发方案"]
+    T --> P["一个根目录 + 根级总览 + 节点独立方案与进度"]
     CT --> P
     DT --> P
 ```
@@ -37,10 +37,13 @@ work-items/
 └── <root-id>/
     ├── hierarchy.json
     ├── development-plan.md
+    ├── progress.md
     ├── baseline.*
     └── children/
         └── <child-id>/
             ├── baseline.*
+            ├── development-plan.md
+            ├── progress.md
             └── children/...
 ```
 

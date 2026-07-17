@@ -10,7 +10,7 @@ Delivery → Capability → Task
 
 Delivery 和 Capability 管协调与聚合，Task 是唯一执行叶子。实际存在的每一级都有独立 baseline、门禁和进度；每个 Task 使用磁盘化独立上下文，不继承前期对话。
 
-每个用户需求只生成一个根目录和一份真实可点击的 `development-plan.md`。该文件一次展示完整的 Task、Capability→Task 或 Delivery→Capability→Task 树：Task 精确到文件、接口/函数和实现逻辑；Capability 展示 Task 内容、共享契约与波次；Delivery 展示 Capability 内容、跨能力契约与交付波次。人工评审当前文件并选择根级开发方式后，只确认一次；Agent 负责携带层级指纹和所选方式完成整树冻结。
+每个用户需求只生成一个嵌套根目录。需求根的 `development-plan.md` 一次展示完整的 Task、Capability→Task 或 Delivery→Capability→Task 树，是统一人工冻结评审入口；每个实际 Capability/Task 节点也在自己的嵌套目录保留独立 `development-plan.md` 和 `progress.md`。人工评审根级整树方案并选择开发方式后，只确认一次；Agent 负责携带层级指纹和所选方式完成整树冻结。
 
 ## 核心能力
 
@@ -25,6 +25,7 @@ Delivery 和 Capability 管协调与聚合，Task 是唯一执行叶子。实际
 - 按依赖、claim 和写入范围计算 READY Task，支持多人并行；
 - Task、Capability、Delivery 各自通过 gate；同一冻结契约内失败后由 Agent 按当前 baseline 自动重试；
 - 开发结果写回后生成 `development-review.json/md` 对照计划与实际；门禁后再生成并更新 `acceptance-report.json/md`；
+- 需求根 `progress.md` 以与 `development-plan.md` 相同的节点 ID、父子顺序和 Delivery→Capability→Task 层级展示整树明细，每次状态写回自动刷新；
 - 治理根 gate 后仍需隔离/人工审查和用户确认；
 - 维护本仓库默认进入 self-hosting maintenance，只有用户明确 dogfood 才创建运行包。
 
@@ -45,12 +46,15 @@ Micro、Workstream 和 M/W/T 可作为规模特征、规划视图和人类可读
         ├── development-plan.md      # 整棵树唯一人工评审入口
         ├── state.json
         ├── overview.md
-        ├── progress.md
+        ├── progress.md              # 与开发方案对应的整树进度明细
         ├── children.json | execution.json
         ├── development-review.json/md # 开发结果写回后生成
         ├── development-mode.json      # 同一次冻结确认记录根级开发方式
         └── children/
             └── <child-id>/            # 按 Delivery→Capability→Task 递归嵌套
+                ├── development-plan.json/md # 子节点独立开发方案
+                ├── progress.md             # 子节点独立进度
+                └── children/               # 按实际层级继续嵌套
 ```
 
 完整规则见 [Skill 入口](skills/hierarchical-delivery-governance/SKILL.md)、[工作流与流程图](skills/hierarchical-delivery-governance/references/workflow.md) 和 [可变深度规划](skills/hierarchical-delivery-governance/references/delivery-planning.md)。

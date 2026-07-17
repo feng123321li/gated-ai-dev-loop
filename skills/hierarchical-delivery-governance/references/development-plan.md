@@ -1,6 +1,6 @@
 # 冻结前整树开发方案
 
-`developmentPlan` 是每个节点 baseline 的机器契约，不是开发完成后的总结。宿主先结合只读代码检索起草完整层级 definition，再执行 `prepare-hierarchy` 生成根级 `development-plan.md`；人工查看真实文件、选择根级开发方式并同意后，Agent 使用准备结果中的层级指纹和所选方式执行一次 `freeze-hierarchy`。
+`developmentPlan` 是每个节点 baseline 的机器契约，不是开发完成后的总结。宿主先结合只读代码检索起草完整层级 definition，再执行 `prepare-hierarchy`：每个节点目录生成自己的 `development-plan.json/md`，根级 Markdown 还会聚合整棵树。人工查看根级真实文件、选择开发方式并同意后，Agent 使用准备结果中的层级指纹和所选方式执行一次 `freeze-hierarchy`。
 
 ## 完整 definition 外壳
 

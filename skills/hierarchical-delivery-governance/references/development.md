@@ -27,14 +27,14 @@
 Task baseline 冻结后状态固定为 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`。宿主必须展示两种方式并等待用户明确选择，然后调用：
 
 ```text
-node <skill-root>/scripts/hdg.mjs select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
+python -X utf8 <skill-root>/scripts/hdg.py select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
 ```
 
 成功后写入 `development-mode.json`：
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 3,
   "taskId": "t-example",
   "baselineFingerprint": "<sha256>",
   "mode": "active",

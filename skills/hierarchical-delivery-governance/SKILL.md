@@ -71,15 +71,15 @@ description: "分层治理可独立交付的软件工作单元。按最小必要
 正常准备应直接执行以下命令，并由宿主把 definition JSON 写入该进程的 stdin；`-` 是实际参数值，不是占位符：
 
 ```text
-node <skill-root>/scripts/hdg.mjs prepare-item --definition - --host-runtime <agent> --json
+python -X utf8 <skill-root>/scripts/hdg.py prepare-item --definition - --host-runtime <agent> --json
 ```
 
 不得为了“不污染仓库”而改用系统临时文件。只有宿主确实无法提供 stdin 时，才可使用当前工作区内的普通临时文件，并在同一轮命令完成后清理；不要把临时输入放进 `.hierarchical-delivery-governance/` 控制面。
 
 ## 每次开发消息的入口
 
-1. 解析当前 Skill 的安装目录，并运行 `node <skill-root>/scripts/hdg.mjs --help` 做只读预检。内置控制器是主入口；全局 `hdg` 只是可选快捷别名，不是前置条件。
-2. 只读检查 `.hierarchical-delivery-governance/work-item-registry.json`；不存在表示尚未持久化工作项，不是 CLI 缺失或 schema 错误。schema v3 直接恢复；若是本 Skill 早期生成、尚未执行或 gate 的单根 schema v2 Task，则展示保留状态、重新计算指纹、清除旧上下文以及选择 `LIGHT|FULL` 的迁移影响，取得明确确认后执行 `upgrade-registry`。其他 schema 或不满足安全前置条件的 v2 现场保持阻断，不得静默改写。
+1. 解析当前 Skill 的安装目录，并运行 `python -X utf8 <skill-root>/scripts/hdg.py --help` 做只读预检。内置模块化 Python 控制器是唯一正式入口，不要求 Node、npm 或第三方 Python 包。
+2. 只读检查 `.hierarchical-delivery-governance/work-item-registry.json`；不存在表示尚未持久化工作项，不是 CLI 缺失或 schema 错误。只恢复字段完整、包与投影未被篡改的当前 schema v3；其他 schema、缺少 `developmentPlan` 或含未知兼容字段的现场保持阻断，不迁移、不猜测、不静默改写。
 3. 先起草层级事实卡和门禁等级，再判断消息是继续/修订/追加/升层，还是新的根 Task、根 Capability 或 Delivery。
 4. definition 必须包含与层级匹配的 `developmentPlan`。先调用 `prepare-item --json` 生成工作项包；这一步只进入 `WAITING_FOR_BASELINE_CONFIRMATION`，绝不授权开发。
 5. 把返回的 `humanArtifacts.developmentReview` 作为可点击文件明确展示给用户，同时概述 ID、层级、开发目的、文件、接口/共享契约、依赖波次和测试映射。用户要求修改时，修改 definition 后重新准备，不得冻结旧方案。
@@ -149,7 +149,7 @@ Task baseline 冻结后必须持久化为 `WAITING_FOR_DEVELOPMENT_MODE_SELECTIO
 只有用户明确选择后，宿主才执行绑定当前 Task baseline 指纹的命令：
 
 ```text
-node <skill-root>/scripts/hdg.mjs select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
+python -X utf8 <skill-root>/scripts/hdg.py select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
 ```
 
 命令成功后写入 `development-mode.json`，并把 Task 状态推进为 `FROZEN`。该记录必须与 registry 中的快照、Task ID 和当前 baseline 指纹完全一致；Task baseline 修订会删除旧记录并回到等待状态。Skill 内置控制器不可用或命令失败时保持阻断，不能用“等价流程”直接开始开发。
@@ -198,33 +198,30 @@ scope 只接受精确相对路径或尾部 `/**` 的目录前缀，不接受中�
 
 ## CLI 对应关系
 
-Skill 自带单文件机械控制器。宿主从当前 `SKILL.md` 所在目录解析 `<skill-root>`，以 `node <skill-root>/scripts/hdg.mjs` 调用；全局 `hdg` 若存在，只能作为同版本控制器的可选快捷别名。
+Skill 自带模块化、纯标准库 Python 机械控制器。宿主从当前 `SKILL.md` 所在目录解析 `<skill-root>`，统一以 `python -X utf8 <skill-root>/scripts/hdg.py` 调用。`scripts/hdg/**` 是可审计模块源码；不要调用 Node 包装层或安装第三方依赖。
 
 层级流程使用以下命令：
 
 ```text
-node <skill-root>/scripts/hdg.mjs prepare-item --definition - --host-runtime <agent> --json
-node <skill-root>/scripts/hdg.mjs freeze-item --item <id> --expected-baseline <sha256> --confirmed --json
-node <skill-root>/scripts/hdg.mjs revise-item --definition - --expected-baseline <sha256> --confirmed
-node <skill-root>/scripts/hdg.mjs promote-item --item <root-id> --parent <frozen-parent-id> --expected-baseline <sha256> --expected-parent-baseline <sha256> --confirmed
-node <skill-root>/scripts/hdg.mjs select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
-node <skill-root>/scripts/hdg.mjs ready-tasks --item <root-or-subtree-id>
-node <skill-root>/scripts/hdg.mjs task-context --item <task-id>
-node <skill-root>/scripts/hdg.mjs dispatch-task --item <task-id> --owner <owner> --operation <operation-id>
-node <skill-root>/scripts/hdg.mjs claim-task --item <task-id> --owner <owner> --operation <operation-id>
-node <skill-root>/scripts/hdg.mjs task-result --item <task-id> --operation <operation-id> --status IMPLEMENTED --evidence -
-node <skill-root>/scripts/hdg.mjs retry-item --item <id> --expected-baseline <sha256> --confirmed
-node <skill-root>/scripts/hdg.mjs accept-item --item <id> --evidence -
-node <skill-root>/scripts/hdg.mjs gate-item --item <id> --status PASS --evidence -
-node <skill-root>/scripts/hdg.mjs acceptance-item --item <root-id> --action INDEPENDENT_REVIEW_PASS --evidence -
-node <skill-root>/scripts/hdg.mjs acceptance-item --item <root-id> --action USER_CONFIRMED --evidence -
-node <skill-root>/scripts/hdg.mjs delivery-item --item <delivery-id> --action INDEPENDENT_REVIEW_PASS --evidence -
-node <skill-root>/scripts/hdg.mjs delivery-item --item <delivery-id> --action USER_CONFIRMED --evidence -
-node <skill-root>/scripts/hdg.mjs refresh-projections
-node <skill-root>/scripts/hdg.mjs upgrade-registry --task-gate-level LIGHT|FULL --confirmed
+python -X utf8 <skill-root>/scripts/hdg.py prepare-item --definition - --host-runtime <agent> --json
+python -X utf8 <skill-root>/scripts/hdg.py freeze-item --item <id> --expected-baseline <sha256> --confirmed --json
+python -X utf8 <skill-root>/scripts/hdg.py revise-item --definition - --expected-baseline <sha256> --confirmed
+python -X utf8 <skill-root>/scripts/hdg.py promote-item --item <root-id> --parent <frozen-parent-id> --expected-baseline <sha256> --expected-parent-baseline <sha256> --confirmed
+python -X utf8 <skill-root>/scripts/hdg.py select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
+python -X utf8 <skill-root>/scripts/hdg.py ready-tasks --item <root-or-subtree-id>
+python -X utf8 <skill-root>/scripts/hdg.py task-context --item <task-id>
+python -X utf8 <skill-root>/scripts/hdg.py dispatch-task --item <task-id> --owner <owner> --operation <operation-id>
+python -X utf8 <skill-root>/scripts/hdg.py claim-task --item <task-id> --owner <owner> --operation <operation-id>
+python -X utf8 <skill-root>/scripts/hdg.py task-result --item <task-id> --operation <operation-id> --status IMPLEMENTED --evidence -
+python -X utf8 <skill-root>/scripts/hdg.py retry-item --item <id> --expected-baseline <sha256> --confirmed
+python -X utf8 <skill-root>/scripts/hdg.py accept-item --item <id> --evidence -
+python -X utf8 <skill-root>/scripts/hdg.py gate-item --item <id> --status PASS --evidence -
+python -X utf8 <skill-root>/scripts/hdg.py acceptance-item --item <root-id> --action INDEPENDENT_REVIEW_PASS --evidence -
+python -X utf8 <skill-root>/scripts/hdg.py acceptance-item --item <root-id> --action USER_CONFIRMED --evidence -
+python -X utf8 <skill-root>/scripts/hdg.py refresh-projections
 ```
 
-正常交互必须使用 `prepare-item → 人工查看 development-review.md → freeze-item`；CLI 不提供把准备和冻结合并为一步的 `approve-item`，防止在评审文件存在前完成冻结。正常开发调度必须使用 `dispatch-task`；`task-context`、`claim-task` 是恢复/诊断低级入口。正常 gate 必须使用 `accept-item`，由控制器读取真实 evidence、复算 hash、校验 baseline、Scope、冻结文件计划、验收项、测试退出码和 P0/P1 后生成 `acceptance-report.json/md`；`gate-item` 仅用于恢复旧记录，不作为正常 PASS 路径。根工作项用 `acceptance-item` 完成独立验收与用户确认；`delivery-item` 只保留 Delivery 向后兼容。安装更新后可用 `refresh-projections` 在不改变 revision 和状态的情况下重建中文工作台。`upgrade-registry` 只处理受支持的单根 schema v2 Task：保留 ID、冻结状态和已确认开发方式，显式补入 gateLevel，重算 baseline/contract 指纹，记录 `migrationHistory`，并删除绑定旧指纹的 context/handoff；早期 v3 包可以继续恢复和收尾，下一次修订必须补齐 `developmentPlan`。内置控制器不导入历史 `route/start/prepare/freeze` CLI 或 YAML 配置链。纯 Markdown 负责指引，真正硬门禁由控制器和磁盘状态执行。
+正常交互必须使用 `prepare-item → 人工查看 development-review.md → freeze-item`；CLI 不提供把准备和冻结合并为一步的 `approve-item`。正常开发调度必须使用 `dispatch-task`；`task-context`、`claim-task` 是诊断与显式恢复低级入口。正常 gate 必须使用 `accept-item`，由控制器读取真实 evidence、复算 hash、校验 baseline、Scope、冻结文件计划、验收项、测试退出码和 P0/P1 后生成 `acceptance-report.json/md`；`gate-item` 仅用于显式恢复，不作为正常 PASS 路径。所有根工作项统一使用 `acceptance-item` 完成独立验收与用户确认。安装更新后可用 `refresh-projections` 在不改变 revision 和状态的情况下重建中文工作台。控制器只接受当前完整 schema v3，不提供旧 schema 迁移、历史 CLI 或兼容别名。纯 Markdown 负责指引，真正硬门禁由 Python 控制器和磁盘状态执行。
 
 ## 验收与反馈
 
@@ -238,7 +235,7 @@ node <skill-root>/scripts/hdg.mjs upgrade-registry --task-gate-level LIGHT|FULL 
 - 层级规划：[delivery-planning.md](references/delivery-planning.md)
 - baseline 与修订：[baselines.md](references/baselines.md)
 - 冻结前开发评审方案与三层示例：[development-review.md](references/development-review.md)
-- 注册表、恢复与 legacy：[task-registry.md](references/task-registry.md)
+- 注册表与严格恢复：[task-registry.md](references/task-registry.md)
 - 事务和并发：[registry-transactions.md](references/registry-transactions.md)
 - 生命周期：[registry-lifecycle.md](references/registry-lifecycle.md)
 - 进度投影：[tracking.md](references/tracking.md)

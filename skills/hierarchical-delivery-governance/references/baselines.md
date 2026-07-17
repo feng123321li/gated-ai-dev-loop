@@ -2,7 +2,7 @@
 
 ## 共同字段
 
-所有新工作项使用 schema v3，并包含：`id`、`kind`、`gateLevel`、`title`、`goal`、`scope`、`nonGoals`、`requirements`、`acceptance`、`testCommands`、`risks`、`decisions` 和 `developmentPlan`。早期版本生成且没有 `developmentPlan` 的 v3 包可以恢复和收尾，但修订时必须补齐。
+所有工作项只使用当前完整 schema v3，并包含：`id`、`kind`、`gateLevel`、`title`、`goal`、`scope`、`nonGoals`、`requirements`、`acceptance`、`testCommands`、`risks`、`decisions` 和 `developmentPlan`。缺少任何当前字段的包都不恢复、不修订、不写入。
 
 `gateLevel` 只能是 `LIGHT|FULL`。只有 Task 可以选择 `LIGHT`；Delivery 和 Capability 必须为 `FULL`。该字段进入 baseline 与 contract 指纹，因此缺失、篡改或未经确认改变门禁等级都会被检测。`None` 是不创建工作项的路由结果，不进入 schema。
 

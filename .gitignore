@@ -1,4 +1,10 @@
 .worktrees/
 .dev-loop-work/
-node_modules/
-.ai-dev-loop/
+__pycache__/
+*.py[cod]
+.venv/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/

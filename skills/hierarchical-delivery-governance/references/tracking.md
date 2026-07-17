@@ -16,14 +16,14 @@
 - 开发评审文件及状态；`WAITING_FOR_BASELINE_CONFIRMATION` 的下一步必须明确为人工评审当前文件和指纹后再 freeze；
 - `directChildren`：直接子级 total、verified、blocked、active；
 - `descendants`：全部后代的同类精确计数。
-- 根工作项的 `acceptance.status`：最终审查和用户确认阶段；非根显示“不适用”。Delivery 同步展示兼容的 `delivery.status`。
+- 根工作项的 `acceptance.status`：最终审查和用户确认阶段；非根显示“不适用”。
 - 已生成的 `acceptance-report.md` 入口；开发结果写回后不得缺失。
 
 Task 的子级计数为零。不要写主观百分比、故事点完成率或“基本完成”。计划但尚未物化的 child 计入 total，状态视为 planned。
 
 ## Delivery 视图
 
-Delivery review/overview 是顶层交付视图，不要求范围覆盖整个仓库或产品。评审文件按 Capability 展示开发目的、交付内容、依赖、跨能力接口/共享契约、交付波次与顶层测试映射；overview 展示状态、直接 Task 完成数、阻断项、聚合 gate、delivery 和证据入口。Delivery VERIFIED 需要所有计划 Capability VERIFIED 且顶层交付 gate PASS；只有审查完成并取得用户确认后 delivery 才为 COMPLETED。
+Delivery review/overview 是顶层交付视图，不要求范围覆盖整个仓库或产品。评审文件按 Capability 展示开发目的、交付内容、依赖、跨能力接口/共享契约、交付波次与顶层测试映射；overview 展示状态、直接子级完成数、阻断项、聚合 gate、最终验收和证据入口。Delivery VERIFIED 需要所有计划 Capability VERIFIED 且顶层交付 gate PASS；只有审查完成并取得用户确认后治理根才为 COMPLETED。
 
 ## Capability 视图
 

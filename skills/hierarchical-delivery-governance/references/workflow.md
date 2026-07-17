@@ -2,8 +2,8 @@
 
 ## 主流程
 
-1. 从当前 Skill 安装目录运行 `node <skill-root>/scripts/hdg.mjs --help`。全局 `hdg` 不是前置条件。
-2. 只读恢复 registry；不存在时表示尚未持久化工作项。遇到受支持的单根 schema v2 Task 时，先展示迁移影响和 gateLevel，明确确认后执行 `upgrade-registry`，再按 v3 恢复；不得因新会话而忽略旧现场，也不得静默迁移。
+1. 从当前 Skill 安装目录运行 `python -X utf8 <skill-root>/scripts/hdg.py --help`。Python 3.10+ 是唯一运行时，不要求 Node、npm 或第三方包。
+2. 只读恢复 registry；不存在时表示尚未持久化工作项。只接受字段完整、开发方案存在且磁盘投影未被篡改的当前 schema v3；其他版本或未知兼容字段保持阻断，不迁移、不解释。
 3. 起草层级事实卡，选择能够承担当前聚合责任的最浅根：Task、Capability 或 Delivery；同时选择不持久化的 `None`，或 schema v3 工作项的 `LIGHT|FULL`。只有 Task 可为 `LIGHT`。为实际层级起草对应 `developmentPlan`：Task 精确到文件、接口与逻辑；Capability 精确到 Task 内容、共享契约和波次；Delivery 精确到 Capability 内容、跨能力契约和波次。
 4. 运行 `prepare-item`，生成 `development-review.md` 和 `development-plan.json`，向用户提供可点击文件与当前指纹。此时状态保持 `WAITING_FOR_BASELINE_CONFIRMATION`，不授权开发。
 5. 人工评审后，需要修改就重新起草和准备；明确同意当前评审文件与指纹后，才执行 `freeze-item --confirmed`。CLI 不提供原子 prepare+freeze 命令。
@@ -82,7 +82,7 @@ READY 是派生谓词，不写入 lifecycle。协调工作项的 VERIFIED 不是
 
 恢复优先级固定为：用户给出的精确 ID/包路径、有效 `currentFocus.workItemId`、唯一非终态候选；多个候选时请用户选择。恢复后验证包指纹、实际父链、依赖、claim 和工作区授权。
 
-同一 `.hierarchical-delivery-governance` 中的 schema v2 单根 Task 属于版本兼容恢复，不是新工作项。只有它已经冻结、没有活动 claim、未运行 gate、磁盘包与 registry 指纹一致时，才允许以明确选择的 `LIGHT|FULL` 执行 `upgrade-registry --confirmed`。迁移保留 ID、状态和已确认开发方式，重算指纹、记录审计历史，并删除旧指纹绑定的 context/handoff；之后必须重新 `dispatch-task` 生成提示词。多工作项、层级树、已产生开发结果或 gate 证据的 v2 现场保持阻断并报告人工迁移需求。
+控制器不提供旧 schema 升级命令。读取到非当前 schema v3、缺少 `developmentPlan`、未知根字段或旧兼容记录时，保持只读阻断并报告现场不受支持；不得自动补字段、重算旧指纹或继续写入。
 
 修订必须携带当前 baseline 指纹和显式确认。新增兄弟子项不影响未变化子项；父稳定契约或目标子契约变化只使对应后代 stale。已 VERIFIED 工作项不能直接修订。
 

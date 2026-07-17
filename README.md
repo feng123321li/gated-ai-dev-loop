@@ -10,12 +10,15 @@ Delivery → Capability → Task
 
 Delivery 和 Capability 管协调与聚合，Task 是唯一执行叶子。实际存在的每一级都有独立 baseline、门禁和进度；每个 Task 使用磁盘化独立上下文，不继承前期对话。
 
+冻结前会先生成真实可点击的开发评审文件：Task 展示精确文件、接口/函数和实现逻辑；Capability 展示 Task 内容、共享契约与波次；Delivery 展示 Capability 内容、跨能力契约与交付波次。人工评审当前指纹后才能冻结和开始开发。
+
 ## 核心能力
 
 - 小需求可直接使用根 Task，不虚构 Capability 或 Delivery；
 - `gateLevel` 作为 schema v3 机器契约进入 baseline、registry、上下文和投影；仅 Task 可为 `LIGHT`，协调层固定 `FULL`；
 - 多 Task 能力使用根 Capability，并可受控持续追加 Task；
 - 多 Capability 交付才创建 Delivery；它可以是完整项目、大型模块、子系统或跨服务需求；
+- `prepare-item` 先写 `development-review.md/development-plan.json`，人工评审后再由 `freeze-item` 冻结；不存在跳过评审的一步 approve；
 - 已冻结且尚未执行的根 Task/Capability 可在独立准备并冻结父 baseline 后，分别受控升层到 Capability/Delivery；
 - Task baseline 冻结后必须由用户显式选择 active/manual；
 - 按依赖、claim 和写入范围计算 READY Task，支持多人并行；
@@ -35,6 +38,8 @@ Micro、Workstream 和 M/W/T 可作为规模特征、规划视图和人类可读
     └── <id>/
         ├── baseline.json
         ├── baseline.md
+        ├── development-plan.json
+        ├── development-review.md
         ├── state.json
         ├── overview.md
         ├── progress.md
@@ -58,7 +63,8 @@ npm run skill:install -- --target both --scope user
 
 ```text
 node <skill-root>/scripts/hdg.mjs --help
-node <skill-root>/scripts/hdg.mjs approve-item --definition - --host-runtime claude-code --confirmed
+node <skill-root>/scripts/hdg.mjs prepare-item --definition - --host-runtime claude-code --json
+node <skill-root>/scripts/hdg.mjs freeze-item --item t-example --expected-baseline <sha256> --confirmed --json
 node <skill-root>/scripts/hdg.mjs promote-item --item t-example --parent c-example --expected-baseline <sha256> --expected-parent-baseline <sha256> --confirmed
 node <skill-root>/scripts/hdg.mjs select-development-mode --item t-example --development-mode active --expected-baseline <sha256> --confirmed
 node <skill-root>/scripts/hdg.mjs ready-tasks --item t-example

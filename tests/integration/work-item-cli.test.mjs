@@ -8,6 +8,7 @@ import { runHierarchicalCli } from '../../src/cli/hierarchical.mjs';
 import { sha256Bytes } from '../../src/core/hash.mjs';
 import {
   capabilityDefinition,
+  developmentPlanFor,
   issueTaskDefinition,
   deliveryDefinition,
 } from '../helpers/work-item-definitions.mjs';
@@ -66,7 +67,7 @@ function result(output) {
   return JSON.parse(output).result;
 }
 
-test('CLI approves a definition from stdin without a temporary input file', async (t) => {
+test('CLI prepares a human review package from stdin before a separate freeze', async (t) => {
   const root = await fixture(t);
   const definition = issueTaskDefinition({
     id: 't-stdin-definition',
@@ -74,12 +75,44 @@ test('CLI approves a definition from stdin without a temporary input file', asyn
     gateLevel: 'LIGHT',
   });
 
-  const approved = await invoke(root, [
-    'approve-item', '--definition', '-', '--host-runtime', 'claude-code', '--confirmed', '--json',
+  const prepared = await invoke(root, [
+    'prepare-item', '--definition', '-', '--host-runtime', 'claude-code', '--json',
   ], { stdin: `${JSON.stringify(definition)}\n` });
 
-  assert.equal(approved.exitCode, 0, approved.err);
-  assert.equal(result(approved.out).id, definition.id);
+  assert.equal(prepared.exitCode, 0, prepared.err);
+  const preparedItem = result(prepared.out);
+  assert.equal(preparedItem.id, definition.id);
+  assert.equal(preparedItem.stage, 'WAITING_FOR_BASELINE_CONFIRMATION');
+  assert.match(preparedItem.humanArtifacts.developmentReview, /development-review\.md$/);
+  const review = await readFile(path.join(root, preparedItem.humanArtifacts.developmentReview), 'utf8');
+  assert.match(review, /等待人工评审/);
+  assert.match(review, /接口与功能契约/);
+
+  const revisedDefinition = issueTaskDefinition({
+    id: definition.id,
+    parentId: null,
+    gateLevel: 'LIGHT',
+    goal: 'Implement the revised reviewed behavior before freezing.',
+  });
+  const revised = await invoke(root, [
+    'prepare-item', '--definition', '-', '--host-runtime', 'claude-code', '--json',
+  ], { stdin: `${JSON.stringify(revisedDefinition)}\n` });
+  assert.equal(revised.exitCode, 0, revised.err);
+  const revisedItem = result(revised.out);
+  assert.equal(revisedItem.revised, true);
+  assert.notEqual(revisedItem.baselineFingerprint, preparedItem.baselineFingerprint);
+
+  const staleFreeze = await invoke(root, [
+    'freeze-item', '--item', definition.id,
+    '--expected-baseline', preparedItem.baselineFingerprint, '--confirmed', '--json',
+  ]);
+  assert.equal(staleFreeze.exitCode, 1);
+  assert.match(staleFreeze.err, /WORK_ITEM_REVISION_CONFLICT/);
+  const frozen = await invoke(root, [
+    'freeze-item', '--item', definition.id,
+    '--expected-baseline', revisedItem.baselineFingerprint, '--confirmed', '--json',
+  ]);
+  assert.equal(frozen.exitCode, 0, frozen.err);
   assert.deepEqual(await readdir(root), ['.hierarchical-delivery-governance']);
 });
 
@@ -196,6 +229,7 @@ test('CLI manages a hierarchical Task from preparation through verified evidence
     requirementIds: ['R-001'],
     acceptanceIds: ['A-001'],
   });
+  revisedCapability.developmentPlan = developmentPlanFor(revisedCapability);
   const revisionFile = await putJson(root, 'capability-revision.json', revisedCapability);
   const expected = registry.workItems.find(({ id }) => id === 'c-token-lifecycle').baselineFingerprint;
   const revision = await invoke(root, [
@@ -206,7 +240,7 @@ test('CLI manages a hierarchical Task from preparation through verified evidence
   assert.equal(result(revision.out).baselineRevision, 2);
 });
 
-test('CLI approves and freezes once, then emits a reusable manual development prompt', async (t) => {
+test('CLI requires prepared plan review before freeze, then emits a reusable manual development prompt', async (t) => {
   const root = await fixture(t);
   const taskValue = issueTaskDefinition({
     id: 't-manual-handoff',
@@ -215,21 +249,29 @@ test('CLI approves and freezes once, then emits a reusable manual development pr
   });
   const task = await putJson(root, 'manual-task.json', taskValue);
 
+  const prepared = await invoke(root, [
+    'prepare-item', '--definition', task, '--host-runtime', 'codex', '--json',
+  ]);
+  assert.equal(prepared.exitCode, 0, prepared.err);
+  assert.equal(result(prepared.out).stage, 'WAITING_FOR_BASELINE_CONFIRMATION');
+
   const unconfirmed = await invoke(root, [
-    'approve-item', '--definition', task, '--host-runtime', 'codex', '--json',
+    'freeze-item', '--item', taskValue.id,
+    '--expected-baseline', result(prepared.out).baselineFingerprint, '--json',
   ]);
   assert.equal(unconfirmed.exitCode, 1);
   assert.match(unconfirmed.err, /CONFIRMATION_REQUIRED/);
-  assert.equal((await readdir(root)).includes('.hierarchical-delivery-governance'), false);
 
   const approved = await invoke(root, [
-    'approve-item', '--definition', task, '--host-runtime', 'codex', '--confirmed', '--json',
+    'freeze-item', '--item', taskValue.id,
+    '--expected-baseline', result(prepared.out).baselineFingerprint, '--confirmed', '--json',
   ]);
   assert.equal(approved.exitCode, 0, approved.err);
   assert.equal(result(approved.out).stage, 'BASELINE_FROZEN');
 
   const repeatedApproval = await invoke(root, [
-    'approve-item', '--definition', task, '--host-runtime', 'codex', '--confirmed', '--json',
+    'freeze-item', '--item', taskValue.id,
+    '--expected-baseline', result(prepared.out).baselineFingerprint, '--confirmed', '--json',
   ]);
   assert.equal(repeatedApproval.exitCode, 0, repeatedApproval.err);
   assert.equal(result(repeatedApproval.out).idempotent, true);

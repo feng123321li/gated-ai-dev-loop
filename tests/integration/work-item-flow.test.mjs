@@ -23,6 +23,7 @@ import {
 } from '../../src/work-items/runtime.mjs';
 import {
   capabilityDefinition,
+  developmentPlanFor,
   issueTaskDefinition,
   deliveryDefinition,
   revokeTaskDefinition,
@@ -68,6 +69,29 @@ async function selectMode(root, id, mode = 'active') {
     now: () => '2026-07-16T00:01:30.000Z',
   });
 }
+
+test('human review projections are regenerated artifacts and tampering blocks freeze', async (t) => {
+  const root = await fixture(t);
+  const definition = issueTaskDefinition({
+    id: 't-review-tamper',
+    parentId: null,
+    gateLevel: 'LIGHT',
+  });
+  const prepared = await prepareWorkItem({ root, definition, hostRuntime: 'codex' });
+  await writeFile(
+    path.join(root, prepared.humanArtifacts.developmentReview),
+    '# forged review\n',
+  );
+  await assert.rejects(
+    () => freezeWorkItem({
+      root,
+      id: definition.id,
+      expectedBaselineFingerprint: prepared.baselineFingerprint,
+      confirmed: true,
+    }),
+    { code: 'WORK_ITEM_PACKAGE_CHANGED' },
+  );
+});
 
 test('a standalone root Task has its own baseline, dispatch, context, and gate', async (t) => {
   const root = await fixture(t);
@@ -708,6 +732,9 @@ test('Capability decomposition can append a Task without invalidating unchanged 
     requirementIds: ['R-001'],
     acceptanceIds: ['A-001'],
   });
+  revised.developmentPlan = developmentPlanFor(revised);
+  revised.developmentPlan.childPlans
+    .find(({ id }) => id === 't-revoke-token').dependsOn = ['t-issue-token'];
   await claimTask({
     root,
     id: 't-issue-token',
@@ -777,6 +804,9 @@ test('Capability dependencies block all consumer Tasks until the provider Capabi
     requirementIds: ['R-001'],
     acceptanceIds: ['A-001'],
   });
+  delivery.developmentPlan = developmentPlanFor(delivery);
+  delivery.developmentPlan.childPlans
+    .find(({ id }) => id === 'c-access-control').dependsOn = ['c-token-lifecycle'];
   const providerCapability = capabilityDefinition({
     children: [capabilityDefinition().children[0]],
   });
@@ -795,6 +825,7 @@ test('Capability dependencies block all consumer Tasks until the provider Capabi
       acceptanceIds: ['A-001'],
     }],
   };
+  consumerCapability.developmentPlan = developmentPlanFor(consumerCapability);
   const consumerTask = issueTaskDefinition({
     id: 't-enforce-access',
     parentId: 'c-access-control',
@@ -838,7 +869,7 @@ test('Capability dependencies block all consumer Tasks until the provider Capabi
   );
 });
 
-test('Capability dependency cycles are rejected when the closing baseline is prepared', async (t) => {
+test('Capability dependency cycles are rejected in the Delivery review plan before freeze', async (t) => {
   const root = await fixture(t);
   const delivery = deliveryDefinition();
   delivery.children.push({
@@ -848,27 +879,13 @@ test('Capability dependency cycles are rejected when the closing baseline is pre
     requirementIds: ['R-001'],
     acceptanceIds: ['A-001'],
   });
-  await prepareAndFreeze(root, delivery);
-  await prepareAndFreeze(root, capabilityDefinition({
-    decomposition: { status: 'OPEN', dependsOn: ['c-access-control'] },
-  }));
-  const access = {
-    ...capabilityDefinition(),
-    id: 'c-access-control',
-    title: 'Access control',
-    goal: 'Deliver access control.',
-    scope: ['src/identity/access/**', 'tests/identity/access/**'],
-    decomposition: { status: 'OPEN', dependsOn: ['c-token-lifecycle'] },
-    children: [{
-      id: 't-enforce-access',
-      kind: 'TASK',
-      title: 'Enforce access',
-      requirementIds: ['R-001'],
-      acceptanceIds: ['A-001'],
-    }],
-  };
+  delivery.developmentPlan = developmentPlanFor(delivery);
+  delivery.developmentPlan.childPlans
+    .find(({ id }) => id === 'c-token-lifecycle').dependsOn = ['c-access-control'];
+  delivery.developmentPlan.childPlans
+    .find(({ id }) => id === 'c-access-control').dependsOn = ['c-token-lifecycle'];
   await assert.rejects(
-    () => prepareWorkItem({ root, definition: access, hostRuntime: 'codex' }),
+    () => prepareWorkItem({ root, definition: delivery, hostRuntime: 'codex' }),
     { code: 'WORK_ITEM_DEPENDENCY_CYCLE' },
   );
 });

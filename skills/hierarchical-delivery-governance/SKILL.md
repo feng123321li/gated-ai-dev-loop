@@ -1,6 +1,6 @@
 ---
 name: hierarchical-delivery-governance
-description: "分层治理可独立交付的软件工作单元。按最小必要深度组织为 Task、Capability→Task 或 Delivery→Capability→Task，为实际存在的每一级维护独立 baseline，按依赖调度独立上下文 Task，支持 manual/active 开发回收、分级门禁、用户可读验收报告、独立验收和最终确认；也用于继续、恢复、修订或审计已有分层交付工作。"
+description: "分层治理可独立交付的软件工作单元。按最小必要深度组织为 Task、Capability→Task 或 Delivery→Capability→Task，在冻结前生成包含开发目的、内容、文件、接口/共享契约、依赖波次和测试映射的人工评审包，为实际存在的每一级维护独立 baseline，按依赖调度独立上下文 Task，支持 manual/active 开发回收、分级门禁、用户可读验收报告、独立验收和最终确认；也用于继续、恢复、修订或审计已有分层交付工作。"
 ---
 
 # Hierarchical Delivery Governance
@@ -45,6 +45,8 @@ description: "分层治理可独立交付的软件工作单元。按最小必要
     └── <work-item-id>/
         ├── baseline.json
         ├── baseline.md
+        ├── development-plan.json # 进入 baseline 指纹的结构化开发方案
+        ├── development-review.md # 冻结前供人工评审，冻结后保留确认记录
         ├── work-item.json
         ├── state.json
         ├── overview.md
@@ -58,7 +60,7 @@ description: "分层治理可独立交付的软件工作单元。按最小必要
         └── acceptance-report.md   # 面向用户的验收报告
 ```
 
-`work-item-registry.json` 是机器权威；Markdown 是可重建投影。`workspace-overview.md`、`overview.md` 和 `progress.md` 是面向用户与协作者的中文工作台，不是机器输入；`acceptance-report.md` 是正式用户验收报告。新 Skill 不读取、迁移或回写其他历史控制目录。
+`work-item-registry.json` 是机器权威；Markdown 是可重建投影。`development-plan.json` 随 baseline 一起计算指纹，`development-review.md` 是冻结前必须人工查看的开发评审文件；`workspace-overview.md`、`overview.md` 和 `progress.md` 是面向用户与协作者的中文工作台，必须链接它。`acceptance-report.md` 是正式用户验收报告，并对照冻结方案与实际改动。新 Skill 不读取、迁移或回写其他历史控制目录。
 
 详细契约见 [task-registry.md](references/task-registry.md)、[baselines.md](references/baselines.md) 与 [tracking.md](references/tracking.md)。
 
@@ -66,10 +68,10 @@ description: "分层治理可独立交付的软件工作单元。按最小必要
 
 `--definition`、`--evidence` 等结构化 JSON 参数接受 `-`，表示直接从 stdin 读取。仅供单次命令使用的 JSON 必须通过 stdin 传入，不得先用 Write 或文件工具写入 `%TEMP%`、`$TMPDIR` 等系统临时目录，也不得写到当前工作区之外。控制器有意把文件输入限制在当前工作区内；跨卷路径会返回 `PATH_CROSS_VOLUME`，同卷但越出工作区会返回 `PATH_OUTSIDE_ROOT`。
 
-正常批准应直接执行以下命令，并由宿主把已展示且获批的 definition JSON 写入该进程的 stdin；`-` 是实际参数值，不是占位符：
+正常准备应直接执行以下命令，并由宿主把 definition JSON 写入该进程的 stdin；`-` 是实际参数值，不是占位符：
 
 ```text
-node <skill-root>/scripts/hdg.mjs approve-item --definition - --host-runtime <agent> --confirmed
+node <skill-root>/scripts/hdg.mjs prepare-item --definition - --host-runtime <agent> --json
 ```
 
 不得为了“不污染仓库”而改用系统临时文件。只有宿主确实无法提供 stdin 时，才可使用当前工作区内的普通临时文件，并在同一轮命令完成后清理；不要把临时输入放进 `.hierarchical-delivery-governance/` 控制面。
@@ -79,10 +81,13 @@ node <skill-root>/scripts/hdg.mjs approve-item --definition - --host-runtime <ag
 1. 解析当前 Skill 的安装目录，并运行 `node <skill-root>/scripts/hdg.mjs --help` 做只读预检。内置控制器是主入口；全局 `hdg` 只是可选快捷别名，不是前置条件。
 2. 只读检查 `.hierarchical-delivery-governance/work-item-registry.json`；不存在表示尚未持久化工作项，不是 CLI 缺失或 schema 错误。schema v3 直接恢复；若是本 Skill 早期生成、尚未执行或 gate 的单根 schema v2 Task，则展示保留状态、重新计算指纹、清除旧上下文以及选择 `LIGHT|FULL` 的迁移影响，取得明确确认后执行 `upgrade-registry`。其他 schema 或不满足安全前置条件的 v2 现场保持阻断，不得静默改写。
 3. 先起草层级事实卡和门禁等级，再判断消息是继续/修订/追加/升层，还是新的根 Task、根 Capability 或 Delivery。
-4. 展示完整 baseline 后，只请求一次批准；该批准必须同时覆盖具体 ID、baseline 内容、持久化和冻结。收到批准后调用 `approve-item --confirmed`，一次完成准备与冻结，不得再请求“确认冻结”。
-5. 不从“升级、优化、项目、任务、治理”等词推导创建或冻结授权。
+4. definition 必须包含与层级匹配的 `developmentPlan`。先调用 `prepare-item --json` 生成工作项包；这一步只进入 `WAITING_FOR_BASELINE_CONFIRMATION`，绝不授权开发。
+5. 把返回的 `humanArtifacts.developmentReview` 作为可点击文件明确展示给用户，同时概述 ID、层级、开发目的、文件、接口/共享契约、依赖波次和测试映射。用户要求修改时，修改 definition 后重新准备，不得冻结旧方案。
+6. 只有用户明确表示已经评审并同意当前 `development-review.md` 及其 baseline 指纹，才调用 `freeze-item --expected-baseline <sha256> --confirmed`。不得把“生成评审文件”“看一下”或 Agent 自己添加的 `--confirmed` 当作评审通过。
+7. 冻结成功后再次提供 `development-review.md`、`baseline.md` 和 `progress.md` 入口；Task 随后才进入开发方式选择。
+8. 不从“升级、优化、项目、任务、治理”等词推导创建或冻结授权。
 
-“明确批准”必须绑定刚刚唯一展示的具体 ID、完整 baseline 内容和“持久化并冻结”动作；当用户按该明确请求回复“批准/同意”时，应视为对这三个要素的一次确认。Agent 不得把用户提供的标题、建议任务名或自己添加的 `--confirmed` 当作确认。内置控制器缺失或预检失败表示 Skill 安装损坏，保持阻断并报告重装 Skill；不得要求用户另装全局 CLI，也不得用纯对话模拟硬门禁。
+“明确评审通过”必须绑定刚刚展示的具体 ID、`development-review.md` 和 baseline 指纹。准备评审包不需要把准备动作伪装成冻结批准；冻结确认只能发生在文件已经存在并供人查看之后。Agent 不得把用户提供的标题、建议任务名、旧版本批准或自己添加的 `--confirmed` 当作当前评审通过。内置控制器缺失或预检失败表示 Skill 安装损坏，保持阻断并报告重装 Skill；不得要求用户另装全局 CLI，也不得用纯对话模拟硬门禁。
 
 多个候选无法确定时请求用户选择。不得按目录时间、名称相似度或自然语言猜测当前焦点。
 
@@ -96,23 +101,35 @@ node <skill-root>/scripts/hdg.mjs approve-item --definition - --host-runtime <ag
 
 不允许 `Delivery → Task` 或 `Capability → Capability`。根 Task 不声明 Task 依赖；根 Capability 不声明 Capability 依赖。出现这些依赖时升级到能承载兄弟关系的聚合根。
 
+### 2. 分层开发评审契约
+
+所有新 definition 都必须有 `developmentPlan`，并按实际层级展示不同责任，不能只把同一段目标复制三遍：
+
+- Task：列出变更场景、精确文件动作、需要新增/修改/删除的接口或函数契约、实现逻辑、数据与事务、兼容性、测试映射和人工评审重点。场景从 `API/DOMAIN/DATA/MIGRATION/CONFIG/UI/INTEGRATION/REFACTOR/TEST/DOCS/SECURITY/PERFORMANCE/BUILD/OTHER` 选择；不适用的接口或数据部分明确写“无”，不能虚构。
+- Capability：逐个说明 Task 的开发目的与交付物、Task 依赖、跨 Task 接口/共享契约、集成流程、开发波次、Capability 级测试映射和评审重点。`childPlans` 必须与全部 Task 子契约一一对应。
+- Delivery：逐个说明 Capability 的开发目的与交付物、跨 Capability 依赖与接口/交付契约、交付波次、顶层测试映射和评审重点。`childPlans` 必须与全部 Capability 子契约一一对应。
+
+Task 的 `fileChanges` 必须是 scope 内精确路径，不能用目录通配符代替“到底改什么”；Task 的实际 PASS evidence 不得包含计划外文件。父级 `childPlans.dependsOn` 是子级依赖的冻结来源，子 Capability/Task 不能另写一套依赖。方案、R/A、scope、测试与层级契约一起进入指纹。
+
+字段记录、场景选择和三层示例见 [development-review.md](references/development-review.md)。
+
 已经作为浅层根冻结后才发现真实聚合责任时，不通过改 `kind` 或伪造父级原地升级，而走受控升层：
 
 1. 先按普通门禁起草目标父级 baseline；父级必须把当前根列为计划 child，并保持根形态；
-2. 用户一次批准父级 ID、内容以及持久化并冻结后执行 `approve-item`；这一步不自动附着当前根；
+2. 执行 `prepare-item` 生成父级开发评审包，人工查看并确认当前指纹后再执行 `freeze-item`；这一步不自动附着当前根；
 3. 展示子、父两个当前 baseline 指纹和关系变化，取得明确升层确认；
 4. 执行 `promote-item`，只允许根 `TASK → CAPABILITY` 或根 `CAPABILITY → DELIVERY`；保留工作项 ID、kind 和 gateLevel，并把旧/新/父 baseline 指纹写入 `promotionHistory`；
 5. Task 升层会清除旧开发方式、上下文和 handoff，回到 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`；Capability 升层保留不受父契约变化影响的 Task 子契约。
 
 源或父已执行 gate、源子树有活动 claim、父未冻结、父未计划该 child、指纹过期或未明确确认时必须拒绝。升层不自动创建或冻结父级，也不能把用户说“需要 Capability/Delivery”当成执行授权。
 
-### 2. Delivery baseline（按需）
+### 3. Delivery baseline（按需）
 
-先生成顶层交付总览，至少包含目标、范围、非目标、R/A 追踪、交付级测试、风险、决策，以及计划的 Capability 子契约。总览范围可以是完整项目，也可以是可独立交付的大型模块、子系统或跨服务需求。Delivery baseline 只授权协调，不授权写业务代码。
+先生成顶层交付总览，至少包含目标、范围、非目标、R/A 追踪、交付级测试、风险、决策、计划的 Capability 子契约，以及对应的 Capability 开发内容、跨能力共享契约和交付波次。总览范围可以是完整项目，也可以是可独立交付的大型模块、子系统或跨服务需求。Delivery baseline 只授权协调，不授权写业务代码。
 
-### 3. Capability baseline（按需）
+### 4. Capability baseline（按需）
 
-Capability 可以是治理根，也可以从 Delivery 的已冻结子契约派生；有父级时范围只能收窄。它必须定义能力目标、R/A、集成测试、计划 Task，以及 `decomposition.status=OPEN|SEALED`。只有 Delivery 下的 Capability 才能声明同 Delivery Capability `dependsOn`；提供方未 VERIFIED 时，消费方下所有 Task 都不 READY。Capability 可持续追加 Task，但必须通过显式 baseline 修订：
+Capability 可以是治理根，也可以从 Delivery 的已冻结子契约派生；有父级时范围只能收窄。它必须定义能力目标、R/A、集成测试、计划 Task、跨 Task 接口与开发波次，以及 `decomposition.status=OPEN|SEALED`。只有 Delivery 下的 Capability 才能声明同 Delivery Capability `dependsOn`；提供方未 VERIFIED 时，消费方下所有 Task 都不 READY。Capability 可持续追加 Task，但必须通过显式 baseline 修订：
 
 - 提交当前 `expectedBaselineFingerprint`；
 - 用户显式确认；
@@ -121,11 +138,11 @@ Capability 可以是治理根，也可以从 Delivery 的已冻结子契约派�
 - 新增兄弟 Task 不使未变化 Task 失效；
 - 修改父稳定契约或某个 Task 的子契约，只使受影响的后代 baseline stale。
 
-### 4. Task baseline
+### 5. Task baseline
 
-Task 是叶子，可以作为治理根，也可以从 Capability 的已冻结子契约派生。它必须包含：目标、精确写入范围、非目标、R/A、依赖、输入、输出、安全 argv 测试和完成定义。有父级时，Task 只能引用同一 Capability 中已计划的兄弟依赖，范围不能超出 Capability；根 Task 的 `dependsOn` 必须为空。
+Task 是叶子，可以作为治理根，也可以从 Capability 的已冻结子契约派生。它必须包含：目标、精确写入范围、非目标、R/A、依赖、输入、输出、安全 argv 测试、完成定义，以及精确到文件和接口/函数目标契约的开发方案。有父级时，Task 只能引用同一 Capability `childPlans` 已冻结的兄弟依赖，范围不能超出 Capability；根 Task 的 `dependsOn` 必须为空。
 
-### 5. 开发方式机械门禁
+### 6. 开发方式机械门禁
 
 Task baseline 冻结后必须持久化为 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`，此时不得计算为 READY、生成上下文或认领。宿主只展示 `active` 与 `manual` 两种方式并等待用户明确选择；baseline 确认、普通“确认”或宿主推断都不能代替开发方式确认。
 
@@ -137,7 +154,7 @@ node <skill-root>/scripts/hdg.mjs select-development-mode --item <task-id> --dev
 
 命令成功后写入 `development-mode.json`，并把 Task 状态推进为 `FROZEN`。该记录必须与 registry 中的快照、Task ID 和当前 baseline 指纹完全一致；Task baseline 修订会删除旧记录并回到等待状态。Skill 内置控制器不可用或命令失败时保持阻断，不能用“等价流程”直接开始开发。
 
-### 6. 独立上下文
+### 7. 独立上下文
 
 验证开发方式记录后，才能生成 `context-manifest.json` 和 `development-handoff.md`。正常流程由 `dispatch-task --json` 返回与文件完全一致、绑定 operationId 的 `handoffPrompt`；`task-context --json` 只生成明确标记“尚未认领、不得开始开发”的诊断预览。上下文只包含：
 
@@ -186,9 +203,8 @@ Skill 自带单文件机械控制器。宿主从当前 `SKILL.md` 所在目录�
 层级流程使用以下命令：
 
 ```text
-node <skill-root>/scripts/hdg.mjs approve-item --definition - --host-runtime <agent> --confirmed
-node <skill-root>/scripts/hdg.mjs prepare-item --definition - --host-runtime <agent> # 仅恢复/诊断低级入口
-node <skill-root>/scripts/hdg.mjs freeze-item --item <id> --expected-baseline <sha256> --confirmed # 仅恢复/诊断低级入口
+node <skill-root>/scripts/hdg.mjs prepare-item --definition - --host-runtime <agent> --json
+node <skill-root>/scripts/hdg.mjs freeze-item --item <id> --expected-baseline <sha256> --confirmed --json
 node <skill-root>/scripts/hdg.mjs revise-item --definition - --expected-baseline <sha256> --confirmed
 node <skill-root>/scripts/hdg.mjs promote-item --item <root-id> --parent <frozen-parent-id> --expected-baseline <sha256> --expected-parent-baseline <sha256> --confirmed
 node <skill-root>/scripts/hdg.mjs select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
@@ -208,11 +224,11 @@ node <skill-root>/scripts/hdg.mjs refresh-projections
 node <skill-root>/scripts/hdg.mjs upgrade-registry --task-gate-level LIGHT|FULL --confirmed
 ```
 
-正常交互必须使用 `approve-item`，让一次用户批准同时完成准备与冻结；`prepare-item`、`freeze-item` 仅用于恢复、诊断和向后兼容。正常开发调度必须使用 `dispatch-task`；`task-context`、`claim-task` 是恢复/诊断低级入口。正常 gate 必须使用 `accept-item`，由控制器读取真实 evidence、复算 hash、校验 baseline、Scope、验收项、测试退出码和 P0/P1 后生成 `acceptance-report.json/md`；`gate-item` 仅用于恢复旧记录，不作为正常 PASS 路径。根工作项用 `acceptance-item` 完成独立验收与用户确认；`delivery-item` 只保留 Delivery 向后兼容。安装更新后可用 `refresh-projections` 在不改变 revision 和状态的情况下重建中文工作台。`upgrade-registry` 只处理受支持的单根 schema v2 Task：保留 ID、冻结状态和已确认开发方式，显式补入 gateLevel，重算 baseline/contract 指纹，记录 `migrationHistory`，并删除绑定旧指纹的 context/handoff；它不是普通 baseline 修订，也不扫描其他历史控制目录。内置控制器不导入历史 `route/start/prepare/freeze` CLI 或 YAML 配置链。纯 Markdown 负责指引，真正硬门禁由控制器和磁盘状态执行。
+正常交互必须使用 `prepare-item → 人工查看 development-review.md → freeze-item`；CLI 不提供把准备和冻结合并为一步的 `approve-item`，防止在评审文件存在前完成冻结。正常开发调度必须使用 `dispatch-task`；`task-context`、`claim-task` 是恢复/诊断低级入口。正常 gate 必须使用 `accept-item`，由控制器读取真实 evidence、复算 hash、校验 baseline、Scope、冻结文件计划、验收项、测试退出码和 P0/P1 后生成 `acceptance-report.json/md`；`gate-item` 仅用于恢复旧记录，不作为正常 PASS 路径。根工作项用 `acceptance-item` 完成独立验收与用户确认；`delivery-item` 只保留 Delivery 向后兼容。安装更新后可用 `refresh-projections` 在不改变 revision 和状态的情况下重建中文工作台。`upgrade-registry` 只处理受支持的单根 schema v2 Task：保留 ID、冻结状态和已确认开发方式，显式补入 gateLevel，重算 baseline/contract 指纹，记录 `migrationHistory`，并删除绑定旧指纹的 context/handoff；早期 v3 包可以继续恢复和收尾，下一次修订必须补齐 `developmentPlan`。内置控制器不导入历史 `route/start/prepare/freeze` CLI 或 YAML 配置链。纯 Markdown 负责指引，真正硬门禁由控制器和磁盘状态执行。
 
 ## 验收与反馈
 
-开发结果写回后立即生成状态为“等待门禁验收”的用户报告；不能在 `IMPLEMENTED` 停止并宣称完成。每一级 gate 使用结构化 evidence，`accept-item` 成功或失败后更新报告中的需求覆盖、实际改动、范围偏差、测试结果、P0/P1/P2 和结论。`VERIFIED` 只表示该级 gate 通过。根工作项 gate 后必须由没有开发上下文的全新只读审查 Agent 验收，或记录显式人工审查接受，再取得用户确认；审查与确认都必须提交真实、hash 匹配、结构合法且不可复用的 evidence。状态按 `WAITING_FOR_INDEPENDENT_REVIEW → WAITING_FOR_USER_CONFIRMATION → COMPLETED` 持久化，并持续更新同一份用户报告。没有隔离审查能力时报告保持 `NEED_HUMAN_REVIEW`，不伪造 PASS 或用户确认。
+开发结果写回后立即生成状态为“等待门禁验收”的用户报告；不能在 `IMPLEMENTED` 停止并宣称完成。每一级 gate 使用结构化 evidence，`accept-item` 成功或失败后更新报告中的冻结开发目的/接口/子级计划、需求覆盖、计划与实际文件差异、范围偏差、测试结果、P0/P1/P2 和结论。`VERIFIED` 只表示该级 gate 通过。根工作项 gate 后必须由没有开发上下文的全新只读审查 Agent 验收，或记录显式人工审查接受，再取得用户确认；审查与确认都必须提交真实、hash 匹配、结构合法且不可复用的 evidence。状态按 `WAITING_FOR_INDEPENDENT_REVIEW → WAITING_FOR_USER_CONFIRMATION → COMPLETED` 持久化，并持续更新同一份用户报告。没有隔离审查能力时报告保持 `NEED_HUMAN_REVIEW`，不伪造 PASS 或用户确认。
 
 不得自动提交、推送、合并、发布或更改外部状态。跨仓库工作只选择一个协调根保存注册表；每个 Task 明确工作区、路径和测试 cwd。详见 [multi-workspace.md](references/multi-workspace.md) 和 [post-acceptance-feedback.md](references/post-acceptance-feedback.md)。
 
@@ -221,6 +237,7 @@ node <skill-root>/scripts/hdg.mjs upgrade-registry --task-gate-level LIGHT|FULL 
 - 完整状态流：[workflow.md](references/workflow.md)
 - 层级规划：[delivery-planning.md](references/delivery-planning.md)
 - baseline 与修订：[baselines.md](references/baselines.md)
+- 冻结前开发评审方案与三层示例：[development-review.md](references/development-review.md)
 - 注册表、恢复与 legacy：[task-registry.md](references/task-registry.md)
 - 事务和并发：[registry-transactions.md](references/registry-transactions.md)
 - 生命周期：[registry-lifecycle.md](references/registry-lifecycle.md)

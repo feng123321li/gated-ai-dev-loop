@@ -2,13 +2,15 @@
 
 ## 共同字段
 
-所有工作项使用 schema v3，并包含：`id`、`kind`、`gateLevel`、`title`、`goal`、`scope`、`nonGoals`、`requirements`、`acceptance`、`testCommands`、`risks` 和 `decisions`。
+所有新工作项使用 schema v3，并包含：`id`、`kind`、`gateLevel`、`title`、`goal`、`scope`、`nonGoals`、`requirements`、`acceptance`、`testCommands`、`risks`、`decisions` 和 `developmentPlan`。早期版本生成且没有 `developmentPlan` 的 v3 包可以恢复和收尾，但修订时必须补齐。
 
 `gateLevel` 只能是 `LIGHT|FULL`。只有 Task 可以选择 `LIGHT`；Delivery 和 Capability 必须为 `FULL`。该字段进入 baseline 与 contract 指纹，因此缺失、篡改或未经确认改变门禁等级都会被检测。`None` 是不创建工作项的路由结果，不进入 schema。
 
-- Delivery 额外包含 `decomposition.status` 和 Capability `children`；
-- Capability 额外包含可空 `parentId`、`decomposition.status`、`decomposition.dependsOn` 和 Task `children`；
-- Task 额外包含可空 `parentId` 与 `execution {dependsOn, inputs, outputs}`。
+- Delivery 额外包含 `decomposition.status`、Capability `children`，以及 `developmentPlan {purpose, childPlans, sharedContracts, integrationFlow, deliveryWaves, testPlan, reviewPoints}`；
+- Capability 额外包含可空 `parentId`、`decomposition.status`、`decomposition.dependsOn`、Task `children`，以及同结构的协调层 `developmentPlan`；
+- Task 额外包含可空 `parentId`、`execution {dependsOn, inputs, outputs}`，以及 `developmentPlan {purpose, scenarios, fileChanges, interfaces, logic, dataAndTransactions, compatibility, testPlan, reviewPoints}`。
+
+Task `fileChanges` 必须是 scope 内的精确相对路径；`interfaces` 根据场景描述 HTTP/RPC/函数/方法/类/事件/schema/config/CLI/UI/文件格式等当前与目标契约，不涉及接口时允许空数组并在人类投影中明确显示。协调层 `childPlans` 必须覆盖全部直接子级并冻结依赖；子级实际 `dependsOn` 必须一致。`deliveryWaves` 覆盖全部直接子级并满足依赖先后。所有 acceptance 都必须映射到 `testPlan` 中的冻结测试命令。
 
 `parentId: null` 表示浅层治理根。根 Task 的 Task 依赖必须为空；根 Capability 的 Capability 依赖必须为空。非空 parentId 仍必须绑定已冻结、已计划且范围包含当前项的父契约。
 
@@ -16,18 +18,26 @@ Delivery/Capability authority 为 `COORDINATION`，Task 为 `EXECUTION`。
 
 ## 准备和冻结
 
-正常交互只请求一次批准。批准必须绑定刚刚展示的具体 ID、完整 baseline 内容以及“持久化并冻结”动作；宿主随后调用 `approve-item --confirmed`，控制器内部依次准备并冻结，不再向用户请求第二次确认。`prepare-item` 产生的 `WAITING_FOR_BASELINE_CONFIRMATION` 仅作为恢复/诊断中间态。冻结时仍重新验证：
+正常交互分成两个机械阶段：
+
+1. `prepare-item` 校验 definition 并持久化 `baseline.json/md`、`development-plan.json`、`development-review.md` 等文件，状态为 `WAITING_FOR_BASELINE_CONFIRMATION`；返回 `humanArtifacts` 和 baseline 指纹。此阶段的目的就是让人工在冻结前有真实文件可看。
+2. 宿主展示 `development-review.md`。用户明确同意当前文件和指纹后，调用 `freeze-item --expected-baseline <sha256> --confirmed`；state 中写入 `review.status=APPROVED`、`reviewedBy=user` 和时间，并更新评审 Markdown。
+
+评审阶段提出修改时，可用同一 ID 和完整新 definition 再次执行 `prepare-item`；控制器只允许替换仍处于等待评审、且 kind/parent 未改变的包，生成新指纹并使旧指纹无法 freeze。已经冻结的工作项必须走 `revise-item`，不能用 prepare 覆盖。
+
+CLI 不提供一步完成准备与冻结的 `approve-item`。冻结时仍重新验证：
 
 - schema、ID 和字段集合；
 - `gateLevel` 合法且协调层没有降为 `LIGHT`；
 - R/A 追踪；
+- `developmentPlan` 层级结构、场景、精确文件、接口/共享契约、子级覆盖、依赖波次和测试映射；
 - 安全相对范围；有父级时校验父范围包含；
 - 有父级时，父级已冻结且子契约存在；
 - 有父级的 Task 依赖属于同一 Capability；浅层根不得声明缺失聚合层才能承载的兄弟依赖；
 - 测试命令为安全 argv 数组；
 - baseline 和 contract 指纹。
 
-冻结后 stage 为 `BASELINE_FROZEN`。Delivery/Capability 状态进入 `FROZEN`；Task 状态进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`。Task baseline 只确定可开发契约，不代表已经选择开发方式；任何开发授权都不来自 Delivery 总览、聊天或进度投影。
+冻结后 stage 为 `BASELINE_FROZEN`。Delivery/Capability 状态进入 `FROZEN`；Task 状态进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`。冻结的 `developmentPlan` 会进入 Task 独立上下文，Task PASS evidence 的实际文件不得超出 `fileChanges`。Task baseline 只确定可开发契约，不代表已经选择开发方式；任何开发授权都不来自 Delivery 总览、聊天或进度投影。
 
 ## 父子指纹
 

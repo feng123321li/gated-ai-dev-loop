@@ -2,7 +2,7 @@
 
 ## 投影原则
 
-`work-item-registry.json` 是 Agent 和控制器使用的机器权威。`workspace-overview.md` 和每个包的 `overview.md/progress.md` 是面向用户与协作者的中文工作台，由 registry 重建；它们展示状态、下一步和验收报告入口，但不能授权开发或证明 PASS。
+`work-item-registry.json` 是 Agent 和控制器使用的机器权威。`workspace-overview.md` 和每个包的 `overview.md/progress.md` 是面向用户与协作者的中文工作台，由 registry 重建；工作项 ID 必须可点击，且展示 `development-review.md`、状态、下一步和验收报告入口。`development-review.md` 是冻结前人工评审入口，但不能单独授权开发或证明 PASS。
 
 ## 层级事实卡投影
 
@@ -13,6 +13,7 @@
 每个工作项都展示：
 
 - 自身 `stage/status/gateLevel/developmentMode/gate/claim/recordRevision`；
+- 开发评审文件及状态；`WAITING_FOR_BASELINE_CONFIRMATION` 的下一步必须明确为人工评审当前文件和指纹后再 freeze；
 - `directChildren`：直接子级 total、verified、blocked、active；
 - `descendants`：全部后代的同类精确计数。
 - 根工作项的 `acceptance.status`：最终审查和用户确认阶段；非根显示“不适用”。Delivery 同步展示兼容的 `delivery.status`。
@@ -22,20 +23,20 @@ Task 的子级计数为零。不要写主观百分比、故事点完成率或“
 
 ## Delivery 视图
 
-Delivery overview 是顶层交付视图，不要求范围覆盖整个仓库或产品。它按 Capability 展示状态、直接 Task 完成数、阻断项、聚合 gate、delivery 和证据入口。Delivery VERIFIED 需要所有计划 Capability VERIFIED 且顶层交付 gate PASS；只有审查完成并取得用户确认后 delivery 才为 COMPLETED。
+Delivery review/overview 是顶层交付视图，不要求范围覆盖整个仓库或产品。评审文件按 Capability 展示开发目的、交付内容、依赖、跨能力接口/共享契约、交付波次与顶层测试映射；overview 展示状态、直接 Task 完成数、阻断项、聚合 gate、delivery 和证据入口。Delivery VERIFIED 需要所有计划 Capability VERIFIED 且顶层交付 gate PASS；只有审查完成并取得用户确认后 delivery 才为 COMPLETED。
 
 ## Capability 视图
 
-Capability progress 展示计划 Task、依赖、READY/CLAIMED/IMPLEMENTED/VERIFIED/BLOCKED 状态和集成 gate。新增 Task 后 total 立即增加；既有 Task 状态不被兄弟追加重置。
+Capability review 展示计划 Task 的目的/交付物、依赖、跨 Task 接口/共享契约、集成流程、波次和测试映射；progress 展示 READY/CLAIMED/IMPLEMENTED/VERIFIED/BLOCKED 状态和集成 gate。新增 Task 后 total 立即增加；既有 Task 状态不被不相关兄弟追加重置。
 
 根 Capability 的父链为空；它在全部 Task 和自身 gate 通过后 VERIFIED，再进入独立验收和用户确认。
 
 ## Task 视图
 
-Task progress 展示父链、baseline 指纹、`gateLevel`、开发方式及确认记录、依赖、claim、实现证据、gate、下一动作和阻断解除条件。未选择时下一动作是明确选择 active/manual；开发 Agent 不更新控制投影，宿主验证返回结果后写入。
+Task review 展示开发目的、变更场景、精确文件、接口/函数当前与目标契约、实现逻辑、数据事务、兼容性和测试映射；progress 展示父链、baseline 指纹、`gateLevel`、开发方式及确认记录、依赖、claim、实现证据、gate、下一动作和阻断解除条件。未选择时下一动作是明确选择 active/manual；开发 Agent 不更新控制投影，宿主验证返回结果后写入。
 
 根 Task 的父链和聚合依赖为空，直接以自身 gate 结果作为浅层交付状态，再进入独立验收和用户确认。
 
 ## 写回时机
 
-准备、冻结、开发方式选择、修订、升层、dispatch、Task result、retry、gate、独立/人工审查和用户确认后立即写回，不在整轮结束后批量补写。Task result 后创建验收报告，后续每一步持续更新。每次写回增加 registry/record revision，并重建所有受影响投影。升层后父子投影立即变化，Task 下一动作重置为明确选择 active/manual，审计细节保留在 `promotionHistory`。
+准备后立即写入可供人工查看的评审文件；冻结后更新其中的确认记录。准备、冻结、开发方式选择、修订、升层、dispatch、Task result、retry、gate、独立/人工审查和用户确认后立即写回，不在整轮结束后批量补写。Task result 后创建验收报告，后续每一步持续更新。每次写回增加 registry/record revision，并重建所有受影响投影。升层后父子投影立即变化，Task 下一动作重置为明确选择 active/manual，审计细节保留在 `promotionHistory`。

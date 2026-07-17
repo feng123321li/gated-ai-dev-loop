@@ -8,8 +8,9 @@ import { sha256Bytes } from '../../src/core/hash.mjs';
 import { canonicalJson } from '../../src/baseline/sources.mjs';
 import {
   acceptWorkItem,
-  approveWorkItem,
   dispatchTask,
+  freezeWorkItem,
+  prepareWorkItem,
   readWorkItemRegistry,
   recordAcceptance,
   recordTaskResult,
@@ -22,6 +23,17 @@ async function fixture(t) {
   const root = await mkdtemp(path.join(tmpdir(), 'hdg-acceptance-loop-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   return root;
+}
+
+async function prepareAndFreeze(root, definition, now) {
+  const prepared = await prepareWorkItem({ root, definition, hostRuntime: 'codex', now });
+  return freezeWorkItem({
+    root,
+    id: prepared.id,
+    expectedBaselineFingerprint: prepared.baselineFingerprint,
+    confirmed: true,
+    now,
+  });
 }
 
 async function putEvidence(root, name, artifact) {
@@ -198,13 +210,7 @@ test('manual root Task closes through dispatch, gate report, independent review,
     gateLevel: 'LIGHT',
     title: '用户可见验收闭环',
   });
-  const approved = await approveWorkItem({
-    root,
-    definition: task,
-    hostRuntime: 'codex',
-    confirmed: true,
-    now: () => '2026-07-16T00:00:00.000Z',
-  });
+  const approved = await prepareAndFreeze(root, task, () => '2026-07-16T00:00:00.000Z');
   await selectDevelopmentMode({
     root,
     id: task.id,
@@ -338,7 +344,7 @@ test('manual root Task closes through dispatch, gate report, independent review,
 test('a passing gate rejects out-of-scope changes instead of producing a false report', async (t) => {
   const root = await fixture(t);
   const task = issueTaskDefinition({ id: 't-scope-rejection', parentId: null, gateLevel: 'LIGHT' });
-  const approved = await approveWorkItem({ root, definition: task, hostRuntime: 'codex', confirmed: true });
+  const approved = await prepareAndFreeze(root, task);
   await selectDevelopmentMode({
     root,
     id: task.id,

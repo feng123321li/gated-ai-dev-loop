@@ -2,7 +2,7 @@
 
 ## 上下文生成
 
-只有开发方式已明确确认、`development-mode.json` 与 registry 快照及当前 Task baseline 指纹一致、实际父链有效且 Task/Capability 依赖都 VERIFIED 的 Task 才能生成上下文。正常流程使用 `dispatch-task` 原子写入 claim 并生成绑定 operationId 的 `context-manifest.json`；`task-context` 只用于调度前诊断或恢复。上下文包含 `gateLevel`、开发方式、operation、Task baseline、实际存在的父契约、依赖证据、R/A、输入输出、测试 argv 和禁止事项；根 Task 的父契约和聚合依赖数组为空，`inheritConversation` 固定为 false。
+只有开发评审已经按当前指纹冻结、开发方式已明确确认、`development-mode.json` 与 registry 快照及当前 Task baseline 指纹一致、实际父链有效且 Task/Capability 依赖都 VERIFIED 的 Task 才能生成上下文。正常流程使用 `dispatch-task` 原子写入 claim 并生成绑定 operationId 的 `context-manifest.json`；`task-context` 只用于调度前诊断或恢复。上下文包含 `gateLevel`、开发方式、operation、Task 的完整 `developmentPlan`、实际存在父级的协调开发计划与子契约、依赖证据、R/A、输入输出、测试 argv 和禁止事项；根 Task 的父契约和聚合依赖数组为空，`inheritConversation` 固定为 false。
 
 `development-handoff.md` 是自包含、可直接粘贴到全新开发会话的提示词。正常流程中 `dispatch-task --json` 返回完全一致、绑定 operationId 的 `handoffPrompt`；`task-context --json` 只返回不得用于开工的未认领诊断预览。开发 Agent 不接收 Delivery 分析对话、Capability 讨论、其他 Task 对话或宿主隐式记忆。
 
@@ -11,7 +11,7 @@
 开发 Agent 必须：
 
 - 只实现一个冻结 Task；
-- 只写 Task scope 内路径；
+- 只写 Task `developmentPlan.fileChanges` 中已经人工评审的精确路径；scope 是外层边界，不能把未计划的 scope 内文件当成已授权；
 - 不改变 baseline、registry、进度投影或 `.git/**`；
 - 不提交、推送、发布或改变外部状态；
 - 运行允许的局部检查并报告真实事实；

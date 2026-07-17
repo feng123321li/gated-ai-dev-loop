@@ -4,6 +4,10 @@ import { readFile } from 'node:fs/promises';
 
 const skillUrl = new URL('../../skills/hierarchical-delivery-governance/SKILL.md', import.meta.url);
 const interfaceUrl = new URL('../../skills/hierarchical-delivery-governance/agents/openai.yaml', import.meta.url);
+const developmentReviewUrl = new URL(
+  '../../skills/hierarchical-delivery-governance/references/development-review.md',
+  import.meta.url,
+);
 const maintenanceUrl = new URL('../../AGENTS.md', import.meta.url);
 
 test('Skill defines one stable hierarchy without repository-maintenance instructions', async () => {
@@ -65,12 +69,26 @@ test('repository maintenance constraints live in AGENTS.md instead of the distri
   assert.match(maintenance, /不追加 `v2`/);
 });
 
-test('Skill interface uses one baseline approval and emits a reusable manual prompt', async () => {
+test('development review reference makes strict definitions constructible for all three levels', async () => {
+  const reference = await readFile(developmentReviewUrl, 'utf8');
+
+  assert.match(reference, /"schemaVersion": 3/);
+  assert.match(reference, /requirements.*R-001/s);
+  assert.match(reference, /acceptance.*A-001/s);
+  assert.match(reference, /五个字段缺一不可/);
+  assert.match(reference, /共同字段 \+ `developmentPlan` \+ `parentId` \+ `execution/);
+  assert.match(reference, /共同字段 \+ `developmentPlan` \+ `parentId` \+ `decomposition/);
+  assert.match(reference, /Delivery：共同字段 \+ `developmentPlan` \+ `decomposition/);
+  assert.match(reference, /准备嵌套子级前必须先 prepare、人工评审并 freeze 父级/);
+});
+
+test('Skill interface requires a pre-freeze development review and emits a reusable manual prompt', async () => {
   const agentInterface = await readFile(interfaceUrl, 'utf8');
 
   assert.match(agentInterface, /分层式 AI 交付治理/);
-  assert.match(agentInterface, /开发回收、门禁、验收报告和最终确认/);
-  assert.match(agentInterface, /一次批准冻结 baseline/);
+  assert.match(agentInterface, /冻结前评审分层开发方案/);
+  assert.match(agentInterface, /development-review\.md/);
+  assert.match(agentInterface, /人工评审当前指纹后再冻结/);
   assert.match(agentInterface, /原子调度 manual\/active 开发/);
   assert.match(agentInterface, /生成用户验收报告/);
   assert.match(agentInterface, /独立验收和用户确认/);

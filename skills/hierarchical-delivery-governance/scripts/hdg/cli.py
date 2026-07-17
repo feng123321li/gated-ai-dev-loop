@@ -17,6 +17,7 @@ from .execution import (
 )
 from .fs_safe import read_regular_file
 from .host_runtime import is_agent_runtime
+from .interactions import list_interactions, record_interaction
 from .jsonio import rendered_json
 from .planning import (
     freeze_hierarchy,
@@ -39,11 +40,13 @@ COMMANDS = (
     "accept-item",
     "acceptance-item",
     "refresh-projections",
+    "record-interaction",
+    "interaction-log",
 )
 VALUE_OPTIONS = {
     "--definition", "--host-runtime", "--item", "--owner", "--operation",
     "--status", "--evidence", "--expected-baseline",
-    "--action", "--development-mode", "--expected-hierarchy",
+    "--action", "--development-mode", "--expected-hierarchy", "--interaction",
 }
 FLAG_OPTIONS = {"--json", "--help", "--confirmed", "--dogfood"}
 COMMAND_OPTIONS = {
@@ -61,6 +64,8 @@ COMMAND_OPTIONS = {
     "accept-item": {"--json", "--help", "--item", "--evidence", "--dogfood"},
     "acceptance-item": {"--json", "--help", "--item", "--action", "--evidence", "--dogfood"},
     "refresh-projections": {"--json", "--help", "--dogfood"},
+    "record-interaction": {"--json", "--help", "--item", "--interaction", "--dogfood"},
+    "interaction-log": {"--json", "--help", "--item"},
 }
 
 USAGE = f"""Usage: python -X utf8 <skill-root>/scripts/hdg.py <command> [options]
@@ -79,6 +84,8 @@ Commands:
   gate-item --item <id> --status PASS|FAIL --evidence <file|->
   accept-item --item <id> --evidence <file|->
   acceptance-item --item <root-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file|->
+  record-interaction --item <id> --interaction <file|->
+  interaction-log --item <id>
   refresh-projections
 
 Common options:
@@ -215,6 +222,17 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
         )
     if command == "refresh-projections":
         return refresh_work_item_projections(**common)
+    if command == "record-interaction":
+        interaction = _read_structured(
+            _required(parsed, "--interaction"), "WORK_ITEM_INTERACTION", cwd=cwd, stdin=stdin
+        )
+        return record_interaction(
+            **common,
+            item_id=_required(parsed, "--item"),
+            interaction=interaction,
+        )
+    if command == "interaction-log":
+        return list_interactions(root=cwd, item_id=_required(parsed, "--item"))
     evidence = _read_structured(
         _required(parsed, "--evidence"), "WORK_ITEM_EVIDENCE", cwd=cwd, stdin=stdin
     )

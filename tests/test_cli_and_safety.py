@@ -22,6 +22,8 @@ class CliAndSafetyTests(unittest.TestCase):
         self.assertIn("--json", help_text)
         self.assertIn("prepare-hierarchy", help_text)
         self.assertIn("freeze-hierarchy", help_text)
+        self.assertIn("record-interaction", help_text)
+        self.assertIn("interaction-log", help_text)
         self.assertIn("--development-mode active|manual", help_text)
         self.assertNotIn("select-development-mode", help_text)
         self.assertIn("retry-item --item <id> --expected-baseline <sha256>", help_text)
@@ -64,6 +66,43 @@ class CliAndSafetyTests(unittest.TestCase):
             )
             self.assertEqual(code, 1)
             self.assertEqual(json.loads(stderr.getvalue())["error"]["code"], "OPTION_REQUIRED")
+
+    def test_interaction_can_be_recorded_and_listed_from_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepare_stdout = io.StringIO()
+            run_cli(
+                ["prepare-hierarchy", "--definition", "-", "--host-runtime", "codex", "--json"],
+                cwd=temporary,
+                stdin=io.StringIO(json.dumps(task_hierarchy())),
+                stdout=prepare_stdout,
+            )
+            item_id = json.loads(prepare_stdout.getvalue())["result"]["rootId"]
+            interaction = {
+                "schemaVersion": 3,
+                "sessionId": "cli-session",
+                "actor": "AGENT",
+                "eventType": "AGENT_UPDATE",
+                "summary": "已完成 SQLite 状态检查。",
+                "operationId": None,
+                "hostRuntime": "codex",
+            }
+            stdout = io.StringIO()
+            self.assertEqual(
+                run_cli(
+                    ["record-interaction", "--item", item_id, "--interaction", "-", "--json"],
+                    cwd=temporary,
+                    stdin=io.StringIO(json.dumps(interaction)),
+                    stdout=stdout,
+                ),
+                0,
+            )
+            self.assertEqual(json.loads(stdout.getvalue())["result"]["eventType"], "AGENT_UPDATE")
+            stdout = io.StringIO()
+            self.assertEqual(
+                run_cli(["interaction-log", "--item", item_id, "--json"], cwd=temporary, stdout=stdout),
+                0,
+            )
+            self.assertEqual(json.loads(stdout.getvalue())["result"][-1]["summary"], "已完成 SQLite 状态检查。")
 
     def test_removed_mode_selection_command_is_rejected(self) -> None:
         stderr = io.StringIO()

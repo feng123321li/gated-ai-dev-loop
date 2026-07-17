@@ -37,13 +37,13 @@
 - Delivery 的直接子级全部是 Capability；
 - 每个协调节点 baseline 声明的 child 与递归 children 一一对应；
 - 所有 ID 唯一，parentId、父范围、子契约和依赖一致；
-- 不允许只规划但没有磁盘包的 child。
+- 不允许只规划但没有数据库节点记录和 Markdown 投影的 child。
 
 ## 准备与统一冻结
 
 1. `prepare-hierarchy` 校验完整 definition，计算各节点 baseline 指纹和一个绑定整树结构的 `hierarchyFingerprint`。
-2. 一个需求只写 `work-items/<root-id>/` 一个顶层目录；后代包按 `children/<id>/` 递归嵌套。
-3. 每个节点目录都写入自己的 `development-plan.json/md`；根级 `development-plan.md` 额外聚合整棵树，是唯一人工冻结评审入口。
+2. 完整 definition、层级和节点状态写入项目级 SQLite；一个需求只生成 `work-items/<root-id>/` 一个 Markdown 顶层目录，后代按 `children/<id>/` 递归嵌套。
+3. 每个节点目录都写入自己的 `development-plan.md`；根级同名文件额外聚合整棵树，是唯一人工冻结评审入口。
 4. 用户评审当前文件并选择 active/manual，不抄写 SHA256。Agent 使用准备结果里的层级指纹和所选方式调用 `freeze-hierarchy`。
 5. `freeze-hierarchy` 重新验证层级、所有节点包和根计划文件，然后用同一次确认记录根级方式并冻结全部节点。
 
@@ -54,7 +54,7 @@
 - Delivery/Capability：`BASELINE_FROZEN / FROZEN`；
 - Task：`BASELINE_FROZEN / FROZEN`；
 - `developmentPlan` 进入 Task 独立上下文；
-- 根级 `development-mode.json` 只记录同一次冻结确认中的 active/manual 选择，全部 Task 继承；
+- 根级开发方式只记录在 SQLite，同一次冻结确认中的 active/manual 由全部 Task 继承；
 - active 的 Agent 数量、并发度、调度顺序和降级路径由运行时自主决定，不进入冻结方案或指纹；
 - 每次生成上下文、claim 和 gate 前重新校验整条父链。
 
@@ -62,10 +62,12 @@
 
 ## 计划、复核与验收文件
 
-- `development-plan.json/md`：开发前；各节点保留独立计划，根级 Markdown 同时作为整树冻结依据。
-- `development-review.json/md`：开发结果写回后；对照计划与实际，不代表门禁 PASS。
-- `acceptance-report.json/md`：门禁及最终验收阶段；记录证据、结论和用户确认。
+- `development-plan.md`：开发前；各节点保留独立计划，根级文件同时作为整树冻结依据。
+- `development-review.md`：开发结果写回后；对照计划与实际，不代表门禁 PASS。
+- `acceptance-report.md`：门禁及最终验收阶段；记录证据、结论和用户确认。
+
+以上文件都是 SQLite 结构化状态的人类投影，不再生成对应 JSON 文件。
 
 ## 当前数据契约
 
-控制器只写当前 schema v3 的单根嵌套结构，并按严格字段集合验证 registry、层级包和 evidence。
+控制器只写当前 schema v3 的项目级 SQLite 和单根嵌套 Markdown，并按严格字段集合验证工作项、层级和 evidence。旧 JSON 工作区不迁移、不兼容。

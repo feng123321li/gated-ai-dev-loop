@@ -5,8 +5,7 @@ from typing import Any
 
 from .constants import SCHEMA_VERSION
 from .errors import fail
-from .fs_safe import atomic_write, read_regular_file, safe_path
-from .jsonio import pretty_json
+from .fs_safe import read_regular_file, safe_path
 from .model import (
     hierarchy_fingerprint,
     iter_hierarchy_nodes,
@@ -119,8 +118,6 @@ def _hierarchy_packages(
             states[record["definition"]["id"]],
             human_plan=root_plan if index == 0 else None,
         )
-        if index == 0:
-            files["hierarchy.json"] = pretty_json(hierarchy_state)
         packages.append((relative, files))
     return packages
 
@@ -133,11 +130,7 @@ def _hierarchy_from_registry(
     if root_entry["parentId"] is not None:
         fail("WORK_ITEM_HIERARCHY_ROOT_REQUIRED", "Hierarchy operations require a root work item")
     root_target = repository.item_path(root_entry)
-    hierarchy_state = repository.read_json(
-        root_target,
-        "hierarchy.json",
-        "WORK_ITEM_HIERARCHY_INVALID",
-    )
+    hierarchy_state = repository.read_hierarchy_state(root_entry["id"])
     expected_keys = {"schemaVersion", "rootId", "stage", "hierarchyFingerprint", "items", "review"}
     if (
         set(hierarchy_state) != expected_keys
@@ -292,6 +285,7 @@ def prepare_hierarchy(
         registry["updatedAt"] = at
         repository.recompute_progress(registry)
         repository.validate_registry(registry)
+        repository.store_hierarchy(records, states, hierarchy_state)
         repository.write_hierarchy_package(
             target,
             _hierarchy_packages(repository, normalized, states, hierarchy_state),
@@ -408,6 +402,7 @@ def freeze_hierarchy(
             status="APPROVED",
             at=at,
         )
+        repository.store_hierarchy(records, frozen_states, frozen_hierarchy_state)
         repository.write_hierarchy_package(
             target,
             _hierarchy_packages(repository, hierarchy, frozen_states, frozen_hierarchy_state),
@@ -421,7 +416,6 @@ def freeze_hierarchy(
             "confirmedBy": "user",
             "confirmedAt": at,
         }
-        atomic_write(target / "development-mode.json", pretty_json(development_mode_record))
         for record in records:
             entry = repository.item_by_id(registry, record["definition"]["id"])
             entry["stage"] = "BASELINE_FROZEN"

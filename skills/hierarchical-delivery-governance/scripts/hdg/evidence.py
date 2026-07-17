@@ -144,10 +144,9 @@ def valid_acceptance_report(value: object, entry: dict[str, Any]) -> bool:
     expected = f".hierarchical-delivery-governance/{entry['packagePath']}"
     return (
         isinstance(value, dict)
-        and set(value) == {"schemaVersion", "status", "jsonPath", "markdownPath", "generatedAt"}
+        and set(value) == {"schemaVersion", "status", "markdownPath", "generatedAt"}
         and value.get("schemaVersion") == SCHEMA_VERSION
         and value.get("status") in ACCEPTANCE_REPORT_STATUSES
-        and value.get("jsonPath") == f"{expected}/acceptance-report.json"
         and value.get("markdownPath") == f"{expected}/acceptance-report.md"
         and valid_timestamp(value.get("generatedAt"))
     )

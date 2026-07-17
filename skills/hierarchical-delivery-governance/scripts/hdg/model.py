@@ -781,7 +781,7 @@ def render_work_item_baseline(definition: dict[str, Any]) -> str:
         definition["developmentPlan"]["purpose"],
         "",
         "- Full human-readable plan: [development-plan.md](development-plan.md)",
-        "- Structured plan: [development-plan.json](development-plan.json)",
+        "- Structured plan authority: project governance SQLite database",
         "",
         "## Risks",
         _list(definition["risks"]),

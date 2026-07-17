@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -89,24 +91,30 @@ class PlanningTests(unittest.TestCase):
                 {source["root"]["definition"]["id"] for source in definitions},
             )
 
-    def test_registry_rejects_unknown_historical_fields(self) -> None:
+    def test_database_rejects_non_current_schema_without_migration(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepare_hierarchy(root=temporary, hierarchy=task_hierarchy(), host_runtime="codex")
-            path = Path(temporary, ".hierarchical-delivery-governance", "work-item-registry.json")
-            registry = json.loads(path.read_text(encoding="utf-8"))
-            registry["obsoleteCompatibility"] = []
-            path.write_text(json.dumps(registry), encoding="utf-8")
+            path = Path(temporary, ".hierarchical-delivery-governance", "governance.sqlite3")
+            with closing(sqlite3.connect(path)) as connection:
+                connection.execute("PRAGMA user_version = 2")
+                connection.commit()
             with self.assertRaises(GatedLoopError) as raised:
                 GovernanceRepository(temporary).read_registry()
-            self.assertEqual(raised.exception.code, "WORK_ITEM_REGISTRY_INVALID")
+            self.assertEqual(raised.exception.code, "WORK_ITEM_DATABASE_SCHEMA_UNSUPPORTED")
 
     def test_registry_rejects_unknown_fields_inside_current_entries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepare_hierarchy(root=temporary, hierarchy=task_hierarchy(), host_runtime="codex")
-            path = Path(temporary, ".hierarchical-delivery-governance", "work-item-registry.json")
-            registry = json.loads(path.read_text(encoding="utf-8"))
-            registry["workItems"][0]["delivery"] = {"status": "LEGACY"}
-            path.write_text(json.dumps(registry), encoding="utf-8")
+            path = Path(temporary, ".hierarchical-delivery-governance", "governance.sqlite3")
+            with closing(sqlite3.connect(path)) as connection:
+                row = connection.execute("SELECT entry_json FROM work_items").fetchone()
+                entry = json.loads(row[0])
+                entry["delivery"] = {"status": "LEGACY"}
+                connection.execute(
+                    "UPDATE work_items SET entry_json = ? WHERE id = ?",
+                    (json.dumps(entry), entry["id"]),
+                )
+                connection.commit()
             with self.assertRaises(GatedLoopError) as raised:
                 GovernanceRepository(temporary).read_registry()
             self.assertEqual(raised.exception.code, "WORK_ITEM_REGISTRY_INVALID")
@@ -121,19 +129,22 @@ class PlanningTests(unittest.TestCase):
                 development_mode="active",
                 confirmed=True,
             )
-            mode_path = Path(
-                temporary,
-                ".hierarchical-delivery-governance",
-                "work-items",
-                prepared["rootId"],
-                "development-mode.json",
-            )
-            mode = json.loads(mode_path.read_text(encoding="utf-8"))
-            mode["legacyMode"] = True
-            mode_path.write_text(json.dumps(mode), encoding="utf-8")
+            database = Path(temporary, ".hierarchical-delivery-governance", "governance.sqlite3")
+            with closing(sqlite3.connect(database)) as connection:
+                row = connection.execute(
+                    "SELECT entry_json FROM work_items WHERE id = ?",
+                    (prepared["rootId"],),
+                ).fetchone()
+                entry = json.loads(row[0])
+                entry["developmentMode"]["legacyMode"] = True
+                connection.execute(
+                    "UPDATE work_items SET entry_json = ? WHERE id = ?",
+                    (json.dumps(entry), prepared["rootId"]),
+                )
+                connection.commit()
             with self.assertRaises(GatedLoopError) as raised:
                 GovernanceRepository(temporary).read_registry()
-            self.assertEqual(raised.exception.code, "WORK_ITEM_DEVELOPMENT_MODE_CHANGED")
+            self.assertEqual(raised.exception.code, "WORK_ITEM_REGISTRY_INVALID")
 
     def test_self_hosting_project_blocks_mutation_without_dogfood(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

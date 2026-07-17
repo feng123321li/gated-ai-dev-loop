@@ -1,49 +1,71 @@
-# Hierarchical Work Item Registry
+# SQLite 分层工作项注册表
 
-## 权威文件
+## 唯一机器权威
 
-`.hierarchical-delivery-governance/work-item-registry.json` 记录全部节点状态；每个需求根目录的 `hierarchy.json` 记录根 ID、层级指纹、完整节点路径和统一人工评审状态。
+`.hierarchical-delivery-governance/governance.sqlite3` 是项目内唯一机器权威。一个项目只使用一个数据库；多个用户需求通过根 `work_item_id` 隔离，不为每个 `<root-id>` 创建数据库。
 
-Registry 每个条目记录 `id/kind/gateLevel/authorityKind/parentId/childIds/packagePath/stage/status`、baseline 与 contract 指纹、父契约指纹、gate、claim、开发结果、根级 acceptance、验收报告入口、record revision、时间和分级 progress。`developmentMode` 只在需求根保存，并由同一次冻结确认写入；后代 Task 继承。
+数据库使用 Python 标准库 `sqlite3`，当前 `PRAGMA user_version=3`。主要记录包括：
 
-## 单根嵌套路径
+- `workspace`：协调根、全局 revision、当前焦点和更新时间；
+- `work_items`：节点 registry 条目、完整 definition 和节点 state；
+- `hierarchies`：每个需求根的层级指纹和统一评审状态；
+- `task_contexts`：绑定 operationId 的 Task 上下文和交接内容；
+- `reports`：开发复核与验收报告的结构化内容；
+- `interaction_events`：追加式人机指令、决策和状态摘要审计链。
+
+复杂契约可作为规范 JSON 文本存入 SQLite 列；这仍是单一数据库权威，不产生持久化 JSON 文件。控制器不迁移、不兼容旧 JSON 工作区或非当前数据库 schema。
+
+## 单根嵌套 Markdown
 
 - 根：`work-items/<root-id>`；
 - 直接子级：`<parent-packagePath>/children/<child-id>`；
 - 更深节点继续递归；
-- Registry 中每个 childId 必须有真实条目和真实包；
-- parentId、childIds、kind 与 packagePath 必须互相一致。
+- 每个节点保留 `baseline.md`、`development-plan.md`、`progress.md` 等人类投影；
+- 需求根额外保留整树方案、整树进度、`interaction-log.md` 和按阶段生成的交接/报告。
 
-因此每个用户需求在 `work-items/` 下只有一个顶层目录。Registry 可以使用平铺数组方便 ID 查询，但磁盘包和人类投影必须保持树形。
+因此每个用户需求在 `work-items/` 下只有一个顶层目录。数据库可按 ID 查询平铺记录，但 Markdown 必须保持 Task、Capability→Task 或 Delivery→Capability→Task 的真实树形。
+
+Markdown 不是机器权威。手工删除 `<root-id>` 目录不会删除数据库中的需求；后续投影刷新可能重建它。删除、归档或重置需求必须通过明确的控制器操作，不能用文件删除代替。
 
 ## 确定性恢复
 
-恢复只使用显式 ID/路径、有效焦点或唯一候选。候选多于一个时请求用户选择。不得依赖目录时间、名称相似度或描述关键词。
-
-恢复时检查：
+恢复只使用显式 ID、有效焦点或唯一候选。候选多于一个时请求用户选择，不依赖目录时间、名称相似度或描述关键词。恢复时检查：
 
 - coordination root 与当前工作区一致；
-- 当前完整 schema v3，字段无缺失、无未知兼容字段；
-- ID 唯一，父子种类合法，无环；
-- 所有计划 child 已物化；
+- 数据库 `user_version` 和所有结构化记录均为当前完整 schema v3；
+- ID 唯一，父子种类合法，无环，全部 child 已物化；
 - packagePath 满足单根递归路径；
-- hierarchy/baseline/state/registry 指纹一致；
-- 根级 `development-plan.md` 与当前整树可重建内容完全一致；
-- 根级 `development-mode.json`、Task claim、operation 和 evidence 可解释；
-- Markdown 投影可由机器状态重建。
+- hierarchy、baseline、state、contract 和父契约指纹一致；
+- 冻结前根级 `development-plan.md` 与数据库可重建内容一致；
+- 根级开发方式、Task claim、operation、gate 和 evidence 快照可解释。
 
-## 焦点与命令
+Markdown 缺失时可执行 `refresh-projections`；数据库结构或机器记录损坏时必须阻断，不能从 Markdown 反向猜测状态。
 
-`currentFocus` 只帮助恢复，不授予冻结或开发权限。正常闭环是：
+## 焦点、交互与命令
+
+`currentFocus` 只帮助恢复，不授予冻结或开发权限。`record-interaction` 只追加简短可审计摘要，`interaction-log` 查询结构化事件；不得保存隐藏思考过程、密钥或不必要的原始对话。
+
+交互输入通过 stdin 提交，严格字段为：
+
+```json
+{"schemaVersion":3,"sessionId":"session-id","actor":"USER|AGENT|SUBAGENT","eventType":"USER_INSTRUCTION|AGENT_UPDATE|DECISION","summary":"简短可审计事实","operationId":null,"hostRuntime":"codex"}
+```
+
+```text
+python -X utf8 <skill-root>/scripts/hdg.py record-interaction --item <id> --interaction - --json
+python -X utf8 <skill-root>/scripts/hdg.py interaction-log --item <id> --json
+```
+
+正常闭环是：
 
 ```text
 prepare-hierarchy
 → 人工查看 development-plan.md
 → 选择开发方式并执行一次 freeze-hierarchy
 → dispatch-task
-→ task-result / development-review
-→ accept-item / acceptance-report
+→ task-result / development-review.md
+→ accept-item / acceptance-report.md
 → acceptance-item
 ```
 
-CLI 只提供整树准备和冻结。诊断、恢复与执行命令包括 `task-context`、`claim-task`、`gate-item`、`retry-item`、`ready-tasks` 和 `refresh-projections`。
+诊断、恢复与执行命令还包括 `task-context`、`claim-task`、`gate-item`、`retry-item`、`ready-tasks` 和 `refresh-projections`。

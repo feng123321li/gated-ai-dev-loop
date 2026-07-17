@@ -22,7 +22,10 @@ class WorkItemFlowTests(unittest.TestCase):
             self.assertTrue(result["created"])
             package = Path(result["artifactDir"])
             self.assertTrue((package / "development-plan.md").is_file())
-            self.assertTrue((package / "development-plan.json").is_file())
+            self.assertTrue(
+                Path(temporary, ".hierarchical-delivery-governance", "governance.sqlite3").is_file()
+            )
+            self.assertEqual(list(Path(temporary, ".hierarchical-delivery-governance").rglob("*.json")), [])
 
             frozen = freeze_hierarchy(
                 root=temporary,

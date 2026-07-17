@@ -23,7 +23,8 @@ Task 子级计数为零。不写主观百分比。协调节点声明的全部 ch
 需求根 `progress.md` 在汇总计数之后使用表格展示整棵需求树：
 
 - “层级工作项”列使用稳定 ID 和层级符号保留 `development-plan.md` 的节点顺序，并链接到对应开发方案章节；
-- 阶段、状态、门禁和认领各自使用独立列，不把全部信息拼成一个长行；
+- 阶段、状态、门禁和“当前执行”各自使用独立列，不把全部信息拼成一个长行；
+- “当前执行”是 claim 的可读投影：协调节点为“不适用”，无 claim 的待执行 Task 为“未认领”，活动 claim 显示 `owner / operationId`，结果已写回的 Task 为“已释放”；
 - “节点文件”列链接该节点自己的 `development-plan.md/progress.md`；
 - “阶段产物”列在开发结果或门禁证据存在后增加 `development-review.md` 或 `acceptance-report.md` 入口，尚未生成时显示“无”；
 - 明细只由 registry 重建，Agent 不直接编辑投影文件。

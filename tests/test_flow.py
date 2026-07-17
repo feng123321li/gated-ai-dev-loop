@@ -5,48 +5,50 @@ import unittest
 from pathlib import Path
 
 from hdg.execution import list_ready_tasks, select_development_mode
-from hdg.planning import freeze_work_item, prepare_work_item
+from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.repository import GovernanceRepository
 
-from .fixtures import task_definition
+from .fixtures import task_hierarchy
 
 
 class WorkItemFlowTests(unittest.TestCase):
-    def test_prepare_review_freeze_and_select_mode(self) -> None:
+    def test_prepare_plan_freeze_and_select_mode(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            result = prepare_work_item(
+            result = prepare_hierarchy(
                 root=temporary,
-                definition=task_definition(),
+                hierarchy=task_hierarchy(),
                 host_runtime="codex",
             )
             self.assertTrue(result["created"])
             package = Path(result["artifactDir"])
-            self.assertTrue((package / "development-review.md").is_file())
+            self.assertTrue((package / "development-plan.md").is_file())
             self.assertTrue((package / "development-plan.json").is_file())
 
-            frozen = freeze_work_item(
+            frozen = freeze_hierarchy(
                 root=temporary,
-                item_id=result["id"],
-                expected_baseline_fingerprint=result["baselineFingerprint"],
+                root_id=result["rootId"],
+                expected_hierarchy_fingerprint=result["hierarchyFingerprint"],
                 confirmed=True,
             )
             self.assertEqual(frozen["stage"], "BASELINE_FROZEN")
 
             selected = select_development_mode(
                 root=temporary,
-                item_id=result["id"],
+                item_id=result["rootId"],
                 mode="manual",
-                expected_baseline_fingerprint=result["baselineFingerprint"],
+                expected_baseline_fingerprint=result["baselineFingerprints"][result["rootId"]],
                 confirmed=True,
             )
             self.assertEqual(selected["status"], "FROZEN")
-            self.assertEqual(list_ready_tasks(root=temporary, work_item_id=result["id"]), [result["id"]])
+            self.assertEqual(list_ready_tasks(root=temporary, work_item_id=result["rootId"]), [result["rootId"]])
 
             registry = GovernanceRepository(temporary).read_registry()
             self.assertEqual(registry["schemaVersion"], 3)
+            self.assertTrue(registry["workItems"][0]["developmentPlan"])
+            self.assertNotIn("developmentReview", registry["workItems"][0])
             self.assertEqual(
                 set(registry),
-                {"schemaVersion", "coordinationRoot", "revision", "currentFocus", "workItems", "promotionHistory", "updatedAt"},
+                {"schemaVersion", "coordinationRoot", "revision", "currentFocus", "workItems", "updatedAt"},
             )
 
 

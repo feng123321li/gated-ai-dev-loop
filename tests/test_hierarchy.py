@@ -8,10 +8,10 @@ from pathlib import Path
 
 from hdg.acceptance import accept_work_item, record_acceptance
 from hdg.execution import dispatch_task, record_task_result, select_development_mode
-from hdg.planning import freeze_work_item, prepare_work_item
+from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.repository import GovernanceRepository
 
-from .fixtures import capability_definition, delivery_definition, task_definition
+from .fixtures import delivery_hierarchy
 
 
 class HierarchyFlowTests(unittest.TestCase):
@@ -36,27 +36,29 @@ class HierarchyFlowTests(unittest.TestCase):
         })
         return accept_work_item(root=root, item_id=prepared["id"], evidence=evidence)
 
-    def _prepare_and_freeze(self, root: str, definition: dict) -> dict:
-        prepared = prepare_work_item(root=root, definition=definition, host_runtime="claude-code")
-        freeze_work_item(
+    def _prepare_and_freeze(self, root: str) -> dict:
+        prepared = prepare_hierarchy(root=root, hierarchy=delivery_hierarchy(), host_runtime="claude-code")
+        freeze_hierarchy(
             root=root,
-            item_id=prepared["id"],
-            expected_baseline_fingerprint=prepared["baselineFingerprint"],
+            root_id=prepared["rootId"],
+            expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
             confirmed=True,
         )
         return prepared
 
+    @staticmethod
+    def _prepared_item(prepared: dict, item_id: str) -> dict:
+        return {
+            "id": item_id,
+            "baselineFingerprint": prepared["baselineFingerprints"][item_id],
+        }
+
     def test_delivery_capability_task_hierarchy(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            delivery = self._prepare_and_freeze(temporary, delivery_definition())
-            capability = self._prepare_and_freeze(
-                temporary,
-                capability_definition(parentId=delivery["id"]),
-            )
-            task = self._prepare_and_freeze(
-                temporary,
-                task_definition(parentId=capability["id"], gateLevel="FULL"),
-            )
+            prepared = self._prepare_and_freeze(temporary)
+            delivery = self._prepared_item(prepared, "d-python-governance")
+            capability = self._prepared_item(prepared, "c-python-runtime")
+            task = self._prepared_item(prepared, "t-python-controller")
             registry = GovernanceRepository(temporary).read_registry()
             by_id = {item["id"]: item for item in registry["workItems"]}
             self.assertEqual(by_id[task["id"]]["parentId"], capability["id"])
@@ -65,15 +67,10 @@ class HierarchyFlowTests(unittest.TestCase):
 
     def test_delivery_capability_task_full_completion_flow(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            delivery = self._prepare_and_freeze(temporary, delivery_definition())
-            capability = self._prepare_and_freeze(
-                temporary,
-                capability_definition(parentId=delivery["id"]),
-            )
-            task = self._prepare_and_freeze(
-                temporary,
-                task_definition(parentId=capability["id"], gateLevel="FULL"),
-            )
+            prepared = self._prepare_and_freeze(temporary)
+            delivery = self._prepared_item(prepared, "d-python-governance")
+            capability = self._prepared_item(prepared, "c-python-runtime")
+            task = self._prepared_item(prepared, "t-python-controller")
             select_development_mode(
                 root=temporary,
                 item_id=task["id"],

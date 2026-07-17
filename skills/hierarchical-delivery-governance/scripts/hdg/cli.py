@@ -20,20 +20,16 @@ from .fs_safe import read_regular_file
 from .host_runtime import is_agent_runtime
 from .jsonio import rendered_json
 from .planning import (
-    freeze_work_item,
-    prepare_work_item,
-    promote_work_item,
+    freeze_hierarchy,
+    prepare_hierarchy,
     refresh_work_item_projections,
     retry_work_item,
-    revise_work_item,
 )
 
 
 COMMANDS = (
-    "prepare-item",
-    "freeze-item",
-    "revise-item",
-    "promote-item",
+    "prepare-hierarchy",
+    "freeze-hierarchy",
     "select-development-mode",
     "ready-tasks",
     "task-context",
@@ -47,19 +43,14 @@ COMMANDS = (
     "refresh-projections",
 )
 VALUE_OPTIONS = {
-    "--definition", "--host-runtime", "--item", "--parent", "--owner", "--operation",
-    "--status", "--evidence", "--expected-baseline", "--expected-parent-baseline",
-    "--action", "--development-mode",
+    "--definition", "--host-runtime", "--item", "--owner", "--operation",
+    "--status", "--evidence", "--expected-baseline",
+    "--action", "--development-mode", "--expected-hierarchy",
 }
 FLAG_OPTIONS = {"--json", "--help", "--confirmed", "--dogfood"}
 COMMAND_OPTIONS = {
-    "prepare-item": {"--json", "--help", "--definition", "--host-runtime", "--dogfood"},
-    "freeze-item": {"--json", "--help", "--item", "--expected-baseline", "--confirmed", "--dogfood"},
-    "revise-item": {"--json", "--help", "--definition", "--expected-baseline", "--confirmed", "--dogfood"},
-    "promote-item": {
-        "--json", "--help", "--item", "--parent", "--expected-baseline",
-        "--expected-parent-baseline", "--confirmed", "--dogfood",
-    },
+    "prepare-hierarchy": {"--json", "--help", "--definition", "--host-runtime", "--dogfood"},
+    "freeze-hierarchy": {"--json", "--help", "--item", "--expected-hierarchy", "--confirmed", "--dogfood"},
     "ready-tasks": {"--json", "--help", "--item"},
     "task-context": {"--json", "--help", "--item", "--dogfood"},
     "select-development-mode": {
@@ -80,10 +71,8 @@ USAGE = f"""Usage: python -X utf8 <skill-root>/scripts/hdg.py <command> [options
 Commands:
 {chr(10).join(f'  {command}' for command in COMMANDS)}
 
-  prepare-item --definition <file|-> --host-runtime <agent>  # writes human review package
-  freeze-item --item <id> --expected-baseline <sha256> --confirmed  # after human review
-  revise-item --definition <file|-> --expected-baseline <sha256> --confirmed
-  promote-item --item <root-id> --parent <frozen-parent-id> --expected-baseline <sha256> --expected-parent-baseline <sha256> --confirmed
+  prepare-hierarchy --definition <file|-> --host-runtime <agent>  # writes one complete requirement tree
+  freeze-hierarchy --item <root-id> --expected-hierarchy <sha256> --confirmed  # one approval for the tree
   select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
   ready-tasks --item <root-or-subtree-id>
   task-context --item <task-id>
@@ -184,36 +173,23 @@ def _read_structured(
 def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
     common = {"root": cwd, "explicit_dogfood": parsed["dogfood"]}
     command = parsed["command"]
-    if command in {"prepare-item", "revise-item"}:
+    if command == "prepare-hierarchy":
         definition = _read_structured(
-            _required(parsed, "--definition"), "WORK_ITEM_DEFINITION", cwd=cwd, stdin=stdin
+            _required(parsed, "--definition"),
+            "HIERARCHY_DEFINITION",
+            cwd=cwd,
+            stdin=stdin,
         )
-        if command == "prepare-item":
-            return prepare_work_item(
-                **common,
-                definition=definition,
-                host_runtime=_required(parsed, "--host-runtime"),
-            )
-        return revise_work_item(
+        return prepare_hierarchy(
             **common,
-            definition=definition,
-            expected_baseline_fingerprint=_required(parsed, "--expected-baseline"),
-            confirmed=parsed["confirmed"],
+            hierarchy=definition,
+            host_runtime=_required(parsed, "--host-runtime"),
         )
-    if command == "freeze-item":
-        return freeze_work_item(
+    if command == "freeze-hierarchy":
+        return freeze_hierarchy(
             **common,
-            item_id=_required(parsed, "--item"),
-            expected_baseline_fingerprint=_required(parsed, "--expected-baseline"),
-            confirmed=parsed["confirmed"],
-        )
-    if command == "promote-item":
-        return promote_work_item(
-            **common,
-            item_id=_required(parsed, "--item"),
-            parent_id=_required(parsed, "--parent"),
-            expected_baseline_fingerprint=_required(parsed, "--expected-baseline"),
-            expected_parent_baseline_fingerprint=_required(parsed, "--expected-parent-baseline"),
+            root_id=_required(parsed, "--item"),
+            expected_hierarchy_fingerprint=_required(parsed, "--expected-hierarchy"),
             confirmed=parsed["confirmed"],
         )
     if command == "select-development-mode":

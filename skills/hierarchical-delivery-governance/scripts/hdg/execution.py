@@ -80,7 +80,7 @@ def select_development_mode(
             "confirmedBy": "user",
             "confirmedAt": at,
         }
-        target = repository.item_path(item_id) / "development-mode.json"
+        target = repository.item_path(entry) / "development-mode.json"
         atomic_write(target, pretty_json(record))
         entry["developmentMode"] = record
         entry["status"] = "FROZEN"
@@ -250,9 +250,17 @@ def record_task_result(
         entry["updatedAt"] = at
         registry["revision"] += 1
         registry["updatedAt"] = at
-        repository.write_acceptance_report(entry, definition, at)
+        repository.write_development_review(entry, definition, at)
         repository.write_registry(registry)
-        return {"id": item_id, "status": status, "acceptanceReport": entry["acceptanceReport"]}
+        base = f".hierarchical-delivery-governance/{entry['packagePath']}"
+        return {
+            "id": item_id,
+            "status": status,
+            "developmentReview": {
+                "jsonPath": f"{base}/development-review.json",
+                "markdownPath": f"{base}/development-review.md",
+            },
+        }
 
 
 def _parent_contract_snapshot(parent: dict[str, Any], child_id: str) -> dict[str, Any]:

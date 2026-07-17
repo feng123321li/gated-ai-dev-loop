@@ -5,7 +5,7 @@ from typing import Any
 
 from .constants import SCHEMA_VERSION
 from .errors import fail
-from .fs_safe import read_regular_file, safe_path
+from .fs_safe import atomic_write, read_regular_file, safe_path
 from .jsonio import pretty_json
 from .model import (
     hierarchy_fingerprint,
@@ -244,7 +244,7 @@ def prepare_hierarchy(
                 existing_root,
             )
             if old_state["stage"] != "WAITING_FOR_BASELINE_CONFIRMATION":
-                fail("WORK_ITEM_SOURCE_CHANGED", "Frozen hierarchies require an explicit hierarchy revision")
+                fail("WORK_ITEM_SOURCE_CHANGED", "A frozen hierarchy cannot be prepared again; plan a complete new requirement")
             old_ids = {node["definition"]["id"] for node in iter_hierarchy_nodes(old_hierarchy)}
             if hierarchy_fingerprint(old_hierarchy) == hierarchy_fingerprint(normalized):
                 return {
@@ -263,7 +263,7 @@ def prepare_hierarchy(
                         "developmentPlan": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/development-plan.md",
                         "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
                     },
-                    "nextAction": "人工评审 development-plan.md；同意当前方案后直接确认冻结，无需复述指纹。",
+                    "nextAction": "人工评审 development-plan.md 并选择 active/manual；同意后一次确认冻结，无需复述指纹。",
                 }
         new_ids = {record["definition"]["id"] for record in records}
         conflicts = sorted(item_id for item_id in new_ids if item_id in existing_by_id and item_id not in old_ids)
@@ -287,7 +287,7 @@ def prepare_hierarchy(
             for record in records
         ]
         registry["workItems"] = [item for item in registry["workItems"] if item["id"] not in old_ids] + entries
-        registry["currentFocus"] = {"workItemId": root_id, "purpose": "HIERARCHY_PLAN_CONFIRMATION"}
+        registry["currentFocus"] = {"workItemId": root_id, "purpose": "HIERARCHY_PLAN_AND_MODE_CONFIRMATION"}
         registry["revision"] += 1
         registry["updatedAt"] = at
         repository.recompute_progress(registry)
@@ -314,7 +314,7 @@ def prepare_hierarchy(
                 "developmentPlan": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/development-plan.md",
                 "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
             },
-            "nextAction": "人工评审 development-plan.md；同意当前方案后直接确认冻结，无需复述指纹。",
+            "nextAction": "人工评审 development-plan.md 并选择 active/manual；同意后一次确认冻结，无需复述指纹。",
         }
 
 
@@ -323,6 +323,7 @@ def freeze_hierarchy(
     root: str,
     root_id: str,
     expected_hierarchy_fingerprint: str,
+    development_mode: str,
     confirmed: bool = False,
     explicit_dogfood: bool = False,
     now: object = None,
@@ -332,6 +333,8 @@ def freeze_hierarchy(
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     if not confirmed:
         fail("CONFIRMATION_REQUIRED", "Hierarchy freeze requires explicit human confirmation")
+    if development_mode not in {"active", "manual"}:
+        fail("WORK_ITEM_DEVELOPMENT_MODE_INVALID", "Development mode must be active or manual")
     at = timestamp(now)
     with repository.transaction() as registry:
         root_entry = repository.item_by_id(registry, root_id)
@@ -340,12 +343,16 @@ def freeze_hierarchy(
             fail("WORK_ITEM_REVISION_CONFLICT", "The confirmed hierarchy fingerprint is not current")
         records = _hierarchy_records(hierarchy)
         if hierarchy_state["stage"] == "BASELINE_FROZEN":
+            if (root_entry.get("developmentMode") or {}).get("mode") != development_mode:
+                fail("WORK_ITEM_DEVELOPMENT_MODE_LOCKED", "Development mode is fixed by the requirement freeze")
             return {
                 "created": False,
                 "idempotent": True,
                 "rootId": root_id,
                 "hierarchyFingerprint": hierarchy_state["hierarchyFingerprint"],
                 "frozenItemIds": [record["definition"]["id"] for record in records],
+                "rootBaselineFingerprint": states[root_id]["baselineFingerprint"],
+                "developmentMode": root_entry["developmentMode"],
             }
         if any(states[record["definition"]["id"]]["stage"] != "WAITING_FOR_BASELINE_CONFIRMATION" for record in records):
             fail("WORK_ITEM_STAGE_INVALID", "Every hierarchy node must be waiting for the same freeze")
@@ -375,17 +382,26 @@ def freeze_hierarchy(
             _hierarchy_packages(repository, hierarchy, frozen_states, frozen_hierarchy_state),
             replace=True,
         )
+        development_mode_record = {
+            "schemaVersion": SCHEMA_VERSION,
+            "rootId": root_id,
+            "baselineFingerprint": frozen_states[root_id]["baselineFingerprint"],
+            "mode": development_mode,
+            "confirmedBy": "user",
+            "confirmedAt": at,
+        }
+        atomic_write(target / "development-mode.json", pretty_json(development_mode_record))
         for record in records:
             entry = repository.item_by_id(registry, record["definition"]["id"])
             entry["stage"] = "BASELINE_FROZEN"
-            entry["status"] = (
-                "WAITING_FOR_DEVELOPMENT_MODE_SELECTION"
-                if entry["kind"] == "TASK"
-                else "FROZEN"
-            )
+            entry["status"] = "FROZEN"
             entry["recordRevision"] += 1
             entry["updatedAt"] = at
-        registry["currentFocus"] = {"workItemId": root_id, "purpose": "DEVELOPMENT_MODE_SELECTION"}
+        root_entry["developmentMode"] = development_mode_record
+        registry["currentFocus"] = {
+            "workItemId": root_id,
+            "purpose": "ACTIVE_REQUIREMENT_DISPATCH" if development_mode == "active" else "MANUAL_REQUIREMENT_HANDOFF",
+        }
         registry["revision"] += 1
         registry["updatedAt"] = at
         repository.write_registry(registry)
@@ -396,6 +412,8 @@ def freeze_hierarchy(
             "stage": "BASELINE_FROZEN",
             "hierarchyFingerprint": frozen_hierarchy_state["hierarchyFingerprint"],
             "frozenItemIds": [record["definition"]["id"] for record in records],
+            "rootBaselineFingerprint": frozen_states[root_id]["baselineFingerprint"],
+            "developmentMode": development_mode_record,
             "taskBaselines": {
                 record["definition"]["id"]: frozen_states[record["definition"]["id"]]["baselineFingerprint"]
                 for record in records
@@ -405,7 +423,11 @@ def freeze_hierarchy(
                 "developmentPlan": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/development-plan.md",
                 "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
             },
-            "nextAction": "为需要执行的 Task 选择 active 或 manual 开发方式。",
+            "nextAction": (
+                "Agent 自主循环实现、回归测试和复测；可安全并发时使用隔离子 Agent，否则自动串行。"
+                if development_mode == "active"
+                else "为 READY Task 生成可复制的独立开发 handoff。"
+            ),
         }
 
 
@@ -414,14 +436,11 @@ def retry_work_item(
     root: str,
     item_id: str,
     expected_baseline_fingerprint: str,
-    confirmed: bool = False,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
     repository = GovernanceRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
-    if not confirmed:
-        fail("CONFIRMATION_REQUIRED", "Work item retry requires explicit confirmation")
     at = timestamp(now)
     with repository.transaction() as registry:
         entry = repository.item_by_id(registry, item_id)

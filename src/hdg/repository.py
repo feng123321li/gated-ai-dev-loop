@@ -220,6 +220,19 @@ class GovernanceRepository:
         if len(ids) != len(registry["workItems"]) or len(set(ids)) != len(ids) or any(not safe_work_item_id(item) for item in ids):
             fail("WORK_ITEM_REGISTRY_INVALID", "Work item registry contains duplicate or unsafe IDs")
         by_id = {item["id"]: item for item in registry["workItems"]}
+
+        def hierarchy_root(entry: dict[str, Any]) -> dict[str, Any] | None:
+            current = entry
+            visited: set[str] = set()
+            while current.get("parentId") is not None:
+                if current.get("id") in visited:
+                    return None
+                visited.add(current.get("id"))
+                current = by_id.get(current.get("parentId"))
+                if current is None:
+                    return None
+            return current
+
         for entry in registry["workItems"]:
             valid_entry = (
                 set(entry) == ENTRY_FIELDS
@@ -244,8 +257,7 @@ class GovernanceRepository:
                 )
                 and entry.get("stage") in {"WAITING_FOR_BASELINE_CONFIRMATION", "BASELINE_FROZEN"}
                 and entry.get("status") in {
-                    "PREPARED", "WAITING_FOR_DEVELOPMENT_MODE_SELECTION", "FROZEN",
-                    "CLAIMED", "IMPLEMENTED", "BLOCKED", "VERIFIED",
+                    "PREPARED", "FROZEN", "CLAIMED", "IMPLEMENTED", "BLOCKED", "VERIFIED",
                 }
                 and _valid_gate(entry.get("gate"))
                 and _plain_int(entry.get("recordRevision"), minimum=1)
@@ -263,22 +275,27 @@ class GovernanceRepository:
             )
             if not valid_entry:
                 fail("WORK_ITEM_REGISTRY_INVALID", f"Work item registry entry is invalid: {entry['id']}")
+            root_entry = hierarchy_root(entry)
+            if root_entry is None:
+                fail("WORK_ITEM_REGISTRY_INVALID", f"Work item hierarchy root is invalid: {entry['id']}")
             mode = entry.get("developmentMode")
-            if entry["kind"] == "TASK":
-                if mode is not None and not valid_development_mode(mode, entry):
-                    fail("WORK_ITEM_REGISTRY_INVALID", f"Work item development mode is invalid: {entry['id']}")
-                waiting = entry.get("status") == "WAITING_FOR_DEVELOPMENT_MODE_SELECTION"
-                if waiting != (mode is None and entry.get("stage") == "BASELINE_FROZEN"):
-                    fail("WORK_ITEM_REGISTRY_INVALID", f"Task development mode state is inconsistent: {entry['id']}")
+            if entry["parentId"] is None:
+                if entry["stage"] == "WAITING_FOR_BASELINE_CONFIRMATION" and mode is not None:
+                    fail("WORK_ITEM_REGISTRY_INVALID", f"Prepared requirement cannot store development mode: {entry['id']}")
+                if entry["stage"] == "BASELINE_FROZEN" and not valid_development_mode(mode, entry):
+                    fail("WORK_ITEM_REGISTRY_INVALID", f"Requirement development mode is invalid: {entry['id']}")
             elif mode is not None:
-                fail("WORK_ITEM_REGISTRY_INVALID", f"Work item development mode is invalid: {entry['id']}")
+                fail("WORK_ITEM_REGISTRY_INVALID", f"Only a requirement root can store development mode: {entry['id']}")
+            root_mode = root_entry.get("developmentMode")
+            if entry["stage"] == "BASELINE_FROZEN" and not valid_development_mode(root_mode, root_entry):
+                fail("WORK_ITEM_REGISTRY_INVALID", f"Frozen tree development mode is invalid: {root_entry['id']}")
             if entry["stage"] == "WAITING_FOR_BASELINE_CONFIRMATION":
                 if entry["status"] != "PREPARED" or mode is not None:
                     fail("WORK_ITEM_REGISTRY_INVALID", f"Work item prepared state is inconsistent: {entry['id']}")
             elif entry["status"] == "PREPARED":
                 fail("WORK_ITEM_REGISTRY_INVALID", f"Work item frozen state is inconsistent: {entry['id']}")
             if entry["kind"] != "TASK" and entry["status"] in {
-                "WAITING_FOR_DEVELOPMENT_MODE_SELECTION", "CLAIMED", "IMPLEMENTED",
+                "CLAIMED", "IMPLEMENTED",
             }:
                 fail("WORK_ITEM_REGISTRY_INVALID", f"Coordination work item status is invalid: {entry['id']}")
             claim = entry.get("claim")
@@ -348,7 +365,7 @@ class GovernanceRepository:
 
     def _assert_persisted_development_modes(self, registry: dict[str, Any]) -> None:
         for entry in registry["workItems"]:
-            if entry["kind"] != "TASK" or entry.get("developmentMode") is None:
+            if entry["parentId"] is not None or entry.get("developmentMode") is None:
                 continue
             try:
                 artifact = self.read_json(self.item_path(entry), "development-mode.json", "WORK_ITEM_DEVELOPMENT_MODE_INVALID")
@@ -620,7 +637,7 @@ class GovernanceRepository:
             if not target.is_dir() or target.is_symlink():
                 fail("WORK_ITEM_PACKAGE_INVALID", f"{entry['id']} package path is invalid")
             atomic_write(target / "overview.md", render_item_overview(entry, by_id))
-            atomic_write(target / "progress.md", render_item_progress(entry))
+            atomic_write(target / "progress.md", render_item_progress(entry, by_id))
 
     def write_acceptance_report(
         self,

@@ -10,7 +10,7 @@
 
 每个节点展示：
 
-- 自身 `stage/status/gateLevel/developmentMode/gate/claim/recordRevision`；
+- 自身 `stage/status/gateLevel/gate/claim/recordRevision`，以及需求评审时确定的根级开发方式；
 - `directChildren` 的 total、verified、blocked、active；
 - `descendants` 的同类精确计数；
 - 根节点的最终 `acceptance.status`；
@@ -22,15 +22,15 @@ Task 子级计数为零。不写主观百分比。协调节点声明的全部 ch
 
 - Delivery：展示 Capability 目的、跨能力契约、交付波次、子级进度和顶层 gate。
 - Capability：展示 Task 目的、依赖、共享契约、集成波次、子级进度和聚合 gate。
-- Task：展示精确文件、接口/函数目标契约、实现逻辑、开发方式、claim、结果、复核和 gate。
+- Task：展示精确文件、接口/函数目标契约、实现逻辑、根级开发方式、claim、结果、复核和 gate。
 
 根 Task、根 Capability 和 Delivery 都在自身 gate PASS 后进入独立验收和用户确认；不要为了最终验收补空父级。
 
 ## 写回时机
 
 - `prepare-hierarchy`：一次写入完整嵌套目录、根计划和树形总览。
-- `freeze-hierarchy`：一次更新全部节点确认记录和状态。
-- `select-development-mode/dispatch-task`：更新 Task 模式、claim、上下文与 handoff。
+- `freeze-hierarchy`：用同一次确认记录根级开发方式，并更新全部节点确认记录和状态。
+- `dispatch-task`：更新单个 Task 的 claim、上下文与 handoff。
 - `task-result`：生成 `development-review.json/md`，明确 IMPLEMENTED 不是完成。
 - `accept-item`：生成或更新 `acceptance-report.json/md`。
 - retry、聚合 gate、独立审查和用户确认：立即更新 registry 和投影。

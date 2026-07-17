@@ -14,7 +14,7 @@ description: "治理可独立交付的软件需求。按最小必要深度组织
 - 每个需求只有一个顶层目录：`work-items/<root-id>/`。全部子级递归放在父级 `children/<child-id>/`，不得平铺成多个需求目录。
 - 每个实际节点都有独立 baseline、状态和 gate；整树只有根级 `development-plan.md` 是冻结前人工评审入口。
 - 一次人工同意冻结整棵树。不得逐节点准备或逐节点批准。
-- 只接受当前控制器的数据契约；不迁移旧格式，不调用 Node 控制器，不提供历史命令兼容。
+- Skill 与 CLI 统一使用当前 Python 控制器和当前数据契约。
 
 ## 层级选择
 
@@ -47,18 +47,18 @@ description: "治理可独立交付的软件需求。按最小必要深度组织
    ```
 
 5. 向用户展示返回的 `humanArtifacts.developmentPlan`，并概述根 ID、树形层级、开发目的、文件、接口/共享契约、依赖波次和测试映射。准备只生成待评审方案，不授权开发。
-6. 用户要求修改时，重新准备同一个完整需求树。用户只需明确表示已经查看并同意当前根级 `development-plan.md`。
-7. Agent 保存 `prepare-hierarchy` 返回的 `hierarchyFingerprint`，在用户明确同意后机械提交：
+6. 用户要求修改时，重新准备同一个完整需求树。确认前请用户查看根级 `development-plan.md`，并选择一次 `active` 或 `manual` 开发方式。
+7. 用户明确同意当前方案并给出开发方式后，Agent 使用 `prepare-hierarchy` 返回的 `hierarchyFingerprint` 一次提交：
 
    ```text
-   python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --expected-hierarchy <fingerprint> --confirmed --json
+   python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --expected-hierarchy <fingerprint> --development-mode active|manual --confirmed --json
    ```
 
-   人不需要知道、复制或复述指纹。方案变化后旧指纹必须被控制器拒绝。
-8. 整树冻结后，每个 Task 分别等待用户明确选择 `active` 或 `manual`，再调用 `select-development-mode`。冻结确认不能代替开发方式确认。
-9. 使用 `dispatch-task` 原子认领并生成绑定 operationId 的独立上下文。开发 Agent 只实现一个冻结 Task，只能返回 `IMPLEMENTED` 或 `BLOCKED`，不能自行宣布 PASS。
-10. 使用 `task-result` 写回结果并生成 `development-review.json/md`；随后使用 `accept-item` 执行门禁并生成 `acceptance-report.json/md`。父级必须在子级全部 VERIFIED 后运行自己的聚合 gate。
-11. 根工作项 gate PASS 后完成独立/人工审查，再取得用户最终确认；只有 `COMPLETED` 表示需求完成。
+   人不需要知道、复制或复述指纹。控制器用同一次确认冻结整树并记录根级方式；方案变化后旧指纹必须被拒绝。
+8. `active` 下，Agent 自主计算 READY Task 并决定多子 Agent、单 Agent 或当前 Agent 串行。子 Agent 不可用或并发不足时自动降级，不请求用户重新选择方式。`manual` 不自动开发，只生成可复制 handoff。Agent 数量、并发度和降级策略属于运行策略，不写入 `development-plan`、baseline、层级指纹或 `development-mode.json`。
+9. 开发阶段不设置额外人工门禁。Agent 在冻结目标和安全边界内循环“实现 → 回归测试 → 修复 → 复测”，逐 Task 写回 `IMPLEMENTED` 或 `BLOCKED`。同 baseline 且没有活动 claim 的 BLOCKED 由 Agent 自动执行 `retry-item`、重新计算 READY 并继续；只有冻结契约或授权必须变化时才回到人工评审。开发结果不能自行宣布 PASS。
+10. 使用 `task-result` 写回结果并生成 `development-review.json/md`；全部相关回归和复测通过后，使用 `accept-item` 提交门禁验收并生成 `acceptance-report.json/md`。父级必须在子级全部 VERIFIED 后运行自己的聚合 gate。
+11. 根工作项 gate PASS 后向用户提交交付，由用户人工验收并最终确认；只有 `COMPLETED` 表示需求完成。
 
 完整状态流和命令参数见 [workflow.md](references/workflow.md) 与控制器 `--help`。
 
@@ -72,7 +72,7 @@ description: "治理可独立交付的软件需求。按最小必要深度组织
 
 Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或数据内容明确写“无”，不得虚构。父级 `childPlans` 必须覆盖全部直接子级，且不能把同一段目标复制到三层。字段说明和示例见 [development-plan.md](references/development-plan.md)。
 
-## 三阶段人工文件
+## 三阶段可读文件
 
 ```text
 冻结前：development-plan.md
@@ -100,6 +100,7 @@ Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或�
 ## 按需参考
 
 - registry、包结构与恢复：[task-registry.md](references/task-registry.md)
+- 生命周期与自动重试：[registry-lifecycle.md](references/registry-lifecycle.md)
 - baseline、指纹与一次冻结：[baselines.md](references/baselines.md)
 - 事务、claim 与并发：[registry-transactions.md](references/registry-transactions.md)
 - 独立开发上下文：[development.md](references/development.md)

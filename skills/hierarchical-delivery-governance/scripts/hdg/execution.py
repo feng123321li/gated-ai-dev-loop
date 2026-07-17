@@ -37,76 +37,20 @@ def _is_descendant(registry: dict[str, Any], entry: dict[str, Any], ancestor_id:
     return False
 
 
-def select_development_mode(
-    *,
-    root: str,
-    item_id: str,
-    mode: str,
-    expected_baseline_fingerprint: str,
-    confirmed: bool = False,
-    explicit_dogfood: bool = False,
-    now: object = None,
-) -> dict[str, Any]:
-    repository = GovernanceRepository(root, now=now)
-    repository.assert_self_hosting_dogfood(explicit_dogfood)
-    if not confirmed:
-        fail("CONFIRMATION_REQUIRED", "Development mode selection requires explicit user confirmation")
-    if mode not in {"active", "manual"}:
-        fail("WORK_ITEM_DEVELOPMENT_MODE_INVALID", "Development mode must be active or manual")
-    at = timestamp(now)
-    with repository.transaction() as registry:
-        entry = repository.item_by_id(registry, item_id)
-        if entry["kind"] != "TASK" or entry["stage"] != "BASELINE_FROZEN":
-            fail("WORK_ITEM_TASK_REQUIRED", "Development mode can only be selected for a frozen Task")
-        if entry["baselineFingerprint"] != expected_baseline_fingerprint:
-            fail("WORK_ITEM_REVISION_CONFLICT", "The development mode confirmation is not bound to the current baseline")
-        if entry.get("claim") or entry["status"] not in {"WAITING_FOR_DEVELOPMENT_MODE_SELECTION", "FROZEN"}:
-            fail("WORK_ITEM_DEVELOPMENT_MODE_LOCKED", "Development mode cannot change after Task dispatch begins")
-        if (entry.get("developmentMode") or {}).get("mode") == mode:
-            return {
-                "created": False,
-                "idempotent": True,
-                "id": item_id,
-                "status": entry["status"],
-                "developmentMode": entry["developmentMode"],
-            }
-        if entry.get("developmentMode") is not None:
-            fail("WORK_ITEM_DEVELOPMENT_MODE_LOCKED", "Development mode is fixed for the current Task baseline")
-        record = {
-            "schemaVersion": SCHEMA_VERSION,
-            "taskId": item_id,
-            "baselineFingerprint": entry["baselineFingerprint"],
-            "mode": mode,
-            "confirmedBy": "user",
-            "confirmedAt": at,
-        }
-        target = repository.item_path(entry) / "development-mode.json"
-        atomic_write(target, pretty_json(record))
-        entry["developmentMode"] = record
-        entry["status"] = "FROZEN"
-        entry["recordRevision"] += 1
-        entry["updatedAt"] = at
-        registry["currentFocus"] = {
-            "workItemId": item_id,
-            "purpose": "ACTIVE_DISPATCH" if mode == "active" else "MANUAL_HANDOFF",
-        }
-        registry["revision"] += 1
-        registry["updatedAt"] = at
-        try:
-            repository.write_registry(registry)
-        except Exception:
-            try:
-                target.unlink()
-            except FileNotFoundError:
-                pass
-            raise
-        return {
-            "created": True,
-            "idempotent": False,
-            "id": item_id,
-            "status": entry["status"],
-            "developmentMode": record,
-        }
+def _hierarchy_root_entry(registry: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
+    current = entry
+    visited: set[str] = set()
+    while current["parentId"] is not None:
+        if current["id"] in visited:
+            fail("WORK_ITEM_HIERARCHY_CYCLE", "Work item hierarchy contains a cycle")
+        visited.add(current["id"])
+        current = next(
+            (item for item in registry["workItems"] if item["id"] == current["parentId"]),
+            None,
+        )
+        if current is None:
+            fail("WORK_ITEM_HIERARCHY_INVALID", "Work item hierarchy has a missing parent")
+    return current
 
 
 def _task_ready(
@@ -120,6 +64,8 @@ def _task_ready(
         or entry["status"] != "FROZEN"
         or entry.get("claim")
     ):
+        return False
+    if _hierarchy_root_entry(registry, entry).get("developmentMode") is None:
         return False
     definition = repository.assert_current_lineage(registry, entry)[0]
     if entry["parentId"] is not None:
@@ -167,8 +113,8 @@ def claim_task(
     at = timestamp(now)
     with repository.transaction() as registry:
         entry = repository.item_by_id(registry, item_id)
-        if entry["kind"] == "TASK" and entry.get("developmentMode") is None:
-            fail("WORK_ITEM_DEVELOPMENT_MODE_REQUIRED", f"{item_id} requires an explicitly confirmed development mode")
+        if entry["kind"] == "TASK" and _hierarchy_root_entry(registry, entry).get("developmentMode") is None:
+            fail("WORK_ITEM_DEVELOPMENT_MODE_REQUIRED", f"{item_id} requires a development mode selected during requirement freeze")
         if not _task_ready(repository, registry, entry):
             fail("WORK_ITEM_NOT_READY", f"{item_id} is not ready for dispatch")
         entry["claim"] = {
@@ -276,20 +222,17 @@ def _parent_contract_snapshot(parent: dict[str, Any], child_id: str) -> dict[str
     }
 
 
-def build_task_context(
-    *,
-    root: str,
-    item_id: str,
-    explicit_dogfood: bool = False,
-) -> dict[str, Any]:
-    repository = GovernanceRepository(root)
-    repository.assert_self_hosting_dogfood(explicit_dogfood)
-    registry = repository.read_registry()
-    entry = repository.item_by_id(registry, item_id)
+def _task_context(
+    repository: GovernanceRepository,
+    registry: dict[str, Any],
+    entry: dict[str, Any],
+) -> tuple[dict[str, Any], str, Any]:
+    item_id = entry["id"]
     if entry["kind"] != "TASK" or entry["stage"] != "BASELINE_FROZEN":
         fail("WORK_ITEM_TASK_REQUIRED", "Independent context can only be built for a frozen Task")
-    if entry.get("developmentMode") is None:
-        fail("WORK_ITEM_DEVELOPMENT_MODE_REQUIRED", f"{item_id} requires an explicitly confirmed development mode")
+    root_entry = _hierarchy_root_entry(registry, entry)
+    if root_entry.get("developmentMode") is None:
+        fail("WORK_ITEM_DEVELOPMENT_MODE_REQUIRED", f"{item_id} requires a development mode selected during requirement freeze")
     definition, _, target = repository.assert_current_lineage(registry, entry)
     parents = []
     child_id = entry["id"]
@@ -329,7 +272,7 @@ def build_task_context(
     context = {
         "schemaVersion": SCHEMA_VERSION,
         "gateLevel": definition["gateLevel"],
-        "developmentMode": entry["developmentMode"]["mode"],
+        "developmentMode": root_entry["developmentMode"]["mode"],
         "operation": {
             "owner": entry["claim"]["owner"],
             "operationId": entry["claim"]["operationId"],
@@ -357,8 +300,20 @@ def build_task_context(
         },
     }
     handoff = render_task_handoff(context)
-    atomic_write(target / "context-manifest.json", pretty_json(context))
-    atomic_write(target / "development-handoff.md", handoff)
+    return context, handoff, target
+
+
+def build_task_context(
+    *,
+    root: str,
+    item_id: str,
+    explicit_dogfood: bool = False,
+) -> dict[str, Any]:
+    repository = GovernanceRepository(root)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    registry = repository.read_registry()
+    entry = repository.item_by_id(registry, item_id)
+    context, handoff, _ = _task_context(repository, registry, entry)
     return {**context, "handoffPrompt": handoff}
 
 
@@ -371,14 +326,35 @@ def dispatch_task(
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
-    build_task_context(root=root, item_id=item_id, explicit_dogfood=explicit_dogfood)
-    claim = claim_task(
-        root=root,
-        item_id=item_id,
-        owner=owner,
-        operation_id=operation_id,
-        explicit_dogfood=explicit_dogfood,
-        now=now,
-    )
-    context = build_task_context(root=root, item_id=item_id, explicit_dogfood=explicit_dogfood)
-    return {**claim, **context}
+    repository = GovernanceRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    at = timestamp(now)
+    with repository.transaction() as registry:
+        entry = repository.item_by_id(registry, item_id)
+        if entry["kind"] == "TASK" and _hierarchy_root_entry(registry, entry).get("developmentMode") is None:
+            fail("WORK_ITEM_DEVELOPMENT_MODE_REQUIRED", f"{item_id} requires a development mode selected during requirement freeze")
+        if not _task_ready(repository, registry, entry):
+            fail("WORK_ITEM_NOT_READY", f"{item_id} is not ready for dispatch")
+        claim = {
+            "owner": _safe_operation_id(owner, "owner"),
+            "operationId": _safe_operation_id(operation_id, "operationId"),
+            "claimedAt": at,
+        }
+        entry["claim"] = claim
+        entry["status"] = "CLAIMED"
+        context, handoff, target = _task_context(repository, registry, entry)
+        atomic_write(target / "context-manifest.json", pretty_json(context))
+        atomic_write(target / "development-handoff.md", handoff)
+        entry["recordRevision"] += 1
+        entry["updatedAt"] = at
+        registry["currentFocus"] = {"workItemId": item_id, "purpose": "EXECUTION"}
+        registry["revision"] += 1
+        registry["updatedAt"] = at
+        repository.write_registry(registry)
+        return {
+            "id": item_id,
+            "status": entry["status"],
+            "claim": claim,
+            **context,
+            "handoffPrompt": handoff,
+        }

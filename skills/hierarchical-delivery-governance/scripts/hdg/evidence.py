@@ -66,10 +66,11 @@ def valid_development_mode(value: object, entry: dict[str, Any]) -> bool:
     return (
         isinstance(value, dict)
         and set(value) == {
-            "schemaVersion", "taskId", "baselineFingerprint", "mode", "confirmedBy", "confirmedAt",
+            "schemaVersion", "rootId", "baselineFingerprint", "mode", "confirmedBy", "confirmedAt",
         }
         and value.get("schemaVersion") == SCHEMA_VERSION
-        and value.get("taskId") == entry["id"]
+        and entry.get("parentId") is None
+        and value.get("rootId") == entry["id"]
         and value.get("baselineFingerprint") == entry["baselineFingerprint"]
         and value.get("mode") in {"active", "manual"}
         and value.get("confirmedBy") == "user"

@@ -14,7 +14,6 @@ from .execution import (
     dispatch_task,
     list_ready_tasks,
     record_task_result,
-    select_development_mode,
 )
 from .fs_safe import read_regular_file
 from .host_runtime import is_agent_runtime
@@ -30,7 +29,6 @@ from .planning import (
 COMMANDS = (
     "prepare-hierarchy",
     "freeze-hierarchy",
-    "select-development-mode",
     "ready-tasks",
     "task-context",
     "dispatch-task",
@@ -50,16 +48,15 @@ VALUE_OPTIONS = {
 FLAG_OPTIONS = {"--json", "--help", "--confirmed", "--dogfood"}
 COMMAND_OPTIONS = {
     "prepare-hierarchy": {"--json", "--help", "--definition", "--host-runtime", "--dogfood"},
-    "freeze-hierarchy": {"--json", "--help", "--item", "--expected-hierarchy", "--confirmed", "--dogfood"},
+    "freeze-hierarchy": {
+        "--json", "--help", "--item", "--expected-hierarchy", "--development-mode", "--confirmed", "--dogfood",
+    },
     "ready-tasks": {"--json", "--help", "--item"},
     "task-context": {"--json", "--help", "--item", "--dogfood"},
-    "select-development-mode": {
-        "--json", "--help", "--item", "--development-mode", "--expected-baseline", "--confirmed", "--dogfood",
-    },
     "claim-task": {"--json", "--help", "--item", "--owner", "--operation", "--dogfood"},
     "dispatch-task": {"--json", "--help", "--item", "--owner", "--operation", "--dogfood"},
     "task-result": {"--json", "--help", "--item", "--operation", "--status", "--evidence", "--dogfood"},
-    "retry-item": {"--json", "--help", "--item", "--expected-baseline", "--confirmed", "--dogfood"},
+    "retry-item": {"--json", "--help", "--item", "--expected-baseline", "--dogfood"},
     "gate-item": {"--json", "--help", "--item", "--status", "--evidence", "--dogfood"},
     "accept-item": {"--json", "--help", "--item", "--evidence", "--dogfood"},
     "acceptance-item": {"--json", "--help", "--item", "--action", "--evidence", "--dogfood"},
@@ -72,14 +69,13 @@ Commands:
 {chr(10).join(f'  {command}' for command in COMMANDS)}
 
   prepare-hierarchy --definition <file|-> --host-runtime <agent>  # writes one complete requirement tree
-  freeze-hierarchy --item <root-id> --expected-hierarchy <sha256> --confirmed  # one approval for the tree
-  select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
+  freeze-hierarchy --item <root-id> --expected-hierarchy <sha256> --development-mode active|manual --confirmed
   ready-tasks --item <root-or-subtree-id>
   task-context --item <task-id>
   dispatch-task --item <task-id> --owner <owner> --operation <id>
   claim-task --item <task-id> --owner <owner> --operation <id>
   task-result --item <task-id> --operation <id> --status IMPLEMENTED|BLOCKED --evidence <file|->
-  retry-item --item <id> --expected-baseline <sha256> --confirmed
+  retry-item --item <id> --expected-baseline <sha256>
   gate-item --item <id> --status PASS|FAIL --evidence <file|->
   accept-item --item <id> --evidence <file|->
   acceptance-item --item <root-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file|->
@@ -190,14 +186,7 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
             **common,
             root_id=_required(parsed, "--item"),
             expected_hierarchy_fingerprint=_required(parsed, "--expected-hierarchy"),
-            confirmed=parsed["confirmed"],
-        )
-    if command == "select-development-mode":
-        return select_development_mode(
-            **common,
-            item_id=_required(parsed, "--item"),
-            mode=_required(parsed, "--development-mode"),
-            expected_baseline_fingerprint=_required(parsed, "--expected-baseline"),
+            development_mode=_required(parsed, "--development-mode"),
             confirmed=parsed["confirmed"],
         )
     if command == "ready-tasks":
@@ -223,7 +212,6 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
             **common,
             item_id=_required(parsed, "--item"),
             expected_baseline_fingerprint=_required(parsed, "--expected-baseline"),
-            confirmed=parsed["confirmed"],
         )
     if command == "refresh-projections":
         return refresh_work_item_projections(**common)

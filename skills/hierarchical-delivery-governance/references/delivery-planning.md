@@ -47,6 +47,6 @@ Task 是唯一可执行叶子，也可以直接作为根。合格 Task 必须有
 - 每个实际存在的聚合层都有自己的测试和 PASS 条件；
 - Task 精确文件/接口方案、Capability 的 Task 组合方案、Delivery 的 Capability 组合方案均已进入同一根级 `development-plan.md`；
 - 跨仓库边界、提供方/消费方顺序和测试 cwd 明确。
-- 人工只确认当前方案文件，Agent 使用准备结果中的层级指纹执行一次整树冻结。
+- 人工评审当前方案并选择根级开发方式，Agent 使用准备结果中的层级指纹和同一次确认执行整树冻结。
 
 Workstream、Micro 和 M/W/T 可以辅助规划或展示，但不作为治理实体，也不取代任一级 baseline。

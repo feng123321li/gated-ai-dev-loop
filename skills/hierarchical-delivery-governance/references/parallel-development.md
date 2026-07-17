@@ -1,6 +1,6 @@
-# 多人并行 Task 调度
+# 多 Agent Task 调度
 
-并行是 READY Task 的执行方式，不是层级或工作项种类。
+并行是需求冻结时选择 `active` 后可采用的运行策略，不是冻结契约、层级或工作项种类，也不是 active 的必要条件。Skill 不提供 Codex/Claude 专用的子 Agent 配置文件；Python 控制器提供统一的 READY、claim、operationId 和 handoff，宿主使用自身能力自主执行。
 
 ## 资格
 
@@ -22,10 +22,21 @@
 
 按 Task 依赖图生成拓扑波次。同一波只包含互不依赖且路径互斥的 READY Task。提供方 Task VERIFIED 后，消费方才能进入后续波次。
 
+`active` Agent 可按以下安全循环自主调度：
+
+1. 调用 `ready-tasks --item <root-id>` 获取当前候选；
+2. 按依赖、范围互斥和可用并发槽选择本波 Task；
+3. 为每个 Task 生成不同 operationId，先执行 `dispatch-task` 完成 claim 和 handoff；
+4. 再启动相互隔离的全新开发 Agent；
+5. 分别写回结果并完成 Task 门禁；
+6. 循环实现、回归、修复和复测，写回结果后重新计算 READY，直到发生真实阻断或全部 Task VERIFIED。
+
+Agent 数量、并发度和调度顺序不固定。并发不足时自动串行；子 Agent 完全不可用时由当前 Agent 继续开发，不改变根级方式，也不询问用户。每个 Task 仍需独立 claim、结果和证据，以便归属、恢复和验收。`manual` 不自动开发，只输出控制器生成的 handoff。这些调度与回退规则只存在于 Skill 运行说明中，不写入冻结方案、baseline、层级指纹或根级方式文件。
+
 ## Claim 和归属
 
 每个 Task 使用唯一 owner/operationId，并单独生成 context。Agent 返回后逐 Task 校验 diff 归属，任何重叠、越界或无法归属的改动都阻断聚合。
 
 ## 聚合
 
-先逐 Task gate，再运行 Capability 集成 gate。Capability PASS 后才可向 Delivery 汇总。一个 Agent 失败不授权其他 Agent 扩大范围替它完成；必须重新规划并取得必要确认。
+先逐 Task gate，再运行 Capability 集成 gate。Capability PASS 后才可向 Delivery 汇总。同一冻结契约内的实现或回归失败由 Agent 自动 retry、修复和复测；其他 Agent 不得擅自扩大范围替代。只有目标、范围、接口、拓扑或授权必须变化时，才重新规划完整需求树并取得人工确认。

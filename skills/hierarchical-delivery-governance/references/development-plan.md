@@ -1,6 +1,6 @@
 # 冻结前整树开发方案
 
-`developmentPlan` 是每个节点 baseline 的机器契约，不是开发完成后的总结。宿主先结合只读代码检索起草完整层级 definition，再执行 `prepare-hierarchy` 生成根级 `development-plan.md`；人工查看真实文件并同意后，Agent 使用准备结果中的层级指纹执行 `freeze-hierarchy`。
+`developmentPlan` 是每个节点 baseline 的机器契约，不是开发完成后的总结。宿主先结合只读代码检索起草完整层级 definition，再执行 `prepare-hierarchy` 生成根级 `development-plan.md`；人工查看真实文件、选择根级开发方式并同意后，Agent 使用准备结果中的层级指纹和所选方式执行一次 `freeze-hierarchy`。
 
 ## 完整 definition 外壳
 
@@ -69,7 +69,7 @@
 }
 ```
 
-Delivery 的 child 使用相同五个字段，但 `kind` 必须为 `CAPABILITY`。Capability 的 `developmentPlan.childPlans` 必须覆盖其全部 Task children；Delivery 的 `childPlans` 必须覆盖其全部 Capability children，且 R/A 映射与 child 完全一致。准备嵌套子级前必须先 prepare、人工评审并 freeze 父级。
+Delivery 的 child 使用相同五个字段，但 `kind` 必须为 `CAPABILITY`。Capability 的 `developmentPlan.childPlans` 必须覆盖其全部 Task children；Delivery 的 `childPlans` 必须覆盖其全部 Capability children，且 R/A 映射与 child 完全一致。全部父子节点必须在同一次 `prepare-hierarchy` 中完整物化、一起评审并一次冻结。
 
 ## 场景选择
 
@@ -186,7 +186,7 @@ Capability 方案说明 Task 如何组合成一项能力。`childPlans` 与 Capa
     }
   ],
   "integrationFlow": [
-    "先冻结并验证提交规则，再运行使用目标契约的回归测试，最后执行 Capability 聚合门禁。"
+    "先实现并验证提交规则，再运行使用目标契约的回归测试，最后执行 Capability 聚合门禁。"
   ],
   "deliveryWaves": [
     {
@@ -229,5 +229,5 @@ Delivery 下 Capability 的 `decomposition.dependsOn` 必须与 Delivery `childP
 2. 同时简述根 ID、完整树、开发目的、文件、接口、依赖波次、测试映射和 `nextAction`；
 3. 明确这只是等待评审，尚未冻结，也没有开发授权；
 4. 用户提出修改时重新准备同一根 ID 的完整树，不把旧文件当作已批准；
-5. 用户只需确认已评审并同意当前文件，不要求知道或复述 SHA256；
-6. Agent 用已保存的 `hierarchyFingerprint` 调用冻结，成功后再次提供 plan、baseline 和 progress 入口。
+5. 用户选择 active/manual，并确认已评审同意当前文件，不要求知道或复述 SHA256；
+6. Agent 用已保存的 `hierarchyFingerprint` 和所选方式调用一次冻结，成功后再次提供 plan、baseline 和 progress 入口。

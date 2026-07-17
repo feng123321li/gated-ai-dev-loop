@@ -5,7 +5,7 @@
 ## 门禁等级与持久化
 
 - `None`：只读问答或报告，无文件写入，也没有 registry 工作项；
-- `LIGHT`：低风险、小范围、影响已知的 Task，可精简非关键说明，但 baseline 字段仍完整，并执行 baseline 确认、开发方式确认和 gate 三项机械门禁；
+- `LIGHT`：低风险、小范围、影响已知的 Task，可精简非关键说明，但 baseline 字段仍完整，并执行一次冻结确认（同时记录开发方式）和 gate；
 - `FULL`：高风险、影响未知、跨边界或协调工作项。Delivery/Capability 必须为 `FULL`。
 
 安全、认证、权限、迁移、兼容、事务、并发、外部契约、依赖变化、未知写路径等信号强制 `FULL`。用户请求 `LIGHT` 不能覆盖硬信号。`LIGHT` 只降低材料和审查负担，不取消状态机。
@@ -30,7 +30,7 @@ Delivery → Capability → Task
 
 根 Task 的 Task `dependsOn` 必须为空；根 Capability 的 Capability `dependsOn` 必须为空。出现兄弟依赖时选择能承载该依赖的上一聚合层。
 
-后续事实证明需要更高聚合责任时，路由只建议升层，不直接修改。先独立准备并冻结包含现有根的父 baseline，再取得绑定双方当前指纹的明确确认，最后执行受控 `TASK → CAPABILITY` 或 `CAPABILITY → DELIVERY` 附着；不改变现有工作项的 kind，也不自动创建或冻结父级。
+等待人工评审时发现需要更高聚合责任，使用同一需求根重新准备完整树，旧层级指纹自动失效。整树冻结后不提供单节点升层或父子附着；边界确实变化时保持阻断并重新进行完整需求规划。
 
 ## Micro、Workstream 与 M/W/T
 
@@ -56,4 +56,4 @@ Delivery → Capability → Task
 
 ## 变更类型与创建授权
 
-`Feature/Bugfix/Refactor/Migration/Maintenance/Docs/Test` 只描述主要改动性质，不决定父子层级。路由只返回建议，不创建包、不生成 ID、不冻结 baseline。用户必须一次明确批准具体 ID、完整 baseline 内容以及持久化并冻结；修订和升层仍分别需要独立明确授权。
+`Feature/Bugfix/Refactor/Migration/Maintenance/Docs/Test` 只描述主要改动性质，不决定父子层级。路由只返回建议，不创建包、不生成 ID、不冻结 baseline。用户评审根级开发方案并选择开发方式后，以一次确认完成整树冻结。

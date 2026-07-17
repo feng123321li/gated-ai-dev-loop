@@ -16,7 +16,6 @@ def human_status(value: object) -> str:
         "CAPABILITY": "能力",
         "TASK": "任务",
         "PREPARED": "等待开发方案评审",
-        "WAITING_FOR_DEVELOPMENT_MODE_SELECTION": "等待选择开发方式",
         "FROZEN": "已冻结",
         "CLAIMED": "开发中",
         "IMPLEMENTED": "等待门禁验收",
@@ -30,6 +29,24 @@ def human_status(value: object) -> str:
         "PASS": "通过",
         "FAIL": "未通过",
     }.get(value, str(value) if value is not None else "无")
+
+
+def _requirement_root(
+    entry: dict[str, Any],
+    by_id: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    current = entry
+    while current["parentId"] is not None:
+        current = by_id[current["parentId"]]
+    return current
+
+
+def _development_mode(
+    entry: dict[str, Any],
+    by_id: dict[str, dict[str, Any]],
+) -> str:
+    mode = _requirement_root(entry, by_id).get("developmentMode")
+    return mode["mode"] if mode else "未选择"
 
 
 def item_human_artifacts(
@@ -53,13 +70,16 @@ def item_human_artifacts(
     }
 
 
-def next_action(entry: dict[str, Any]) -> str:
+def next_action(
+    entry: dict[str, Any],
+    by_id: dict[str, dict[str, Any]] | None = None,
+) -> str:
     if entry["stage"] == "WAITING_FOR_BASELINE_CONFIRMATION":
-        return "人工评审根级 development-plan.md；同意后直接确认冻结，无需复述指纹。"
-    if entry["status"] == "WAITING_FOR_DEVELOPMENT_MODE_SELECTION":
-        return "人工选择 active 或 manual 开发方式。"
+        return "人工评审根级 development-plan.md、选择开发方式并一次确认冻结；无需复述指纹。"
     if entry["status"] == "FROZEN" and entry["kind"] == "TASK":
-        return "等待依赖满足后执行 dispatch-task。"
+        if by_id is not None and _development_mode(entry, by_id) == "manual":
+            return "按需生成可复制的独立开发 handoff。"
+        return "Agent 按依赖自主调度，循环实现、回归测试和复测。"
     if entry["status"] == "FROZEN":
         return "等待当前树中的子级完成后运行聚合门禁。"
     if entry["status"] == "CLAIMED":
@@ -67,7 +87,7 @@ def next_action(entry: dict[str, Any]) -> str:
     if entry["status"] == "IMPLEMENTED":
         return "形成严格 evidence 并执行 accept-item 门禁验收。"
     if entry["status"] == "BLOCKED":
-        return "处理阻断后按当前指纹显式 retry-item。"
+        return "Agent 处理阻断后按当前指纹自动执行 retry-item，并继续开发与复测。"
     if entry["status"] == "VERIFIED" and entry["parentId"] is None:
         acceptance = entry.get("acceptance")
         if acceptance and acceptance["status"] == "WAITING_FOR_INDEPENDENT_REVIEW":
@@ -89,8 +109,8 @@ def render_workspace_overview(registry: dict[str, Any]) -> str:
 
     def append_node(item: dict[str, Any], prefix: str, connector: str) -> None:
         overview = posixpath.join(item["packagePath"], "overview.md")
-        mode = item["developmentMode"]["mode"] if item.get("developmentMode") else "未选择"
-        extra = f"；开发方式 {mode}" if item["kind"] == "TASK" else ""
+        mode = _development_mode(item, by_id)
+        extra = f"；开发建议 {mode}" if item["kind"] == "TASK" else ""
         lines.append(
             f"{prefix}{connector}{human_status(item['kind'])} `{item['id']}` — "
             f"{human_status(item['status'])}；门禁 {human_status(item['gate']['status'])}{extra}；[概览]({overview})"
@@ -112,6 +132,7 @@ def render_workspace_overview(registry: dict[str, Any]) -> str:
             f"## 需求：{root['id']}",
             "",
             f"- 开发方案：[查看整树 development-plan.md]({posixpath.join(root['packagePath'], 'development-plan.md')})",
+            f"- 开发建议：{_development_mode(root, by_id)}（需求评审时选择）",
             f"- 最终验收：{human_status(acceptance['status']) if acceptance else '不适用'}",
             f"- 进度：{root['progress']['descendants']['verified']}/{root['progress']['descendants']['total']} 个后代已验证",
             "",
@@ -148,14 +169,18 @@ def render_item_overview(entry: dict[str, Any], by_id: dict[str, dict[str, Any]]
         f"- 子级：{', '.join(child_links) or '无'}",
         f"- 开发复核：{'[development-review.md](development-review.md)' if entry.get('latestResult') else '开发结果写回后生成'}",
         f"- 验收报告：{'[acceptance-report.md](acceptance-report.md)' if entry.get('acceptanceReport') else '尚未生成'}",
-        f"- 下一步：{next_action(entry)}",
+        f"- 下一步：{next_action(entry, by_id)}",
         "",
     ])
 
 
-def render_item_progress(entry: dict[str, Any]) -> str:
+def render_item_progress(
+    entry: dict[str, Any],
+    by_id: dict[str, dict[str, Any]] | None = None,
+) -> str:
+    by_id = by_id or {entry["id"]: entry}
     acceptance = entry.get("acceptance") if entry["parentId"] is None else None
-    mode = entry["developmentMode"]["mode"] if entry.get("developmentMode") else "未选择"
+    mode = _development_mode(entry, by_id)
     claim = f"{entry['claim']['owner']} / {entry['claim']['operationId']}" if entry.get("claim") else "无"
     return "\n".join([
         f"# {entry['id']} 进度",
@@ -166,14 +191,14 @@ def render_item_progress(entry: dict[str, Any]) -> str:
         f"- 门禁等级：{entry['gateLevel']}",
         f"- 最终验收：{human_status(acceptance['status']) if acceptance else '不适用'}",
         f"- 门禁：{human_status(entry['gate']['status'])}",
-        f"- 开发方式：{mode}",
+        f"- 开发建议：{mode}",
         f"- 认领：{claim}",
         f"- 直接子级：{entry['progress']['directChildren']['verified']}/{entry['progress']['directChildren']['total']} 已验证；"
         f"{entry['progress']['directChildren']['blocked']} 阻断；{entry['progress']['directChildren']['active']} 活动",
         f"- 全部后代：{entry['progress']['descendants']['verified']}/{entry['progress']['descendants']['total']} 已验证；"
         f"{entry['progress']['descendants']['blocked']} 阻断；{entry['progress']['descendants']['active']} 活动",
         f"- 验收报告：{'[acceptance-report.md](acceptance-report.md)' if entry.get('acceptanceReport') else '尚未生成'}",
-        f"- 下一步：{next_action(entry)}",
+        f"- 下一步：{next_action(entry, by_id)}",
         f"- 更新时间：{entry['updatedAt']}",
         "",
     ])
@@ -358,7 +383,7 @@ def render_task_handoff(context: dict[str, Any]) -> str:
         f"Task：{context['task']['id']}",
         f"Baseline fingerprint：{context['task']['baselineFingerprint']}",
         f"Gate level：{context['gateLevel']}",
-        f"Development mode：{context['developmentMode']}",
+        f"开发建议：{context['developmentMode']}",
         f"Operation ID：{display_operation}",
         "",
         "以下冻结上下文是完整权威。不要重新分析原始需求、改变验收标准或继承其他会话的隐含假设。",

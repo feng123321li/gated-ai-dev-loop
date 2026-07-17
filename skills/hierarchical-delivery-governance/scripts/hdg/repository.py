@@ -4,13 +4,15 @@ import json
 import os
 import re
 import shutil
+import sqlite3
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
 from .constants import SCHEMA_VERSION
-from .errors import GatedLoopError, fail
+from .errors import fail
 from .evidence import (
     FINGERPRINT,
     safe_work_item_id,
@@ -18,36 +20,40 @@ from .evidence import (
     valid_acceptance_report,
     valid_development_mode,
     valid_evidence_reference,
-    valid_review_artifact,
     valid_timestamp,
 )
-from .fs_safe import atomic_create_directory, atomic_replace_directory, atomic_write, read_regular_file, runtime_lock, safe_path
+from .fs_safe import atomic_create_directory, atomic_replace_directory, atomic_write, read_regular_file, safe_path
 from .host_runtime import is_agent_runtime
-from .jsonio import canonical_json, pretty_json, sha256_bytes
+from .jsonio import canonical_json, sha256_bytes
 from .model import (
     WORK_ITEM_AUTHORITIES,
     WORK_ITEM_GATE_LEVELS,
     WORK_ITEM_KINDS,
     WORK_ITEM_SCHEMA_VERSION,
     render_development_plan,
+    render_hierarchy_plan,
     render_work_item_baseline,
+    raw_definition,
     resolve_self_hosting_policy,
     work_item_baseline_fingerprint,
     work_item_child_contract_fingerprint,
     work_item_contract_fingerprint,
+    validate_hierarchy_definition,
 )
 from .projections import (
     render_acceptance_report,
     render_development_review,
     render_item_overview,
     render_item_progress,
+    render_interaction_log,
     render_requirement_handoff,
     render_workspace_overview,
     report_status,
 )
 
 
-WORK_ITEM_REGISTRY_FILE = "work-item-registry.json"
+WORK_ITEM_DATABASE_FILE = "governance.sqlite3"
+LEGACY_REGISTRY_FILE = "work-item-registry.json"
 WORK_ITEMS_DIRECTORY = "work-items"
 GOVERNANCE_DIRECTORY = ".hierarchical-delivery-governance"
 WORK_ITEM_REGISTRY_SCHEMA_VERSION = SCHEMA_VERSION
@@ -138,14 +144,15 @@ class GovernanceRepository:
     def __init__(self, root: str | os.PathLike[str], *, now: object = None) -> None:
         self.root = Path(root).absolute()
         self.now = now
+        self._connection: sqlite3.Connection | None = None
 
     @property
     def governance_root(self) -> Path:
         return self.root / GOVERNANCE_DIRECTORY
 
     @property
-    def registry_path(self) -> Path:
-        return self.governance_root / WORK_ITEM_REGISTRY_FILE
+    def database_path(self) -> Path:
+        return self.governance_root / WORK_ITEM_DATABASE_FILE
 
     def item_path(self, entry: dict[str, Any]) -> Path:
         return self.governance_root / entry["packagePath"]
@@ -178,9 +185,112 @@ class GovernanceRepository:
         runtime = safe_path(self.root, GOVERNANCE_DIRECTORY)
         runtime.mkdir(parents=True, exist_ok=True)
         safe_path(self.root, GOVERNANCE_DIRECTORY)
+        legacy_registry = runtime / LEGACY_REGISTRY_FILE
+        if legacy_registry.exists() and not self.database_path.exists():
+            fail(
+                "WORK_ITEM_STORAGE_UNSUPPORTED",
+                "Legacy JSON governance storage is unsupported; create a new SQLite-governed requirement",
+            )
         items = safe_path(self.root, f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}")
         items.mkdir(parents=True, exist_ok=True)
         safe_path(self.root, f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}")
+
+    def _connect(self, *, create: bool) -> sqlite3.Connection:
+        if not create and not self.database_path.is_file():
+            fail("WORK_ITEM_DATABASE_MISSING", "Governance database does not exist")
+        connection = sqlite3.connect(
+            self.database_path,
+            timeout=30.0,
+            isolation_level=None,
+        )
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout = 30000")
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA journal_mode = DELETE")
+        connection.execute("PRAGMA synchronous = FULL")
+        return connection
+
+    @staticmethod
+    def _initialize_database(connection: sqlite3.Connection, *, create: bool) -> None:
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        if version not in {0, SCHEMA_VERSION} or (version == 0 and not create):
+            fail(
+                "WORK_ITEM_DATABASE_SCHEMA_UNSUPPORTED",
+                f"Governance database schema {version} is unsupported; expected {SCHEMA_VERSION}",
+            )
+        if version == SCHEMA_VERSION:
+            return
+        statements = (
+            """CREATE TABLE IF NOT EXISTS workspace (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                schema_version INTEGER NOT NULL,
+                coordination_root TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                current_focus_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )""",
+            """CREATE TABLE IF NOT EXISTS work_items (
+                id TEXT PRIMARY KEY,
+                entry_json TEXT NOT NULL,
+                definition_json TEXT NOT NULL,
+                state_json TEXT NOT NULL
+            )""",
+            """CREATE TABLE IF NOT EXISTS hierarchies (
+                root_id TEXT PRIMARY KEY,
+                hierarchy_state_json TEXT NOT NULL
+            )""",
+            """CREATE TABLE IF NOT EXISTS task_contexts (
+                work_item_id TEXT PRIMARY KEY,
+                context_json TEXT NOT NULL,
+                handoff_markdown TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )""",
+            """CREATE TABLE IF NOT EXISTS reports (
+                work_item_id TEXT NOT NULL,
+                report_kind TEXT NOT NULL,
+                report_json TEXT NOT NULL,
+                generated_at TEXT NOT NULL,
+                PRIMARY KEY (work_item_id, report_kind)
+            )""",
+            """CREATE TABLE IF NOT EXISTS interaction_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_uuid TEXT NOT NULL UNIQUE,
+                work_item_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                operation_id TEXT,
+                host_runtime TEXT,
+                payload_json TEXT NOT NULL,
+                registry_revision INTEGER,
+                recorded_at TEXT NOT NULL,
+                previous_hash TEXT,
+                event_hash TEXT NOT NULL UNIQUE
+            )""",
+            """CREATE INDEX IF NOT EXISTS interaction_events_item_order
+                ON interaction_events(work_item_id, event_id)""",
+        )
+        for statement in statements:
+            connection.execute(statement)
+        connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+    def _active_connection(self) -> sqlite3.Connection:
+        if self._connection is None:
+            fail("WORK_ITEM_TRANSACTION_REQUIRED", "This operation requires an active governance transaction")
+        return self._connection
+
+    @contextmanager
+    def _read_connection(self) -> Iterator[sqlite3.Connection]:
+        if self._connection is not None:
+            yield self._connection
+            return
+        connection = self._connect(create=False)
+        try:
+            self._initialize_database(connection, create=False)
+            yield connection
+        finally:
+            connection.close()
 
     def empty_registry(self) -> dict[str, Any]:
         return {
@@ -342,72 +452,54 @@ class GovernanceRepository:
             fail("WORK_ITEM_REGISTRY_INVALID", "Current focus is invalid")
         return registry
 
-    def _assert_persisted_acceptance_evidence(self, registry: dict[str, Any]) -> None:
-        for entry in registry["workItems"]:
-            acceptance = entry.get("acceptance") if entry["parentId"] is None else None
-            if not acceptance or acceptance["status"] in {"NOT_READY", "WAITING_FOR_INDEPENDENT_REVIEW"}:
-                continue
-            records = [acceptance["review"]]
-            if acceptance["status"] == "COMPLETED":
-                records.append(acceptance["userConfirmation"])
-            for record in records:
-                try:
-                    data = read_regular_file(self.root, record["evidence"]["path"])
-                except Exception:
-                    fail("WORK_ITEM_ACCEPTANCE_EVIDENCE_MISSING", f"Persisted acceptance evidence is unavailable: {record['evidence']['path']}")
-                if sha256_bytes(data) != record["evidence"]["sha256"]:
-                    fail("WORK_ITEM_ACCEPTANCE_EVIDENCE_CHANGED", f"Persisted acceptance evidence changed: {record['evidence']['path']}")
-                try:
-                    artifact = json.loads(data.decode("utf-8"))
-                except (UnicodeDecodeError, json.JSONDecodeError):
-                    fail("WORK_ITEM_ACCEPTANCE_EVIDENCE_INVALID", f"Persisted acceptance evidence is invalid JSON: {record['evidence']['path']}")
-                if not valid_review_artifact(record["action"], artifact) or canonical_json(artifact) != canonical_json(record["artifact"]):
-                    fail("WORK_ITEM_ACCEPTANCE_EVIDENCE_CHANGED", f"Persisted acceptance evidence no longer matches its registry snapshot: {record['evidence']['path']}")
-
-    def _assert_persisted_development_modes(self, registry: dict[str, Any]) -> None:
-        for entry in registry["workItems"]:
-            if entry["parentId"] is not None or entry.get("developmentMode") is None:
-                continue
-            try:
-                artifact = self.read_json(self.item_path(entry), "development-mode.json", "WORK_ITEM_DEVELOPMENT_MODE_INVALID")
-            except Exception:
-                fail("WORK_ITEM_DEVELOPMENT_MODE_INVALID", f"{entry['id']} development-mode.json is missing or unreadable")
-            if not valid_development_mode(artifact, entry) or canonical_json(artifact) != canonical_json(entry["developmentMode"]):
-                fail("WORK_ITEM_DEVELOPMENT_MODE_CHANGED", f"{entry['id']} development-mode.json changed after confirmation")
-
     def read_registry(self, *, allow_missing: bool = False) -> dict[str, Any]:
-        try:
-            data = read_regular_file(self.root, self.registry_path)
-        except FileNotFoundError:
+        if self._connection is None and not self.database_path.is_file():
             if allow_missing:
                 return self.empty_registry()
-            fail("WORK_ITEM_REGISTRY_MISSING", "Work item registry does not exist")
-        try:
-            registry = json.loads(data.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            fail("WORK_ITEM_REGISTRY_INVALID", "Work item registry is not valid JSON")
-        validated = self.validate_registry(registry)
-        self._assert_persisted_acceptance_evidence(validated)
-        self._assert_persisted_development_modes(validated)
-        return validated
+            fail("WORK_ITEM_DATABASE_MISSING", "Governance database does not exist")
+        with self._read_connection() as connection:
+            row = connection.execute(
+                "SELECT schema_version, coordination_root, revision, current_focus_json, updated_at "
+                "FROM workspace WHERE singleton = 1"
+            ).fetchone()
+            if row is None:
+                if allow_missing:
+                    return self.empty_registry()
+                fail("WORK_ITEM_REGISTRY_MISSING", "Governance registry does not exist")
+            try:
+                focus = json.loads(row["current_focus_json"])
+                entries = [
+                    json.loads(item["entry_json"])
+                    for item in connection.execute("SELECT entry_json FROM work_items ORDER BY id")
+                ]
+            except (TypeError, json.JSONDecodeError):
+                fail("WORK_ITEM_REGISTRY_INVALID", "Governance registry records are invalid")
+            registry = {
+                "schemaVersion": row["schema_version"],
+                "coordinationRoot": row["coordination_root"],
+                "revision": row["revision"],
+                "currentFocus": focus,
+                "workItems": entries,
+                "updatedAt": row["updated_at"],
+            }
+            return self.validate_registry(registry)
 
     @contextmanager
     def transaction(self) -> Iterator[dict[str, Any]]:
         self.ensure_runtime_root()
-        with runtime_lock(self.registry_path):
-            yield self.read_registry(allow_missing=True)
-
-    def read_json(self, root: Path, target: str | os.PathLike[str], code: str) -> dict[str, Any]:
-        candidate = root / target
+        connection = self._connect(create=True)
         try:
-            value = json.loads(read_regular_file(root, candidate).decode("utf-8"))
-        except GatedLoopError:
-            raise
+            connection.execute("BEGIN IMMEDIATE")
+            self._initialize_database(connection, create=True)
+            self._connection = connection
+            yield self.read_registry(allow_missing=True)
+            connection.commit()
         except Exception:
-            fail(code, f"Unable to read {Path(target).name}")
-        if not isinstance(value, dict):
-            fail(code, f"Unable to read {Path(target).name}")
-        return value
+            connection.rollback()
+            raise
+        finally:
+            self._connection = None
+            connection.close()
 
     @staticmethod
     def package_files(
@@ -416,32 +508,10 @@ class GovernanceRepository:
         *,
         human_plan: str | None = None,
     ) -> dict[str, str]:
-        files = {
-            "baseline.json": pretty_json(definition),
+        return {
             "baseline.md": render_work_item_baseline(definition),
-            "work-item.json": pretty_json({
-                "schemaVersion": WORK_ITEM_SCHEMA_VERSION,
-                "id": definition["id"],
-                "kind": definition["kind"],
-                "gateLevel": definition["gateLevel"],
-                "authorityKind": definition["authorityKind"],
-                "parentId": definition["parentId"],
-            }),
-            "state.json": pretty_json(state),
-            "development-plan.json": pretty_json({
-                "schemaVersion": SCHEMA_VERSION,
-                "workItemId": definition["id"],
-                "kind": definition["kind"],
-                "baselineFingerprint": state["baselineFingerprint"],
-                "developmentPlan": definition["developmentPlan"],
-            }),
             "development-plan.md": human_plan or render_development_plan(definition, state),
         }
-        if "children" in definition:
-            files["children.json"] = pretty_json({"schemaVersion": WORK_ITEM_SCHEMA_VERSION, "children": definition["children"]})
-        if "execution" in definition:
-            files["execution.json"] = pretty_json({"schemaVersion": WORK_ITEM_SCHEMA_VERSION, **definition["execution"]})
-        return files
 
     def write_new_package(self, target: Path, files: dict[str, str]) -> None:
         def populate(staging: Path) -> None:
@@ -469,6 +539,51 @@ class GovernanceRepository:
             atomic_replace_directory(target, populate)
         else:
             atomic_create_directory(target, populate)
+
+    def store_hierarchy(
+        self,
+        records: list[dict[str, Any]],
+        states: dict[str, dict[str, Any]],
+        hierarchy_state: dict[str, Any],
+    ) -> None:
+        """Store the complete machine-authoritative requirement tree in SQLite."""
+        connection = self._active_connection()
+        for record in records:
+            definition = record["definition"]
+            state = states[definition["id"]]
+            connection.execute(
+                "INSERT INTO work_items(id, entry_json, definition_json, state_json) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET definition_json = excluded.definition_json, "
+                "state_json = excluded.state_json",
+                (
+                    definition["id"],
+                    "{}",
+                    canonical_json(definition),
+                    canonical_json(state),
+                ),
+            )
+        connection.execute(
+            "INSERT INTO hierarchies(root_id, hierarchy_state_json) VALUES (?, ?) "
+            "ON CONFLICT(root_id) DO UPDATE SET hierarchy_state_json = excluded.hierarchy_state_json",
+            (hierarchy_state["rootId"], canonical_json(hierarchy_state)),
+        )
+
+    def read_hierarchy_state(self, root_id: str) -> dict[str, Any]:
+        with self._read_connection() as connection:
+            row = connection.execute(
+                "SELECT hierarchy_state_json FROM hierarchies WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+        if row is None:
+            fail("WORK_ITEM_HIERARCHY_INVALID", "Hierarchy state is missing")
+        try:
+            value = json.loads(row["hierarchy_state_json"])
+        except (TypeError, json.JSONDecodeError):
+            fail("WORK_ITEM_HIERARCHY_INVALID", "Hierarchy state is invalid")
+        if not isinstance(value, dict):
+            fail("WORK_ITEM_HIERARCHY_INVALID", "Hierarchy state is invalid")
+        return value
 
     def replace_package(
         self,
@@ -504,8 +619,18 @@ class GovernanceRepository:
 
     def read_package(self, registry: dict[str, Any], entry: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Path]:
         target = self.item_path(entry)
-        definition = self.read_json(target, "baseline.json", "WORK_ITEM_PACKAGE_INVALID")
-        state = self.read_json(target, "state.json", "WORK_ITEM_PACKAGE_INVALID")
+        with self._read_connection() as connection:
+            row = connection.execute(
+                "SELECT definition_json, state_json FROM work_items WHERE id = ?",
+                (entry["id"],),
+            ).fetchone()
+        if row is None:
+            fail("WORK_ITEM_PACKAGE_INVALID", f"{entry['id']} is missing from the governance database")
+        try:
+            definition = json.loads(row["definition_json"])
+            state = json.loads(row["state_json"])
+        except (TypeError, json.JSONDecodeError):
+            fail("WORK_ITEM_PACKAGE_INVALID", f"{entry['id']} database records are invalid")
         baseline_fingerprint = work_item_baseline_fingerprint(definition)
         review = state.get("review")
         review_valid = (
@@ -528,17 +653,6 @@ class GovernanceRepository:
                 )
             )
         )
-        generated_valid = True
-        generated_files = self.package_files(definition, state)
-        if entry["parentId"] is None:
-            generated_files.pop("development-plan.md")
-        for name, expected in generated_files.items():
-            if name == "state.json":
-                continue
-            try:
-                generated_valid = generated_valid and read_regular_file(target, target / name) == expected.encode("utf-8")
-            except Exception:
-                generated_valid = False
         valid = (
             set(state) == STATE_FIELDS
             and state.get("schemaVersion") == WORK_ITEM_SCHEMA_VERSION
@@ -558,7 +672,6 @@ class GovernanceRepository:
                 else valid_timestamp(state.get("frozenAt"))
             )
             and review_valid
-            and generated_valid
         )
         if not valid:
             fail("WORK_ITEM_PACKAGE_CHANGED", f"{entry['id']} package changed after preparation", id=entry["id"])
@@ -624,12 +737,274 @@ class GovernanceRepository:
                 "descendants": self._progress_counts(descendants(entry)),
             }
 
+    @staticmethod
+    def _automatic_event_summary(purpose: str) -> str:
+        return {
+            "HIERARCHY_PLAN_AND_MODE_CONFIRMATION": "层级方案与方式确认",
+            "ACTIVE_REQUIREMENT_DISPATCH": "主动开发调度",
+            "MANUAL_REQUIREMENT_HANDOFF": "需求级开发交接",
+            "EXECUTION": "任务执行状态更新",
+            "GATE": "门禁验收状态更新",
+            "ACCEPTANCE": "交付验收状态更新",
+            "RETRY": "阻断任务重试",
+        }.get(purpose, purpose)
+
+    def append_interaction_event(
+        self,
+        *,
+        work_item_id: str,
+        session_id: str,
+        actor: str,
+        event_type: str,
+        summary: str,
+        operation_id: str | None,
+        host_runtime: str | None,
+        payload: dict[str, Any],
+        registry_revision: int | None,
+        recorded_at: str,
+    ) -> dict[str, Any]:
+        connection = self._active_connection()
+        previous = connection.execute(
+            "SELECT event_hash FROM interaction_events ORDER BY event_id DESC LIMIT 1"
+        ).fetchone()
+        previous_hash = previous["event_hash"] if previous else None
+        event_uuid = uuid.uuid4().hex
+        material = {
+            "eventUuid": event_uuid,
+            "workItemId": work_item_id,
+            "sessionId": session_id,
+            "actor": actor,
+            "eventType": event_type,
+            "summary": summary,
+            "operationId": operation_id,
+            "hostRuntime": host_runtime,
+            "payload": payload,
+            "registryRevision": registry_revision,
+            "recordedAt": recorded_at,
+            "previousHash": previous_hash,
+        }
+        event_hash = sha256_bytes(canonical_json(material).encode("utf-8"))
+        cursor = connection.execute(
+            "INSERT INTO interaction_events("
+            "event_uuid, work_item_id, session_id, actor, event_type, summary, operation_id, "
+            "host_runtime, payload_json, registry_revision, recorded_at, previous_hash, event_hash"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                event_uuid,
+                work_item_id,
+                session_id,
+                actor,
+                event_type,
+                summary,
+                operation_id,
+                host_runtime,
+                canonical_json(payload),
+                registry_revision,
+                recorded_at,
+                previous_hash,
+                event_hash,
+            ),
+        )
+        return {"eventId": cursor.lastrowid, **material, "eventHash": event_hash}
+
+    def read_interaction_events(self, item_ids: list[str] | None = None) -> list[dict[str, Any]]:
+        where = ""
+        parameters: tuple[Any, ...] = ()
+        if item_ids is not None:
+            if not item_ids:
+                return []
+            where = f" WHERE work_item_id IN ({','.join('?' for _ in item_ids)})"
+            parameters = tuple(item_ids)
+        with self._read_connection() as connection:
+            rows = connection.execute(
+                "SELECT event_id, event_uuid, work_item_id, session_id, actor, event_type, summary, "
+                "operation_id, host_runtime, payload_json, registry_revision, recorded_at, "
+                "previous_hash, event_hash FROM interaction_events"
+                f"{where} ORDER BY event_id",
+                parameters,
+            ).fetchall()
+        result = []
+        for row in rows:
+            try:
+                payload = json.loads(row["payload_json"])
+            except (TypeError, json.JSONDecodeError):
+                fail("WORK_ITEM_INTERACTION_INVALID", "Stored interaction payload is invalid")
+            result.append({
+                "eventId": row["event_id"],
+                "eventUuid": row["event_uuid"],
+                "workItemId": row["work_item_id"],
+                "sessionId": row["session_id"],
+                "actor": row["actor"],
+                "eventType": row["event_type"],
+                "summary": row["summary"],
+                "operationId": row["operation_id"],
+                "hostRuntime": row["host_runtime"],
+                "payload": payload,
+                "registryRevision": row["registry_revision"],
+                "recordedAt": row["recorded_at"],
+                "previousHash": row["previous_hash"],
+                "eventHash": row["event_hash"],
+            })
+        return result
+
+    def _write_interaction_logs(self, registry: dict[str, Any]) -> None:
+        by_id = {item["id"]: item for item in registry["workItems"]}
+
+        def tree_ids(entry: dict[str, Any]) -> list[str]:
+            result = [entry["id"]]
+            for child_id in entry["childIds"]:
+                result.extend(tree_ids(by_id[child_id]))
+            return result
+
+        for root in (item for item in registry["workItems"] if item["parentId"] is None):
+            events = self.read_interaction_events(tree_ids(root))
+            atomic_write(self.item_path(root) / "interaction-log.md", render_interaction_log(root, events))
+
+    def refresh_interaction_logs(self, registry: dict[str, Any]) -> None:
+        self._write_interaction_logs(registry)
+
+    def write_task_context(
+        self,
+        entry: dict[str, Any],
+        context: dict[str, Any],
+        handoff: str,
+        at: str,
+    ) -> None:
+        self._active_connection().execute(
+            "INSERT INTO task_contexts(work_item_id, context_json, handoff_markdown, updated_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(work_item_id) DO UPDATE SET "
+            "context_json = excluded.context_json, handoff_markdown = excluded.handoff_markdown, "
+            "updated_at = excluded.updated_at",
+            (entry["id"], canonical_json(context), handoff, at),
+        )
+
+    def refresh_markdown_projections(self, registry: dict[str, Any]) -> None:
+        """Rebuild every human artifact that has a complete SQLite source."""
+        by_id = {item["id"]: item for item in registry["workItems"]}
+        definitions: dict[str, dict[str, Any]] = {}
+        states: dict[str, dict[str, Any]] = {}
+        for entry in registry["workItems"]:
+            definition, state, _ = self.read_package(registry, entry)
+            definitions[entry["id"]] = definition
+            states[entry["id"]] = state
+
+        def build(entry: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "definition": raw_definition(definitions[entry["id"]]),
+                "children": [build(by_id[child_id]) for child_id in entry["childIds"]],
+            }
+
+        for root in (item for item in registry["workItems"] if item["parentId"] is None):
+            hierarchy = validate_hierarchy_definition({
+                "schemaVersion": SCHEMA_VERSION,
+                "root": build(root),
+            })
+            hierarchy_state = self.read_hierarchy_state(root["id"])
+            root_plan = render_hierarchy_plan(hierarchy, states, hierarchy_state)
+
+            def project(entry: dict[str, Any], *, is_root: bool) -> None:
+                target = self.item_path(entry)
+                atomic_write(target / "baseline.md", render_work_item_baseline(definitions[entry["id"]]))
+                atomic_write(
+                    target / "development-plan.md",
+                    root_plan if is_root else render_development_plan(definitions[entry["id"]], states[entry["id"]]),
+                )
+                for child_id in entry["childIds"]:
+                    project(by_id[child_id], is_root=False)
+
+            project(root, is_root=True)
+
+        connection = self._active_connection()
+        for row in connection.execute(
+            "SELECT work_item_id, context_json, handoff_markdown FROM task_contexts"
+        ):
+            entry = by_id.get(row["work_item_id"])
+            if entry is not None:
+                atomic_write(self.item_path(entry) / "development-handoff.md", row["handoff_markdown"])
+        for row in connection.execute(
+            "SELECT work_item_id, report_kind, report_json FROM reports"
+        ):
+            entry = by_id.get(row["work_item_id"])
+            if entry is None:
+                continue
+            try:
+                report = json.loads(row["report_json"])
+            except (TypeError, json.JSONDecodeError):
+                fail("WORK_ITEM_REPORT_INVALID", f"Stored report is invalid: {row['work_item_id']}")
+            if row["report_kind"] == "DEVELOPMENT_REVIEW":
+                atomic_write(self.item_path(entry) / "development-review.md", render_development_review(report))
+            elif row["report_kind"] == "ACCEPTANCE":
+                atomic_write(self.item_path(entry) / "acceptance-report.md", render_acceptance_report(report))
+            else:
+                fail("WORK_ITEM_REPORT_INVALID", f"Unknown stored report kind: {row['report_kind']}")
+
     def write_registry(self, registry: dict[str, Any]) -> None:
         self.recompute_progress(registry)
         self.validate_registry(registry)
         registry["workItems"] = sorted(registry["workItems"], key=lambda item: item["id"])
         by_id = {item["id"]: item for item in registry["workItems"]}
-        atomic_write(self.registry_path, pretty_json(registry))
+        connection = self._active_connection()
+        previous = connection.execute(
+            "SELECT revision FROM workspace WHERE singleton = 1"
+        ).fetchone()
+        previous_revision = previous["revision"] if previous else None
+        current_ids = set(by_id)
+        stored_ids = {row["id"] for row in connection.execute("SELECT id FROM work_items")}
+        for stale_id in stored_ids - current_ids:
+            connection.execute("DELETE FROM task_contexts WHERE work_item_id = ?", (stale_id,))
+            connection.execute("DELETE FROM reports WHERE work_item_id = ?", (stale_id,))
+            connection.execute("DELETE FROM work_items WHERE id = ?", (stale_id,))
+        root_ids = {item["id"] for item in registry["workItems"] if item["parentId"] is None}
+        for row in connection.execute("SELECT root_id FROM hierarchies").fetchall():
+            if row["root_id"] not in root_ids:
+                connection.execute("DELETE FROM hierarchies WHERE root_id = ?", (row["root_id"],))
+        for entry in registry["workItems"]:
+            cursor = connection.execute(
+                "UPDATE work_items SET entry_json = ? WHERE id = ?",
+                (canonical_json(entry), entry["id"]),
+            )
+            if cursor.rowcount != 1:
+                fail("WORK_ITEM_PACKAGE_INVALID", f"{entry['id']} has no stored definition")
+        connection.execute(
+            "INSERT INTO workspace(singleton, schema_version, coordination_root, revision, current_focus_json, updated_at) "
+            "VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT(singleton) DO UPDATE SET "
+            "schema_version = excluded.schema_version, coordination_root = excluded.coordination_root, "
+            "revision = excluded.revision, current_focus_json = excluded.current_focus_json, "
+            "updated_at = excluded.updated_at",
+            (
+                registry["schemaVersion"],
+                registry["coordinationRoot"],
+                registry["revision"],
+                canonical_json(registry["currentFocus"]),
+                registry["updatedAt"],
+            ),
+        )
+        focus = registry["currentFocus"]
+        if previous_revision != registry["revision"] and focus["workItemId"] is not None:
+            focused = by_id[focus["workItemId"]]
+            state = connection.execute(
+                "SELECT state_json FROM work_items WHERE id = ?",
+                (focused["id"],),
+            ).fetchone()
+            host_runtime = None
+            if state:
+                try:
+                    host_runtime = json.loads(state["state_json"]).get("hostRuntime")
+                except (TypeError, json.JSONDecodeError):
+                    pass
+            self.append_interaction_event(
+                work_item_id=focused["id"],
+                session_id="controller",
+                actor="AGENT",
+                event_type=focus["purpose"],
+                summary=self._automatic_event_summary(focus["purpose"]),
+                operation_id=(focused.get("claim") or {}).get("operationId"),
+                host_runtime=host_runtime,
+                payload={"status": focused["status"], "stage": focused["stage"]},
+                registry_revision=registry["revision"],
+                recorded_at=registry["updatedAt"],
+            )
+        self.refresh_markdown_projections(registry)
         atomic_write(self.governance_root / "workspace-overview.md", render_workspace_overview(registry))
         for entry in registry["workItems"]:
             target = self.item_path(entry)
@@ -648,6 +1023,7 @@ class GovernanceRepository:
                     target / "requirement-handoff.md",
                     render_requirement_handoff(entry, by_id),
                 )
+        self._write_interaction_logs(registry)
 
     def write_acceptance_report(
         self,
@@ -676,13 +1052,17 @@ class GovernanceRepository:
             "generatedAt": at,
         }
         directory = self.item_path(entry)
-        atomic_write(directory / "acceptance-report.json", pretty_json(report))
+        self._active_connection().execute(
+            "INSERT INTO reports(work_item_id, report_kind, report_json, generated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(work_item_id, report_kind) DO UPDATE SET "
+            "report_json = excluded.report_json, generated_at = excluded.generated_at",
+            (entry["id"], "ACCEPTANCE", canonical_json(report), at),
+        )
         atomic_write(directory / "acceptance-report.md", render_acceptance_report(report))
         base = f"{GOVERNANCE_DIRECTORY}/{entry['packagePath']}"
         entry["acceptanceReport"] = {
             "schemaVersion": SCHEMA_VERSION,
             "status": report["status"],
-            "jsonPath": f"{base}/acceptance-report.json",
             "markdownPath": f"{base}/acceptance-report.md",
             "generatedAt": at,
         }
@@ -710,7 +1090,12 @@ class GovernanceRepository:
             "generatedAt": at,
         }
         directory = self.item_path(entry)
-        atomic_write(directory / "development-review.json", pretty_json(report))
+        self._active_connection().execute(
+            "INSERT INTO reports(work_item_id, report_kind, report_json, generated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(work_item_id, report_kind) DO UPDATE SET "
+            "report_json = excluded.report_json, generated_at = excluded.generated_at",
+            (entry["id"], "DEVELOPMENT_REVIEW", canonical_json(report), at),
+        )
         atomic_write(directory / "development-review.md", render_development_review(report))
         return report
 

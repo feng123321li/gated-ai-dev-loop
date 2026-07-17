@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import stat
-import time
 import uuid
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Iterator, TypeVar
+from typing import Callable, TypeVar
 
 from .errors import GatedLoopError
 
@@ -126,45 +123,3 @@ def atomic_replace_directory(target: str | os.PathLike[str], populate: Callable[
             shutil.rmtree(staging)
         if backup.exists() and destination.exists():
             shutil.rmtree(backup)
-
-
-@contextmanager
-def runtime_lock(
-    target: str | os.PathLike[str],
-    *,
-    timeout_seconds: float = 10.0,
-    stale_seconds: float = 300.0,
-) -> Iterator[None]:
-    """Serialize registry mutations using an atomic lock directory."""
-
-    lock = Path(f"{target}.lock")
-    deadline = time.monotonic() + timeout_seconds
-    while True:
-        try:
-            lock.mkdir(parents=False)
-            atomic_write(
-                lock / "owner.json",
-                json.dumps({"pid": os.getpid(), "createdAt": time.time()}, separators=(",", ":")),
-            )
-            break
-        except FileExistsError:
-            try:
-                age = time.time() - lock.stat().st_mtime
-            except FileNotFoundError:
-                continue
-            if age > stale_seconds:
-                try:
-                    shutil.rmtree(lock)
-                except FileNotFoundError:
-                    pass
-                continue
-            if time.monotonic() >= deadline:
-                raise GatedLoopError("RUNTIME_LOCK_TIMEOUT", f"Timed out waiting for runtime lock: {lock}")
-            time.sleep(0.02)
-    try:
-        yield
-    finally:
-        try:
-            shutil.rmtree(lock)
-        except FileNotFoundError:
-            pass

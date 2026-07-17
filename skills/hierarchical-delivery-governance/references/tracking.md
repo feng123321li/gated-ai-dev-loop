@@ -2,7 +2,7 @@
 
 ## 投影原则
 
-`work-item-registry.json` 是节点状态机器权威，根目录 `hierarchy.json` 绑定整棵需求树。`workspace-overview.md` 按需求根分组展示所有需求；每个需求根的 `progress.md` 使用 Markdown 表格，在第一列保留与该根 `development-plan.md` 相同的工作项 ID、父子顺序和 Delivery→Capability→Task 层级。两个投影都不能把父子节点渲染成彼此并列的需求行。
+项目级 `governance.sqlite3` 是节点、层级和进度的唯一机器权威。`workspace-overview.md` 按需求根分组展示所有需求；每个需求根的 `progress.md` 使用 Markdown 表格，在第一列保留与该根 `development-plan.md` 相同的工作项 ID、父子顺序和 Delivery→Capability→Task 层级。两个投影都不能把父子节点渲染成彼此并列的需求行。
 
 每个需求根只有一个整树 `development-plan.md` 作为统一人工冻结入口。各实际节点仍有自己的 `development-plan.md`、`progress.md`、baseline、状态、门禁和后续开发复核；节点进度必须直接链接本节点方案。
 
@@ -27,7 +27,7 @@ Task 子级计数为零。不写主观百分比。协调节点声明的全部 ch
 - “当前执行”是 claim 的可读投影：协调节点为“不适用”，无 claim 的待执行 Task 为“未认领”，活动 claim 显示 `owner / operationId`，结果已写回的 Task 为“已释放”；
 - “节点文件”列链接该节点自己的 `development-plan.md/progress.md`；
 - “阶段产物”列为 manual 需求根增加一次性交接入口，并在开发结果或门禁证据存在后增加 `development-review.md` 或 `acceptance-report.md` 入口，尚未生成时显示“无”；
-- 明细只由 registry 重建，Agent 不直接编辑投影文件。
+- 明细只由 SQLite 重建，Agent 不直接编辑投影文件。
 
 ## 分层视图
 
@@ -42,8 +42,9 @@ Task 子级计数为零。不写主观百分比。协调节点声明的全部 ch
 - `prepare-hierarchy`：一次写入完整嵌套目录、根计划、树形总览和待确认的整树进度明细。
 - `freeze-hierarchy`：用同一次确认记录根级开发方式，并更新全部节点确认记录和状态；manual 同时生成根级 `requirement-handoff.md`。
 - `dispatch-task`：更新单个 Task 的 claim、上下文与 handoff。
-- `task-result`：生成 `development-review.json/md`，明确 IMPLEMENTED 不是完成。
-- `accept-item`：生成或更新 `acceptance-report.json/md`。
-- retry、聚合 gate、独立审查和用户确认：立即更新 registry 和投影。
+- `task-result`：结构化结果写入 SQLite，生成 `development-review.md`，明确 IMPLEMENTED 不是完成。
+- `accept-item`：结构化报告写入 SQLite，生成或更新 `acceptance-report.md`。
+- `record-interaction`：追加指令、决策或状态摘要，刷新需求根 `interaction-log.md`。
+- retry、聚合 gate、独立审查和用户确认：立即更新数据库和投影。
 
-每次写回增加 registry/record revision，并重建 `workspace-overview.md`、需求根整树明细和每个已物化节点的 `overview.md/progress.md`。因此 Task 被认领、写回实现或阻断、重试、门禁验证，以及父级聚合和最终验收后，根级明细都立即反映新状态。
+每次状态写回增加 workspace/record revision，并重建 `workspace-overview.md`、需求根整树明细和每个已物化节点的 `overview.md/progress.md`。因此 Task 被认领、写回实现或阻断、重试、门禁验证，以及父级聚合和最终验收后，根级明细都立即反映新状态。

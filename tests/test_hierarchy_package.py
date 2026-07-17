@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -43,9 +42,10 @@ class HierarchyPackageTests(unittest.TestCase):
             self.assertEqual([item.name for item in work_items.iterdir()], ["c-python-runtime"])
             root = work_items / "c-python-runtime"
             child = root / "children" / "t-python-controller"
-            self.assertTrue((root / "hierarchy.json").is_file())
+            self.assertTrue((root / "baseline.md").is_file())
             self.assertTrue((root / "development-plan.md").is_file())
-            self.assertTrue((child / "baseline.json").is_file())
+            self.assertTrue((child / "baseline.md").is_file())
+            self.assertEqual(list(work_items.rglob("*.json")), [])
             self.assertEqual(prepared["artifactDir"], str(root))
 
             registry = GovernanceRepository(temporary).read_registry()
@@ -122,9 +122,7 @@ class HierarchyPackageTests(unittest.TestCase):
                 list_ready_tasks(root=temporary, work_item_id=prepared["rootId"]),
                 ["t-python-controller"],
             )
-            hierarchy_state = json.loads(
-                Path(prepared["artifactDir"], "hierarchy.json").read_text(encoding="utf-8")
-            )
+            hierarchy_state = GovernanceRepository(temporary).read_hierarchy_state(prepared["rootId"])
             self.assertEqual(hierarchy_state["review"]["status"], "APPROVED")
 
     def test_freeze_makes_every_independent_task_ready_without_a_second_choice(self) -> None:
@@ -159,8 +157,8 @@ class HierarchyPackageTests(unittest.TestCase):
                 "active",
             )
             root_path = Path(prepared["artifactDir"])
-            self.assertTrue((root_path / "development-mode.json").is_file())
-            mode_record = json.loads((root_path / "development-mode.json").read_text(encoding="utf-8"))
+            self.assertFalse((root_path / "development-mode.json").exists())
+            mode_record = by_id[prepared["rootId"]]["developmentMode"]
             self.assertEqual(
                 set(mode_record),
                 {"schemaVersion", "rootId", "baselineFingerprint", "mode", "confirmedBy", "confirmedAt"},
@@ -218,7 +216,7 @@ class HierarchyPackageTests(unittest.TestCase):
             real_atomic_write = execution.atomic_write
 
             def fail_bound_context(target: Path, content: str) -> None:
-                if target.name == "context-manifest.json" and "op-atomic" in content:
+                if target.name == "development-handoff.md" and "op-atomic" in content:
                     raise OSError("simulated context write failure")
                 real_atomic_write(target, content)
 
@@ -260,7 +258,11 @@ class HierarchyPackageTests(unittest.TestCase):
                     "hierarchyFingerprint": prepared["hierarchyFingerprint"],
                     "baselineFingerprints": prepared["baselineFingerprints"],
                     "plan": (root_path / "development-plan.md").read_text(encoding="utf-8"),
-                    "mode": json.loads((root_path / "development-mode.json").read_text(encoding="utf-8")),
+                    "mode": next(
+                        item["developmentMode"]
+                        for item in GovernanceRepository(temporary).read_registry()["workItems"]
+                        if item["id"] == prepared["rootId"]
+                    ),
                     "handoff": frozen["humanArtifacts"]["requirementHandoff"],
                     "handoffPrompt": frozen["handoffPrompt"],
                     "handoffExists": (root_path / "requirement-handoff.md").exists(),

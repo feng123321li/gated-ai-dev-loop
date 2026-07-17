@@ -2,9 +2,9 @@
 
 ## 上下文生成
 
-只有根级开发方案已经通过一次整树冻结、开发方式已在同一次确认中记录、根级 `development-mode.json` 与 registry 快照及根 baseline 指纹一致、实际父链有效且 Task/Capability 依赖都 VERIFIED 的 Task 才能生成上下文。正常流程使用 `dispatch-task` 在同一受锁调度事务中校验 READY、准备绑定 operationId 的 `context-manifest.json` 和 handoff，并在工件写入成功后提交 claim；`task-context` 只返回调度前诊断或恢复预览，不写入开工工件。上下文继承需求根开发方式，并包含 `gateLevel`、operation、Task 的完整 `developmentPlan`、实际存在父级的协调开发计划与子契约、依赖证据、R/A、输入输出、测试 argv 和禁止事项；根 Task 的父契约和聚合依赖数组为空，`inheritConversation` 固定为 false。
+只有根级开发方案已经通过一次整树冻结、开发方式已在同一次确认中写入 SQLite、实际父链有效且 Task/Capability 依赖都 VERIFIED 的 Task 才能生成上下文。正常流程使用 `dispatch-task` 在同一 SQLite 短事务中校验 READY、保存绑定 operationId 的结构化上下文和 handoff，并在 Markdown handoff 写入成功后提交 claim。`task-context` 只返回调度前诊断或恢复预览，不写入开工工件。上下文继承需求根开发方式，并包含 `gateLevel`、operation、Task 的完整 `developmentPlan`、实际存在父级的协调开发计划与子契约、依赖证据、R/A、输入输出、测试 argv 和禁止事项；根 Task 的父契约和聚合依赖数组为空，`inheritConversation` 固定为 false。
 
-`requirement-handoff.md` 是 manual 根级需求的一次性交接提示词，冻结与每次投影刷新都会从 registry 重建；它列出完整树并要求接收会话自行循环 READY、dispatch、结果写回和逐级门禁。`development-handoff.md` 仍是 `dispatch-task` 后生成的单 Task 执行上下文，只在执行宿主内部交给对应开发 Agent，不再要求人逐 Task 复制。`task-context --json` 只返回不得用于开工的未认领诊断预览。开发 Agent 不接收 Delivery 分析对话、Capability 讨论、其他 Task 对话或宿主隐式记忆。
+`requirement-handoff.md` 是 manual 根级需求的一次性交接提示词，冻结与投影刷新都会从 SQLite 重建；它列出完整树并要求接收会话自行循环 READY、dispatch、结果写回和逐级门禁。`development-handoff.md` 仍是 `dispatch-task` 后生成的单 Task 执行上下文，只在执行宿主内部交给对应开发 Agent，不再要求人逐 Task 复制。`task-context --json` 只返回不得用于开工的未认领诊断预览。开发 Agent 不接收 Delivery 分析对话、Capability 讨论、其他 Task 对话或宿主隐式记忆。
 
 ## 开发 Agent 契约
 
@@ -12,7 +12,7 @@
 
 - 每个 Task 的结果和 evidence 可独立归属；
 - 实际改动仍在人工评审过的目标、scope 和安全授权内；需要改变冻结需求或扩大权限时必须阻断；
-- 不改变 baseline、registry、进度投影或 `.git/**`；
+- 不改变 SQLite、baseline、进度投影或 `.git/**`；
 - 不提交、推送、发布或改变外部状态；
 - 持续运行相关回归、修复失败并复测，报告真实事实；
 - 返回 `IMPLEMENTED` 或 `BLOCKED`，不得报告 PASS。
@@ -30,7 +30,7 @@
 python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --expected-hierarchy <sha256> --development-mode active|manual --confirmed
 ```
 
-冻结成功后只在需求根写入 `development-mode.json`：
+冻结成功后只在 SQLite 的需求根记录中保存开发方式：
 
 ```json
 {
@@ -43,8 +43,8 @@ python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --e
 }
 ```
 
-全部后代 Task 继承同一方式，但仍各自使用独立 baseline、gateLevel、scope、operationId、结果和 gate。manual 的一次交接只移交整树执行责任，不会提前 claim 全部 Task；`dispatch-task` 仍在每个 Task 真正 READY 且准备开工时执行。冻结命令缺少明确方式时必须拒绝，不能默认选择；根级文件缺失、被改动或与 registry/baseline 不一致也必须拒绝。方式一旦随当前需求树冻结就不能原地切换。`development-mode.json` 只保存 active/manual 选择；子 Agent 数量、并发度、调度顺序和回退策略是运行时决策，不进入该文件、开发方案、baseline 或层级指纹。
+全部后代 Task 继承同一方式，但仍各自使用独立 baseline、gateLevel、scope、operationId、结果和 gate。manual 的一次交接只移交整树执行责任，不会提前 claim 全部 Task；`dispatch-task` 仍在每个 Task 真正 READY 且准备开工时执行。冻结命令缺少明确方式时必须拒绝，不能默认选择；根级计划被改动或数据库中的层级/baseline 不一致也必须拒绝。方式一旦随当前需求树冻结就不能原地切换。子 Agent 数量、并发度、调度顺序和回退策略是运行时决策，不进入开发方式记录、开发方案、baseline 或层级指纹。
 
 ## 结果接收
 
-宿主用 claim 的 operationId 接收结果，核对真实 diff、写入归属和证据后执行 `task-result`，记录 `IMPLEMENTED/BLOCKED` 并清除 claim。控制器随即生成 `development-review.json/md`，对照冻结计划展示实际改动、接口、回归测试、复测和偏差；`IMPLEMENTED` 只表示等待门禁。Agent 应先修复回归失败并完成复测，再形成严格 gate evidence、执行 `accept-item` 并生成验收报告。根工作项通过聚合门禁后向用户提交交付，由用户人工验收和最终确认；开发会话的 IMPLEMENTED 不能当作完成。
+宿主用 claim 的 operationId 接收结果，核对真实 diff、写入归属和证据后执行 `task-result`，在 SQLite 记录 `IMPLEMENTED/BLOCKED` 并清除 claim。控制器随即生成 `development-review.md`，对照冻结计划展示实际改动、接口、回归测试、复测和偏差；`IMPLEMENTED` 只表示等待门禁。Agent 应先修复回归失败并完成复测，再形成严格 gate evidence、执行 `accept-item` 并生成验收报告。根工作项通过聚合门禁后向用户提交交付，由用户人工验收和最终确认；开发会话的 IMPLEMENTED 不能当作完成。

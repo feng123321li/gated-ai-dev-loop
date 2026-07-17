@@ -8,7 +8,7 @@ from .constants import SCHEMA_VERSION
 from .errors import GatedLoopError, fail
 from .evidence import evidence_record, valid_task_result_artifact
 from .fs_safe import atomic_write, read_regular_file
-from .jsonio import pretty_json, sha256_bytes
+from .jsonio import sha256_bytes
 from .model import scope_patterns_overlap, work_item_child_contract_fingerprint
 from .projections import render_task_handoff
 from .repository import GovernanceRepository, timestamp
@@ -203,7 +203,6 @@ def record_task_result(
             "id": item_id,
             "status": status,
             "developmentReview": {
-                "jsonPath": f"{base}/development-review.json",
                 "markdownPath": f"{base}/development-review.md",
             },
         }
@@ -343,7 +342,7 @@ def dispatch_task(
         entry["claim"] = claim
         entry["status"] = "CLAIMED"
         context, handoff, target = _task_context(repository, registry, entry)
-        atomic_write(target / "context-manifest.json", pretty_json(context))
+        repository.write_task_context(entry, context, handoff, at)
         atomic_write(target / "development-handoff.md", handoff)
         entry["recordRevision"] += 1
         entry["updatedAt"] = at

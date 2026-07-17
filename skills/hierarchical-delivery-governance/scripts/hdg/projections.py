@@ -74,6 +74,9 @@ def item_human_artifacts(
         "hierarchyDevelopmentPlan": posixpath.join(plan_base, "development-plan.md"),
         "baseline": posixpath.join(base, "baseline.md"),
         "progress": posixpath.join(base, "progress.md"),
+        "interactionLog": posixpath.join(base, "interaction-log.md")
+        if isinstance(item, dict) and item["parentId"] is None
+        else None,
         "requirementHandoff": requirement_handoff,
         "developmentReview": posixpath.join(base, "development-review.md")
         if isinstance(item, dict) and item.get("latestResult")
@@ -121,7 +124,7 @@ def render_workspace_overview(registry: dict[str, Any]) -> str:
     lines = [
         "# 需求层级总览",
         "",
-        "> 本文件是面向用户和协作者的可读投影；机器权威为 `work-item-registry.json`。",
+        "> 本文件是面向用户和协作者的可读投影；机器权威为 `governance.sqlite3`。",
         f"> 注册表版本：{registry['revision']}",
         f"> 当前焦点：{registry['currentFocus']['workItemId'] or '无'}",
     ]
@@ -184,7 +187,6 @@ def render_item_overview(entry: dict[str, Any], by_id: dict[str, dict[str, Any]]
         f"- 父级：{parent_link}",
         "- 基线：[baseline.md](baseline.md)",
         "- 开发方案：[development-plan.md](development-plan.md)",
-        "- 结构化开发计划：[development-plan.json](development-plan.json)",
         "- 进度：[progress.md](progress.md)",
         f"- 父契约指纹：{entry['parentContractFingerprint'] or '无'}",
         f"- 子级：{', '.join(child_links) or '无'}",
@@ -229,14 +231,14 @@ def render_requirement_handoff(
         "",
         "## 接收会话执行规则",
         "",
-        "1. 在项目根目录使用当前 `hierarchical-delivery-governance` Skill，先读取 registry、完整冻结方案和实时进度；不要重新准备或重新冻结需求。",
+        "1. 在项目根目录使用当前 `hierarchical-delivery-governance` Skill，先读取 SQLite 治理状态、完整冻结方案和实时进度；不要重新准备或重新冻结需求。",
         f"2. 以根工作项 `{root['id']}` 调用 `ready-tasks`，按依赖动态计算 READY Task；一次交接不等于一次认领全部 Task。",
         "3. 对本轮 READY Task 分别生成唯一 operationId，并在实际开工前调用 `dispatch-task`。可安全并行时使用隔离子 Agent；不可并行时自动串行。",
         "4. 每个 Task 严格使用自己的 context、scope、结果和证据，循环实现、回归测试、修复和复测；写回 `IMPLEMENTED` 或 `BLOCKED` 后完成该 Task 门禁。",
         "5. 每次状态写回后重新计算 READY Task，自动推进后续波次；全部子级 VERIFIED 后运行 Capability/Delivery 聚合门禁。",
         "6. 不要要求用户逐 Task 回复启动，也不要在正常 Task 切换、并发降级或自动重试时请求人工确认。",
         "7. 只有冻结目标、范围、接口、授权必须改变或出现无法自动消除的真实阻断时才返回用户；根门禁通过后提交最终交付，由用户人工验收。",
-        "8. 不修改 baseline、registry、治理投影或 `.git/**`；未获得单独授权时不提交、推送、合并、发布或改变外部状态。",
+        "8. 不修改 SQLite、baseline、治理投影或 `.git/**`；未获得单独授权时不提交、推送、合并、发布或改变外部状态。",
         "",
     ])
     return "\n".join(lines)
@@ -266,6 +268,7 @@ def render_item_progress(
         f"- 门禁：{human_status(entry['gate']['status'])}",
         f"- 开发建议：{mode}",
         "- 开发方案：[development-plan.md](development-plan.md)",
+        *(["- 交互记录：[interaction-log.md](interaction-log.md)"] if entry["parentId"] is None else []),
         *(["- 需求级交接：[requirement-handoff.md](requirement-handoff.md)"] if requirement_handoff else []),
         f"- 当前执行：{current_execution}",
         f"- 直接子级：{entry['progress']['directChildren']['verified']}/{entry['progress']['directChildren']['total']} 已验证；"
@@ -279,6 +282,30 @@ def render_item_progress(
     ]
     if entry["parentId"] is None:
         lines.extend(_render_hierarchy_progress(entry, by_id))
+    return "\n".join(lines)
+
+
+def render_interaction_log(root: dict[str, Any], events: list[dict[str, Any]]) -> str:
+    """Render the append-only interaction audit trail for one requirement tree."""
+    lines = [
+        f"# {root['id']} 交互记录",
+        "",
+        "> SQLite 保存结构化交互事件，本文件仅供人工查看。",
+        "> 只记录指令、决策和状态摘要，不记录隐藏思考过程或敏感原文。",
+        "",
+        "| 序号 | 时间 | 工作项 | 参与者 | 事件 | 摘要 | 操作 |",
+        "| ---: | --- | --- | --- | --- | --- | --- |",
+    ]
+    if not events:
+        lines.append("| - | - | - | - | - | 暂无记录 | - |")
+    for event in events:
+        summary = str(event["summary"]).replace("|", "\\|").replace("\n", " ")
+        lines.append(
+            f"| {event['eventId']} | {event['recordedAt']} | `{event['workItemId']}` | "
+            f"{event['actor']} | `{event['eventType']}` | {summary} | "
+            f"{event['operationId'] or '无'} |"
+        )
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -550,7 +577,7 @@ def render_task_handoff(context: dict[str, Any]) -> str:
         "",
         "执行规则：",
         "- 只实现这个冻结的叶子 Task，并且只写入 Scope 中的路径。",
-        "- 不修改 baseline、registry、进度投影、`.git/**` 或外部状态。",
+        "- 不修改 SQLite、baseline、进度投影、`.git/**` 或外部状态。",
         "- 运行列出的测试命令，只报告真实存在的证据。",
         "- 不提交、推送、发布，也不得自行报告 PASS。",
         "- 最终只返回 IMPLEMENTED 或 BLOCKED，并携带当前 Operation ID、变更文件和测试事实。",

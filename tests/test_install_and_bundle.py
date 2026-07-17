@@ -55,7 +55,7 @@ class InstallAndBundleTests(unittest.TestCase):
         allowed_roots = {
             "hdg", "__future__", "abc", "argparse", "ast", "base64", "collections", "contextlib",
             "copy", "dataclasses", "datetime", "enum", "functools", "hashlib", "io", "json",
-            "os", "pathlib", "posixpath", "re", "shutil", "stat", "sys", "tempfile", "time",
+            "os", "pathlib", "posixpath", "re", "shutil", "sqlite3", "stat", "sys", "tempfile", "time",
             "typing", "unittest", "uuid",
         }
         repository_root = Path(__file__).resolve().parents[1]

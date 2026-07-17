@@ -47,7 +47,7 @@ decomposition 为 SEALED 且所有计划 Capability VERIFIED 后，运行跨能�
 
 审查者只读取 baseline、context、真实 diff、测试和 evidence，不继承开发对话。隔离审查 PASS，或用户明确接受人工审查结果后，记录 `WAITING_FOR_USER_CONFIRMATION`；只有随后独立记录 `USER_CONFIRMED`，治理根才进入 `COMPLETED`。审查 evidence 与用户确认 evidence 必须是两个不同的真实文件，CLI 提交相对路径与 SHA-256，宿主在写回前读取文件、复算 hash 并把结构化内容快照写入 registry；每次恢复 registry 也重新核对文件存在、hash、结构和快照。不能只提交 action 标签，也不能复用同一路径或内容。
 
-最终验收 evidence 使用 schemaVersion 1 JSON：独立审查必须包含 `kind=INDEPENDENT_REVIEW`、非空 reviewer、`isolation=FRESH_READ_ONLY`、`verdict=PASS` 和 `findings.p0/p1=0`；人工审查必须包含 `kind=HUMAN_REVIEW`、非空 reviewer 与 `verdict=ACCEPTED`；用户确认必须包含 `kind=USER_CONFIRMATION`、非空 confirmedBy 与 `decision=CONFIRMED`。
+最终验收 evidence 使用当前 schemaVersion 3 JSON：独立审查必须包含 `kind=INDEPENDENT_REVIEW`、非空 reviewer、`isolation=FRESH_READ_ONLY`、`verdict=PASS` 和 `findings.p0/p1=0`；人工审查必须包含 `kind=HUMAN_REVIEW`、非空 reviewer 与 `verdict=ACCEPTED`；用户确认必须包含 `kind=USER_CONFIRMATION`、非空 confirmedBy 与 `decision=CONFIRMED`。
 
 ## 严重级别
 

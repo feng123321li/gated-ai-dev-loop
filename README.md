@@ -51,24 +51,23 @@ Micro、Workstream 和 M/W/T 可作为规模特征、规划视图和人类可读
 
 ## 安装 Skill
 
-只安装 Skill 是主路径；安装目录内已经包含自给自足的 `scripts/hdg.mjs` 机械控制器，不要求全局 CLI。
+只安装 Skill 是主路径；安装目录内已经包含模块化、纯标准库的 Python 控制器，不要求 Node、npm、pip 包或全局 CLI。运行环境需要 Python 3.10+。
 
 ```text
-npm install
-npm run skill:install -- --target both --scope user --dry-run
-npm run skill:install -- --target both --scope user
+python scripts/install_skill.py --target both --scope user --dry-run
+python scripts/install_skill.py --target both --scope user
 ```
 
 安装后的宿主从 `SKILL.md` 所在目录执行：
 
 ```text
-node <skill-root>/scripts/hdg.mjs --help
-node <skill-root>/scripts/hdg.mjs prepare-item --definition - --host-runtime claude-code --json
-node <skill-root>/scripts/hdg.mjs freeze-item --item t-example --expected-baseline <sha256> --confirmed --json
-node <skill-root>/scripts/hdg.mjs promote-item --item t-example --parent c-example --expected-baseline <sha256> --expected-parent-baseline <sha256> --confirmed
-node <skill-root>/scripts/hdg.mjs select-development-mode --item t-example --development-mode active --expected-baseline <sha256> --confirmed
-node <skill-root>/scripts/hdg.mjs ready-tasks --item t-example
-node <skill-root>/scripts/hdg.mjs task-context --item t-example
+python -X utf8 <skill-root>/scripts/hdg.py --help
+python -X utf8 <skill-root>/scripts/hdg.py prepare-item --definition - --host-runtime claude-code --json
+python -X utf8 <skill-root>/scripts/hdg.py freeze-item --item t-example --expected-baseline <sha256> --confirmed --json
+python -X utf8 <skill-root>/scripts/hdg.py promote-item --item t-example --parent c-example --expected-baseline <sha256> --expected-parent-baseline <sha256> --confirmed
+python -X utf8 <skill-root>/scripts/hdg.py select-development-mode --item t-example --development-mode active --expected-baseline <sha256> --confirmed
+python -X utf8 <skill-root>/scripts/hdg.py ready-tasks --item t-example
+python -X utf8 <skill-root>/scripts/hdg.py task-context --item t-example
 ```
 
 `--definition -` 表示从 stdin 读取 JSON。单次 definition/evidence 输入优先使用 stdin；控制器只接受当前工作区内的文件路径，不要把这类输入写入系统 `TEMP` 或工作区之外。
@@ -76,11 +75,11 @@ node <skill-root>/scripts/hdg.mjs task-context --item t-example
 开发本仓库时，修改运行时代码后重新生成 Skill 控制器并验证：
 
 ```text
-npm run skill:bundle
-npm test
-npm run test:coverage
+python scripts/build_skill.py
+python -m unittest discover -s tests -t . -v
+python -m compileall -q src scripts tests
 ```
 
-内置控制器只打包层级 runtime，不再引入历史 `route/start/prepare/freeze` CLI 及其 YAML 配置链。`npm install -g .` 提供可选的 `hdg` 快捷别名，但不是 Skill 工作流的依赖。
+内置控制器直接打包 `src/hdg` Python 包。仓库与 Skill 使用同一份模块源码，运行时只依赖 Python 标准库；不提供历史 CLI、旧 schema 迁移或兼容别名。
 
-Skill、npm 包和运行控制目录统一使用 `hierarchical-delivery-governance`，不追加 `v2`，也不读取或迁移旧控制目录。
+Skill、Python 项目和运行控制目录统一使用 `hierarchical-delivery-governance`。所有持久化文件与 evidence 只接受当前完整 schema v3，不读取、迁移或解释其他版本。

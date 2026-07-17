@@ -21,7 +21,7 @@ Task 执行状态：
 
 Delivery/Capability 保持 `FROZEN`，直到 decomposition 为 SEALED、全部计划直接子级 VERIFIED 且自身 gate PASS，之后为 `VERIFIED`。根 Task 在自身 gate PASS 后 VERIFIED；根 Capability 在自己的聚合 gate PASS 后 VERIFIED。READY 是 Task 的派生谓词，不是这里的持久状态。
 
-每个治理根另有 acceptance 状态：`NOT_READY → WAITING_FOR_INDEPENDENT_REVIEW → WAITING_FOR_USER_CONFIRMATION → COMPLETED`。Delivery 同步保留 delivery 投影以兼容旧 registry。工作项 `VERIFIED` 与最终交付 `COMPLETED` 不合并；非根子项不重复执行最终确认。
+每个治理根另有 acceptance 状态：`NOT_READY → WAITING_FOR_INDEPENDENT_REVIEW → WAITING_FOR_USER_CONFIRMATION → COMPLETED`。工作项 `VERIFIED` 与最终交付 `COMPLETED` 不合并；非根子项不重复执行最终确认。
 
 ## 合法迁移
 
@@ -61,7 +61,7 @@ BLOCKED 必须记录事实、责任方和解除条件。依赖完成、环境恢
 
 同一 baseline 下重试任何 BLOCKED 工作项时，只使用 `retry-item` 提交当前 expected baseline 指纹和显式确认。Task 回到 FROZEN 后沿用仍与该 baseline 绑定的开发方式并重新计算 READY；Task baseline 修订则清除开发方式并回到 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`。Capability/Delivery 回到 FROZEN 后重新运行聚合 gate。重试不修改需求或 scope；需要改契约时走 baseline 修订。不提供旧命令别名。
 
-schema v2→v3 是控制格式兼容升级，不属于上面的业务状态迁移。受支持的单根冻结 Task 必须在无 claim、未运行 gate 且包/registry 指纹一致时，由用户明确确认 gateLevel 后执行 `upgrade-registry`。迁移保持业务状态和开发方式，但重算包含 gateLevel 的指纹、清除旧 context/handoff，并追加审计历史；新会话只能恢复该结果，不能重新解释或再次要求 baseline 批准。
+schema 版本不参与业务生命周期迁移。控制器只接受当前完整 schema v3；其他版本、缺少冻结开发方案或含未知兼容字段的现场保持只读阻断，不提供自动升级。
 
 ## 后续工作
 

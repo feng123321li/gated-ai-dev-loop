@@ -10,7 +10,7 @@
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "coordinationRoot": "C:/projects/platform",
   "workspaces": [
     {
@@ -27,7 +27,7 @@
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "taskId": "t-provider-contract",
   "status": "PASS",
   "workspaceIds": ["provider-service"],
@@ -41,7 +41,7 @@
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "tasks": [
     {
       "taskId": "t-provider-contract",
@@ -61,17 +61,17 @@
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "tests": [
     {
       "workspaceId": "provider-service",
       "cwd": "C:/projects/provider",
-      "argv": ["npm", "test"]
+      "argv": ["python", "-m", "unittest"]
     },
     {
       "workspaceId": "consumer-service",
       "cwd": "C:/projects/consumer",
-      "argv": ["npm", "test"]
+      "argv": ["python", "-m", "unittest"]
     }
   ]
 }

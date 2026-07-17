@@ -58,13 +58,14 @@ npm run skill:install -- --target both --scope user
 
 ```text
 node <skill-root>/scripts/hdg.mjs --help
-node <skill-root>/scripts/hdg.mjs prepare-item --definition task.json --host-runtime claude
-node <skill-root>/scripts/hdg.mjs freeze-item --item t-example --expected-baseline <sha256> --confirmed
+node <skill-root>/scripts/hdg.mjs approve-item --definition - --host-runtime claude-code --confirmed
 node <skill-root>/scripts/hdg.mjs promote-item --item t-example --parent c-example --expected-baseline <sha256> --expected-parent-baseline <sha256> --confirmed
 node <skill-root>/scripts/hdg.mjs select-development-mode --item t-example --development-mode active --expected-baseline <sha256> --confirmed
 node <skill-root>/scripts/hdg.mjs ready-tasks --item t-example
 node <skill-root>/scripts/hdg.mjs task-context --item t-example
 ```
+
+`--definition -` 表示从 stdin 读取 JSON。单次 definition/evidence 输入优先使用 stdin；控制器只接受当前工作区内的文件路径，不要把这类输入写入系统 `TEMP` 或工作区之外。
 
 开发本仓库时，修改运行时代码后重新生成 Skill 控制器并验证：
 

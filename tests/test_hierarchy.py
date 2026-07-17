@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from hdg.acceptance import accept_work_item, record_acceptance
-from hdg.execution import dispatch_task, record_task_result, select_development_mode
+from hdg.execution import dispatch_task, record_task_result
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.repository import GovernanceRepository
 
@@ -42,6 +42,7 @@ class HierarchyFlowTests(unittest.TestCase):
             root=root,
             root_id=prepared["rootId"],
             expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+            development_mode="active",
             confirmed=True,
         )
         return prepared
@@ -71,13 +72,6 @@ class HierarchyFlowTests(unittest.TestCase):
             delivery = self._prepared_item(prepared, "d-python-governance")
             capability = self._prepared_item(prepared, "c-python-runtime")
             task = self._prepared_item(prepared, "t-python-controller")
-            select_development_mode(
-                root=temporary,
-                item_id=task["id"],
-                mode="active",
-                expected_baseline_fingerprint=task["baselineFingerprint"],
-                confirmed=True,
-            )
             dispatch_task(root=temporary, item_id=task["id"], owner="developer", operation_id="op-nested")
             result = self._write_evidence(temporary, "nested-task-result.json", {
                 "schemaVersion": 3,

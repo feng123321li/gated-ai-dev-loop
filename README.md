@@ -10,7 +10,7 @@ Delivery → Capability → Task
 
 Delivery 和 Capability 管协调与聚合，Task 是唯一执行叶子。实际存在的每一级都有独立 baseline、门禁和进度；每个 Task 使用磁盘化独立上下文，不继承前期对话。
 
-每个用户需求只生成一个根目录和一份真实可点击的 `development-plan.md`。该文件一次展示完整的 Task、Capability→Task 或 Delivery→Capability→Task 树：Task 精确到文件、接口/函数和实现逻辑；Capability 展示 Task 内容、共享契约与波次；Delivery 展示 Capability 内容、跨能力契约与交付波次。人工只需确认已经评审并同意当前文件，Agent 负责携带对应层级指纹完成一次整树冻结。
+每个用户需求只生成一个根目录和一份真实可点击的 `development-plan.md`。该文件一次展示完整的 Task、Capability→Task 或 Delivery→Capability→Task 树：Task 精确到文件、接口/函数和实现逻辑；Capability 展示 Task 内容、共享契约与波次；Delivery 展示 Capability 内容、跨能力契约与交付波次。人工评审当前文件并选择根级开发方式后，只确认一次；Agent 负责携带层级指纹和所选方式完成整树冻结。
 
 ## 核心能力
 
@@ -18,11 +18,12 @@ Delivery 和 Capability 管协调与聚合，Task 是唯一执行叶子。实际
 - `gateLevel` 作为 schema v3 机器契约进入 baseline、registry、上下文和投影；仅 Task 可为 `LIGHT`，协调层固定 `FULL`；
 - 多 Task 能力使用根 Capability，所有当前计划 Task 在冻结前一次物化；
 - 多 Capability 交付才创建 Delivery；它可以是完整项目、大型模块、子系统或跨服务需求；
-- `prepare-hierarchy` 一次写入完整树和 `development-plan.json/md`，人工评审后由 `freeze-hierarchy` 一次冻结全部节点；
+- `prepare-hierarchy` 一次写入完整树和 `development-plan.json/md`，人工评审并选择开发方式后由 `freeze-hierarchy` 一次冻结全部节点；
 - 人工确认不要求抄写 SHA256；层级指纹由 Agent 从准备结果传给控制器，过期方案会机械拒绝；
-- Task baseline 冻结后必须由用户显式选择 active/manual；
+- 同一次冻结确认在需求根记录 active/manual；不再要求冻结后二次批准；
+- active 由 Agent 自主选择多子 Agent、单 Agent 或当前 Agent 串行，并循环实现、回归、修复和复测；
 - 按依赖、claim 和写入范围计算 READY Task，支持多人并行；
-- Task、Capability、Delivery 各自通过 gate，失败后绑定当前 baseline 显式重试；
+- Task、Capability、Delivery 各自通过 gate；同一冻结契约内失败后由 Agent 按当前 baseline 自动重试；
 - 开发结果写回后生成 `development-review.json/md` 对照计划与实际；门禁后再生成并更新 `acceptance-report.json/md`；
 - 治理根 gate 后仍需隔离/人工审查和用户确认；
 - 维护本仓库默认进入 self-hosting maintenance，只有用户明确 dogfood 才创建运行包。
@@ -47,7 +48,7 @@ Micro、Workstream 和 M/W/T 可作为规模特征、规划视图和人类可读
         ├── progress.md
         ├── children.json | execution.json
         ├── development-review.json/md # 开发结果写回后生成
-        ├── development-mode.json      # 根 Task 显式选择后生成
+        ├── development-mode.json      # 同一次冻结确认记录根级开发方式
         └── children/
             └── <child-id>/            # 按 Delivery→Capability→Task 递归嵌套
 ```
@@ -68,9 +69,8 @@ python scripts/install_skill.py --target both --scope user
 ```text
 python -X utf8 <skill-root>/scripts/hdg.py --help
 python -X utf8 <skill-root>/scripts/hdg.py prepare-hierarchy --definition - --host-runtime claude-code --json
-python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item c-example --expected-hierarchy <sha256> --confirmed --json
-python -X utf8 <skill-root>/scripts/hdg.py select-development-mode --item t-example --development-mode active --expected-baseline <sha256> --confirmed
-python -X utf8 <skill-root>/scripts/hdg.py ready-tasks --item t-example
+python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item c-example --expected-hierarchy <sha256> --development-mode active --confirmed --json
+python -X utf8 <skill-root>/scripts/hdg.py ready-tasks --item c-example
 python -X utf8 <skill-root>/scripts/hdg.py task-context --item t-example
 ```
 
@@ -84,6 +84,6 @@ python -m unittest discover -s tests -t . -v
 python -m compileall -q src scripts tests
 ```
 
-内置控制器直接打包 `src/hdg` Python 包。仓库与 Skill 使用同一份模块源码，运行时只依赖 Python 标准库；不提供历史 CLI、旧 schema 迁移或兼容别名。
+内置控制器直接打包 `src/hdg` Python 包。仓库与 Skill 使用同一份模块源码，运行时只依赖 Python 标准库。
 
 Skill、Python 项目和运行控制目录统一使用 `hierarchical-delivery-governance`。所有持久化文件与 evidence 只接受当前完整 schema v3，不读取、迁移或解释其他版本。

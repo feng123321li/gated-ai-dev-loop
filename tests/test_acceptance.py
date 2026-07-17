@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 
 from hdg.acceptance import accept_work_item, record_acceptance
-from hdg.execution import dispatch_task, record_task_result, select_development_mode
-from hdg.planning import freeze_hierarchy, prepare_hierarchy
+from hdg.execution import dispatch_task, record_task_result
+from hdg.planning import freeze_hierarchy, prepare_hierarchy, retry_work_item
 from hdg.repository import GovernanceRepository
 
 from .fixtures import task_hierarchy
@@ -22,6 +22,45 @@ def write_evidence(root: str, name: str, value: dict) -> dict[str, str]:
 
 
 class AcceptanceFlowTests(unittest.TestCase):
+    def test_blocked_task_can_retry_without_mid_development_human_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(root=temporary, hierarchy=task_hierarchy(), host_runtime="codex")
+            freeze_hierarchy(
+                root=temporary,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                development_mode="active",
+                confirmed=True,
+            )
+            task_id = prepared["rootId"]
+            dispatch_task(root=temporary, item_id=task_id, owner="developer", operation_id="op-retry")
+            blocked = write_evidence(temporary, "blocked-result.json", {
+                "schemaVersion": 3,
+                "kind": "TASK_RESULT",
+                "taskId": task_id,
+                "operationId": "op-retry",
+                "status": "BLOCKED",
+                "summary": "Regression test failed and requires another implementation loop.",
+                "changedFiles": ["src/controller.py"],
+                "tests": [{"argv": ["python", "-m", "unittest"], "exitCode": 1, "testsRun": 1}],
+                "blockers": ["Regression failure"],
+            })
+            record_task_result(
+                root=temporary,
+                item_id=task_id,
+                operation_id="op-retry",
+                status="BLOCKED",
+                evidence=blocked,
+                strict_evidence=True,
+            )
+
+            retried = retry_work_item(
+                root=temporary,
+                item_id=task_id,
+                expected_baseline_fingerprint=prepared["baselineFingerprints"][task_id],
+            )
+            self.assertEqual(retried["status"], "FROZEN")
+
     def test_task_reaches_completed_with_distinct_review_and_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepared = prepare_hierarchy(root=temporary, hierarchy=task_hierarchy(), host_runtime="codex")
@@ -29,17 +68,11 @@ class AcceptanceFlowTests(unittest.TestCase):
                 root=temporary,
                 root_id=prepared["rootId"],
                 expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                development_mode="active",
                 confirmed=True,
             )
             task_id = prepared["rootId"]
             baseline = prepared["baselineFingerprints"][task_id]
-            select_development_mode(
-                root=temporary,
-                item_id=task_id,
-                mode="active",
-                expected_baseline_fingerprint=baseline,
-                confirmed=True,
-            )
             dispatch_task(
                 root=temporary,
                 item_id=task_id,

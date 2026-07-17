@@ -44,17 +44,18 @@
 1. `prepare-hierarchy` 校验完整 definition，计算各节点 baseline 指纹和一个绑定整树结构的 `hierarchyFingerprint`。
 2. 一个需求只写 `work-items/<root-id>/` 一个顶层目录；后代包按 `children/<id>/` 递归嵌套。
 3. 根级 `development-plan.md` 是唯一人工评审入口，一次展示完整层级、开发目的、文件、接口/共享契约、依赖波次和测试映射。
-4. 用户只确认已经评审并同意当前文件，不抄写 SHA256。Agent 使用准备结果里的层级指纹调用 `freeze-hierarchy`。
-5. `freeze-hierarchy` 重新验证层级、所有节点包和根计划文件，然后一次记录批准并冻结全部节点。
+4. 用户评审当前文件并选择 active/manual，不抄写 SHA256。Agent 使用准备结果里的层级指纹和所选方式调用 `freeze-hierarchy`。
+5. `freeze-hierarchy` 重新验证层级、所有节点包和根计划文件，然后用同一次确认记录根级方式并冻结全部节点。
 
 等待评审时可以用同一根 ID 重新准备整棵树；新层级指纹使旧确认自动失效。冻结后的拓扑不可用单节点命令改写。
 
 ## 冻结后的状态
 
 - Delivery/Capability：`BASELINE_FROZEN / FROZEN`；
-- Task：`BASELINE_FROZEN / WAITING_FOR_DEVELOPMENT_MODE_SELECTION`；
+- Task：`BASELINE_FROZEN / FROZEN`；
 - `developmentPlan` 进入 Task 独立上下文；
-- 用户选择 active/manual 后，`development-mode.json` 绑定 Task 当前 baseline；
+- 根级 `development-mode.json` 只记录同一次冻结确认中的 active/manual 选择，全部 Task 继承；
+- active 的 Agent 数量、并发度、调度顺序和降级路径由运行时自主决定，不进入冻结方案或指纹；
 - 每次生成上下文、claim 和 gate 前重新校验整条父链。
 
 子 baseline 仍绑定父级稳定契约与自己的 child contract。无关兄弟不会进入该 child-specific 指纹，但整树层级指纹会绑定本次统一评审包含的全部节点。
@@ -65,6 +66,6 @@
 - `development-review.json/md`：开发结果写回后；对照计划与实际，不代表门禁 PASS。
 - `acceptance-report.json/md`：门禁及最终验收阶段；记录证据、结论和用户确认。
 
-## 当前兼容边界
+## 当前数据契约
 
-只写当前 schema v3 的单根嵌套结构，不扫描、迁移或解释平铺工作项包、旧 schema 或历史 CLI。
+控制器只写当前 schema v3 的单根嵌套结构，并按严格字段集合验证 registry、层级包和 evidence。

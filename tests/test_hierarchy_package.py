@@ -4,8 +4,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from hdg.errors import GatedLoopError
+from hdg.execution import build_task_context, dispatch_task, list_ready_tasks
+from hdg import execution
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.repository import GovernanceRepository
 
@@ -16,6 +19,7 @@ from .fixtures import (
     hierarchy_node,
     task_definition,
     task_hierarchy,
+    two_task_capability_hierarchy,
 )
 
 
@@ -99,19 +103,170 @@ class HierarchyPackageTests(unittest.TestCase):
                 root=temporary,
                 root_id=prepared["rootId"],
                 expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                development_mode="active",
                 confirmed=True,
             )
 
             self.assertEqual(frozen["frozenItemIds"], ["c-python-runtime", "t-python-controller"])
+            self.assertEqual(
+                frozen["rootBaselineFingerprint"],
+                prepared["baselineFingerprints"][prepared["rootId"]],
+            )
             registry = GovernanceRepository(temporary).read_registry()
             by_id = {item["id"]: item for item in registry["workItems"]}
             self.assertEqual(by_id["c-python-runtime"]["status"], "FROZEN")
-            self.assertEqual(by_id["t-python-controller"]["status"], "WAITING_FOR_DEVELOPMENT_MODE_SELECTION")
+            self.assertEqual(by_id["t-python-controller"]["status"], "FROZEN")
             self.assertTrue(all(item["stage"] == "BASELINE_FROZEN" for item in by_id.values()))
+            self.assertEqual(
+                list_ready_tasks(root=temporary, work_item_id=prepared["rootId"]),
+                ["t-python-controller"],
+            )
             hierarchy_state = json.loads(
                 Path(prepared["artifactDir"], "hierarchy.json").read_text(encoding="utf-8")
             )
             self.assertEqual(hierarchy_state["review"]["status"], "APPROVED")
+
+    def test_freeze_makes_every_independent_task_ready_without_a_second_choice(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=two_task_capability_hierarchy(),
+                host_runtime="codex",
+            )
+            frozen = freeze_hierarchy(
+                root=temporary,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                development_mode="active",
+                confirmed=True,
+            )
+
+            self.assertEqual(frozen["developmentMode"]["mode"], "active")
+            registry = GovernanceRepository(temporary).read_registry()
+            by_id = {item["id"]: item for item in registry["workItems"]}
+            self.assertEqual(by_id[prepared["rootId"]]["developmentMode"]["mode"], "active")
+            self.assertIsNone(by_id["t-python-controller"]["developmentMode"])
+            self.assertIsNone(by_id["t-python-worker"]["developmentMode"])
+            self.assertEqual(by_id["t-python-controller"]["status"], "FROZEN")
+            self.assertEqual(by_id["t-python-worker"]["status"], "FROZEN")
+            self.assertEqual(
+                list_ready_tasks(root=temporary, work_item_id=prepared["rootId"]),
+                ["t-python-controller", "t-python-worker"],
+            )
+            self.assertEqual(
+                build_task_context(root=temporary, item_id="t-python-controller")["developmentMode"],
+                "active",
+            )
+            root_path = Path(prepared["artifactDir"])
+            self.assertTrue((root_path / "development-mode.json").is_file())
+            mode_record = json.loads((root_path / "development-mode.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                set(mode_record),
+                {"schemaVersion", "rootId", "baselineFingerprint", "mode", "confirmedBy", "confirmedAt"},
+            )
+            self.assertNotIn("agentCount", mode_record)
+            self.assertNotIn("concurrency", mode_record)
+            plan = (root_path / "development-plan.md").read_text(encoding="utf-8")
+            self.assertNotIn("子 Agent", plan)
+            self.assertNotIn("并发槽", plan)
+            self.assertFalse((root_path / "children" / "t-python-controller" / "development-mode.json").exists())
+            self.assertFalse((root_path / "children" / "t-python-worker" / "development-mode.json").exists())
+            workspace_overview = Path(
+                temporary,
+                ".hierarchical-delivery-governance",
+                "workspace-overview.md",
+            ).read_text(encoding="utf-8")
+            self.assertIn("开发建议：active（需求评审时选择）", workspace_overview)
+            child_progress = (
+                root_path / "children" / "t-python-controller" / "progress.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("开发建议：active", child_progress)
+
+            repeated = freeze_hierarchy(
+                root=temporary,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                development_mode="active",
+                confirmed=True,
+            )
+            self.assertTrue(repeated["idempotent"])
+            with self.assertRaises(GatedLoopError) as raised:
+                freeze_hierarchy(
+                    root=temporary,
+                    root_id=prepared["rootId"],
+                    expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                    development_mode="manual",
+                    confirmed=True,
+                )
+            self.assertEqual(raised.exception.code, "WORK_ITEM_DEVELOPMENT_MODE_LOCKED")
+
+    def test_dispatch_artifact_failure_does_not_leave_a_claimed_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=task_hierarchy(),
+                host_runtime="codex",
+            )
+            freeze_hierarchy(
+                root=temporary,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                development_mode="active",
+                confirmed=True,
+            )
+            real_atomic_write = execution.atomic_write
+
+            def fail_bound_context(target: Path, content: str) -> None:
+                if target.name == "context-manifest.json" and "op-atomic" in content:
+                    raise OSError("simulated context write failure")
+                real_atomic_write(target, content)
+
+            with patch("hdg.execution.atomic_write", side_effect=fail_bound_context):
+                with self.assertRaises(OSError):
+                    dispatch_task(
+                        root=temporary,
+                        item_id=prepared["rootId"],
+                        owner="developer",
+                        operation_id="op-atomic",
+                    )
+
+            registry = GovernanceRepository(temporary).read_registry()
+            task = registry["workItems"][0]
+            self.assertEqual(task["status"], "FROZEN")
+            self.assertIsNone(task["claim"])
+            self.assertEqual(list_ready_tasks(root=temporary, work_item_id=prepared["rootId"]), [prepared["rootId"]])
+
+    def test_development_mode_does_not_change_the_frozen_requirement_contract(self) -> None:
+        results = {}
+        with tempfile.TemporaryDirectory() as active_root, tempfile.TemporaryDirectory() as manual_root:
+            for mode, temporary in (("active", active_root), ("manual", manual_root)):
+                prepared = prepare_hierarchy(
+                    root=temporary,
+                    hierarchy=two_task_capability_hierarchy(),
+                    host_runtime="codex",
+                    now="2026-07-17T10:00:00Z",
+                )
+                freeze_hierarchy(
+                    root=temporary,
+                    root_id=prepared["rootId"],
+                    expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                    development_mode=mode,
+                    confirmed=True,
+                    now="2026-07-17T10:01:00Z",
+                )
+                root_path = Path(prepared["artifactDir"])
+                results[mode] = {
+                    "hierarchyFingerprint": prepared["hierarchyFingerprint"],
+                    "baselineFingerprints": prepared["baselineFingerprints"],
+                    "plan": (root_path / "development-plan.md").read_text(encoding="utf-8"),
+                    "mode": json.loads((root_path / "development-mode.json").read_text(encoding="utf-8")),
+                }
+
+            self.assertEqual(results["active"]["hierarchyFingerprint"], results["manual"]["hierarchyFingerprint"])
+            self.assertEqual(results["active"]["baselineFingerprints"], results["manual"]["baselineFingerprints"])
+            self.assertEqual(results["active"]["plan"], results["manual"]["plan"])
+            self.assertEqual(results["active"]["mode"]["mode"], "active")
+            self.assertEqual(results["manual"]["mode"]["mode"], "manual")
 
     def test_hierarchy_plan_tampering_blocks_the_single_freeze(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -128,6 +283,7 @@ class HierarchyPackageTests(unittest.TestCase):
                     root=temporary,
                     root_id=prepared["rootId"],
                     expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                    development_mode="active",
                     confirmed=True,
                 )
             self.assertEqual(raised.exception.code, "WORK_ITEM_HIERARCHY_PLAN_CHANGED")

@@ -4,7 +4,7 @@
 
 `.hierarchical-delivery-governance/work-item-registry.json` 记录全部节点状态；每个需求根目录的 `hierarchy.json` 记录根 ID、层级指纹、完整节点路径和统一人工评审状态。
 
-Registry 每个条目记录 `id/kind/gateLevel/authorityKind/parentId/childIds/packagePath/stage/status`、baseline 与 contract 指纹、父契约指纹、`developmentMode`、gate、claim、开发结果、根级 acceptance、验收报告入口、record revision、时间和分级 progress。
+Registry 每个条目记录 `id/kind/gateLevel/authorityKind/parentId/childIds/packagePath/stage/status`、baseline 与 contract 指纹、父契约指纹、gate、claim、开发结果、根级 acceptance、验收报告入口、record revision、时间和分级 progress。`developmentMode` 只在需求根保存，并由同一次冻结确认写入；后代 Task 继承。
 
 ## 单根嵌套路径
 
@@ -29,7 +29,7 @@ Registry 每个条目记录 `id/kind/gateLevel/authorityKind/parentId/childIds/p
 - packagePath 满足单根递归路径；
 - hierarchy/baseline/state/registry 指纹一致；
 - 根级 `development-plan.md` 与当前整树可重建内容完全一致；
-- `development-mode.json`、claim、operation 和 evidence 可解释；
+- 根级 `development-mode.json`、Task claim、operation 和 evidence 可解释；
 - Markdown 投影可由机器状态重建。
 
 ## 焦点与命令
@@ -39,12 +39,11 @@ Registry 每个条目记录 `id/kind/gateLevel/authorityKind/parentId/childIds/p
 ```text
 prepare-hierarchy
 → 人工查看 development-plan.md
-→ freeze-hierarchy
-→ select-development-mode
+→ 选择开发方式并执行一次 freeze-hierarchy
 → dispatch-task
 → task-result / development-review
 → accept-item / acceptance-report
 → acceptance-item
 ```
 
-CLI 不提供逐节点 `prepare-item/freeze-item`、旧 schema 升级、兼容别名或历史 Node 入口。诊断/恢复命令包括 `task-context`、`claim-task`、`gate-item`、`retry-item`、`ready-tasks` 和 `refresh-projections`。
+CLI 只提供整树准备和冻结。诊断、恢复与执行命令包括 `task-context`、`claim-task`、`gate-item`、`retry-item`、`ready-tasks` 和 `refresh-projections`。

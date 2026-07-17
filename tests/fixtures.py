@@ -197,6 +197,44 @@ def capability_hierarchy() -> dict[str, Any]:
     return hierarchy_definition(capability, [hierarchy_node(task)])
 
 
+def two_task_capability_hierarchy() -> dict[str, Any]:
+    children = [
+        {
+            "id": "t-python-controller",
+            "kind": "TASK",
+            "title": "Python controller",
+            "requirementIds": ["R-001"],
+            "acceptanceIds": ["A-001"],
+        },
+        {
+            "id": "t-python-worker",
+            "kind": "TASK",
+            "title": "Python worker",
+            "requirementIds": ["R-001"],
+            "acceptanceIds": ["A-001"],
+        },
+    ]
+    capability = capability_definition(children=children)
+    controller = task_definition(parentId=capability["id"], gateLevel="FULL")
+    worker = task_definition(
+        id="t-python-worker",
+        parentId=capability["id"],
+        gateLevel="FULL",
+        title="Python worker",
+        scope=["src/worker.py", "tests/test_worker.py"],
+        testCommands=[["python", "-m", "unittest", "tests.test_worker"]],
+    )
+    worker["developmentPlan"]["fileChanges"] = [
+        {"path": "src/worker.py", "action": "ADD", "purpose": "Provide the Python worker."},
+        {"path": "tests/test_worker.py", "action": "ADD", "purpose": "Verify the Python worker."},
+    ]
+    worker["developmentPlan"]["interfaces"][0]["location"] = "src/worker.py"
+    return hierarchy_definition(
+        capability,
+        [hierarchy_node(controller), hierarchy_node(worker)],
+    )
+
+
 def delivery_hierarchy() -> dict[str, Any]:
     delivery = delivery_definition()
     capability = capability_definition(parentId=delivery["id"])

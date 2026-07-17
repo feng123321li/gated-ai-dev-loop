@@ -26,7 +26,7 @@ Agent 返回结果时必须提交相同 operationId。成功写 `IMPLEMENTED` �
 
 `prepare-hierarchy` 在锁内检查新树所有 ID 是否与其他需求冲突，并一次写入完整嵌套目录和全部 registry 条目。等待评审的同根树可以整体替换；层级指纹改变后旧确认失效。
 
-`freeze-hierarchy` 对一个层级指纹执行 compare-and-swap，重新验证 `hierarchy.json`、全部 baseline/state、子包完整性和根级 `development-plan.md`，然后一次更新全部节点。CLI 不提供逐节点 prepare/freeze、局部升层或拓扑修订入口，避免同一需求出现多个顶层目录或部分冻结状态。
+`freeze-hierarchy` 对一个层级指纹执行 compare-and-swap，重新验证 `hierarchy.json`、全部 baseline/state、子包完整性和根级 `development-plan.md`，然后用同一次确认记录根级开发方式并更新全部节点，避免同一需求出现多个顶层目录或部分冻结状态。
 
 ## Git 边界
 

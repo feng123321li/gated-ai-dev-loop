@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from hdg.errors import GatedLoopError
-from hdg.execution import select_development_mode
 from hdg.planning import (
     freeze_hierarchy,
     prepare_hierarchy,
@@ -28,6 +27,7 @@ class PlanningTests(unittest.TestCase):
                     root=temporary,
                     root_id=prepared["rootId"],
                     expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                    development_mode="active",
                     confirmed=True,
                 )
             self.assertEqual(raised.exception.code, "WORK_ITEM_HIERARCHY_PLAN_CHANGED")
@@ -48,6 +48,7 @@ class PlanningTests(unittest.TestCase):
                     root=temporary,
                     root_id=second["rootId"],
                     expected_hierarchy_fingerprint=first["hierarchyFingerprint"],
+                    development_mode="active",
                     confirmed=True,
                 )
             self.assertEqual(raised.exception.code, "WORK_ITEM_REVISION_CONFLICT")
@@ -117,13 +118,7 @@ class PlanningTests(unittest.TestCase):
                 root=temporary,
                 root_id=prepared["rootId"],
                 expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
-                confirmed=True,
-            )
-            select_development_mode(
-                root=temporary,
-                item_id=prepared["rootId"],
-                mode="active",
-                expected_baseline_fingerprint=prepared["baselineFingerprints"][prepared["rootId"]],
+                development_mode="active",
                 confirmed=True,
             )
             mode_path = Path(

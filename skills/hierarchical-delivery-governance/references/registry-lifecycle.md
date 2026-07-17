@@ -5,13 +5,11 @@
 准备阶段：
 
 - `WAITING_FOR_BASELINE_CONFIRMATION / PREPARED`
-- `BASELINE_FROZEN / FROZEN`（Delivery / Capability）
-- `BASELINE_FROZEN / WAITING_FOR_DEVELOPMENT_MODE_SELECTION`（刚冻结或修订后的 Task）
+- `BASELINE_FROZEN / FROZEN`（Delivery / Capability / Task）
 
 Task 执行状态：
 
-- `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`：等待用户明确选择 active/manual；
-- `FROZEN`：开发方式已持久化，等待依赖或可调度；
+- `FROZEN`：已随整树冻结并继承根级开发方式，等待依赖或可调度；
 - `CLAIMED`：一个 operation 拥有执行权；
 - `IMPLEMENTED`：开发返回，尚未通过 gate；
 - `BLOCKED`：开发或 gate 阻断；
@@ -26,25 +24,18 @@ Delivery/Capability 保持 `FROZEN`，直到 decomposition 为 SEALED、全部�
 ## 合法迁移
 
 ```text
-DELIVERY/CAPABILITY PREPARED --confirm--> FROZEN
-TASK PREPARED --confirm--> WAITING_FOR_DEVELOPMENT_MODE_SELECTION
-WAITING_FOR_DEVELOPMENT_MODE_SELECTION --explicit mode confirmation--> FROZEN
-FROZEN --dispatch-task(operation claim + handoff)--> CLAIMED
-CLAIMED --result--> IMPLEMENTED | BLOCKED
-IMPLEMENTED --accept-item PASS--> VERIFIED + acceptance report
-IMPLEMENTED --accept-item FAIL--> BLOCKED + acceptance report
-BLOCKED --retry-item(current fingerprint + confirmation)--> FROZEN
-DELIVERY/CAPABILITY FROZEN/BLOCKED --confirmed baseline revision--> FROZEN
-TASK FROZEN/BLOCKED --confirmed baseline revision--> WAITING_FOR_DEVELOPMENT_MODE_SELECTION
-ROOT TASK FROZEN --confirmed promotion to frozen root Capability--> WAITING_FOR_DEVELOPMENT_MODE_SELECTION
-ROOT CAPABILITY FROZEN --confirmed promotion to frozen Delivery--> FROZEN
-ROOT VERIFIED --independent/human review--> WAITING_FOR_USER_CONFIRMATION
-WAITING_FOR_USER_CONFIRMATION --user confirmation--> COMPLETED
+整树 PREPARED --人工评审方案、选择方式并一次确认--> 全部 baseline FROZEN
+Task FROZEN --dispatch-task 认领并生成 handoff--> CLAIMED
+Task CLAIMED --写回结果--> IMPLEMENTED | BLOCKED
+Task IMPLEMENTED --accept-item 通过--> VERIFIED + acceptance report
+Task IMPLEMENTED --accept-item 未通过--> BLOCKED + acceptance report
+Task/协调节点 BLOCKED --retry-item 校验当前指纹--> FROZEN
+协调节点 FROZEN --全部直接子级 VERIFIED + 聚合门禁通过--> VERIFIED
+治理根 VERIFIED --独立/人工审查通过--> WAITING_FOR_USER_CONFIRMATION
+WAITING_FOR_USER_CONFIRMATION --用户确认--> COMPLETED
 ```
 
 协调工作项没有 CLAIMED/IMPLEMENTED；它们通过 child 状态和自己的 gate 推进。
-
-升层只适用于尚未运行 gate 的冻结浅层根。父级必须已按自己的 baseline 确认流程冻结并计划该 child；操作同时校验源/父指纹、无活动 claim 和明确确认。它是父子附着，不把 Task 改成 Capability，也不把 Capability 改成 Delivery。Task 因父链改变而清除开发方式并重新等待选择；升层历史写入 registry。
 
 ## 完成条件
 
@@ -57,12 +48,10 @@ WAITING_FOR_USER_CONFIRMATION --user confirmation--> COMPLETED
 
 ## 阻断与恢复
 
-BLOCKED 必须记录事实、责任方和解除条件。依赖完成、环境恢复或用户补充授权后重新计算 READY；不要直接跳过 gate。父链 stale 时先修订并重新冻结受影响 baseline。
+BLOCKED 必须记录事实、责任方和解除条件。依赖完成或环境恢复后重新计算 READY；不要直接跳过 gate。父链或冻结契约发生变化时保持阻断，重新准备、评审并冻结完整需求树。
 
-同一 baseline 下重试任何 BLOCKED 工作项时，只使用 `retry-item` 提交当前 expected baseline 指纹和显式确认。Task 回到 FROZEN 后沿用仍与该 baseline 绑定的开发方式并重新计算 READY；Task baseline 修订则清除开发方式并回到 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`。Capability/Delivery 回到 FROZEN 后重新运行聚合 gate。重试不修改需求或 scope；需要改契约时走 baseline 修订。不提供旧命令别名。
-
-schema 版本不参与业务生命周期迁移。控制器只接受当前完整 schema v3；其他版本、缺少冻结开发方案或含未知兼容字段的现场保持只读阻断，不提供自动升级。
+同一 baseline 下重试任何 BLOCKED 工作项时，Agent 使用 `retry-item` 提交当前 expected baseline 指纹并自动继续。Task 回到 FROZEN 后重新计算 READY；Capability/Delivery 回到 FROZEN 后重新运行聚合 gate。重试不修改需求、拓扑或 scope；冻结契约需要变化时保持阻断并重新进行完整需求规划。
 
 ## 后续工作
 
-已 VERIFIED 工作项默认不可原地修订。新反馈按同 Task 修复、父 baseline 修订、后续 Task/Capability/Delivery 或建议延期分类，并保留关系与旧证据。
+已 VERIFIED 工作项不可原地改写。当前冻结契约内的失败在完成前自动重试；契约变化或需求已经完成时，以新的完整需求树进入人工评审，并保留原工作项和证据。

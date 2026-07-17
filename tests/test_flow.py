@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hdg.execution import list_ready_tasks, select_development_mode
+from hdg.execution import list_ready_tasks
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.repository import GovernanceRepository
 
@@ -12,7 +12,7 @@ from .fixtures import task_hierarchy
 
 
 class WorkItemFlowTests(unittest.TestCase):
-    def test_prepare_plan_freeze_and_select_mode(self) -> None:
+    def test_prepare_plan_and_single_freeze_make_task_ready(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             result = prepare_hierarchy(
                 root=temporary,
@@ -28,18 +28,11 @@ class WorkItemFlowTests(unittest.TestCase):
                 root=temporary,
                 root_id=result["rootId"],
                 expected_hierarchy_fingerprint=result["hierarchyFingerprint"],
+                development_mode="manual",
                 confirmed=True,
             )
             self.assertEqual(frozen["stage"], "BASELINE_FROZEN")
 
-            selected = select_development_mode(
-                root=temporary,
-                item_id=result["rootId"],
-                mode="manual",
-                expected_baseline_fingerprint=result["baselineFingerprints"][result["rootId"]],
-                confirmed=True,
-            )
-            self.assertEqual(selected["status"], "FROZEN")
             self.assertEqual(list_ready_tasks(root=temporary, work_item_id=result["rootId"]), [result["rootId"]])
 
             registry = GovernanceRepository(temporary).read_registry()
@@ -50,6 +43,9 @@ class WorkItemFlowTests(unittest.TestCase):
                 set(registry),
                 {"schemaVersion", "coordinationRoot", "revision", "currentFocus", "workItems", "updatedAt"},
             )
+            progress = (package / "progress.md").read_text(encoding="utf-8")
+            self.assertIn("开发建议：manual", progress)
+            self.assertIn("按需生成可复制的独立开发 handoff", progress)
 
 
 if __name__ == "__main__":

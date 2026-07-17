@@ -22,6 +22,10 @@ class CliAndSafetyTests(unittest.TestCase):
         self.assertIn("--json", help_text)
         self.assertIn("prepare-hierarchy", help_text)
         self.assertIn("freeze-hierarchy", help_text)
+        self.assertIn("--development-mode active|manual", help_text)
+        self.assertNotIn("select-development-mode", help_text)
+        self.assertIn("retry-item --item <id> --expected-baseline <sha256>", help_text)
+        self.assertNotIn("retry-item --item <id> --expected-baseline <sha256> --confirmed", help_text)
         self.assertNotIn("prepare-item", help_text)
         self.assertNotIn("freeze-item", help_text)
         self.assertNotIn("promote-item", help_text)
@@ -43,6 +47,29 @@ class CliAndSafetyTests(unittest.TestCase):
             )
             self.assertEqual(code, 0, stderr.getvalue())
             self.assertTrue(json.loads(stdout.getvalue())["ok"])
+
+    def test_freeze_requires_mode_in_the_same_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            stderr = io.StringIO()
+            code = run_cli(
+                [
+                    "freeze-hierarchy",
+                    "--item", "t-example",
+                    "--expected-hierarchy", "0" * 64,
+                    "--confirmed",
+                    "--json",
+                ],
+                cwd=temporary,
+                stderr=stderr,
+            )
+            self.assertEqual(code, 1)
+            self.assertEqual(json.loads(stderr.getvalue())["error"]["code"], "OPTION_REQUIRED")
+
+    def test_removed_mode_selection_command_is_rejected(self) -> None:
+        stderr = io.StringIO()
+        code = run_cli(["select-development-mode", "--json"], stderr=stderr)
+        self.assertEqual(code, 1)
+        self.assertEqual(json.loads(stderr.getvalue())["error"]["code"], "UNKNOWN_COMMAND")
 
     @unittest.skipUnless(os.name == "nt", "Windows drive semantics")
     def test_cross_volume_input_is_rejected(self) -> None:

@@ -186,7 +186,7 @@ def render_item_progress(
     by_id = by_id or {entry["id"]: entry}
     acceptance = entry.get("acceptance") if entry["parentId"] is None else None
     mode = _development_mode(entry, by_id)
-    claim = f"{entry['claim']['owner']} / {entry['claim']['operationId']}" if entry.get("claim") else "无"
+    current_execution = _current_execution(entry)
     lines = [
         f"# {entry['id']} 进度",
         "",
@@ -198,7 +198,7 @@ def render_item_progress(
         f"- 门禁：{human_status(entry['gate']['status'])}",
         f"- 开发建议：{mode}",
         "- 开发方案：[development-plan.md](development-plan.md)",
-        f"- 认领：{claim}",
+        f"- 当前执行：{current_execution}",
         f"- 直接子级：{entry['progress']['directChildren']['verified']}/{entry['progress']['directChildren']['total']} 已验证；"
         f"{entry['progress']['directChildren']['blocked']} 阻断；{entry['progress']['directChildren']['active']} 活动",
         f"- 全部后代：{entry['progress']['descendants']['verified']}/{entry['progress']['descendants']['total']} 已验证；"
@@ -213,6 +213,16 @@ def render_item_progress(
     return "\n".join(lines)
 
 
+def _current_execution(entry: dict[str, Any]) -> str:
+    if entry["kind"] != "TASK":
+        return "不适用"
+    if entry.get("claim"):
+        return f"{entry['claim']['owner']} / {entry['claim']['operationId']}"
+    if entry["status"] in {"IMPLEMENTED", "BLOCKED", "VERIFIED"}:
+        return "已释放"
+    return "未认领"
+
+
 def _render_hierarchy_progress(
     root: dict[str, Any],
     by_id: dict[str, dict[str, Any]],
@@ -223,7 +233,7 @@ def _render_hierarchy_progress(
         "> 本明细与 [development-plan.md](development-plan.md) 使用相同的工作项 ID、父子顺序和层级结构。",
         "> 表格第一列保留层级；点击工作项可跳转到对应开发方案。每次控制器状态写回都会重建本文件。",
         "",
-        "| 层级工作项 | 阶段 | 状态 | 门禁 | 认领 | 节点文件 | 阶段产物 |",
+        "| 层级工作项 | 阶段 | 状态 | 门禁 | 当前执行 | 节点文件 | 阶段产物 |",
         "| --- | --- | --- | --- | --- | --- | --- |",
     ]
 
@@ -257,11 +267,7 @@ def _render_hierarchy_progress(
         return "、".join(links) or "无"
 
     def append_node(item: dict[str, Any], depth: int, connector: str) -> None:
-        claim = (
-            f"{item['claim']['owner']} / {item['claim']['operationId']}"
-            if item.get("claim")
-            else "无"
-        )
+        current_execution = _current_execution(item)
         plan_anchor = f"development-plan.md#work-item-{item['id']}"
         plan_path, progress_path, _, _ = item_paths(item)
         indentation = "　" * max(depth - 1, 0)
@@ -270,7 +276,7 @@ def _render_hierarchy_progress(
         )
         lines.append(
             f"| {hierarchy_item} | {human_status(item['stage'])} | {human_status(item['status'])} | "
-            f"{human_status(item['gate']['status'])} | {claim} | "
+            f"{human_status(item['gate']['status'])} | {current_execution} | "
             f"[方案]({plan_path})、[进度]({progress_path}) | {artifact_links(item)} |"
         )
         children = [by_id[child_id] for child_id in item["childIds"]]

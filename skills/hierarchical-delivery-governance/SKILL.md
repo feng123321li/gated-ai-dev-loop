@@ -57,7 +57,7 @@ description: "治理可独立交付的软件需求。按最小必要深度组织
    人不需要知道、复制或复述指纹。控制器用同一次确认冻结整树并记录根级方式；方案变化后旧指纹必须被拒绝。
 8. `active` 下，Agent 自主计算 READY Task 并决定多子 Agent、单 Agent 或当前 Agent 串行。子 Agent 不可用或并发不足时自动降级，不请求用户重新选择方式。`manual` 不自动开发，只生成可复制 handoff。Agent 数量、并发度和降级策略属于运行策略，不写入 `development-plan`、baseline、层级指纹或 `development-mode.json`。
 9. 开发阶段不设置额外人工门禁。Agent 在冻结目标和安全边界内循环“实现 → 回归测试 → 修复 → 复测”，逐 Task 写回 `IMPLEMENTED` 或 `BLOCKED`。同 baseline 且没有活动 claim 的 BLOCKED 由 Agent 自动执行 `retry-item`、重新计算 READY 并继续；只有冻结契约或授权必须变化时才回到人工评审。开发结果不能自行宣布 PASS。
-10. 需求根 `progress.md` 使用 Markdown 表格展示整树明细：第一列保留与 `development-plan.md` 相同的工作项 ID、父子顺序和层级，其余列分别展示阶段、状态、门禁、认领、节点文件和阶段性产物。每次控制器写回都会从 registry 自动重建该表格，不依赖 Agent 手工改表。
+10. 需求根 `progress.md` 使用 Markdown 表格展示整树明细：第一列保留与 `development-plan.md` 相同的工作项 ID、父子顺序和层级，其余列分别展示阶段、状态、门禁、当前执行、节点文件和阶段性产物。“当前执行”对协调节点显示“不适用”，对待执行 Task 显示“未认领”，开发中显示 owner/operationId，结果写回后显示“已释放”。每次控制器写回都会从 registry 自动重建该表格，不依赖 Agent 手工改表。
 11. 使用 `task-result` 写回结果并生成 `development-review.json/md`；全部相关回归和复测通过后，使用 `accept-item` 提交门禁验收并生成 `acceptance-report.json/md`。父级必须在子级全部 VERIFIED 后运行自己的聚合 gate。
 12. 根工作项 gate PASS 后向用户提交交付，由用户人工验收并最终确认；只有 `COMPLETED` 表示需求完成。
 

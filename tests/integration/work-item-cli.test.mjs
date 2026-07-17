@@ -33,7 +33,7 @@ async function putEvidenceReference(root, name, artifact) {
   });
 }
 
-async function invoke(root, argv) {
+async function invoke(root, argv, { stdin } = {}) {
   const out = [];
   const err = [];
   const exitCode = await runHierarchicalCli(argv, {
@@ -41,6 +41,7 @@ async function invoke(root, argv) {
     stdout: (value) => out.push(value),
     stderr: (value) => err.push(value),
     now: () => '2026-07-16T00:00:00.000Z',
+    stdin,
   });
   return { exitCode, out: out.join(''), err: err.join('') };
 }
@@ -64,6 +65,23 @@ async function selectMode(root, id, mode = 'active', confirmed = true) {
 function result(output) {
   return JSON.parse(output).result;
 }
+
+test('CLI approves a definition from stdin without a temporary input file', async (t) => {
+  const root = await fixture(t);
+  const definition = issueTaskDefinition({
+    id: 't-stdin-definition',
+    parentId: null,
+    gateLevel: 'LIGHT',
+  });
+
+  const approved = await invoke(root, [
+    'approve-item', '--definition', '-', '--host-runtime', 'claude-code', '--confirmed', '--json',
+  ], { stdin: `${JSON.stringify(definition)}\n` });
+
+  assert.equal(approved.exitCode, 0, approved.err);
+  assert.equal(result(approved.out).id, definition.id);
+  assert.deepEqual(await readdir(root), ['.hierarchical-delivery-governance']);
+});
 
 test('CLI manages a hierarchical Task from preparation through verified evidence', async (t) => {
   const root = await fixture(t);

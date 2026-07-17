@@ -3438,22 +3438,22 @@ var usage = `Usage: hdg <command> [options]
 Commands:
 ${HIERARCHICAL_COMMANDS.map((command) => `  ${command}`).join("\n")}
 
-  approve-item --definition <file> --host-runtime <agent> --confirmed
-  prepare-item --definition <file> --host-runtime <agent>
+  approve-item --definition <file|-> --host-runtime <agent> --confirmed
+  prepare-item --definition <file|-> --host-runtime <agent>
   freeze-item --item <id> --expected-baseline <sha256> --confirmed
-  revise-item --definition <file> --expected-baseline <sha256> --confirmed
+  revise-item --definition <file|-> --expected-baseline <sha256> --confirmed
   promote-item --item <root-id> --parent <frozen-parent-id> --expected-baseline <sha256> --expected-parent-baseline <sha256> --confirmed
   select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
   ready-tasks --item <root-or-subtree-id>
   task-context --item <task-id>
   dispatch-task --item <task-id> --owner <owner> --operation <id>
   claim-task --item <task-id> --owner <owner> --operation <id>
-  task-result --item <task-id> --operation <id> --status IMPLEMENTED|BLOCKED --evidence <file>
+  task-result --item <task-id> --operation <id> --status IMPLEMENTED|BLOCKED --evidence <file|->
   retry-item --item <id> --expected-baseline <sha256> --confirmed
-  gate-item --item <id> --status PASS|FAIL --evidence <file>
-  accept-item --item <id> --evidence <file>
-  acceptance-item --item <root-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file>
-  delivery-item --item <delivery-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file>
+  gate-item --item <id> --status PASS|FAIL --evidence <file|->
+  accept-item --item <id> --evidence <file|->
+  acceptance-item --item <root-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file|->
+  delivery-item --item <delivery-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file|->
   refresh-projections
   upgrade-registry --task-gate-level LIGHT|FULL --confirmed
 

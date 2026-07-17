@@ -47,6 +47,11 @@ test('Skill defines one stable hierarchy without repository-maintenance instruct
   assert.match(skill, /acceptance-report\.md/);
   assert.match(skill, /面向用户与协作者的中文工作台/);
   assert.match(skill, /根 Task、根 Capability、Delivery.*COMPLETED/);
+  assert.match(skill, /--definition -/);
+  assert.match(skill, /直接从 stdin 读取/);
+  assert.match(skill, /不得先用 Write 或文件工具写入 `%TEMP%`、`\$TMPDIR` 等系统临时目录/);
+  assert.match(skill, /跨卷路径会返回 `PATH_CROSS_VOLUME`/);
+  assert.match(skill, /不要把临时输入放进 `.hierarchical-delivery-governance\/` 控制面/);
 });
 
 test('repository maintenance constraints live in AGENTS.md instead of the distributed Skill', async () => {

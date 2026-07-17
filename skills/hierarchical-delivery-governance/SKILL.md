@@ -62,6 +62,18 @@ description: "分层治理可独立交付的软件工作单元。按最小必要
 
 详细契约见 [task-registry.md](references/task-registry.md)、[baselines.md](references/baselines.md) 与 [tracking.md](references/tracking.md)。
 
+## 结构化命令输入
+
+`--definition`、`--evidence` 等结构化 JSON 参数接受 `-`，表示直接从 stdin 读取。仅供单次命令使用的 JSON 必须通过 stdin 传入，不得先用 Write 或文件工具写入 `%TEMP%`、`$TMPDIR` 等系统临时目录，也不得写到当前工作区之外。控制器有意把文件输入限制在当前工作区内；跨卷路径会返回 `PATH_CROSS_VOLUME`，同卷但越出工作区会返回 `PATH_OUTSIDE_ROOT`。
+
+正常批准应直接执行以下命令，并由宿主把已展示且获批的 definition JSON 写入该进程的 stdin；`-` 是实际参数值，不是占位符：
+
+```text
+node <skill-root>/scripts/hdg.mjs approve-item --definition - --host-runtime <agent> --confirmed
+```
+
+不得为了“不污染仓库”而改用系统临时文件。只有宿主确实无法提供 stdin 时，才可使用当前工作区内的普通临时文件，并在同一轮命令完成后清理；不要把临时输入放进 `.hierarchical-delivery-governance/` 控制面。
+
 ## 每次开发消息的入口
 
 1. 解析当前 Skill 的安装目录，并运行 `node <skill-root>/scripts/hdg.mjs --help` 做只读预检。内置控制器是主入口；全局 `hdg` 只是可选快捷别名，不是前置条件。
@@ -174,24 +186,24 @@ Skill 自带单文件机械控制器。宿主从当前 `SKILL.md` 所在目录�
 层级流程使用以下命令：
 
 ```text
-node <skill-root>/scripts/hdg.mjs approve-item --definition <json> --host-runtime <agent> --confirmed
-node <skill-root>/scripts/hdg.mjs prepare-item --definition <json> --host-runtime <agent> # 仅恢复/诊断低级入口
+node <skill-root>/scripts/hdg.mjs approve-item --definition - --host-runtime <agent> --confirmed
+node <skill-root>/scripts/hdg.mjs prepare-item --definition - --host-runtime <agent> # 仅恢复/诊断低级入口
 node <skill-root>/scripts/hdg.mjs freeze-item --item <id> --expected-baseline <sha256> --confirmed # 仅恢复/诊断低级入口
-node <skill-root>/scripts/hdg.mjs revise-item --definition <json> --expected-baseline <sha256> --confirmed
+node <skill-root>/scripts/hdg.mjs revise-item --definition - --expected-baseline <sha256> --confirmed
 node <skill-root>/scripts/hdg.mjs promote-item --item <root-id> --parent <frozen-parent-id> --expected-baseline <sha256> --expected-parent-baseline <sha256> --confirmed
 node <skill-root>/scripts/hdg.mjs select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
 node <skill-root>/scripts/hdg.mjs ready-tasks --item <root-or-subtree-id>
 node <skill-root>/scripts/hdg.mjs task-context --item <task-id>
 node <skill-root>/scripts/hdg.mjs dispatch-task --item <task-id> --owner <owner> --operation <operation-id>
 node <skill-root>/scripts/hdg.mjs claim-task --item <task-id> --owner <owner> --operation <operation-id>
-node <skill-root>/scripts/hdg.mjs task-result --item <task-id> --operation <operation-id> --status IMPLEMENTED --evidence <json>
+node <skill-root>/scripts/hdg.mjs task-result --item <task-id> --operation <operation-id> --status IMPLEMENTED --evidence -
 node <skill-root>/scripts/hdg.mjs retry-item --item <id> --expected-baseline <sha256> --confirmed
-node <skill-root>/scripts/hdg.mjs accept-item --item <id> --evidence <json>
-node <skill-root>/scripts/hdg.mjs gate-item --item <id> --status PASS --evidence <json>
-node <skill-root>/scripts/hdg.mjs acceptance-item --item <root-id> --action INDEPENDENT_REVIEW_PASS --evidence <json>
-node <skill-root>/scripts/hdg.mjs acceptance-item --item <root-id> --action USER_CONFIRMED --evidence <json>
-node <skill-root>/scripts/hdg.mjs delivery-item --item <delivery-id> --action INDEPENDENT_REVIEW_PASS --evidence <json>
-node <skill-root>/scripts/hdg.mjs delivery-item --item <delivery-id> --action USER_CONFIRMED --evidence <json>
+node <skill-root>/scripts/hdg.mjs accept-item --item <id> --evidence -
+node <skill-root>/scripts/hdg.mjs gate-item --item <id> --status PASS --evidence -
+node <skill-root>/scripts/hdg.mjs acceptance-item --item <root-id> --action INDEPENDENT_REVIEW_PASS --evidence -
+node <skill-root>/scripts/hdg.mjs acceptance-item --item <root-id> --action USER_CONFIRMED --evidence -
+node <skill-root>/scripts/hdg.mjs delivery-item --item <delivery-id> --action INDEPENDENT_REVIEW_PASS --evidence -
+node <skill-root>/scripts/hdg.mjs delivery-item --item <delivery-id> --action USER_CONFIRMED --evidence -
 node <skill-root>/scripts/hdg.mjs refresh-projections
 node <skill-root>/scripts/hdg.mjs upgrade-registry --task-gate-level LIGHT|FULL --confirmed
 ```

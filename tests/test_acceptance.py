@@ -8,10 +8,10 @@ from pathlib import Path
 
 from hdg.acceptance import accept_work_item, record_acceptance
 from hdg.execution import dispatch_task, record_task_result, select_development_mode
-from hdg.planning import freeze_work_item, prepare_work_item
+from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.repository import GovernanceRepository
 
-from .fixtures import task_definition
+from .fixtures import task_hierarchy
 
 
 def write_evidence(root: str, name: str, value: dict) -> dict[str, str]:
@@ -24,30 +24,32 @@ def write_evidence(root: str, name: str, value: dict) -> dict[str, str]:
 class AcceptanceFlowTests(unittest.TestCase):
     def test_task_reaches_completed_with_distinct_review_and_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            prepared = prepare_work_item(root=temporary, definition=task_definition(), host_runtime="codex")
-            freeze_work_item(
+            prepared = prepare_hierarchy(root=temporary, hierarchy=task_hierarchy(), host_runtime="codex")
+            freeze_hierarchy(
                 root=temporary,
-                item_id=prepared["id"],
-                expected_baseline_fingerprint=prepared["baselineFingerprint"],
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
                 confirmed=True,
             )
+            task_id = prepared["rootId"]
+            baseline = prepared["baselineFingerprints"][task_id]
             select_development_mode(
                 root=temporary,
-                item_id=prepared["id"],
+                item_id=task_id,
                 mode="active",
-                expected_baseline_fingerprint=prepared["baselineFingerprint"],
+                expected_baseline_fingerprint=baseline,
                 confirmed=True,
             )
             dispatch_task(
                 root=temporary,
-                item_id=prepared["id"],
+                item_id=task_id,
                 owner="developer",
                 operation_id="op-001",
             )
             result = write_evidence(temporary, "task-result.json", {
                 "schemaVersion": 3,
                 "kind": "TASK_RESULT",
-                "taskId": prepared["id"],
+                "taskId": task_id,
                 "operationId": "op-001",
                 "status": "IMPLEMENTED",
                 "summary": "Implemented the frozen Python controller.",
@@ -55,19 +57,27 @@ class AcceptanceFlowTests(unittest.TestCase):
                 "tests": [{"argv": ["python", "-m", "unittest", "tests.test_controller"], "exitCode": 0, "testsRun": 1}],
                 "blockers": [],
             })
-            record_task_result(
+            result_record = record_task_result(
                 root=temporary,
-                item_id=prepared["id"],
+                item_id=task_id,
                 operation_id="op-001",
                 status="IMPLEMENTED",
                 evidence=result,
                 strict_evidence=True,
             )
+            development_review_path = Path(temporary, result_record["developmentReview"]["markdownPath"])
+            self.assertTrue(development_review_path.is_file())
+            development_review = development_review_path.read_text(encoding="utf-8")
+            self.assertIn("# 开发复核", development_review)
+            self.assertIn("计划文件", development_review)
+            self.assertIn("实际文件", development_review)
+            self.assertIn("不代表门禁通过", development_review)
+            self.assertFalse(Path(temporary, ".hierarchical-delivery-governance", "work-items", task_id, "acceptance-report.md").exists())
             gate = write_evidence(temporary, "gate.json", {
                 "schemaVersion": 3,
                 "kind": "WORK_ITEM_GATE",
-                "workItemId": prepared["id"],
-                "baselineFingerprint": prepared["baselineFingerprint"],
+                "workItemId": task_id,
+                "baselineFingerprint": baseline,
                 "verdict": "PASS",
                 "summary": "All frozen acceptance checks passed.",
                 "scope": {
@@ -83,7 +93,7 @@ class AcceptanceFlowTests(unittest.TestCase):
                 }],
                 "findings": {"p0": [], "p1": [], "p2": []},
             })
-            accepted = accept_work_item(root=temporary, item_id=prepared["id"], evidence=gate)
+            accepted = accept_work_item(root=temporary, item_id=task_id, evidence=gate)
             self.assertEqual(accepted["status"], "VERIFIED")
 
             review = write_evidence(temporary, "review.json", {
@@ -96,7 +106,7 @@ class AcceptanceFlowTests(unittest.TestCase):
             })
             record_acceptance(
                 root=temporary,
-                item_id=prepared["id"],
+                item_id=task_id,
                 action="INDEPENDENT_REVIEW_PASS",
                 evidence=review,
             )
@@ -108,7 +118,7 @@ class AcceptanceFlowTests(unittest.TestCase):
             })
             completed = record_acceptance(
                 root=temporary,
-                item_id=prepared["id"],
+                item_id=task_id,
                 action="USER_CONFIRMED",
                 evidence=confirmation,
             )

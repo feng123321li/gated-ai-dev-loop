@@ -32,26 +32,36 @@ def human_status(value: object) -> str:
     }.get(value, str(value) if value is not None else "无")
 
 
-def item_human_artifacts(item_id: str, acceptance_report: dict[str, Any] | None = None) -> dict[str, str | None]:
-    base = posixpath.join(GOVERNANCE_DIRECTORY, WORK_ITEMS_DIRECTORY, item_id)
+def item_human_artifacts(
+    item: str | dict[str, Any],
+    acceptance_report: dict[str, Any] | None = None,
+    *,
+    root_package_path: str | None = None,
+) -> dict[str, str | None]:
+    package_path = item["packagePath"] if isinstance(item, dict) else posixpath.join(WORK_ITEMS_DIRECTORY, item)
+    base = posixpath.join(GOVERNANCE_DIRECTORY, package_path)
+    plan_base = posixpath.join(GOVERNANCE_DIRECTORY, root_package_path or package_path)
     return {
         "overview": posixpath.join(base, "overview.md"),
-        "developmentReview": posixpath.join(base, "development-review.md"),
+        "developmentPlan": posixpath.join(plan_base, "development-plan.md"),
         "baseline": posixpath.join(base, "baseline.md"),
         "progress": posixpath.join(base, "progress.md"),
+        "developmentReview": posixpath.join(base, "development-review.md")
+        if isinstance(item, dict) and item.get("latestResult")
+        else None,
         "acceptanceReport": acceptance_report.get("markdownPath") if acceptance_report else None,
     }
 
 
 def next_action(entry: dict[str, Any]) -> str:
     if entry["stage"] == "WAITING_FOR_BASELINE_CONFIRMATION":
-        return "人工评审 development-review.md；需要修改则重新起草，确认无误后按当前指纹执行 freeze-item。"
+        return "人工评审根级 development-plan.md；同意后直接确认冻结，无需复述指纹。"
     if entry["status"] == "WAITING_FOR_DEVELOPMENT_MODE_SELECTION":
         return "人工选择 active 或 manual 开发方式。"
     if entry["status"] == "FROZEN" and entry["kind"] == "TASK":
         return "等待依赖满足后执行 dispatch-task。"
     if entry["status"] == "FROZEN":
-        return "继续准备已计划子级，或在分解封口且子级通过后运行聚合门禁。"
+        return "等待当前树中的子级完成后运行聚合门禁。"
     if entry["status"] == "CLAIMED":
         return "等待开发结果按 operationId 写回。"
     if entry["status"] == "IMPLEMENTED":
@@ -68,52 +78,75 @@ def next_action(entry: dict[str, Any]) -> str:
 
 
 def render_workspace_overview(registry: dict[str, Any]) -> str:
+    by_id = {item["id"]: item for item in registry["workItems"]}
     lines = [
-        "# 工作项总览",
+        "# 需求层级总览",
         "",
         "> 本文件是面向用户和协作者的可读投影；机器权威为 `work-item-registry.json`。",
         f"> 注册表版本：{registry['revision']}",
         f"> 当前焦点：{registry['currentFocus']['workItemId'] or '无'}",
-        "",
-        "| 工作项 | 类型 | 门禁等级 | 父级 | 当前状态 | 开发评审 | 开发方式 | 最终验收 | 直接子级 | 全部后代 | 门禁 | 认领者 | 验收报告 |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
-    for item in sorted(registry["workItems"], key=lambda value: value["id"]):
-        report = (
-            f"[查看]({posixpath.relpath(item['acceptanceReport']['markdownPath'], GOVERNANCE_DIRECTORY)})"
-            if item.get("acceptanceReport")
-            else "尚未生成"
-        )
-        acceptance = item.get("acceptance") if item["parentId"] is None else None
-        item_link = f"[{item['id']}]({posixpath.join(WORK_ITEMS_DIRECTORY, item['id'], 'overview.md')})"
-        review = f"[查看]({posixpath.join(WORK_ITEMS_DIRECTORY, item['id'], 'development-review.md')})"
-        mode = item["developmentMode"]["mode"] if item.get("developmentMode") else "不适用"
+
+    def append_node(item: dict[str, Any], prefix: str, connector: str) -> None:
+        overview = posixpath.join(item["packagePath"], "overview.md")
+        mode = item["developmentMode"]["mode"] if item.get("developmentMode") else "未选择"
+        extra = f"；开发方式 {mode}" if item["kind"] == "TASK" else ""
         lines.append(
-            f"| {item_link} | {human_status(item['kind'])} | {item['gateLevel']} | {item['parentId'] or '无'} | "
-            f"{human_status(item['status'])} | {review} | {mode} | "
-            f"{human_status(acceptance['status']) if acceptance else '不适用'} | "
-            f"{item['progress']['directChildren']['verified']}/{item['progress']['directChildren']['total']} | "
-            f"{item['progress']['descendants']['verified']}/{item['progress']['descendants']['total']} | "
-            f"{human_status(item['gate']['status'])} | {item['claim']['owner'] if item.get('claim') else '无'} | {report} |"
+            f"{prefix}{connector}{human_status(item['kind'])} `{item['id']}` — "
+            f"{human_status(item['status'])}；门禁 {human_status(item['gate']['status'])}{extra}；[概览]({overview})"
         )
+        children = [by_id[child_id] for child_id in item["childIds"]]
+        for index, child in enumerate(children):
+            last = index == len(children) - 1
+            child_prefix = prefix + ("   " if connector in {"", "└─ "} else "│  ")
+            append_node(child, child_prefix, "└─ " if last else "├─ ")
+
+    roots = sorted(
+        (item for item in registry["workItems"] if item["parentId"] is None),
+        key=lambda item: item["id"],
+    )
+    for root in roots:
+        acceptance = root.get("acceptance")
+        lines.extend([
+            "",
+            f"## 需求：{root['id']}",
+            "",
+            f"- 开发方案：[查看整树 development-plan.md]({posixpath.join(root['packagePath'], 'development-plan.md')})",
+            f"- 最终验收：{human_status(acceptance['status']) if acceptance else '不适用'}",
+            f"- 进度：{root['progress']['descendants']['verified']}/{root['progress']['descendants']['total']} 个后代已验证",
+            "",
+        ])
+        append_node(root, "", "")
     lines.append("")
     return "\n".join(lines)
 
 
-def render_item_overview(entry: dict[str, Any]) -> str:
+def render_item_overview(entry: dict[str, Any], by_id: dict[str, dict[str, Any]] | None = None) -> str:
+    by_id = by_id or {entry["id"]: entry}
+    parent = by_id.get(entry["parentId"]) if entry["parentId"] else None
+    parent_link = (
+        f"[{parent['id']}]({posixpath.relpath(posixpath.join(parent['packagePath'], 'overview.md'), entry['packagePath'])})"
+        if parent
+        else "无"
+    )
+    child_links = [
+        f"[{child_id}]({posixpath.relpath(posixpath.join(by_id[child_id]['packagePath'], 'overview.md'), entry['packagePath'])})"
+        for child_id in entry["childIds"]
+    ]
     return "\n".join([
         f"# {entry['id']} 工作项概览",
         "",
         f"- 类型：{entry['kind']}",
         f"- 门禁等级：{entry['gateLevel']}",
         f"- 权限性质：{entry['authorityKind']}",
-        f"- 父级：{entry['parentId'] or '无'}",
+        f"- 父级：{parent_link}",
         "- 基线：[baseline.md](baseline.md)",
-        "- 开发评审：[development-review.md](development-review.md)",
+        "- 开发方案：[development-plan.md](development-plan.md)",
         "- 结构化开发计划：[development-plan.json](development-plan.json)",
         "- 进度：[progress.md](progress.md)",
         f"- 父契约指纹：{entry['parentContractFingerprint'] or '无'}",
-        f"- 子级：{', '.join(entry['childIds']) or '无'}",
+        f"- 子级：{', '.join(child_links) or '无'}",
+        f"- 开发复核：{'[development-review.md](development-review.md)' if entry.get('latestResult') else '开发结果写回后生成'}",
         f"- 验收报告：{'[acceptance-report.md](acceptance-report.md)' if entry.get('acceptanceReport') else '尚未生成'}",
         f"- 下一步：{next_action(entry)}",
         "",
@@ -155,6 +188,62 @@ def report_status(entry: dict[str, Any]) -> str:
     if entry["status"] in {"BLOCKED", "VERIFIED"}:
         return entry["status"]
     return "NOT_READY"
+
+
+def render_development_review(report: dict[str, Any]) -> str:
+    plan = report["developmentPlan"]
+    result = (report.get("result") or {}).get("artifact") or {}
+    planned_files = [item["path"] for item in plan.get("fileChanges", [])]
+    actual_files = [item.replace("\\", "/") for item in result.get("changedFiles", [])]
+    tests = result.get("tests", [])
+    lines = [
+        f"# 开发复核：{report['workItem']['title']}",
+        "",
+        f"- 工作项：{report['workItem']['id']}",
+        f"- Baseline 指纹：{report['workItem']['baselineFingerprint']}",
+        f"- 开发结果：{report['status']}",
+        f"- 写回时间：{report['generatedAt']}",
+        "",
+        "## 冻结计划与实际改动",
+        "",
+        f"- 开发目的：{plan['purpose']}",
+        f"- 计划文件：{'、'.join(planned_files) or '无'}",
+        f"- 实际文件：{'、'.join(actual_files) or '无'}",
+        f"- 计划外文件：{'、'.join(item for item in actual_files if item not in planned_files) or '无'}",
+        f"- 尚未观察到的计划文件：{'、'.join(item for item in planned_files if item not in actual_files) or '无'}",
+        "",
+        "## 接口与功能复核",
+        "",
+    ]
+    interfaces = plan.get("interfaces", [])
+    if interfaces:
+        lines.extend(
+            f"- {item['action']} {item['kind']} `{item['name']}`：{item['targetContract']}"
+            for item in interfaces
+        )
+    else:
+        lines.append("- 冻结计划未声明接口改动。")
+    lines.extend(["", "## 开发者结果", "", f"- 摘要：{result.get('summary', '未提供')}"])
+    blockers = result.get("blockers", [])
+    lines.append(f"- 阻断：{'；'.join(blockers) or '无'}")
+    lines.extend(["", "## 测试事实", ""])
+    if tests:
+        for test in tests:
+            argv = json.dumps(test["argv"], ensure_ascii=False, separators=(",", ":"))
+            lines.append(
+                f"- `{argv}`：退出码 {test['exitCode']}；执行 {test.get('testsRun', '未记录')} 项测试"
+            )
+    else:
+        lines.append("- 未提供测试事实。")
+    lines.extend([
+        "",
+        "## 复核结论",
+        "",
+        "- 本文件只对照冻结计划和开发者写回事实，不代表门禁通过。",
+        "- 下一步必须形成独立门禁 evidence 并执行 accept-item。",
+        "",
+    ])
+    return "\n".join(lines)
 
 
 def render_acceptance_report(report: dict[str, Any]) -> str:

@@ -2,7 +2,7 @@
 
 ## Task gate
 
-Task 只有在状态为 IMPLEMENTED 时可运行 gate。`task-result` 写回后，控制器立即生成状态为“等待门禁验收”的 `acceptance-report.json/md`；宿主不能在此状态结束工作。正常 gate 使用 `accept-item`，由控制器验证：
+Task 只有在状态为 IMPLEMENTED 时可运行 gate。`task-result` 写回后，控制器立即生成状态为“等待门禁”的 `development-review.json/md`，用于复核冻结计划与实际开发结果；此时尚未生成验收报告，宿主不能在此状态结束工作。正常 gate 使用 `accept-item`，并在门禁执行后生成 `acceptance-report.json/md`。控制器验证：
 
 - baseline 与实际存在的父链指纹；根 Task 无父链；
 - 真实 diff 归属和 Scope；
@@ -28,14 +28,14 @@ decomposition 为 SEALED 且所有计划 Capability VERIFIED 后，运行跨能�
 
 ## 用户验收报告
 
-每个实际工作项都维护一份 `acceptance-report.json` 和面向用户的 `acceptance-report.md`：
+每个实际执行过门禁的工作项都维护一份 `acceptance-report.json` 和面向用户的 `acceptance-report.md`：
 
-- Task result 后显示开发摘要、变更文件、开发侧测试事实和“等待门禁验收”；
+- Task result 后由 `development-review.json/md` 显示开发摘要、变更文件、开发侧测试事实和“等待门禁”，不提前创建验收报告；
 - gate 后显示冻结开发目的与接口/子级契约、计划文件与实际文件差异、验收项逐条结论、测试 argv/退出码/Tests run、Scope 外变更、P0/P1/P2 和门禁结论；
 - 根工作项继续显示独立/人工审查结论与用户确认，直到最终状态为“已完成”；
 - 子工作项报告在该级 VERIFIED 后结束，不重复请求用户确认。
 
-报告是 registry 和 evidence 的可重建人类投影，不取代机器权威。`workspace-overview.md` 必须提供报告入口。
+开发复核与验收报告都是 registry 和 evidence 的可重建人类投影，不取代机器权威。`workspace-overview.md` 必须按实际阶段提供对应入口。
 
 ## 语义审查能力
 

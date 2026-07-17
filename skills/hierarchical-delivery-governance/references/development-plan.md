@@ -1,10 +1,10 @@
-# 冻结前开发评审方案
+# 冻结前整树开发方案
 
-`developmentPlan` 是 baseline 的机器契约，不是开发完成后的总结。宿主先结合只读代码检索起草它，再执行 `prepare-item` 生成 `development-review.md`；人工查看真实文件并确认当前指纹后才能 `freeze-item`。
+`developmentPlan` 是每个节点 baseline 的机器契约，不是开发完成后的总结。宿主先结合只读代码检索起草完整层级 definition，再执行 `prepare-hierarchy` 生成根级 `development-plan.md`；人工查看真实文件并同意后，Agent 使用准备结果中的层级指纹执行 `freeze-hierarchy`。
 
 ## 完整 definition 外壳
 
-控制器使用严格字段集合，缺字段和未知字段都会拒绝。三个层级都必须先具备以下共同字段，再加入本层专有字段：
+控制器使用严格字段集合，缺字段和未知字段都会拒绝。最外层固定为 `{"schemaVersion":3,"root":{"definition":{...},"children":[...]}}`；每个 child 继续使用相同的 `definition + children` 节点结构。三个层级的节点 definition 都必须先具备以下共同字段，再加入本层专有字段：
 
 ```json
 {
@@ -223,11 +223,11 @@ Delivery 下 Capability 的 `decomposition.dependsOn` 必须与 Delivery `childP
 
 ## 人工展示规则
 
-`prepare-item --json` 成功后，宿主必须：
+`prepare-hierarchy --json` 成功后，宿主必须：
 
-1. 提供返回的 `humanArtifacts.developmentReview` 可点击入口；
-2. 同时简述当前 ID、kind、baseline 指纹和 `nextAction`；
-3. 对 Task 摘要文件与接口，对 Capability 摘要 Task/共享契约，对 Delivery 摘要 Capability/跨能力契约；
-4. 等待人工明确评审，不立即调用 freeze；
-5. 用户提出修改时重新生成同一 ID 的当前 definition，不把旧文件当作已批准；
-6. freeze 后再次提供评审、baseline 和 progress 入口。
+1. 提供返回的 `humanArtifacts.developmentPlan` 可点击入口；
+2. 同时简述根 ID、完整树、开发目的、文件、接口、依赖波次、测试映射和 `nextAction`；
+3. 明确这只是等待评审，尚未冻结，也没有开发授权；
+4. 用户提出修改时重新准备同一根 ID 的完整树，不把旧文件当作已批准；
+5. 用户只需确认已评审并同意当前文件，不要求知道或复述 SHA256；
+6. Agent 用已保存的 `hierarchyFingerprint` 调用冻结，成功后再次提供 plan、baseline 和 progress 入口。

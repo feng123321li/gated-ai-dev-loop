@@ -1,6 +1,6 @@
 interface:
   display_name: "分层式 AI 交付治理"
   short_description: "冻结前评审分层开发方案，再治理开发、门禁与验收"
-  default_prompt: "使用 $hierarchical-delivery-governance 以 Task、Capability→Task 或 Delivery→Capability→Task 的最浅合法结构治理当前工作：先按层级生成包含开发目的、内容、文件、接口/共享契约、依赖波次和测试映射的 development-review.md，供人工评审当前指纹后再冻结；随后原子调度 manual/active 开发，回收结果后执行门禁，对照计划生成用户验收报告，并让治理根完成独立验收和用户确认。"
+  default_prompt: "使用 $hierarchical-delivery-governance 以 Task、Capability→Task 或 Delivery→Capability→Task 的最浅合法结构治理当前工作：一个需求一次生成一个嵌套根目录和一份包含开发目的、文件、接口/共享契约、依赖波次与测试映射的 development-plan.md；人工只确认当前文件，Agent 使用已保存的层级指纹一次冻结整树。随后调度 manual/active Task，开发结果写回后生成 development-review，再执行门禁与 acceptance report，并让治理根完成独立验收和用户确认。"
 policy:
   allow_implicit_invocation: true

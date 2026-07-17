@@ -1,42 +1,38 @@
-# 分级进度、交付状态与投影
+# 分级进度、树形投影与开发复核
 
 ## 投影原则
 
-`work-item-registry.json` 是 Agent 和控制器使用的机器权威。`workspace-overview.md` 和每个包的 `overview.md/progress.md` 是面向用户与协作者的中文工作台，由 registry 重建；工作项 ID 必须可点击，且展示 `development-review.md`、状态、下一步和验收报告入口。`development-review.md` 是冻结前人工评审入口，但不能单独授权开发或证明 PASS。
+`work-item-registry.json` 是节点状态机器权威，根目录 `hierarchy.json` 绑定整棵需求树。`workspace-overview.md` 必须按需求根分组并使用树形结构展示 Delivery→Capability→Task；不能把父子节点渲染成彼此并列的需求行。
 
-## 层级事实卡投影
-
-在任何工作项持久化前，协调视图先展示人可读的层级事实卡：交付对象和独立验收边界、实际需要的 Task/Capability 聚合责任及各自聚合验收、可执行叶子、依赖和集成波次、命中规则、为什么不是更小一级、缺失事实及待确认项。它是路由依据，不是创建授权；事实不足时保持草案，不生成 ID、不准备包、不冻结 baseline。
+一个需求只显示一个根级 `development-plan.md` 入口。各节点仍有自己的 baseline、状态、进度、门禁和后续开发复核。
 
 ## 三种进度
 
-每个工作项都展示：
+每个节点展示：
 
 - 自身 `stage/status/gateLevel/developmentMode/gate/claim/recordRevision`；
-- 开发评审文件及状态；`WAITING_FOR_BASELINE_CONFIRMATION` 的下一步必须明确为人工评审当前文件和指纹后再 freeze；
-- `directChildren`：直接子级 total、verified、blocked、active；
-- `descendants`：全部后代的同类精确计数。
-- 根工作项的 `acceptance.status`：最终审查和用户确认阶段；非根显示“不适用”。
-- 已生成的 `acceptance-report.md` 入口；开发结果写回后不得缺失。
+- `directChildren` 的 total、verified、blocked、active；
+- `descendants` 的同类精确计数；
+- 根节点的最终 `acceptance.status`；
+- 开发前 `development-plan.md`、开发后 `development-review.md`、门禁后 `acceptance-report.md` 的对应入口。
 
-Task 的子级计数为零。不要写主观百分比、故事点完成率或“基本完成”。计划但尚未物化的 child 计入 total，状态视为 planned。
+Task 子级计数为零。不写主观百分比。协调节点声明的全部 child 必须已物化，因此不存在“计划但尚未生成”的占位进度。
 
-## Delivery 视图
+## 分层视图
 
-Delivery review/overview 是顶层交付视图，不要求范围覆盖整个仓库或产品。评审文件按 Capability 展示开发目的、交付内容、依赖、跨能力接口/共享契约、交付波次与顶层测试映射；overview 展示状态、直接子级完成数、阻断项、聚合 gate、最终验收和证据入口。Delivery VERIFIED 需要所有计划 Capability VERIFIED 且顶层交付 gate PASS；只有审查完成并取得用户确认后治理根才为 COMPLETED。
+- Delivery：展示 Capability 目的、跨能力契约、交付波次、子级进度和顶层 gate。
+- Capability：展示 Task 目的、依赖、共享契约、集成波次、子级进度和聚合 gate。
+- Task：展示精确文件、接口/函数目标契约、实现逻辑、开发方式、claim、结果、复核和 gate。
 
-## Capability 视图
-
-Capability review 展示计划 Task 的目的/交付物、依赖、跨 Task 接口/共享契约、集成流程、波次和测试映射；progress 展示 READY/CLAIMED/IMPLEMENTED/VERIFIED/BLOCKED 状态和集成 gate。新增 Task 后 total 立即增加；既有 Task 状态不被不相关兄弟追加重置。
-
-根 Capability 的父链为空；它在全部 Task 和自身 gate 通过后 VERIFIED，再进入独立验收和用户确认。
-
-## Task 视图
-
-Task review 展示开发目的、变更场景、精确文件、接口/函数当前与目标契约、实现逻辑、数据事务、兼容性和测试映射；progress 展示父链、baseline 指纹、`gateLevel`、开发方式及确认记录、依赖、claim、实现证据、gate、下一动作和阻断解除条件。未选择时下一动作是明确选择 active/manual；开发 Agent 不更新控制投影，宿主验证返回结果后写入。
-
-根 Task 的父链和聚合依赖为空，直接以自身 gate 结果作为浅层交付状态，再进入独立验收和用户确认。
+根 Task、根 Capability 和 Delivery 都在自身 gate PASS 后进入独立验收和用户确认；不要为了最终验收补空父级。
 
 ## 写回时机
 
-准备后立即写入可供人工查看的评审文件；冻结后更新其中的确认记录。准备、冻结、开发方式选择、修订、升层、dispatch、Task result、retry、gate、独立/人工审查和用户确认后立即写回，不在整轮结束后批量补写。Task result 后创建验收报告，后续每一步持续更新。每次写回增加 registry/record revision，并重建所有受影响投影。升层后父子投影立即变化，Task 下一动作重置为明确选择 active/manual，审计细节保留在 `promotionHistory`。
+- `prepare-hierarchy`：一次写入完整嵌套目录、根计划和树形总览。
+- `freeze-hierarchy`：一次更新全部节点确认记录和状态。
+- `select-development-mode/dispatch-task`：更新 Task 模式、claim、上下文与 handoff。
+- `task-result`：生成 `development-review.json/md`，明确 IMPLEMENTED 不是完成。
+- `accept-item`：生成或更新 `acceptance-report.json/md`。
+- retry、聚合 gate、独立审查和用户确认：立即更新 registry 和投影。
+
+每次写回增加 registry/record revision，并重建所有受影响的树形投影。

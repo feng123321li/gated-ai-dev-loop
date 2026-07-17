@@ -168,3 +168,40 @@ def delivery_definition(**overrides: Any) -> dict[str, Any]:
     definition.update(overrides)
     definition["developmentPlan"] = overrides.get("developmentPlan", coordination_plan(definition))
     return deepcopy(definition)
+
+
+def hierarchy_node(definition: dict[str, Any], children: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    return {
+        "definition": deepcopy(definition),
+        "children": deepcopy(children or []),
+    }
+
+
+def hierarchy_definition(
+    definition: dict[str, Any],
+    children: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "schemaVersion": 3,
+        "root": hierarchy_node(definition, children),
+    }
+
+
+def task_hierarchy(**overrides: Any) -> dict[str, Any]:
+    return hierarchy_definition(task_definition(**overrides))
+
+
+def capability_hierarchy() -> dict[str, Any]:
+    capability = capability_definition()
+    task = task_definition(parentId=capability["id"], gateLevel="FULL")
+    return hierarchy_definition(capability, [hierarchy_node(task)])
+
+
+def delivery_hierarchy() -> dict[str, Any]:
+    delivery = delivery_definition()
+    capability = capability_definition(parentId=delivery["id"])
+    task = task_definition(parentId=capability["id"], gateLevel="FULL")
+    return hierarchy_definition(
+        delivery,
+        [hierarchy_node(capability, [hierarchy_node(task)])],
+    )

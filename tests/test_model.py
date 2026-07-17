@@ -6,7 +6,7 @@ import unittest
 from hdg.errors import GatedLoopError
 from hdg.evidence import valid_gate_artifact
 from hdg.model import (
-    render_development_review,
+    render_development_plan,
     resolve_self_hosting_policy,
     scope_patterns_overlap,
     validate_work_item_definition,
@@ -24,7 +24,7 @@ class WorkItemModelTests(unittest.TestCase):
         self.assertEqual(definition["authorityKind"], "EXECUTION")
         self.assertRegex(work_item_baseline_fingerprint(definition), r"^[a-f0-9]{64}$")
 
-    def test_all_hierarchy_shapes_render_distinct_reviews(self) -> None:
+    def test_all_hierarchy_shapes_render_distinct_plans(self) -> None:
         for source, heading in (
             (task_definition(), "## 文件改动"),
             (capability_definition(), "## Task 开发内容"),
@@ -32,14 +32,14 @@ class WorkItemModelTests(unittest.TestCase):
         ):
             definition = validate_work_item_definition(source)
             fingerprint = work_item_baseline_fingerprint(definition)
-            review = render_development_review(
+            plan = render_development_plan(
                 definition,
                 {
                     "baselineFingerprint": fingerprint,
                     "review": {"status": "WAITING_FOR_HUMAN_REVIEW"},
                 },
             )
-            self.assertIn(heading, review)
+            self.assertIn(heading, plan)
 
     def test_development_plan_is_required(self) -> None:
         source = task_definition()

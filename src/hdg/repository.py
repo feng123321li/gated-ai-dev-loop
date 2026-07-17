@@ -29,7 +29,7 @@ from .model import (
     WORK_ITEM_GATE_LEVELS,
     WORK_ITEM_KINDS,
     WORK_ITEM_SCHEMA_VERSION,
-    render_development_review,
+    render_development_plan,
     render_work_item_baseline,
     resolve_self_hosting_policy,
     work_item_baseline_fingerprint,
@@ -38,6 +38,7 @@ from .model import (
 )
 from .projections import (
     render_acceptance_report,
+    render_development_review,
     render_item_overview,
     render_item_progress,
     render_workspace_overview,
@@ -51,13 +52,9 @@ GOVERNANCE_DIRECTORY = ".hierarchical-delivery-governance"
 WORK_ITEM_REGISTRY_SCHEMA_VERSION = SCHEMA_VERSION
 ENTRY_FIELDS = {
     "id", "kind", "gateLevel", "authorityKind", "parentId", "childIds", "packagePath",
-    "developmentReview", "stage", "status", "baselineFingerprint", "contractFingerprint",
+    "developmentPlan", "stage", "status", "baselineFingerprint", "contractFingerprint",
     "parentContractFingerprint", "gate", "acceptance", "acceptanceReport", "developmentMode",
     "claim", "latestEvidence", "latestResult", "recordRevision", "createdAt", "updatedAt", "progress",
-}
-PROMOTION_FIELDS = {
-    "schemaVersion", "childId", "childKind", "parentId", "parentKind",
-    "previousBaselineFingerprint", "promotedBaselineFingerprint", "parentBaselineFingerprint", "promotedAt",
 }
 STATE_FIELDS = {
     "schemaVersion", "id", "stage", "baselineFingerprint", "contractFingerprint",
@@ -149,12 +146,8 @@ class GovernanceRepository:
     def registry_path(self) -> Path:
         return self.governance_root / WORK_ITEM_REGISTRY_FILE
 
-    def item_path(self, item_id: str) -> Path:
-        return self.governance_root / WORK_ITEMS_DIRECTORY / item_id
-
-    @staticmethod
-    def item_relative_path(item_id: str) -> str:
-        return f"{WORK_ITEMS_DIRECTORY}/{item_id}"
+    def item_path(self, entry: dict[str, Any]) -> Path:
+        return self.governance_root / entry["packagePath"]
 
     def assert_self_hosting_dogfood(self, explicit_dogfood: bool) -> None:
         project_name = None
@@ -195,7 +188,6 @@ class GovernanceRepository:
             "revision": 0,
             "currentFocus": {"workItemId": None, "purpose": None},
             "workItems": [],
-            "promotionHistory": [],
             "updatedAt": timestamp(self.now),
         }
 
@@ -214,13 +206,12 @@ class GovernanceRepository:
             and not isinstance(registry.get("revision"), bool)
             and registry["revision"] >= 0
             and isinstance(registry.get("workItems"), list)
-            and isinstance(registry.get("promotionHistory"), list)
             and isinstance(registry.get("currentFocus"), dict)
             and set(registry["currentFocus"]) == {"workItemId", "purpose"}
             and valid_timestamp(registry.get("updatedAt"))
             and set(registry) == {
                 "schemaVersion", "coordinationRoot", "revision", "currentFocus", "workItems",
-                "promotionHistory", "updatedAt",
+                "updatedAt",
             }
         )
         if not valid:
@@ -229,24 +220,6 @@ class GovernanceRepository:
         if len(ids) != len(registry["workItems"]) or len(set(ids)) != len(ids) or any(not safe_work_item_id(item) for item in ids):
             fail("WORK_ITEM_REGISTRY_INVALID", "Work item registry contains duplicate or unsafe IDs")
         by_id = {item["id"]: item for item in registry["workItems"]}
-        for promotion in registry["promotionHistory"]:
-            valid_promotion = (
-                isinstance(promotion, dict)
-                and set(promotion) == PROMOTION_FIELDS
-                and promotion.get("schemaVersion") == SCHEMA_VERSION
-                and safe_work_item_id(promotion.get("childId"))
-                and safe_work_item_id(promotion.get("parentId"))
-                and (
-                    (promotion.get("childKind") == "TASK" and promotion.get("parentKind") == "CAPABILITY")
-                    or (promotion.get("childKind") == "CAPABILITY" and promotion.get("parentKind") == "DELIVERY")
-                )
-                and all(bool(FINGERPRINT.fullmatch(str(promotion.get(key, "")))) for key in (
-                    "previousBaselineFingerprint", "promotedBaselineFingerprint", "parentBaselineFingerprint"
-                ))
-                and valid_timestamp(promotion.get("promotedAt"))
-            )
-            if not valid_promotion:
-                fail("WORK_ITEM_REGISTRY_INVALID", "Work item promotion history is invalid")
         for entry in registry["workItems"]:
             valid_entry = (
                 set(entry) == ENTRY_FIELDS
@@ -257,8 +230,11 @@ class GovernanceRepository:
                 and (entry.get("parentId") is None or safe_work_item_id(entry.get("parentId")))
                 and isinstance(entry.get("childIds"), list)
                 and all(safe_work_item_id(item) for item in entry["childIds"])
-                and entry.get("packagePath") == self.item_relative_path(entry["id"])
-                and entry.get("developmentReview") is True
+                and isinstance(entry.get("packagePath"), str)
+                and entry["packagePath"].replace("\\", "/") == entry["packagePath"]
+                and entry["packagePath"].startswith(f"{WORK_ITEMS_DIRECTORY}/")
+                and ".." not in entry["packagePath"].split("/")
+                and entry.get("developmentPlan") is True
                 and bool(FINGERPRINT.fullmatch(str(entry.get("baselineFingerprint", ""))))
                 and bool(FINGERPRINT.fullmatch(str(entry.get("contractFingerprint", ""))))
                 and (
@@ -322,6 +298,17 @@ class GovernanceRepository:
                 fail("WORK_ITEM_REGISTRY_INVALID", f"Work item acceptance report is invalid: {entry['id']}")
             if entry["kind"] == "DELIVERY" and entry["parentId"] is not None:
                 fail("WORK_ITEM_REGISTRY_INVALID", "Delivery entries cannot have parents")
+            expected_package = (
+                f"{WORK_ITEMS_DIRECTORY}/{entry['id']}"
+                if entry["parentId"] is None
+                else f"{by_id[entry['parentId']]['packagePath']}/children/{entry['id']}"
+                if entry["parentId"] in by_id
+                else None
+            )
+            if entry["packagePath"] != expected_package:
+                fail("WORK_ITEM_REGISTRY_INVALID", f"Work item package path is invalid: {entry['id']}")
+            if any(child_id not in by_id for child_id in entry["childIds"]):
+                fail("WORK_ITEM_REGISTRY_INVALID", f"Work item hierarchy is not fully materialized: {entry['id']}")
             if entry["kind"] != "DELIVERY" and entry["parentId"] is not None:
                 parent = by_id.get(entry["parentId"])
                 expected_kind = "DELIVERY" if entry["kind"] == "CAPABILITY" else "CAPABILITY"
@@ -364,7 +351,7 @@ class GovernanceRepository:
             if entry["kind"] != "TASK" or entry.get("developmentMode") is None:
                 continue
             try:
-                artifact = self.read_json(self.item_path(entry["id"]), "development-mode.json", "WORK_ITEM_DEVELOPMENT_MODE_INVALID")
+                artifact = self.read_json(self.item_path(entry), "development-mode.json", "WORK_ITEM_DEVELOPMENT_MODE_INVALID")
             except Exception:
                 fail("WORK_ITEM_DEVELOPMENT_MODE_INVALID", f"{entry['id']} development-mode.json is missing or unreadable")
             if not valid_development_mode(artifact, entry) or canonical_json(artifact) != canonical_json(entry["developmentMode"]):
@@ -405,7 +392,12 @@ class GovernanceRepository:
         return value
 
     @staticmethod
-    def package_files(definition: dict[str, Any], state: dict[str, Any]) -> dict[str, str]:
+    def package_files(
+        definition: dict[str, Any],
+        state: dict[str, Any],
+        *,
+        human_plan: str | None = None,
+    ) -> dict[str, str]:
         files = {
             "baseline.json": pretty_json(definition),
             "baseline.md": render_work_item_baseline(definition),
@@ -425,7 +417,7 @@ class GovernanceRepository:
                 "baselineFingerprint": state["baselineFingerprint"],
                 "developmentPlan": definition["developmentPlan"],
             }),
-            "development-review.md": render_development_review(definition, state),
+            "development-plan.md": human_plan or render_development_plan(definition, state),
         }
         if "children" in definition:
             files["children.json"] = pretty_json({"schemaVersion": WORK_ITEM_SCHEMA_VERSION, "children": definition["children"]})
@@ -439,6 +431,26 @@ class GovernanceRepository:
                 atomic_write(staging / name, contents)
 
         atomic_create_directory(target, populate)
+
+    def write_hierarchy_package(
+        self,
+        target: Path,
+        packages: list[tuple[Path, dict[str, str]]],
+        *,
+        replace: bool = False,
+    ) -> None:
+        """Atomically write one complete requirement tree below its root directory."""
+        def populate(staging: Path) -> None:
+            for relative, files in packages:
+                directory = staging / relative
+                directory.mkdir(parents=True, exist_ok=True)
+                for name, contents in files.items():
+                    atomic_write(directory / name, contents)
+
+        if replace:
+            atomic_replace_directory(target, populate)
+        else:
+            atomic_create_directory(target, populate)
 
     def replace_package(
         self,
@@ -473,7 +485,7 @@ class GovernanceRepository:
         atomic_replace_directory(target, populate)
 
     def read_package(self, registry: dict[str, Any], entry: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], Path]:
-        target = self.item_path(entry["id"])
+        target = self.item_path(entry)
         definition = self.read_json(target, "baseline.json", "WORK_ITEM_PACKAGE_INVALID")
         state = self.read_json(target, "state.json", "WORK_ITEM_PACKAGE_INVALID")
         baseline_fingerprint = work_item_baseline_fingerprint(definition)
@@ -499,7 +511,10 @@ class GovernanceRepository:
             )
         )
         generated_valid = True
-        for name, expected in self.package_files(definition, state).items():
+        generated_files = self.package_files(definition, state)
+        if entry["parentId"] is None:
+            generated_files.pop("development-plan.md")
+        for name, expected in generated_files.items():
             if name == "state.json":
                 continue
             try:
@@ -595,15 +610,16 @@ class GovernanceRepository:
         self.recompute_progress(registry)
         self.validate_registry(registry)
         registry["workItems"] = sorted(registry["workItems"], key=lambda item: item["id"])
+        by_id = {item["id"]: item for item in registry["workItems"]}
         atomic_write(self.registry_path, pretty_json(registry))
         atomic_write(self.governance_root / "workspace-overview.md", render_workspace_overview(registry))
         for entry in registry["workItems"]:
-            target = self.item_path(entry["id"])
+            target = self.item_path(entry)
             if not target.exists():
                 continue
             if not target.is_dir() or target.is_symlink():
                 fail("WORK_ITEM_PACKAGE_INVALID", f"{entry['id']} package path is invalid")
-            atomic_write(target / "overview.md", render_item_overview(entry))
+            atomic_write(target / "overview.md", render_item_overview(entry, by_id))
             atomic_write(target / "progress.md", render_item_progress(entry))
 
     def write_acceptance_report(
@@ -632,10 +648,10 @@ class GovernanceRepository:
             "userConfirmation": acceptance.get("userConfirmation") if acceptance else None,
             "generatedAt": at,
         }
-        directory = self.item_path(entry["id"])
+        directory = self.item_path(entry)
         atomic_write(directory / "acceptance-report.json", pretty_json(report))
         atomic_write(directory / "acceptance-report.md", render_acceptance_report(report))
-        base = f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{entry['id']}"
+        base = f"{GOVERNANCE_DIRECTORY}/{entry['packagePath']}"
         entry["acceptanceReport"] = {
             "schemaVersion": SCHEMA_VERSION,
             "status": report["status"],
@@ -645,8 +661,40 @@ class GovernanceRepository:
         }
         return report
 
+    def write_development_review(
+        self,
+        entry: dict[str, Any],
+        definition: dict[str, Any],
+        at: str,
+    ) -> dict[str, Any]:
+        report = {
+            "schemaVersion": SCHEMA_VERSION,
+            "workItem": {
+                "id": entry["id"],
+                "title": definition["title"],
+                "kind": entry["kind"],
+                "gateLevel": entry["gateLevel"],
+                "baselineFingerprint": entry["baselineFingerprint"],
+                "parentId": entry["parentId"],
+            },
+            "status": entry["status"],
+            "developmentPlan": definition["developmentPlan"],
+            "result": entry.get("latestResult"),
+            "generatedAt": at,
+        }
+        directory = self.item_path(entry)
+        atomic_write(directory / "development-review.json", pretty_json(report))
+        atomic_write(directory / "development-review.md", render_development_review(report))
+        return report
 
-def entry_from_definition(definition: dict[str, Any], state: dict[str, Any], at: str) -> dict[str, Any]:
+
+def entry_from_definition(
+    definition: dict[str, Any],
+    state: dict[str, Any],
+    at: str,
+    *,
+    package_path: str | None = None,
+) -> dict[str, Any]:
     return {
         "id": definition["id"],
         "kind": definition["kind"],
@@ -654,8 +702,8 @@ def entry_from_definition(definition: dict[str, Any], state: dict[str, Any], at:
         "authorityKind": definition["authorityKind"],
         "parentId": definition["parentId"],
         "childIds": [item["id"] for item in definition.get("children", [])],
-        "packagePath": f"{WORK_ITEMS_DIRECTORY}/{definition['id']}",
-        "developmentReview": True,
+        "packagePath": package_path or f"{WORK_ITEMS_DIRECTORY}/{definition['id']}",
+        "developmentPlan": True,
         "stage": state["stage"],
         "status": "PREPARED",
         "baselineFingerprint": state["baselineFingerprint"],

@@ -585,6 +585,83 @@ def validate_work_item_definition(
     return normalized
 
 
+def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
+    """Validate and normalize one complete requirement hierarchy."""
+    if not _exact_keys(hierarchy, ["schemaVersion", "root"]):
+        fail(
+            "WORK_ITEM_HIERARCHY_INVALID",
+            "Hierarchy definition must contain only schemaVersion and root",
+        )
+    if hierarchy["schemaVersion"] != WORK_ITEM_SCHEMA_VERSION:
+        fail(
+            "WORK_ITEM_SCHEMA_INVALID",
+            f"Hierarchy schemaVersion must be {WORK_ITEM_SCHEMA_VERSION}",
+        )
+
+    seen: set[str] = set()
+
+    def normalize_node(value: object, parent: dict[str, Any] | None) -> dict[str, Any]:
+        if not _exact_keys(value, ["definition", "children"]):
+            fail(
+                "WORK_ITEM_HIERARCHY_INVALID",
+                "Every hierarchy node must contain only definition and children",
+            )
+        if not isinstance(value["children"], list):
+            fail("WORK_ITEM_HIERARCHY_INVALID", "Hierarchy node children must be an array")
+        definition = validate_work_item_definition(value["definition"], parent=parent)
+        if definition["id"] in seen:
+            fail(
+                "WORK_ITEM_HIERARCHY_INVALID",
+                f"Hierarchy contains duplicate work item ID: {definition['id']}",
+            )
+        seen.add(definition["id"])
+        if definition["kind"] == "TASK":
+            if value["children"]:
+                fail("WORK_ITEM_TASK_NOT_LEAF", "Task hierarchy nodes cannot contain children")
+            return {"definition": definition, "children": []}
+
+        expected = {(item["id"], item["kind"]) for item in definition["children"]}
+        declared: set[tuple[str, str]] = set()
+        for child in value["children"]:
+            if not isinstance(child, dict) or not isinstance(child.get("definition"), dict):
+                fail("WORK_ITEM_HIERARCHY_INVALID", "Hierarchy child definition is invalid")
+            child_definition = child["definition"]
+            child_id = child_definition.get("id")
+            child_kind = child_definition.get("kind")
+            if isinstance(child_id, str) and isinstance(child_kind, str):
+                declared.add((child_id, child_kind))
+        if declared != expected or len(value["children"]) != len(expected):
+            fail(
+                "WORK_ITEM_HIERARCHY_INCOMPLETE",
+                f"{definition['id']} must materialize every planned child exactly once",
+                expected=sorted(item[0] for item in expected),
+                actual=sorted(item[0] for item in declared),
+            )
+        children = [normalize_node(child, definition) for child in value["children"]]
+        children.sort(key=lambda item: item["definition"]["id"])
+        return {"definition": definition, "children": children}
+
+    root = normalize_node(hierarchy["root"], None)
+    return {"schemaVersion": WORK_ITEM_SCHEMA_VERSION, "root": root}
+
+
+def iter_hierarchy_nodes(hierarchy: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return hierarchy nodes in deterministic pre-order."""
+    result: list[dict[str, Any]] = []
+
+    def visit(node: dict[str, Any]) -> None:
+        result.append(node)
+        for child in node["children"]:
+            visit(child)
+
+    visit(hierarchy["root"])
+    return result
+
+
+def hierarchy_fingerprint(hierarchy: dict[str, Any]) -> str:
+    return fingerprint(hierarchy)
+
+
 def _contract(definition: dict[str, Any]) -> dict[str, Any]:
     normalized: dict[str, Any] = {
         "schemaVersion": definition["schemaVersion"],
@@ -633,7 +710,10 @@ def work_item_baseline_fingerprint(definition: dict[str, Any]) -> str:
 
 
 def raw_definition(definition: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in definition.items() if key not in {"authorityKind", "parentContractFingerprint"}}
+    omitted = {"authorityKind", "parentContractFingerprint"}
+    if definition.get("kind") == "DELIVERY":
+        omitted.add("parentId")
+    return {key: value for key, value in definition.items() if key not in omitted}
 
 
 def _list(values: list[str]) -> str:
@@ -697,10 +777,10 @@ def render_work_item_baseline(definition: dict[str, Any]) -> str:
     lines.extend(f"- {json.dumps(argv, ensure_ascii=False, separators=(',', ':'))}" for argv in definition["testCommands"])
     lines.extend([
         "",
-        "## Development Review Contract",
+        "## Development Plan Contract",
         definition["developmentPlan"]["purpose"],
         "",
-        "- Full human-readable plan: [development-review.md](development-review.md)",
+        "- Full human-readable plan: [development-plan.md](development-plan.md)",
         "- Structured plan: [development-plan.json](development-plan.json)",
         "",
         "## Risks",
@@ -724,10 +804,10 @@ def _markdown_cell(value: object) -> str:
     return str(value).replace("|", "\\|").replace("\n", "<br>")
 
 
-def render_development_review(definition: dict[str, Any], state: dict[str, Any]) -> str:
+def render_development_plan(definition: dict[str, Any], state: dict[str, Any]) -> str:
     plan = definition["developmentPlan"]
     lines = [
-        f"# 开发评审：{definition['title']}",
+        f"# 开发方案：{definition['title']}",
         "",
         f"- 工作项：{definition['id']}",
         f"- 层级：{definition['kind']}",
@@ -860,7 +940,70 @@ def render_development_review(definition: dict[str, Any], state: dict[str, Any])
         "",
         "- 请先评审本文件中的开发目的、内容、文件、接口/共享契约、依赖波次和测试映射。",
         "- 如需修改，先修改 definition 并重新 prepare；不要冻结错误版本。",
-        f"- 只有对指纹 `{state['baselineFingerprint']}` 明确确认后，才可执行 freeze-item；冻结后开发上下文必须携带本计划。",
+        "- 人只需确认已经评审并同意当前开发方案，无需复制或复述指纹。",
+        "- Agent 必须使用展示本方案时保存的当前指纹调用冻结；方案已变化时控制器会拒绝旧确认。",
+        "",
+    ])
+    return "\n".join(lines)
+
+
+def render_hierarchy_plan(
+    hierarchy: dict[str, Any],
+    states: dict[str, dict[str, Any]],
+    hierarchy_state: dict[str, Any],
+) -> str:
+    """Render the single human plan for one complete requirement tree."""
+    kind_text = {"DELIVERY": "交付", "CAPABILITY": "能力", "TASK": "任务"}
+    review = hierarchy_state["review"]
+    review_text = (
+        f"已由人工确认（{review['reviewedBy']}，{review['reviewedAt']}）"
+        if review["status"] == "APPROVED"
+        else "等待人工评审；尚未冻结，禁止开始开发"
+    )
+    lines = [
+        "# 需求层级开发方案",
+        "",
+        f"- 根工作项：{hierarchy_state['rootId']}",
+        f"- 层级指纹：{hierarchy_state['hierarchyFingerprint']}",
+        f"- 方案状态：{review_text}",
+        "- 确认方式：人工只需确认已评审并同意本文件，无需复制或复述指纹。",
+        "",
+        "## 层级结构",
+        "",
+    ]
+
+    def append_tree(node: dict[str, Any], prefix: str, connector: str) -> None:
+        definition = node["definition"]
+        lines.append(
+            f"{prefix}{connector}{kind_text[definition['kind']]} `{definition['id']}`：{definition['title']}"
+        )
+        children = node["children"]
+        for index, child in enumerate(children):
+            last = index == len(children) - 1
+            child_prefix = prefix + ("   " if connector in {"", "└─ "} else "│  ")
+            append_tree(child, child_prefix, "└─ " if last else "├─ ")
+
+    append_tree(hierarchy["root"], "", "")
+
+    for node in iter_hierarchy_nodes(hierarchy):
+        definition = node["definition"]
+        item_plan = render_development_plan(definition, states[definition["id"]]).splitlines()
+        lines.extend([
+            "",
+            f"## {kind_text[definition['kind']]}：{definition['id']} — {definition['title']}",
+            "",
+        ])
+        for line in item_plan[1:]:
+            lines.append("#" + line if line.startswith("## ") else line)
+
+    lines.extend([
+        "",
+        "## 统一冻结说明",
+        "",
+        "- 本文件一次展示并绑定整棵当前需求树的所有 baseline、接口、文件、依赖波次和测试映射。",
+        "- 需要修改时重新准备整棵树；旧层级指纹会自动失效。",
+        "- 人工确认本文件后，Agent 使用已保存的层级指纹原子冻结全部节点。",
+        "- 新增或修改节点必须走后续层级修订，不得静默改变已冻结方案。",
         "",
     ])
     return "\n".join(lines)

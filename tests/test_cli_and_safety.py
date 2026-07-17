@@ -10,7 +10,7 @@ from hdg.cli import run_cli
 from hdg.errors import GatedLoopError
 from hdg.fs_safe import safe_path
 
-from .fixtures import task_definition
+from .fixtures import task_hierarchy
 
 
 class CliAndSafetyTests(unittest.TestCase):
@@ -20,6 +20,12 @@ class CliAndSafetyTests(unittest.TestCase):
         help_text = output.getvalue()
         self.assertIn("python -X utf8 <skill-root>/scripts/hdg.py", help_text)
         self.assertIn("--json", help_text)
+        self.assertIn("prepare-hierarchy", help_text)
+        self.assertIn("freeze-hierarchy", help_text)
+        self.assertNotIn("prepare-item", help_text)
+        self.assertNotIn("freeze-item", help_text)
+        self.assertNotIn("promote-item", help_text)
+        self.assertNotIn("revise-item", help_text)
         self.assertNotIn("upgrade-registry", help_text)
         self.assertNotIn("delivery-item", help_text)
         self.assertNotIn("hdg.mjs", help_text)
@@ -29,9 +35,9 @@ class CliAndSafetyTests(unittest.TestCase):
             stdout = io.StringIO()
             stderr = io.StringIO()
             code = run_cli(
-                ["prepare-item", "--definition", "-", "--host-runtime", "codex", "--json"],
+                ["prepare-hierarchy", "--definition", "-", "--host-runtime", "codex", "--json"],
                 cwd=temporary,
-                stdin=io.StringIO(json.dumps(task_definition())),
+                stdin=io.StringIO(json.dumps(task_hierarchy())),
                 stdout=stdout,
                 stderr=stderr,
             )

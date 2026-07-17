@@ -2,7 +2,7 @@
 
 ## 投影原则
 
-`work-item-registry.json` 是节点状态机器权威，根目录 `hierarchy.json` 绑定整棵需求树。`workspace-overview.md` 按需求根分组展示所有需求；每个需求根的 `progress.md` 使用与该根 `development-plan.md` 相同的工作项 ID、父子顺序和 Delivery→Capability→Task 层级。两个投影都不能把父子节点渲染成彼此并列的需求行。
+`work-item-registry.json` 是节点状态机器权威，根目录 `hierarchy.json` 绑定整棵需求树。`workspace-overview.md` 按需求根分组展示所有需求；每个需求根的 `progress.md` 使用 Markdown 表格，在第一列保留与该根 `development-plan.md` 相同的工作项 ID、父子顺序和 Delivery→Capability→Task 层级。两个投影都不能把父子节点渲染成彼此并列的需求行。
 
 每个需求根只有一个整树 `development-plan.md` 作为统一人工冻结入口。各实际节点仍有自己的 `development-plan.md`、`progress.md`、baseline、状态、门禁和后续开发复核；节点进度必须直接链接本节点方案。
 
@@ -20,11 +20,12 @@ Task 子级计数为零。不写主观百分比。协调节点声明的全部 ch
 
 ## 根级整树明细
 
-需求根 `progress.md` 在汇总计数之后递归展示整棵需求树：
+需求根 `progress.md` 在汇总计数之后使用表格展示整棵需求树：
 
-- 节点顺序与 `development-plan.md` 一致，并使用稳定工作项 ID 链接到该节点开发方案；
-- 每行展示 kind、stage、status、gate、claim，并链接该节点自己的 `development-plan.md/progress.md`；
-- 开发结果或门禁证据存在后，同行增加 `development-review.md` 或 `acceptance-report.md` 入口；
+- “层级工作项”列使用稳定 ID 和层级符号保留 `development-plan.md` 的节点顺序，并链接到对应开发方案章节；
+- 阶段、状态、门禁和认领各自使用独立列，不把全部信息拼成一个长行；
+- “节点文件”列链接该节点自己的 `development-plan.md/progress.md`；
+- “阶段产物”列在开发结果或门禁证据存在后增加 `development-review.md` 或 `acceptance-report.md` 入口，尚未生成时显示“无”；
 - 明细只由 registry 重建，Agent 不直接编辑投影文件。
 
 ## 分层视图

@@ -331,13 +331,19 @@ class HierarchyPackageTests(unittest.TestCase):
             self.assertIn("# 开发方案：Python controller", child_plan)
             self.assertIn("- 开发方案：[development-plan.md](development-plan.md)", child_progress)
             self.assertIn("## 整树进度明细", prepared_progress)
-            self.assertIn("[能力 `c-python-runtime`](development-plan.md#work-item-c-python-runtime)", prepared_progress)
-            self.assertIn("├─ [任务 `t-python-controller`](development-plan.md#work-item-t-python-controller)", prepared_progress)
-            self.assertIn("└─ [任务 `t-python-worker`](development-plan.md#work-item-t-python-worker)", prepared_progress)
             self.assertIn(
-                "[节点方案](children/t-python-controller/development-plan.md)",
+                "| 层级工作项 | 阶段 | 状态 | 门禁 | 认领 | 节点文件 | 阶段产物 |",
                 prepared_progress,
             )
+            self.assertIn("[能力 `c-python-runtime`](development-plan.md#work-item-c-python-runtime)", prepared_progress)
+            self.assertIn("| ├─ [任务 `t-python-controller`](development-plan.md#work-item-t-python-controller) |", prepared_progress)
+            self.assertIn("| └─ [任务 `t-python-worker`](development-plan.md#work-item-t-python-worker) |", prepared_progress)
+            self.assertIn(
+                "[方案](children/t-python-controller/development-plan.md)、"
+                "[进度](children/t-python-controller/progress.md)",
+                prepared_progress,
+            )
+            self.assertNotIn("— 阶段", prepared_progress)
             refreshed = refresh_work_item_projections(root=temporary)
             task_artifacts = next(
                 item["humanArtifacts"]
@@ -353,7 +359,7 @@ class HierarchyPackageTests(unittest.TestCase):
                 task_artifacts["hierarchyDevelopmentPlan"],
                 ".hierarchical-delivery-governance/work-items/c-python-runtime/development-plan.md",
             )
-            self.assertIn("状态 等待开发方案评审", prepared_progress)
+            self.assertIn("| 等待开发方案确认 | 等待开发方案评审 | 未运行 |", prepared_progress)
 
             freeze_hierarchy(
                 root=temporary,
@@ -363,7 +369,7 @@ class HierarchyPackageTests(unittest.TestCase):
                 confirmed=True,
             )
             frozen_progress = (root / "progress.md").read_text(encoding="utf-8")
-            self.assertEqual(frozen_progress.count("状态 已冻结"), 3)
+            self.assertEqual(frozen_progress.count("| 开发方案已冻结 | 已冻结 | 未运行 |"), 3)
 
             dispatch_task(
                 root=temporary,
@@ -372,8 +378,11 @@ class HierarchyPackageTests(unittest.TestCase):
                 operation_id="op-progress",
             )
             claimed_progress = (root / "progress.md").read_text(encoding="utf-8")
-            self.assertRegex(claimed_progress, r"t-python-controller.*状态 开发中.*认领 developer / op-progress")
-            self.assertRegex(claimed_progress, r"t-python-worker.*状态 已冻结")
+            self.assertRegex(
+                claimed_progress,
+                r"t-python-controller.*\| 开发方案已冻结 \| 开发中 \| 未运行 \| developer / op-progress \|",
+            )
+            self.assertRegex(claimed_progress, r"t-python-worker.*\| 开发方案已冻结 \| 已冻结 \|")
 
             record_task_result(
                 root=temporary,
@@ -383,7 +392,7 @@ class HierarchyPackageTests(unittest.TestCase):
                 evidence={"path": "missing-progress-evidence.json", "sha256": "0" * 64},
             )
             implemented_progress = (root / "progress.md").read_text(encoding="utf-8")
-            self.assertRegex(implemented_progress, r"t-python-controller.*状态 等待门禁验收")
+            self.assertRegex(implemented_progress, r"t-python-controller.*\| 开发方案已冻结 \| 等待门禁验收 \|")
             self.assertIn(
                 "[开发复核](children/t-python-controller/development-review.md)",
                 implemented_progress,
@@ -396,7 +405,7 @@ class HierarchyPackageTests(unittest.TestCase):
                 evidence={"path": "missing-progress-gate.json", "sha256": "1" * 64},
             )
             verified_progress = (root / "progress.md").read_text(encoding="utf-8")
-            self.assertRegex(verified_progress, r"t-python-controller.*状态 门禁已通过.*门禁 通过")
+            self.assertRegex(verified_progress, r"t-python-controller.*\| 开发方案已冻结 \| 门禁已通过 \| 通过 \|")
             self.assertIn(
                 "[验收报告](children/t-python-controller/acceptance-report.md)",
                 verified_progress,
@@ -420,8 +429,8 @@ class HierarchyPackageTests(unittest.TestCase):
             )
             self.assertLess(progress.index(ids[0]), progress.index(ids[1]))
             self.assertLess(progress.index(ids[1]), progress.index(ids[2]))
-            self.assertIn("\n└─ [能力 `c-python-runtime`]", progress)
-            self.assertIn("\n   └─ [任务 `t-python-controller`]", progress)
+            self.assertIn("\n| └─ [能力 `c-python-runtime`]", progress)
+            self.assertIn("\n| 　└─ [任务 `t-python-controller`]", progress)
             self.assertIn("\n└─ 能力 [`c-python-runtime`]", plan)
             self.assertIn("\n   └─ 任务 [`t-python-controller`]", plan)
 

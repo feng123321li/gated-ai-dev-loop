@@ -25,7 +25,7 @@ Delivery 和 Capability 管协调与聚合，Task 是唯一执行叶子。实际
 - 按依赖、claim 和写入范围计算 READY Task，支持多人并行；
 - Task、Capability、Delivery 各自通过 gate；同一冻结契约内失败后由 Agent 按当前 baseline 自动重试；
 - 开发结果写回后生成 `development-review.json/md` 对照计划与实际；门禁后再生成并更新 `acceptance-report.json/md`；
-- 需求根 `progress.md` 以与 `development-plan.md` 相同的节点 ID、父子顺序和 Delivery→Capability→Task 层级展示整树明细，每次状态写回自动刷新；
+- 需求根 `progress.md` 以 Markdown 表格展示整树明细，第一列保留与 `development-plan.md` 相同的节点 ID、父子顺序和 Delivery→Capability→Task 层级，每次状态写回自动刷新；
 - 治理根 gate 后仍需隔离/人工审查和用户确认；
 - 维护本仓库默认进入 self-hosting maintenance，只有用户明确 dogfood 才创建运行包。
 

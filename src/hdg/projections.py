@@ -221,11 +221,13 @@ def _render_hierarchy_progress(
         "## 整树进度明细",
         "",
         "> 本明细与 [development-plan.md](development-plan.md) 使用相同的工作项 ID、父子顺序和层级结构。",
-        "> 点击工作项可跳转到对应开发方案；每次控制器状态写回都会重建本文件。",
+        "> 表格第一列保留层级；点击工作项可跳转到对应开发方案。每次控制器状态写回都会重建本文件。",
         "",
+        "| 层级工作项 | 阶段 | 状态 | 门禁 | 认领 | 节点文件 | 阶段产物 |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
 
-    def artifact_links(item: dict[str, Any]) -> str:
+    def item_paths(item: dict[str, Any]) -> tuple[str, str, str, str]:
         package_path = item["packagePath"]
         progress_path = posixpath.relpath(
             posixpath.join(package_path, "progress.md"),
@@ -235,42 +237,48 @@ def _render_hierarchy_progress(
             posixpath.join(package_path, "development-plan.md"),
             root["packagePath"],
         )
-        links = [f"[节点方案]({plan_path})", f"[节点进度]({progress_path})"]
+        review_path = posixpath.relpath(
+            posixpath.join(package_path, "development-review.md"),
+            root["packagePath"],
+        )
+        report_path = posixpath.relpath(
+            posixpath.join(package_path, "acceptance-report.md"),
+            root["packagePath"],
+        )
+        return plan_path, progress_path, review_path, report_path
+
+    def artifact_links(item: dict[str, Any]) -> str:
+        _, _, review_path, report_path = item_paths(item)
+        links = []
         if item.get("latestResult"):
-            review_path = posixpath.relpath(
-                posixpath.join(package_path, "development-review.md"),
-                root["packagePath"],
-            )
             links.append(f"[开发复核]({review_path})")
         if item.get("acceptanceReport"):
-            report_path = posixpath.relpath(
-                posixpath.join(package_path, "acceptance-report.md"),
-                root["packagePath"],
-            )
             links.append(f"[验收报告]({report_path})")
-        return "、".join(links)
+        return "、".join(links) or "无"
 
-    def append_node(item: dict[str, Any], prefix: str, connector: str) -> None:
+    def append_node(item: dict[str, Any], depth: int, connector: str) -> None:
         claim = (
             f"{item['claim']['owner']} / {item['claim']['operationId']}"
             if item.get("claim")
             else "无"
         )
         plan_anchor = f"development-plan.md#work-item-{item['id']}"
+        plan_path, progress_path, _, _ = item_paths(item)
+        indentation = "　" * max(depth - 1, 0)
+        hierarchy_item = (
+            f"{indentation}{connector}[{human_status(item['kind'])} `{item['id']}`]({plan_anchor})"
+        )
         lines.append(
-            f"{prefix}{connector}[{human_status(item['kind'])} `{item['id']}`]({plan_anchor}) — "
-            f"阶段 {human_status(item['stage'])}；状态 {human_status(item['status'])}；"
-            f"门禁 {human_status(item['gate']['status'])}；认领 {claim}；{artifact_links(item)}"
+            f"| {hierarchy_item} | {human_status(item['stage'])} | {human_status(item['status'])} | "
+            f"{human_status(item['gate']['status'])} | {claim} | "
+            f"[方案]({plan_path})、[进度]({progress_path}) | {artifact_links(item)} |"
         )
         children = [by_id[child_id] for child_id in item["childIds"]]
         for index, child in enumerate(children):
             last = index == len(children) - 1
-            child_prefix = prefix + (
-                "" if connector == "" else ("   " if connector == "└─ " else "│  ")
-            )
-            append_node(child, child_prefix, "└─ " if last else "├─ ")
+            append_node(child, depth + 1, "└─ " if last else "├─ ")
 
-    append_node(root, "", "")
+    append_node(root, 0, "")
     lines.append("")
     return lines
 

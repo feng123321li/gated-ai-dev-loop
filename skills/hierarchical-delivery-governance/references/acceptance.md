@@ -6,6 +6,7 @@ Task 只有在状态为 IMPLEMENTED 时可运行 gate。`task-result` 写回后�
 
 - baseline 与实际存在的父链指纹；根 Task 无父链；
 - 真实 diff 归属和 Scope；
+- Task 实际变更文件全部在人工评审并冻结的 `developmentPlan.fileChanges` 中；scope 内但未计划的文件仍属于计划偏差，不能 PASS；
 - 冻结测试 argv、退出码和适用的 Tests run；
 - 依赖输出和全部验收项；
 - evidence 文件存在、SHA-256 匹配，且内容覆盖当前工作项和当前 baseline；
@@ -30,7 +31,7 @@ decomposition 为 SEALED 且所有计划 Capability VERIFIED 后，运行跨能�
 每个实际工作项都维护一份 `acceptance-report.json` 和面向用户的 `acceptance-report.md`：
 
 - Task result 后显示开发摘要、变更文件、开发侧测试事实和“等待门禁验收”；
-- gate 后显示基线、验收项逐条结论、测试 argv/退出码/Tests run、Scope 外变更、P0/P1/P2 和门禁结论；
+- gate 后显示冻结开发目的与接口/子级契约、计划文件与实际文件差异、验收项逐条结论、测试 argv/退出码/Tests run、Scope 外变更、P0/P1/P2 和门禁结论；
 - 根工作项继续显示独立/人工审查结论与用户确认，直到最终状态为“已完成”；
 - 子工作项报告在该级 VERIFIED 后结束，不重复请求用户确认。
 

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  renderDevelopmentReview,
   renderWorkItemBaseline,
   resolveSelfHostingPolicy,
   validateWorkItemDefinition,
@@ -10,6 +11,7 @@ import {
 } from '../../src/work-items/model.mjs';
 import {
   capabilityDefinition,
+  developmentPlanFor,
   issueTaskDefinition,
   deliveryDefinition,
 } from '../helpers/work-item-definitions.mjs';
@@ -79,6 +81,51 @@ test('gate level is a required machine contract and LIGHT is valid only for Task
   );
 });
 
+test('new work items require a structured development plan with exact in-scope Task files', () => {
+  const missing = issueTaskDefinition({ parentId: null });
+  delete missing.developmentPlan;
+  assert.throws(
+    () => validateWorkItemDefinition(missing),
+    { code: 'WORK_ITEM_DEFINITION_INVALID' },
+  );
+
+  const outOfScope = issueTaskDefinition({ parentId: null });
+  outOfScope.developmentPlan.fileChanges[0].path = 'src/outside/change.mjs';
+  assert.throws(
+    () => validateWorkItemDefinition(outOfScope),
+    { code: 'WORK_ITEM_DEVELOPMENT_PLAN_INVALID' },
+  );
+});
+
+test('human review rendering is hierarchy-specific and fingerprint-bound', () => {
+  const state = {
+    baselineFingerprint: 'a'.repeat(64),
+    review: {
+      status: 'WAITING_FOR_HUMAN_REVIEW',
+      reviewedBy: null,
+      reviewedAt: null,
+    },
+  };
+  const taskReview = renderDevelopmentReview(validateWorkItemDefinition(
+    issueTaskDefinition({ parentId: null }),
+  ), state);
+  const capabilityReview = renderDevelopmentReview(validateWorkItemDefinition(
+    capabilityDefinition({ parentId: null }),
+  ), state);
+  const deliveryReview = renderDevelopmentReview(validateWorkItemDefinition(deliveryDefinition()), state);
+  assert.match(taskReview, /文件改动/);
+  assert.match(taskReview, /接口与功能契约/);
+  assert.match(capabilityReview, /Task 开发内容/);
+  assert.match(capabilityReview, /跨 Task 接口与共享契约/);
+  assert.match(deliveryReview, /Capability 开发内容/);
+  assert.match(deliveryReview, /跨 Capability 接口与共享契约/);
+  for (const review of [taskReview, capabilityReview, deliveryReview]) {
+    assert.match(review, /等待人工评审/);
+    assert.match(review, new RegExp('a{64}'));
+    assert.match(review, /测试与验收映射/);
+  }
+});
+
 test('hierarchy validation rejects Workstream entities, unplanned children, scope expansion, and Task children', () => {
   const delivery = validateWorkItemDefinition(deliveryDefinition());
   const capability = validateWorkItemDefinition(capabilityDefinition(), { parent: delivery });
@@ -126,6 +173,8 @@ test('a child contract fingerprint ignores unrelated siblings but detects its ow
     requirementIds: ['R-001'],
     acceptanceIds: ['A-001'],
   });
+  withSibling.developmentPlan = developmentPlanFor(withSibling);
+  withSibling.developmentPlan.sharedContracts = capabilityDefinition().developmentPlan.sharedContracts;
   const revised = validateWorkItemDefinition(withSibling, { parent: delivery });
   assert.equal(
     workItemChildContractFingerprint(original, 't-issue-token'),
@@ -140,13 +189,16 @@ test('a child contract fingerprint ignores unrelated siblings but detects its ow
 
 test('Capability dependencies reference planned sibling capabilities and reject self-dependency', () => {
   const deliverySource = deliveryDefinition();
-  deliverySource.children.push({
+  deliverySource.children.unshift({
     id: 'c-access-control',
     kind: 'CAPABILITY',
     title: 'Access control',
     requirementIds: ['R-001'],
     acceptanceIds: ['A-001'],
   });
+  deliverySource.developmentPlan = developmentPlanFor(deliverySource);
+  deliverySource.developmentPlan.childPlans
+    .find(({ id }) => id === 'c-token-lifecycle').dependsOn = ['c-access-control'];
   const delivery = validateWorkItemDefinition(deliverySource);
   const capability = validateWorkItemDefinition(capabilityDefinition({
     decomposition: { status: 'OPEN', dependsOn: ['c-access-control'] },

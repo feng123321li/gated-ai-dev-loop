@@ -70,7 +70,9 @@ test('package exposes only the hdg executable and rejects old workflow commands'
   assert.match((await invoke(['prepare-item'])).err, /UNKNOWN_COMMAND/);
   const hierarchicalHelp = (await invokeHierarchical(['--help'])).out;
   assert.match(hierarchicalHelp, /promote-item/);
-  assert.match(hierarchicalHelp, /approve-item --definition <file\|->/);
+  assert.doesNotMatch(hierarchicalHelp, /approve-item/);
+  assert.match(hierarchicalHelp, /prepare-item --definition <file\|->.*human review package/);
+  assert.match(hierarchicalHelp, /freeze-item.*after human review/);
   assert.match(hierarchicalHelp, /accept-item --item <id> --evidence <file\|->/);
   assert.match((await invokeHierarchical(['ready-tasks', '--project', 'd-example'])).err, /UNKNOWN_OPTION/);
   const smoke = spawnSync(process.execPath, [path.join(root, 'bin', 'hdg.mjs'), '--help'], { encoding: 'utf8' });

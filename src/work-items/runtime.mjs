@@ -14,6 +14,7 @@ import {
 import { sha256Bytes } from '../core/hash.mjs';
 import { requireHostRuntime } from '../mode/host-runtime.mjs';
 import {
+  renderDevelopmentReview,
   renderWorkItemBaseline,
   resolveSelfHostingPolicy,
   scopePatternsOverlap,
@@ -265,6 +266,7 @@ function validateRegistry(registry, root) {
       && (entry.parentId === null || safeId(entry.parentId))
       && Array.isArray(entry.childIds) && entry.childIds.every(safeId)
       && entry.packagePath === itemRelativePath(entry.id)
+      && (entry.developmentReview === undefined || typeof entry.developmentReview === 'boolean')
       && typeof entry.baselineFingerprint === 'string' && /^[a-f0-9]{64}$/.test(entry.baselineFingerprint)
       && typeof entry.contractFingerprint === 'string' && /^[a-f0-9]{64}$/.test(entry.contractFingerprint);
     if (!validEntry) fail('WORK_ITEM_REGISTRY_INVALID', `Work item registry entry is invalid: ${entry.id}`);
@@ -397,7 +399,7 @@ function humanStatus(value) {
     DELIVERY: '交付',
     CAPABILITY: '能力',
     TASK: '任务',
-    PREPARED: '等待基线确认',
+    PREPARED: '等待开发方案评审',
     WAITING_FOR_DEVELOPMENT_MODE_SELECTION: '等待选择开发方式',
     FROZEN: '已冻结',
     CLAIMED: '开发中',
@@ -414,6 +416,35 @@ function humanStatus(value) {
   })[value] ?? value ?? '无';
 }
 
+function itemHumanArtifacts(id, acceptanceReport = null) {
+  const base = path.posix.join(GOVERNANCE_DIRECTORY, WORK_ITEMS_DIRECTORY, id);
+  return {
+    overview: path.posix.join(base, 'overview.md'),
+    developmentReview: path.posix.join(base, 'development-review.md'),
+    baseline: path.posix.join(base, 'baseline.md'),
+    progress: path.posix.join(base, 'progress.md'),
+    acceptanceReport: acceptanceReport?.markdownPath ?? null,
+  };
+}
+
+function nextAction(entry) {
+  if (entry.stage === 'WAITING_FOR_BASELINE_CONFIRMATION') {
+    return '人工评审 development-review.md；需要修改则重新起草，确认无误后按当前指纹执行 freeze-item。';
+  }
+  if (entry.status === 'WAITING_FOR_DEVELOPMENT_MODE_SELECTION') return '人工选择 active 或 manual 开发方式。';
+  if (entry.status === 'FROZEN' && entry.kind === 'TASK') return '等待依赖满足后执行 dispatch-task。';
+  if (entry.status === 'FROZEN') return '继续准备已计划子级，或在分解封口且子级通过后运行聚合门禁。';
+  if (entry.status === 'CLAIMED') return '等待开发结果按 operationId 写回。';
+  if (entry.status === 'IMPLEMENTED') return '形成严格 evidence 并执行 accept-item 门禁验收。';
+  if (entry.status === 'BLOCKED') return '处理阻断后按当前指纹显式 retry-item。';
+  if (entry.status === 'VERIFIED' && entry.parentId === null) {
+    const acceptance = entry.acceptance ?? entry.delivery;
+    if (acceptance?.status === 'WAITING_FOR_INDEPENDENT_REVIEW') return '执行独立验收或记录人工验收接受。';
+    if (acceptance?.status === 'WAITING_FOR_USER_CONFIRMATION') return '等待用户最终确认。';
+  }
+  return entry.status === 'VERIFIED' ? '等待父级聚合门禁。' : '查看当前状态与门禁证据。';
+}
+
 function renderWorkspaceOverview(registry) {
   const lines = [
     '# 工作项总览',
@@ -422,15 +453,19 @@ function renderWorkspaceOverview(registry) {
     `> 注册表版本：${registry.revision}`,
     `> 当前焦点：${registry.currentFocus.workItemId ?? '无'}`,
     '',
-    '| 工作项 | 类型 | 门禁等级 | 父级 | 当前状态 | 开发方式 | 最终验收 | 直接子级 | 全部后代 | 门禁 | 认领者 | 验收报告 |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| 工作项 | 类型 | 门禁等级 | 父级 | 当前状态 | 开发评审 | 开发方式 | 最终验收 | 直接子级 | 全部后代 | 门禁 | 认领者 | 验收报告 |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
   ];
   for (const item of sortedItems(registry.workItems)) {
     const report = item.acceptanceReport
       ? `[查看](${path.posix.relative(GOVERNANCE_DIRECTORY, item.acceptanceReport.markdownPath)})`
       : '尚未生成';
     const acceptance = item.acceptance ?? (item.parentId === null ? item.delivery : null);
-    lines.push(`| ${item.id} | ${humanStatus(item.kind)} | ${item.gateLevel} | ${item.parentId ?? '无'} | ${humanStatus(item.status)} | ${item.developmentMode?.mode ?? '不适用'} | ${acceptance ? humanStatus(acceptance.status) : '不适用'} | ${item.progress.directChildren.verified}/${item.progress.directChildren.total} | ${item.progress.descendants.verified}/${item.progress.descendants.total} | ${humanStatus(item.gate.status)} | ${item.claim?.owner ?? '无'} | ${report} |`);
+    const itemLink = `[${item.id}](${path.posix.join(WORK_ITEMS_DIRECTORY, item.id, 'overview.md')})`;
+    const review = item.developmentReview
+      ? `[查看](${path.posix.join(WORK_ITEMS_DIRECTORY, item.id, 'development-review.md')})`
+      : '旧版基线未记录';
+    lines.push(`| ${itemLink} | ${humanStatus(item.kind)} | ${item.gateLevel} | ${item.parentId ?? '无'} | ${humanStatus(item.status)} | ${review} | ${item.developmentMode?.mode ?? '不适用'} | ${acceptance ? humanStatus(acceptance.status) : '不适用'} | ${item.progress.directChildren.verified}/${item.progress.directChildren.total} | ${item.progress.descendants.verified}/${item.progress.descendants.total} | ${humanStatus(item.gate.status)} | ${item.claim?.owner ?? '无'} | ${report} |`);
   }
   lines.push('');
   return lines.join('\n');
@@ -445,9 +480,13 @@ function renderItemOverview(entry) {
     `- 权限性质：${entry.authorityKind}`,
     `- 父级：${entry.parentId ?? '无'}`,
     '- 基线：[baseline.md](baseline.md)',
+    `- 开发评审：${entry.developmentReview ? '[development-review.md](development-review.md)' : '旧版基线未记录；修订时必须补充'}`,
+    `- 结构化开发计划：${entry.developmentReview ? '[development-plan.json](development-plan.json)' : '旧版基线未记录'}`,
+    '- 进度：[progress.md](progress.md)',
     `- 父契约指纹：${entry.parentContractFingerprint ?? '无'}`,
     `- 子级：${entry.childIds.join(', ') || '无'}`,
     `- 验收报告：${entry.acceptanceReport ? '[acceptance-report.md](acceptance-report.md)' : '尚未生成'}`,
+    `- 下一步：${nextAction(entry)}`,
     '',
   ].join('\n');
 }
@@ -468,6 +507,7 @@ function renderItemProgress(entry) {
     `- 直接子级：${entry.progress.directChildren.verified}/${entry.progress.directChildren.total} 已验证；${entry.progress.directChildren.blocked} 阻断；${entry.progress.directChildren.active} 活动`,
     `- 全部后代：${entry.progress.descendants.verified}/${entry.progress.descendants.total} 已验证；${entry.progress.descendants.blocked} 阻断；${entry.progress.descendants.active} 活动`,
     `- 验收报告：${entry.acceptanceReport ? '[acceptance-report.md](acceptance-report.md)' : '尚未生成'}`,
+    `- 下一步：${nextAction(entry)}`,
     `- 更新时间：${entry.updatedAt}`,
     '',
   ].join('\n');
@@ -547,12 +587,40 @@ async function readPackageDefinition(root, entry, fs) {
   const definition = await readJsonFile(target, 'baseline.json', fs, 'WORK_ITEM_PACKAGE_INVALID');
   const state = await readJsonFile(target, 'state.json', fs, 'WORK_ITEM_PACKAGE_INVALID');
   const fingerprint = workItemBaselineFingerprint(definition);
+  const reviewValid = !definition.developmentPlan || (
+    state.review
+    && state.review.schemaVersion === 1
+    && state.review.baselineFingerprint === fingerprint
+    && (
+      (state.stage === 'WAITING_FOR_BASELINE_CONFIRMATION'
+        && state.review.status === 'WAITING_FOR_HUMAN_REVIEW'
+        && state.review.reviewedBy === null
+        && state.review.reviewedAt === null)
+      || (state.stage === 'BASELINE_FROZEN'
+        && state.review.status === 'APPROVED'
+        && state.review.reviewedBy === 'user'
+        && typeof state.review.reviewedAt === 'string'
+        && !Number.isNaN(Date.parse(state.review.reviewedAt)))
+    )
+  );
+  let generatedFilesValid = true;
+  for (const [name, expected] of Object.entries(definitionFiles(definition, state))) {
+    if (name === 'state.json') continue;
+    try {
+      const actual = await readSafeRegularFile(root, path.join(target, name), { fs });
+      if (!actual.equals(Buffer.from(expected, 'utf8'))) generatedFilesValid = false;
+    } catch {
+      generatedFilesValid = false;
+    }
+  }
   const valid = state.schemaVersion === WORK_ITEM_SCHEMA_VERSION
     && state.id === entry.id
     && state.baselineFingerprint === fingerprint
     && state.contractFingerprint === workItemContractFingerprint(definition)
     && entry.baselineFingerprint === state.baselineFingerprint
-    && entry.contractFingerprint === state.contractFingerprint;
+    && entry.contractFingerprint === state.contractFingerprint
+    && reviewValid
+    && generatedFilesValid;
   if (!valid) fail('WORK_ITEM_PACKAGE_CHANGED', `${entry.id} package changed after preparation`, { id: entry.id });
   return { definition, state, target };
 }
@@ -595,6 +663,16 @@ function definitionFiles(definition, state) {
   };
   if (definition.children) files['children.json'] = json({ schemaVersion: WORK_ITEM_SCHEMA_VERSION, children: definition.children });
   if (definition.execution) files['execution.json'] = json({ schemaVersion: WORK_ITEM_SCHEMA_VERSION, ...definition.execution });
+  if (definition.developmentPlan) {
+    files['development-plan.json'] = json({
+      schemaVersion: 1,
+      workItemId: definition.id,
+      kind: definition.kind,
+      baselineFingerprint: state.baselineFingerprint,
+      developmentPlan: definition.developmentPlan,
+    });
+    files['development-review.md'] = renderDevelopmentReview(definition, state);
+  }
   return files;
 }
 
@@ -625,6 +703,7 @@ function entryFromDefinition(definition, state, at) {
     parentId: definition.parentId,
     childIds: definition.children?.map(({ id }) => id) ?? [],
     packagePath: itemRelativePath(definition.id),
+    developmentReview: Boolean(definition.developmentPlan),
     stage: state.stage,
     status: 'PREPARED',
     baselineFingerprint: state.baselineFingerprint,
@@ -708,9 +787,65 @@ export async function prepareWorkItem({
         const parentEntry = itemById(registry, definition.parentId);
         const parent = (await readPackageDefinition(root, parentEntry, fs)).definition;
         candidate = validateWorkItemDefinition(definition, { parent });
+        validateTaskDependencies(candidate, parent);
       }
-      if (workItemBaselineFingerprint(candidate) !== current.state.baselineFingerprint) {
-        fail('WORK_ITEM_SOURCE_CHANGED', `${existing.id} prepared baseline differs from the requested definition`);
+      await validateCapabilityDependencyGraph(root, registry, candidate, fs);
+      const candidateFingerprint = workItemBaselineFingerprint(candidate);
+      if (candidateFingerprint !== current.state.baselineFingerprint) {
+        if (existing.stage !== 'WAITING_FOR_BASELINE_CONFIRMATION'
+            || candidate.id !== existing.id
+            || candidate.kind !== existing.kind
+            || candidate.parentId !== existing.parentId) {
+          fail('WORK_ITEM_SOURCE_CHANGED', `${existing.id} prepared baseline differs from the requested definition`);
+        }
+        const revisedState = {
+          schemaVersion: WORK_ITEM_SCHEMA_VERSION,
+          id: candidate.id,
+          stage: 'WAITING_FOR_BASELINE_CONFIRMATION',
+          baselineFingerprint: candidateFingerprint,
+          contractFingerprint: workItemContractFingerprint(candidate),
+          parentContractFingerprint: candidate.parentContractFingerprint,
+          hostRuntime,
+          createdAt: current.state.createdAt,
+          revisedAt: at,
+          frozenAt: null,
+          review: {
+            schemaVersion: 1,
+            status: 'WAITING_FOR_HUMAN_REVIEW',
+            baselineFingerprint: candidateFingerprint,
+            reviewedBy: null,
+            reviewedAt: null,
+          },
+        };
+        await atomicReplaceDirectory(current.target, async (staging) => {
+          for (const [name, contents] of Object.entries(definitionFiles(candidate, revisedState))) {
+            await atomicWriteFile(path.join(staging, name), contents, { fs });
+          }
+        }, { fs });
+        existing.gateLevel = candidate.gateLevel;
+        existing.childIds = candidate.children?.map(({ id }) => id) ?? [];
+        existing.baselineFingerprint = revisedState.baselineFingerprint;
+        existing.contractFingerprint = revisedState.contractFingerprint;
+        existing.parentContractFingerprint = revisedState.parentContractFingerprint;
+        existing.developmentReview = true;
+        existing.recordRevision += 1;
+        existing.updatedAt = at;
+        registry.currentFocus = { workItemId: existing.id, purpose: 'BASELINE_CONFIRMATION' };
+        registry.revision += 1;
+        registry.updatedAt = at;
+        await writeRegistryUnlocked(root, registry, fs);
+        return {
+          created: false,
+          idempotent: false,
+          revised: true,
+          id: existing.id,
+          kind: existing.kind,
+          stage: existing.stage,
+          baselineFingerprint: existing.baselineFingerprint,
+          artifactDir: current.target,
+          humanArtifacts: itemHumanArtifacts(existing.id, existing.acceptanceReport),
+          nextAction: nextAction(existing),
+        };
       }
       return {
         created: false,
@@ -720,6 +855,10 @@ export async function prepareWorkItem({
         stage: existing.stage,
         baselineFingerprint: existing.baselineFingerprint,
         artifactDir: itemPath(root, existing.id),
+        humanArtifacts: existing.developmentReview
+          ? itemHumanArtifacts(existing.id, existing.acceptanceReport)
+          : null,
+        nextAction: nextAction(existing),
       };
     }
 
@@ -742,6 +881,13 @@ export async function prepareWorkItem({
       hostRuntime,
       createdAt: at,
       frozenAt: null,
+      review: {
+        schemaVersion: 1,
+        status: 'WAITING_FOR_HUMAN_REVIEW',
+        baselineFingerprint: workItemBaselineFingerprint(normalized),
+        reviewedBy: null,
+        reviewedAt: null,
+      },
     };
     const target = await assertSafePath(root, path.join(GOVERNANCE_DIRECTORY, WORK_ITEMS_DIRECTORY, normalized.id), { fs });
     await writeNewPackage(target, definitionFiles(normalized, state), fs);
@@ -769,6 +915,8 @@ export async function prepareWorkItem({
       stage: entry.stage,
       baselineFingerprint: entry.baselineFingerprint,
       artifactDir: target,
+      humanArtifacts: itemHumanArtifacts(entry.id),
+      nextAction: nextAction(entry),
     };
   }, { now });
 }
@@ -792,15 +940,38 @@ export async function freezeWorkItem({
     }
     const taskPackage = await assertCurrentLineage(root, registry, entry, fs);
     if (entry.stage === 'BASELINE_FROZEN') {
-      return { created: false, idempotent: true, id, stage: entry.stage, baselineFingerprint: entry.baselineFingerprint };
+      return {
+        created: false,
+        idempotent: true,
+        id,
+        stage: entry.stage,
+        baselineFingerprint: entry.baselineFingerprint,
+        humanArtifacts: entry.developmentReview ? itemHumanArtifacts(id, entry.acceptanceReport) : null,
+        nextAction: nextAction(entry),
+      };
     }
     if (entry.stage !== 'WAITING_FOR_BASELINE_CONFIRMATION') fail('WORK_ITEM_STAGE_INVALID', `${id} is not ready to freeze`);
     const state = {
       ...taskPackage.state,
       stage: 'BASELINE_FROZEN',
       frozenAt: at,
+      ...(taskPackage.definition.developmentPlan ? {
+        review: {
+          ...taskPackage.state.review,
+          status: 'APPROVED',
+          reviewedBy: 'user',
+          reviewedAt: at,
+        },
+      } : {}),
     };
     await atomicWriteFile(path.join(taskPackage.target, 'state.json'), json(state), { fs });
+    if (taskPackage.definition.developmentPlan) {
+      await atomicWriteFile(
+        path.join(taskPackage.target, 'development-review.md'),
+        renderDevelopmentReview(taskPackage.definition, state),
+        { fs },
+      );
+    }
     entry.stage = 'BASELINE_FROZEN';
     entry.status = entry.kind === 'TASK' ? 'WAITING_FOR_DEVELOPMENT_MODE_SELECTION' : 'FROZEN';
     entry.recordRevision += 1;
@@ -812,48 +983,16 @@ export async function freezeWorkItem({
     registry.revision += 1;
     registry.updatedAt = at;
     await writeRegistryUnlocked(root, registry, fs);
-    return { created: true, idempotent: false, id, stage: entry.stage, baselineFingerprint: entry.baselineFingerprint };
+    return {
+      created: true,
+      idempotent: false,
+      id,
+      stage: entry.stage,
+      baselineFingerprint: entry.baselineFingerprint,
+      humanArtifacts: entry.developmentReview ? itemHumanArtifacts(id, entry.acceptanceReport) : null,
+      nextAction: nextAction(entry),
+    };
   }, { now });
-}
-
-export async function approveWorkItem({
-  root,
-  definition,
-  hostRuntime,
-  confirmed = false,
-  explicitDogfood = false,
-  now,
-  fs = fsPromises,
-} = {}) {
-  if (confirmed !== true) {
-    fail('CONFIRMATION_REQUIRED', 'Work item approval must explicitly authorize persistence and baseline freeze');
-  }
-  const prepared = await prepareWorkItem({
-    root,
-    definition,
-    hostRuntime,
-    explicitDogfood,
-    now,
-    fs,
-  });
-  const frozen = await freezeWorkItem({
-    root,
-    id: prepared.id,
-    expectedBaselineFingerprint: prepared.baselineFingerprint,
-    confirmed: true,
-    explicitDogfood,
-    now,
-    fs,
-  });
-  return {
-    ...frozen,
-    approved: true,
-    prepared: {
-      created: prepared.created,
-      idempotent: prepared.idempotent,
-    },
-    artifactDir: prepared.artifactDir,
-  };
 }
 
 async function retryBlockedWorkItem({
@@ -976,6 +1115,13 @@ export async function reviseWorkItem({
       parentContractFingerprint: normalized.parentContractFingerprint,
       baselineRevision: (current.state.baselineRevision ?? 1) + 1,
       revisedAt: at,
+      review: {
+        schemaVersion: 1,
+        status: 'APPROVED',
+        baselineFingerprint: workItemBaselineFingerprint(normalized),
+        reviewedBy: 'user',
+        reviewedAt: at,
+      },
     };
     const files = definitionFiles(normalized, state);
     await atomicReplaceDirectory(current.target, async (staging) => {
@@ -996,6 +1142,7 @@ export async function reviseWorkItem({
     entry.baselineFingerprint = state.baselineFingerprint;
     entry.contractFingerprint = state.contractFingerprint;
     entry.parentContractFingerprint = state.parentContractFingerprint;
+    entry.developmentReview = true;
     entry.status = entry.kind === 'TASK' ? 'WAITING_FOR_DEVELOPMENT_MODE_SELECTION' : 'FROZEN';
     entry.developmentMode = null;
     entry.gate = { status: 'NOT_RUN', evidence: null };
@@ -1074,7 +1221,10 @@ export async function promoteWorkItem({
     const normalized = validateWorkItemDefinition({
       ...rawDefinition(current.definition),
       parentId: parentEntry.id,
-    }, { parent: parentPackage.definition });
+    }, {
+      parent: parentPackage.definition,
+      allowLegacyDevelopmentPlan: !current.definition.developmentPlan,
+    });
     validateTaskDependencies(normalized, parentPackage.definition);
     await validateCapabilityDependencyGraph(root, registry, normalized, fs);
 
@@ -1085,6 +1235,15 @@ export async function promoteWorkItem({
       parentContractFingerprint: normalized.parentContractFingerprint,
       baselineRevision: (current.state.baselineRevision ?? 1) + 1,
       revisedAt: at,
+      ...(normalized.developmentPlan ? {
+        review: {
+          schemaVersion: 1,
+          status: 'APPROVED',
+          baselineFingerprint: workItemBaselineFingerprint(normalized),
+          reviewedBy: 'user',
+          reviewedAt: at,
+        },
+      } : {}),
     };
     const files = definitionFiles(normalized, state);
     await atomicReplaceDirectory(current.target, async (staging) => {
@@ -1107,6 +1266,7 @@ export async function promoteWorkItem({
     entry.baselineFingerprint = state.baselineFingerprint;
     entry.contractFingerprint = state.contractFingerprint;
     entry.parentContractFingerprint = state.parentContractFingerprint;
+    entry.developmentReview = Boolean(normalized.developmentPlan);
     entry.status = entry.kind === 'TASK' ? 'WAITING_FOR_DEVELOPMENT_MODE_SELECTION' : 'FROZEN';
     entry.developmentMode = null;
     entry.gate = { status: 'NOT_RUN', evidence: null };
@@ -1296,7 +1456,7 @@ export async function upgradeWorkItemRegistry({
       ...rawDefinition(legacyDefinition),
       schemaVersion: WORK_ITEM_SCHEMA_VERSION,
       gateLevel: taskGateLevel,
-    });
+    }, { allowLegacyDevelopmentPlan: true });
     const migratedState = {
       ...legacyState,
       schemaVersion: WORK_ITEM_SCHEMA_VERSION,
@@ -1400,9 +1560,10 @@ export async function refreshWorkItemProjections({
     return {
       revision: registry.revision,
       workspaceOverview: path.posix.join(GOVERNANCE_DIRECTORY, 'workspace-overview.md'),
-      workItems: registry.workItems.map(({ id, acceptanceReport }) => ({
+      workItems: registry.workItems.map(({ id, acceptanceReport, developmentReview }) => ({
         id,
         acceptanceReport: acceptanceReport?.markdownPath ?? null,
+        humanArtifacts: developmentReview ? itemHumanArtifacts(id, acceptanceReport) : null,
       })),
     };
   }, { fs });
@@ -1660,6 +1821,12 @@ function validGateArtifact(value, entry, definition) {
       && (result.testsRun === undefined || (Number.isInteger(result.testsRun) && result.testsRun >= 0));
   });
   if (!acceptanceComplete || !testsComplete) return false;
+  if (definition.kind === 'TASK' && definition.developmentPlan) {
+    const plannedFiles = new Set(definition.developmentPlan.fileChanges.map(({ path: plannedPath }) => plannedPath));
+    if (value.scope.changedFiles.some((changedFile) => !plannedFiles.has(changedFile.replaceAll('\\', '/')))) {
+      return false;
+    }
+  }
   if (value.verdict === 'PASS') {
     return value.scope.outOfScopeFiles.length === 0
       && definition.acceptance.every(({ id }) => acceptanceById.get(id).status === 'PASS')
@@ -1718,6 +1885,16 @@ function renderAcceptanceReport(report) {
     const result = results.get(item.id);
     lines.push(`| ${item.id} | ${item.expectedResult} | ${result ? gateStatusText(result.status) : '待验收'} | ${result?.evidence ?? '无'} |`);
   }
+  lines.push('', '## 冻结开发方案', '');
+  if (report.developmentPlan?.interfaces) {
+    lines.push(`- 开发目的：${report.developmentPlan.purpose}`);
+    lines.push(`- 接口契约：${report.developmentPlan.interfaces.map(({ action, kind, name }) => `${action} ${kind} ${name}`).join('；') || '无接口改动'}`);
+  } else if (report.developmentPlan?.childPlans) {
+    lines.push(`- 协调目的：${report.developmentPlan.purpose}`);
+    lines.push(`- 子级内容：${report.developmentPlan.childPlans.map(({ id, purpose }) => `${id}：${purpose}`).join('；')}`);
+  } else {
+    lines.push('- 旧版 baseline 未记录结构化开发方案。');
+  }
   lines.push('', '## 测试结果', '');
   const tests = gateArtifact?.tests ?? report.development?.artifact?.tests ?? [];
   if (tests.length === 0) lines.push('- 尚无测试证据。');
@@ -1726,6 +1903,17 @@ function renderAcceptanceReport(report) {
   }
   lines.push('', '## 变更范围', '');
   const scope = gateArtifact?.scope;
+  if (report.developmentPlan?.fileChanges) {
+    const planned = report.developmentPlan.fileChanges.map(({ path: plannedPath }) => plannedPath);
+    const actual = scope?.changedFiles ?? report.development?.artifact?.changedFiles ?? [];
+    const actualSet = new Set(actual.map((changedFile) => changedFile.replaceAll('\\', '/')));
+    lines.push(`- 冻结计划文件：${planned.join('、') || '无'}`);
+    lines.push(`- 计划外文件：${actual.filter((changedFile) => !planned.includes(changedFile.replaceAll('\\', '/'))).join('、') || '无'}`);
+    lines.push(`- 计划中尚未观察到的文件：${planned.filter((plannedPath) => !actualSet.has(plannedPath)).join('、') || '无'}`);
+  } else if (report.developmentPlan?.childPlans) {
+    lines.push(`- 冻结子级计划：${report.developmentPlan.childPlans.map(({ id }) => id).join('、')}`);
+    lines.push(`- 冻结共享契约：${report.developmentPlan.sharedContracts.map(({ name }) => name).join('、') || '无'}`);
+  }
   lines.push(`- 已记录变更：${scope?.changedFiles?.join('、') || report.development?.artifact?.changedFiles?.join('、') || '无'}`);
   lines.push(`- 范围外变更：${scope?.outOfScopeFiles?.join('、') || '无'}`);
   lines.push('', '## 问题与建议', '');
@@ -1762,6 +1950,7 @@ async function writeAcceptanceReport(root, entry, definition, at, fs) {
     development: entry.latestResult,
     gate: entry.gate,
     criteria: definition.acceptance,
+    developmentPlan: definition.developmentPlan ?? null,
     review: acceptance?.review ?? null,
     userConfirmation: acceptance?.userConfirmation ?? null,
     generatedAt: at,
@@ -2082,6 +2271,7 @@ function parentContractSnapshot(parent, childId) {
     goal: parent.goal,
     scope: parent.scope,
     childContract: child,
+    developmentPlan: parent.developmentPlan ?? null,
   };
 }
 
@@ -2197,6 +2387,7 @@ export async function buildTaskContext({ root, id, explicitDogfood = false, fs =
       goal: own.definition.goal,
       scope: own.definition.scope,
       baselineFingerprint: entry.baselineFingerprint,
+      developmentPlan: own.definition.developmentPlan ?? null,
     },
     parentContracts: parents,
     capabilityDependencies,

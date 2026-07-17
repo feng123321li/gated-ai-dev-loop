@@ -4,14 +4,15 @@
 
 1. 从当前 Skill 安装目录运行 `node <skill-root>/scripts/hdg.mjs --help`。全局 `hdg` 不是前置条件。
 2. 只读恢复 registry；不存在时表示尚未持久化工作项。遇到受支持的单根 schema v2 Task 时，先展示迁移影响和 gateLevel，明确确认后执行 `upgrade-registry`，再按 v3 恢复；不得因新会话而忽略旧现场，也不得静默迁移。
-3. 起草层级事实卡，选择能够承担当前聚合责任的最浅根：Task、Capability 或 Delivery；同时选择不持久化的 `None`，或 schema v3 工作项的 `LIGHT|FULL`。只有 Task 可为 `LIGHT`。
-4. 展示完整 baseline 后，只请求一次覆盖具体 ID、内容以及“持久化并冻结”的批准；收到批准后用 `approve-item --confirmed` 一次完成准备与冻结，不再请求第二次冻结确认。
-5. 如果已有浅层根后来需要真实聚合父级，先单独准备并冻结计划该根的父 baseline，再展示双方指纹并取得明确升层确认；`promote-item` 只附着 `Task→Capability` 或 `Capability→Delivery`，不自动创建/冻结父级。
-6. Task 冻结或升层后进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`，等待用户明确选择 active/manual。
-7. 内置控制器持久化并校验 `development-mode.json` 后，才计算 READY；正常流程用 `dispatch-task` 原子认领并生成绑定 operationId 的独立上下文。manual 模式必须把返回的 `handoffPrompt` 原样展示，不能只给文件链接。
-8. 开发 Agent 返回实现事实或 BLOCKED；宿主用 operationId 执行 `task-result`。IMPLEMENTED 后立即生成“等待门禁验收”报告，宿主继续形成严格 evidence 并执行 `accept-item`，不得在开发完成处停止。
-9. 若存在 Capability，全部 Task VERIFIED 后运行 Capability 聚合门禁；若存在 Delivery，全部 Capability VERIFIED 后运行 Delivery 聚合门禁。
-10. 任意治理根 gate PASS 后完成隔离/人工审查，再由用户确认最终交付；同一份用户验收报告持续更新至“已完成”。
+3. 起草层级事实卡，选择能够承担当前聚合责任的最浅根：Task、Capability 或 Delivery；同时选择不持久化的 `None`，或 schema v3 工作项的 `LIGHT|FULL`。只有 Task 可为 `LIGHT`。为实际层级起草对应 `developmentPlan`：Task 精确到文件、接口与逻辑；Capability 精确到 Task 内容、共享契约和波次；Delivery 精确到 Capability 内容、跨能力契约和波次。
+4. 运行 `prepare-item`，生成 `development-review.md` 和 `development-plan.json`，向用户提供可点击文件与当前指纹。此时状态保持 `WAITING_FOR_BASELINE_CONFIRMATION`，不授权开发。
+5. 人工评审后，需要修改就重新起草和准备；明确同意当前评审文件与指纹后，才执行 `freeze-item --confirmed`。CLI 不提供原子 prepare+freeze 命令。
+6. 如果已有浅层根后来需要真实聚合父级，先单独准备、人工评审并冻结计划该根的父 baseline，再展示双方指纹并取得明确升层确认；`promote-item` 只附着 `Task→Capability` 或 `Capability→Delivery`，不自动创建/冻结父级。
+7. Task 冻结或升层后进入 `WAITING_FOR_DEVELOPMENT_MODE_SELECTION`，等待用户明确选择 active/manual。
+8. 内置控制器持久化并校验 `development-mode.json` 后，才计算 READY；正常流程用 `dispatch-task` 原子认领并生成绑定 operationId 的独立上下文。manual 模式必须把返回的 `handoffPrompt` 原样展示，不能只给文件链接。
+9. 开发 Agent 返回实现事实或 BLOCKED；宿主用 operationId 执行 `task-result`。IMPLEMENTED 后立即生成“等待门禁验收”报告，宿主继续形成严格 evidence 并执行 `accept-item`，不得在开发完成处停止。
+10. 若存在 Capability，全部 Task VERIFIED 后运行 Capability 聚合门禁；若存在 Delivery，全部 Capability VERIFIED 后运行 Delivery 聚合门禁。
+11. 任意治理根 gate PASS 后完成隔离/人工审查，再由用户确认最终交付；同一份用户验收报告持续更新至“已完成”。
 
 任何步骤都不能从自然语言关键词推导创建、冻结或修订授权。
 
@@ -41,7 +42,7 @@ flowchart TD
 ```mermaid
 flowchart LR
     S["已冻结浅层根；未 gate；无活动 claim"] --> P["单独起草父 baseline，并计划现有根"]
-    P --> F["一次批准父 ID、内容、持久化并冻结"]
+    P --> F["prepare 父评审包；人工查看后 freeze"]
     F --> C2["展示源/父指纹与失效影响"]
     C2 -->|"明确确认 promote-item"| K{"合法一级关系"}
     K -->|"Task → Capability"| TC["附着并记录 promotionHistory；清除 Task mode/context"]
@@ -55,7 +56,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    P["Task PREPARED"] -->|"baseline confirmation"| M["WAITING_FOR_DEVELOPMENT_MODE_SELECTION"]
+    P["Task PREPARED；评审文件已生成"] -->|"human review + fingerprint-bound freeze"| M["WAITING_FOR_DEVELOPMENT_MODE_SELECTION"]
     RP["Root Task FROZEN"] -->|"confirmed promote to frozen Capability"| M
     RC["Root Capability FROZEN"] -->|"confirmed promote to frozen Delivery"| CF["Capability FROZEN"]
     M -->|"explicit active/manual confirmation"| F["FROZEN"]
@@ -87,7 +88,7 @@ READY 是派生谓词，不写入 lifecycle。协调工作项的 VERIFIED 不是
 
 ## 失败关闭
 
-- 基线不完整：不准备包；未确认：不冻结；
+- 基线或开发方案不完整：不准备包；评审文件未生成或当前指纹未确认：不冻结；
 - 未明确选择开发方式：不生成上下文、不认领；
 - Skill 内置控制器缺失或校验失败：报告 Skill 安装损坏，不要求另装全局 CLI，不用对话模拟硬门禁；
 - 父链漂移、依赖未验证或范围冲突：Task 不 READY；

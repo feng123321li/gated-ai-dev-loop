@@ -16,7 +16,7 @@ Delivery 是可选的最高聚合类型，不是“完整代码项目”的同�
 
 ## Delivery 总览（按需）
 
-Delivery baseline 是顶层交付协调契约，包含目标、范围、非目标、R/A、跨工作区约束、交付测试、安全决策、Capability 子契约和风险。Delivery 不包含可执行代码任务。
+Delivery baseline 是顶层交付协调契约，包含目标、范围、非目标、R/A、跨工作区约束、交付测试、安全决策、Capability 子契约和风险。其 `development-review.md` 还必须逐项展示 Capability 的开发目的/交付物、依赖、跨 Capability 接口或共享契约、交付波次和顶层测试映射。Delivery 不包含可执行代码任务。
 
 ## Capability 拆分（按需）
 
@@ -26,11 +26,12 @@ Capability 可以是根，也可以从 Delivery 子契约派生。每个 Capabil
 - 声明计划 Task 的 ID、标题及父级 R/A 映射；
 - 有 Delivery 父级时可以声明同 Delivery Capability 的 `dependsOn`，并保证无环；
 - 用 `OPEN` 表示仍在拆分，用 `SEALED` 明确当前子项集合已封口；
+- 在开发评审中逐项展示 Task 目的/交付物、跨 Task 接口或共享契约、集成流程、波次和测试映射；
 - baseline 未冻结前不能准备子 Task。
 
 ## Task 拆分
 
-Task 是唯一可执行叶子，也可以直接作为根。合格 Task 必须有单一目标、精确写入范围、输入输出、安全测试 argv、完整 R/A 和可观察完成结果，并能由全新 Agent 在独立上下文中完成。根 Task 的 `dependsOn` 必须为空；Capability 下的 Task 只引用同 Capability 已计划兄弟。
+Task 是唯一可执行叶子，也可以直接作为根。合格 Task 必须有单一目标、精确写入范围、输入输出、安全测试 argv、完整 R/A 和可观察完成结果，并在评审文件中明确变更场景、精确文件动作、接口/函数当前与目标契约、实现逻辑、数据事务、兼容性和测试映射，能由全新 Agent 在独立上下文中完成。根 Task 的 `dependsOn` 必须为空；Capability 下的 Task 只引用同 Capability 已计划兄弟。
 
 ## 持续拆分
 
@@ -42,8 +43,8 @@ Capability 不必一次物化全部 Task 包，但 baseline 必须先声明子�
 
 最初事实只支持根 Task 或根 Capability 时应先使用浅层治理；后续出现真实的兄弟聚合责任，不需要废弃原工作项，也不能直接改它的 kind。
 
-- Task 需要与其他 Task 形成能力聚合：起草一个把现有 Task 列为 child 的根 Capability，按普通流程准备、确认、冻结，再明确确认 `promote-item`；
-- Capability 需要与其他 Capability 形成顶层交付：起草一个把现有 Capability 列为 child 的 Delivery，准备、确认、冻结后再升层。
+- Task 需要与其他 Task 形成能力聚合：起草一个把现有 Task 列为 child 的根 Capability，按普通流程 prepare、人工评审、freeze，再明确确认 `promote-item`；
+- Capability 需要与其他 Capability 形成顶层交付：起草一个把现有 Capability 列为 child 的 Delivery，prepare、人工评审、freeze 后再升层。
 
 升层前展示源和父的当前 baseline 指纹、父子契约、scope 以及 Task 开发方式失效影响。操作只允许附着一级，保留源 ID、kind、gateLevel 和历史；不能因将来可能扩展而提前创建空父级。
 
@@ -55,6 +56,7 @@ Capability 不必一次物化全部 Task 包，但 baseline 必须先声明子�
 - 根 Capability 无 Capability 依赖；跨能力依赖由 Delivery 下的 Capability `dependsOn` 表达；
 - 所有写入路径落在实际父范围内；
 - 每个实际存在的聚合层都有自己的测试和 PASS 条件；
+- Task 精确文件/接口方案、Capability 的 Task 组合方案、Delivery 的 Capability 组合方案均已生成真实评审文件并按当前指纹确认；
 - 跨仓库边界、提供方/消费方顺序和测试 cwd 明确。
 - 升层时父级已独立冻结并计划现有根，双方指纹和失效影响已由用户确认。
 

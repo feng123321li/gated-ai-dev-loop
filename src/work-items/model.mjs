@@ -8,6 +8,14 @@ import { sha256Bytes } from '../core/hash.mjs';
 export const WORK_ITEM_SCHEMA_VERSION = 3;
 export const WORK_ITEM_KINDS = Object.freeze(['DELIVERY', 'CAPABILITY', 'TASK']);
 export const WORK_ITEM_GATE_LEVELS = Object.freeze(['LIGHT', 'FULL']);
+export const WORK_ITEM_CHANGE_SCENARIOS = Object.freeze([
+  'API', 'DOMAIN', 'DATA', 'MIGRATION', 'CONFIG', 'UI', 'INTEGRATION', 'REFACTOR',
+  'TEST', 'DOCS', 'SECURITY', 'PERFORMANCE', 'BUILD', 'OTHER',
+]);
+export const WORK_ITEM_INTERFACE_KINDS = Object.freeze([
+  'HTTP_ENDPOINT', 'RPC', 'FUNCTION', 'METHOD', 'CLASS', 'EVENT', 'SCHEMA', 'CONFIG',
+  'CLI', 'UI', 'FILE_FORMAT', 'OTHER',
+]);
 export const WORK_ITEM_AUTHORITIES = Object.freeze({
   DELIVERY: 'COORDINATION',
   CAPABILITY: 'COORDINATION',
@@ -193,6 +201,260 @@ function testCommands(values) {
   return commands;
 }
 
+function linkedTraceIds(values, allowed, field, { allowEmpty = false } = {}) {
+  const linked = strings(values, field, { allowEmpty }).sort();
+  if (linked.some((id) => !allowed.has(id))) {
+    fail('WORK_ITEM_TRACE_INVALID', `${field} references an unknown trace ID`, { field });
+  }
+  return linked;
+}
+
+function developmentTestPlan(values, acceptance, testCommandCount) {
+  if (!Array.isArray(values) || values.length === 0) {
+    fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', 'developmentPlan.testPlan must be a nonempty array');
+  }
+  const acceptanceIds = new Set(acceptance.map(({ id }) => id));
+  const covered = new Set();
+  const normalized = values.map((entry, index) => {
+    const field = `developmentPlan.testPlan[${index}]`;
+    if (!exactKeys(entry, ['acceptanceIds', 'approach', 'commandIndexes'])) {
+      fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', `${field} has missing or unknown fields`, { field });
+    }
+    const linkedAcceptance = linkedTraceIds(entry.acceptanceIds, acceptanceIds, `${field}.acceptanceIds`);
+    linkedAcceptance.forEach((id) => covered.add(id));
+    if (!Array.isArray(entry.commandIndexes) || entry.commandIndexes.length === 0
+        || entry.commandIndexes.some((commandIndex) => (
+          !Number.isInteger(commandIndex) || commandIndex < 0 || commandIndex >= testCommandCount
+        )) || new Set(entry.commandIndexes).size !== entry.commandIndexes.length) {
+      fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', `${field}.commandIndexes must reference frozen test commands`, { field });
+    }
+    return {
+      acceptanceIds: linkedAcceptance,
+      approach: text(entry.approach, `${field}.approach`),
+      commandIndexes: [...entry.commandIndexes].sort((left, right) => left - right),
+    };
+  });
+  if (acceptance.some(({ id }) => !covered.has(id))) {
+    fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', 'Every acceptance criterion must be covered by developmentPlan.testPlan');
+  }
+  return normalized;
+}
+
+function taskDevelopmentPlan(value, normalized) {
+  const keys = [
+    'purpose', 'scenarios', 'fileChanges', 'interfaces', 'logic', 'dataAndTransactions',
+    'compatibility', 'testPlan', 'reviewPoints',
+  ];
+  if (!exactKeys(value, keys)) {
+    fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', 'Task developmentPlan contains missing or unknown fields');
+  }
+  const requirementIds = new Set(normalized.requirements.map(({ id }) => id));
+  const coveredRequirements = new Set();
+  if (!Array.isArray(value.scenarios) || value.scenarios.length === 0) {
+    fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', 'Task developmentPlan.scenarios must be nonempty');
+  }
+  const scenarios = value.scenarios.map((entry, index) => {
+    const field = `developmentPlan.scenarios[${index}]`;
+    if (!exactKeys(entry, ['kind', 'title', 'description', 'requirementIds'])
+        || !WORK_ITEM_CHANGE_SCENARIOS.includes(entry.kind)) {
+      fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', `${field} is invalid`, { field });
+    }
+    const linkedRequirements = linkedTraceIds(entry.requirementIds, requirementIds, `${field}.requirementIds`);
+    linkedRequirements.forEach((id) => coveredRequirements.add(id));
+    return {
+      kind: entry.kind,
+      title: text(entry.title, `${field}.title`),
+      description: text(entry.description, `${field}.description`),
+      requirementIds: linkedRequirements,
+    };
+  });
+  if (normalized.requirements.some(({ id }) => !coveredRequirements.has(id))) {
+    fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', 'Every requirement must be covered by a development scenario');
+  }
+
+  if (!Array.isArray(value.fileChanges) || value.fileChanges.length === 0) {
+    fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', 'Task developmentPlan.fileChanges must be nonempty');
+  }
+  const seenPaths = new Set();
+  const fileChanges = value.fileChanges.map((entry, index) => {
+    const field = `developmentPlan.fileChanges[${index}]`;
+    if (!exactKeys(entry, ['path', 'action', 'purpose'])
+        || !['ADD', 'MODIFY', 'REMOVE'].includes(entry.action)) {
+      fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', `${field} is invalid`, { field });
+    }
+    const plannedPath = normalizeScopePattern(entry.path);
+    if (/[*?{}[\]]/.test(plannedPath) || seenPaths.has(plannedPath)
+        || !scopeContains(normalized.scope, [plannedPath])) {
+      fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', `${field}.path must be a unique exact path inside Task scope`, { field });
+    }
+    seenPaths.add(plannedPath);
+    return {
+      path: plannedPath,
+      action: entry.action,
+      purpose: text(entry.purpose, `${field}.purpose`),
+    };
+  }).sort((left, right) => left.path.localeCompare(right.path));
+
+  if (!Array.isArray(value.interfaces)) {
+    fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', 'Task developmentPlan.interfaces must be an array');
+  }
+  const interfaces = value.interfaces.map((entry, index) => {
+    const field = `developmentPlan.interfaces[${index}]`;
+    const interfaceKeys = [
+      'name', 'kind', 'action', 'location', 'currentContract', 'targetContract', 'requirementIds',
+    ];
+    if (!exactKeys(entry, interfaceKeys)
+        || !WORK_ITEM_INTERFACE_KINDS.includes(entry.kind)
+        || !['ADD', 'MODIFY', 'REMOVE'].includes(entry.action)) {
+      fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', `${field} is invalid`, { field });
+    }
+    return {
+      name: text(entry.name, `${field}.name`),
+      kind: entry.kind,
+      action: entry.action,
+      location: text(entry.location, `${field}.location`),
+      currentContract: text(entry.currentContract, `${field}.currentContract`),
+      targetContract: text(entry.targetContract, `${field}.targetContract`),
+      requirementIds: linkedTraceIds(entry.requirementIds, requirementIds, `${field}.requirementIds`),
+    };
+  });
+
+  return {
+    purpose: text(value.purpose, 'developmentPlan.purpose'),
+    scenarios,
+    fileChanges,
+    interfaces,
+    logic: strings(value.logic, 'developmentPlan.logic'),
+    dataAndTransactions: strings(value.dataAndTransactions, 'developmentPlan.dataAndTransactions', { allowEmpty: true }),
+    compatibility: strings(value.compatibility, 'developmentPlan.compatibility'),
+    testPlan: developmentTestPlan(value.testPlan, normalized.acceptance, normalized.testCommands.length),
+    reviewPoints: strings(value.reviewPoints, 'developmentPlan.reviewPoints'),
+  };
+}
+
+function coordinationDevelopmentPlan(value, normalized) {
+  const keys = [
+    'purpose', 'childPlans', 'sharedContracts', 'integrationFlow', 'deliveryWaves',
+    'testPlan', 'reviewPoints',
+  ];
+  if (!exactKeys(value, keys)) {
+    fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', 'Coordination developmentPlan contains missing or unknown fields');
+  }
+  const requirements = new Set(normalized.requirements.map(({ id }) => id));
+  const acceptance = new Set(normalized.acceptance.map(({ id }) => id));
+  const childById = new Map(normalized.children.map((child) => [child.id, child]));
+  if (!Array.isArray(value.childPlans) || value.childPlans.length !== normalized.children.length) {
+    fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', 'developmentPlan.childPlans must cover every direct child exactly once');
+  }
+  const seen = new Set();
+  const childPlans = value.childPlans.map((entry, index) => {
+    const field = `developmentPlan.childPlans[${index}]`;
+    const child = childById.get(entry?.id);
+    if (!exactKeys(entry, ['id', 'purpose', 'deliverables', 'requirementIds', 'acceptanceIds', 'dependsOn'])
+        || !child || seen.has(entry.id)) {
+      fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', `${field} does not match a unique planned child`, { field });
+    }
+    seen.add(entry.id);
+    const linkedRequirements = linkedTraceIds(entry.requirementIds, requirements, `${field}.requirementIds`);
+    const linkedAcceptance = linkedTraceIds(entry.acceptanceIds, acceptance, `${field}.acceptanceIds`);
+    if (canonicalJson(linkedRequirements) !== canonicalJson(child.requirementIds)
+        || canonicalJson(linkedAcceptance) !== canonicalJson(child.acceptanceIds)) {
+      fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', `${field} trace mapping must match the child contract`, { field });
+    }
+    const dependsOn = entry.dependsOn.map((id, dependencyIndex) => safeId(id, `${field}.dependsOn[${dependencyIndex}]`));
+    if (dependsOn.includes(entry.id) || new Set(dependsOn).size !== dependsOn.length
+        || dependsOn.some((id) => !childById.has(id))) {
+      fail('WORK_ITEM_DEPENDENCY_INVALID', `${field}.dependsOn must reference unique sibling children`, { field });
+    }
+    return {
+      id: entry.id,
+      purpose: text(entry.purpose, `${field}.purpose`),
+      deliverables: strings(entry.deliverables, `${field}.deliverables`),
+      requirementIds: linkedRequirements,
+      acceptanceIds: linkedAcceptance,
+      dependsOn: [...dependsOn].sort(),
+    };
+  }).sort((left, right) => left.id.localeCompare(right.id));
+
+  const graph = new Map(childPlans.map(({ id, dependsOn }) => [id, dependsOn]));
+  const visiting = new Set();
+  const visited = new Set();
+  const visit = (id) => {
+    if (visiting.has(id)) fail('WORK_ITEM_DEPENDENCY_CYCLE', 'developmentPlan child dependencies contain a cycle');
+    if (visited.has(id)) return;
+    visiting.add(id);
+    for (const dependency of graph.get(id) ?? []) visit(dependency);
+    visiting.delete(id);
+    visited.add(id);
+  };
+  for (const id of graph.keys()) visit(id);
+
+  if (!Array.isArray(value.sharedContracts)) {
+    fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', 'developmentPlan.sharedContracts must be an array');
+  }
+  const sharedContracts = value.sharedContracts.map((entry, index) => {
+    const field = `developmentPlan.sharedContracts[${index}]`;
+    if (!exactKeys(entry, [
+      'name', 'kind', 'description', 'providerChildIds', 'consumerChildIds', 'requirementIds',
+    ]) || !WORK_ITEM_INTERFACE_KINDS.includes(entry.kind)) {
+      fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', `${field} is invalid`, { field });
+    }
+    const childIds = new Set(childById.keys());
+    const providers = strings(entry.providerChildIds, `${field}.providerChildIds`).sort();
+    const consumers = strings(entry.consumerChildIds, `${field}.consumerChildIds`).sort();
+    if ([...providers, ...consumers].some((id) => !childIds.has(id))) {
+      fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', `${field} references an unknown child`, { field });
+    }
+    return {
+      name: text(entry.name, `${field}.name`),
+      kind: entry.kind,
+      description: text(entry.description, `${field}.description`),
+      providerChildIds: providers,
+      consumerChildIds: consumers,
+      requirementIds: linkedTraceIds(entry.requirementIds, requirements, `${field}.requirementIds`),
+    };
+  });
+
+  if (!Array.isArray(value.deliveryWaves) || value.deliveryWaves.length === 0) {
+    fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', 'developmentPlan.deliveryWaves must be nonempty');
+  }
+  const waveByChild = new Map();
+  const waveOrders = new Set();
+  const deliveryWaves = value.deliveryWaves.map((entry, index) => {
+    const field = `developmentPlan.deliveryWaves[${index}]`;
+    if (!exactKeys(entry, ['order', 'name', 'childIds', 'exitCriteria'])
+        || !Number.isInteger(entry.order) || entry.order < 1 || waveOrders.has(entry.order)) {
+      fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', `${field} is invalid`, { field });
+    }
+    waveOrders.add(entry.order);
+    const childIds = strings(entry.childIds, `${field}.childIds`).map((id) => safeId(id, `${field}.childIds`)).sort();
+    if (childIds.some((id) => !childById.has(id) || waveByChild.has(id))) {
+      fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', `${field} must contain unique planned children`, { field });
+    }
+    childIds.forEach((id) => waveByChild.set(id, entry.order));
+    return {
+      order: entry.order,
+      name: text(entry.name, `${field}.name`),
+      childIds,
+      exitCriteria: text(entry.exitCriteria, `${field}.exitCriteria`),
+    };
+  }).sort((left, right) => left.order - right.order);
+  if (waveByChild.size !== childById.size
+      || childPlans.some(({ id, dependsOn }) => dependsOn.some((dependency) => waveByChild.get(dependency) >= waveByChild.get(id)))) {
+    fail('WORK_ITEM_DEVELOPMENT_PLAN_INVALID', 'Delivery waves must cover every child and order dependencies before consumers');
+  }
+
+  return {
+    purpose: text(value.purpose, 'developmentPlan.purpose'),
+    childPlans,
+    sharedContracts,
+    integrationFlow: strings(value.integrationFlow, 'developmentPlan.integrationFlow'),
+    deliveryWaves,
+    testPlan: developmentTestPlan(value.testPlan, normalized.acceptance, normalized.testCommands.length),
+    reviewPoints: strings(value.reviewPoints, 'developmentPlan.reviewPoints'),
+  };
+}
+
 function scopeCovers(parentPattern, childPattern) {
   if (parentPattern === '**') return true;
   if (!parentPattern.endsWith('/**')) return parentPattern === childPattern;
@@ -245,7 +507,7 @@ function normalizeParent(definition, parent) {
   };
 }
 
-export function validateWorkItemDefinition(definition, { parent } = {}) {
+export function validateWorkItemDefinition(definition, { parent, allowLegacyDevelopmentPlan = false } = {}) {
   if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
     fail('WORK_ITEM_DEFINITION_INVALID', 'Work item definition must be an object');
   }
@@ -265,9 +527,12 @@ export function validateWorkItemDefinition(definition, { parent } = {}) {
     'schemaVersion', 'id', 'kind', 'gateLevel', 'title', 'goal', 'scope', 'nonGoals', 'requirements',
     'acceptance', 'testCommands', 'risks', 'decisions',
   ];
+  const developmentPlanKeys = allowLegacyDevelopmentPlan && !Object.hasOwn(definition, 'developmentPlan')
+    ? []
+    : ['developmentPlan'];
   const expectedKeys = definition.kind === 'DELIVERY'
-    ? [...commonKeys, 'decomposition', 'children']
-    : [...commonKeys, 'parentId', ...(definition.kind === 'TASK' ? ['execution'] : ['decomposition', 'children'])];
+    ? [...commonKeys, ...developmentPlanKeys, 'decomposition', 'children']
+    : [...commonKeys, ...developmentPlanKeys, 'parentId', ...(definition.kind === 'TASK' ? ['execution'] : ['decomposition', 'children'])];
   if (!exactKeys(definition, expectedKeys)) {
     fail('WORK_ITEM_DEFINITION_INVALID', 'Work item definition contains missing or unknown fields', {
       expectedKeys: expectedKeys.sort(),
@@ -297,7 +562,21 @@ export function validateWorkItemDefinition(definition, { parent } = {}) {
     normalized.decomposition = decompositionRecord(definition.decomposition, definition.kind, normalized.id, parent);
     normalized.children = childRecords(definition.children, definition.kind, normalized.requirements, normalized.acceptance);
   }
+  if (Object.hasOwn(definition, 'developmentPlan')) {
+    normalized.developmentPlan = definition.kind === 'TASK'
+      ? taskDevelopmentPlan(definition.developmentPlan, normalized)
+      : coordinationDevelopmentPlan(definition.developmentPlan, normalized);
+  }
   Object.assign(normalized, normalizeParent({ ...definition, ...normalized }, parent));
+  if (parent?.developmentPlan) {
+    const planned = parent.developmentPlan.childPlans.find(({ id }) => id === normalized.id);
+    const actualDependencies = normalized.kind === 'TASK'
+      ? normalized.execution.dependsOn
+      : normalized.decomposition.dependsOn;
+    if (!planned || canonicalJson(planned.dependsOn) !== canonicalJson(actualDependencies)) {
+      fail('WORK_ITEM_PARENT_PLAN_MISMATCH', `${normalized.id} dependencies do not match the frozen parent development plan`);
+    }
+  }
   return normalized;
 }
 
@@ -316,6 +595,7 @@ function contract(definition) {
   if (definition.children) normalized.children = [...definition.children].sort((left, right) => left.id.localeCompare(right.id));
   if (definition.decomposition) normalized.decomposition = definition.decomposition;
   if (definition.execution) normalized.execution = definition.execution;
+  if (definition.developmentPlan) normalized.developmentPlan = definition.developmentPlan;
   return normalized;
 }
 
@@ -329,9 +609,23 @@ export function workItemChildContractFingerprint(parent, childId) {
   const stableParentContract = contract(parent);
   delete stableParentContract.children;
   delete stableParentContract.decomposition;
+  let childDevelopmentPlan;
+  if (stableParentContract.developmentPlan) {
+    childDevelopmentPlan = stableParentContract.developmentPlan.childPlans.find(({ id }) => id === childId);
+    stableParentContract.developmentPlan = {
+      ...stableParentContract.developmentPlan,
+      sharedContracts: stableParentContract.developmentPlan.sharedContracts
+        .filter(({ consumerChildIds }) => consumerChildIds.includes(childId)),
+      childPlans: undefined,
+      deliveryWaves: undefined,
+    };
+    delete stableParentContract.developmentPlan.childPlans;
+    delete stableParentContract.developmentPlan.deliveryWaves;
+  }
   return sha256Bytes(Buffer.from(canonicalJson({
     parent: stableParentContract,
     child,
+    ...(childDevelopmentPlan ? { childDevelopmentPlan } : {}),
   }), 'utf8'));
 }
 
@@ -392,8 +686,151 @@ export function renderWorkItemBaseline(definition) {
     );
   }
   lines.push('', '## Test Commands', ...definition.testCommands.map((argv) => `- ${JSON.stringify(argv)}`));
+  if (definition.developmentPlan) {
+    lines.push(
+      '',
+      '## Development Review Contract',
+      definition.developmentPlan.purpose,
+      '',
+      '- Full human-readable plan: [development-review.md](development-review.md)',
+      '- Structured plan: [development-plan.json](development-plan.json)',
+    );
+  }
   lines.push('', '## Risks', list(definition.risks));
   lines.push('', '## Decisions', list(definition.decisions), '');
+  return lines.join('\n');
+}
+
+function reviewStatusText(state) {
+  return state?.review?.status === 'APPROVED'
+    ? `已由人工确认（${state.review.reviewedBy}，${state.review.reviewedAt}）`
+    : '等待人工评审；尚未冻结，禁止开始开发';
+}
+
+function markdownTableCell(value) {
+  return String(value).replaceAll('|', '\\|').replaceAll('\n', '<br>');
+}
+
+export function renderDevelopmentReview(definition, state) {
+  const plan = definition.developmentPlan;
+  if (!plan) return '';
+  const lines = [
+    `# 开发评审：${definition.title}`,
+    '',
+    `- 工作项：${definition.id}`,
+    `- 层级：${definition.kind}`,
+    `- 门禁等级：${definition.gateLevel}`,
+    `- Baseline 指纹：${state.baselineFingerprint}`,
+    `- 评审状态：${reviewStatusText(state)}`,
+    `- 开发目的：${plan.purpose}`,
+    '',
+    '## 需求与验收边界',
+    '',
+    '| 需求 | 内容 |',
+    '| --- | --- |',
+    ...definition.requirements.map(({ id, text: requirement }) => `| ${id} | ${markdownTableCell(requirement)} |`),
+    '',
+    '| 验收 | 覆盖需求 | 预期结果 |',
+    '| --- | --- | --- |',
+    ...definition.acceptance.map(({ id, requirementIds, expectedResult }) => (
+      `| ${id} | ${requirementIds.join(', ')} | ${markdownTableCell(expectedResult)} |`
+    )),
+    '',
+  ];
+
+  if (definition.kind === 'TASK') {
+    lines.push(
+      '## 变更场景',
+      '',
+      '| 场景 | 标题 | 开发内容 | 覆盖需求 |',
+      '| --- | --- | --- | --- |',
+      ...plan.scenarios.map((scenario) => (
+        `| ${scenario.kind} | ${markdownTableCell(scenario.title)} | ${markdownTableCell(scenario.description)} | ${scenario.requirementIds.join(', ')} |`
+      )),
+      '',
+      '## 文件改动',
+      '',
+      '| 动作 | 文件 | 目的 |',
+      '| --- | --- | --- |',
+      ...plan.fileChanges.map((change) => `| ${change.action} | \`${change.path}\` | ${markdownTableCell(change.purpose)} |`),
+      '',
+      '## 接口与功能契约',
+      '',
+    );
+    if (plan.interfaces.length === 0) lines.push('- 本 Task 不新增、修改或删除外部/内部接口。');
+    else {
+      lines.push(
+        '| 动作 | 类型 | 名称与位置 | 当前契约 | 目标契约 | 覆盖需求 |',
+        '| --- | --- | --- | --- | --- | --- |',
+        ...plan.interfaces.map((contract) => (
+          `| ${contract.action} | ${contract.kind} | ${markdownTableCell(contract.name)}<br>${markdownTableCell(contract.location)} | ${markdownTableCell(contract.currentContract)} | ${markdownTableCell(contract.targetContract)} | ${contract.requirementIds.join(', ')} |`
+        )),
+      );
+    }
+    lines.push('', '## 实现逻辑', '', ...plan.logic.map((item) => `- ${item}`));
+    lines.push('', '## 数据与事务', '');
+    lines.push(...(plan.dataAndTransactions.length > 0
+      ? plan.dataAndTransactions.map((item) => `- ${item}`)
+      : ['- 不涉及数据模型、持久化或事务边界变更。']));
+    lines.push('', '## 兼容性', '', ...plan.compatibility.map((item) => `- ${item}`));
+  } else {
+    const childLabel = definition.kind === 'DELIVERY' ? 'Capability' : 'Task';
+    lines.push(
+      `## ${childLabel} 开发内容`,
+      '',
+      `| ${childLabel} | 开发目的 | 交付内容 | 依赖 | R/A |`,
+      '| --- | --- | --- | --- | --- |',
+      ...plan.childPlans.map((child) => (
+        `| ${child.id} | ${markdownTableCell(child.purpose)} | ${markdownTableCell(child.deliverables.join('；'))} | ${child.dependsOn.join(', ') || '无'} | ${child.requirementIds.join(', ')} / ${child.acceptanceIds.join(', ')} |`
+      )),
+      '',
+      `## 跨 ${childLabel} 接口与共享契约`,
+      '',
+    );
+    if (plan.sharedContracts.length === 0) lines.push(`- 无跨 ${childLabel} 共享接口；子级仅通过冻结输出和聚合门禁组合。`);
+    else {
+      lines.push(
+        '| 类型 | 契约 | 提供方 | 消费方 | 说明 | 覆盖需求 |',
+        '| --- | --- | --- | --- | --- | --- |',
+        ...plan.sharedContracts.map((contract) => (
+          `| ${contract.kind} | ${markdownTableCell(contract.name)} | ${contract.providerChildIds.join(', ')} | ${contract.consumerChildIds.join(', ')} | ${markdownTableCell(contract.description)} | ${contract.requirementIds.join(', ')} |`
+        )),
+      );
+    }
+    lines.push('', '## 集成流程', '', ...plan.integrationFlow.map((item) => `- ${item}`));
+    lines.push(
+      '',
+      '## 开发与集成波次',
+      '',
+      '| 波次 | 名称 | 子级 | 退出条件 |',
+      '| --- | --- | --- | --- |',
+      ...plan.deliveryWaves.map((wave) => (
+        `| ${wave.order} | ${markdownTableCell(wave.name)} | ${wave.childIds.join(', ')} | ${markdownTableCell(wave.exitCriteria)} |`
+      )),
+    );
+  }
+
+  lines.push(
+    '',
+    '## 测试与验收映射',
+    '',
+    '| 验收项 | 验证方法 | 冻结命令序号 |',
+    '| --- | --- | --- |',
+    ...plan.testPlan.map((test) => (
+      `| ${test.acceptanceIds.join(', ')} | ${markdownTableCell(test.approach)} | ${test.commandIndexes.join(', ')} |`
+    )),
+    '',
+    '## 人工评审重点',
+    '',
+    ...plan.reviewPoints.map((item) => `- ${item}`),
+    '',
+    '## 冻结说明',
+    '',
+    '- 请先评审本文件中的开发目的、内容、文件、接口/共享契约、依赖波次和测试映射。',
+    '- 如需修改，先修改 definition 并重新 prepare；不要冻结错误版本。',
+    `- 只有对指纹 \`${state.baselineFingerprint}\` 明确确认后，才可执行 freeze-item；冻结后开发上下文必须携带本计划。`,
+    '',
+  );
   return lines.join('\n');
 }
 

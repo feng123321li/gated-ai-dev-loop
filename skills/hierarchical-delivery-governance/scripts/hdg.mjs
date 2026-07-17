@@ -1012,6 +1012,36 @@ import path2 from "node:path";
 var WORK_ITEM_SCHEMA_VERSION = 3;
 var WORK_ITEM_KINDS = Object.freeze(["DELIVERY", "CAPABILITY", "TASK"]);
 var WORK_ITEM_GATE_LEVELS = Object.freeze(["LIGHT", "FULL"]);
+var WORK_ITEM_CHANGE_SCENARIOS = Object.freeze([
+  "API",
+  "DOMAIN",
+  "DATA",
+  "MIGRATION",
+  "CONFIG",
+  "UI",
+  "INTEGRATION",
+  "REFACTOR",
+  "TEST",
+  "DOCS",
+  "SECURITY",
+  "PERFORMANCE",
+  "BUILD",
+  "OTHER"
+]);
+var WORK_ITEM_INTERFACE_KINDS = Object.freeze([
+  "HTTP_ENDPOINT",
+  "RPC",
+  "FUNCTION",
+  "METHOD",
+  "CLASS",
+  "EVENT",
+  "SCHEMA",
+  "CONFIG",
+  "CLI",
+  "UI",
+  "FILE_FORMAT",
+  "OTHER"
+]);
 var WORK_ITEM_AUTHORITIES = Object.freeze({
   DELIVERY: "COORDINATION",
   CAPABILITY: "COORDINATION",
@@ -1172,6 +1202,259 @@ function testCommands(values) {
   if (new Set(canonical).size !== canonical.length) fail("WORK_ITEM_TEST_COMMAND_INVALID", "Duplicate test command");
   return commands;
 }
+function linkedTraceIds(values, allowed, field, { allowEmpty = false } = {}) {
+  const linked = strings(values, field, { allowEmpty }).sort();
+  if (linked.some((id) => !allowed.has(id))) {
+    fail("WORK_ITEM_TRACE_INVALID", `${field} references an unknown trace ID`, { field });
+  }
+  return linked;
+}
+function developmentTestPlan(values, acceptance, testCommandCount) {
+  if (!Array.isArray(values) || values.length === 0) {
+    fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "developmentPlan.testPlan must be a nonempty array");
+  }
+  const acceptanceIds = new Set(acceptance.map(({ id }) => id));
+  const covered = /* @__PURE__ */ new Set();
+  const normalized = values.map((entry, index) => {
+    const field = `developmentPlan.testPlan[${index}]`;
+    if (!exactKeys(entry, ["acceptanceIds", "approach", "commandIndexes"])) {
+      fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", `${field} has missing or unknown fields`, { field });
+    }
+    const linkedAcceptance = linkedTraceIds(entry.acceptanceIds, acceptanceIds, `${field}.acceptanceIds`);
+    linkedAcceptance.forEach((id) => covered.add(id));
+    if (!Array.isArray(entry.commandIndexes) || entry.commandIndexes.length === 0 || entry.commandIndexes.some((commandIndex) => !Number.isInteger(commandIndex) || commandIndex < 0 || commandIndex >= testCommandCount) || new Set(entry.commandIndexes).size !== entry.commandIndexes.length) {
+      fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", `${field}.commandIndexes must reference frozen test commands`, { field });
+    }
+    return {
+      acceptanceIds: linkedAcceptance,
+      approach: text(entry.approach, `${field}.approach`),
+      commandIndexes: [...entry.commandIndexes].sort((left, right) => left - right)
+    };
+  });
+  if (acceptance.some(({ id }) => !covered.has(id))) {
+    fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "Every acceptance criterion must be covered by developmentPlan.testPlan");
+  }
+  return normalized;
+}
+function taskDevelopmentPlan(value, normalized) {
+  const keys = [
+    "purpose",
+    "scenarios",
+    "fileChanges",
+    "interfaces",
+    "logic",
+    "dataAndTransactions",
+    "compatibility",
+    "testPlan",
+    "reviewPoints"
+  ];
+  if (!exactKeys(value, keys)) {
+    fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "Task developmentPlan contains missing or unknown fields");
+  }
+  const requirementIds = new Set(normalized.requirements.map(({ id }) => id));
+  const coveredRequirements = /* @__PURE__ */ new Set();
+  if (!Array.isArray(value.scenarios) || value.scenarios.length === 0) {
+    fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "Task developmentPlan.scenarios must be nonempty");
+  }
+  const scenarios = value.scenarios.map((entry, index) => {
+    const field = `developmentPlan.scenarios[${index}]`;
+    if (!exactKeys(entry, ["kind", "title", "description", "requirementIds"]) || !WORK_ITEM_CHANGE_SCENARIOS.includes(entry.kind)) {
+      fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", `${field} is invalid`, { field });
+    }
+    const linkedRequirements = linkedTraceIds(entry.requirementIds, requirementIds, `${field}.requirementIds`);
+    linkedRequirements.forEach((id) => coveredRequirements.add(id));
+    return {
+      kind: entry.kind,
+      title: text(entry.title, `${field}.title`),
+      description: text(entry.description, `${field}.description`),
+      requirementIds: linkedRequirements
+    };
+  });
+  if (normalized.requirements.some(({ id }) => !coveredRequirements.has(id))) {
+    fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "Every requirement must be covered by a development scenario");
+  }
+  if (!Array.isArray(value.fileChanges) || value.fileChanges.length === 0) {
+    fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "Task developmentPlan.fileChanges must be nonempty");
+  }
+  const seenPaths = /* @__PURE__ */ new Set();
+  const fileChanges = value.fileChanges.map((entry, index) => {
+    const field = `developmentPlan.fileChanges[${index}]`;
+    if (!exactKeys(entry, ["path", "action", "purpose"]) || !["ADD", "MODIFY", "REMOVE"].includes(entry.action)) {
+      fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", `${field} is invalid`, { field });
+    }
+    const plannedPath = normalizeScopePattern(entry.path);
+    if (/[*?{}[\]]/.test(plannedPath) || seenPaths.has(plannedPath) || !scopeContains(normalized.scope, [plannedPath])) {
+      fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", `${field}.path must be a unique exact path inside Task scope`, { field });
+    }
+    seenPaths.add(plannedPath);
+    return {
+      path: plannedPath,
+      action: entry.action,
+      purpose: text(entry.purpose, `${field}.purpose`)
+    };
+  }).sort((left, right) => left.path.localeCompare(right.path));
+  if (!Array.isArray(value.interfaces)) {
+    fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "Task developmentPlan.interfaces must be an array");
+  }
+  const interfaces = value.interfaces.map((entry, index) => {
+    const field = `developmentPlan.interfaces[${index}]`;
+    const interfaceKeys = [
+      "name",
+      "kind",
+      "action",
+      "location",
+      "currentContract",
+      "targetContract",
+      "requirementIds"
+    ];
+    if (!exactKeys(entry, interfaceKeys) || !WORK_ITEM_INTERFACE_KINDS.includes(entry.kind) || !["ADD", "MODIFY", "REMOVE"].includes(entry.action)) {
+      fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", `${field} is invalid`, { field });
+    }
+    return {
+      name: text(entry.name, `${field}.name`),
+      kind: entry.kind,
+      action: entry.action,
+      location: text(entry.location, `${field}.location`),
+      currentContract: text(entry.currentContract, `${field}.currentContract`),
+      targetContract: text(entry.targetContract, `${field}.targetContract`),
+      requirementIds: linkedTraceIds(entry.requirementIds, requirementIds, `${field}.requirementIds`)
+    };
+  });
+  return {
+    purpose: text(value.purpose, "developmentPlan.purpose"),
+    scenarios,
+    fileChanges,
+    interfaces,
+    logic: strings(value.logic, "developmentPlan.logic"),
+    dataAndTransactions: strings(value.dataAndTransactions, "developmentPlan.dataAndTransactions", { allowEmpty: true }),
+    compatibility: strings(value.compatibility, "developmentPlan.compatibility"),
+    testPlan: developmentTestPlan(value.testPlan, normalized.acceptance, normalized.testCommands.length),
+    reviewPoints: strings(value.reviewPoints, "developmentPlan.reviewPoints")
+  };
+}
+function coordinationDevelopmentPlan(value, normalized) {
+  const keys = [
+    "purpose",
+    "childPlans",
+    "sharedContracts",
+    "integrationFlow",
+    "deliveryWaves",
+    "testPlan",
+    "reviewPoints"
+  ];
+  if (!exactKeys(value, keys)) {
+    fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "Coordination developmentPlan contains missing or unknown fields");
+  }
+  const requirements = new Set(normalized.requirements.map(({ id }) => id));
+  const acceptance = new Set(normalized.acceptance.map(({ id }) => id));
+  const childById = new Map(normalized.children.map((child) => [child.id, child]));
+  if (!Array.isArray(value.childPlans) || value.childPlans.length !== normalized.children.length) {
+    fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "developmentPlan.childPlans must cover every direct child exactly once");
+  }
+  const seen = /* @__PURE__ */ new Set();
+  const childPlans = value.childPlans.map((entry, index) => {
+    const field = `developmentPlan.childPlans[${index}]`;
+    const child = childById.get(entry?.id);
+    if (!exactKeys(entry, ["id", "purpose", "deliverables", "requirementIds", "acceptanceIds", "dependsOn"]) || !child || seen.has(entry.id)) {
+      fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", `${field} does not match a unique planned child`, { field });
+    }
+    seen.add(entry.id);
+    const linkedRequirements = linkedTraceIds(entry.requirementIds, requirements, `${field}.requirementIds`);
+    const linkedAcceptance = linkedTraceIds(entry.acceptanceIds, acceptance, `${field}.acceptanceIds`);
+    if (canonicalJson(linkedRequirements) !== canonicalJson(child.requirementIds) || canonicalJson(linkedAcceptance) !== canonicalJson(child.acceptanceIds)) {
+      fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", `${field} trace mapping must match the child contract`, { field });
+    }
+    const dependsOn = entry.dependsOn.map((id, dependencyIndex) => safeId(id, `${field}.dependsOn[${dependencyIndex}]`));
+    if (dependsOn.includes(entry.id) || new Set(dependsOn).size !== dependsOn.length || dependsOn.some((id) => !childById.has(id))) {
+      fail("WORK_ITEM_DEPENDENCY_INVALID", `${field}.dependsOn must reference unique sibling children`, { field });
+    }
+    return {
+      id: entry.id,
+      purpose: text(entry.purpose, `${field}.purpose`),
+      deliverables: strings(entry.deliverables, `${field}.deliverables`),
+      requirementIds: linkedRequirements,
+      acceptanceIds: linkedAcceptance,
+      dependsOn: [...dependsOn].sort()
+    };
+  }).sort((left, right) => left.id.localeCompare(right.id));
+  const graph = new Map(childPlans.map(({ id, dependsOn }) => [id, dependsOn]));
+  const visiting = /* @__PURE__ */ new Set();
+  const visited = /* @__PURE__ */ new Set();
+  const visit = (id) => {
+    if (visiting.has(id)) fail("WORK_ITEM_DEPENDENCY_CYCLE", "developmentPlan child dependencies contain a cycle");
+    if (visited.has(id)) return;
+    visiting.add(id);
+    for (const dependency of graph.get(id) ?? []) visit(dependency);
+    visiting.delete(id);
+    visited.add(id);
+  };
+  for (const id of graph.keys()) visit(id);
+  if (!Array.isArray(value.sharedContracts)) {
+    fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "developmentPlan.sharedContracts must be an array");
+  }
+  const sharedContracts = value.sharedContracts.map((entry, index) => {
+    const field = `developmentPlan.sharedContracts[${index}]`;
+    if (!exactKeys(entry, [
+      "name",
+      "kind",
+      "description",
+      "providerChildIds",
+      "consumerChildIds",
+      "requirementIds"
+    ]) || !WORK_ITEM_INTERFACE_KINDS.includes(entry.kind)) {
+      fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", `${field} is invalid`, { field });
+    }
+    const childIds = new Set(childById.keys());
+    const providers = strings(entry.providerChildIds, `${field}.providerChildIds`).sort();
+    const consumers = strings(entry.consumerChildIds, `${field}.consumerChildIds`).sort();
+    if ([...providers, ...consumers].some((id) => !childIds.has(id))) {
+      fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", `${field} references an unknown child`, { field });
+    }
+    return {
+      name: text(entry.name, `${field}.name`),
+      kind: entry.kind,
+      description: text(entry.description, `${field}.description`),
+      providerChildIds: providers,
+      consumerChildIds: consumers,
+      requirementIds: linkedTraceIds(entry.requirementIds, requirements, `${field}.requirementIds`)
+    };
+  });
+  if (!Array.isArray(value.deliveryWaves) || value.deliveryWaves.length === 0) {
+    fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "developmentPlan.deliveryWaves must be nonempty");
+  }
+  const waveByChild = /* @__PURE__ */ new Map();
+  const waveOrders = /* @__PURE__ */ new Set();
+  const deliveryWaves = value.deliveryWaves.map((entry, index) => {
+    const field = `developmentPlan.deliveryWaves[${index}]`;
+    if (!exactKeys(entry, ["order", "name", "childIds", "exitCriteria"]) || !Number.isInteger(entry.order) || entry.order < 1 || waveOrders.has(entry.order)) {
+      fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", `${field} is invalid`, { field });
+    }
+    waveOrders.add(entry.order);
+    const childIds = strings(entry.childIds, `${field}.childIds`).map((id) => safeId(id, `${field}.childIds`)).sort();
+    if (childIds.some((id) => !childById.has(id) || waveByChild.has(id))) {
+      fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", `${field} must contain unique planned children`, { field });
+    }
+    childIds.forEach((id) => waveByChild.set(id, entry.order));
+    return {
+      order: entry.order,
+      name: text(entry.name, `${field}.name`),
+      childIds,
+      exitCriteria: text(entry.exitCriteria, `${field}.exitCriteria`)
+    };
+  }).sort((left, right) => left.order - right.order);
+  if (waveByChild.size !== childById.size || childPlans.some(({ id, dependsOn }) => dependsOn.some((dependency) => waveByChild.get(dependency) >= waveByChild.get(id)))) {
+    fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "Delivery waves must cover every child and order dependencies before consumers");
+  }
+  return {
+    purpose: text(value.purpose, "developmentPlan.purpose"),
+    childPlans,
+    sharedContracts,
+    integrationFlow: strings(value.integrationFlow, "developmentPlan.integrationFlow"),
+    deliveryWaves,
+    testPlan: developmentTestPlan(value.testPlan, normalized.acceptance, normalized.testCommands.length),
+    reviewPoints: strings(value.reviewPoints, "developmentPlan.reviewPoints")
+  };
+}
 function scopeCovers(parentPattern, childPattern) {
   if (parentPattern === "**") return true;
   if (!parentPattern.endsWith("/**")) return parentPattern === childPattern;
@@ -1218,7 +1501,7 @@ function normalizeParent(definition, parent) {
     parentContractFingerprint: workItemChildContractFingerprint(parent, definition.id)
   };
 }
-function validateWorkItemDefinition(definition, { parent } = {}) {
+function validateWorkItemDefinition(definition, { parent, allowLegacyDevelopmentPlan = false } = {}) {
   if (!definition || typeof definition !== "object" || Array.isArray(definition)) {
     fail("WORK_ITEM_DEFINITION_INVALID", "Work item definition must be an object");
   }
@@ -1249,7 +1532,8 @@ function validateWorkItemDefinition(definition, { parent } = {}) {
     "risks",
     "decisions"
   ];
-  const expectedKeys = definition.kind === "DELIVERY" ? [...commonKeys, "decomposition", "children"] : [...commonKeys, "parentId", ...definition.kind === "TASK" ? ["execution"] : ["decomposition", "children"]];
+  const developmentPlanKeys = allowLegacyDevelopmentPlan && !Object.hasOwn(definition, "developmentPlan") ? [] : ["developmentPlan"];
+  const expectedKeys = definition.kind === "DELIVERY" ? [...commonKeys, ...developmentPlanKeys, "decomposition", "children"] : [...commonKeys, ...developmentPlanKeys, "parentId", ...definition.kind === "TASK" ? ["execution"] : ["decomposition", "children"]];
   if (!exactKeys(definition, expectedKeys)) {
     fail("WORK_ITEM_DEFINITION_INVALID", "Work item definition contains missing or unknown fields", {
       expectedKeys: expectedKeys.sort(),
@@ -1278,7 +1562,17 @@ function validateWorkItemDefinition(definition, { parent } = {}) {
     normalized.decomposition = decompositionRecord(definition.decomposition, definition.kind, normalized.id, parent);
     normalized.children = childRecords(definition.children, definition.kind, normalized.requirements, normalized.acceptance);
   }
+  if (Object.hasOwn(definition, "developmentPlan")) {
+    normalized.developmentPlan = definition.kind === "TASK" ? taskDevelopmentPlan(definition.developmentPlan, normalized) : coordinationDevelopmentPlan(definition.developmentPlan, normalized);
+  }
   Object.assign(normalized, normalizeParent({ ...definition, ...normalized }, parent));
+  if (parent?.developmentPlan) {
+    const planned = parent.developmentPlan.childPlans.find(({ id }) => id === normalized.id);
+    const actualDependencies = normalized.kind === "TASK" ? normalized.execution.dependsOn : normalized.decomposition.dependsOn;
+    if (!planned || canonicalJson(planned.dependsOn) !== canonicalJson(actualDependencies)) {
+      fail("WORK_ITEM_PARENT_PLAN_MISMATCH", `${normalized.id} dependencies do not match the frozen parent development plan`);
+    }
+  }
   return normalized;
 }
 function contract(definition) {
@@ -1296,6 +1590,7 @@ function contract(definition) {
   if (definition.children) normalized.children = [...definition.children].sort((left, right) => left.id.localeCompare(right.id));
   if (definition.decomposition) normalized.decomposition = definition.decomposition;
   if (definition.execution) normalized.execution = definition.execution;
+  if (definition.developmentPlan) normalized.developmentPlan = definition.developmentPlan;
   return normalized;
 }
 function workItemContractFingerprint(definition) {
@@ -1307,9 +1602,22 @@ function workItemChildContractFingerprint(parent, childId) {
   const stableParentContract = contract(parent);
   delete stableParentContract.children;
   delete stableParentContract.decomposition;
+  let childDevelopmentPlan;
+  if (stableParentContract.developmentPlan) {
+    childDevelopmentPlan = stableParentContract.developmentPlan.childPlans.find(({ id }) => id === childId);
+    stableParentContract.developmentPlan = {
+      ...stableParentContract.developmentPlan,
+      sharedContracts: stableParentContract.developmentPlan.sharedContracts.filter(({ consumerChildIds }) => consumerChildIds.includes(childId)),
+      childPlans: void 0,
+      deliveryWaves: void 0
+    };
+    delete stableParentContract.developmentPlan.childPlans;
+    delete stableParentContract.developmentPlan.deliveryWaves;
+  }
   return sha256Bytes(Buffer.from(canonicalJson({
     parent: stableParentContract,
-    child
+    child,
+    ...childDevelopmentPlan ? { childDevelopmentPlan } : {}
   }), "utf8"));
 }
 function workItemBaselineFingerprint(definition) {
@@ -1365,8 +1673,128 @@ function renderWorkItemBaseline(definition) {
     );
   }
   lines.push("", "## Test Commands", ...definition.testCommands.map((argv) => `- ${JSON.stringify(argv)}`));
+  if (definition.developmentPlan) {
+    lines.push(
+      "",
+      "## Development Review Contract",
+      definition.developmentPlan.purpose,
+      "",
+      "- Full human-readable plan: [development-review.md](development-review.md)",
+      "- Structured plan: [development-plan.json](development-plan.json)"
+    );
+  }
   lines.push("", "## Risks", list(definition.risks));
   lines.push("", "## Decisions", list(definition.decisions), "");
+  return lines.join("\n");
+}
+function reviewStatusText(state) {
+  return state?.review?.status === "APPROVED" ? `\u5DF2\u7531\u4EBA\u5DE5\u786E\u8BA4\uFF08${state.review.reviewedBy}\uFF0C${state.review.reviewedAt}\uFF09` : "\u7B49\u5F85\u4EBA\u5DE5\u8BC4\u5BA1\uFF1B\u5C1A\u672A\u51BB\u7ED3\uFF0C\u7981\u6B62\u5F00\u59CB\u5F00\u53D1";
+}
+function markdownTableCell(value) {
+  return String(value).replaceAll("|", "\\|").replaceAll("\n", "<br>");
+}
+function renderDevelopmentReview(definition, state) {
+  const plan = definition.developmentPlan;
+  if (!plan) return "";
+  const lines = [
+    `# \u5F00\u53D1\u8BC4\u5BA1\uFF1A${definition.title}`,
+    "",
+    `- \u5DE5\u4F5C\u9879\uFF1A${definition.id}`,
+    `- \u5C42\u7EA7\uFF1A${definition.kind}`,
+    `- \u95E8\u7981\u7B49\u7EA7\uFF1A${definition.gateLevel}`,
+    `- Baseline \u6307\u7EB9\uFF1A${state.baselineFingerprint}`,
+    `- \u8BC4\u5BA1\u72B6\u6001\uFF1A${reviewStatusText(state)}`,
+    `- \u5F00\u53D1\u76EE\u7684\uFF1A${plan.purpose}`,
+    "",
+    "## \u9700\u6C42\u4E0E\u9A8C\u6536\u8FB9\u754C",
+    "",
+    "| \u9700\u6C42 | \u5185\u5BB9 |",
+    "| --- | --- |",
+    ...definition.requirements.map(({ id, text: requirement }) => `| ${id} | ${markdownTableCell(requirement)} |`),
+    "",
+    "| \u9A8C\u6536 | \u8986\u76D6\u9700\u6C42 | \u9884\u671F\u7ED3\u679C |",
+    "| --- | --- | --- |",
+    ...definition.acceptance.map(({ id, requirementIds, expectedResult }) => `| ${id} | ${requirementIds.join(", ")} | ${markdownTableCell(expectedResult)} |`),
+    ""
+  ];
+  if (definition.kind === "TASK") {
+    lines.push(
+      "## \u53D8\u66F4\u573A\u666F",
+      "",
+      "| \u573A\u666F | \u6807\u9898 | \u5F00\u53D1\u5185\u5BB9 | \u8986\u76D6\u9700\u6C42 |",
+      "| --- | --- | --- | --- |",
+      ...plan.scenarios.map((scenario) => `| ${scenario.kind} | ${markdownTableCell(scenario.title)} | ${markdownTableCell(scenario.description)} | ${scenario.requirementIds.join(", ")} |`),
+      "",
+      "## \u6587\u4EF6\u6539\u52A8",
+      "",
+      "| \u52A8\u4F5C | \u6587\u4EF6 | \u76EE\u7684 |",
+      "| --- | --- | --- |",
+      ...plan.fileChanges.map((change) => `| ${change.action} | \`${change.path}\` | ${markdownTableCell(change.purpose)} |`),
+      "",
+      "## \u63A5\u53E3\u4E0E\u529F\u80FD\u5951\u7EA6",
+      ""
+    );
+    if (plan.interfaces.length === 0) lines.push("- \u672C Task \u4E0D\u65B0\u589E\u3001\u4FEE\u6539\u6216\u5220\u9664\u5916\u90E8/\u5185\u90E8\u63A5\u53E3\u3002");
+    else {
+      lines.push(
+        "| \u52A8\u4F5C | \u7C7B\u578B | \u540D\u79F0\u4E0E\u4F4D\u7F6E | \u5F53\u524D\u5951\u7EA6 | \u76EE\u6807\u5951\u7EA6 | \u8986\u76D6\u9700\u6C42 |",
+        "| --- | --- | --- | --- | --- | --- |",
+        ...plan.interfaces.map((contract2) => `| ${contract2.action} | ${contract2.kind} | ${markdownTableCell(contract2.name)}<br>${markdownTableCell(contract2.location)} | ${markdownTableCell(contract2.currentContract)} | ${markdownTableCell(contract2.targetContract)} | ${contract2.requirementIds.join(", ")} |`)
+      );
+    }
+    lines.push("", "## \u5B9E\u73B0\u903B\u8F91", "", ...plan.logic.map((item) => `- ${item}`));
+    lines.push("", "## \u6570\u636E\u4E0E\u4E8B\u52A1", "");
+    lines.push(...plan.dataAndTransactions.length > 0 ? plan.dataAndTransactions.map((item) => `- ${item}`) : ["- \u4E0D\u6D89\u53CA\u6570\u636E\u6A21\u578B\u3001\u6301\u4E45\u5316\u6216\u4E8B\u52A1\u8FB9\u754C\u53D8\u66F4\u3002"]);
+    lines.push("", "## \u517C\u5BB9\u6027", "", ...plan.compatibility.map((item) => `- ${item}`));
+  } else {
+    const childLabel = definition.kind === "DELIVERY" ? "Capability" : "Task";
+    lines.push(
+      `## ${childLabel} \u5F00\u53D1\u5185\u5BB9`,
+      "",
+      `| ${childLabel} | \u5F00\u53D1\u76EE\u7684 | \u4EA4\u4ED8\u5185\u5BB9 | \u4F9D\u8D56 | R/A |`,
+      "| --- | --- | --- | --- | --- |",
+      ...plan.childPlans.map((child) => `| ${child.id} | ${markdownTableCell(child.purpose)} | ${markdownTableCell(child.deliverables.join("\uFF1B"))} | ${child.dependsOn.join(", ") || "\u65E0"} | ${child.requirementIds.join(", ")} / ${child.acceptanceIds.join(", ")} |`),
+      "",
+      `## \u8DE8 ${childLabel} \u63A5\u53E3\u4E0E\u5171\u4EAB\u5951\u7EA6`,
+      ""
+    );
+    if (plan.sharedContracts.length === 0) lines.push(`- \u65E0\u8DE8 ${childLabel} \u5171\u4EAB\u63A5\u53E3\uFF1B\u5B50\u7EA7\u4EC5\u901A\u8FC7\u51BB\u7ED3\u8F93\u51FA\u548C\u805A\u5408\u95E8\u7981\u7EC4\u5408\u3002`);
+    else {
+      lines.push(
+        "| \u7C7B\u578B | \u5951\u7EA6 | \u63D0\u4F9B\u65B9 | \u6D88\u8D39\u65B9 | \u8BF4\u660E | \u8986\u76D6\u9700\u6C42 |",
+        "| --- | --- | --- | --- | --- | --- |",
+        ...plan.sharedContracts.map((contract2) => `| ${contract2.kind} | ${markdownTableCell(contract2.name)} | ${contract2.providerChildIds.join(", ")} | ${contract2.consumerChildIds.join(", ")} | ${markdownTableCell(contract2.description)} | ${contract2.requirementIds.join(", ")} |`)
+      );
+    }
+    lines.push("", "## \u96C6\u6210\u6D41\u7A0B", "", ...plan.integrationFlow.map((item) => `- ${item}`));
+    lines.push(
+      "",
+      "## \u5F00\u53D1\u4E0E\u96C6\u6210\u6CE2\u6B21",
+      "",
+      "| \u6CE2\u6B21 | \u540D\u79F0 | \u5B50\u7EA7 | \u9000\u51FA\u6761\u4EF6 |",
+      "| --- | --- | --- | --- |",
+      ...plan.deliveryWaves.map((wave) => `| ${wave.order} | ${markdownTableCell(wave.name)} | ${wave.childIds.join(", ")} | ${markdownTableCell(wave.exitCriteria)} |`)
+    );
+  }
+  lines.push(
+    "",
+    "## \u6D4B\u8BD5\u4E0E\u9A8C\u6536\u6620\u5C04",
+    "",
+    "| \u9A8C\u6536\u9879 | \u9A8C\u8BC1\u65B9\u6CD5 | \u51BB\u7ED3\u547D\u4EE4\u5E8F\u53F7 |",
+    "| --- | --- | --- |",
+    ...plan.testPlan.map((test) => `| ${test.acceptanceIds.join(", ")} | ${markdownTableCell(test.approach)} | ${test.commandIndexes.join(", ")} |`),
+    "",
+    "## \u4EBA\u5DE5\u8BC4\u5BA1\u91CD\u70B9",
+    "",
+    ...plan.reviewPoints.map((item) => `- ${item}`),
+    "",
+    "## \u51BB\u7ED3\u8BF4\u660E",
+    "",
+    "- \u8BF7\u5148\u8BC4\u5BA1\u672C\u6587\u4EF6\u4E2D\u7684\u5F00\u53D1\u76EE\u7684\u3001\u5185\u5BB9\u3001\u6587\u4EF6\u3001\u63A5\u53E3/\u5171\u4EAB\u5951\u7EA6\u3001\u4F9D\u8D56\u6CE2\u6B21\u548C\u6D4B\u8BD5\u6620\u5C04\u3002",
+    "- \u5982\u9700\u4FEE\u6539\uFF0C\u5148\u4FEE\u6539 definition \u5E76\u91CD\u65B0 prepare\uFF1B\u4E0D\u8981\u51BB\u7ED3\u9519\u8BEF\u7248\u672C\u3002",
+    `- \u53EA\u6709\u5BF9\u6307\u7EB9 \`${state.baselineFingerprint}\` \u660E\u786E\u786E\u8BA4\u540E\uFF0C\u624D\u53EF\u6267\u884C freeze-item\uFF1B\u51BB\u7ED3\u540E\u5F00\u53D1\u4E0A\u4E0B\u6587\u5FC5\u987B\u643A\u5E26\u672C\u8BA1\u5212\u3002`,
+    ""
+  );
   return lines.join("\n");
 }
 function resolveSelfHostingPolicy({ packageName, explicitDogfood = false } = {}) {
@@ -1534,7 +1962,7 @@ function validateRegistry(registry, root) {
     if (!migrationValid) fail2("WORK_ITEM_REGISTRY_INVALID", "Work item migration history is invalid");
   }
   for (const entry of registry.workItems) {
-    const validEntry = WORK_ITEM_KINDS.includes(entry.kind) && entry.authorityKind === WORK_ITEM_AUTHORITIES[entry.kind] && WORK_ITEM_GATE_LEVELS.includes(entry.gateLevel) && (entry.kind === "TASK" || entry.gateLevel === "FULL") && (entry.parentId === null || safeId2(entry.parentId)) && Array.isArray(entry.childIds) && entry.childIds.every(safeId2) && entry.packagePath === itemRelativePath(entry.id) && typeof entry.baselineFingerprint === "string" && /^[a-f0-9]{64}$/.test(entry.baselineFingerprint) && typeof entry.contractFingerprint === "string" && /^[a-f0-9]{64}$/.test(entry.contractFingerprint);
+    const validEntry = WORK_ITEM_KINDS.includes(entry.kind) && entry.authorityKind === WORK_ITEM_AUTHORITIES[entry.kind] && WORK_ITEM_GATE_LEVELS.includes(entry.gateLevel) && (entry.kind === "TASK" || entry.gateLevel === "FULL") && (entry.parentId === null || safeId2(entry.parentId)) && Array.isArray(entry.childIds) && entry.childIds.every(safeId2) && entry.packagePath === itemRelativePath(entry.id) && (entry.developmentReview === void 0 || typeof entry.developmentReview === "boolean") && typeof entry.baselineFingerprint === "string" && /^[a-f0-9]{64}$/.test(entry.baselineFingerprint) && typeof entry.contractFingerprint === "string" && /^[a-f0-9]{64}$/.test(entry.contractFingerprint);
     if (!validEntry) fail2("WORK_ITEM_REGISTRY_INVALID", `Work item registry entry is invalid: ${entry.id}`);
     const developmentModeValid = entry.kind === "TASK" ? entry.developmentMode === null || validDevelopmentMode(entry.developmentMode, entry) : entry.developmentMode === null;
     if (!developmentModeValid) {
@@ -1658,7 +2086,7 @@ function humanStatus(value) {
     DELIVERY: "\u4EA4\u4ED8",
     CAPABILITY: "\u80FD\u529B",
     TASK: "\u4EFB\u52A1",
-    PREPARED: "\u7B49\u5F85\u57FA\u7EBF\u786E\u8BA4",
+    PREPARED: "\u7B49\u5F85\u5F00\u53D1\u65B9\u6848\u8BC4\u5BA1",
     WAITING_FOR_DEVELOPMENT_MODE_SELECTION: "\u7B49\u5F85\u9009\u62E9\u5F00\u53D1\u65B9\u5F0F",
     FROZEN: "\u5DF2\u51BB\u7ED3",
     CLAIMED: "\u5F00\u53D1\u4E2D",
@@ -1674,6 +2102,33 @@ function humanStatus(value) {
     FAIL: "\u672A\u901A\u8FC7"
   }[value] ?? value ?? "\u65E0";
 }
+function itemHumanArtifacts(id, acceptanceReport = null) {
+  const base = path3.posix.join(GOVERNANCE_DIRECTORY, WORK_ITEMS_DIRECTORY, id);
+  return {
+    overview: path3.posix.join(base, "overview.md"),
+    developmentReview: path3.posix.join(base, "development-review.md"),
+    baseline: path3.posix.join(base, "baseline.md"),
+    progress: path3.posix.join(base, "progress.md"),
+    acceptanceReport: acceptanceReport?.markdownPath ?? null
+  };
+}
+function nextAction(entry) {
+  if (entry.stage === "WAITING_FOR_BASELINE_CONFIRMATION") {
+    return "\u4EBA\u5DE5\u8BC4\u5BA1 development-review.md\uFF1B\u9700\u8981\u4FEE\u6539\u5219\u91CD\u65B0\u8D77\u8349\uFF0C\u786E\u8BA4\u65E0\u8BEF\u540E\u6309\u5F53\u524D\u6307\u7EB9\u6267\u884C freeze-item\u3002";
+  }
+  if (entry.status === "WAITING_FOR_DEVELOPMENT_MODE_SELECTION") return "\u4EBA\u5DE5\u9009\u62E9 active \u6216 manual \u5F00\u53D1\u65B9\u5F0F\u3002";
+  if (entry.status === "FROZEN" && entry.kind === "TASK") return "\u7B49\u5F85\u4F9D\u8D56\u6EE1\u8DB3\u540E\u6267\u884C dispatch-task\u3002";
+  if (entry.status === "FROZEN") return "\u7EE7\u7EED\u51C6\u5907\u5DF2\u8BA1\u5212\u5B50\u7EA7\uFF0C\u6216\u5728\u5206\u89E3\u5C01\u53E3\u4E14\u5B50\u7EA7\u901A\u8FC7\u540E\u8FD0\u884C\u805A\u5408\u95E8\u7981\u3002";
+  if (entry.status === "CLAIMED") return "\u7B49\u5F85\u5F00\u53D1\u7ED3\u679C\u6309 operationId \u5199\u56DE\u3002";
+  if (entry.status === "IMPLEMENTED") return "\u5F62\u6210\u4E25\u683C evidence \u5E76\u6267\u884C accept-item \u95E8\u7981\u9A8C\u6536\u3002";
+  if (entry.status === "BLOCKED") return "\u5904\u7406\u963B\u65AD\u540E\u6309\u5F53\u524D\u6307\u7EB9\u663E\u5F0F retry-item\u3002";
+  if (entry.status === "VERIFIED" && entry.parentId === null) {
+    const acceptance = entry.acceptance ?? entry.delivery;
+    if (acceptance?.status === "WAITING_FOR_INDEPENDENT_REVIEW") return "\u6267\u884C\u72EC\u7ACB\u9A8C\u6536\u6216\u8BB0\u5F55\u4EBA\u5DE5\u9A8C\u6536\u63A5\u53D7\u3002";
+    if (acceptance?.status === "WAITING_FOR_USER_CONFIRMATION") return "\u7B49\u5F85\u7528\u6237\u6700\u7EC8\u786E\u8BA4\u3002";
+  }
+  return entry.status === "VERIFIED" ? "\u7B49\u5F85\u7236\u7EA7\u805A\u5408\u95E8\u7981\u3002" : "\u67E5\u770B\u5F53\u524D\u72B6\u6001\u4E0E\u95E8\u7981\u8BC1\u636E\u3002";
+}
 function renderWorkspaceOverview(registry) {
   const lines = [
     "# \u5DE5\u4F5C\u9879\u603B\u89C8",
@@ -1682,13 +2137,15 @@ function renderWorkspaceOverview(registry) {
     `> \u6CE8\u518C\u8868\u7248\u672C\uFF1A${registry.revision}`,
     `> \u5F53\u524D\u7126\u70B9\uFF1A${registry.currentFocus.workItemId ?? "\u65E0"}`,
     "",
-    "| \u5DE5\u4F5C\u9879 | \u7C7B\u578B | \u95E8\u7981\u7B49\u7EA7 | \u7236\u7EA7 | \u5F53\u524D\u72B6\u6001 | \u5F00\u53D1\u65B9\u5F0F | \u6700\u7EC8\u9A8C\u6536 | \u76F4\u63A5\u5B50\u7EA7 | \u5168\u90E8\u540E\u4EE3 | \u95E8\u7981 | \u8BA4\u9886\u8005 | \u9A8C\u6536\u62A5\u544A |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
+    "| \u5DE5\u4F5C\u9879 | \u7C7B\u578B | \u95E8\u7981\u7B49\u7EA7 | \u7236\u7EA7 | \u5F53\u524D\u72B6\u6001 | \u5F00\u53D1\u8BC4\u5BA1 | \u5F00\u53D1\u65B9\u5F0F | \u6700\u7EC8\u9A8C\u6536 | \u76F4\u63A5\u5B50\u7EA7 | \u5168\u90E8\u540E\u4EE3 | \u95E8\u7981 | \u8BA4\u9886\u8005 | \u9A8C\u6536\u62A5\u544A |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
   ];
   for (const item of sortedItems(registry.workItems)) {
     const report = item.acceptanceReport ? `[\u67E5\u770B](${path3.posix.relative(GOVERNANCE_DIRECTORY, item.acceptanceReport.markdownPath)})` : "\u5C1A\u672A\u751F\u6210";
     const acceptance = item.acceptance ?? (item.parentId === null ? item.delivery : null);
-    lines.push(`| ${item.id} | ${humanStatus(item.kind)} | ${item.gateLevel} | ${item.parentId ?? "\u65E0"} | ${humanStatus(item.status)} | ${item.developmentMode?.mode ?? "\u4E0D\u9002\u7528"} | ${acceptance ? humanStatus(acceptance.status) : "\u4E0D\u9002\u7528"} | ${item.progress.directChildren.verified}/${item.progress.directChildren.total} | ${item.progress.descendants.verified}/${item.progress.descendants.total} | ${humanStatus(item.gate.status)} | ${item.claim?.owner ?? "\u65E0"} | ${report} |`);
+    const itemLink = `[${item.id}](${path3.posix.join(WORK_ITEMS_DIRECTORY, item.id, "overview.md")})`;
+    const review = item.developmentReview ? `[\u67E5\u770B](${path3.posix.join(WORK_ITEMS_DIRECTORY, item.id, "development-review.md")})` : "\u65E7\u7248\u57FA\u7EBF\u672A\u8BB0\u5F55";
+    lines.push(`| ${itemLink} | ${humanStatus(item.kind)} | ${item.gateLevel} | ${item.parentId ?? "\u65E0"} | ${humanStatus(item.status)} | ${review} | ${item.developmentMode?.mode ?? "\u4E0D\u9002\u7528"} | ${acceptance ? humanStatus(acceptance.status) : "\u4E0D\u9002\u7528"} | ${item.progress.directChildren.verified}/${item.progress.directChildren.total} | ${item.progress.descendants.verified}/${item.progress.descendants.total} | ${humanStatus(item.gate.status)} | ${item.claim?.owner ?? "\u65E0"} | ${report} |`);
   }
   lines.push("");
   return lines.join("\n");
@@ -1702,9 +2159,13 @@ function renderItemOverview(entry) {
     `- \u6743\u9650\u6027\u8D28\uFF1A${entry.authorityKind}`,
     `- \u7236\u7EA7\uFF1A${entry.parentId ?? "\u65E0"}`,
     "- \u57FA\u7EBF\uFF1A[baseline.md](baseline.md)",
+    `- \u5F00\u53D1\u8BC4\u5BA1\uFF1A${entry.developmentReview ? "[development-review.md](development-review.md)" : "\u65E7\u7248\u57FA\u7EBF\u672A\u8BB0\u5F55\uFF1B\u4FEE\u8BA2\u65F6\u5FC5\u987B\u8865\u5145"}`,
+    `- \u7ED3\u6784\u5316\u5F00\u53D1\u8BA1\u5212\uFF1A${entry.developmentReview ? "[development-plan.json](development-plan.json)" : "\u65E7\u7248\u57FA\u7EBF\u672A\u8BB0\u5F55"}`,
+    "- \u8FDB\u5EA6\uFF1A[progress.md](progress.md)",
     `- \u7236\u5951\u7EA6\u6307\u7EB9\uFF1A${entry.parentContractFingerprint ?? "\u65E0"}`,
     `- \u5B50\u7EA7\uFF1A${entry.childIds.join(", ") || "\u65E0"}`,
     `- \u9A8C\u6536\u62A5\u544A\uFF1A${entry.acceptanceReport ? "[acceptance-report.md](acceptance-report.md)" : "\u5C1A\u672A\u751F\u6210"}`,
+    `- \u4E0B\u4E00\u6B65\uFF1A${nextAction(entry)}`,
     ""
   ].join("\n");
 }
@@ -1724,6 +2185,7 @@ function renderItemProgress(entry) {
     `- \u76F4\u63A5\u5B50\u7EA7\uFF1A${entry.progress.directChildren.verified}/${entry.progress.directChildren.total} \u5DF2\u9A8C\u8BC1\uFF1B${entry.progress.directChildren.blocked} \u963B\u65AD\uFF1B${entry.progress.directChildren.active} \u6D3B\u52A8`,
     `- \u5168\u90E8\u540E\u4EE3\uFF1A${entry.progress.descendants.verified}/${entry.progress.descendants.total} \u5DF2\u9A8C\u8BC1\uFF1B${entry.progress.descendants.blocked} \u963B\u65AD\uFF1B${entry.progress.descendants.active} \u6D3B\u52A8`,
     `- \u9A8C\u6536\u62A5\u544A\uFF1A${entry.acceptanceReport ? "[acceptance-report.md](acceptance-report.md)" : "\u5C1A\u672A\u751F\u6210"}`,
+    `- \u4E0B\u4E00\u6B65\uFF1A${nextAction(entry)}`,
     `- \u66F4\u65B0\u65F6\u95F4\uFF1A${entry.updatedAt}`,
     ""
   ].join("\n");
@@ -1802,7 +2264,18 @@ async function readPackageDefinition(root, entry, fs) {
   const definition = await readJsonFile(target, "baseline.json", fs, "WORK_ITEM_PACKAGE_INVALID");
   const state = await readJsonFile(target, "state.json", fs, "WORK_ITEM_PACKAGE_INVALID");
   const fingerprint = workItemBaselineFingerprint(definition);
-  const valid = state.schemaVersion === WORK_ITEM_SCHEMA_VERSION && state.id === entry.id && state.baselineFingerprint === fingerprint && state.contractFingerprint === workItemContractFingerprint(definition) && entry.baselineFingerprint === state.baselineFingerprint && entry.contractFingerprint === state.contractFingerprint;
+  const reviewValid = !definition.developmentPlan || state.review && state.review.schemaVersion === 1 && state.review.baselineFingerprint === fingerprint && (state.stage === "WAITING_FOR_BASELINE_CONFIRMATION" && state.review.status === "WAITING_FOR_HUMAN_REVIEW" && state.review.reviewedBy === null && state.review.reviewedAt === null || state.stage === "BASELINE_FROZEN" && state.review.status === "APPROVED" && state.review.reviewedBy === "user" && typeof state.review.reviewedAt === "string" && !Number.isNaN(Date.parse(state.review.reviewedAt)));
+  let generatedFilesValid = true;
+  for (const [name, expected] of Object.entries(definitionFiles(definition, state))) {
+    if (name === "state.json") continue;
+    try {
+      const actual = await readSafeRegularFile(root, path3.join(target, name), { fs });
+      if (!actual.equals(Buffer.from(expected, "utf8"))) generatedFilesValid = false;
+    } catch {
+      generatedFilesValid = false;
+    }
+  }
+  const valid = state.schemaVersion === WORK_ITEM_SCHEMA_VERSION && state.id === entry.id && state.baselineFingerprint === fingerprint && state.contractFingerprint === workItemContractFingerprint(definition) && entry.baselineFingerprint === state.baselineFingerprint && entry.contractFingerprint === state.contractFingerprint && reviewValid && generatedFilesValid;
   if (!valid) fail2("WORK_ITEM_PACKAGE_CHANGED", `${entry.id} package changed after preparation`, { id: entry.id });
   return { definition, state, target };
 }
@@ -1842,6 +2315,16 @@ function definitionFiles(definition, state) {
   };
   if (definition.children) files["children.json"] = json({ schemaVersion: WORK_ITEM_SCHEMA_VERSION, children: definition.children });
   if (definition.execution) files["execution.json"] = json({ schemaVersion: WORK_ITEM_SCHEMA_VERSION, ...definition.execution });
+  if (definition.developmentPlan) {
+    files["development-plan.json"] = json({
+      schemaVersion: 1,
+      workItemId: definition.id,
+      kind: definition.kind,
+      baselineFingerprint: state.baselineFingerprint,
+      developmentPlan: definition.developmentPlan
+    });
+    files["development-review.md"] = renderDevelopmentReview(definition, state);
+  }
   return files;
 }
 function rawDefinition(definition) {
@@ -1867,6 +2350,7 @@ function entryFromDefinition(definition, state, at) {
     parentId: definition.parentId,
     childIds: definition.children?.map(({ id }) => id) ?? [],
     packagePath: itemRelativePath(definition.id),
+    developmentReview: Boolean(definition.developmentPlan),
     stage: state.stage,
     status: "PREPARED",
     baselineFingerprint: state.baselineFingerprint,
@@ -1940,9 +2424,62 @@ async function prepareWorkItem({
         const parentEntry = itemById(registry, definition.parentId);
         const parent2 = (await readPackageDefinition(root, parentEntry, fs)).definition;
         candidate = validateWorkItemDefinition(definition, { parent: parent2 });
+        validateTaskDependencies(candidate, parent2);
       }
-      if (workItemBaselineFingerprint(candidate) !== current.state.baselineFingerprint) {
-        fail2("WORK_ITEM_SOURCE_CHANGED", `${existing.id} prepared baseline differs from the requested definition`);
+      await validateCapabilityDependencyGraph(root, registry, candidate, fs);
+      const candidateFingerprint = workItemBaselineFingerprint(candidate);
+      if (candidateFingerprint !== current.state.baselineFingerprint) {
+        if (existing.stage !== "WAITING_FOR_BASELINE_CONFIRMATION" || candidate.id !== existing.id || candidate.kind !== existing.kind || candidate.parentId !== existing.parentId) {
+          fail2("WORK_ITEM_SOURCE_CHANGED", `${existing.id} prepared baseline differs from the requested definition`);
+        }
+        const revisedState = {
+          schemaVersion: WORK_ITEM_SCHEMA_VERSION,
+          id: candidate.id,
+          stage: "WAITING_FOR_BASELINE_CONFIRMATION",
+          baselineFingerprint: candidateFingerprint,
+          contractFingerprint: workItemContractFingerprint(candidate),
+          parentContractFingerprint: candidate.parentContractFingerprint,
+          hostRuntime,
+          createdAt: current.state.createdAt,
+          revisedAt: at,
+          frozenAt: null,
+          review: {
+            schemaVersion: 1,
+            status: "WAITING_FOR_HUMAN_REVIEW",
+            baselineFingerprint: candidateFingerprint,
+            reviewedBy: null,
+            reviewedAt: null
+          }
+        };
+        await atomicReplaceDirectory(current.target, async (staging) => {
+          for (const [name, contents] of Object.entries(definitionFiles(candidate, revisedState))) {
+            await atomicWriteFile(path3.join(staging, name), contents, { fs });
+          }
+        }, { fs });
+        existing.gateLevel = candidate.gateLevel;
+        existing.childIds = candidate.children?.map(({ id }) => id) ?? [];
+        existing.baselineFingerprint = revisedState.baselineFingerprint;
+        existing.contractFingerprint = revisedState.contractFingerprint;
+        existing.parentContractFingerprint = revisedState.parentContractFingerprint;
+        existing.developmentReview = true;
+        existing.recordRevision += 1;
+        existing.updatedAt = at;
+        registry.currentFocus = { workItemId: existing.id, purpose: "BASELINE_CONFIRMATION" };
+        registry.revision += 1;
+        registry.updatedAt = at;
+        await writeRegistryUnlocked(root, registry, fs);
+        return {
+          created: false,
+          idempotent: false,
+          revised: true,
+          id: existing.id,
+          kind: existing.kind,
+          stage: existing.stage,
+          baselineFingerprint: existing.baselineFingerprint,
+          artifactDir: current.target,
+          humanArtifacts: itemHumanArtifacts(existing.id, existing.acceptanceReport),
+          nextAction: nextAction(existing)
+        };
       }
       return {
         created: false,
@@ -1951,7 +2488,9 @@ async function prepareWorkItem({
         kind: existing.kind,
         stage: existing.stage,
         baselineFingerprint: existing.baselineFingerprint,
-        artifactDir: itemPath(root, existing.id)
+        artifactDir: itemPath(root, existing.id),
+        humanArtifacts: existing.developmentReview ? itemHumanArtifacts(existing.id, existing.acceptanceReport) : null,
+        nextAction: nextAction(existing)
       };
     }
     let parent = null;
@@ -1972,7 +2511,14 @@ async function prepareWorkItem({
       parentContractFingerprint: normalized.parentContractFingerprint,
       hostRuntime,
       createdAt: at,
-      frozenAt: null
+      frozenAt: null,
+      review: {
+        schemaVersion: 1,
+        status: "WAITING_FOR_HUMAN_REVIEW",
+        baselineFingerprint: workItemBaselineFingerprint(normalized),
+        reviewedBy: null,
+        reviewedAt: null
+      }
     };
     const target = await assertSafePath(root, path3.join(GOVERNANCE_DIRECTORY, WORK_ITEMS_DIRECTORY, normalized.id), { fs });
     await writeNewPackage(target, definitionFiles(normalized, state), fs);
@@ -2001,7 +2547,9 @@ async function prepareWorkItem({
       kind: entry.kind,
       stage: entry.stage,
       baselineFingerprint: entry.baselineFingerprint,
-      artifactDir: target
+      artifactDir: target,
+      humanArtifacts: itemHumanArtifacts(entry.id),
+      nextAction: nextAction(entry)
     };
   }, { now });
 }
@@ -2024,15 +2572,38 @@ async function freezeWorkItem({
     }
     const taskPackage = await assertCurrentLineage(root, registry, entry, fs);
     if (entry.stage === "BASELINE_FROZEN") {
-      return { created: false, idempotent: true, id, stage: entry.stage, baselineFingerprint: entry.baselineFingerprint };
+      return {
+        created: false,
+        idempotent: true,
+        id,
+        stage: entry.stage,
+        baselineFingerprint: entry.baselineFingerprint,
+        humanArtifacts: entry.developmentReview ? itemHumanArtifacts(id, entry.acceptanceReport) : null,
+        nextAction: nextAction(entry)
+      };
     }
     if (entry.stage !== "WAITING_FOR_BASELINE_CONFIRMATION") fail2("WORK_ITEM_STAGE_INVALID", `${id} is not ready to freeze`);
     const state = {
       ...taskPackage.state,
       stage: "BASELINE_FROZEN",
-      frozenAt: at
+      frozenAt: at,
+      ...taskPackage.definition.developmentPlan ? {
+        review: {
+          ...taskPackage.state.review,
+          status: "APPROVED",
+          reviewedBy: "user",
+          reviewedAt: at
+        }
+      } : {}
     };
     await atomicWriteFile(path3.join(taskPackage.target, "state.json"), json(state), { fs });
+    if (taskPackage.definition.developmentPlan) {
+      await atomicWriteFile(
+        path3.join(taskPackage.target, "development-review.md"),
+        renderDevelopmentReview(taskPackage.definition, state),
+        { fs }
+      );
+    }
     entry.stage = "BASELINE_FROZEN";
     entry.status = entry.kind === "TASK" ? "WAITING_FOR_DEVELOPMENT_MODE_SELECTION" : "FROZEN";
     entry.recordRevision += 1;
@@ -2044,47 +2615,16 @@ async function freezeWorkItem({
     registry.revision += 1;
     registry.updatedAt = at;
     await writeRegistryUnlocked(root, registry, fs);
-    return { created: true, idempotent: false, id, stage: entry.stage, baselineFingerprint: entry.baselineFingerprint };
+    return {
+      created: true,
+      idempotent: false,
+      id,
+      stage: entry.stage,
+      baselineFingerprint: entry.baselineFingerprint,
+      humanArtifacts: entry.developmentReview ? itemHumanArtifacts(id, entry.acceptanceReport) : null,
+      nextAction: nextAction(entry)
+    };
   }, { now });
-}
-async function approveWorkItem({
-  root,
-  definition,
-  hostRuntime,
-  confirmed = false,
-  explicitDogfood = false,
-  now,
-  fs = fsPromises2
-} = {}) {
-  if (confirmed !== true) {
-    fail2("CONFIRMATION_REQUIRED", "Work item approval must explicitly authorize persistence and baseline freeze");
-  }
-  const prepared = await prepareWorkItem({
-    root,
-    definition,
-    hostRuntime,
-    explicitDogfood,
-    now,
-    fs
-  });
-  const frozen = await freezeWorkItem({
-    root,
-    id: prepared.id,
-    expectedBaselineFingerprint: prepared.baselineFingerprint,
-    confirmed: true,
-    explicitDogfood,
-    now,
-    fs
-  });
-  return {
-    ...frozen,
-    approved: true,
-    prepared: {
-      created: prepared.created,
-      idempotent: prepared.idempotent
-    },
-    artifactDir: prepared.artifactDir
-  };
 }
 async function retryBlockedWorkItem({
   root,
@@ -2200,7 +2740,14 @@ async function reviseWorkItem({
       contractFingerprint: workItemContractFingerprint(normalized),
       parentContractFingerprint: normalized.parentContractFingerprint,
       baselineRevision: (current.state.baselineRevision ?? 1) + 1,
-      revisedAt: at
+      revisedAt: at,
+      review: {
+        schemaVersion: 1,
+        status: "APPROVED",
+        baselineFingerprint: workItemBaselineFingerprint(normalized),
+        reviewedBy: "user",
+        reviewedAt: at
+      }
     };
     const files = definitionFiles(normalized, state);
     await atomicReplaceDirectory(current.target, async (staging) => {
@@ -2221,6 +2768,7 @@ async function reviseWorkItem({
     entry.baselineFingerprint = state.baselineFingerprint;
     entry.contractFingerprint = state.contractFingerprint;
     entry.parentContractFingerprint = state.parentContractFingerprint;
+    entry.developmentReview = true;
     entry.status = entry.kind === "TASK" ? "WAITING_FOR_DEVELOPMENT_MODE_SELECTION" : "FROZEN";
     entry.developmentMode = null;
     entry.gate = { status: "NOT_RUN", evidence: null };
@@ -2288,7 +2836,10 @@ async function promoteWorkItem({
     const normalized = validateWorkItemDefinition({
       ...rawDefinition(current.definition),
       parentId: parentEntry.id
-    }, { parent: parentPackage.definition });
+    }, {
+      parent: parentPackage.definition,
+      allowLegacyDevelopmentPlan: !current.definition.developmentPlan
+    });
     validateTaskDependencies(normalized, parentPackage.definition);
     await validateCapabilityDependencyGraph(root, registry, normalized, fs);
     const state = {
@@ -2297,7 +2848,16 @@ async function promoteWorkItem({
       contractFingerprint: workItemContractFingerprint(normalized),
       parentContractFingerprint: normalized.parentContractFingerprint,
       baselineRevision: (current.state.baselineRevision ?? 1) + 1,
-      revisedAt: at
+      revisedAt: at,
+      ...normalized.developmentPlan ? {
+        review: {
+          schemaVersion: 1,
+          status: "APPROVED",
+          baselineFingerprint: workItemBaselineFingerprint(normalized),
+          reviewedBy: "user",
+          reviewedAt: at
+        }
+      } : {}
     };
     const files = definitionFiles(normalized, state);
     await atomicReplaceDirectory(current.target, async (staging) => {
@@ -2319,6 +2879,7 @@ async function promoteWorkItem({
     entry.baselineFingerprint = state.baselineFingerprint;
     entry.contractFingerprint = state.contractFingerprint;
     entry.parentContractFingerprint = state.parentContractFingerprint;
+    entry.developmentReview = Boolean(normalized.developmentPlan);
     entry.status = entry.kind === "TASK" ? "WAITING_FOR_DEVELOPMENT_MODE_SELECTION" : "FROZEN";
     entry.developmentMode = null;
     entry.gate = { status: "NOT_RUN", evidence: null };
@@ -2461,7 +3022,7 @@ async function upgradeWorkItemRegistry({
       ...rawDefinition(legacyDefinition),
       schemaVersion: WORK_ITEM_SCHEMA_VERSION,
       gateLevel: taskGateLevel
-    });
+    }, { allowLegacyDevelopmentPlan: true });
     const migratedState = {
       ...legacyState,
       schemaVersion: WORK_ITEM_SCHEMA_VERSION,
@@ -2563,9 +3124,10 @@ async function refreshWorkItemProjections({
     return {
       revision: registry.revision,
       workspaceOverview: path3.posix.join(GOVERNANCE_DIRECTORY, "workspace-overview.md"),
-      workItems: registry.workItems.map(({ id, acceptanceReport }) => ({
+      workItems: registry.workItems.map(({ id, acceptanceReport, developmentReview }) => ({
         id,
-        acceptanceReport: acceptanceReport?.markdownPath ?? null
+        acceptanceReport: acceptanceReport?.markdownPath ?? null,
+        humanArtifacts: developmentReview ? itemHumanArtifacts(id, acceptanceReport) : null
       }))
     };
   }, { fs });
@@ -2786,6 +3348,12 @@ function validGateArtifact(value, entry, definition) {
     return result && Number.isInteger(result.exitCode) && nonEmptyString(result.summary) && (result.testsRun === void 0 || Number.isInteger(result.testsRun) && result.testsRun >= 0);
   });
   if (!acceptanceComplete || !testsComplete) return false;
+  if (definition.kind === "TASK" && definition.developmentPlan) {
+    const plannedFiles = new Set(definition.developmentPlan.fileChanges.map(({ path: plannedPath }) => plannedPath));
+    if (value.scope.changedFiles.some((changedFile) => !plannedFiles.has(changedFile.replaceAll("\\", "/")))) {
+      return false;
+    }
+  }
   if (value.verdict === "PASS") {
     return value.scope.outOfScopeFiles.length === 0 && definition.acceptance.every(({ id }) => acceptanceById.get(id).status === "PASS") && definition.testCommands.every((argv) => testsByArgv.get(canonicalJson(argv)).exitCode === 0) && value.findings.p0.length === 0 && value.findings.p1.length === 0;
   }
@@ -2836,6 +3404,16 @@ function renderAcceptanceReport(report) {
     const result = results.get(item.id);
     lines.push(`| ${item.id} | ${item.expectedResult} | ${result ? gateStatusText(result.status) : "\u5F85\u9A8C\u6536"} | ${result?.evidence ?? "\u65E0"} |`);
   }
+  lines.push("", "## \u51BB\u7ED3\u5F00\u53D1\u65B9\u6848", "");
+  if (report.developmentPlan?.interfaces) {
+    lines.push(`- \u5F00\u53D1\u76EE\u7684\uFF1A${report.developmentPlan.purpose}`);
+    lines.push(`- \u63A5\u53E3\u5951\u7EA6\uFF1A${report.developmentPlan.interfaces.map(({ action, kind, name }) => `${action} ${kind} ${name}`).join("\uFF1B") || "\u65E0\u63A5\u53E3\u6539\u52A8"}`);
+  } else if (report.developmentPlan?.childPlans) {
+    lines.push(`- \u534F\u8C03\u76EE\u7684\uFF1A${report.developmentPlan.purpose}`);
+    lines.push(`- \u5B50\u7EA7\u5185\u5BB9\uFF1A${report.developmentPlan.childPlans.map(({ id, purpose }) => `${id}\uFF1A${purpose}`).join("\uFF1B")}`);
+  } else {
+    lines.push("- \u65E7\u7248 baseline \u672A\u8BB0\u5F55\u7ED3\u6784\u5316\u5F00\u53D1\u65B9\u6848\u3002");
+  }
   lines.push("", "## \u6D4B\u8BD5\u7ED3\u679C", "");
   const tests = gateArtifact?.tests ?? report.development?.artifact?.tests ?? [];
   if (tests.length === 0) lines.push("- \u5C1A\u65E0\u6D4B\u8BD5\u8BC1\u636E\u3002");
@@ -2844,6 +3422,17 @@ function renderAcceptanceReport(report) {
   }
   lines.push("", "## \u53D8\u66F4\u8303\u56F4", "");
   const scope = gateArtifact?.scope;
+  if (report.developmentPlan?.fileChanges) {
+    const planned = report.developmentPlan.fileChanges.map(({ path: plannedPath }) => plannedPath);
+    const actual = scope?.changedFiles ?? report.development?.artifact?.changedFiles ?? [];
+    const actualSet = new Set(actual.map((changedFile) => changedFile.replaceAll("\\", "/")));
+    lines.push(`- \u51BB\u7ED3\u8BA1\u5212\u6587\u4EF6\uFF1A${planned.join("\u3001") || "\u65E0"}`);
+    lines.push(`- \u8BA1\u5212\u5916\u6587\u4EF6\uFF1A${actual.filter((changedFile) => !planned.includes(changedFile.replaceAll("\\", "/"))).join("\u3001") || "\u65E0"}`);
+    lines.push(`- \u8BA1\u5212\u4E2D\u5C1A\u672A\u89C2\u5BDF\u5230\u7684\u6587\u4EF6\uFF1A${planned.filter((plannedPath) => !actualSet.has(plannedPath)).join("\u3001") || "\u65E0"}`);
+  } else if (report.developmentPlan?.childPlans) {
+    lines.push(`- \u51BB\u7ED3\u5B50\u7EA7\u8BA1\u5212\uFF1A${report.developmentPlan.childPlans.map(({ id }) => id).join("\u3001")}`);
+    lines.push(`- \u51BB\u7ED3\u5171\u4EAB\u5951\u7EA6\uFF1A${report.developmentPlan.sharedContracts.map(({ name }) => name).join("\u3001") || "\u65E0"}`);
+  }
   lines.push(`- \u5DF2\u8BB0\u5F55\u53D8\u66F4\uFF1A${scope?.changedFiles?.join("\u3001") || report.development?.artifact?.changedFiles?.join("\u3001") || "\u65E0"}`);
   lines.push(`- \u8303\u56F4\u5916\u53D8\u66F4\uFF1A${scope?.outOfScopeFiles?.join("\u3001") || "\u65E0"}`);
   lines.push("", "## \u95EE\u9898\u4E0E\u5EFA\u8BAE", "");
@@ -2875,6 +3464,7 @@ async function writeAcceptanceReport(root, entry, definition, at, fs) {
     development: entry.latestResult,
     gate: entry.gate,
     criteria: definition.acceptance,
+    developmentPlan: definition.developmentPlan ?? null,
     review: acceptance?.review ?? null,
     userConfirmation: acceptance?.userConfirmation ?? null,
     generatedAt: at
@@ -3180,7 +3770,8 @@ function parentContractSnapshot(parent, childId) {
     contractFingerprint: workItemChildContractFingerprint(parent, childId),
     goal: parent.goal,
     scope: parent.scope,
-    childContract: child
+    childContract: child,
+    developmentPlan: parent.developmentPlan ?? null
   };
 }
 function renderTaskHandoff(context) {
@@ -3293,7 +3884,8 @@ async function buildTaskContext({ root, id, explicitDogfood = false, fs = fsProm
       title: own.definition.title,
       goal: own.definition.goal,
       scope: own.definition.scope,
-      baselineFingerprint: entry.baselineFingerprint
+      baselineFingerprint: entry.baselineFingerprint,
+      developmentPlan: own.definition.developmentPlan ?? null
     },
     parentContracts: parents,
     capabilityDependencies,
@@ -3354,7 +3946,6 @@ function renderError(error) {
 
 // src/cli/hierarchical.mjs
 var HIERARCHICAL_COMMANDS = Object.freeze([
-  "approve-item",
   "prepare-item",
   "freeze-item",
   "revise-item",
@@ -3390,14 +3981,6 @@ var VALUE_OPTIONS = /* @__PURE__ */ new Set([
 ]);
 var FLAG_OPTIONS = /* @__PURE__ */ new Set(["--json", "--help", "--confirmed", "--dogfood"]);
 var COMMAND_OPTIONS = Object.freeze({
-  "approve-item": /* @__PURE__ */ new Set([
-    "--json",
-    "--help",
-    "--definition",
-    "--host-runtime",
-    "--confirmed",
-    "--dogfood"
-  ]),
   "prepare-item": /* @__PURE__ */ new Set(["--json", "--help", "--definition", "--host-runtime", "--dogfood"]),
   "freeze-item": /* @__PURE__ */ new Set(["--json", "--help", "--item", "--expected-baseline", "--confirmed", "--dogfood"]),
   "revise-item": /* @__PURE__ */ new Set(["--json", "--help", "--definition", "--expected-baseline", "--confirmed", "--dogfood"]),
@@ -3438,9 +4021,8 @@ var usage = `Usage: hdg <command> [options]
 Commands:
 ${HIERARCHICAL_COMMANDS.map((command) => `  ${command}`).join("\n")}
 
-  approve-item --definition <file|-> --host-runtime <agent> --confirmed
-  prepare-item --definition <file|-> --host-runtime <agent>
-  freeze-item --item <id> --expected-baseline <sha256> --confirmed
+  prepare-item --definition <file|-> --host-runtime <agent>  # writes human review package
+  freeze-item --item <id> --expected-baseline <sha256> --confirmed  # after human review
   revise-item --definition <file|-> --expected-baseline <sha256> --confirmed
   promote-item --item <root-id> --parent <frozen-parent-id> --expected-baseline <sha256> --expected-parent-baseline <sha256> --confirmed
   select-development-mode --item <task-id> --development-mode active|manual --expected-baseline <sha256> --confirmed
@@ -3546,20 +4128,12 @@ async function runWorkItemCommand(parsed, io) {
   const root = io.cwd ?? process.cwd();
   const fs = io.fs ?? fsPromises3;
   const common = { root, fs, now: io.now, explicitDogfood: parsed.dogfood };
-  if (["approve-item", "prepare-item", "revise-item"].includes(parsed.command)) {
+  if (["prepare-item", "revise-item"].includes(parsed.command)) {
     const definition = await readStructured(
       required(parsed, "--definition"),
       "WORK_ITEM_DEFINITION",
       { cwd: root, fs, stdin: io.stdin }
     );
-    if (parsed.command === "approve-item") {
-      return approveWorkItem({
-        ...common,
-        definition,
-        hostRuntime: required(parsed, "--host-runtime"),
-        confirmed: parsed.confirmed
-      });
-    }
     if (parsed.command === "prepare-item") {
       return prepareWorkItem({
         ...common,

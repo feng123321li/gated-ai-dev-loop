@@ -1,5 +1,86 @@
-export function deliveryDefinition(overrides = {}) {
+function exactPlannedPath(pattern) {
+  return pattern.endsWith('/**') ? `${pattern.slice(0, -3)}/planned-change.mjs` : pattern;
+}
+
+function testPlan(definition) {
+  return [{
+    acceptanceIds: definition.acceptance.map(({ id }) => id),
+    approach: 'Run the frozen command and verify every mapped acceptance result.',
+    commandIndexes: [0],
+  }];
+}
+
+function taskDevelopmentPlan(definition) {
   return {
+    purpose: `Implement the reviewed change for ${definition.title}.`,
+    scenarios: [{
+      kind: 'API',
+      title: `${definition.title} behavior`,
+      description: definition.goal,
+      requirementIds: definition.requirements.map(({ id }) => id),
+    }],
+    fileChanges: definition.scope.map((scopePath) => ({
+      path: exactPlannedPath(scopePath),
+      action: 'MODIFY',
+      purpose: `Implement or verify ${definition.title} within the frozen scope.`,
+    })),
+    interfaces: [{
+      name: `${definition.title} contract`,
+      kind: 'FUNCTION',
+      action: 'MODIFY',
+      location: exactPlannedPath(definition.scope[0]),
+      currentContract: 'The current behavior does not satisfy the frozen requirement.',
+      targetContract: definition.acceptance[0].expectedResult,
+      requirementIds: definition.requirements.map(({ id }) => id),
+    }],
+    logic: [`Implement ${definition.goal}`, 'Keep all changes inside the reviewed file list.'],
+    dataAndTransactions: [],
+    compatibility: ['Preserve callers outside the frozen interface change.'],
+    testPlan: testPlan(definition),
+    reviewPoints: ['Confirm the target contract and exact changed files before freezing.'],
+  };
+}
+
+function coordinationDevelopmentPlan(definition) {
+  const ids = new Set(definition.children.map(({ id }) => id));
+  return {
+    purpose: `Coordinate the reviewed child work for ${definition.title}.`,
+    childPlans: definition.children.map((child) => ({
+      id: child.id,
+      purpose: `Deliver ${child.title}.`,
+      deliverables: [`Verified ${child.kind} result for ${child.title}.`],
+      requirementIds: child.requirementIds,
+      acceptanceIds: child.acceptanceIds,
+      dependsOn: child.id === 't-verify-token' && ids.has('t-issue-token') ? ['t-issue-token'] : [],
+    })),
+    sharedContracts: definition.children.length > 1 ? [{
+      name: `${definition.title} shared contract`,
+      kind: 'SCHEMA',
+      description: 'The provider output is consumed by the dependent child without implicit assumptions.',
+      providerChildIds: [definition.children[0].id],
+      consumerChildIds: [definition.children.at(-1).id],
+      requirementIds: definition.requirements.map(({ id }) => id),
+    }] : [],
+    integrationFlow: ['Complete provider children before consumers, then run the frozen aggregate gate.'],
+    deliveryWaves: definition.children.map((child, index) => ({
+      order: index + 1,
+      name: `Wave ${index + 1}`,
+      childIds: [child.id],
+      exitCriteria: `${child.id} is verified before the next wave begins.`,
+    })),
+    testPlan: testPlan(definition),
+    reviewPoints: ['Confirm child responsibilities, shared contracts, dependency order, and aggregate acceptance.'],
+  };
+}
+
+export function developmentPlanFor(definition) {
+  return definition.kind === 'TASK'
+    ? taskDevelopmentPlan(definition)
+    : coordinationDevelopmentPlan(definition);
+}
+
+export function deliveryDefinition(overrides = {}) {
+  const definition = {
     schemaVersion: 3,
     gateLevel: 'FULL',
     id: 'd-identity-platform',
@@ -29,10 +110,14 @@ export function deliveryDefinition(overrides = {}) {
     decisions: ['Delivery and Capability baselines coordinate work; only Task baselines authorize implementation.'],
     ...overrides,
   };
+  definition.developmentPlan = Object.hasOwn(overrides, 'developmentPlan')
+    ? overrides.developmentPlan
+    : coordinationDevelopmentPlan(definition);
+  return definition;
 }
 
 export function capabilityDefinition(overrides = {}) {
-  return {
+  const definition = {
     schemaVersion: 3,
     gateLevel: 'FULL',
     id: 'c-token-lifecycle',
@@ -70,10 +155,14 @@ export function capabilityDefinition(overrides = {}) {
     decisions: ['The capability gate runs only after both Tasks are verified.'],
     ...overrides,
   };
+  definition.developmentPlan = Object.hasOwn(overrides, 'developmentPlan')
+    ? overrides.developmentPlan
+    : coordinationDevelopmentPlan(definition);
+  return definition;
 }
 
 export function issueTaskDefinition(overrides = {}) {
-  return {
+  const definition = {
     schemaVersion: 3,
     gateLevel: 'FULL',
     id: 't-issue-token',
@@ -99,10 +188,14 @@ export function issueTaskDefinition(overrides = {}) {
     decisions: ['This Task is an executable leaf and cannot contain child work items.'],
     ...overrides,
   };
+  definition.developmentPlan = Object.hasOwn(overrides, 'developmentPlan')
+    ? overrides.developmentPlan
+    : taskDevelopmentPlan(definition);
+  return definition;
 }
 
 export function verifyTaskDefinition(overrides = {}) {
-  return {
+  const definition = {
     ...issueTaskDefinition(),
     id: 't-verify-token',
     title: 'Verify tokens',
@@ -125,10 +218,14 @@ export function verifyTaskDefinition(overrides = {}) {
     decisions: ['The dependency is explicit and blocks READY until the issuer is verified.'],
     ...overrides,
   };
+  definition.developmentPlan = Object.hasOwn(overrides, 'developmentPlan')
+    ? overrides.developmentPlan
+    : taskDevelopmentPlan(definition);
+  return definition;
 }
 
 export function revokeTaskDefinition(overrides = {}) {
-  return {
+  const definition = {
     ...issueTaskDefinition(),
     id: 't-revoke-token',
     title: 'Revoke tokens',
@@ -147,4 +244,8 @@ export function revokeTaskDefinition(overrides = {}) {
     decisions: ['Use the existing token identifier as the revocation key.'],
     ...overrides,
   };
+  definition.developmentPlan = Object.hasOwn(overrides, 'developmentPlan')
+    ? overrides.developmentPlan
+    : taskDevelopmentPlan(definition);
+  return definition;
 }

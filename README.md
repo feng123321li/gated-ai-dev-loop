@@ -22,6 +22,7 @@ Delivery 和 Capability 管协调与聚合，Task 是唯一执行叶子。实际
 - 人工确认不要求抄写 SHA256；层级指纹由 Agent 从准备结果传给控制器，过期方案会机械拒绝；
 - 同一次冻结确认在需求根记录 active/manual；不再要求冻结后二次批准；
 - active 由 Agent 自主选择多子 Agent、单 Agent 或当前 Agent 串行，并循环实现、回归、修复和复测；
+- manual 在需求根生成一份 `requirement-handoff.md`，人工只需一次复制到新会话，接收 Agent 自行推进整树，不逐 Task 要求启动；
 - 按依赖、claim 和写入范围计算 READY Task，支持多人并行；
 - Task、Capability、Delivery 各自通过 gate；同一冻结契约内失败后由 Agent 按当前 baseline 自动重试；
 - 开发结果写回后生成 `development-review.json/md` 对照计划与实际；门禁后再生成并更新 `acceptance-report.json/md`；
@@ -50,6 +51,7 @@ Micro、Workstream 和 M/W/T 可作为规模特征、规划视图和人类可读
         ├── children.json | execution.json
         ├── development-review.json/md # 开发结果写回后生成
         ├── development-mode.json      # 同一次冻结确认记录根级开发方式
+        ├── requirement-handoff.md     # manual 模式的整树一次性交接
         └── children/
             └── <child-id>/            # 按 Delivery→Capability→Task 递归嵌套
                 ├── development-plan.json/md # 子节点独立开发方案

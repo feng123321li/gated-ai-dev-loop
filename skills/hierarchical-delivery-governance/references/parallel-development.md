@@ -1,6 +1,6 @@
 # 多 Agent Task 调度
 
-并行是需求冻结时选择 `active` 后可采用的运行策略，不是冻结契约、层级或工作项种类，也不是 active 的必要条件。Skill 不提供 Codex/Claude 专用的子 Agent 配置文件；Python 控制器提供统一的 READY、claim、operationId 和 handoff，宿主使用自身能力自主执行。
+并行是整树执行宿主可采用的运行策略，不是冻结契约、层级或工作项种类，也不是 active 的必要条件。active 的当前 Agent 与 manual 根级交接的接收 Agent 都可根据运行能力并行或串行。Skill 不提供 Codex/Claude 专用的子 Agent 配置文件；Python 控制器提供统一的 READY、claim、operationId 和 Task handoff，宿主使用自身能力自主执行。
 
 ## 资格
 
@@ -22,7 +22,7 @@
 
 按 Task 依赖图生成拓扑波次。同一波只包含互不依赖且路径互斥的 READY Task。提供方 Task VERIFIED 后，消费方才能进入后续波次。
 
-`active` Agent 可按以下安全循环自主调度：
+执行宿主可按以下安全循环自主调度：
 
 1. 调用 `ready-tasks --item <root-id>` 获取当前候选；
 2. 按依赖、范围互斥和可用并发槽选择本波 Task；
@@ -31,7 +31,7 @@
 5. 分别写回结果并完成 Task 门禁；
 6. 循环实现、回归、修复和复测，写回结果后重新计算 READY，直到发生真实阻断或全部 Task VERIFIED。
 
-Agent 数量、并发度和调度顺序不固定。并发不足时自动串行；子 Agent 完全不可用时由当前 Agent 继续开发，不改变根级方式，也不询问用户。每个 Task 仍需独立 claim、结果和证据，以便归属、恢复和验收。`manual` 不自动开发，只输出控制器生成的 handoff。这些调度与回退规则只存在于 Skill 运行说明中，不写入冻结方案、baseline、层级指纹或根级方式文件。
+Agent 数量、并发度和调度顺序不固定。并发不足时自动串行；子 Agent 完全不可用时由执行宿主继续开发，不改变根级方式，也不询问用户。每个 Task 仍需独立 claim、结果和证据，以便归属、恢复和验收。manual 只在规划会话停止自动开发并输出一份根级 `requirement-handoff.md`；接收会话启动后使用同一安全循环处理全树，不逐 Task 返回人工交接。这些调度与回退规则只存在于 Skill 运行说明中，不写入冻结方案、baseline、层级指纹或根级方式文件。
 
 ## Claim 和归属
 

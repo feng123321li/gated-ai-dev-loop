@@ -247,7 +247,7 @@ class HierarchyPackageTests(unittest.TestCase):
                     host_runtime="codex",
                     now="2026-07-17T10:00:00Z",
                 )
-                freeze_hierarchy(
+                frozen = freeze_hierarchy(
                     root=temporary,
                     root_id=prepared["rootId"],
                     expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
@@ -261,6 +261,9 @@ class HierarchyPackageTests(unittest.TestCase):
                     "baselineFingerprints": prepared["baselineFingerprints"],
                     "plan": (root_path / "development-plan.md").read_text(encoding="utf-8"),
                     "mode": json.loads((root_path / "development-mode.json").read_text(encoding="utf-8")),
+                    "handoff": frozen["humanArtifacts"]["requirementHandoff"],
+                    "handoffPrompt": frozen["handoffPrompt"],
+                    "handoffExists": (root_path / "requirement-handoff.md").exists(),
                 }
 
             self.assertEqual(results["active"]["hierarchyFingerprint"], results["manual"]["hierarchyFingerprint"])
@@ -268,6 +271,64 @@ class HierarchyPackageTests(unittest.TestCase):
             self.assertEqual(results["active"]["plan"], results["manual"]["plan"])
             self.assertEqual(results["active"]["mode"]["mode"], "active")
             self.assertEqual(results["manual"]["mode"]["mode"], "manual")
+            self.assertIsNone(results["active"]["handoff"])
+            self.assertIsNone(results["active"]["handoffPrompt"])
+            self.assertFalse(results["active"]["handoffExists"])
+            self.assertTrue(results["manual"]["handoffExists"])
+
+    def test_manual_freeze_creates_one_handoff_for_the_complete_requirement_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=two_task_capability_hierarchy(),
+                host_runtime="codex",
+            )
+            frozen = freeze_hierarchy(
+                root=temporary,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                development_mode="manual",
+                confirmed=True,
+            )
+            root = Path(prepared["artifactDir"])
+            handoff_path = root / "requirement-handoff.md"
+            handoff = handoff_path.read_text(encoding="utf-8")
+
+            self.assertEqual(handoff, frozen["handoffPrompt"])
+            self.assertIn("需求级一次性交接", handoff)
+            self.assertIn("`c-python-runtime`", handoff)
+            self.assertIn("`t-python-controller`", handoff)
+            self.assertIn("`t-python-worker`", handoff)
+            self.assertIn("按依赖动态计算 READY Task", handoff)
+            self.assertIn("不要要求用户逐 Task 回复启动", handoff)
+            self.assertFalse((root / "children" / "t-python-controller" / "development-handoff.md").exists())
+            self.assertFalse((root / "children" / "t-python-worker" / "development-handoff.md").exists())
+
+            child_progress = (
+                root / "children" / "t-python-controller" / "progress.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("无需人工逐 Task 启动", child_progress)
+
+            refreshed = refresh_work_item_projections(root=temporary)
+            root_artifacts = next(
+                item["humanArtifacts"]
+                for item in refreshed["workItems"]
+                if item["id"] == prepared["rootId"]
+            )
+            self.assertEqual(
+                root_artifacts["requirementHandoff"],
+                ".hierarchical-delivery-governance/work-items/c-python-runtime/requirement-handoff.md",
+            )
+
+            idempotent = freeze_hierarchy(
+                root=temporary,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                development_mode="manual",
+                confirmed=True,
+            )
+            self.assertTrue(idempotent["idempotent"])
+            self.assertEqual(idempotent["handoffPrompt"], handoff)
 
     def test_hierarchy_plan_tampering_blocks_the_single_freeze(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

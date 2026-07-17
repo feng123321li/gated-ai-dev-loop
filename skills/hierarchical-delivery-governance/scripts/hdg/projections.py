@@ -60,12 +60,21 @@ def item_human_artifacts(
     package_path = item["packagePath"] if isinstance(item, dict) else posixpath.join(WORK_ITEMS_DIRECTORY, item)
     base = posixpath.join(GOVERNANCE_DIRECTORY, package_path)
     plan_base = posixpath.join(GOVERNANCE_DIRECTORY, root_package_path or package_path)
+    requirement_handoff = (
+        posixpath.join(base, "requirement-handoff.md")
+        if isinstance(item, dict)
+        and item["parentId"] is None
+        and item["stage"] == "BASELINE_FROZEN"
+        and (item.get("developmentMode") or {}).get("mode") == "manual"
+        else None
+    )
     return {
         "overview": posixpath.join(base, "overview.md"),
         "developmentPlan": posixpath.join(base, "development-plan.md"),
         "hierarchyDevelopmentPlan": posixpath.join(plan_base, "development-plan.md"),
         "baseline": posixpath.join(base, "baseline.md"),
         "progress": posixpath.join(base, "progress.md"),
+        "requirementHandoff": requirement_handoff,
         "developmentReview": posixpath.join(base, "development-review.md")
         if isinstance(item, dict) and item.get("latestResult")
         else None,
@@ -79,9 +88,16 @@ def next_action(
 ) -> str:
     if entry["stage"] == "WAITING_FOR_BASELINE_CONFIRMATION":
         return "人工评审根级 development-plan.md、选择开发方式并一次确认冻结；无需复述指纹。"
+    if (
+        entry["status"] == "FROZEN"
+        and by_id is not None
+        and _development_mode(entry, by_id) == "manual"
+    ):
+        root = _requirement_root(entry, by_id)
+        if entry["id"] == root["id"]:
+            return "使用 requirement-handoff.md 一次性交接整棵需求树；接收会话按依赖推进，无需人工逐 Task 启动。"
+        return "由根级需求交接会话按依赖调度；无需人工逐 Task 启动。"
     if entry["status"] == "FROZEN" and entry["kind"] == "TASK":
-        if by_id is not None and _development_mode(entry, by_id) == "manual":
-            return "按需生成可复制的独立开发 handoff。"
         return "Agent 按依赖自主调度，循环实现、回归测试和复测。"
     if entry["status"] == "FROZEN":
         return "等待当前树中的子级完成后运行聚合门禁。"
@@ -179,6 +195,53 @@ def render_item_overview(entry: dict[str, Any], by_id: dict[str, dict[str, Any]]
     ])
 
 
+def render_requirement_handoff(
+    root: dict[str, Any],
+    by_id: dict[str, dict[str, Any]],
+) -> str:
+    """Render one copyable handoff for a complete frozen manual requirement tree."""
+    lines = [
+        f"# 需求级开发交接：{root['id']}",
+        "",
+        "> 这是需求级一次性交接，不是某个 Task 的单独开工提示。",
+        "> 接收会话负责一次接管整棵需求树，并在内部按依赖逐 Task 认领、开发、回归、复测和验收。",
+        "",
+        "## 权威入口",
+        "",
+        f"- 根工作项：`{root['id']}`",
+        "- 开发方式：manual",
+        "- 完整冻结方案：[development-plan.md](development-plan.md)",
+        "- 实时进度：[progress.md](progress.md)",
+        "",
+        "## 冻结需求树",
+        "",
+    ]
+
+    def append_node(item: dict[str, Any], depth: int) -> None:
+        lines.append(
+            f"{'  ' * depth}- {human_status(item['kind'])} `{item['id']}` — {human_status(item['status'])}"
+        )
+        for child_id in item["childIds"]:
+            append_node(by_id[child_id], depth + 1)
+
+    append_node(root, 0)
+    lines.extend([
+        "",
+        "## 接收会话执行规则",
+        "",
+        "1. 在项目根目录使用当前 `hierarchical-delivery-governance` Skill，先读取 registry、完整冻结方案和实时进度；不要重新准备或重新冻结需求。",
+        f"2. 以根工作项 `{root['id']}` 调用 `ready-tasks`，按依赖动态计算 READY Task；一次交接不等于一次认领全部 Task。",
+        "3. 对本轮 READY Task 分别生成唯一 operationId，并在实际开工前调用 `dispatch-task`。可安全并行时使用隔离子 Agent；不可并行时自动串行。",
+        "4. 每个 Task 严格使用自己的 context、scope、结果和证据，循环实现、回归测试、修复和复测；写回 `IMPLEMENTED` 或 `BLOCKED` 后完成该 Task 门禁。",
+        "5. 每次状态写回后重新计算 READY Task，自动推进后续波次；全部子级 VERIFIED 后运行 Capability/Delivery 聚合门禁。",
+        "6. 不要要求用户逐 Task 回复启动，也不要在正常 Task 切换、并发降级或自动重试时请求人工确认。",
+        "7. 只有冻结目标、范围、接口、授权必须改变或出现无法自动消除的真实阻断时才返回用户；根门禁通过后提交最终交付，由用户人工验收。",
+        "8. 不修改 baseline、registry、治理投影或 `.git/**`；未获得单独授权时不提交、推送、合并、发布或改变外部状态。",
+        "",
+    ])
+    return "\n".join(lines)
+
+
 def render_item_progress(
     entry: dict[str, Any],
     by_id: dict[str, dict[str, Any]] | None = None,
@@ -187,6 +250,11 @@ def render_item_progress(
     acceptance = entry.get("acceptance") if entry["parentId"] is None else None
     mode = _development_mode(entry, by_id)
     current_execution = _current_execution(entry)
+    requirement_handoff = (
+        entry["parentId"] is None
+        and entry["stage"] == "BASELINE_FROZEN"
+        and mode == "manual"
+    )
     lines = [
         f"# {entry['id']} 进度",
         "",
@@ -198,6 +266,7 @@ def render_item_progress(
         f"- 门禁：{human_status(entry['gate']['status'])}",
         f"- 开发建议：{mode}",
         "- 开发方案：[development-plan.md](development-plan.md)",
+        *(["- 需求级交接：[requirement-handoff.md](requirement-handoff.md)"] if requirement_handoff else []),
         f"- 当前执行：{current_execution}",
         f"- 直接子级：{entry['progress']['directChildren']['verified']}/{entry['progress']['directChildren']['total']} 已验证；"
         f"{entry['progress']['directChildren']['blocked']} 阻断；{entry['progress']['directChildren']['active']} 活动",
@@ -260,6 +329,12 @@ def _render_hierarchy_progress(
     def artifact_links(item: dict[str, Any]) -> str:
         _, _, review_path, report_path = item_paths(item)
         links = []
+        if (
+            item["parentId"] is None
+            and item["stage"] == "BASELINE_FROZEN"
+            and _development_mode(item, by_id) == "manual"
+        ):
+            links.append("[需求交接](requirement-handoff.md)")
         if item.get("latestResult"):
             links.append(f"[开发复核]({review_path})")
         if item.get("acceptanceReport"):

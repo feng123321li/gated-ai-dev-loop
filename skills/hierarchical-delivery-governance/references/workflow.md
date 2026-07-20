@@ -11,8 +11,9 @@
 7. Agent 使用准备结果中的 `hierarchyFingerprint`，调用一次 `freeze-hierarchy --expected-hierarchy ... --development-mode ... --confirmed`。控制器在同一事务中记录方式并冻结全部节点；指纹已变化则拒绝旧确认。
 8. active 下由当前 Agent 冻结后直接自主推进；manual 在需求根生成一份 `requirement-handoff.md`，用户只需一次复制到新会话，接收 Agent 即成为整树执行宿主。两种宿主都自主决定多子 Agent、单 Agent 或当前 Agent 串行，循环实现、回归、修复和复测；运行能力变化时自动调整，不再次询问开发方式或要求人工逐 Task 启动。
 9. 开发结果的完整 artifact 通过 `task-result --evidence -` 从 stdin 交给控制器。控制器在同一 SQLite 写事务内校验当前 operationId、计算摘要并保存 artifact 与摘要，然后生成 `development-review.md`；开发结果不代表 PASS，也不产生临时 evidence 文件。
-10. 全部相关回归和复测通过后，宿主形成严格 gate artifact，并通过 `accept-item --evidence -` 从 stdin 直接提交。控制器在同一事务中按当前 baseline 校验、计算摘要并保存结构化验收记录，随后生成 `acceptance-report.md`；Task 全部 VERIFIED 后依次运行 Capability、Delivery 自身聚合门禁。
-11. 治理根 gate PASS 后向用户提交交付，由用户人工验收并确认；验收报告持续更新至 `COMPLETED`。
+10. 回归、门禁、独立审查或最终验收发现遗漏时，先判断是否仍为原冻结目标和验收契约。已有授权文件内直接重试；仅缺少完成原验收项所需的精确文件，且目标、需求、验收、接口行为、数据、拓扑和外部权限不变时，通过 `remediate-task --evidence -` 追加到原 Task。控制器保持 baseline 不变，失效该 Task 和已通过的祖先 gate，再重新调度；不得 `prepare-hierarchy` 新建重复需求根。
+11. 全部相关回归和复测通过后，宿主形成严格 gate artifact，并通过 `accept-item --evidence -` 从 stdin 直接提交。控制器在同一事务中按当前 baseline 和追加验证修正校验、计算摘要并保存结构化验收记录，随后生成 `acceptance-report.md`；Task 全部 VERIFIED 后依次运行 Capability、Delivery 自身聚合门禁。
+12. 治理根 gate PASS 后向用户提交交付，由用户人工验收并确认；验收报告持续更新至 `COMPLETED`。
 
 任何步骤都不能从“优化、开发、项目、治理”等自然语言关键词推导创建或冻结授权。
 
@@ -94,11 +95,13 @@ flowchart TD
     R -->|"已实现"| M["执行任务门禁"]
     M --> N["生成验收报告"]
     N --> O{"门禁结果"}
-    O -->|"未通过"| X
+    O -->|"未通过且无需补充文件"| X
+    O -->|"原验收项遗漏精确文件"| Y["原任务追加验证修正"]
+    Y --> A
     O -->|"通过"| V["任务已验证"]
 ```
 
-“可调度”是实时计算结果，不写入持久化生命周期。“已实现”只表示开发结果已回收，必须继续执行门禁。实际机械命令依次为 `dispatch-task`、`task-result`、`accept-item` 和 `retry-item`。
+“可调度”是实时计算结果，不写入持久化生命周期。“已实现”只表示开发结果已回收，必须继续执行门禁。同契约修正必须使用原 Task 的 `remediate-task`，不能创建新根。实际机械命令依次为 `dispatch-task`、`task-result`、`remediate-task`（仅验证修正需要）、`accept-item` 和 `retry-item`。
 
 ### 3. 父级聚合与最终完成
 
@@ -118,13 +121,16 @@ flowchart TD
     P --> C
     Q -->|"是"| R
     R --> S{"独立审查或人工审查"}
-    S -->|"未通过或无法隔离"| N["保持等待独立审查"]
+    S -->|"发现同契约文件遗漏"| T["回到原任务追加验证修正"]
+    T --> T2["原任务重新开发并通过任务门禁"]
+    T2 --> A
+    S -->|"无法隔离或契约需变化"| N["保持等待独立审查或回到需求评审"]
     S -->|"通过"| U{"用户是否最终确认？"}
     U -->|"尚未确认"| W["保持等待用户确认"]
     U -->|"确认"| Z["需求已完成"]
 ```
 
-能力和交付都必须在全部直接子级已验证后运行自己的聚合门禁，不能把子级完成等同于父级通过。门禁失败时按当前层级修复并重试，不进入最终确认。
+能力和交付都必须在全部直接子级已验证后运行自己的聚合门禁，不能把子级完成等同于父级通过。同契约验证修正必须回到原 Task，并逐级失效已通过的父级 gate；普通门禁失败按当前层级修复并重试。两者都不进入最终确认，也不新建重复需求根。
 
 ## 恢复与失败关闭
 
@@ -136,3 +142,4 @@ flowchart TD
 - 测试或证据不足时 gate 不 PASS。
 - 没有独立审查能力时根保持等待人工审查。
 - 未取得用户确认时不得标记 `COMPLETED`。
+- 未完成需求的验证发现若映射到已有验收项，不得另建根 Task；使用 `retry-item` 或 `remediate-task` 回到原 Task。已 `COMPLETED` 的需求保持不可变。

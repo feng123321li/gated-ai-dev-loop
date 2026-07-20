@@ -11,8 +11,11 @@ from pathlib import Path
 
 from hdg.cli import run_cli
 from hdg.errors import GatedLoopError
+from hdg.execution import dispatch_task, record_task_result
 from hdg.fs_safe import safe_path
 from hdg.jsonio import fingerprint
+from hdg.planning import freeze_hierarchy, prepare_hierarchy
+from hdg.repository import GovernanceRepository
 
 from .fixtures import task_hierarchy
 
@@ -31,6 +34,7 @@ class CliAndSafetyTests(unittest.TestCase):
         self.assertIn("--development-mode active|manual", help_text)
         self.assertNotIn("select-development-mode", help_text)
         self.assertIn("retry-item --item <id> --expected-baseline <sha256>", help_text)
+        self.assertIn("remediate-task --item <task-id> --expected-baseline <sha256> --evidence -", help_text)
         self.assertNotIn("retry-item --item <id> --expected-baseline <sha256> --confirmed", help_text)
         self.assertNotIn("prepare-item", help_text)
         self.assertNotIn("freeze-item", help_text)
@@ -305,6 +309,87 @@ class CliAndSafetyTests(unittest.TestCase):
             json.loads(stderr.getvalue())["error"]["code"],
             "WORK_ITEM_EVIDENCE_STDIN_REQUIRED",
         )
+
+    def test_validation_remediation_streams_from_stdin_without_a_new_requirement(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=task_hierarchy(),
+                host_runtime="codex",
+            )
+            task_id = prepared["rootId"]
+            baseline = prepared["baselineFingerprints"][task_id]
+            freeze_hierarchy(
+                root=temporary,
+                root_id=task_id,
+                expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                development_mode="active",
+                confirmed=True,
+            )
+            dispatch_task(root=temporary, item_id=task_id, owner="developer", operation_id="op-cli")
+            record_task_result(
+                root=temporary,
+                item_id=task_id,
+                operation_id="op-cli",
+                status="IMPLEMENTED",
+                evidence={
+                    "schemaVersion": 3,
+                    "kind": "TASK_RESULT",
+                    "taskId": task_id,
+                    "operationId": "op-cli",
+                    "status": "IMPLEMENTED",
+                    "summary": "Implemented before validation remediation.",
+                    "changedFiles": ["src/controller.py"],
+                    "tests": [{"argv": ["python", "-m", "unittest"], "exitCode": 0, "testsRun": 1}],
+                    "blockers": [],
+                },
+            )
+            artifact = {
+                "schemaVersion": 3,
+                "kind": "VALIDATION_REMEDIATION",
+                "taskId": task_id,
+                "baselineFingerprint": baseline,
+                "source": "REGRESSION",
+                "summary": "Correct a file omission found by validation.",
+                "acceptanceIds": ["A-001"],
+                "fileChanges": [{
+                    "path": "src/controller_docs.py",
+                    "action": "MODIFY",
+                    "purpose": "Align documentation with the frozen behavior.",
+                }],
+                "assertions": {
+                    "goalUnchanged": True,
+                    "requirementsUnchanged": True,
+                    "acceptanceUnchanged": True,
+                    "interfacesUnchanged": True,
+                    "dataContractUnchanged": True,
+                    "testCommandsUnchanged": True,
+                    "topologyUnchanged": True,
+                    "externalAuthorityUnchanged": True,
+                },
+            }
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            self.assertEqual(
+                run_cli(
+                    [
+                        "remediate-task", "--item", task_id,
+                        "--expected-baseline", baseline,
+                        "--evidence", "-", "--json",
+                    ],
+                    cwd=temporary,
+                    stdin=io.StringIO(json.dumps(artifact)),
+                    stdout=stdout,
+                    stderr=stderr,
+                ),
+                0,
+                stderr.getvalue(),
+            )
+            result = json.loads(stdout.getvalue())["result"]
+            self.assertEqual(result["id"], task_id)
+            self.assertEqual(result["status"], "FROZEN")
+            self.assertEqual(len(GovernanceRepository(temporary).read_registry()["workItems"]), 1)
+            self.assertEqual(list(Path(temporary).rglob("*.json")), [])
 
     def test_freeze_requires_mode_in_the_same_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

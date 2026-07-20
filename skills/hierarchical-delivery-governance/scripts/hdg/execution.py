@@ -21,6 +21,16 @@ def _safe_operation_id(value: object, field: str) -> str:
     return value
 
 
+def _task_write_scope(
+    repository: GovernanceRepository,
+    definition: dict[str, Any],
+) -> list[str]:
+    scope = list(definition["scope"])
+    if definition["kind"] == "TASK":
+        scope.extend(item["path"] for item in repository.effective_task_file_changes(definition))
+    return sorted(set(scope))
+
+
 def _is_descendant(registry: dict[str, Any], entry: dict[str, Any], ancestor_id: str) -> bool:
     by_id = {item["id"]: item for item in registry["workItems"]}
     current = entry
@@ -82,7 +92,10 @@ def _task_ready(
         return False
     for claimed in (item for item in registry["workItems"] if item.get("claim")):
         claimed_definition = repository.read_package(registry, claimed)[0]
-        if scope_patterns_overlap(definition["scope"], claimed_definition["scope"]):
+        if scope_patterns_overlap(
+            _task_write_scope(repository, definition),
+            _task_write_scope(repository, claimed_definition),
+        ):
             return False
     return True
 
@@ -214,6 +227,8 @@ def _task_context(
     if root_entry.get("developmentMode") is None:
         fail("WORK_ITEM_DEVELOPMENT_MODE_REQUIRED", f"{item_id} requires a development mode selected during requirement freeze")
     definition, _, target = repository.assert_current_lineage(registry, entry)
+    validation_remediations = repository.read_validation_remediations(item_id, definition)
+    authorized_file_changes = repository.effective_task_file_changes(definition)
     parents = []
     child_id = entry["id"]
     parent_id = entry["parentId"]
@@ -265,6 +280,8 @@ def _task_context(
             "scope": definition["scope"],
             "baselineFingerprint": entry["baselineFingerprint"],
             "developmentPlan": definition["developmentPlan"],
+            "validationRemediations": validation_remediations,
+            "authorizedFileChanges": authorized_file_changes,
         },
         "parentContracts": parents,
         "capabilityDependencies": capability_dependencies,

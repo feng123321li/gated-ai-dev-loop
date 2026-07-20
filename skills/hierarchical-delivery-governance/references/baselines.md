@@ -8,7 +8,7 @@
 - Capability：额外包含 `parentId`、`decomposition.status/dependsOn`、Task `children` 和协调层开发计划。
 - Task：额外包含 `parentId`、`execution {dependsOn, inputs, outputs}` 和精确文件/接口开发计划。
 
-`gateLevel` 只能是 `LIGHT|FULL`，且只有 Task 可以为 `LIGHT`。Task `fileChanges` 必须是 scope 内精确相对路径；协调层 `childPlans`、依赖、波次、R/A 和测试映射必须覆盖全部直接子级。
+`gateLevel` 只能是 `LIGHT|FULL`，且只有 Task 可以为 `LIGHT`。Task 冻结时的 `fileChanges` 必须是 scope 内精确相对路径；协调层 `childPlans`、依赖、波次、R/A 和测试映射必须覆盖全部直接子级。验证阶段发现原验收项所需文件漏列时，`remediate-task` 以追加审计方式形成补充授权，不改写 baseline 或冻结方案。
 
 ## 完整层级 definition
 

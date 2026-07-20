@@ -7,14 +7,36 @@ from .evidence import evidence_record, valid_gate_artifact, valid_review_artifac
 from .repository import GovernanceRepository, timestamp
 
 
+def _remediation_files(
+    repository: GovernanceRepository,
+    entry: dict[str, Any],
+    definition: dict[str, Any],
+) -> set[str]:
+    if entry["kind"] != "TASK":
+        return set()
+    frozen = {
+        item["path"] for item in definition["developmentPlan"].get("fileChanges", [])
+    }
+    effective = {
+        item["path"] for item in repository.effective_task_file_changes(definition)
+    }
+    return effective - frozen
+
+
 def _validated_gate_artifact(
     evidence: object,
     *,
     entry: dict[str, Any],
     definition: dict[str, Any],
     status: str | None = None,
+    additional_planned_files: set[str] | None = None,
 ) -> tuple[dict[str, str], dict[str, Any]]:
-    if not valid_gate_artifact(evidence, entry, definition) or (
+    if not valid_gate_artifact(
+        evidence,
+        entry,
+        definition,
+        additional_planned_files=additional_planned_files,
+    ) or (
         status is not None and evidence.get("verdict") != status
     ):
         fail("WORK_ITEM_GATE_EVIDENCE_INVALID", "Gate evidence is incomplete or contradicts the requested verdict")
@@ -47,11 +69,13 @@ def record_work_item_gate(
     with repository.transaction() as registry:
         entry = repository.item_by_id(registry, item_id)
         definition = repository.assert_current_lineage(registry, entry)[0]
+        remediation_files = _remediation_files(repository, entry, definition)
         verified_reference, verified_artifact = _validated_gate_artifact(
             evidence,
             entry=entry,
             definition=definition,
             status=status,
+            additional_planned_files=remediation_files,
         )
         if entry["status"] == "BLOCKED":
             fail("WORK_ITEM_RETRY_REQUIRED", f"{item_id} must be explicitly retried before its gate can run again")
@@ -111,10 +135,12 @@ def accept_work_item(
     registry = repository.read_operational_registry()
     entry = repository.item_by_id(registry, item_id)
     definition = repository.assert_current_lineage(registry, entry)[0]
+    remediation_files = _remediation_files(repository, entry, definition)
     _, artifact = _validated_gate_artifact(
         evidence,
         entry=entry,
         definition=definition,
+        additional_planned_files=remediation_files,
     )
     return record_work_item_gate(
         root=root,

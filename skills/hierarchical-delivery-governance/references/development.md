@@ -2,7 +2,7 @@
 
 ## 上下文生成
 
-只有根级开发方案已经通过一次整树冻结、开发方式已在同一次确认中写入 SQLite、实际父链有效且 Task/Capability 依赖都 VERIFIED 的 Task 才能生成上下文。正常流程使用 `dispatch-task` 在同一 SQLite 短事务中校验 READY、保存绑定 operationId 的结构化上下文和 handoff，并在 Markdown handoff 写入成功后提交 claim。`task-context` 只返回调度前诊断或恢复预览，不写入开工工件。上下文继承需求根开发方式，并包含 `gateLevel`、operation、Task 的完整 `developmentPlan`、实际存在父级的协调开发计划与子契约、依赖证据、R/A、输入输出、测试 argv 和禁止事项；根 Task 的父契约和聚合依赖数组为空，`inheritConversation` 固定为 false。
+只有根级开发方案已经通过一次整树冻结、开发方式已在同一次确认中写入 SQLite、实际父链有效且 Task/Capability 依赖都 VERIFIED 的 Task 才能生成上下文。正常流程使用 `dispatch-task` 在同一 SQLite 短事务中校验 READY、保存绑定 operationId 的结构化上下文和 handoff，并在 Markdown handoff 写入成功后提交 claim。`task-context` 只返回调度前诊断或恢复预览，不写入开工工件。上下文继承需求根开发方式，并包含 `gateLevel`、operation、Task 的完整 `developmentPlan`、验证修正记录、`authorizedFileChanges`、实际存在父级的协调开发计划与子契约、依赖证据、R/A、输入输出、测试 argv 和禁止事项；根 Task 的父契约和聚合依赖数组为空，`inheritConversation` 固定为 false。
 
 `requirement-handoff.md` 是 manual 根级需求的一次性交接提示词，冻结与投影刷新都会从 SQLite 重建；它列出完整树并要求接收会话自行循环 READY、dispatch、结果写回和逐级门禁。`development-handoff.md` 仍是 `dispatch-task` 后生成的单 Task 执行上下文，只在执行宿主内部交给对应开发 Agent，不再要求人逐 Task 复制。`task-context --json` 只返回不得用于开工的未认领诊断预览。开发 Agent 不接收 Delivery 分析对话、Capability 讨论、其他 Task 对话或宿主隐式记忆。
 
@@ -11,7 +11,7 @@
 开发过程不冻结 Agent 数量、并发度、调度顺序或内部实现循环。交付证据仍必须满足：
 
 - 每个 Task 的结果和 evidence 可独立归属；
-- 实际改动仍在人工评审过的目标、scope 和安全授权内；需要改变冻结需求或扩大权限时必须阻断；
+- 实际改动只能位于 `authorizedFileChanges`：人工冻结文件加上控制器校验并追加审计的验证修正文件；需要改变冻结目标、契约、拓扑或外部权限时必须阻断；
 - 不改变 SQLite、baseline、进度投影或 `.git/**`；
 - 不提交、推送、发布或改变外部状态；
 - 持续运行相关回归、修复失败并复测，报告真实事实；
@@ -48,3 +48,5 @@ python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --e
 ## 结果接收
 
 宿主用 claim 的 operationId 接收完整结果 artifact，并以 `--evidence -` 从 stdin 直接执行 `task-result`。控制器在同一 SQLite 写事务内核对当前 claim、operationId 和 artifact，计算规范 JSON 摘要，记录 `IMPLEMENTED/BLOCKED`、artifact 与摘要并清除 claim；不创建临时 evidence 文件。控制器随即生成 `development-review.md`，对照冻结计划展示实际改动、接口、回归测试、复测和偏差；`IMPLEMENTED` 只表示等待门禁。Agent 应先修复回归失败并完成复测，再以相同方式提交严格 gate artifact、执行 `accept-item` 并生成验收报告。根工作项通过聚合门禁后向用户提交交付，由用户人工验收和最终确认；开发会话的 IMPLEMENTED 不能当作完成。
+
+验证阶段若发现原验收项所需文件漏列，当前 claim 必须先正常写回并释放，再由宿主执行 `remediate-task`。控制器把补充文件加入下一次 context 的 `authorizedFileChanges`，原 Task 重新 READY 后再认领；开发 Agent 不自行编辑 baseline、计划或 SQLite，也不另起需求根。

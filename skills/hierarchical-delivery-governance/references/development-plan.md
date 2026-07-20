@@ -90,7 +90,7 @@ Task 的 `scenarios[].kind` 从以下值选择，可组合多个：
 
 ## Task developmentPlan
 
-Task 方案必须精确到文件和目标契约。`fileChanges.path` 只能是 scope 内的精确相对路径，不能使用 `/**` 或其他 glob。
+Task 方案必须精确到文件和目标契约。`fileChanges.path` 只能是 scope 内的精确相对路径，不能使用 `/**` 或其他 glob。规划时必须沿每个接口/方法契约检查实现、公开说明和对应测试的所有者文件，避免把同一验收项的 Javadoc、注解、映射或测试遗漏到验证阶段。若冻结后仍发现这种同契约文件遗漏，使用原 Task 的追加验证修正，不创建新的需求根。
 
 ```json
 {

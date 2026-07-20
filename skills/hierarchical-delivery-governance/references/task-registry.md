@@ -11,7 +11,7 @@
 - `hierarchies`：每个需求根的层级指纹和统一评审状态；
 - `task_contexts`：绑定 operationId 的 Task 上下文和交接内容；
 - `reports`：开发复核与验收报告的结构化内容；
-- `interaction_events`：追加式人机指令、决策和状态摘要审计链。
+- `interaction_events`：追加式人机指令、决策、状态摘要和验证修正审计链。
 
 复杂契约和完整证据 artifact 可作为规范 JSON 文本存入 SQLite 列；证据引用只保留控制器按规范 JSON 计算的 SHA-256。两者在同一写事务中保存，仍是单一数据库权威，不产生临时或持久化 JSON 文件。控制器不迁移、不兼容旧 JSON 工作区、路径式 evidence 引用或非当前数据库 schema。
 
@@ -66,8 +66,9 @@ prepare-hierarchy
 → 选择开发方式并执行一次 freeze-hierarchy
 → dispatch-task
 → task-result / development-review.md
+→ 验证发现同契约文件遗漏时 remediate-task / 回到原 Task
 → accept-item / acceptance-report.md
 → acceptance-item
 ```
 
-诊断、恢复与执行命令还包括 `task-context`、`claim-task`、`gate-item`、`retry-item`、`ready-tasks` 和 `refresh-projections`。
+`remediate-task` 只为未完成需求的同契约验证修正追加精确文件授权。artifact、摘要和修正前状态快照存入现有 `interaction_events`，不新增 JSON 文件、不修改 baseline，也不创建第二个需求根。诊断、恢复与执行命令还包括 `task-context`、`claim-task`、`gate-item`、`retry-item`、`ready-tasks` 和 `refresh-projections`。

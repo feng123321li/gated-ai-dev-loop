@@ -33,7 +33,7 @@ Task 子级计数为零。不写主观百分比。协调节点声明的全部 ch
 
 - Delivery：展示 Capability 目的、跨能力契约、交付波次、子级进度和顶层 gate。
 - Capability：展示 Task 目的、依赖、共享契约、集成波次、子级进度和聚合 gate。
-- Task：展示精确文件、接口/函数目标契约、实现逻辑、根级开发方式、claim、结果、复核和 gate。
+- Task：展示冻结精确文件、验证修正补充文件、有效授权集合、接口/函数目标契约、实现逻辑、根级开发方式、claim、结果、复核和 gate。
 
 根 Task、根 Capability 和 Delivery 都在自身 gate PASS 后进入独立验收和用户确认；不要为了最终验收补空父级。
 
@@ -43,6 +43,7 @@ Task 子级计数为零。不写主观百分比。协调节点声明的全部 ch
 - `freeze-hierarchy`：用同一次确认记录根级开发方式，并更新全部节点确认记录和状态；manual 同时生成根级 `requirement-handoff.md`。
 - `dispatch-task`：更新单个 Task 的 claim、上下文与 handoff。
 - `task-result`：结构化结果写入 SQLite，生成 `development-review.md`，明确 IMPLEMENTED 不是完成。
+- `remediate-task`：把同一验收契约的文件遗漏追加到原 Task，失效相关 gate，并在开发复核、验收报告和交互日志中展示修正明细；不生成新需求根。
 - `accept-item`：结构化报告写入 SQLite，生成或更新 `acceptance-report.md`。
 - `record-interaction`：追加指令、决策或状态摘要，刷新需求根 `interaction-log.md`。
 - retry、聚合 gate、独立审查和用户确认：立即更新数据库和投影。

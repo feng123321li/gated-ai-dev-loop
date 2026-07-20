@@ -6,13 +6,15 @@ Task 只有在状态为 IMPLEMENTED 时可运行 gate。`task-result` 写回后�
 
 - baseline 与实际存在的父链指纹；根 Task 无父链；
 - 真实 diff 归属和 Scope；
-- Task 实际变更文件全部在人工评审并冻结的 `developmentPlan.fileChanges` 中；scope 内但未计划的文件仍属于计划偏差，不能 PASS；
+- Task 实际变更文件全部在人工评审并冻结的 `developmentPlan.fileChanges` 或控制器已记录的验证修正补充文件中；未经 `remediate-task` 记录的文件即使位于原 scope 内也不能 PASS；
 - 冻结测试 argv、退出码和适用的 Tests run；
 - 依赖输出和全部验收项；
 - 从 stdin 收到的完整 evidence artifact 覆盖当前工作项和当前 baseline；控制器在当前 SQLite 写事务内完成校验与摘要计算；
 - PASS evidence 中 Scope 外变更为空、全部测试退出码为 0、全部验收项为 PASS、P0/P1 为空。
 
 PASS 后 Task 为 VERIFIED；FAIL 后为 BLOCKED，并把范围、测试、验收项和 findings 写入用户报告。Agent 修复后使用当前 baseline 指纹执行 `retry-item`，自动回到 FROZEN 并继续回归与复测；只有冻结需求或授权需要变化时才回到人工评审。开发 Agent 的结论不能替代 gate，正常 PASS 路径使用 `accept-item`。
+
+如果失败只是暴露原验收项所需文件被开发方案漏列，且目标、需求、验收、接口行为、数据、拓扑和外部权限不变，Agent 不创建新的根 Task。它通过 `remediate-task --evidence -` 在原 Task 下记录修正原因、验收项和补充文件；控制器保持 baseline 不变，失效该 Task 与已通过的祖先 gate，修正后重新执行完整门禁。具体证据见 [validation-remediation.md](validation-remediation.md)。
 
 根 Task 在此 gate PASS 后达到浅层根 VERIFIED 并进入最终验收；它不需要虚构 Capability gate。
 
@@ -33,6 +35,7 @@ decomposition 为 SEALED 且所有计划 Capability VERIFIED 后，运行跨能�
 - Task result 后由 `development-review.md` 显示开发摘要、变更文件、开发侧测试事实和“等待门禁”，不提前创建验收报告；
 - gate 后显示冻结开发目的与接口/子级契约、计划文件与实际文件差异、验收项逐条结论、测试 argv/退出码/Tests run、Scope 外变更、P0/P1/P2 和门禁结论；
 - 根工作项继续显示独立/人工审查结论与用户确认，直到最终状态为“已完成”；
+- 同一 Task 存在验证修正时，开发复核和验收报告必须显示发现阶段、关联验收项、修正原因、补充授权文件和记录时间，并把这些文件纳入有效授权集合；
 - 子工作项报告在该级 VERIFIED 后结束，不重复请求用户确认。
 
 开发复核与验收报告都是 SQLite 和 evidence 快照的可重建人类投影，不取代机器权威。`workspace-overview.md` 必须按实际阶段提供对应入口。

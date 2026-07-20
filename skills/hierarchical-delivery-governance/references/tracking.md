@@ -4,7 +4,7 @@
 
 项目级 `governance.sqlite3` 是节点、层级和进度的唯一机器权威。`workspace-overview.md` 按需求根分组展示所有需求；每个需求根的 `progress.md` 使用 Markdown 表格，在第一列保留与该根 `development-plan.md` 相同的工作项 ID、父子顺序和 Delivery→Capability→Task 层级。两个投影都不能把父子节点渲染成彼此并列的需求行。
 
-每个需求根只有一个整树 `development-plan.md` 作为统一人工冻结入口。各实际节点仍有自己的 `development-plan.md`、`progress.md`、baseline、状态、门禁和后续开发复核；节点进度必须直接链接本节点方案。
+每个需求根只有一个整树 `development-plan.md` 作为统一人工冻结入口。需求根的 `progress.md` 是整树总进度；根节点自身进度使用同目录 `node-progress.md`，子节点自身进度使用各自目录 `progress.md`。各实际节点仍有自己的开发内容、节点进度、baseline、状态、门禁和后续开发复核；节点进度必须直接链接本节点方案。
 
 ## 三种进度
 
@@ -25,7 +25,7 @@ Task 子级计数为零。不写主观百分比。协调节点声明的全部 ch
 - “层级工作项”列使用稳定 ID 和层级符号保留 `development-plan.md` 的节点顺序，并链接到对应开发方案章节；
 - 阶段、状态、门禁和“当前执行”各自使用独立列，不把全部信息拼成一个长行；
 - “当前执行”是 claim 的可读投影：协调节点为“不适用”，无 claim 的待执行 Task 为“未认领”，活动 claim 显示 `owner / operationId`，结果已写回的 Task 为“已释放”；
-- “节点文件”列链接该节点自己的 `development-plan.md/progress.md`；
+- “节点文件”列链接该节点自己的方案和节点进度：根节点进度链接 `node-progress.md`，子节点进度链接其目录下的 `progress.md`；根节点不得回链整树 `progress.md`；
 - “阶段产物”列为 manual 需求根增加一次性交接入口，并在开发结果或门禁证据存在后增加 `development-review.md` 或 `acceptance-report.md` 入口，尚未生成时显示“无”；
 - 明细只由 SQLite 重建，Agent 不直接编辑投影文件。
 
@@ -48,4 +48,4 @@ Task 子级计数为零。不写主观百分比。协调节点声明的全部 ch
 - `record-interaction`：追加指令、决策或状态摘要，刷新需求根 `interaction-log.md`。
 - retry、聚合 gate、独立审查和用户确认：立即更新数据库和投影。
 
-每次状态写回增加 workspace/record revision，并重建 `workspace-overview.md`、需求根整树明细和每个已物化节点的 `overview.md/progress.md`。因此 Task 被认领、写回实现或阻断、重试、门禁验证，以及父级聚合和最终验收后，根级明细都立即反映新状态。
+每次状态写回增加 workspace/record revision，并重建 `workspace-overview.md`、需求根整树 `progress.md`、根节点 `node-progress.md`，以及每个已物化子节点的 `overview.md/progress.md`。因此 Task 被认领、写回实现或阻断、重试、门禁验证，以及父级聚合和最终验收后，根级明细都立即反映新状态。

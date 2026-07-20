@@ -10,6 +10,11 @@ GOVERNANCE_DIRECTORY = ".hierarchical-delivery-governance"
 WORK_ITEMS_DIRECTORY = "work-items"
 
 
+def _node_progress_filename(entry: dict[str, Any]) -> str:
+    """Keep the requirement-wide progress separate from the root node's progress."""
+    return "node-progress.md" if entry["parentId"] is None else "progress.md"
+
+
 def human_status(value: object) -> str:
     return {
         "DELIVERY": "交付",
@@ -68,12 +73,17 @@ def item_human_artifacts(
         and (item.get("developmentMode") or {}).get("mode") == "manual"
         else None
     )
+    node_progress = posixpath.join(
+        base,
+        _node_progress_filename(item) if isinstance(item, dict) else "progress.md",
+    )
     return {
         "overview": posixpath.join(base, "overview.md"),
         "developmentPlan": posixpath.join(base, "development-plan.md"),
         "hierarchyDevelopmentPlan": posixpath.join(plan_base, "development-plan.md"),
         "baseline": posixpath.join(base, "baseline.md"),
         "progress": posixpath.join(base, "progress.md"),
+        "nodeProgress": node_progress,
         "interactionLog": posixpath.join(base, "interaction-log.md")
         if isinstance(item, dict) and item["parentId"] is None
         else None,
@@ -190,6 +200,14 @@ def render_item_overview(entry: dict[str, Any], by_id: dict[str, dict[str, Any]]
         f"[{child_id}]({posixpath.relpath(posixpath.join(by_id[child_id]['packagePath'], 'overview.md'), entry['packagePath'])})"
         for child_id in entry["childIds"]
     ]
+    progress_lines = (
+        [
+            "- 节点进度：[node-progress.md](node-progress.md)",
+            "- 整树进度：[progress.md](progress.md)",
+        ]
+        if entry["parentId"] is None
+        else ["- 节点进度：[progress.md](progress.md)"]
+    )
     return "\n".join([
         f"# {entry['id']} 工作项概览",
         "",
@@ -199,7 +217,7 @@ def render_item_overview(entry: dict[str, Any], by_id: dict[str, dict[str, Any]]
         f"- 父级：{parent_link}",
         "- 基线：[baseline.md](baseline.md)",
         "- 开发方案：[development-plan.md](development-plan.md)",
-        "- 进度：[progress.md](progress.md)",
+        *progress_lines,
         f"- 父契约指纹：{entry['parentContractFingerprint'] or '无'}",
         f"- 子级：{', '.join(child_links) or '无'}",
         f"- 开发复核：{'[development-review.md](development-review.md)' if entry.get('latestResult') else '开发结果写回后生成'}",
@@ -259,6 +277,8 @@ def render_requirement_handoff(
 def render_item_progress(
     entry: dict[str, Any],
     by_id: dict[str, dict[str, Any]] | None = None,
+    *,
+    include_hierarchy: bool = False,
 ) -> str:
     by_id = by_id or {entry["id"]: entry}
     acceptance = entry.get("acceptance") if entry["parentId"] is None else None
@@ -270,7 +290,7 @@ def render_item_progress(
         and mode == "manual"
     )
     lines = [
-        f"# {entry['id']} 进度",
+        f"# {entry['id']} {'整树进度' if include_hierarchy else '节点进度'}",
         "",
         f"- 记录版本：{entry['recordRevision']}",
         f"- 阶段：{entry['stage']}",
@@ -292,7 +312,7 @@ def render_item_progress(
         f"- 更新时间：{entry['updatedAt']}",
         "",
     ]
-    if entry["parentId"] is None:
+    if include_hierarchy:
         lines.extend(_render_hierarchy_progress(entry, by_id))
     return "\n".join(lines)
 
@@ -348,7 +368,7 @@ def _render_hierarchy_progress(
     def item_paths(item: dict[str, Any]) -> tuple[str, str, str, str]:
         package_path = item["packagePath"]
         progress_path = posixpath.relpath(
-            posixpath.join(package_path, "progress.md"),
+            posixpath.join(package_path, _node_progress_filename(item)),
             root["packagePath"],
         )
         plan_path = posixpath.relpath(

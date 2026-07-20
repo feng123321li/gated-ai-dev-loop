@@ -57,7 +57,8 @@ def _task_ready(
     entry: dict[str, Any],
 ) -> bool:
     if (
-        entry["kind"] != "TASK"
+        repository.is_item_isolated(entry["id"])
+        or entry["kind"] != "TASK"
         or entry["stage"] != "BASELINE_FROZEN"
         or entry["status"] != "FROZEN"
         or entry.get("claim")
@@ -88,7 +89,7 @@ def _task_ready(
 
 def list_ready_tasks(*, root: str, work_item_id: str) -> list[str]:
     repository = GovernanceRepository(root)
-    registry = repository.read_registry()
+    registry = repository.read_operational_registry()
     repository.item_by_id(registry, work_item_id)
     return [
         entry["id"]
@@ -290,7 +291,7 @@ def build_task_context(
 ) -> dict[str, Any]:
     repository = GovernanceRepository(root)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
-    registry = repository.read_registry()
+    registry = repository.read_operational_registry()
     entry = repository.item_by_id(registry, item_id)
     context, handoff, _ = _task_context(repository, registry, entry)
     return {**context, "handoffPrompt": handoff}

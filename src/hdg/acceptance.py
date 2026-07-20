@@ -108,7 +108,7 @@ def accept_work_item(
     now: object = None,
 ) -> dict[str, Any]:
     repository = GovernanceRepository(root, now=now)
-    registry = repository.read_registry()
+    registry = repository.read_operational_registry()
     entry = repository.item_by_id(registry, item_id)
     definition = repository.assert_current_lineage(registry, entry)[0]
     _, artifact = _validated_gate_artifact(

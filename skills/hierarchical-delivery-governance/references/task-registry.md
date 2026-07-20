@@ -29,17 +29,19 @@ Markdown 不是机器权威。手工删除 `<root-id>` 目录不会删除数据�
 
 ## 确定性恢复
 
-恢复只使用显式 ID、有效焦点或唯一候选。候选多于一个时请求用户选择，不依赖目录时间、名称相似度或描述关键词。恢复时检查：
+恢复只使用显式 ID、有效焦点或唯一候选。候选多于一个时请求用户选择，不依赖目录时间、名称相似度或描述关键词。数据库 schema、workspace、ID、拓扑、路径或 JSON 结构损坏时全局阻断。若单个历史节点仅有 evidence 引用不符合当前契约，且完整 artifact 与其他字段仍能通过当前校验，则把该节点设为只读隔离：原始 SQLite 行保持不变，直接操作该节点会被拒绝，但新需求、有效兄弟节点和已有 claim 可以继续。`workspace-overview.md` 必须列出隔离节点。
+
+恢复时检查：
 
 - coordination root 与当前工作区一致；
-- 数据库 `user_version` 和所有结构化记录均为当前完整 schema v3；
+- 数据库 `user_version` 为当前 schema v3；除明确只读隔离的历史 evidence 节点外，所有结构化记录均满足当前完整契约；
 - ID 唯一，父子种类合法，无环，全部 child 已物化；
 - packagePath 满足单根递归路径；
 - hierarchy、baseline、state、contract 和父契约指纹一致；
 - 冻结前根级 `development-plan.md` 与数据库可重建内容一致；
 - 根级开发方式、Task claim、operation、gate 和 evidence 快照可解释。
 
-Markdown 缺失时可执行 `refresh-projections`；数据库结构或机器记录损坏时必须阻断，不能从 Markdown 反向猜测状态。
+Markdown 缺失时可执行 `refresh-projections`；隔离不是迁移或兼容入口，控制器不得根据旧路径读取 evidence、不得修复或重写隔离行。不能安全证明为“仅 evidence 引用过期”的机器记录仍必须阻断，也不能从 Markdown 反向猜测状态。
 
 ## 焦点、交互与命令
 

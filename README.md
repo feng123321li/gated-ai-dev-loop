@@ -130,6 +130,8 @@ Task 通过后，Capability 和 Delivery 按层级执行自己的聚合门禁。
 
 Markdown 不是机器权威。手工删除 `<root-id>` 目录不会删除 SQLite 中的需求状态，刷新投影后目录还会被重建，因此不能用删除目录代替需求状态清理。
 
+多个需求在同一数据库中按工作项隔离。若某个历史节点只有 evidence 引用不符合当前契约、但完整 artifact 和其余结构仍有效，控制器会把该节点标记为只读隔离并在 `workspace-overview.md` 告警：不迁移、不改写历史记录，同时允许新需求和其他有效 Task 继续。数据库 schema、ID、拓扑、路径或其他结构损坏仍会全局阻断。
+
 ## 安装
 
 仓库提供一个 Python 安装器，可同时更新 Codex 和 Claude：

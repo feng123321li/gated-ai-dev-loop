@@ -91,7 +91,7 @@ def list_interactions(
 ) -> list[dict[str, Any]]:
     """Return append-only interaction events, optionally for one work item."""
     repository = GovernanceRepository(root)
-    registry = repository.read_registry()
+    registry = repository.read_operational_registry()
     if item_id is None:
         return repository.read_interaction_events()
     entry = repository.item_by_id(registry, item_id)

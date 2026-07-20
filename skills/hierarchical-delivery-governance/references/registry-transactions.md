@@ -10,7 +10,7 @@
 
 1. 验证协调根、目标安全路径和当前数据库 schema；
 2. 开启 `BEGIN IMMEDIATE` 并重读 workspace、工作项和层级状态；
-3. 检查 revision、层级指纹、baseline 指纹和活动 claim；
+3. 检查 revision、层级指纹、baseline 指纹和活动 claim；仅 evidence 引用过期且完整 artifact 仍在库内的历史节点进入只读隔离，其他结构错误阻断；
 4. 对执行证据，在事务内校验完整 artifact 与当前工作项、operationId、baseline 或动作，计算规范 JSON 的 SHA-256；
 5. 在同一事务写 definition/state、证据 artifact 与摘要、上下文、报告、交互事件和 registry 条目；
 6. 更新 workspace revision 并提交；
@@ -18,6 +18,8 @@
 8. 事务结束后再运行 Agent 或测试。
 
 写入失败必须回滚 SQLite，不留下可被恢复为成功的机器状态。Markdown 是可重建投影；投影写入失败时保持阻断，后续使用 `refresh-projections` 修复，不能把残缺 Markdown 当作权威。
+
+事务可以读取隔离节点的稳定层级与状态，以维持依赖、进度和 claim 判断，但不能把它作为当前命令目标，也不能更新、删除或规范化其 SQLite 行。提交前控制器再次确认隔离集合和每条隔离记录均未变化。这样一个历史 evidence 节点不会阻断无关新需求或有效兄弟 Task，也不会成为绕过当前数据契约的兼容入口。
 
 ## Claim
 

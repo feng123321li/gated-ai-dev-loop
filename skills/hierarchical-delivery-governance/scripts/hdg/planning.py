@@ -284,7 +284,7 @@ def prepare_hierarchy(
         registry["revision"] += 1
         registry["updatedAt"] = at
         repository.recompute_progress(registry)
-        repository.validate_registry(registry)
+        repository.validate_operational_registry(registry)
         repository.store_hierarchy(records, states, hierarchy_state)
         repository.write_hierarchy_package(
             target,

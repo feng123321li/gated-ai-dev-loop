@@ -119,7 +119,11 @@ def next_action(
     return "等待父级聚合门禁。" if entry["status"] == "VERIFIED" else "查看当前状态与门禁证据。"
 
 
-def render_workspace_overview(registry: dict[str, Any]) -> str:
+def render_workspace_overview(
+    registry: dict[str, Any],
+    *,
+    isolated_item_ids: set[str] | None = None,
+) -> str:
     by_id = {item["id"]: item for item in registry["workItems"]}
     lines = [
         "# 需求层级总览",
@@ -128,6 +132,14 @@ def render_workspace_overview(registry: dict[str, Any]) -> str:
         f"> 注册表版本：{registry['revision']}",
         f"> 当前焦点：{registry['currentFocus']['workItemId'] or '无'}",
     ]
+    isolated = sorted(isolated_item_ids or set())
+    if isolated:
+        lines.extend([
+            "",
+            "> 只读隔离：以下历史工作项不符合当前数据契约，控制器不会迁移、改写或删除它们；",
+            "> 其他有效工作项和新需求可以继续，直接操作隔离项仍会被拒绝。",
+            f"> 隔离工作项：{', '.join(f'`{item_id}`' for item_id in isolated)}",
+        ])
 
     def append_node(item: dict[str, Any], prefix: str, connector: str) -> None:
         overview = posixpath.join(item["packagePath"], "overview.md")

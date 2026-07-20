@@ -20,8 +20,8 @@
 - 根：`work-items/<root-id>`；
 - 直接子级：`<parent-packagePath>/children/<child-id>`；
 - 更深节点继续递归；
-- 每个节点保留 `baseline.md`、`development-plan.md`、`progress.md` 等人类投影；
-- 需求根额外保留整树方案、整树进度、`interaction-log.md` 和按阶段生成的交接/报告。
+- 每个节点保留 `baseline.md`、开发方案、节点进度等人类投影；根节点自身进度为 `node-progress.md`，子节点自身进度为各自目录的 `progress.md`；
+- 需求根额外以 `development-plan.md`、`progress.md` 保留整树方案和整树进度，并保留 `interaction-log.md` 和按阶段生成的交接/报告。
 
 因此每个用户需求在 `work-items/` 下只有一个顶层目录。数据库可按 ID 查询平铺记录，但 Markdown 必须保持 Task、Capability→Task 或 Delivery→Capability→Task 的真实树形。
 

@@ -1191,7 +1191,17 @@ class GovernanceRepository:
             if not target.is_dir() or target.is_symlink():
                 fail("WORK_ITEM_PACKAGE_INVALID", f"{entry['id']} package path is invalid")
             atomic_write(target / "overview.md", render_item_overview(entry, by_id))
-            atomic_write(target / "progress.md", render_item_progress(entry, by_id))
+            if entry["parentId"] is None:
+                atomic_write(
+                    target / "node-progress.md",
+                    render_item_progress(entry, by_id),
+                )
+                atomic_write(
+                    target / "progress.md",
+                    render_item_progress(entry, by_id, include_hierarchy=True),
+                )
+            else:
+                atomic_write(target / "progress.md", render_item_progress(entry, by_id))
             if (
                 entry["parentId"] is None
                 and entry["stage"] == "BASELINE_FROZEN"

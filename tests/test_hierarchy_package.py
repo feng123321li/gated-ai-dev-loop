@@ -385,6 +385,8 @@ class HierarchyPackageTests(unittest.TestCase):
             root = Path(prepared["artifactDir"])
             plan = (root / "development-plan.md").read_text(encoding="utf-8")
             prepared_progress = (root / "progress.md").read_text(encoding="utf-8")
+            root_node_progress = (root / "node-progress.md").read_text(encoding="utf-8")
+            root_overview = (root / "overview.md").read_text(encoding="utf-8")
             child = root / "children" / "t-python-controller"
             child_plan = (child / "development-plan.md").read_text(encoding="utf-8")
             child_progress = (child / "progress.md").read_text(encoding="utf-8")
@@ -395,6 +397,10 @@ class HierarchyPackageTests(unittest.TestCase):
             self.assertIn("- 开发方案：[development-plan.md](development-plan.md)", child_progress)
             self.assertIn("- 当前执行：未认领", child_progress)
             self.assertIn("- 当前执行：不适用", prepared_progress)
+            self.assertIn("- 当前执行：不适用", root_node_progress)
+            self.assertNotIn("## 整树进度明细", root_node_progress)
+            self.assertIn("- 节点进度：[node-progress.md](node-progress.md)", root_overview)
+            self.assertIn("- 整树进度：[progress.md](progress.md)", root_overview)
             self.assertNotIn("- 认领：", prepared_progress)
             self.assertIn("## 整树进度明细", prepared_progress)
             self.assertIn(
@@ -405,16 +411,35 @@ class HierarchyPackageTests(unittest.TestCase):
             self.assertIn("| ├─ [任务 `t-python-controller`](development-plan.md#work-item-t-python-controller) |", prepared_progress)
             self.assertIn("| └─ [任务 `t-python-worker`](development-plan.md#work-item-t-python-worker) |", prepared_progress)
             self.assertIn(
+                "[方案](development-plan.md)、[进度](node-progress.md)",
+                prepared_progress,
+            )
+            self.assertIn(
                 "[方案](children/t-python-controller/development-plan.md)、"
                 "[进度](children/t-python-controller/progress.md)",
                 prepared_progress,
             )
             self.assertNotIn("— 阶段", prepared_progress)
+            (root / "node-progress.md").unlink()
             refreshed = refresh_work_item_projections(root=temporary)
+            self.assertTrue((root / "node-progress.md").is_file())
             task_artifacts = next(
                 item["humanArtifacts"]
                 for item in refreshed["workItems"]
                 if item["id"] == "t-python-controller"
+            )
+            root_artifacts = next(
+                item["humanArtifacts"]
+                for item in refreshed["workItems"]
+                if item["id"] == "c-python-runtime"
+            )
+            self.assertEqual(
+                root_artifacts["progress"],
+                ".hierarchical-delivery-governance/work-items/c-python-runtime/progress.md",
+            )
+            self.assertEqual(
+                root_artifacts["nodeProgress"],
+                ".hierarchical-delivery-governance/work-items/c-python-runtime/node-progress.md",
             )
             self.assertEqual(
                 task_artifacts["developmentPlan"],
@@ -424,6 +449,11 @@ class HierarchyPackageTests(unittest.TestCase):
             self.assertEqual(
                 task_artifacts["hierarchyDevelopmentPlan"],
                 ".hierarchical-delivery-governance/work-items/c-python-runtime/development-plan.md",
+            )
+            self.assertEqual(
+                task_artifacts["nodeProgress"],
+                ".hierarchical-delivery-governance/work-items/c-python-runtime/children/"
+                "t-python-controller/progress.md",
             )
             self.assertIn("| 等待开发方案确认 | 等待开发方案评审 | 未运行 |", prepared_progress)
             self.assertRegex(prepared_progress, r"c-python-runtime.*\| 未运行 \| 不适用 \|")

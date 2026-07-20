@@ -66,8 +66,8 @@
 - `development-review.md`：开发结果写回后；对照计划与实际，不代表门禁 PASS。
 - `acceptance-report.md`：门禁及最终验收阶段；记录证据、结论和用户确认。
 
-以上文件都是 SQLite 结构化状态的人类投影，不再生成对应 JSON 文件。
+以上文件都是 SQLite 结构化状态的人类投影，不再生成对应 JSON 文件。开发结果、门禁和最终验收的完整证据 artifact 只通过 stdin 进入控制器，由控制器在当前写事务内校验、计算规范 JSON 摘要，并将 artifact 与摘要一起存入 SQLite。
 
 ## 当前数据契约
 
-控制器只写当前 schema v3 的项目级 SQLite 和单根嵌套 Markdown，并按严格字段集合验证工作项、层级和 evidence。旧 JSON 工作区不迁移、不兼容。
+控制器只写当前 schema v3 的项目级 SQLite 和单根嵌套 Markdown，并按严格字段集合验证工作项、层级和 evidence artifact。旧 JSON 工作区与路径式 evidence 引用不迁移、不兼容。

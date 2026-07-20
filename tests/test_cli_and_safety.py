@@ -3,12 +3,16 @@ from __future__ import annotations
 import io
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
+from pathlib import Path
 
 from hdg.cli import run_cli
 from hdg.errors import GatedLoopError
 from hdg.fs_safe import safe_path
+from hdg.jsonio import fingerprint
 
 from .fixtures import task_hierarchy
 
@@ -49,6 +53,258 @@ class CliAndSafetyTests(unittest.TestCase):
             )
             self.assertEqual(code, 0, stderr.getvalue())
             self.assertTrue(json.loads(stdout.getvalue())["ok"])
+
+    def test_execution_artifacts_stream_from_stdin_and_persist_only_in_sqlite(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepare_stdout = io.StringIO()
+            self.assertEqual(
+                run_cli(
+                    ["prepare-hierarchy", "--definition", "-", "--host-runtime", "codex", "--json"],
+                    cwd=temporary,
+                    stdin=io.StringIO(json.dumps(task_hierarchy())),
+                    stdout=prepare_stdout,
+                ),
+                0,
+            )
+            prepared = json.loads(prepare_stdout.getvalue())["result"]
+            item_id = prepared["rootId"]
+            baseline = prepared["baselineFingerprints"][item_id]
+            self.assertEqual(
+                run_cli(
+                    [
+                        "freeze-hierarchy", "--item", item_id,
+                        "--expected-hierarchy", prepared["hierarchyFingerprint"],
+                        "--development-mode", "active", "--confirmed", "--json",
+                    ],
+                    cwd=temporary,
+                    stdout=io.StringIO(),
+                ),
+                0,
+            )
+            self.assertEqual(
+                run_cli(
+                    [
+                        "dispatch-task", "--item", item_id,
+                        "--owner", "developer", "--operation", "op-inline", "--json",
+                    ],
+                    cwd=temporary,
+                    stdout=io.StringIO(),
+                ),
+                0,
+            )
+            result_artifact = {
+                "schemaVersion": 3,
+                "kind": "TASK_RESULT",
+                "taskId": item_id,
+                "operationId": "op-inline",
+                "status": "IMPLEMENTED",
+                "summary": "Implemented without a temporary evidence file.",
+                "changedFiles": ["src/controller.py", "tests/test_controller.py"],
+                "tests": [{
+                    "argv": ["python", "-m", "unittest", "tests.test_controller"],
+                    "exitCode": 0,
+                    "testsRun": 1,
+                }],
+                "blockers": [],
+            }
+            self.assertEqual(
+                run_cli(
+                    [
+                        "task-result", "--item", item_id, "--operation", "op-inline",
+                        "--status", "IMPLEMENTED", "--evidence", "-", "--json",
+                    ],
+                    cwd=temporary,
+                    stdin=io.StringIO(json.dumps(result_artifact)),
+                    stdout=io.StringIO(),
+                ),
+                0,
+            )
+            gate_artifact = {
+                "schemaVersion": 3,
+                "kind": "WORK_ITEM_GATE",
+                "workItemId": item_id,
+                "baselineFingerprint": baseline,
+                "verdict": "PASS",
+                "summary": "All frozen checks passed without a temporary evidence file.",
+                "scope": {
+                    "changedFiles": ["src/controller.py", "tests/test_controller.py"],
+                    "outOfScopeFiles": [],
+                },
+                "acceptance": [{"id": "A-001", "status": "PASS", "evidence": "Verified."}],
+                "tests": [{
+                    "argv": ["python", "-m", "unittest", "tests.test_controller"],
+                    "exitCode": 0,
+                    "testsRun": 1,
+                    "summary": "Passed.",
+                }],
+                "findings": {"p0": [], "p1": [], "p2": []},
+            }
+            self.assertEqual(
+                run_cli(
+                    ["accept-item", "--item", item_id, "--evidence", "-", "--json"],
+                    cwd=temporary,
+                    stdin=io.StringIO(json.dumps(gate_artifact)),
+                    stdout=io.StringIO(),
+                ),
+                0,
+            )
+            review_artifact = {
+                "schemaVersion": 3,
+                "kind": "INDEPENDENT_REVIEW",
+                "reviewer": "fresh-reviewer",
+                "isolation": "FRESH_READ_ONLY",
+                "verdict": "PASS",
+                "findings": {"p0": 0, "p1": 0},
+            }
+            self.assertEqual(
+                run_cli(
+                    [
+                        "acceptance-item", "--item", item_id,
+                        "--action", "INDEPENDENT_REVIEW_PASS", "--evidence", "-", "--json",
+                    ],
+                    cwd=temporary,
+                    stdin=io.StringIO(json.dumps(review_artifact)),
+                    stdout=io.StringIO(),
+                ),
+                0,
+            )
+            confirmation_artifact = {
+                "schemaVersion": 3,
+                "kind": "USER_CONFIRMATION",
+                "confirmedBy": "user",
+                "decision": "CONFIRMED",
+            }
+            self.assertEqual(
+                run_cli(
+                    [
+                        "acceptance-item", "--item", item_id,
+                        "--action", "USER_CONFIRMED", "--evidence", "-", "--json",
+                    ],
+                    cwd=temporary,
+                    stdin=io.StringIO(json.dumps(confirmation_artifact)),
+                    stdout=io.StringIO(),
+                ),
+                0,
+            )
+
+            self.assertEqual(list(Path(temporary).rglob("*.json")), [])
+            database = Path(temporary, ".hierarchical-delivery-governance", "governance.sqlite3")
+            with closing(sqlite3.connect(database)) as connection:
+                entry = json.loads(
+                    connection.execute(
+                        "SELECT entry_json FROM work_items WHERE id = ?", (item_id,)
+                    ).fetchone()[0]
+                )
+                report = json.loads(
+                    connection.execute(
+                        "SELECT report_json FROM reports WHERE work_item_id = ? AND report_kind = 'ACCEPTANCE'",
+                        (item_id,),
+                    ).fetchone()[0]
+                )
+            self.assertEqual(entry["latestResult"]["artifact"], result_artifact)
+            self.assertEqual(entry["latestResult"]["evidence"], {"sha256": fingerprint(result_artifact)})
+            self.assertEqual(entry["gate"]["artifact"], gate_artifact)
+            self.assertEqual(entry["gate"]["evidence"], {"sha256": fingerprint(gate_artifact)})
+            self.assertEqual(entry["acceptance"]["review"]["artifact"], review_artifact)
+            self.assertEqual(
+                entry["acceptance"]["review"]["evidence"],
+                {"sha256": fingerprint(review_artifact)},
+            )
+            self.assertEqual(
+                entry["acceptance"]["userConfirmation"]["artifact"],
+                confirmation_artifact,
+            )
+            self.assertEqual(
+                entry["acceptance"]["userConfirmation"]["evidence"],
+                {"sha256": fingerprint(confirmation_artifact)},
+            )
+            self.assertEqual(report["gate"]["artifact"], gate_artifact)
+
+    def test_invalid_stdin_artifact_rolls_back_without_releasing_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepare_stdout = io.StringIO()
+            run_cli(
+                ["prepare-hierarchy", "--definition", "-", "--host-runtime", "codex", "--json"],
+                cwd=temporary,
+                stdin=io.StringIO(json.dumps(task_hierarchy())),
+                stdout=prepare_stdout,
+            )
+            prepared = json.loads(prepare_stdout.getvalue())["result"]
+            item_id = prepared["rootId"]
+            run_cli(
+                [
+                    "freeze-hierarchy", "--item", item_id,
+                    "--expected-hierarchy", prepared["hierarchyFingerprint"],
+                    "--development-mode", "active", "--confirmed", "--json",
+                ],
+                cwd=temporary,
+                stdout=io.StringIO(),
+            )
+            run_cli(
+                [
+                    "dispatch-task", "--item", item_id,
+                    "--owner", "developer", "--operation", "op-current", "--json",
+                ],
+                cwd=temporary,
+                stdout=io.StringIO(),
+            )
+            invalid_artifact = {
+                "schemaVersion": 3,
+                "kind": "TASK_RESULT",
+                "taskId": item_id,
+                "operationId": "op-stale",
+                "status": "IMPLEMENTED",
+                "summary": "Stale operation result.",
+                "changedFiles": [],
+                "tests": [],
+                "blockers": [],
+            }
+            stderr = io.StringIO()
+            self.assertEqual(
+                run_cli(
+                    [
+                        "task-result", "--item", item_id, "--operation", "op-current",
+                        "--status", "IMPLEMENTED", "--evidence", "-", "--json",
+                    ],
+                    cwd=temporary,
+                    stdin=io.StringIO(json.dumps(invalid_artifact)),
+                    stdout=io.StringIO(),
+                    stderr=stderr,
+                ),
+                1,
+            )
+            self.assertEqual(
+                json.loads(stderr.getvalue())["error"]["code"],
+                "WORK_ITEM_RESULT_EVIDENCE_INVALID",
+            )
+            database = Path(temporary, ".hierarchical-delivery-governance", "governance.sqlite3")
+            with closing(sqlite3.connect(database)) as connection:
+                entry = json.loads(
+                    connection.execute(
+                        "SELECT entry_json FROM work_items WHERE id = ?", (item_id,)
+                    ).fetchone()[0]
+                )
+            self.assertEqual(entry["status"], "CLAIMED")
+            self.assertEqual(entry["claim"]["operationId"], "op-current")
+
+    def test_execution_evidence_file_paths_are_rejected(self) -> None:
+        stderr = io.StringIO()
+        self.assertEqual(
+            run_cli(
+                [
+                    "accept-item", "--item", "t-example",
+                    "--evidence", ".hdg-tmp/t-example-gate.json", "--json",
+                ],
+                cwd=tempfile.gettempdir(),
+                stdout=io.StringIO(),
+                stderr=stderr,
+            ),
+            1,
+        )
+        self.assertEqual(
+            json.loads(stderr.getvalue())["error"]["code"],
+            "WORK_ITEM_EVIDENCE_STDIN_REQUIRED",
+        )
 
     def test_freeze_requires_mode_in_the_same_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

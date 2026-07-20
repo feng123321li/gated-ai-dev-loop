@@ -584,7 +584,7 @@ def render_task_handoff(context: dict[str, Any]) -> str:
         "- 宿主必须用 task-result 回收结果；返回开发结果后必须继续验收，IMPLEMENTED 不是完成状态。",
         "- 门禁通过后仍需独立验收、生成用户验收报告并取得用户确认。",
         "",
-        "结果返回格式（由治理宿主保存为 evidence，并用相同 Operation ID 执行 task-result）：",
+        "结果返回格式（由治理宿主以 --evidence - 从 stdin 直接交给 task-result；不要生成临时 JSON 文件）：",
         "```json",
         pretty(result_template),
         "```",

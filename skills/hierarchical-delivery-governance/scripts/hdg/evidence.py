@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from pathlib import PurePosixPath
 from typing import Any
 
 from .constants import SCHEMA_VERSION
 from .errors import fail
-from .jsonio import canonical_json
+from .jsonio import canonical_json, fingerprint
 
 
 FINGERPRINT = re.compile(r"^[a-f0-9]{64}$")
@@ -41,25 +40,19 @@ def safe_work_item_id(value: object) -> bool:
     )
 
 
-def valid_evidence_reference(value: object) -> bool:
-    if not isinstance(value, dict):
-        return False
-    path = value.get("path")
-    portable = path.replace("\\", "/") if isinstance(path, str) else ""
+def valid_evidence_record(value: object) -> bool:
     return (
-        set(value) == {"path", "sha256"}
-        and bool(portable)
-        and not PurePosixPath(portable).is_absolute()
-        and ".." not in portable.split("/")
+        isinstance(value, dict)
+        and set(value) == {"sha256"}
         and isinstance(value.get("sha256"), str)
         and bool(FINGERPRINT.fullmatch(value["sha256"]))
     )
 
 
 def evidence_record(value: object) -> dict[str, str]:
-    if not valid_evidence_reference(value):
-        fail("WORK_ITEM_EVIDENCE_INVALID", "Evidence must contain a safe relative path and sha256")
-    return {"path": value["path"].replace("\\", "/"), "sha256": value["sha256"]}
+    if not isinstance(value, dict):
+        fail("WORK_ITEM_EVIDENCE_INVALID", "Evidence artifact must be a JSON mapping")
+    return {"sha256": fingerprint(value)}
 
 
 def valid_development_mode(value: object, entry: dict[str, Any]) -> bool:
@@ -115,7 +108,7 @@ def _valid_acceptance_evidence(value: object, actions: set[str]) -> bool:
         isinstance(value, dict)
         and set(value) == {"action", "evidence", "artifact", "recordedAt"}
         and value.get("action") in actions
-        and valid_evidence_reference(value.get("evidence"))
+        and valid_evidence_record(value.get("evidence"))
         and valid_review_artifact(value["action"], value.get("artifact"))
         and valid_timestamp(value.get("recordedAt"))
     )

@@ -4,7 +4,8 @@ from copy import deepcopy
 import unittest
 
 from hdg.errors import GatedLoopError
-from hdg.evidence import valid_gate_artifact
+from hdg.evidence import evidence_record, valid_evidence_record, valid_gate_artifact
+from hdg.jsonio import fingerprint
 from hdg.model import (
     render_development_plan,
     resolve_self_hosting_policy,
@@ -89,6 +90,14 @@ class WorkItemModelTests(unittest.TestCase):
         outside_plan = deepcopy(artifact)
         outside_plan["scope"]["changedFiles"].append("src/unplanned.py")
         self.assertFalse(valid_gate_artifact(outside_plan, entry, definition))
+
+    def test_evidence_record_is_controller_computed_digest_only(self) -> None:
+        artifact = {"schemaVersion": 3, "kind": "USER_CONFIRMATION", "decision": "CONFIRMED"}
+        record = evidence_record(artifact)
+
+        self.assertEqual(record, {"sha256": fingerprint(artifact)})
+        self.assertTrue(valid_evidence_record(record))
+        self.assertFalse(valid_evidence_record({"path": ".hdg-tmp/evidence.json", **record}))
 
     def test_light_is_valid_only_for_task(self) -> None:
         self.assertEqual(validate_work_item_definition(task_definition())["gateLevel"], "LIGHT")

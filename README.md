@@ -152,7 +152,9 @@ python scripts/install_skill.py --target claude --scope user --force
 python -X utf8 <skill-root>/scripts/hdg.py --help
 ```
 
-一次性的 definition、evidence 和 interaction JSON 应通过 stdin 传入。不要先写入系统 `TEMP` 或工作区之外的文件；仓库与系统临时目录位于不同磁盘时会触发跨卷路径保护。
+开发结果、节点门禁和最终验收的完整证据 artifact 必须通过 `--evidence -` 从 stdin 直接交给控制器；证据文件路径会被拒绝。控制器在同一个 SQLite 写事务中校验当前工作项、operationId、baseline 和动作，计算规范 JSON 的 SHA-256，并同时保存完整 artifact 与摘要。因此不会产生 `.hdg-tmp`、系统 `TEMP` 或其他临时 evidence JSON，Agent 也不能直接写 SQLite。
+
+一次性的 definition 和 interaction JSON 也应通过 stdin 传入，避免跨卷路径和无意义的中间文件。
 
 ## 主要控制命令
 

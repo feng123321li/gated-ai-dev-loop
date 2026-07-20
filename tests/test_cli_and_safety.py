@@ -28,6 +28,9 @@ class CliAndSafetyTests(unittest.TestCase):
         self.assertIn("python -X utf8 <skill-root>/scripts/hdg.py", help_text)
         self.assertIn("--json", help_text)
         self.assertIn("prepare-hierarchy", help_text)
+        self.assertIn("prepare-hierarchy --definition - --host-runtime <agent>", help_text)
+        self.assertIn("record-interaction --item <id> --interaction -", help_text)
+        self.assertNotIn("<file|->", help_text)
         self.assertIn("freeze-hierarchy", help_text)
         self.assertIn("record-interaction", help_text)
         self.assertIn("interaction-log", help_text)
@@ -57,6 +60,55 @@ class CliAndSafetyTests(unittest.TestCase):
             )
             self.assertEqual(code, 0, stderr.getvalue())
             self.assertTrue(json.loads(stdout.getvalue())["ok"])
+
+    def test_definition_file_paths_are_rejected_without_creating_control_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            definition_path = Path(temporary, "_hdg_definition.json")
+            definition_path.write_text(json.dumps(task_hierarchy()), encoding="utf-8")
+            stderr = io.StringIO()
+            code = run_cli(
+                [
+                    "prepare-hierarchy",
+                    "--definition",
+                    definition_path.name,
+                    "--host-runtime",
+                    "claude-code",
+                    "--json",
+                ],
+                cwd=temporary,
+                stdout=io.StringIO(),
+                stderr=stderr,
+            )
+            self.assertEqual(code, 1)
+            self.assertEqual(
+                json.loads(stderr.getvalue())["error"]["code"],
+                "HIERARCHY_DEFINITION_STDIN_REQUIRED",
+            )
+            self.assertFalse(Path(temporary, ".hierarchical-delivery-governance").exists())
+
+    def test_interaction_file_paths_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            interaction_path = Path(temporary, "_hdg_interaction.json")
+            interaction_path.write_text("{}", encoding="utf-8")
+            stderr = io.StringIO()
+            code = run_cli(
+                [
+                    "record-interaction",
+                    "--item",
+                    "t-example",
+                    "--interaction",
+                    interaction_path.name,
+                    "--json",
+                ],
+                cwd=temporary,
+                stdout=io.StringIO(),
+                stderr=stderr,
+            )
+            self.assertEqual(code, 1)
+            self.assertEqual(
+                json.loads(stderr.getvalue())["error"]["code"],
+                "WORK_ITEM_INTERACTION_STDIN_REQUIRED",
+            )
 
     def test_execution_artifacts_stream_from_stdin_and_persist_only_in_sqlite(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -15,6 +15,14 @@ def _node_progress_filename(entry: dict[str, Any]) -> str:
     return "node-progress.md" if entry["parentId"] is None else "progress.md"
 
 
+def _utc_date(value: str) -> str:
+    return value[:10]
+
+
+def _utc_minute(value: str) -> str:
+    return value[:16].replace("T", " ")
+
+
 def human_status(value: object) -> str:
     return {
         "DELIVERY": "交付",
@@ -151,26 +159,57 @@ def render_workspace_overview(
             f"> 隔离工作项：{', '.join(f'`{item_id}`' for item_id in isolated)}",
         ])
 
-    def append_node(item: dict[str, Any], prefix: str, connector: str) -> None:
+    def append_node(item: dict[str, Any], depth: int, connector: str) -> None:
         overview = posixpath.join(item["packagePath"], "overview.md")
+        progress_filename = _node_progress_filename(item)
+        progress = posixpath.join(item["packagePath"], progress_filename)
         mode = _development_mode(item, by_id)
-        extra = f"；开发建议 {mode}" if item["kind"] == "TASK" else ""
+        indentation = "　" * max(depth - 1, 0)
+        hierarchy_item = f"{indentation}{connector}{human_status(item['kind'])} `{item['id']}`"
         lines.append(
-            f"{prefix}{connector}{human_status(item['kind'])} `{item['id']}` — "
-            f"{human_status(item['status'])}；门禁 {human_status(item['gate']['status'])}{extra}；[概览]({overview})"
+            f"| {hierarchy_item} | {human_status(item['status'])} | "
+            f"{human_status(item['gate']['status'])} | {mode} | "
+            f"[概览]({overview})、[节点进度]({progress}) |"
         )
         children = [by_id[child_id] for child_id in item["childIds"]]
         for index, child in enumerate(children):
             last = index == len(children) - 1
-            child_prefix = prefix + (
-                "" if connector == "" else ("   " if connector == "└─ " else "│  ")
-            )
-            append_node(child, child_prefix, "└─ " if last else "├─ ")
+            append_node(child, depth + 1, "└─ " if last else "├─ ")
 
     roots = sorted(
         (item for item in registry["workItems"] if item["parentId"] is None),
-        key=lambda item: item["id"],
+        key=lambda item: (item["updatedAt"], item["id"]),
+        reverse=True,
     )
+    lines.extend([
+        "",
+        "## 需求索引",
+        "",
+        "> 按最近更新时间倒序排列；目录继续使用稳定根 ID，日期只用于检索和浏览。",
+        "",
+        "| 最近更新（UTC） | 创建日期（UTC） | 需求根 | 类型 | 状态 | 门禁 | 后代进度 | 入口 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    ])
+    if not roots:
+        lines.append("| - | - | 暂无需求 | - | - | - | - | - |")
+    for root in roots:
+        descendants = root["progress"]["descendants"]
+        descendant_progress = (
+            "不适用"
+            if descendants["total"] == 0
+            else f"{descendants['verified']}/{descendants['total']} 已验证"
+        )
+        overview = posixpath.join(root["packagePath"], "overview.md")
+        plan = posixpath.join(root["packagePath"], "development-plan.md")
+        progress = posixpath.join(root["packagePath"], "progress.md")
+        lines.append(
+            f"| {_utc_minute(root['updatedAt'])} | {_utc_date(root['createdAt'])} | "
+            f"[`{root['id']}`]({overview}) | "
+            f"{human_status(root['kind'])} | {human_status(root['status'])} | "
+            f"{human_status(root['gate']['status'])} | "
+            f"{descendant_progress} | "
+            f"[方案]({plan})、[整树进度]({progress}) |"
+        )
     for root in roots:
         acceptance = root.get("acceptance")
         lines.extend([
@@ -182,8 +221,10 @@ def render_workspace_overview(
             f"- 最终验收：{human_status(acceptance['status']) if acceptance else '不适用'}",
             f"- 进度：{root['progress']['descendants']['verified']}/{root['progress']['descendants']['total']} 个后代已验证",
             "",
+            "| 层级工作项 | 状态 | 门禁 | 开发方式 | 节点文件 |",
+            "| --- | --- | --- | --- | --- |",
         ])
-        append_node(root, "", "")
+        append_node(root, 0, "")
     lines.append("")
     return "\n".join(lines)
 

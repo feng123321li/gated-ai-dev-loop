@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-from pathlib import Path
 from typing import Any, Callable, TextIO
 
 from .acceptance import accept_work_item, record_acceptance, record_work_item_gate
@@ -15,7 +14,6 @@ from .execution import (
     list_ready_tasks,
     record_task_result,
 )
-from .fs_safe import read_regular_file
 from .host_runtime import is_agent_runtime
 from .interactions import list_interactions, record_interaction
 from .jsonio import rendered_json
@@ -76,7 +74,7 @@ USAGE = f"""Usage: python -X utf8 <skill-root>/scripts/hdg.py <command> [options
 Commands:
 {chr(10).join(f'  {command}' for command in COMMANDS)}
 
-  prepare-hierarchy --definition <file|-> --host-runtime <agent>  # writes one complete requirement tree
+  prepare-hierarchy --definition - --host-runtime <agent>  # reads one complete requirement tree from stdin
   freeze-hierarchy --item <root-id> --expected-hierarchy <sha256> --development-mode active|manual --confirmed
   ready-tasks --item <root-or-subtree-id>
   task-context --item <task-id>
@@ -88,7 +86,7 @@ Commands:
   gate-item --item <id> --status PASS|FAIL --evidence -
   accept-item --item <id> --evidence -
   acceptance-item --item <root-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence -
-  record-interaction --item <id> --interaction <file|->
+  record-interaction --item <id> --interaction -
   interaction-log --item <id>
   refresh-projections
 
@@ -152,20 +150,15 @@ def _read_structured(
     source: str,
     kind: str,
     *,
-    cwd: str,
     stdin: TextIO,
 ) -> dict[str, Any]:
+    if source != "-":
+        raise GatedLoopError(
+            f"{kind}_STDIN_REQUIRED",
+            f"{kind.lower()} JSON must be provided directly through stdin with '-'",
+        )
     try:
-        if source == "-":
-            text = stdin.read()
-        else:
-            portable = source.replace("\\", "/").lower()
-            basename = portable.split("/")[-1]
-            if basename.startswith(".env") or "production" in portable:
-                raise GatedLoopError("INPUT_PATH_FORBIDDEN", "Structured input path is forbidden")
-            text = read_regular_file(cwd, source).decode("utf-8")
-    except GatedLoopError:
-        raise
+        text = stdin.read()
     except Exception:
         raise GatedLoopError(f"{kind}_READ", f"Unable to read {kind.lower()} JSON")
     try:
@@ -184,7 +177,6 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
         definition = _read_structured(
             _required(parsed, "--definition"),
             "HIERARCHY_DEFINITION",
-            cwd=cwd,
             stdin=stdin,
         )
         return prepare_hierarchy(
@@ -228,7 +220,7 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
         return refresh_work_item_projections(**common)
     if command == "record-interaction":
         interaction = _read_structured(
-            _required(parsed, "--interaction"), "WORK_ITEM_INTERACTION", cwd=cwd, stdin=stdin
+            _required(parsed, "--interaction"), "WORK_ITEM_INTERACTION", stdin=stdin
         )
         return record_interaction(
             **common,
@@ -243,7 +235,7 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
             "WORK_ITEM_EVIDENCE_STDIN_REQUIRED",
             "Evidence artifact must be provided directly through stdin with --evidence -",
         )
-    evidence = _read_structured(evidence_source, "WORK_ITEM_EVIDENCE", cwd=cwd, stdin=stdin)
+    evidence = _read_structured(evidence_source, "WORK_ITEM_EVIDENCE", stdin=stdin)
     if command == "remediate-task":
         return record_validation_remediation(
             **common,

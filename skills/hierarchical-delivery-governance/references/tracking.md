@@ -2,7 +2,7 @@
 
 ## 投影原则
 
-项目级 `governance.sqlite3` 是节点、层级和进度的唯一机器权威。`workspace-overview.md` 按需求根分组展示所有需求；每个需求根的 `progress.md` 使用 Markdown 表格，在第一列保留与该根 `development-plan.md` 相同的工作项 ID、父子顺序和 Delivery→Capability→Task 层级。两个投影都不能把父子节点渲染成彼此并列的需求行。
+项目级 `governance.sqlite3` 是节点、层级和进度的唯一机器权威。`workspace-overview.md` 先按最近更新时间倒序生成需求索引，再按需求根分组展示层级表格；索引展示创建时间、更新时间、根类型、状态、门禁、后代进度和入口。物理目录保持稳定根 ID，不添加日期。每个需求根的 `progress.md` 使用 Markdown 表格，在第一列保留与该根 `development-plan.md` 相同的工作项 ID、父子顺序和 Delivery→Capability→Task 层级。两个投影都不能把父子节点渲染成彼此并列的需求行，也不能使用会被 Markdown 折叠为长段落的连续普通文本行。
 
 每个需求根只有一个整树 `development-plan.md` 作为统一人工冻结入口。需求根的 `progress.md` 是整树总进度；根节点自身进度使用同目录 `node-progress.md`，子节点自身进度使用各自目录 `progress.md`。各实际节点仍有自己的开发内容、节点进度、baseline、状态、门禁和后续开发复核；节点进度必须直接链接本节点方案。
 

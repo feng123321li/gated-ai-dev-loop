@@ -58,7 +58,7 @@ description: "治理可独立交付的软件需求。按最小必要深度组织
    人不需要知道、复制或复述指纹。控制器用同一次确认冻结整树并记录根级方式；方案变化后旧指纹必须被拒绝。
 8. `active` 下，当前 Agent 冻结后立即自主计算 READY Task 并决定多子 Agent、单 Agent 或当前 Agent 串行。`manual` 下，当前规划会话不开发，控制器在需求根生成一份 `requirement-handoff.md` 和同内容 `handoffPrompt`；用户只需把这份需求级交接复制到一个新会话一次，接收 Agent 随后自行计算 READY、逐 Task `dispatch-task`、开发、门禁并推进整棵树，不得要求用户逐 Task 回复启动。两种方式的执行宿主都在子 Agent 不可用或并发不足时自动降级，不请求用户重新选择方式。Agent 数量、并发度和降级策略属于运行策略，不写入冻结方案或层级指纹。
 9. 开发阶段不设置额外人工门禁。Agent 在冻结目标和安全边界内循环“实现 → 回归测试 → 修复 → 复测”，逐 Task 写回 `IMPLEMENTED` 或 `BLOCKED`。同 baseline 且没有活动 claim 的 BLOCKED 由 Agent 自动执行 `retry-item`、重新计算 READY 并继续。若验证发现为满足原验收项必须补充冻结方案遗漏的精确文件，但目标、需求、验收、接口行为、数据契约、拓扑和外部授权均不变，则使用 `remediate-task --evidence -` 在原 Task 下追加验证修正授权，自动失效该 Task 及已通过的祖先门禁，再继续原 Task；不得重新 `prepare-hierarchy` 创建重复需求根。只有上述契约或授权事实确实变化时才回到人工评审。开发结果不能自行宣布 PASS。
-10. 需求根 `progress.md` 使用 Markdown 表格展示整树明细：第一列保留与 `development-plan.md` 相同的工作项 ID、父子顺序和层级，其余列分别展示阶段、状态、门禁、当前执行、节点文件和阶段性产物。根节点行的节点进度链接 `node-progress.md`，子节点行链接各自 `progress.md`，不得让根节点进度回链整树文件。“当前执行”对协调节点显示“不适用”，对待执行 Task 显示“未认领”，开发中显示 owner/operationId，结果写回后显示“已释放”。每次控制器写回都会从 SQLite 自动重建这些文件，不依赖 Agent 手工改表。
+10. `workspace-overview.md` 顶部按最近更新时间倒序生成需求索引，展示创建时间、根类型、状态、门禁、后代进度和方案/总进度入口；物理目录仍使用稳定根 ID，不追加日期。每个需求的层级节点用表格展示，避免 Markdown 折叠树形文本。需求根 `progress.md` 继续使用 Markdown 表格展示整树明细：第一列保留与 `development-plan.md` 相同的工作项 ID、父子顺序和层级，其余列分别展示阶段、状态、门禁、当前执行、节点文件和阶段性产物。根节点行的节点进度链接 `node-progress.md`，子节点行链接各自 `progress.md`，不得让根节点进度回链整树文件。“当前执行”对协调节点显示“不适用”，对待执行 Task 显示“未认领”，开发中显示 owner/operationId，结果写回后显示“已释放”。每次控制器写回都会从 SQLite 自动重建这些文件，不依赖 Agent 手工改表。
 11. 使用 `task-result` 写回结果并生成 `development-review.md`；验证修正会在同一文件追加“验证修正”明细，并进入原 Task 的授权文件集合。全部相关回归和复测通过后，使用 `accept-item` 提交门禁验收并生成 `acceptance-report.md`。结构化上下文、结果、修正和报告只存 SQLite。父级必须在子级全部 VERIFIED 后运行自己的聚合 gate。
 12. 根工作项 gate PASS 后向用户提交交付，由用户人工验收并最终确认；只有 `COMPLETED` 表示需求完成。
 
@@ -90,7 +90,7 @@ Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或�
 
 `task-result`、`remediate-task`、`gate-item`、`accept-item` 和 `acceptance-item` 的完整证据 artifact 必须使用 `--evidence -` 从 stdin 直接提交；文件路径输入会被拒绝，不生成 `.hdg-tmp`、`%TEMP%` 或其他临时 JSON。控制器在 SQLite 写事务内按当前工作项、operationId、baseline 和动作校验 artifact，计算规范 JSON 的 SHA-256，并把完整 artifact 与摘要一起写入 SQLite；Agent 不直接写数据库，也不自行提交路径或摘要。
 
-`--definition` 和 `--interaction` 的一次性 JSON 也优先使用 `-` 从 stdin 读取，避免跨卷路径和无意义的中间文件。
+`--definition` 和 `--interaction` 的一次性 JSON 也必须使用 `-` 从 stdin 读取；控制器拒绝任何文件路径。Claude Code 的 Bash 工具必须在当前 shell 直接使用带引号的 heredoc，不得嵌套 `bash -lc`、`sh -c` 或其他 shell 包装；heredoc 失败时修正输入命令，不得降级为 `Write(_hdg_*.json)`、仓库临时文件或 `%TEMP%` 文件。PowerShell 使用 here-string 管道。完整、安全的宿主示例见 [stdin-transport.md](references/stdin-transport.md)。
 
 ## SQLite 与交互记录
 
@@ -121,5 +121,6 @@ Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或�
 - 进度与父级聚合：[tracking.md](references/tracking.md)
 - 门禁、独立审查与最终确认：[acceptance.md](references/acceptance.md)
 - 同一 Task 的验证修正：[validation-remediation.md](references/validation-remediation.md)
+- definition、interaction 与 evidence 的无临时文件 stdin 传输：[stdin-transport.md](references/stdin-transport.md)
 - 多工作区：[multi-workspace.md](references/multi-workspace.md)
 - 验收后反馈：[post-acceptance-feedback.md](references/post-acceptance-feedback.md)

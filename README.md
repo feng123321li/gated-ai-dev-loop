@@ -137,6 +137,8 @@ Markdown 不是机器权威。手工删除 `<root-id>` 目录不会删除 SQLite
 
 多个需求在同一数据库中按工作项隔离。若某个历史节点只有 evidence 引用不符合当前契约、但完整 artifact 和其余结构仍有效，控制器会把该节点标记为只读隔离并在 `workspace-overview.md` 告警：不迁移、不改写历史记录，同时允许新需求和其他有效 Task 继续。数据库 schema、ID、拓扑、路径或其他结构损坏仍会全局阻断。
 
+`workspace-overview.md` 使用稳定根 ID，不给物理目录追加日期；文件顶部按最近更新时间倒序提供需求索引，展示创建时间、状态、门禁和方案/进度入口。每个需求下方再用表格保留 Delivery → Capability → Task 层级，避免 Markdown 把树节点折叠成一个长段落。
+
 ## 安装
 
 仓库提供一个 Python 安装器，可同时更新 Codex 和 Claude：
@@ -161,7 +163,7 @@ python -X utf8 <skill-root>/scripts/hdg.py --help
 
 开发结果、验证修正、节点门禁和最终验收的完整证据 artifact 必须通过 `--evidence -` 从 stdin 直接交给控制器；证据文件路径会被拒绝。控制器在同一个 SQLite 写事务中校验当前工作项、operationId、baseline 和动作，计算规范 JSON 的 SHA-256，并同时保存完整 artifact 与摘要。因此不会产生 `.hdg-tmp`、系统 `TEMP` 或其他临时 evidence JSON，Agent 也不能直接写 SQLite。
 
-一次性的 definition 和 interaction JSON 也应通过 stdin 传入，避免跨卷路径和无意义的中间文件。
+一次性的 definition 和 interaction JSON 也必须通过 stdin 传入；控制器会拒绝文件路径，避免跨卷路径、仓库内 `_hdg_*.json` 和系统临时文件。Claude Code 的 Bash 调用应直接使用带引号的 heredoc，不能再嵌套 `bash -lc`；PowerShell 使用 here-string 管道。详细示例见 Skill 的 `references/stdin-transport.md`。
 
 ## 主要控制命令
 

@@ -372,8 +372,35 @@ class HierarchyPackageTests(unittest.TestCase):
                 ".hierarchical-delivery-governance",
                 "workspace-overview.md",
             ).read_text(encoding="utf-8")
+            self.assertIn("## 需求索引", overview)
+            self.assertIn(
+                "| 最近更新（UTC） | 创建日期（UTC） | 需求根 | 类型 | 状态 | 门禁 | 后代进度 | 入口 |",
+                overview,
+            )
+            self.assertIn(
+                "[`c-python-runtime`](work-items/c-python-runtime/overview.md)",
+                overview,
+            )
+            self.assertIn(
+                "[方案](work-items/c-python-runtime/development-plan.md)、"
+                "[整树进度](work-items/c-python-runtime/progress.md)",
+                overview,
+            )
             self.assertIn("## 需求：c-python-runtime", overview)
+            self.assertIn(
+                "| 层级工作项 | 状态 | 门禁 | 开发方式 | 节点文件 |",
+                overview,
+            )
+            self.assertIn(
+                "| 能力 `c-python-runtime` | 等待开发方案评审 | 未运行 | 未选择 |",
+                overview,
+            )
             self.assertIn("└─ 任务 `t-python-controller`", overview)
+            self.assertIn(
+                "[概览](work-items/c-python-runtime/overview.md)、"
+                "[节点进度](work-items/c-python-runtime/node-progress.md)",
+                overview,
+            )
 
     def test_root_progress_tracks_the_development_plan_tree_after_each_state_write(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

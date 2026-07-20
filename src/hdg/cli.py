@@ -79,11 +79,11 @@ Commands:
   task-context --item <task-id>
   dispatch-task --item <task-id> --owner <owner> --operation <id>
   claim-task --item <task-id> --owner <owner> --operation <id>
-  task-result --item <task-id> --operation <id> --status IMPLEMENTED|BLOCKED --evidence <file|->
+  task-result --item <task-id> --operation <id> --status IMPLEMENTED|BLOCKED --evidence -
   retry-item --item <id> --expected-baseline <sha256>
-  gate-item --item <id> --status PASS|FAIL --evidence <file|->
-  accept-item --item <id> --evidence <file|->
-  acceptance-item --item <root-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence <file|->
+  gate-item --item <id> --status PASS|FAIL --evidence -
+  accept-item --item <id> --evidence -
+  acceptance-item --item <root-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence -
   record-interaction --item <id> --interaction <file|->
   interaction-log --item <id>
   refresh-projections
@@ -233,9 +233,13 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
         )
     if command == "interaction-log":
         return list_interactions(root=cwd, item_id=_required(parsed, "--item"))
-    evidence = _read_structured(
-        _required(parsed, "--evidence"), "WORK_ITEM_EVIDENCE", cwd=cwd, stdin=stdin
-    )
+    evidence_source = _required(parsed, "--evidence")
+    if evidence_source != "-":
+        raise GatedLoopError(
+            "WORK_ITEM_EVIDENCE_STDIN_REQUIRED",
+            "Evidence artifact must be provided directly through stdin with --evidence -",
+        )
+    evidence = _read_structured(evidence_source, "WORK_ITEM_EVIDENCE", cwd=cwd, stdin=stdin)
     if command == "task-result":
         return record_task_result(
             **common,
@@ -243,7 +247,6 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
             operation_id=_required(parsed, "--operation"),
             status=_required(parsed, "--status"),
             evidence=evidence,
-            strict_evidence=True,
         )
     if command == "acceptance-item":
         return record_acceptance(

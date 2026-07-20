@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,13 +10,6 @@ from hdg.planning import freeze_hierarchy, prepare_hierarchy, retry_work_item
 from hdg.repository import GovernanceRepository
 
 from .fixtures import task_hierarchy
-
-
-def write_evidence(root: str, name: str, value: dict) -> dict[str, str]:
-    path = Path(root, name)
-    data = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    path.write_bytes(data)
-    return {"path": name, "sha256": hashlib.sha256(data).hexdigest()}
 
 
 class AcceptanceFlowTests(unittest.TestCase):
@@ -34,7 +25,7 @@ class AcceptanceFlowTests(unittest.TestCase):
             )
             task_id = prepared["rootId"]
             dispatch_task(root=temporary, item_id=task_id, owner="developer", operation_id="op-retry")
-            blocked = write_evidence(temporary, "blocked-result.json", {
+            blocked = {
                 "schemaVersion": 3,
                 "kind": "TASK_RESULT",
                 "taskId": task_id,
@@ -44,14 +35,13 @@ class AcceptanceFlowTests(unittest.TestCase):
                 "changedFiles": ["src/controller.py"],
                 "tests": [{"argv": ["python", "-m", "unittest"], "exitCode": 1, "testsRun": 1}],
                 "blockers": ["Regression failure"],
-            })
+            }
             record_task_result(
                 root=temporary,
                 item_id=task_id,
                 operation_id="op-retry",
                 status="BLOCKED",
                 evidence=blocked,
-                strict_evidence=True,
             )
 
             retried = retry_work_item(
@@ -79,7 +69,7 @@ class AcceptanceFlowTests(unittest.TestCase):
                 owner="developer",
                 operation_id="op-001",
             )
-            result = write_evidence(temporary, "task-result.json", {
+            result = {
                 "schemaVersion": 3,
                 "kind": "TASK_RESULT",
                 "taskId": task_id,
@@ -89,14 +79,13 @@ class AcceptanceFlowTests(unittest.TestCase):
                 "changedFiles": ["src/controller.py", "tests/test_controller.py"],
                 "tests": [{"argv": ["python", "-m", "unittest", "tests.test_controller"], "exitCode": 0, "testsRun": 1}],
                 "blockers": [],
-            })
+            }
             result_record = record_task_result(
                 root=temporary,
                 item_id=task_id,
                 operation_id="op-001",
                 status="IMPLEMENTED",
                 evidence=result,
-                strict_evidence=True,
             )
             development_review_path = Path(temporary, result_record["developmentReview"]["markdownPath"])
             self.assertTrue(development_review_path.is_file())
@@ -106,7 +95,7 @@ class AcceptanceFlowTests(unittest.TestCase):
             self.assertIn("实际文件", development_review)
             self.assertIn("不代表门禁通过", development_review)
             self.assertFalse(Path(temporary, ".hierarchical-delivery-governance", "work-items", task_id, "acceptance-report.md").exists())
-            gate = write_evidence(temporary, "gate.json", {
+            gate = {
                 "schemaVersion": 3,
                 "kind": "WORK_ITEM_GATE",
                 "workItemId": task_id,
@@ -125,30 +114,30 @@ class AcceptanceFlowTests(unittest.TestCase):
                     "summary": "One test passed.",
                 }],
                 "findings": {"p0": [], "p1": [], "p2": []},
-            })
+            }
             accepted = accept_work_item(root=temporary, item_id=task_id, evidence=gate)
             self.assertEqual(accepted["status"], "VERIFIED")
 
-            review = write_evidence(temporary, "review.json", {
+            review = {
                 "schemaVersion": 3,
                 "kind": "INDEPENDENT_REVIEW",
                 "reviewer": "fresh-reviewer",
                 "isolation": "FRESH_READ_ONLY",
                 "verdict": "PASS",
                 "findings": {"p0": 0, "p1": 0},
-            })
+            }
             record_acceptance(
                 root=temporary,
                 item_id=task_id,
                 action="INDEPENDENT_REVIEW_PASS",
                 evidence=review,
             )
-            confirmation = write_evidence(temporary, "confirmation.json", {
+            confirmation = {
                 "schemaVersion": 3,
                 "kind": "USER_CONFIRMATION",
                 "confirmedBy": "user",
                 "decision": "CONFIRMED",
-            })
+            }
             completed = record_acceptance(
                 root=temporary,
                 item_id=task_id,

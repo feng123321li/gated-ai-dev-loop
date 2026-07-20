@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import hashlib
-import json
 import tempfile
 import unittest
-from pathlib import Path
 
 from hdg.acceptance import accept_work_item, record_acceptance
 from hdg.execution import dispatch_task, record_task_result
@@ -15,14 +12,8 @@ from .fixtures import delivery_hierarchy
 
 
 class HierarchyFlowTests(unittest.TestCase):
-    @staticmethod
-    def _write_evidence(root: str, name: str, value: dict) -> dict[str, str]:
-        data = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        Path(root, name).write_bytes(data)
-        return {"path": name, "sha256": hashlib.sha256(data).hexdigest()}
-
-    def _gate(self, root: str, prepared: dict, command: list[str], changed_files: list[str], name: str) -> dict:
-        evidence = self._write_evidence(root, name, {
+    def _gate(self, root: str, prepared: dict, command: list[str], changed_files: list[str]) -> dict:
+        evidence = {
             "schemaVersion": 3,
             "kind": "WORK_ITEM_GATE",
             "workItemId": prepared["id"],
@@ -33,7 +24,7 @@ class HierarchyFlowTests(unittest.TestCase):
             "acceptance": [{"id": "A-001", "status": "PASS", "evidence": "Verified."}],
             "tests": [{"argv": command, "exitCode": 0, "testsRun": 1, "summary": "Passed."}],
             "findings": {"p0": [], "p1": [], "p2": []},
-        })
+        }
         return accept_work_item(root=root, item_id=prepared["id"], evidence=evidence)
 
     def _prepare_and_freeze(self, root: str) -> dict:
@@ -73,7 +64,7 @@ class HierarchyFlowTests(unittest.TestCase):
             capability = self._prepared_item(prepared, "c-python-runtime")
             task = self._prepared_item(prepared, "t-python-controller")
             dispatch_task(root=temporary, item_id=task["id"], owner="developer", operation_id="op-nested")
-            result = self._write_evidence(temporary, "nested-task-result.json", {
+            result = {
                 "schemaVersion": 3,
                 "kind": "TASK_RESULT",
                 "taskId": task["id"],
@@ -87,56 +78,52 @@ class HierarchyFlowTests(unittest.TestCase):
                     "testsRun": 1,
                 }],
                 "blockers": [],
-            })
+            }
             record_task_result(
                 root=temporary,
                 item_id=task["id"],
                 operation_id="op-nested",
                 status="IMPLEMENTED",
                 evidence=result,
-                strict_evidence=True,
             )
             self.assertEqual(self._gate(
                 temporary,
                 task,
                 ["python", "-m", "unittest", "tests.test_controller"],
                 ["src/controller.py", "tests/test_controller.py"],
-                "nested-task-gate.json",
             )["status"], "VERIFIED")
             self.assertEqual(self._gate(
                 temporary,
                 capability,
                 ["python", "-m", "unittest", "discover"],
                 [],
-                "capability-gate.json",
             )["status"], "VERIFIED")
             self.assertEqual(self._gate(
                 temporary,
                 delivery,
                 ["python", "-m", "unittest", "discover"],
                 [],
-                "delivery-gate.json",
             )["status"], "VERIFIED")
-            review = self._write_evidence(temporary, "delivery-review.json", {
+            review = {
                 "schemaVersion": 3,
                 "kind": "INDEPENDENT_REVIEW",
                 "reviewer": "fresh-reviewer",
                 "isolation": "FRESH_READ_ONLY",
                 "verdict": "PASS",
                 "findings": {"p0": 0, "p1": 0},
-            })
+            }
             record_acceptance(
                 root=temporary,
                 item_id=delivery["id"],
                 action="INDEPENDENT_REVIEW_PASS",
                 evidence=review,
             )
-            confirmation = self._write_evidence(temporary, "delivery-confirmation.json", {
+            confirmation = {
                 "schemaVersion": 3,
                 "kind": "USER_CONFIRMATION",
                 "confirmedBy": "user",
                 "decision": "CONFIRMED",
-            })
+            }
             completed = record_acceptance(
                 root=temporary,
                 item_id=delivery["id"],

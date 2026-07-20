@@ -464,7 +464,21 @@ class HierarchyPackageTests(unittest.TestCase):
                 item_id="t-python-controller",
                 operation_id="op-progress",
                 status="IMPLEMENTED",
-                evidence={"path": "missing-progress-evidence.json", "sha256": "0" * 64},
+                evidence={
+                    "schemaVersion": 3,
+                    "kind": "TASK_RESULT",
+                    "taskId": "t-python-controller",
+                    "operationId": "op-progress",
+                    "status": "IMPLEMENTED",
+                    "summary": "Implemented the progress-tracked Task.",
+                    "changedFiles": ["src/controller.py", "tests/test_controller.py"],
+                    "tests": [{
+                        "argv": ["python", "-m", "unittest", "tests.test_controller"],
+                        "exitCode": 0,
+                        "testsRun": 1,
+                    }],
+                    "blockers": [],
+                },
             )
             implemented_progress = (root / "progress.md").read_text(encoding="utf-8")
             implemented_child_progress = (child / "progress.md").read_text(encoding="utf-8")
@@ -482,7 +496,26 @@ class HierarchyPackageTests(unittest.TestCase):
                 root=temporary,
                 item_id="t-python-controller",
                 status="PASS",
-                evidence={"path": "missing-progress-gate.json", "sha256": "1" * 64},
+                evidence={
+                    "schemaVersion": 3,
+                    "kind": "WORK_ITEM_GATE",
+                    "workItemId": "t-python-controller",
+                    "baselineFingerprint": prepared["baselineFingerprints"]["t-python-controller"],
+                    "verdict": "PASS",
+                    "summary": "The progress-tracked Task passed.",
+                    "scope": {
+                        "changedFiles": ["src/controller.py", "tests/test_controller.py"],
+                        "outOfScopeFiles": [],
+                    },
+                    "acceptance": [{"id": "A-001", "status": "PASS", "evidence": "Verified."}],
+                    "tests": [{
+                        "argv": ["python", "-m", "unittest", "tests.test_controller"],
+                        "exitCode": 0,
+                        "testsRun": 1,
+                        "summary": "Passed.",
+                    }],
+                    "findings": {"p0": [], "p1": [], "p2": []},
+                },
             )
             verified_progress = (root / "progress.md").read_text(encoding="utf-8")
             self.assertRegex(

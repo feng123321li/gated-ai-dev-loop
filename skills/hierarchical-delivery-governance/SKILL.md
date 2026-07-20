@@ -87,7 +87,9 @@ Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或�
 
 ## 输入与路径
 
-`--definition`、`--evidence` 的一次性 JSON 使用 `-` 从 stdin 读取。不要先写入 `%TEMP%`、`$TMPDIR` 或工作区外文件；跨卷会触发 `PATH_CROSS_VOLUME`。只有宿主不能提供 stdin 时，才可使用工作区内普通临时文件并在同一轮清理，不得把临时输入放进治理控制面。
+`task-result`、`gate-item`、`accept-item` 和 `acceptance-item` 的完整证据 artifact 必须使用 `--evidence -` 从 stdin 直接提交；文件路径输入会被拒绝，不生成 `.hdg-tmp`、`%TEMP%` 或其他临时 JSON。控制器在 SQLite 写事务内按当前工作项、operationId、baseline 和动作校验 artifact，计算规范 JSON 的 SHA-256，并把完整 artifact 与摘要一起写入 SQLite；Agent 不直接写数据库，也不自行提交路径或摘要。
+
+`--definition` 和 `--interaction` 的一次性 JSON 也优先使用 `-` 从 stdin 读取，避免跨卷路径和无意义的中间文件。
 
 ## SQLite 与交互记录
 

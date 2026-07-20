@@ -9,7 +9,7 @@ Task 只有在状态为 IMPLEMENTED 时可运行 gate。`task-result` 写回后�
 - Task 实际变更文件全部在人工评审并冻结的 `developmentPlan.fileChanges` 中；scope 内但未计划的文件仍属于计划偏差，不能 PASS；
 - 冻结测试 argv、退出码和适用的 Tests run；
 - 依赖输出和全部验收项；
-- evidence 文件存在、SHA-256 匹配，且内容覆盖当前工作项和当前 baseline；
+- 从 stdin 收到的完整 evidence artifact 覆盖当前工作项和当前 baseline；控制器在当前 SQLite 写事务内完成校验与摘要计算；
 - PASS evidence 中 Scope 外变更为空、全部测试退出码为 0、全部验收项为 PASS、P0/P1 为空。
 
 PASS 后 Task 为 VERIFIED；FAIL 后为 BLOCKED，并把范围、测试、验收项和 findings 写入用户报告。Agent 修复后使用当前 baseline 指纹执行 `retry-item`，自动回到 FROZEN 并继续回归与复测；只有冻结需求或授权需要变化时才回到人工评审。开发 Agent 的结论不能替代 gate，正常 PASS 路径使用 `accept-item`。
@@ -45,7 +45,7 @@ decomposition 为 SEALED 且所有计划 Capability VERIFIED 后，运行跨能�
 2. 没有其他产品时使用全新、无开发上下文的只读子 Agent；
 3. 两者都不可用时生成清晰人工验收包，结论为 `NEED_HUMAN_REVIEW`。
 
-审查者只读取 baseline、context、真实 diff、测试和 evidence，不继承开发对话。隔离审查 PASS，或用户明确接受人工审查结果后，记录 `WAITING_FOR_USER_CONFIRMATION`；只有随后独立记录 `USER_CONFIRMED`，治理根才进入 `COMPLETED`。审查 evidence 与用户确认 evidence 必须是两个不同的真实输入，CLI 提交相对路径与 SHA-256，宿主在写回前读取文件、复算 hash，并把已校验的结构化内容和引用快照写入 SQLite。恢复以后以 SQLite 快照为机器权威，不依赖外部 JSON 永久存在。不能只提交 action 标签，也不能复用同一路径或内容。
+审查者只读取 baseline、context、真实 diff、测试和 evidence，不继承开发对话。隔离审查 PASS，或用户明确接受人工审查结果后，记录 `WAITING_FOR_USER_CONFIRMATION`；只有随后独立记录 `USER_CONFIRMED`，治理根才进入 `COMPLETED`。审查 evidence 与用户确认 evidence 必须是两个不同的完整 artifact，分别通过 `--evidence -` 从 stdin 提交。控制器在各自 SQLite 写事务内校验内容、计算规范 JSON 的 SHA-256，并把 artifact 与摘要一起写入 SQLite；CLI 拒绝文件路径和调用方提供的摘要。恢复只依赖 SQLite 快照，不依赖外部 JSON。不能只提交 action 标签，也不能复用同一内容。
 
 最终验收 evidence 使用当前 schemaVersion 3 JSON：独立审查必须包含 `kind=INDEPENDENT_REVIEW`、非空 reviewer、`isolation=FRESH_READ_ONLY`、`verdict=PASS` 和 `findings.p0/p1=0`；人工审查必须包含 `kind=HUMAN_REVIEW`、非空 reviewer 与 `verdict=ACCEPTED`；用户确认必须包含 `kind=USER_CONFIRMATION`、非空 confirmedBy 与 `decision=CONFIRMED`。
 

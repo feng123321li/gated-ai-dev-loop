@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
 from .constants import SCHEMA_VERSION
-from .errors import GatedLoopError, fail
+from .errors import fail
 from .evidence import evidence_record, valid_task_result_artifact
-from .fs_safe import atomic_write, read_regular_file
-from .jsonio import sha256_bytes
+from .fs_safe import atomic_write
 from .model import scope_patterns_overlap, work_item_child_contract_fingerprint
 from .projections import render_task_handoff
 from .repository import GovernanceRepository, timestamp
@@ -132,31 +130,16 @@ def claim_task(
         return {"id": item_id, "status": entry["status"], "claim": entry["claim"]}
 
 
-def _optional_task_result_artifact(
-    repository: GovernanceRepository,
+def _validated_task_result_artifact(
     evidence: object,
     *,
     item_id: str,
     operation_id: str,
     status: str,
-    strict: bool,
-) -> tuple[dict[str, str], dict[str, Any] | None]:
-    reference = evidence_record(evidence)
-    try:
-        data = read_regular_file(repository.root, reference["path"])
-    except Exception:
-        if strict:
-            fail("WORK_ITEM_RESULT_EVIDENCE_MISSING", f"Task result evidence is unavailable: {reference['path']}")
-        return reference, None
-    if sha256_bytes(data) != reference["sha256"]:
-        fail("WORK_ITEM_RESULT_EVIDENCE_CHANGED", f"Task result evidence hash does not match: {reference['path']}")
-    try:
-        artifact = json.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        fail("WORK_ITEM_RESULT_EVIDENCE_INVALID", "Task result evidence must be valid JSON")
-    if not valid_task_result_artifact(artifact, item_id=item_id, operation_id=operation_id, status=status):
+) -> tuple[dict[str, str], dict[str, Any]]:
+    if not valid_task_result_artifact(evidence, item_id=item_id, operation_id=operation_id, status=status):
         fail("WORK_ITEM_RESULT_EVIDENCE_INVALID", "Task result evidence does not match the active operation")
-    return reference, artifact
+    return evidence_record(evidence), evidence
 
 
 def record_task_result(
@@ -166,7 +149,6 @@ def record_task_result(
     operation_id: str,
     status: str,
     evidence: object,
-    strict_evidence: bool = False,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
@@ -180,13 +162,11 @@ def record_task_result(
         if entry["kind"] != "TASK" or entry["status"] != "CLAIMED" or (entry.get("claim") or {}).get("operationId") != operation_id:
             fail("WORK_ITEM_OPERATION_INVALID", f"{item_id} does not have the supplied active operation")
         definition = repository.assert_current_lineage(registry, entry)[0]
-        reference, artifact = _optional_task_result_artifact(
-            repository,
+        reference, artifact = _validated_task_result_artifact(
             evidence,
             item_id=item_id,
             operation_id=operation_id,
             status=status,
-            strict=strict_evidence,
         )
         entry["status"] = status
         entry["claim"] = None

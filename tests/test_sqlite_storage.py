@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import sqlite3
+import json
 import shutil
+import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
@@ -11,8 +12,8 @@ from hdg.acceptance import record_work_item_gate
 from hdg.errors import GatedLoopError
 from hdg.execution import dispatch_task, record_task_result
 from hdg.interactions import list_interactions, record_interaction
-from hdg.planning import freeze_hierarchy, prepare_hierarchy
-from hdg.planning import refresh_work_item_projections
+from hdg.jsonio import fingerprint
+from hdg.planning import freeze_hierarchy, prepare_hierarchy, refresh_work_item_projections
 
 from .fixtures import task_hierarchy
 
@@ -82,24 +83,68 @@ class SQLiteStorageTests(unittest.TestCase):
                 owner="developer",
                 operation_id="op-sqlite",
             )
+            result_artifact = {
+                "schemaVersion": 3,
+                "kind": "TASK_RESULT",
+                "taskId": prepared["rootId"],
+                "operationId": "op-sqlite",
+                "status": "IMPLEMENTED",
+                "summary": "Stored directly in SQLite.",
+                "changedFiles": ["src/controller.py", "tests/test_controller.py"],
+                "tests": [{
+                    "argv": ["python", "-m", "unittest", "tests.test_controller"],
+                    "exitCode": 0,
+                    "testsRun": 1,
+                }],
+                "blockers": [],
+            }
             record_task_result(
                 root=temporary,
                 item_id=prepared["rootId"],
                 operation_id="op-sqlite",
                 status="IMPLEMENTED",
-                evidence={"path": "not-persisted.json", "sha256": "0" * 64},
+                evidence=result_artifact,
             )
+            gate_artifact = {
+                "schemaVersion": 3,
+                "kind": "WORK_ITEM_GATE",
+                "workItemId": prepared["rootId"],
+                "baselineFingerprint": prepared["baselineFingerprints"][prepared["rootId"]],
+                "verdict": "PASS",
+                "summary": "Validated and stored directly in SQLite.",
+                "scope": {
+                    "changedFiles": ["src/controller.py", "tests/test_controller.py"],
+                    "outOfScopeFiles": [],
+                },
+                "acceptance": [{"id": "A-001", "status": "PASS", "evidence": "Verified."}],
+                "tests": [{
+                    "argv": ["python", "-m", "unittest", "tests.test_controller"],
+                    "exitCode": 0,
+                    "testsRun": 1,
+                    "summary": "Passed.",
+                }],
+                "findings": {"p0": [], "p1": [], "p2": []},
+            }
             record_work_item_gate(
                 root=temporary,
                 item_id=prepared["rootId"],
                 status="PASS",
-                evidence={"path": "not-persisted-gate.json", "sha256": "1" * 64},
+                evidence=gate_artifact,
             )
 
             database = self._governance_root(temporary) / "governance.sqlite3"
             with closing(sqlite3.connect(database)) as connection:
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM task_contexts").fetchone()[0], 1)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM reports").fetchone()[0], 2)
+                entry = json.loads(
+                    connection.execute(
+                        "SELECT entry_json FROM work_items WHERE id = ?", (prepared["rootId"],)
+                    ).fetchone()[0]
+                )
+            self.assertEqual(entry["latestResult"]["artifact"], result_artifact)
+            self.assertEqual(entry["latestResult"]["evidence"], {"sha256": fingerprint(result_artifact)})
+            self.assertEqual(entry["gate"]["artifact"], gate_artifact)
+            self.assertEqual(entry["gate"]["evidence"], {"sha256": fingerprint(gate_artifact)})
             self.assert_no_persisted_json(temporary)
             package = Path(prepared["artifactDir"])
             self.assertTrue((package / "development-handoff.md").is_file())

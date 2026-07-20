@@ -13,7 +13,7 @@
 - `reports`：开发复核与验收报告的结构化内容；
 - `interaction_events`：追加式人机指令、决策和状态摘要审计链。
 
-复杂契约可作为规范 JSON 文本存入 SQLite 列；这仍是单一数据库权威，不产生持久化 JSON 文件。控制器不迁移、不兼容旧 JSON 工作区或非当前数据库 schema。
+复杂契约和完整证据 artifact 可作为规范 JSON 文本存入 SQLite 列；证据引用只保留控制器按规范 JSON 计算的 SHA-256。两者在同一写事务中保存，仍是单一数据库权威，不产生临时或持久化 JSON 文件。控制器不迁移、不兼容旧 JSON 工作区、路径式 evidence 引用或非当前数据库 schema。
 
 ## 单根嵌套 Markdown
 

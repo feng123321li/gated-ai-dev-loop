@@ -19,7 +19,7 @@ from .evidence import (
     valid_acceptance,
     valid_acceptance_report,
     valid_development_mode,
-    valid_evidence_reference,
+    valid_evidence_record,
     valid_timestamp,
 )
 from .fs_safe import atomic_create_directory, atomic_replace_directory, atomic_write, read_regular_file, safe_path
@@ -93,7 +93,7 @@ def _valid_gate(value: object) -> bool:
         return set(value) == {"status", "evidence"} and value["evidence"] is None
     return (
         set(value) == {"status", "evidence", "artifact"}
-        and valid_evidence_reference(value["evidence"])
+        and valid_evidence_record(value["evidence"])
         and (value["artifact"] is None or isinstance(value["artifact"], dict))
     )
 
@@ -114,7 +114,7 @@ def _valid_latest_result(value: object) -> bool:
     return (
         isinstance(value, dict)
         and set(value) == {"evidence", "artifact", "recordedAt"}
-        and valid_evidence_reference(value.get("evidence"))
+        and valid_evidence_record(value.get("evidence"))
         and (value.get("artifact") is None or isinstance(value.get("artifact"), dict))
         and valid_timestamp(value.get("recordedAt"))
     )
@@ -377,7 +377,7 @@ class GovernanceRepository:
                 and _valid_progress(entry.get("progress"))
                 and (
                     entry.get("latestEvidence") is None
-                    or valid_evidence_reference(entry.get("latestEvidence"))
+                    or valid_evidence_record(entry.get("latestEvidence"))
                 )
                 and (
                     entry.get("latestResult") is None

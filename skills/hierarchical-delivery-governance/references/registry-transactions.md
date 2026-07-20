@@ -11,10 +11,11 @@
 1. 验证协调根、目标安全路径和当前数据库 schema；
 2. 开启 `BEGIN IMMEDIATE` 并重读 workspace、工作项和层级状态；
 3. 检查 revision、层级指纹、baseline 指纹和活动 claim；
-4. 在同一事务写 definition/state、上下文、报告、交互事件和 registry 条目；
-5. 更新 workspace revision 并提交；
-6. 从数据库重建 workspace、overview、progress 和阶段 Markdown；
-7. 事务结束后再运行 Agent 或测试。
+4. 对执行证据，在事务内校验完整 artifact 与当前工作项、operationId、baseline 或动作，计算规范 JSON 的 SHA-256；
+5. 在同一事务写 definition/state、证据 artifact 与摘要、上下文、报告、交互事件和 registry 条目；
+6. 更新 workspace revision 并提交；
+7. 从数据库重建 workspace、overview、progress 和阶段 Markdown；
+8. 事务结束后再运行 Agent 或测试。
 
 写入失败必须回滚 SQLite，不留下可被恢复为成功的机器状态。Markdown 是可重建投影；投影写入失败时保持阻断，后续使用 `refresh-projections` 修复，不能把残缺 Markdown 当作权威。
 
@@ -22,7 +23,7 @@
 
 Task claim 包含 `owner`、`operationId` 和 `claimedAt`。正常流程用 `dispatch-task` 在短事务中完成 READY 校验、claim、结构化上下文入库和绑定 operationId 的 Markdown handoff；`claim-task` 仅用于恢复。相同 Task 不能重复认领，写入范围与活动 Task 重叠时也不能认领。
 
-Agent 返回结果时必须提交相同 operationId。成功写 `IMPLEMENTED` 和证据快照，失败写 `BLOCKED` 和阻断证据，然后清除 claim，并生成 `development-review.md`。无法确认外部 Agent 是否已启动或写入时，不重复派遣，转人工核对。正常 PASS 必须通过 `accept-item` 校验 evidence 后写 gate 与 `acceptance-report.md`，不能用自然语言补写 PASS。
+Agent 返回结果时必须提交相同 operationId，并将完整结果 artifact 通过 `--evidence -` 从 stdin 交给控制器。成功写 `IMPLEMENTED`、artifact 和控制器计算的摘要，失败写 `BLOCKED`、阻断 artifact 和摘要，然后清除 claim，并生成 `development-review.md`。无法确认外部 Agent 是否已启动或写入时，不重复派遣，转人工核对。正常 PASS 必须以同样的 stdin 方式通过 `accept-item` 校验 gate artifact 后写 gate 与 `acceptance-report.md`，不能用自然语言补写 PASS，也不能用临时文件或 Agent 直写 SQLite 绕过事务。
 
 ## 整树准备与冻结并发
 

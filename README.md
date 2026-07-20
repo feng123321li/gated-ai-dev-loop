@@ -1,94 +1,184 @@
 # Hierarchical Delivery Governance
 
-面向 AI Agent 的分层交付治理 Skill。它按最小必要深度把可独立交付的软件工作组织为：
+面向 AI Agent 的分层交付治理 Skill。它把一个软件需求整理成可人工评审、一次冻结、自动开发、持续回归和最终验收的交付树。
 
-```text
-Task
-Capability → Task
-Delivery → Capability → Task
+项目与 Skill 均由 Python 3.10+ 和标准库驱动，不需要 Node、npm、第三方 Python 包或全局 CLI。
+
+## 人工参与边界
+
+人在正常流程中只参与以下环节：
+
+1. 冻结前查看根级 `development-plan.md`，确认需求、开发方案和开发方式；
+2. 选择 `active` 或 `manual`。`manual` 只需把根级交接内容复制到新会话一次；
+3. 全部开发、回归和门禁完成后，接收交付并进行最终人工验收。
+
+一次确认会冻结整个需求树，不逐 Task 批准，不要求人工知道或复制指纹。冻结后的 Task 调度、Agent 数量、并发或串行策略、失败重试和回归复测由执行 Agent 自主处理。只有需求或授权边界需要变化时，才重新回到人工评审。
+
+## 完整流程
+
+```mermaid
+flowchart TD
+    A["提出一个软件需求"] --> B["Agent 选择最浅合法层级并规划完整需求树"]
+    B --> C["生成根级开发方案和各节点独立方案"]
+    C --> D["人工评审根级开发方案并选择开发方式"]
+    D --> E{"是否同意当前方案？"}
+    E -->|"需要修改"| B
+    E -->|"同意"| F["一次冻结整棵需求树"]
+    F --> G{"开发方式"}
+    G -->|"主动开发"| H["当前 Agent 立即自主推进整树"]
+    G -->|"手动开发"| I["生成一份根级需求交接"]
+    I --> J["人工一次复制到新会话"]
+    J --> H
+    H --> K["按依赖调度任务并循环实现、回归、修复、复测"]
+    K --> L["逐级执行任务门禁和父级聚合门禁"]
+    L --> M["提交交付和验收报告"]
+    M --> N["人工最终验收"]
+    N --> O["需求完成"]
 ```
 
-Delivery 和 Capability 管协调与聚合，Task 是唯一执行叶子。实际存在的每一级都有独立 baseline、门禁和进度；每个 Task 使用 SQLite 重建的独立上下文，不继承前期对话。
+## 层级结构
 
-每个用户需求只生成一个嵌套根目录。需求根的 `development-plan.md` 一次展示完整的 Task、Capability→Task 或 Delivery→Capability→Task 树，是统一人工冻结评审入口；每个实际 Capability/Task 节点也在自己的嵌套目录保留独立 `development-plan.md` 和 `progress.md`。人工评审根级整树方案并选择开发方式后，只确认一次；Agent 负责携带层级指纹和所选方式完成整树冻结。
+每个需求使用满足真实聚合责任的最浅结构：
 
-## 核心能力
+| 结构 | 适用场景 | 执行责任 |
+|---|---|---|
+| `Task` | 一个可独立开发和验收的结果 | Task 直接执行 |
+| `Capability → Task` | 多个 Task 需要共享契约、依赖或集成验收 | Capability 聚合，Task 执行 |
+| `Delivery → Capability → Task` | 多个 Capability 需要跨能力约束或顶层交付验收 | Delivery 和 Capability 聚合，Task 执行 |
 
-- 小需求可直接使用根 Task，不虚构 Capability 或 Delivery；
-- `gateLevel` 作为 schema v3 机器契约进入 SQLite baseline、上下文和投影；仅 Task 可为 `LIGHT`，协调层固定 `FULL`；
-- 多 Task 能力使用根 Capability，所有当前计划 Task 在冻结前一次物化；
-- 多 Capability 交付才创建 Delivery；它可以是完整项目、大型模块、子系统或跨服务需求；
-- `prepare-hierarchy` 一次把完整树写入项目级 SQLite，并生成可读的 `development-plan.md`；人工评审并选择开发方式后由 `freeze-hierarchy` 一次冻结全部节点；
-- 人工确认不要求抄写 SHA256；层级指纹由 Agent 从准备结果传给控制器，过期方案会机械拒绝；
-- 同一次冻结确认在需求根记录 active/manual；不再要求冻结后二次批准；
-- active 由 Agent 自主选择多子 Agent、单 Agent 或当前 Agent 串行，并循环实现、回归、修复和复测；
-- manual 在需求根生成一份 `requirement-handoff.md`，人工只需一次复制到新会话，接收 Agent 自行推进整树，不逐 Task 要求启动；
-- 按依赖、claim 和写入范围计算 READY Task，支持多人并行；
-- Task、Capability、Delivery 各自通过 gate；同一冻结契约内失败后由 Agent 按当前 baseline 自动重试；
-- 开发结果写回后生成 `development-review.md` 对照计划与实际；门禁后再生成并更新 `acceptance-report.md`；结构化内容只存 SQLite；
-- 人机指令、决策和状态摘要可追加写入 SQLite，并投影为需求根 `interaction-log.md`；
-- 需求根 `progress.md` 以 Markdown 表格展示整树明细，第一列保留与 `development-plan.md` 相同的节点 ID、父子顺序和 Delivery→Capability→Task 层级，每次状态写回自动刷新；
-- 治理根 gate 后仍需隔离/人工审查和用户确认；
-- 维护本仓库默认进入 self-hosting maintenance，只有用户明确 dogfood 才创建运行包。
+Task 是唯一执行叶子。文件数量、接口数量、仓库大小或风险等级不能单独决定创建 Capability 或 Delivery。
 
-Micro、Workstream 和 M/W/T 可作为规模特征、规划视图和人类可读编号，但不进入机器 `kind`，也不拥有 baseline、claim 或 gate。
+每个用户需求只生成一个顶层目录。Capability 和 Task 必须按真实父子关系递归放入 `children/`，不能平铺成多个需求目录。
 
-## 运行目录
+## 冻结前开发方案
+
+根级 `development-plan.md` 是整棵需求树唯一的人工冻结评审入口。人在开工前可以从中看到：
+
+- 开发目的、业务场景和验收目标；
+- 完整的 Delivery、Capability、Task 层级；
+- 每个 Task 的精确文件改动；
+- 接口、函数、共享契约、数据和事务变化；
+- Task 依赖、开发波次和集成关系；
+- 测试映射、兼容性和人工评审重点。
+
+每个实际子节点也有自己的 `development-plan.md` 和 `progress.md`，供执行 Agent 获取独立上下文和查看节点进度。根级文件负责聚合整树，不需要人工逐个进入子目录批准。
+
+## 开发方式
+
+### 主动开发
+
+选择 `active` 后，当前 Agent 在整树冻结后立即推进开发。它根据依赖、写入范围和可用能力决定使用多个子 Agent、安全串行或由当前 Agent 逐个开发；运行能力变化时自动降级，不重新询问开发方式。
+
+### 手动开发
+
+选择 `manual` 后，规划会话只生成一份根级 `requirement-handoff.md`。人工把这份交接复制到一个新会话一次，新会话随后负责整个需求树的调度、开发、测试和门禁，不再逐 Task 请求人工交接或启动。
+
+开发方式只决定由当前会话还是新会话接管执行，不锁定 Agent 数量和并发策略。
+
+## 自动开发与验收闭环
+
+执行 Agent 按依赖计算当前可执行 Task，并循环完成：
+
+```text
+认领 Task
+→ 获取该 Task 的独立上下文
+→ 实现
+→ 回归测试
+→ 修复与复测
+→ 写回开发结果
+→ 生成 development-review.md
+→ 执行 Task 门禁
+→ 生成 acceptance-report.md
+```
+
+Task 通过后，Capability 和 Delivery 按层级执行自己的聚合门禁。开发中没有额外人工门禁；可恢复失败由 Agent 在原冻结契约内自动重试。开发结果只能写回“已实现”或“已阻断”，不能绕过门禁自行宣布通过。
+
+根工作项的 `progress.md` 使用 Markdown 表格展示整树进度，并与 `development-plan.md` 保持相同的节点 ID、父子顺序和层级。每次控制器写回都会从 SQLite 自动重建进度表。
+
+## SQLite 与可读文件
+
+每个项目只有一个：
+
+```text
+.hierarchical-delivery-governance/governance.sqlite3
+```
+
+它保存项目内全部需求的结构化状态、层级、冻结信息、Task 认领、开发结果、门禁报告和交互摘要。不同需求通过根工作项 ID 隔离，不为每个 `<root-id>` 单独创建数据库。
+
+需求目录只保留供人查看、评审和验收的 Markdown 投影：
 
 ```text
 .hierarchical-delivery-governance/
-├── governance.sqlite3              # 项目内唯一机器权威
+├── governance.sqlite3                 # 项目内唯一机器权威
 ├── workspace-overview.md
 └── work-items/
-    └── <requirement-root-id>/       # 一个需求只有一个顶层目录
+    └── <root-id>/                     # 一个需求只有一个顶层目录
         ├── baseline.md
-        ├── development-plan.md      # 整棵树唯一人工评审入口
-        ├── overview.md
-        ├── progress.md              # 与开发方案对应的整树进度明细
-        ├── interaction-log.md         # 指令、决策和状态摘要
+        ├── development-plan.md        # 整树冻结评审入口
+        ├── progress.md                # 整树进度表
+        ├── interaction-log.md         # 人机指令、决策和状态摘要
+        ├── requirement-handoff.md     # 仅 manual 冻结后生成
         ├── development-review.md      # 开发结果写回后生成
         ├── acceptance-report.md       # 门禁后生成并持续更新
-        ├── requirement-handoff.md     # manual 模式的整树一次性交接
         └── children/
-            └── <child-id>/            # 按 Delivery→Capability→Task 递归嵌套
+            └── <child-id>/
                 ├── baseline.md
-                ├── development-plan.md      # 子节点独立开发方案
-                ├── progress.md             # 子节点独立进度
-                └── children/               # 按实际层级继续嵌套
+                ├── development-plan.md
+                ├── progress.md
+                └── children/...
 ```
 
-完整规则见 [Skill 入口](skills/hierarchical-delivery-governance/SKILL.md)、[工作流与流程图](skills/hierarchical-delivery-governance/references/workflow.md) 和 [可变深度规划](skills/hierarchical-delivery-governance/references/delivery-planning.md)。
+Markdown 不是机器权威。手工删除 `<root-id>` 目录不会删除 SQLite 中的需求状态，刷新投影后目录还会被重建，因此不能用删除目录代替需求状态清理。
 
-## 安装 Skill
+## 安装
 
-只安装 Skill 是主路径；安装目录内已经包含模块化、纯标准库的 Python 控制器，不要求 Node、npm、pip 包或全局 CLI。运行环境需要 Python 3.10+。
+仓库提供一个 Python 安装器，可同时更新 Codex 和 Claude：
 
 ```text
 python scripts/install_skill.py --target both --scope user --dry-run
-python scripts/install_skill.py --target both --scope user
+python scripts/install_skill.py --target both --scope user --force
 ```
 
-安装后的宿主从 `SKILL.md` 所在目录执行：
+也可以只安装一个宿主：
+
+```text
+python scripts/install_skill.py --target codex --scope user --force
+python scripts/install_skill.py --target claude --scope user --force
+```
+
+安装后从当前宿主的 Skill 目录运行控制器：
 
 ```text
 python -X utf8 <skill-root>/scripts/hdg.py --help
-python -X utf8 <skill-root>/scripts/hdg.py prepare-hierarchy --definition - --host-runtime claude-code --json
-python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item c-example --expected-hierarchy <sha256> --development-mode active --confirmed --json
-python -X utf8 <skill-root>/scripts/hdg.py ready-tasks --item c-example
-python -X utf8 <skill-root>/scripts/hdg.py task-context --item t-example
-python -X utf8 <skill-root>/scripts/hdg.py interaction-log --item c-example
 ```
 
-`--definition -` 表示从 stdin 读取 JSON。层级 definition 固定为 `{"schemaVersion":3,"root":{"definition":{...},"children":[...]}}`，每个子节点继续使用同样的 `definition + children` 结构；协调节点声明的每个 child 都必须在本次树中完整物化。单次 definition/evidence 输入优先使用 stdin；控制器只接受当前工作区内的文件路径，不要把这类输入写入系统 `TEMP` 或工作区之外。
+一次性的 definition、evidence 和 interaction JSON 应通过 stdin 传入。不要先写入系统 `TEMP` 或工作区之外的文件；仓库与系统临时目录位于不同磁盘时会触发跨卷路径保护。
 
-开发本仓库时，修改运行时代码后重新生成 Skill 控制器并验证：
+## 主要控制命令
+
+| 命令 | 作用 |
+|---|---|
+| `prepare-hierarchy` | 准备完整需求树并生成开发方案和进度投影 |
+| `freeze-hierarchy` | 使用一次人工确认冻结整棵树并记录开发方式 |
+| `ready-tasks` | 计算当前满足依赖和范围条件的 Task |
+| `dispatch-task` | 原子认领一个 Task 并建立独立执行上下文 |
+| `task-result` | 写回开发结果并生成开发复核 |
+| `accept-item` | 执行节点门禁并生成验收报告 |
+| `retry-item` | 在当前冻结契约内恢复可重试节点 |
+| `refresh-projections` | 从 SQLite 重建 Markdown 投影 |
+| `record-interaction` | 记录必要的人机指令、决策或状态摘要 |
+
+具体参数以当前安装版本的 `hdg.py --help` 为准。人工不需要直接拼接层级指纹或逐个执行这些命令，它们由使用 Skill 的 Agent 调用。
+
+## 仓库维护
+
+修改控制器源码后，重新构建 Skill 内置控制器并运行验证：
 
 ```text
 python scripts/build_skill.py
 python -m unittest discover -s tests -t . -v
 python -m compileall -q src scripts tests
+git diff --check
 ```
 
-内置控制器直接打包 `src/hdg` Python 包。仓库与 Skill 使用同一份模块源码，运行时只依赖 Python 标准库。
-
-Skill、Python 项目和运行控制目录统一使用 `hierarchical-delivery-governance`。每个项目只有一个 `governance.sqlite3`；需求目录只保留可重建 Markdown。手工删除 `<root-id>` 目录不会删除数据库状态，不得把它当成需求删除操作。数据库与 evidence 只接受当前完整 schema v3，不读取、迁移或解释其他版本。
+完整规则见 [Skill 入口](skills/hierarchical-delivery-governance/SKILL.md)、[工作流与全中文流程图](skills/hierarchical-delivery-governance/references/workflow.md)、[开发方案字段](skills/hierarchical-delivery-governance/references/development-plan.md) 和 [SQLite 工作项注册表](skills/hierarchical-delivery-governance/references/task-registry.md)。

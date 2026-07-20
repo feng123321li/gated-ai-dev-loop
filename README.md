@@ -115,7 +115,11 @@ Task 通过后，Capability 和 Delivery 按层级执行自己的聚合门禁。
 ```text
 .hierarchical-delivery-governance/
 ├── governance.sqlite3                 # 项目内唯一机器权威
-├── workspace-overview.md
+├── workspace-overview.md              # 只保留全局需求索引
+├── workspace-overview/
+│   ├── YYYY-MM.md                     # 月度需求索引
+│   └── YYYY-MM/
+│       └── <root-id>.md               # 可直接打开的单需求明细
 └── work-items/
     └── <root-id>/                     # 一个需求只有一个顶层目录
         ├── baseline.md
@@ -137,7 +141,7 @@ Markdown 不是机器权威。手工删除 `<root-id>` 目录不会删除 SQLite
 
 多个需求在同一数据库中按工作项隔离。若某个历史节点只有 evidence 引用不符合当前契约、但完整 artifact 和其余结构仍有效，控制器会把该节点标记为只读隔离并在 `workspace-overview.md` 告警：不迁移、不改写历史记录，同时允许新需求和其他有效 Task 继续。数据库 schema、ID、拓扑、路径或其他结构损坏仍会全局阻断。
 
-`workspace-overview.md` 使用稳定根 ID，不给物理目录追加日期；文件顶部按最近更新时间倒序提供需求索引，展示创建时间、状态、门禁和方案/进度入口。每个需求下方再用表格保留 Delivery → Capability → Task 层级，避免 Markdown 把树节点折叠成一个长段落。
+`workspace-overview.md` 使用稳定根 ID，不给物理目录追加日期；该文件只保留按最近更新时间倒序的全局需求索引，展示本机时区的创建时间（精确到分）和更新时间，以及状态、门禁和方案/进度入口。`workspace-overview/YYYY-MM.md` 是月度索引，每个需求的详细 Delivery → Capability → Task 表格写入 `workspace-overview/YYYY-MM/<root-id>.md`；全局索引直接链接该文件，不依赖跨文件标题锚点。需求明细同时展示需求开始时间和最终用户确认形成的完成日期；未完成需求明确显示“未完成”。SQLite 原始时间仍保持 UTC。
 
 ## 安装
 

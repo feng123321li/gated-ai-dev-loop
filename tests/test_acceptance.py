@@ -148,6 +148,20 @@ class AcceptanceFlowTests(unittest.TestCase):
             registry = GovernanceRepository(temporary).read_registry()
             self.assertEqual(registry["workItems"][0]["acceptance"]["status"], "COMPLETED")
             self.assertTrue(Path(temporary, completed["acceptanceReport"]["markdownPath"]).is_file())
+            monthly_root = Path(
+                temporary,
+                ".hierarchical-delivery-governance",
+                "workspace-overview",
+            )
+            monthly_index = next(monthly_root.glob("*.md"))
+            monthly_overview = (
+                monthly_root / monthly_index.stem / f"{task_id}.md"
+            ).read_text(encoding="utf-8")
+            self.assertNotIn("- 需求完成日期（本机时区）：未完成", monthly_overview)
+            self.assertRegex(
+                monthly_overview,
+                r"- 需求完成日期（本机时区）：\d{4}-\d{2}-\d{2}",
+            )
 
 
 if __name__ == "__main__":

@@ -175,7 +175,17 @@ class HierarchyPackageTests(unittest.TestCase):
                 ".hierarchical-delivery-governance",
                 "workspace-overview.md",
             ).read_text(encoding="utf-8")
-            self.assertIn("开发建议：active（需求评审时选择）", workspace_overview)
+            self.assertNotIn("开发建议：active（需求评审时选择）", workspace_overview)
+            monthly_root = Path(
+                temporary,
+                ".hierarchical-delivery-governance",
+                "workspace-overview",
+            )
+            monthly_index = next(monthly_root.glob("*.md"))
+            monthly_overview = (
+                monthly_root / monthly_index.stem / "c-python-runtime.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn("开发建议：active（需求评审时选择）", monthly_overview)
             child_progress = (
                 root_path / "children" / "t-python-controller" / "progress.md"
             ).read_text(encoding="utf-8")
@@ -372,10 +382,30 @@ class HierarchyPackageTests(unittest.TestCase):
                 ".hierarchical-delivery-governance",
                 "workspace-overview.md",
             ).read_text(encoding="utf-8")
+            monthly_files = list(
+                Path(
+                    temporary,
+                    ".hierarchical-delivery-governance",
+                    "workspace-overview",
+                ).glob("*.md")
+            )
+            self.assertEqual(len(monthly_files), 1)
+            monthly_index = monthly_files[0].read_text(encoding="utf-8")
+            monthly_detail_path = (
+                monthly_files[0].parent
+                / monthly_files[0].stem
+                / "c-python-runtime.md"
+            )
+            self.assertTrue(monthly_detail_path.is_file())
+            monthly_detail = monthly_detail_path.read_text(encoding="utf-8")
             self.assertIn("## 需求索引", overview)
             self.assertIn(
-                "| 最近更新（UTC） | 创建日期（UTC） | 需求根 | 类型 | 状态 | 门禁 | 后代进度 | 入口 |",
+                "| 最近更新（本机时区） | 创建时间（本机时区） | 需求根 | 类型 | 状态 | 门禁 | 后代进度 | 入口 |",
                 overview,
+            )
+            self.assertRegex(
+                overview,
+                r"\| \d{4}-\d{2}-\d{2} \d{2}:\d{2} \| \d{4}-\d{2}-\d{2} \d{2}:\d{2} \|",
             )
             self.assertIn(
                 "[`c-python-runtime`](work-items/c-python-runtime/overview.md)",
@@ -386,21 +416,105 @@ class HierarchyPackageTests(unittest.TestCase):
                 "[整树进度](work-items/c-python-runtime/progress.md)",
                 overview,
             )
-            self.assertIn("## 需求：c-python-runtime", overview)
+            self.assertIn(
+                f"[月度明细](workspace-overview/{monthly_files[0].stem}/c-python-runtime.md)",
+                overview,
+            )
+            self.assertNotIn("## 需求：c-python-runtime", overview)
+            self.assertIn(
+                f"[查看需求明细]({monthly_files[0].stem}/c-python-runtime.md)",
+                monthly_index,
+            )
+            self.assertIn("创建时间（本机时区）", monthly_index)
+            self.assertRegex(
+                monthly_index,
+                r"\| \d{4}-\d{2}-\d{2} \d{2}:\d{2} \| 未完成 \|",
+            )
+            self.assertIn("# 需求：c-python-runtime", monthly_detail)
+            self.assertNotIn('<a id="requirement-c-python-runtime"></a>', monthly_detail)
+            self.assertRegex(
+                monthly_detail,
+                r"- 需求开始时间（本机时区）：\d{4}-\d{2}-\d{2} \d{2}:\d{2}",
+            )
+            self.assertIn("- 需求完成日期（本机时区）：未完成", monthly_detail)
+            self.assertIn("日期按运行控制器的电脑本地时区显示和归档", monthly_index)
             self.assertIn(
                 "| 层级工作项 | 状态 | 门禁 | 开发方式 | 节点文件 |",
-                overview,
+                monthly_detail,
             )
             self.assertIn(
                 "| 能力 `c-python-runtime` | 等待开发方案评审 | 未运行 | 未选择 |",
-                overview,
+                monthly_detail,
             )
-            self.assertIn("└─ 任务 `t-python-controller`", overview)
+            self.assertIn("└─ 任务 `t-python-controller`", monthly_detail)
             self.assertIn(
-                "[概览](work-items/c-python-runtime/overview.md)、"
-                "[节点进度](work-items/c-python-runtime/node-progress.md)",
-                overview,
+                "[概览](../../work-items/c-python-runtime/overview.md)、"
+                "[节点进度](../../work-items/c-python-runtime/node-progress.md)",
+                monthly_detail,
             )
+
+    def test_workspace_overview_splits_details_by_local_creation_month(self) -> None:
+        def hierarchy(item_id: str, source_name: str) -> dict:
+            prepared_hierarchy = task_hierarchy(
+                id=item_id,
+                title=item_id,
+                scope=[f"src/{source_name}.py", f"tests/test_{source_name}.py"],
+                testCommands=[["python", "-m", "unittest", f"tests.test_{source_name}"]],
+            )
+            definition = prepared_hierarchy["root"]["definition"]
+            definition["developmentPlan"]["fileChanges"] = [
+                {
+                    "path": f"src/{source_name}.py",
+                    "action": "ADD",
+                    "purpose": f"Provide {source_name}.",
+                },
+                {
+                    "path": f"tests/test_{source_name}.py",
+                    "action": "ADD",
+                    "purpose": f"Verify {source_name}.",
+                },
+            ]
+            definition["developmentPlan"]["interfaces"][0]["location"] = (
+                f"src/{source_name}.py"
+            )
+            return prepared_hierarchy
+
+        with tempfile.TemporaryDirectory() as temporary:
+            prepare_hierarchy(
+                root=temporary,
+                hierarchy=hierarchy("t-june-requirement", "june_requirement"),
+                host_runtime="codex",
+                now="2026-06-15T12:00:00Z",
+            )
+            prepare_hierarchy(
+                root=temporary,
+                hierarchy=hierarchy("t-july-requirement", "july_requirement"),
+                host_runtime="codex",
+                now="2026-07-15T12:00:00Z",
+            )
+            governance = Path(temporary, ".hierarchical-delivery-governance")
+            monthly_root = governance / "workspace-overview"
+            self.assertEqual(
+                sorted(path.name for path in monthly_root.glob("*.md")),
+                ["2026-06.md", "2026-07.md"],
+            )
+            june = (monthly_root / "2026-06.md").read_text(encoding="utf-8")
+            july = (monthly_root / "2026-07.md").read_text(encoding="utf-8")
+            self.assertIn("[查看需求明细](2026-06/t-june-requirement.md)", june)
+            self.assertNotIn("t-july-requirement", june)
+            self.assertIn("[查看需求明细](2026-07/t-july-requirement.md)", july)
+            self.assertNotIn("t-june-requirement", july)
+            june_detail = (monthly_root / "2026-06" / "t-june-requirement.md")
+            july_detail = (monthly_root / "2026-07" / "t-july-requirement.md")
+            self.assertTrue(june_detail.is_file())
+            self.assertTrue(july_detail.is_file())
+            self.assertIn("# 需求：t-june-requirement", june_detail.read_text(encoding="utf-8"))
+            self.assertIn("# 需求：t-july-requirement", july_detail.read_text(encoding="utf-8"))
+
+            stale = monthly_root / "1900-01.md"
+            stale.write_text("stale", encoding="utf-8")
+            refresh_work_item_projections(root=temporary)
+            self.assertFalse(stale.exists())
 
     def test_root_progress_tracks_the_development_plan_tree_after_each_state_write(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

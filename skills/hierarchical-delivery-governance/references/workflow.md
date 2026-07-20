@@ -35,6 +35,11 @@ flowchart TD
 
 ```text
 governance.sqlite3
+workspace-overview.md
+workspace-overview/
+├── YYYY-MM.md  # 月度需求索引
+└── YYYY-MM/
+    └── <root-id>.md  # 可直接打开的单需求层级明细
 work-items/
 └── <root-id>/
     ├── development-plan.md

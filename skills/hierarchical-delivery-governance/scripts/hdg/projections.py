@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import posixpath
+from datetime import datetime
 from typing import Any
 
 from .constants import SCHEMA_VERSION
@@ -15,12 +16,16 @@ def _node_progress_filename(entry: dict[str, Any]) -> str:
     return "node-progress.md" if entry["parentId"] is None else "progress.md"
 
 
-def _utc_date(value: str) -> str:
-    return value[:10]
+def _local_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone()
 
 
-def _utc_minute(value: str) -> str:
-    return value[:16].replace("T", " ")
+def _local_date(value: str) -> str:
+    return _local_datetime(value).strftime("%Y-%m-%d")
+
+
+def _local_minute(value: str) -> str:
+    return _local_datetime(value).strftime("%Y-%m-%d %H:%M")
 
 
 def human_status(value: object) -> str:
@@ -142,7 +147,6 @@ def render_workspace_overview(
     *,
     isolated_item_ids: set[str] | None = None,
 ) -> str:
-    by_id = {item["id"]: item for item in registry["workItems"]}
     lines = [
         "# 需求层级总览",
         "",
@@ -159,35 +163,14 @@ def render_workspace_overview(
             f"> 隔离工作项：{', '.join(f'`{item_id}`' for item_id in isolated)}",
         ])
 
-    def append_node(item: dict[str, Any], depth: int, connector: str) -> None:
-        overview = posixpath.join(item["packagePath"], "overview.md")
-        progress_filename = _node_progress_filename(item)
-        progress = posixpath.join(item["packagePath"], progress_filename)
-        mode = _development_mode(item, by_id)
-        indentation = "　" * max(depth - 1, 0)
-        hierarchy_item = f"{indentation}{connector}{human_status(item['kind'])} `{item['id']}`"
-        lines.append(
-            f"| {hierarchy_item} | {human_status(item['status'])} | "
-            f"{human_status(item['gate']['status'])} | {mode} | "
-            f"[概览]({overview})、[节点进度]({progress}) |"
-        )
-        children = [by_id[child_id] for child_id in item["childIds"]]
-        for index, child in enumerate(children):
-            last = index == len(children) - 1
-            append_node(child, depth + 1, "└─ " if last else "├─ ")
-
-    roots = sorted(
-        (item for item in registry["workItems"] if item["parentId"] is None),
-        key=lambda item: (item["updatedAt"], item["id"]),
-        reverse=True,
-    )
+    roots = _workspace_roots(registry)
     lines.extend([
         "",
         "## 需求索引",
         "",
         "> 按最近更新时间倒序排列；目录继续使用稳定根 ID，日期只用于检索和浏览。",
         "",
-        "| 最近更新（UTC） | 创建日期（UTC） | 需求根 | 类型 | 状态 | 门禁 | 后代进度 | 入口 |",
+        "| 最近更新（本机时区） | 创建时间（本机时区） | 需求根 | 类型 | 状态 | 门禁 | 后代进度 | 入口 |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ])
     if not roots:
@@ -202,29 +185,131 @@ def render_workspace_overview(
         overview = posixpath.join(root["packagePath"], "overview.md")
         plan = posixpath.join(root["packagePath"], "development-plan.md")
         progress = posixpath.join(root["packagePath"], "progress.md")
+        month = _workspace_month(root)
+        monthly_detail = f"workspace-overview/{month}/{root['id']}.md"
         lines.append(
-            f"| {_utc_minute(root['updatedAt'])} | {_utc_date(root['createdAt'])} | "
+            f"| {_local_minute(root['updatedAt'])} | {_local_minute(root['createdAt'])} | "
             f"[`{root['id']}`]({overview}) | "
             f"{human_status(root['kind'])} | {human_status(root['status'])} | "
             f"{human_status(root['gate']['status'])} | "
             f"{descendant_progress} | "
-            f"[方案]({plan})、[整树进度]({progress}) |"
+            f"[方案]({plan})、[整树进度]({progress})、[月度明细]({monthly_detail}) |"
         )
-    for root in roots:
-        acceptance = root.get("acceptance")
-        lines.extend([
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _workspace_roots(registry: dict[str, Any]) -> list[dict[str, Any]]:
+    return sorted(
+        (item for item in registry["workItems"] if item["parentId"] is None),
+        key=lambda item: (item["updatedAt"], item["id"]),
+        reverse=True,
+    )
+
+
+def _workspace_month(root: dict[str, Any]) -> str:
+    return _local_datetime(root["createdAt"]).strftime("%Y-%m")
+
+
+def _requirement_completion_date(root: dict[str, Any]) -> str:
+    acceptance = root.get("acceptance") or {}
+    confirmation = acceptance.get("userConfirmation") or {}
+    recorded_at = confirmation.get("recordedAt")
+    if acceptance.get("status") != "COMPLETED" or not isinstance(recorded_at, str):
+        return "未完成"
+    return _local_date(recorded_at)
+
+
+def render_workspace_month_overviews(registry: dict[str, Any]) -> dict[str, str]:
+    by_id = {item["id"]: item for item in registry["workItems"]}
+    roots = _workspace_roots(registry)
+    months = sorted({_workspace_month(root) for root in roots}, reverse=True)
+    rendered: dict[str, str] = {}
+
+    for month in months:
+        month_roots = [root for root in roots if _workspace_month(root) == month]
+        month_lines = [
+            f"# {month} 需求索引",
             "",
-            f"## 需求：{root['id']}",
+            "> 本文件按需求创建月份归档；每个需求使用独立明细文件，避免依赖跨文件标题锚点。",
+            "> 机器权威为 `../governance.sqlite3`，物理目录继续使用稳定根 ID。",
+            "> 日期按运行控制器的电脑本地时区显示和归档。",
             "",
-            f"- 开发方案：[查看整树 development-plan.md]({posixpath.join(root['packagePath'], 'development-plan.md')})",
-            f"- 开发建议：{_development_mode(root, by_id)}（需求评审时选择）",
-            f"- 最终验收：{human_status(acceptance['status']) if acceptance else '不适用'}",
-            f"- 进度：{root['progress']['descendants']['verified']}/{root['progress']['descendants']['total']} 个后代已验证",
+            "[返回全局需求索引](../workspace-overview.md)",
             "",
-            "| 层级工作项 | 状态 | 门禁 | 开发方式 | 节点文件 |",
-            "| --- | --- | --- | --- | --- |",
-        ])
-        append_node(root, 0, "")
+            "| 创建时间（本机时区） | 完成日期（本机时区） | 最近更新（本机时区） | 需求根 | 状态 | 门禁 | 入口 |",
+            "| --- | --- | --- | --- | --- | --- | --- |",
+        ]
+
+        for root in month_roots:
+            detail_path = f"{month}/{root['id']}.md"
+            month_lines.append(
+                f"| {_local_minute(root['createdAt'])} | {_requirement_completion_date(root)} | "
+                f"{_local_minute(root['updatedAt'])} | `{root['id']}` | "
+                f"{human_status(root['status'])} | {human_status(root['gate']['status'])} | "
+                f"[查看需求明细]({detail_path}) |"
+            )
+            rendered[detail_path] = _render_workspace_requirement_detail(
+                root,
+                by_id,
+                month,
+            )
+        month_lines.append("")
+        rendered[f"{month}.md"] = "\n".join(month_lines)
+    return rendered
+
+
+def _render_workspace_requirement_detail(
+    root: dict[str, Any],
+    by_id: dict[str, dict[str, Any]],
+    month: str,
+) -> str:
+    acceptance = root.get("acceptance")
+    plan = posixpath.join("..", "..", root["packagePath"], "development-plan.md")
+    lines = [
+        f"# 需求：{root['id']}",
+        "",
+        "> 本文件是单个需求的可读投影；状态与门禁会随 SQLite 写回自动刷新。",
+        "> 机器权威为 `../../governance.sqlite3`，日期按运行控制器的电脑本地时区显示。",
+        "",
+        f"[返回 {month} 月度索引](../{month}.md) · [返回全局需求索引](../../workspace-overview.md)",
+        "",
+        f"- 需求开始时间（本机时区）：{_local_minute(root['createdAt'])}",
+        f"- 需求完成日期（本机时区）：{_requirement_completion_date(root)}",
+        f"- 最近更新（本机时区）：{_local_minute(root['updatedAt'])}",
+        f"- 开发方案：[查看整树 development-plan.md]({plan})",
+        f"- 开发建议：{_development_mode(root, by_id)}（需求评审时选择）",
+        f"- 最终验收：{human_status(acceptance['status']) if acceptance else '不适用'}",
+        f"- 进度：{root['progress']['descendants']['verified']}/{root['progress']['descendants']['total']} 个后代已验证",
+        "",
+        "| 层级工作项 | 状态 | 门禁 | 开发方式 | 节点文件 |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+
+    def append_node(item: dict[str, Any], depth: int, connector: str) -> None:
+        overview = posixpath.join("..", "..", item["packagePath"], "overview.md")
+        progress = posixpath.join(
+            "..",
+            "..",
+            item["packagePath"],
+            _node_progress_filename(item),
+        )
+        mode = _development_mode(item, by_id)
+        indentation = "　" * max(depth - 1, 0)
+        hierarchy_item = (
+            f"{indentation}{connector}{human_status(item['kind'])} `{item['id']}`"
+        )
+        lines.append(
+            f"| {hierarchy_item} | {human_status(item['status'])} | "
+            f"{human_status(item['gate']['status'])} | {mode} | "
+            f"[概览]({overview})、[节点进度]({progress}) |"
+        )
+        children = [by_id[child_id] for child_id in item["childIds"]]
+        for index, child in enumerate(children):
+            last = index == len(children) - 1
+            append_node(child, depth + 1, "└─ " if last else "├─ ")
+
+    append_node(root, 0, "")
     lines.append("")
     return "\n".join(lines)
 

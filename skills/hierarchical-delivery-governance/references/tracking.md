@@ -2,7 +2,9 @@
 
 ## 投影原则
 
-项目级 `governance.sqlite3` 是节点、层级和进度的唯一机器权威。`workspace-overview.md` 先按最近更新时间倒序生成需求索引，再按需求根分组展示层级表格；索引展示创建时间、更新时间、根类型、状态、门禁、后代进度和入口。物理目录保持稳定根 ID，不添加日期。每个需求根的 `progress.md` 使用 Markdown 表格，在第一列保留与该根 `development-plan.md` 相同的工作项 ID、父子顺序和 Delivery→Capability→Task 层级。两个投影都不能把父子节点渲染成彼此并列的需求行，也不能使用会被 Markdown 折叠为长段落的连续普通文本行。
+项目级 `governance.sqlite3` 是节点、层级和进度的唯一机器权威。`workspace-overview.md` 只保留按最近更新时间倒序的全局需求索引；索引展示本机时区的创建时间和更新时间（均精确到分），以及根类型、状态、门禁、后代进度和入口。`workspace-overview/YYYY-MM.md` 是月度索引，详细层级写入 `workspace-overview/YYYY-MM/<root-id>.md`，每个需求保留开始时间、完成日期和 Delivery→Capability→Task 表格。完成日期只能来自 `COMPLETED` 的最终用户确认时间，不能用 gate 时间或最近更新时间代替。物理目录保持稳定根 ID，不添加日期；SQLite 时间保持 UTC。每个需求根的 `progress.md` 使用 Markdown 表格，在第一列保留与该根 `development-plan.md` 相同的工作项 ID、父子顺序和层级。投影不能把父子节点渲染成彼此并列的需求行，也不能使用会被 Markdown 折叠为长段落的连续普通文本行。
+
+月度明细链接必须直接指向以需求根 ID 命名的独立 Markdown 文件，不携带标题片段，确保原始 Markdown 编辑器和预览查看器都可导航。
 
 每个需求根只有一个整树 `development-plan.md` 作为统一人工冻结入口。需求根的 `progress.md` 是整树总进度；根节点自身进度使用同目录 `node-progress.md`，子节点自身进度使用各自目录 `progress.md`。各实际节点仍有自己的开发内容、节点进度、baseline、状态、门禁和后续开发复核；节点进度必须直接链接本节点方案。
 
@@ -48,4 +50,4 @@ Task 子级计数为零。不写主观百分比。协调节点声明的全部 ch
 - `record-interaction`：追加指令、决策或状态摘要，刷新需求根 `interaction-log.md`。
 - retry、聚合 gate、独立审查和用户确认：立即更新数据库和投影。
 
-每次状态写回增加 workspace/record revision，并重建 `workspace-overview.md`、需求根整树 `progress.md`、根节点 `node-progress.md`，以及每个已物化子节点的 `overview.md/progress.md`。因此 Task 被认领、写回实现或阻断、重试、门禁验证，以及父级聚合和最终验收后，根级明细都立即反映新状态。
+每次状态写回增加 workspace/record revision，并重建 `workspace-overview.md`、全部 `workspace-overview/YYYY-MM.md` 和 `workspace-overview/YYYY-MM/<root-id>.md`、需求根整树 `progress.md`、根节点 `node-progress.md`，以及每个已物化子节点的 `overview.md/progress.md`。不再存在的月份文件与需求明细会随月度投影目录的原子重建一并清理。因此 Task 被认领、写回实现或阻断、重试、门禁验证，以及父级聚合和最终验收后，索引与月度明细都立即反映新状态。

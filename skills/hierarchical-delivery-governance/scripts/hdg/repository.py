@@ -50,6 +50,7 @@ from .projections import (
     render_item_progress,
     render_interaction_log,
     render_requirement_handoff,
+    render_workspace_month_overviews,
     render_workspace_overview,
     report_status,
 )
@@ -1184,6 +1185,21 @@ class GovernanceRepository:
                 isolated_item_ids=self._isolated_entry_ids,
             ),
         )
+        monthly_overviews = render_workspace_month_overviews(registry)
+        monthly_root = self.governance_root / "workspace-overview"
+        if monthly_root.exists() and (
+            not monthly_root.is_dir() or monthly_root.is_symlink()
+        ):
+            fail(
+                "WORKSPACE_OVERVIEW_DIRECTORY_INVALID",
+                "Monthly workspace overview path must be a regular directory",
+            )
+
+        def populate_monthly_overviews(staging: Path) -> None:
+            for relative_path, content in monthly_overviews.items():
+                atomic_write(staging / relative_path, content)
+
+        atomic_replace_directory(monthly_root, populate_monthly_overviews)
         for entry in registry["workItems"]:
             target = self.item_path(entry)
             if not target.exists():

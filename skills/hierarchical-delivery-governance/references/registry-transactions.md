@@ -27,6 +27,8 @@ Task claim 包含 `owner`、`operationId` 和 `claimedAt`。正常流程用 `dis
 
 Agent 返回结果时必须提交相同 operationId，并将完整结果 artifact 通过 `--evidence -` 从 stdin 交给控制器。成功写 `IMPLEMENTED`、artifact 和控制器计算的摘要，失败写 `BLOCKED`、阻断 artifact 和摘要，然后清除 claim，并生成 `development-review.md`。无法确认外部 Agent 是否已启动或写入时，不重复派遣，转人工核对。正常 PASS 必须以同样的 stdin 方式通过 `accept-item` 校验 gate artifact 后写 gate 与 `acceptance-report.md`，不能用自然语言补写 PASS，也不能用临时文件或 Agent 直写 SQLite 绕过事务。
 
+同契约验证修正使用 `remediate-task --evidence -`。命令只接受没有活动 claim、需求未完成且状态为 IMPLEMENTED/BLOCKED/VERIFIED 的 Task；事务内校验当前 baseline、关联验收项、契约不变断言、精确文件和活动范围冲突，随后把 artifact、摘要与修正前状态快照追加到 `interaction_events`。补充文件不会改写 definition 或 baseline，而是与冻结 `fileChanges` 合并成后续执行和 gate 的有效授权集合。若目标 Task 或祖先 gate 已通过，事务会逐级失效到需求根并重置最终验收状态；整个过程仍使用原 Task 和原根目录。
+
 ## 整树准备与冻结并发
 
 `prepare-hierarchy` 在事务内检查新树所有 ID 是否与其他需求冲突，并一次写入完整层级记录。等待评审的同根树可以整体替换；层级指纹改变后旧确认失效。

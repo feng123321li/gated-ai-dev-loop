@@ -12,6 +12,7 @@ description: "治理可独立交付的软件需求。按最小必要深度组织
 - 合法结构只有：根 `Task`、`Capability → Task`、`Delivery → Capability → Task`。
 - 使用满足真实聚合责任的最浅结构。Task 是唯一执行叶子；Capability 聚合多个 Task；Delivery 聚合多个 Capability。
 - 每个需求只有一个顶层目录：`work-items/<root-id>/`。全部子级递归放在父级 `children/<child-id>/`，不得平铺成多个需求目录。
+- 开发、回归、门禁、独立审查或最终验收发现的修正，只要仍为同一冻结目标和验收契约，就必须回到原 Task；不得为修复同一需求另建根 Task。
 - 项目级 `governance.sqlite3` 是唯一机器权威；每个实际节点都有独立的 Markdown baseline、`development-plan.md`、`progress.md` 和阶段报告。
 - 一次人工同意冻结整棵树。不得逐节点准备或逐节点批准。
 - Skill 与 CLI 统一使用当前 Python 控制器和当前数据契约。
@@ -56,9 +57,9 @@ description: "治理可独立交付的软件需求。按最小必要深度组织
 
    人不需要知道、复制或复述指纹。控制器用同一次确认冻结整树并记录根级方式；方案变化后旧指纹必须被拒绝。
 8. `active` 下，当前 Agent 冻结后立即自主计算 READY Task 并决定多子 Agent、单 Agent 或当前 Agent 串行。`manual` 下，当前规划会话不开发，控制器在需求根生成一份 `requirement-handoff.md` 和同内容 `handoffPrompt`；用户只需把这份需求级交接复制到一个新会话一次，接收 Agent 随后自行计算 READY、逐 Task `dispatch-task`、开发、门禁并推进整棵树，不得要求用户逐 Task 回复启动。两种方式的执行宿主都在子 Agent 不可用或并发不足时自动降级，不请求用户重新选择方式。Agent 数量、并发度和降级策略属于运行策略，不写入冻结方案或层级指纹。
-9. 开发阶段不设置额外人工门禁。Agent 在冻结目标和安全边界内循环“实现 → 回归测试 → 修复 → 复测”，逐 Task 写回 `IMPLEMENTED` 或 `BLOCKED`。同 baseline 且没有活动 claim 的 BLOCKED 由 Agent 自动执行 `retry-item`、重新计算 READY 并继续；只有冻结契约或授权必须变化时才回到人工评审。开发结果不能自行宣布 PASS。
+9. 开发阶段不设置额外人工门禁。Agent 在冻结目标和安全边界内循环“实现 → 回归测试 → 修复 → 复测”，逐 Task 写回 `IMPLEMENTED` 或 `BLOCKED`。同 baseline 且没有活动 claim 的 BLOCKED 由 Agent 自动执行 `retry-item`、重新计算 READY 并继续。若验证发现为满足原验收项必须补充冻结方案遗漏的精确文件，但目标、需求、验收、接口行为、数据契约、拓扑和外部授权均不变，则使用 `remediate-task --evidence -` 在原 Task 下追加验证修正授权，自动失效该 Task 及已通过的祖先门禁，再继续原 Task；不得重新 `prepare-hierarchy` 创建重复需求根。只有上述契约或授权事实确实变化时才回到人工评审。开发结果不能自行宣布 PASS。
 10. 需求根 `progress.md` 使用 Markdown 表格展示整树明细：第一列保留与 `development-plan.md` 相同的工作项 ID、父子顺序和层级，其余列分别展示阶段、状态、门禁、当前执行、节点文件和阶段性产物。“当前执行”对协调节点显示“不适用”，对待执行 Task 显示“未认领”，开发中显示 owner/operationId，结果写回后显示“已释放”。每次控制器写回都会从 SQLite 自动重建该表格，不依赖 Agent 手工改表。
-11. 使用 `task-result` 写回结果并生成 `development-review.md`；全部相关回归和复测通过后，使用 `accept-item` 提交门禁验收并生成 `acceptance-report.md`。结构化上下文、结果和报告只存 SQLite。父级必须在子级全部 VERIFIED 后运行自己的聚合 gate。
+11. 使用 `task-result` 写回结果并生成 `development-review.md`；验证修正会在同一文件追加“验证修正”明细，并进入原 Task 的授权文件集合。全部相关回归和复测通过后，使用 `accept-item` 提交门禁验收并生成 `acceptance-report.md`。结构化上下文、结果、修正和报告只存 SQLite。父级必须在子级全部 VERIFIED 后运行自己的聚合 gate。
 12. 根工作项 gate PASS 后向用户提交交付，由用户人工验收并最终确认；只有 `COMPLETED` 表示需求完成。
 
 完整状态流和命令参数见 [workflow.md](references/workflow.md) 与控制器 `--help`。
@@ -87,7 +88,7 @@ Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或�
 
 ## 输入与路径
 
-`task-result`、`gate-item`、`accept-item` 和 `acceptance-item` 的完整证据 artifact 必须使用 `--evidence -` 从 stdin 直接提交；文件路径输入会被拒绝，不生成 `.hdg-tmp`、`%TEMP%` 或其他临时 JSON。控制器在 SQLite 写事务内按当前工作项、operationId、baseline 和动作校验 artifact，计算规范 JSON 的 SHA-256，并把完整 artifact 与摘要一起写入 SQLite；Agent 不直接写数据库，也不自行提交路径或摘要。
+`task-result`、`remediate-task`、`gate-item`、`accept-item` 和 `acceptance-item` 的完整证据 artifact 必须使用 `--evidence -` 从 stdin 直接提交；文件路径输入会被拒绝，不生成 `.hdg-tmp`、`%TEMP%` 或其他临时 JSON。控制器在 SQLite 写事务内按当前工作项、operationId、baseline 和动作校验 artifact，计算规范 JSON 的 SHA-256，并把完整 artifact 与摘要一起写入 SQLite；Agent 不直接写数据库，也不自行提交路径或摘要。
 
 `--definition` 和 `--interaction` 的一次性 JSON 也优先使用 `-` 从 stdin 读取，避免跨卷路径和无意义的中间文件。
 
@@ -97,11 +98,12 @@ Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或�
 - `workspace-overview.md` 会列出只读隔离的历史 evidence 节点。不能直接操作隔离节点；其他有效需求、同树兄弟 Task 和已有 claim 不因它被连带阻断。
 - `<root-id>` 目录只有 Markdown 投影。手工删除目录不会删除需求状态，后续刷新还会重建；不得用手删目录代替控制器状态操作。
 - 需要保留人机协作事实时，用 `record-interaction` 写入简短的指令、决策或状态摘要；`interaction-log` 查询结构化事件，需求根 `interaction-log.md` 供人工审计。不得保存隐藏思考过程、密钥或不必要的原始对话。
+- `remediate-task` 把验证修正 artifact、摘要、原状态快照和补充文件授权追加到 SQLite 交互审计链；原 baseline、层级指纹和 `development-plan.md` 不被改写。
 - 旧 JSON 控制目录不迁移、不兼容；发现后明确阻断并要求使用新的治理目录。
 
 ## 开发与安全边界
 
-- Task 只写冻结的 `developmentPlan.fileChanges`；scope 是外边界，不代表 scope 内任意文件都已授权。
+- Task 只写冻结的 `developmentPlan.fileChanges` 与控制器校验通过的验证修正补充文件；scope 不是任意写授权，Agent 不能用自然语言自行扩展文件集合。
 - 不继承需求分析或其他 Task 对话；上下文必须由控制器从 SQLite 重建。
 - 开发 Agent 不修改 SQLite、baseline、治理投影或 `.git/**`。
 - 不自动提交、推送、合并、迁移、发布或执行其他外部动作；需要用户单独明确授权。
@@ -118,5 +120,6 @@ Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或�
 - 并行调度：[parallel-development.md](references/parallel-development.md)
 - 进度与父级聚合：[tracking.md](references/tracking.md)
 - 门禁、独立审查与最终确认：[acceptance.md](references/acceptance.md)
+- 同一 Task 的验证修正：[validation-remediation.md](references/validation-remediation.md)
 - 多工作区：[multi-workspace.md](references/multi-workspace.md)
 - 验收后反馈：[post-acceptance-feedback.md](references/post-acceptance-feedback.md)

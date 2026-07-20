@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from .constants import SCHEMA_VERSION
-from .errors import fail
+from .errors import GatedLoopError, fail
 from .jsonio import canonical_json, fingerprint
 
 
@@ -15,6 +15,19 @@ ACCEPTANCE_STATUSES = {
     "NOT_READY", "WAITING_FOR_INDEPENDENT_REVIEW", "WAITING_FOR_USER_CONFIRMATION", "COMPLETED",
 }
 ACCEPTANCE_REPORT_STATUSES = ACCEPTANCE_STATUSES | {"WAITING_FOR_GATE", "BLOCKED", "VERIFIED"}
+VALIDATION_REMEDIATION_SOURCES = {
+    "REGRESSION", "TASK_GATE", "INDEPENDENT_REVIEW", "USER_ACCEPTANCE",
+}
+VALIDATION_REMEDIATION_ASSERTIONS = {
+    "goalUnchanged",
+    "requirementsUnchanged",
+    "acceptanceUnchanged",
+    "interfacesUnchanged",
+    "dataContractUnchanged",
+    "testCommandsUnchanged",
+    "topologyUnchanged",
+    "externalAuthorityUnchanged",
+}
 
 
 def valid_timestamp(value: object) -> bool:
@@ -175,7 +188,70 @@ def valid_task_result_artifact(value: object, *, item_id: str, operation_id: str
     )
 
 
-def valid_gate_artifact(value: object, entry: dict[str, Any], definition: dict[str, Any]) -> bool:
+def valid_validation_remediation_artifact(
+    value: object,
+    *,
+    item_id: str,
+    baseline_fingerprint: str,
+    acceptance_ids: set[str],
+) -> bool:
+    """Validate an append-only repair that keeps the frozen requirement contract unchanged."""
+    if not isinstance(value, dict):
+        return False
+    assertions = value.get("assertions")
+    file_changes = value.get("fileChanges")
+    linked_acceptance = value.get("acceptanceIds")
+    if not (
+        set(value) == {
+            "schemaVersion", "kind", "taskId", "baselineFingerprint", "source", "summary",
+            "acceptanceIds", "fileChanges", "assertions",
+        }
+        and value.get("schemaVersion") == SCHEMA_VERSION
+        and value.get("kind") == "VALIDATION_REMEDIATION"
+        and value.get("taskId") == item_id
+        and value.get("baselineFingerprint") == baseline_fingerprint
+        and value.get("source") in VALIDATION_REMEDIATION_SOURCES
+        and non_empty_string(value.get("summary"))
+        and isinstance(linked_acceptance, list)
+        and bool(linked_acceptance)
+        and all(isinstance(item, str) and item in acceptance_ids for item in linked_acceptance)
+        and len(set(linked_acceptance)) == len(linked_acceptance)
+        and isinstance(file_changes, list)
+        and bool(file_changes)
+        and isinstance(assertions, dict)
+        and set(assertions) == VALIDATION_REMEDIATION_ASSERTIONS
+        and all(assertions.get(key) is True for key in VALIDATION_REMEDIATION_ASSERTIONS)
+    ):
+        return False
+
+    from .model import WILDCARD, normalize_scope_pattern
+
+    paths: list[str] = []
+    for change in file_changes:
+        if not (
+            isinstance(change, dict)
+            and set(change) == {"path", "action", "purpose"}
+            and change.get("action") in {"ADD", "MODIFY", "REMOVE"}
+            and non_empty_string(change.get("purpose"))
+        ):
+            return False
+        try:
+            normalized = normalize_scope_pattern(change.get("path"))
+        except GatedLoopError:
+            return False
+        if normalized != change.get("path") or WILDCARD.search(normalized):
+            return False
+        paths.append(normalized)
+    return len(set(paths)) == len(paths)
+
+
+def valid_gate_artifact(
+    value: object,
+    entry: dict[str, Any],
+    definition: dict[str, Any],
+    *,
+    additional_planned_files: set[str] | None = None,
+) -> bool:
     if not isinstance(value, dict):
         return False
     scope = value.get("scope")
@@ -242,6 +318,7 @@ def valid_gate_artifact(value: object, entry: dict[str, Any], definition: dict[s
         ):
             return False
     planned_files = {item["path"] for item in definition["developmentPlan"].get("fileChanges", [])}
+    planned_files.update(additional_planned_files or set())
     if definition["kind"] == "TASK" and any(
         item.replace("\\", "/") not in planned_files for item in scope["changedFiles"]
     ):

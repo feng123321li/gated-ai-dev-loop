@@ -414,10 +414,45 @@ def report_status(entry: dict[str, Any]) -> str:
     return "NOT_READY"
 
 
+def _validation_remediation_changes(report: dict[str, Any]) -> list[dict[str, Any]]:
+    changes: list[dict[str, Any]] = []
+    for record in report.get("validationRemediations", []):
+        changes.extend(record["artifact"]["fileChanges"])
+    return changes
+
+
+def _append_validation_remediations(
+    lines: list[str],
+    report: dict[str, Any],
+) -> None:
+    remediations = report.get("validationRemediations", [])
+    lines.extend(["", "## 验证修正", ""])
+    if not remediations:
+        lines.append("- 无。")
+        return
+    lines.extend([
+        "> 以下内容是原冻结契约下的追加式验证修正；原 baseline、需求 ID 和层级结构保持不变。",
+        "",
+        "| 序号 | 发现阶段 | 对应验收项 | 修正原因 | 补充授权文件 | 记录时间 |",
+        "| ---: | --- | --- | --- | --- | --- |",
+    ])
+    for index, record in enumerate(remediations, start=1):
+        artifact = record["artifact"]
+        summary = artifact["summary"].replace("|", "\\|").replace("\n", " ")
+        files = "、".join(item["path"] for item in artifact["fileChanges"])
+        lines.append(
+            f"| {index} | `{artifact['source']}` | "
+            f"{', '.join(f'`{item}`' for item in artifact['acceptanceIds'])} | "
+            f"{summary} | {files} | {record['recordedAt']} |"
+        )
+
+
 def render_development_review(report: dict[str, Any]) -> str:
     plan = report["developmentPlan"]
     result = (report.get("result") or {}).get("artifact") or {}
     planned_files = [item["path"] for item in plan.get("fileChanges", [])]
+    remediation_files = [item["path"] for item in _validation_remediation_changes(report)]
+    authorized_files = planned_files + [item for item in remediation_files if item not in planned_files]
     actual_files = [item.replace("\\", "/") for item in result.get("changedFiles", [])]
     tests = result.get("tests", [])
     lines = [
@@ -431,10 +466,11 @@ def render_development_review(report: dict[str, Any]) -> str:
         "## 冻结计划与实际改动",
         "",
         f"- 开发目的：{plan['purpose']}",
-        f"- 计划文件：{'、'.join(planned_files) or '无'}",
+        f"- 冻结计划文件：{'、'.join(planned_files) or '无'}",
+        f"- 验证修正补充文件：{'、'.join(remediation_files) or '无'}",
         f"- 实际文件：{'、'.join(actual_files) or '无'}",
-        f"- 计划外文件：{'、'.join(item for item in actual_files if item not in planned_files) or '无'}",
-        f"- 尚未观察到的计划文件：{'、'.join(item for item in planned_files if item not in actual_files) or '无'}",
+        f"- 未授权文件：{'、'.join(item for item in actual_files if item not in authorized_files) or '无'}",
+        f"- 尚未观察到的授权文件：{'、'.join(item for item in authorized_files if item not in actual_files) or '无'}",
         "",
         "## 接口与功能复核",
         "",
@@ -447,6 +483,7 @@ def render_development_review(report: dict[str, Any]) -> str:
         )
     else:
         lines.append("- 冻结计划未声明接口改动。")
+    _append_validation_remediations(lines, report)
     lines.extend(["", "## 开发者结果", "", f"- 摘要：{result.get('summary', '未提供')}"])
     blockers = result.get("blockers", [])
     lines.append(f"- 阻断：{'；'.join(blockers) or '无'}")
@@ -511,6 +548,7 @@ def render_acceptance_report(report: dict[str, Any]) -> str:
     else:
         children = "；".join(f"{item['id']}：{item['purpose']}" for item in plan["childPlans"])
         lines.extend([f"- 协调目的：{plan['purpose']}", f"- 子级内容：{children}"])
+    _append_validation_remediations(lines, report)
     tests = (gate_artifact or {}).get("tests") or ((report.get("development") or {}).get("artifact") or {}).get("tests", [])
     lines.extend(["", "## 测试结果", ""])
     if not tests:
@@ -523,12 +561,15 @@ def render_acceptance_report(report: dict[str, Any]) -> str:
     lines.extend(["", "## 变更范围", ""])
     if "fileChanges" in plan:
         planned = [item["path"] for item in plan["fileChanges"]]
+        remediation = [item["path"] for item in _validation_remediation_changes(report)]
+        authorized = planned + [item for item in remediation if item not in planned]
         actual = scope.get("changedFiles") or (((report.get("development") or {}).get("artifact") or {}).get("changedFiles", []))
         actual_portable = [item.replace("\\", "/") for item in actual]
         lines.extend([
             f"- 冻结计划文件：{'、'.join(planned) or '无'}",
-            f"- 计划外文件：{'、'.join(item for item, portable in zip(actual, actual_portable) if portable not in planned) or '无'}",
-            f"- 计划中尚未观察到的文件：{'、'.join(item for item in planned if item not in actual_portable) or '无'}",
+            f"- 验证修正补充文件：{'、'.join(remediation) or '无'}",
+            f"- 未授权文件：{'、'.join(item for item, portable in zip(actual, actual_portable) if portable not in authorized) or '无'}",
+            f"- 尚未观察到的授权文件：{'、'.join(item for item in authorized if item not in actual_portable) or '无'}",
         ])
     else:
         lines.extend([
@@ -588,7 +629,7 @@ def render_task_handoff(context: dict[str, Any]) -> str:
         "以下冻结上下文是完整权威。不要重新分析原始需求、改变验收标准或继承其他会话的隐含假设。",
         "",
         "执行规则：",
-        "- 只实现这个冻结的叶子 Task，并且只写入 Scope 中的路径。",
+        "- 只实现这个冻结的叶子 Task，并且只写入 task.authorizedFileChanges；验证修正文件是原 Task 的追加授权，不是新需求。",
         "- 不修改 SQLite、baseline、进度投影、`.git/**` 或外部状态。",
         "- 运行列出的测试命令，只报告真实存在的证据。",
         "- 不提交、推送、发布，也不得自行报告 PASS。",

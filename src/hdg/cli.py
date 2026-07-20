@@ -25,6 +25,7 @@ from .planning import (
     refresh_work_item_projections,
     retry_work_item,
 )
+from .remediation import record_validation_remediation
 
 
 COMMANDS = (
@@ -35,6 +36,7 @@ COMMANDS = (
     "dispatch-task",
     "claim-task",
     "task-result",
+    "remediate-task",
     "retry-item",
     "gate-item",
     "accept-item",
@@ -59,6 +61,7 @@ COMMAND_OPTIONS = {
     "claim-task": {"--json", "--help", "--item", "--owner", "--operation", "--dogfood"},
     "dispatch-task": {"--json", "--help", "--item", "--owner", "--operation", "--dogfood"},
     "task-result": {"--json", "--help", "--item", "--operation", "--status", "--evidence", "--dogfood"},
+    "remediate-task": {"--json", "--help", "--item", "--expected-baseline", "--evidence", "--dogfood"},
     "retry-item": {"--json", "--help", "--item", "--expected-baseline", "--dogfood"},
     "gate-item": {"--json", "--help", "--item", "--status", "--evidence", "--dogfood"},
     "accept-item": {"--json", "--help", "--item", "--evidence", "--dogfood"},
@@ -80,6 +83,7 @@ Commands:
   dispatch-task --item <task-id> --owner <owner> --operation <id>
   claim-task --item <task-id> --owner <owner> --operation <id>
   task-result --item <task-id> --operation <id> --status IMPLEMENTED|BLOCKED --evidence -
+  remediate-task --item <task-id> --expected-baseline <sha256> --evidence -
   retry-item --item <id> --expected-baseline <sha256>
   gate-item --item <id> --status PASS|FAIL --evidence -
   accept-item --item <id> --evidence -
@@ -240,6 +244,13 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
             "Evidence artifact must be provided directly through stdin with --evidence -",
         )
     evidence = _read_structured(evidence_source, "WORK_ITEM_EVIDENCE", cwd=cwd, stdin=stdin)
+    if command == "remediate-task":
+        return record_validation_remediation(
+            **common,
+            item_id=_required(parsed, "--item"),
+            expected_baseline_fingerprint=_required(parsed, "--expected-baseline"),
+            evidence=evidence,
+        )
     if command == "task-result":
         return record_task_result(
             **common,

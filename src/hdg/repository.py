@@ -22,6 +22,7 @@ from .evidence import (
     valid_acceptance_report,
     valid_development_mode,
     valid_evidence_record,
+    valid_validation_remediation_artifact,
     valid_timestamp,
 )
 from .fs_safe import atomic_create_directory, atomic_replace_directory, atomic_write, read_regular_file, safe_path
@@ -868,6 +869,7 @@ class GovernanceRepository:
             "GATE": "门禁验收状态更新",
             "ACCEPTANCE": "交付验收状态更新",
             "RETRY": "阻断任务重试",
+            "VALIDATION_REMEDIATION_RETRY": "原任务验证修正重试",
         }.get(purpose, purpose)
 
     def append_interaction_event(
@@ -967,6 +969,53 @@ class GovernanceRepository:
                 "eventHash": row["event_hash"],
             })
         return result
+
+    def read_validation_remediations(
+        self,
+        item_id: str,
+        definition: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Read validated append-only remediation records for one frozen Task."""
+        acceptance_ids = {item["id"] for item in definition["acceptance"]}
+        result: list[dict[str, Any]] = []
+        for event in self.read_interaction_events([item_id]):
+            if event["eventType"] != "VALIDATION_REMEDIATION":
+                continue
+            payload = event["payload"]
+            if not isinstance(payload, dict) or set(payload) != {"remediation", "previousState"}:
+                fail("WORK_ITEM_REMEDIATION_INVALID", f"Stored validation remediation is invalid: {item_id}")
+            record = payload["remediation"]
+            previous_state = payload["previousState"]
+            if not (
+                isinstance(record, dict)
+                and set(record) == {"evidence", "artifact", "recordedAt"}
+                and isinstance(previous_state, dict)
+                and set(previous_state) == {
+                    "status", "gate", "acceptance", "latestEvidence", "latestResult",
+                }
+                and valid_evidence_record(record.get("evidence"))
+                and record.get("recordedAt") == event["recordedAt"]
+                and valid_validation_remediation_artifact(
+                    record.get("artifact"),
+                    item_id=item_id,
+                    baseline_fingerprint=work_item_baseline_fingerprint(definition),
+                    acceptance_ids=acceptance_ids,
+                )
+                and record["evidence"] == evidence_record(record["artifact"])
+            ):
+                fail("WORK_ITEM_REMEDIATION_INVALID", f"Stored validation remediation is invalid: {item_id}")
+            result.append(deepcopy(record))
+        return result
+
+    def effective_task_file_changes(
+        self,
+        definition: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Return frozen file changes plus validated remediation additions."""
+        changes = deepcopy(definition["developmentPlan"].get("fileChanges", []))
+        for record in self.read_validation_remediations(definition["id"], definition):
+            changes.extend(deepcopy(record["artifact"]["fileChanges"]))
+        return sorted(changes, key=lambda item: item["path"])
 
     def _write_interaction_logs(self, registry: dict[str, Any]) -> None:
         by_id = {item["id"]: item for item in registry["workItems"]}
@@ -1176,6 +1225,9 @@ class GovernanceRepository:
             "gate": entry["gate"],
             "criteria": definition["acceptance"],
             "developmentPlan": definition["developmentPlan"],
+            "validationRemediations": self.read_validation_remediations(entry["id"], definition)
+            if entry["kind"] == "TASK"
+            else [],
             "review": acceptance.get("review") if acceptance else None,
             "userConfirmation": acceptance.get("userConfirmation") if acceptance else None,
             "generatedAt": at,
@@ -1215,6 +1267,7 @@ class GovernanceRepository:
             },
             "status": entry["status"],
             "developmentPlan": definition["developmentPlan"],
+            "validationRemediations": self.read_validation_remediations(entry["id"], definition),
             "result": entry.get("latestResult"),
             "generatedAt": at,
         }

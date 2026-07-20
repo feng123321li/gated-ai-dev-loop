@@ -30,6 +30,7 @@ Task CLAIMED --写回结果--> IMPLEMENTED | BLOCKED
 Task IMPLEMENTED --accept-item 通过--> VERIFIED + acceptance report
 Task IMPLEMENTED --accept-item 未通过--> BLOCKED + acceptance report
 Task/协调节点 BLOCKED --retry-item 校验当前指纹--> FROZEN
+Task IMPLEMENTED/BLOCKED/VERIFIED --remediate-task 同契约补充文件--> 原 Task FROZEN + 已通过祖先 FROZEN
 协调节点 FROZEN --全部直接子级 VERIFIED + 聚合门禁通过--> VERIFIED
 治理根 VERIFIED --独立/人工审查通过--> WAITING_FOR_USER_CONFIRMATION
 WAITING_FOR_USER_CONFIRMATION --用户确认--> COMPLETED
@@ -52,6 +53,8 @@ BLOCKED 必须记录事实、责任方和解除条件。依赖完成或环境恢
 
 同一 baseline 下重试任何 BLOCKED 工作项时，Agent 使用 `retry-item` 提交当前 expected baseline 指纹并自动继续。Task 回到 FROZEN 后重新计算 READY；Capability/Delivery 回到 FROZEN 后重新运行聚合 gate。重试不修改需求、拓扑或 scope；冻结契约需要变化时保持阻断并重新进行完整需求规划。
 
+若验证发现原验收项所需的精确文件在冻结方案中遗漏，但目标、需求、验收、接口行为、数据契约、拓扑和外部权限均不变，使用 `remediate-task` 把补充文件追加到原 Task 的有效授权。原 baseline 不改，Task 回到 FROZEN；已通过的 Capability、Delivery gate 和根级最终验收状态逐级失效，修正后必须重新运行。此路径不是新需求，不生成新根，也不再次选择开发方式。
+
 ## 后续工作
 
-已 VERIFIED 工作项不可原地改写。当前冻结契约内的失败在完成前自动重试；契约变化或需求已经完成时，以新的完整需求树进入人工评审，并保留原工作项和证据。
+VERIFIED 但尚未完成最终验收的工作项，可以通过严格的同契约验证修正回到原 Task；修正事实追加审计，不改写原 baseline。已 `COMPLETED` 的需求不可原地改写。契约变化或需求已经完成时，以新的完整需求树进入人工评审，并保留原工作项和证据。

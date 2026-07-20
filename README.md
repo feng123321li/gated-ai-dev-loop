@@ -12,7 +12,7 @@
 2. 选择 `active` 或 `manual`。`manual` 只需把根级交接内容复制到新会话一次；
 3. 全部开发、回归和门禁完成后，接收交付并进行最终人工验收。
 
-一次确认会冻结整个需求树，不逐 Task 批准，不要求人工知道或复制指纹。冻结后的 Task 调度、Agent 数量、并发或串行策略、失败重试和回归复测由执行 Agent 自主处理。只有需求或授权边界需要变化时，才重新回到人工评审。
+一次确认会冻结整个需求树，不逐 Task 批准，不要求人工知道或复制指纹。冻结后的 Task 调度、Agent 数量、并发或串行策略、失败重试和回归复测由执行 Agent 自主处理。验证发现原验收项的文件遗漏时回到原 Task 追加修正，不创建第二个需求根；只有目标、契约、拓扑或外部权限需要变化时，才重新回到人工评审。
 
 ## 完整流程
 
@@ -30,7 +30,10 @@ flowchart TD
     I --> J["人工一次复制到新会话"]
     J --> H
     H --> K["按依赖调度任务并循环实现、回归、修复、复测"]
-    K --> L["逐级执行任务门禁和父级聚合门禁"]
+    K --> V{"验证是否发现原验收项遗漏？"}
+    V -->|"是，契约不变"| R["在原任务追加验证修正并重新开发"]
+    R --> K
+    V -->|"否"| L["逐级执行任务门禁和父级聚合门禁"]
     L --> M["提交交付和验收报告"]
     M --> N["人工最终验收"]
     N --> O["需求完成"]
@@ -93,6 +96,8 @@ Task 是唯一执行叶子。文件数量、接口数量、仓库大小或风险
 
 Task 通过后，Capability 和 Delivery 按层级执行自己的聚合门禁。开发中没有额外人工门禁；可恢复失败由 Agent 在原冻结契约内自动重试。开发结果只能写回“已实现”或“已阻断”，不能绕过门禁自行宣布通过。
 
+若回归、门禁、独立审查或最终验收发现：原需求与验收标准没有变化，但冻结方案漏列了完成原验收项所需的精确文件，控制器使用 `remediate-task` 把修正追加到原 Task。原 baseline 和 `development-plan.md` 保持不变，补充文件及原因进入 SQLite 审计链、开发复核和验收报告；Task 与已通过的父级 gate 重新执行。只有需求已经完成或契约确实变化时才建立新需求。
+
 根工作项的 `progress.md` 使用 Markdown 表格展示整树进度，并与 `development-plan.md` 保持相同的节点 ID、父子顺序和层级。每次控制器写回都会从 SQLite 自动重建进度表。
 
 ## SQLite 与可读文件
@@ -154,7 +159,7 @@ python scripts/install_skill.py --target claude --scope user --force
 python -X utf8 <skill-root>/scripts/hdg.py --help
 ```
 
-开发结果、节点门禁和最终验收的完整证据 artifact 必须通过 `--evidence -` 从 stdin 直接交给控制器；证据文件路径会被拒绝。控制器在同一个 SQLite 写事务中校验当前工作项、operationId、baseline 和动作，计算规范 JSON 的 SHA-256，并同时保存完整 artifact 与摘要。因此不会产生 `.hdg-tmp`、系统 `TEMP` 或其他临时 evidence JSON，Agent 也不能直接写 SQLite。
+开发结果、验证修正、节点门禁和最终验收的完整证据 artifact 必须通过 `--evidence -` 从 stdin 直接交给控制器；证据文件路径会被拒绝。控制器在同一个 SQLite 写事务中校验当前工作项、operationId、baseline 和动作，计算规范 JSON 的 SHA-256，并同时保存完整 artifact 与摘要。因此不会产生 `.hdg-tmp`、系统 `TEMP` 或其他临时 evidence JSON，Agent 也不能直接写 SQLite。
 
 一次性的 definition 和 interaction JSON 也应通过 stdin 传入，避免跨卷路径和无意义的中间文件。
 
@@ -167,6 +172,7 @@ python -X utf8 <skill-root>/scripts/hdg.py --help
 | `ready-tasks` | 计算当前满足依赖和范围条件的 Task |
 | `dispatch-task` | 原子认领一个 Task 并建立独立执行上下文 |
 | `task-result` | 写回开发结果并生成开发复核 |
+| `remediate-task` | 把同一验收契约的验证修正追加到原 Task，并重新进入开发门禁循环 |
 | `accept-item` | 执行节点门禁并生成验收报告 |
 | `retry-item` | 在当前冻结契约内恢复可重试节点 |
 | `refresh-projections` | 从 SQLite 重建 Markdown 投影 |
@@ -185,4 +191,4 @@ python -m compileall -q src scripts tests
 git diff --check
 ```
 
-完整规则见 [Skill 入口](skills/hierarchical-delivery-governance/SKILL.md)、[工作流与全中文流程图](skills/hierarchical-delivery-governance/references/workflow.md)、[开发方案字段](skills/hierarchical-delivery-governance/references/development-plan.md) 和 [SQLite 工作项注册表](skills/hierarchical-delivery-governance/references/task-registry.md)。
+完整规则见 [Skill 入口](skills/hierarchical-delivery-governance/SKILL.md)、[工作流与全中文流程图](skills/hierarchical-delivery-governance/references/workflow.md)、[开发方案字段](skills/hierarchical-delivery-governance/references/development-plan.md)、[同一 Task 的验证修正](skills/hierarchical-delivery-governance/references/validation-remediation.md) 和 [SQLite 工作项注册表](skills/hierarchical-delivery-governance/references/task-registry.md)。

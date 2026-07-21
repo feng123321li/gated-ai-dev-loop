@@ -275,6 +275,7 @@ class HierarchyPackageTests(unittest.TestCase):
                     ),
                     "handoff": frozen["humanArtifacts"]["requirementHandoff"],
                     "handoffPrompt": frozen["handoffPrompt"],
+                    "handoffCommand": frozen["handoffCommand"],
                     "handoffExists": (root_path / "requirement-handoff.md").exists(),
                 }
 
@@ -285,6 +286,8 @@ class HierarchyPackageTests(unittest.TestCase):
             self.assertEqual(results["manual"]["mode"]["mode"], "manual")
             self.assertIsNone(results["active"]["handoff"])
             self.assertIsNone(results["active"]["handoffPrompt"])
+            self.assertIsNone(results["active"]["handoffCommand"])
+            self.assertIn("继续执行治理需求 c-python-runtime", results["manual"]["handoffCommand"])
             self.assertFalse(results["active"]["handoffExists"])
             self.assertTrue(results["manual"]["handoffExists"])
 
@@ -341,6 +344,7 @@ class HierarchyPackageTests(unittest.TestCase):
             )
             self.assertTrue(idempotent["idempotent"])
             self.assertEqual(idempotent["handoffPrompt"], handoff)
+            self.assertEqual(idempotent["handoffCommand"], frozen["handoffCommand"])
 
     def test_hierarchy_plan_tampering_blocks_the_single_freeze(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

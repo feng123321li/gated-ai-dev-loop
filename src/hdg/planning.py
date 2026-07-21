@@ -15,7 +15,11 @@ from .model import (
     work_item_baseline_fingerprint,
     work_item_contract_fingerprint,
 )
-from .projections import item_human_artifacts, render_requirement_handoff
+from .projections import (
+    item_human_artifacts,
+    render_requirement_handoff,
+    render_requirement_handoff_command,
+)
 from .repository import (
     GOVERNANCE_DIRECTORY,
     WORK_ITEMS_DIRECTORY,
@@ -335,7 +339,7 @@ def _frozen_human_artifacts(root_id: str, handoff: str | None) -> dict[str, str 
 def _frozen_next_action(development_mode: str) -> str:
     if development_mode == "active":
         return "Agent 自主循环实现、回归测试和复测；可安全并发时使用隔离子 Agent，否则自动串行。"
-    return "把 requirement-handoff.md 一次交给新会话；接收会话自行推进整棵需求树，无需人工逐 Task 启动。"
+    return "把 handoffCommand 一次复制到新会话；接收会话自行推进整棵需求树，无需人工逐 Task 启动。"
 
 
 def freeze_hierarchy(
@@ -367,6 +371,7 @@ def freeze_hierarchy(
                 fail("WORK_ITEM_DEVELOPMENT_MODE_LOCKED", "Development mode is fixed by the requirement freeze")
             repository.write_registry(registry)
             handoff = _manual_requirement_handoff(root_entry, registry)
+            handoff_command = render_requirement_handoff_command(root_id) if handoff is not None else None
             return {
                 "created": False,
                 "idempotent": True,
@@ -377,6 +382,7 @@ def freeze_hierarchy(
                 "developmentMode": root_entry["developmentMode"],
                 "humanArtifacts": _frozen_human_artifacts(root_id, handoff),
                 "handoffPrompt": handoff,
+                "handoffCommand": handoff_command,
                 "nextAction": _frozen_next_action(development_mode),
             }
         if any(states[record["definition"]["id"]]["stage"] != "WAITING_FOR_BASELINE_CONFIRMATION" for record in records):
@@ -431,6 +437,7 @@ def freeze_hierarchy(
         registry["updatedAt"] = at
         repository.write_registry(registry)
         handoff = _manual_requirement_handoff(root_entry, registry)
+        handoff_command = render_requirement_handoff_command(root_id) if handoff is not None else None
         return {
             "created": True,
             "idempotent": False,
@@ -447,6 +454,7 @@ def freeze_hierarchy(
             },
             "humanArtifacts": _frozen_human_artifacts(root_id, handoff),
             "handoffPrompt": handoff,
+            "handoffCommand": handoff_command,
             "nextAction": _frozen_next_action(development_mode),
         }
 

@@ -1,131 +1,187 @@
 # Hierarchical Delivery Governance
 
-面向 AI Agent 的分层交付治理 Skill。它把一个软件需求整理成可人工评审、一次冻结、自动开发、持续回归和最终验收的交付树。
+面向 AI Agent 的分层交付治理 Skill。它使用 Python 3.10+ 标准库控制器，把一个软件需求组织成可恢复、可人工评审、可机械门禁的交付树，并以 SQLite 保存唯一机器状态。
 
-项目与 Skill 均由 Python 3.10+ 和标准库驱动，不需要 Node、npm、第三方 Python 包或全局 CLI。
+当前只维护完整 schema v3。项目不依赖 Node、npm、第三方 Python 包或全局 CLI，也不提供旧 JSON 工作区或旧 schema 的迁移与兼容入口。
+
+## 核心契约
+
+- 合法结构只有根 `Task`、`Capability → Task`、`Delivery → Capability → Task`。
+- 使用满足真实聚合责任的最浅结构；Task 是唯一执行叶子。
+- 一个用户需求在 `work-items/` 下只有一个顶层目录，子节点按真实父子关系递归放入 `children/`。
+- 根级 `development-plan.md` 是整棵需求树唯一的冻结评审入口，一次人工确认冻结全部节点。
+- 项目级 `.hierarchical-delivery-governance/governance.sqlite3` 是唯一机器权威，Markdown 只是可重建的人类投影。
+- 同一冻结目标和验收契约内的修正必须回到原 Task，不得为修复同一需求创建第二个根。
+- Agent 不自动提交、推送、合并、迁移、发布或改变外部状态；这些动作需要单独明确授权。
 
 ## 人工参与边界
 
-人在正常流程中只参与以下环节：
+人在正常流程中只参与三个环节：
 
-1. 冻结前查看根级 `development-plan.md`，确认需求、开发方案和开发方式；
-2. 选择 `active` 或 `manual`。`manual` 只需把根级交接内容复制到新会话一次；
-3. 全部开发、回归和门禁完成后，接收交付并进行最终人工验收。
+1. 查看根级 `development-plan.md`，确认需求、完整开发方案和开发方式；
+2. 选择一次 `active` 或 `manual` 并明确同意当前方案；
+3. 根工作项门禁、独立审查和交付完成后，进行最终验收与确认。
 
-一次确认会冻结整个需求树，不逐 Task 批准，不要求人工知道或复制指纹。冻结后的 Task 调度、Agent 数量、并发或串行策略、失败重试和回归复测由执行 Agent 自主处理。验证发现原验收项的文件遗漏时回到原 Task 追加修正，不创建第二个需求根；只有目标、契约、拓扑或外部权限需要变化时，才重新回到人工评审。
+人工不需要知道、复制或复述层级指纹，也不逐 Task 批准、交接或回复启动。冻结后的 READY 计算、认领、并发或串行、回归、修复、复测和可恢复重试由执行宿主负责。
 
-## 完整流程
+## 层级选择
+
+| 最浅合法结构 | 适用场景 | 责任边界 |
+|---|---|---|
+| `Task` | 一个可独立开发和验收的结果 | Task 直接执行与门禁 |
+| `Capability → Task` | 多个 Task 需要共享契约、依赖或集成门禁 | Capability 聚合，Task 执行 |
+| `Delivery → Capability → Task` | 多个 Capability 需要跨能力约束或顶层交付门禁 | Delivery 顶层聚合，Capability 分组，Task 执行 |
+
+文件数量、接口数量、仓库大小或风险等级不能单独推出更深层级。不允许 `Delivery → Task`、`Capability → Capability`、平铺子包或声明但不物化的 child。事实不足时先补齐交付边界、执行叶子、依赖和聚合验收责任，不创建运行包。
+
+## 完整工作流
 
 ```mermaid
 flowchart TD
-    A["提出一个软件需求"] --> B["Agent 选择最浅合法层级并规划完整需求树"]
-    B --> C["生成根级开发方案和各节点独立方案"]
-    C --> D["人工评审根级开发方案并选择开发方式"]
-    D --> E{"是否同意当前方案？"}
-    E -->|"需要修改"| B
-    E -->|"同意"| F["一次冻结整棵需求树"]
-    F --> G{"开发方式"}
-    G -->|"主动开发"| H["当前 Agent 立即自主推进整树"]
-    G -->|"手动开发"| I["生成一份根级需求交接"]
-    I --> J["人工一次复制到新会话"]
-    J --> H
-    H --> K["按依赖调度任务并循环实现、回归、修复、复测"]
-    K --> V{"验证是否发现原验收项遗漏？"}
-    V -->|"是，契约不变"| R["在原任务追加验证修正并重新开发"]
-    R --> K
-    V -->|"否"| L["逐级执行任务门禁和父级聚合门禁"]
-    L --> M["提交交付和验收报告"]
-    M --> N["人工最终验收"]
-    N --> O["需求完成"]
+    A["提出或恢复软件需求"] --> B["读取项目 SQLite 治理状态"]
+    B --> C{"存在可恢复需求？"}
+    C -->|"是"| R["按精确 ID、有效焦点或唯一候选恢复"]
+    C -->|"否"| D["选择最浅合法层级并规划完整需求树"]
+    R --> X["从当前阶段继续"]
+    D --> E["生成根级整树方案和各节点独立方案"]
+    E --> F["人工评审方案并选择 active/manual"]
+    F --> G{"同意当前方案？"}
+    G -->|"修改"| D
+    G -->|"同意"| H["一次冻结整棵需求树"]
+    H --> I{"开发方式"}
+    I -->|"active"| J["当前会话接管执行"]
+    I -->|"manual"| K["展示可复制 handoffCommand"]
+    K --> L["新会话接管执行"]
+    J --> M["按依赖调度 READY Task"]
+    L --> M
+    X --> M
+    M --> N["实现、回归、修复、复测并写回结果"]
+    N --> O{"原验收项是否遗漏精确文件？"}
+    O -->|"是且契约不变"| P["在原 Task 追加验证修正"]
+    P --> M
+    O -->|"否"| Q["Task 门禁与父级聚合门禁"]
+    Q --> S["独立或人工审查"]
+    S --> T["用户最终确认"]
+    T --> U["COMPLETED"]
 ```
 
-## 层级结构
+正常新需求的控制器顺序为：
 
-每个需求使用满足真实聚合责任的最浅结构：
+```text
+prepare-hierarchy
+→ 人工评审 development-plan.md 并选择 active/manual
+→ freeze-hierarchy
+→ ready-tasks / dispatch-task
+→ task-result / development-review.md
+→ 必要时 remediate-task 回到原 Task
+→ accept-item / acceptance-report.md
+→ acceptance-item / 用户最终确认
+```
 
-| 结构 | 适用场景 | 执行责任 |
-|---|---|---|
-| `Task` | 一个可独立开发和验收的结果 | Task 直接执行 |
-| `Capability → Task` | 多个 Task 需要共享契约、依赖或集成验收 | Capability 聚合，Task 执行 |
-| `Delivery → Capability → Task` | 多个 Capability 需要跨能力约束或顶层交付验收 | Delivery 和 Capability 聚合，Task 执行 |
+## 准备与一次冻结
 
-Task 是唯一执行叶子。文件数量、接口数量、仓库大小或风险等级不能单独决定创建 Capability 或 Delivery。
+启动时先从当前 Skill 安装目录验证控制器入口：
 
-每个用户需求只生成一个顶层目录。Capability 和 Task 必须按真实父子关系递归放入 `children/`，不能平铺成多个需求目录。
+```text
+python -X utf8 <skill-root>/scripts/hdg.py --help
+```
 
-## 冻结前开发方案
+新需求使用 schema v3 的完整嵌套 definition，通过 stdin 一次准备整棵树：
 
-根级 `development-plan.md` 是整棵需求树唯一的人工冻结评审入口。人在开工前可以从中看到：
+```json
+{"schemaVersion":3,"root":{"definition":{"...":"完整根节点定义"},"children":[]}}
+```
 
-- 开发目的、业务场景和验收目标；
-- 完整的 Delivery、Capability、Task 层级；
-- 每个 Task 的精确文件改动；
-- 接口、函数、共享契约、数据和事务变化；
-- Task 依赖、开发波次和集成关系；
-- 测试映射、兼容性和人工评审重点。
+```text
+python -X utf8 <skill-root>/scripts/hdg.py prepare-hierarchy --definition - --host-runtime <agent> --json
+```
 
-每个实际子节点也有自己的 `development-plan.md` 和 `progress.md`，供执行 Agent 获取独立上下文和查看节点进度。需求根的 `progress.md` 专门展示整树总进度，根节点自身状态单独写入 `node-progress.md`；总进度表中的根节点“进度”入口必须指向该独立文件，不能回链整树总进度。根级方案仍负责一次评审整树，不需要人工逐个进入子目录批准。
+准备只生成待评审方案，不授权开发。Agent 应向用户展示根 ID、层级、开发目的、精确文件、接口或共享契约、依赖波次和测试映射，并提供根级 `development-plan.md`。方案修改后重新准备同一个完整需求树。
+
+用户明确同意当前方案并选择开发方式后，Agent 使用准备结果中的当前指纹一次冻结：
+
+```text
+python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --expected-hierarchy <fingerprint> --development-mode active|manual --confirmed --json
+```
+
+计划或指纹变化后，旧确认必须被拒绝。开发方式与整棵树同时冻结，不能在同一冻结需求上原地切换。
 
 ## 开发方式
 
-### 主动开发
+### active
 
-选择 `active` 后，当前 Agent 在整树冻结后立即推进开发。它根据依赖、写入范围和可用能力决定使用多个子 Agent、安全串行或由当前 Agent 逐个开发；运行能力变化时自动降级，不重新询问开发方式。
+当前会话冻结后立即成为整树执行宿主。它根据依赖、写入冲突和可用能力决定使用隔离子 Agent、单 Agent 或当前 Agent 串行；能力不足时自动降级，不重新询问开发方式。
 
-### 手动开发
+### manual
 
-选择 `manual` 后，规划会话只生成一份根级 `requirement-handoff.md`。人工把这份交接复制到一个新会话一次，新会话随后负责整个需求树的调度、开发、测试和门禁，不再逐 Task 请求人工交接或启动。
+规划会话冻结后不修改业务代码。控制器同时提供：
 
-开发方式只决定由当前会话还是新会话接管执行，不锁定 Agent 数量和并发策略。
+- `requirement-handoff.md`：完整需求级交接文档；
+- `handoffPrompt`：与完整交接文档相同的内容；
+- `handoffCommand`：可直接复制到新任务的简短指令。
 
-## 自动开发与验收闭环
-
-执行 Agent 按依赖计算当前可执行 Task，并循环完成：
+最终回复必须直接用纯文本代码块展示 `handoffCommand`，不能只给 `requirement-handoff.md` 链接，也不能要求用户打开文件后全选复制。文件链接放在代码块之后，仅用于查看完整交接与冻结方案。
 
 ```text
-认领 Task
-→ 获取该 Task 的独立上下文
+继续执行治理需求 <root-id>。使用 hierarchical-delivery-governance Skill 从当前项目的治理数据库恢复已冻结方案，接管整棵需求树并自动完成开发、测试和门禁；不要重新准备或冻结需求，也不要逐 Task 请求人工启动。
+```
+
+新会话收到一次交接后成为整树执行宿主。它仍按依赖即时计算 READY 并逐 Task `dispatch-task`，但不再要求人工逐项启动。
+
+## 开发、写回与门禁
+
+执行宿主只调度依赖已验证、路径不冲突且实际可访问的 READY Task。每个 Task 使用独立的 owner、operationId、上下文、授权文件、结果和门禁证据：
+
+```text
+dispatch-task
 → 实现
 → 回归测试
 → 修复与复测
-→ 写回开发结果
-→ 生成 development-review.md
-→ 执行 Task 门禁
-→ 生成 acceptance-report.md
+→ task-result: IMPLEMENTED | BLOCKED
+→ development-review.md
+→ accept-item
+→ acceptance-report.md
 ```
 
-Task 通过后，Capability 和 Delivery 按层级执行自己的聚合门禁。开发中没有额外人工门禁；可恢复失败由 Agent 在原冻结契约内自动重试。开发结果只能写回“已实现”或“已阻断”，不能绕过门禁自行宣布通过。
+- `IMPLEMENTED` 只表示开发结果已写回并等待门禁，不表示 PASS。
+- Task 通过后为 `VERIFIED`；Capability 和 Delivery 必须等直接子级全部 VERIFIED 后运行自己的聚合门禁，不能因子级全绿自动 PASS。
+- 同 baseline 且没有活动 claim 的 `BLOCKED` 可用 `retry-item` 自动恢复并继续。
+- 测试、范围、验收项或证据不完整时门禁不能 PASS；P0/P1 必须为空，P2 必须展示。
+- 根 gate PASS 后仍需独立只读审查或人工审查，再由用户单独最终确认；只有 `COMPLETED` 表示需求完成。
 
-若回归、门禁、独立审查或最终验收发现：原需求与验收标准没有变化，但冻结方案漏列了完成原验收项所需的精确文件，控制器使用 `remediate-task` 把修正追加到原 Task。原 baseline 和 `development-plan.md` 保持不变，补充文件及原因进入 SQLite 审计链、开发复核和验收报告；Task 与已通过的父级 gate 重新执行。只有需求已经完成或契约确实变化时才建立新需求。
+### 同一 Task 的验证修正
 
-根工作项的 `progress.md` 使用 Markdown 表格展示整树进度，并与 `development-plan.md` 保持相同的节点 ID、父子顺序和层级。每次控制器写回都会从 SQLite 自动重建进度表。
+若回归、门禁、独立审查或最终验收发现冻结方案漏列了完成原验收项所需的精确文件，并且目标、需求、验收、接口行为、数据契约、拓扑和外部授权都未改变，执行宿主使用 `remediate-task --evidence -` 在原 Task 追加授权。
 
-## SQLite 与可读文件
+控制器保持原 baseline、层级指纹和 `development-plan.md` 不变，记录修正原因、关联验收项和补充文件，并使该 Task 与已通过的祖先 gate 失效后重新开发和门禁。只有契约或授权事实确实变化时才回到人工评审；不得通过重新 `prepare-hierarchy` 创建重复需求根。
 
-每个项目只有一个：
+## SQLite 权威与可读投影
+
+每个项目只有一个机器权威：
 
 ```text
 .hierarchical-delivery-governance/governance.sqlite3
 ```
 
-它保存项目内全部需求的结构化状态、层级、冻结信息、Task 认领、开发结果、门禁报告和交互摘要。不同需求通过根工作项 ID 隔离，不为每个 `<root-id>` 单独创建数据库。
+它保存全部需求的工作项、层级、冻结状态、Task 上下文、claim、operationId、完整 evidence、开发复核、验收报告和交互事件。多个需求通过根工作项 ID 隔离，不为每个 `<root-id>` 建库。
 
-需求目录只保留供人查看、评审和验收的 Markdown 投影：
+人类可读文件由 SQLite 重建：
 
 ```text
 .hierarchical-delivery-governance/
-├── governance.sqlite3                 # 项目内唯一机器权威
-├── workspace-overview.md              # 只保留全局需求索引
+├── governance.sqlite3                 # 唯一机器权威，schema v3
+├── workspace-overview.md              # 按最近更新时间倒序的全局需求索引
 ├── workspace-overview/
-│   ├── YYYY-MM.md                     # 月度需求索引
+│   ├── YYYY-MM.md                     # 月度索引
 │   └── YYYY-MM/
-│       └── <root-id>.md               # 可直接打开的单需求明细
+│       └── <root-id>.md               # 单需求完整层级明细
 └── work-items/
     └── <root-id>/                     # 一个需求只有一个顶层目录
         ├── baseline.md
         ├── development-plan.md        # 整树冻结评审入口
-        ├── progress.md                # 整树进度表
-        ├── interaction-log.md         # 人机指令、决策和状态摘要
+        ├── progress.md                # 整树总进度
+        ├── node-progress.md           # 根节点自身进度
+        ├── interaction-log.md         # 可审计交互摘要
         ├── requirement-handoff.md     # 仅 manual 冻结后生成
         ├── development-review.md      # 开发结果写回后生成
         ├── acceptance-report.md       # 门禁后生成并持续更新
@@ -133,19 +189,64 @@ Task 通过后，Capability 和 Delivery 按层级执行自己的聚合门禁。
             └── <child-id>/
                 ├── baseline.md
                 ├── development-plan.md
-                ├── progress.md
+                ├── progress.md        # 子节点自身进度
                 └── children/...
 ```
 
-Markdown 不是机器权威。手工删除 `<root-id>` 目录不会删除 SQLite 中的需求状态，刷新投影后目录还会被重建，因此不能用删除目录代替需求状态清理。
+三阶段核心阅读入口是：
 
-多个需求在同一数据库中按工作项隔离。若某个历史节点只有 evidence 引用不符合当前契约、但完整 artifact 和其余结构仍有效，控制器会把该节点标记为只读隔离并在 `workspace-overview.md` 告警：不迁移、不改写历史记录，同时允许新需求和其他有效 Task 继续。数据库 schema、ID、拓扑、路径或其他结构损坏仍会全局阻断。
+```text
+冻结前：development-plan.md
+开发结果写回后：development-review.md
+门禁执行后：acceptance-report.md
+```
 
-`workspace-overview.md` 使用稳定根 ID，不给物理目录追加日期；该文件只保留按最近更新时间倒序的全局需求索引，展示本机时区的创建时间（精确到分）和更新时间，以及状态、门禁和方案/进度入口。`workspace-overview/YYYY-MM.md` 是月度索引，每个需求的详细 Delivery → Capability → Task 表格写入 `workspace-overview/YYYY-MM/<root-id>.md`；全局索引直接链接该文件，不依赖跨文件标题锚点。需求明细同时展示需求开始时间和最终用户确认形成的完成日期；未完成需求明确显示“未完成”。SQLite 原始时间仍保持 UTC。
+根 `progress.md` 以表格保持与方案相同的节点顺序和层级，并分别展示阶段、状态、门禁、当前执行、节点文件和阶段产物。“当前执行”对协调节点显示“不适用”，对未认领 Task 显示“未认领”，活动 Task 显示 `owner / operationId`，结果写回后显示“已释放”。根节点进度链接 `node-progress.md`，不能回链整树 `progress.md`。
+
+`workspace-overview.md` 只保留稳定根 ID 的全局索引；月度和单需求明细写入 `workspace-overview/`。显示时间使用运行时本机时区，SQLite 原始时间保持 UTC；完成日期只能来自最终用户确认后的 `COMPLETED`。
+
+Markdown 不是机器权威。手工删除需求目录不会删除 SQLite 状态，后续刷新还会重建，因此不能用删除文件代替治理状态操作。
+
+## 恢复、隔离与交互审计
+
+- 恢复优先使用用户给出的精确 ID 或路径，其次使用有效焦点或唯一候选；存在多个候选时请求用户选择。
+- 数据库 schema、协调根、ID、拓扑、路径、普通字段或指纹损坏时阻断，不迁移、不猜测。
+- 仅当历史节点只有 evidence 引用过期、完整 artifact 仍在 SQLite 且其他契约有效时，控制器将该节点只读隔离；它不能被直接操作，但不阻断新需求、有效兄弟 Task 或已有 claim。
+- Markdown 投影缺失时使用 `refresh-projections` 从 SQLite 重建，不能从 Markdown 反向猜测机器状态。
+- `record-interaction` 只记录必要的用户指令、Agent 更新、决策或状态摘要；`interaction-log` 查询结构化事件，根级 `interaction-log.md` 供人工审计。
+- 交互记录不得保存隐藏思考过程、密钥或不必要的原始对话。
+
+旧 JSON 控制目录、旧 schema 和路径式 evidence 不迁移、不兼容。
+
+## 结构化输入与临时文件
+
+以下结构化数据只能通过 stdin 直接提交：
+
+- `prepare-hierarchy --definition -`
+- `record-interaction --interaction -`
+- `task-result`、`remediate-task`、`gate-item`、`accept-item`、`acceptance-item` 的 `--evidence -`
+
+控制器拒绝文件路径，不生成 `_hdg_*.json`、`.hdg-tmp/**`、系统 `%TEMP%` 或其他中间 JSON。完整 artifact 与控制器计算的规范 JSON SHA-256 在同一 SQLite 写事务内保存；Agent 不直接写数据库，也不提供自算摘要。
+
+PowerShell 使用单引号 here-string 管道，Claude Code Bash 使用当前 shell 的带引号 heredoc。不得再嵌套 `bash -lc`、`sh -c`、`cmd /c` 或另一个 shell 包装。详细示例见 [stdin-transport.md](skills/hierarchical-delivery-governance/references/stdin-transport.md)。
+
+## 开发与安全边界
+
+- Task 只能修改冻结的 `developmentPlan.fileChanges` 和控制器通过验证修正追加的精确文件；scope 不是任意写授权。
+- Task 上下文不继承需求分析、其他 Task 对话或宿主隐式记忆，必须从 SQLite 重建。
+- 开发 Agent 不修改 SQLite、baseline、治理投影或 `.git/**`。
+- 控制器缺失、版本不符或机械校验失败时保持阻断，不用对话或“等价流程”绕过。
+- 外部提交、推送、合并、迁移、发布和公开动作必须另行授权。
+
+## 多仓库与多服务
+
+当前控制器只维护一个协调根。跨仓库或多服务需求的所有文件必须能从协调根以安全相对路径访问，控制面只存在于协调根的 `.hierarchical-delivery-governance/`，不能复制到各子仓库。
+
+每个 Task 的 `scope` 和 `fileChanges` 应包含仓库目录；测试从协调根执行；提供方与消费方通过 `dependsOn` 表达先后关系；跨服务接口、schema、事件或配置进入父级 `sharedContracts`。无法从协调根安全访问的路径必须在准备需求树前阻断。
 
 ## 安装
 
-仓库提供一个 Python 安装器，可同时更新 Codex 和 Claude：
+仓库提供标准库安装器，可同时更新 Codex 和 Claude：
 
 ```text
 python scripts/install_skill.py --target both --scope user --dry-run
@@ -159,42 +260,60 @@ python scripts/install_skill.py --target codex --scope user --force
 python scripts/install_skill.py --target claude --scope user --force
 ```
 
-安装后从当前宿主的 Skill 目录运行控制器：
+安装后从实际 Skill 目录运行当前控制器，不能依赖旧副本或全局命令：
 
 ```text
 python -X utf8 <skill-root>/scripts/hdg.py --help
 ```
 
-开发结果、验证修正、节点门禁和最终验收的完整证据 artifact 必须通过 `--evidence -` 从 stdin 直接交给控制器；证据文件路径会被拒绝。控制器在同一个 SQLite 写事务中校验当前工作项、operationId、baseline 和动作，计算规范 JSON 的 SHA-256，并同时保存完整 artifact 与摘要。因此不会产生 `.hdg-tmp`、系统 `TEMP` 或其他临时 evidence JSON，Agent 也不能直接写 SQLite。
-
-一次性的 definition 和 interaction JSON 也必须通过 stdin 传入；控制器会拒绝文件路径，避免跨卷路径、仓库内 `_hdg_*.json` 和系统临时文件。Claude Code 的 Bash 调用应直接使用带引号的 heredoc，不能再嵌套 `bash -lc`；PowerShell 使用 here-string 管道。详细示例见 Skill 的 `references/stdin-transport.md`。
-
-## 主要控制命令
+## 当前控制命令
 
 | 命令 | 作用 |
 |---|---|
-| `prepare-hierarchy` | 准备完整需求树并生成开发方案和进度投影 |
-| `freeze-hierarchy` | 使用一次人工确认冻结整棵树并记录开发方式 |
-| `ready-tasks` | 计算当前满足依赖和范围条件的 Task |
-| `dispatch-task` | 原子认领一个 Task 并建立独立执行上下文 |
-| `task-result` | 写回开发结果并生成开发复核 |
-| `remediate-task` | 把同一验收契约的验证修正追加到原 Task，并重新进入开发门禁循环 |
-| `accept-item` | 执行节点门禁并生成验收报告 |
-| `retry-item` | 在当前冻结契约内恢复可重试节点 |
-| `refresh-projections` | 从 SQLite 重建 Markdown 投影 |
-| `record-interaction` | 记录必要的人机指令、决策或状态摘要 |
+| `prepare-hierarchy` | 通过 stdin 准备完整需求树，生成整树和节点方案及进度 |
+| `freeze-hierarchy` | 用一次人工确认冻结整棵树并记录 active/manual |
+| `ready-tasks` | 动态计算根或子树中当前可调度 Task |
+| `task-context` | 只读诊断未认领 Task 的上下文预览，不授权开工 |
+| `dispatch-task` | 原子校验 READY、认领 Task 并生成独立执行上下文与 handoff |
+| `claim-task` | 仅执行原子认领；正常开工优先使用 `dispatch-task` |
+| `task-result` | 通过 stdin 写回 IMPLEMENTED/BLOCKED，并生成开发复核 |
+| `remediate-task` | 在同一验收契约下向原 Task 追加精确文件授权 |
+| `retry-item` | 使用当前 baseline 恢复可重试的 BLOCKED 节点 |
+| `gate-item` | 提交显式 PASS/FAIL 的低层门禁 evidence |
+| `accept-item` | 执行正常节点门禁并生成或更新验收报告 |
+| `acceptance-item` | 提交根级独立审查、人工审查接受或用户最终确认 |
+| `refresh-projections` | 从 SQLite 重建全部 Markdown 投影 |
+| `record-interaction` | 追加必要的人机交互摘要 |
+| `interaction-log` | 查询指定需求的结构化交互事件 |
 
-具体参数以当前安装版本的 `hdg.py --help` 为准。人工不需要直接拼接层级指纹或逐个执行这些命令，它们由使用 Skill 的 Agent 调用。
+具体参数以当前安装版本的 `hdg.py --help` 为准。人工不需要直接拼接指纹或逐个执行命令，它们由使用 Skill 的 Agent 调用。
 
 ## 仓库维护
 
-修改控制器源码后，重新构建 Skill 内置控制器并运行验证：
+本仓库的 Python 项目名和规范 Skill 名均为 `hierarchical-delivery-governance`。维护源码时直接修改 `src/`、Skill、CLI、文档和测试，不为维护工作创建 `.hierarchical-delivery-governance/**` 运行包，也不调用运行态的批准、准备或冻结命令。
+
+只有用户明确要求 dogfood/演练运行任务包时，控制面写命令才可执行，并且必须显式携带 `--dogfood`，同时满足命令原有确认条件。
+
+更新控制器源码后必须重新构建 Skill 内嵌控制器并完整验证：
 
 ```text
 python scripts/build_skill.py
 python -m unittest discover -s tests -t . -v
 python -m compileall -q src scripts tests
+python -X utf8 <skill-validator>/quick_validate.py skills/hierarchical-delivery-governance
 git diff --check
 ```
 
-完整规则见 [Skill 入口](skills/hierarchical-delivery-governance/SKILL.md)、[工作流与全中文流程图](skills/hierarchical-delivery-governance/references/workflow.md)、[开发方案字段](skills/hierarchical-delivery-governance/references/development-plan.md)、[同一 Task 的验证修正](skills/hierarchical-delivery-governance/references/validation-remediation.md) 和 [SQLite 工作项注册表](skills/hierarchical-delivery-governance/references/task-registry.md)。
+## 详细参考
+
+- [Skill 入口](skills/hierarchical-delivery-governance/SKILL.md)
+- [完整工作流与状态关闭](skills/hierarchical-delivery-governance/references/workflow.md)
+- [层级路由](skills/hierarchical-delivery-governance/references/routing-profiles.md)
+- [开发方案字段](skills/hierarchical-delivery-governance/references/development-plan.md)
+- [Task 独立上下文与 manual 交接](skills/hierarchical-delivery-governance/references/development.md)
+- [进度与投影](skills/hierarchical-delivery-governance/references/tracking.md)
+- [验收与最终确认](skills/hierarchical-delivery-governance/references/acceptance.md)
+- [同一 Task 的验证修正](skills/hierarchical-delivery-governance/references/validation-remediation.md)
+- [SQLite 注册表与恢复](skills/hierarchical-delivery-governance/references/task-registry.md)
+- [多仓库边界](skills/hierarchical-delivery-governance/references/multi-workspace.md)
+- [stdin 传输](skills/hierarchical-delivery-governance/references/stdin-transport.md)

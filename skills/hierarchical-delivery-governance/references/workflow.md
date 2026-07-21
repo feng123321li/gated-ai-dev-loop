@@ -9,7 +9,7 @@
 5. 运行 `prepare-hierarchy`。一个需求只生成 `work-items/<root-id>/` 一个顶层目录，子节点按 `children/<id>/` 递归嵌套；根级 `development-plan.md/progress.md` 聚合完整树，根节点自身进度写入 `node-progress.md`，每个实际子节点生成自己的 `development-plan.md/progress.md`。
 6. 人工查看根级 `development-plan.md`，同时选择 active/manual。需要修改就重新准备整棵树；同意时只需确认当前方案和所选方式，无需知道或复述指纹。
 7. Agent 使用准备结果中的 `hierarchyFingerprint`，调用一次 `freeze-hierarchy --expected-hierarchy ... --development-mode ... --confirmed`。控制器在同一事务中记录方式并冻结全部节点；指纹已变化则拒绝旧确认。
-8. active 下由当前 Agent 冻结后直接自主推进；manual 在需求根生成一份 `requirement-handoff.md`，用户只需一次复制到新会话，接收 Agent 即成为整树执行宿主。两种宿主都自主决定多子 Agent、单 Agent 或当前 Agent 串行，循环实现、回归、修复和复测；运行能力变化时自动调整，不再次询问开发方式或要求人工逐 Task 启动。
+8. active 下由当前 Agent 冻结后直接自主推进；manual 在需求根生成完整 `requirement-handoff.md`，并返回简短 `handoffCommand`。规划会话必须把 `handoffCommand` 放入纯文本代码块供用户一次复制，不能只给文件链接；接收 Agent 即成为整树执行宿主。两种宿主都自主决定多子 Agent、单 Agent 或当前 Agent 串行，循环实现、回归、修复和复测；运行能力变化时自动调整，不再次询问开发方式或要求人工逐 Task 启动。
 9. 开发结果的完整 artifact 通过 `task-result --evidence -` 从 stdin 交给控制器。控制器在同一 SQLite 写事务内校验当前 operationId、计算摘要并保存 artifact 与摘要，然后生成 `development-review.md`；开发结果不代表 PASS，也不产生临时 evidence 文件。
 10. 回归、门禁、独立审查或最终验收发现遗漏时，先判断是否仍为原冻结目标和验收契约。已有授权文件内直接重试；仅缺少完成原验收项所需的精确文件，且目标、需求、验收、接口行为、数据、拓扑和外部权限不变时，通过 `remediate-task --evidence -` 追加到原 Task。控制器保持 baseline 不变，失效该 Task 和已通过的祖先 gate，再重新调度；不得 `prepare-hierarchy` 新建重复需求根。
 11. 全部相关回归和复测通过后，宿主形成严格 gate artifact，并通过 `accept-item --evidence -` 从 stdin 直接提交。控制器在同一事务中按当前 baseline 和追加验证修正校验、计算摘要并保存结构化验收记录，随后生成 `acceptance-report.md`；Task 全部 VERIFIED 后依次运行 Capability、Delivery 自身聚合门禁。

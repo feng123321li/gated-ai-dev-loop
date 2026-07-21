@@ -18,6 +18,11 @@ def file_map(root: Path) -> dict[str, bytes]:
 
 
 class InstallAndBundleTests(unittest.TestCase):
+    def test_manual_skill_contract_requires_a_copyable_session_command(self) -> None:
+        skill = (TARGET_PACKAGE.parent.parent / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("必须直接展示返回的 `handoffCommand`", skill)
+        self.assertIn("不得只给出 `requirement-handoff.md` 链接", skill)
+
     def test_build_is_reproducible_and_bundle_matches_source(self) -> None:
         build_skill()
         self.assertEqual(file_map(SOURCE_PACKAGE), file_map(TARGET_PACKAGE))

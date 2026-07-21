@@ -22,7 +22,7 @@
 ## Active 与 Manual
 
 - `active`：冻结后由 Agent 自动推进。Agent 可以使用多个隔离子 Agent、单个开发 Agent 或当前 Agent，根据依赖、范围冲突和运行能力自主并行或串行；能力变化时自动调整，不请求用户重新选择。开发持续循环到相关回归和复测通过，或形成真实阻断。
-- `manual`：当前规划会话不创建开发 Agent。`freeze-hierarchy` 在需求根生成一份 `requirement-handoff.md` 并在 `handoffPrompt` 返回同样内容；用户一次复制到任意全新 Agent 后，接收会话成为整树执行宿主，自主计算 READY、为每个实际开工 Task 生成唯一 operationId 并执行 `dispatch-task`。它可安全并行时使用隔离子 Agent，否则自动串行；不得要求用户逐 Task 再次回复或复制交接。
+- `manual`：当前规划会话不创建开发 Agent。`freeze-hierarchy` 在需求根生成一份 `requirement-handoff.md`，在 `handoffPrompt` 返回同样的完整内容，并通过 `handoffCommand` 返回可直接复制到新会话的简短指令。规划会话的最终回复必须用纯文本代码块展示 `handoffCommand`，完整交接与冻结方案链接放在代码块之后；不能只返回文件链接。用户一次复制短指令到任意全新 Agent 后，接收会话成为整树执行宿主，自主计算 READY、为每个实际开工 Task 生成唯一 operationId 并执行 `dispatch-task`。它可安全并行时使用隔离子 Agent，否则自动串行；不得要求用户逐 Task 再次回复或复制交接。
 
 用户在评审 `development-plan.md` 时选择一次根级方式；Agent 使用同一次确认调用：
 

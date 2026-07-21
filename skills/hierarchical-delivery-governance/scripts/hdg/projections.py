@@ -400,6 +400,15 @@ def render_requirement_handoff(
     return "\n".join(lines)
 
 
+def render_requirement_handoff_command(root_id: str) -> str:
+    """Render the short prompt that a user can paste directly into a new session."""
+    return (
+        f"继续执行治理需求 {root_id}。使用 hierarchical-delivery-governance Skill "
+        "从当前项目的治理数据库恢复已冻结方案，接管整棵需求树并自动完成开发、测试和门禁；"
+        "不要重新准备或冻结需求，也不要逐 Task 请求人工启动。"
+    )
+
+
 def render_item_progress(
     entry: dict[str, Any],
     by_id: dict[str, dict[str, Any]] | None = None,

@@ -1,6 +1,6 @@
 # Layered Delivery
 
-面向 AI Agent 的分层交付治理 Skill。它使用 Python 3.10+ 标准库控制器，把一个软件需求组织成可恢复、可人工评审、可机械门禁的交付树，并以 SQLite 保存唯一机器状态。
+面向 AI Agent 的分层交付治理 Skill。它使用 Python 3.10+ 标准库控制器，把人工评审的交付层级编译成“执行图 + 治理图”，让软件需求可恢复、可调度、可机械门禁，并以 SQLite 保存唯一机器状态。
 
 当前只维护完整 schema v3。项目不依赖 Node、npm、第三方 Python 包或全局 CLI，也不提供旧 JSON 工作区或旧 schema 的迁移与兼容入口。
 
@@ -10,6 +10,9 @@
 - 使用满足真实聚合责任的最浅结构；Task 是唯一执行叶子。
 - 一个用户需求在 `work-items/` 下只有一个顶层目录，子节点按真实父子关系递归放入 `children/`。
 - 根级 `development-plan.md` 是整棵需求树唯一的冻结评审入口，一次人工确认冻结全部节点。
+- 层级由用户评审，Delivery Graph 由控制器确定性编译；用户不直接维护任意节点和边。
+- Task execution、各级 gate、root review 和 user confirmation 都是显式图节点。
+- `ready-tasks` 是 graph frontier 的 Task 投影；完整运行时权威由冻结图、graph run、node attempt 和事件链共同表达。
 - 项目级 `.layered-delivery/governance.sqlite3` 是唯一机器权威，Markdown 只是可重建的人类投影。
 - 同一冻结目标和验收契约内的修正必须回到原 Task，不得为修复同一需求创建第二个根。
 - Agent 不自动提交、推送、合并、迁移、发布或改变外部状态；这些动作需要单独明确授权。
@@ -38,40 +41,40 @@
 
 ```mermaid
 flowchart TD
-    A["提出或恢复软件需求"] --> B["读取项目 SQLite 治理状态"]
-    B --> C{"存在可恢复需求？"}
-    C -->|"是"| R["按精确 ID、有效焦点或唯一候选恢复"]
-    C -->|"否"| D["选择最浅合法层级并规划完整需求树"]
-    R --> X["从当前阶段继续"]
-    D --> E["生成根级整树方案和各节点独立方案"]
-    E --> F["人工评审方案并选择 active/manual"]
-    F --> G{"同意当前方案？"}
-    G -->|"修改"| D
-    G -->|"同意"| H["一次冻结整棵需求树"]
-    H --> I{"开发方式"}
-    I -->|"active"| J["当前会话接管执行"]
-    I -->|"manual"| K["展示可复制 handoffCommand"]
-    K --> L["新会话接管执行"]
-    J --> M["按依赖调度 READY Task"]
+    A["提出或恢复需求 / Create or Resume"] --> B["读取治理数据库 / Read Governance DB"]
+    B --> C{"存在可恢复需求？ / Resumable?"}
+    C -->|"是 / Yes"| R["定位需求 / Resolve Requirement"]
+    C -->|"否 / No"| D["选择最浅层级 / Choose Shallowest Hierarchy"]
+    R --> X["从图前沿继续 / Resume from Graph Frontier"]
+    D --> E["生成方案并编译图 / Plan & Compile Graph"]
+    E --> F["人工评审并选择方式 / Review & Choose Mode"]
+    F --> G{"同意方案？ / Approved?"}
+    G -->|"修改 / Revise"| D
+    G -->|"同意 / Approve"| H["一次冻结层级与图 / Freeze Hierarchy & Graph"]
+    H --> I{"开发方式 / Development Mode"}
+    I -->|"主动 / Active"| J["当前会话接管 / Current Session"]
+    I -->|"手动交接 / Manual"| K["生成交接命令 / Create Handoff"]
+    K --> L["新会话接管 / New Session"]
+    J --> M["推进图前沿 / Advance Graph Frontier"]
     L --> M
     X --> M
-    M --> N["实现、回归、修复、复测并写回结果"]
-    N --> O{"原验收项是否遗漏精确文件？"}
-    O -->|"是且契约不变"| P["在原 Task 追加验证修正"]
+    M --> N["实现与验证 / Implement & Verify"]
+    N --> O{"需要同合同修正？ / Remediation?"}
+    O -->|"是 / Yes"| P["失效下游并创建新尝试 / Invalidate & Retry"]
     P --> M
-    O -->|"否"| Q["Task 门禁与父级聚合门禁"]
-    Q --> S["独立或人工审查"]
-    S --> T["用户最终确认"]
-    T --> U["COMPLETED"]
+    O -->|"否 / No"| Q["分级门禁 / Layered Gates"]
+    Q --> S["根级审查 / Root Review"]
+    S --> T["用户确认 / User Confirmation"]
+    T --> U["已完成 / Completed"]
 ```
 
 正常新需求的控制器顺序为：
 
 ```text
 prepare-hierarchy
-→ 人工评审 development-plan.md 并选择 active/manual
+→ 人工评审 development-plan.md + execution-graph.md 并选择 active/manual
 → freeze-hierarchy
-→ ready-tasks / dispatch-task
+→ graph-frontier / dispatch-task
 → task-result / development-review.md
 → 必要时 remediate-task 回到原 Task
 → accept-item / acceptance-report.md
@@ -130,7 +133,7 @@ python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --e
 
 ## 开发、写回与门禁
 
-执行宿主只调度依赖已验证、路径不冲突且实际可访问的 READY Task。每个 Task 使用独立的 owner、operationId、上下文、授权文件、结果和门禁证据：
+执行宿主从 graph frontier 调度依赖已验证、路径不冲突且实际可访问的 READY Task。每个 Task 使用独立的 owner、operationId、attempt、上下文、授权文件、结果和门禁证据：
 
 ```text
 dispatch-task
@@ -153,7 +156,7 @@ dispatch-task
 
 若回归、门禁、独立审查或最终验收发现冻结方案漏列了完成原验收项所需的精确文件，并且目标、需求、验收、接口行为、数据契约、拓扑和外部授权都未改变，执行宿主使用 `remediate-task --evidence -` 在原 Task 追加授权。
 
-控制器保持原 baseline、层级指纹和 `development-plan.md` 不变，记录修正原因、关联验收项和补充文件，并使该 Task 与已通过的祖先 gate 失效后重新开发和门禁。只有契约或授权事实确实变化时才回到人工评审；不得通过重新 `prepare-hierarchy` 创建重复需求根。
+控制器保持原 baseline、层级指纹、图指纹和 `development-plan.md` 不变，记录修正原因、关联验收项和补充文件，并从该 Task execution 沿显式图边失效必要后继与聚合 gate，再创建新的 node attempt。只有契约或授权事实确实变化时才回到人工评审；不得通过重新 `prepare-hierarchy` 创建重复需求根。
 
 ## SQLite 权威与可读投影
 
@@ -179,6 +182,8 @@ dispatch-task
     └── <root-id>/                     # 一个需求只有一个顶层目录
         ├── baseline.md
         ├── development-plan.md        # 整树冻结评审入口
+        ├── execution-graph.md         # 执行图 + 治理图双语投影
+        ├── run-timeline.md            # 节点 attempt、状态与事件链
         ├── progress.md                # 整树总进度
         ├── node-progress.md           # 根节点自身进度
         ├── interaction-log.md         # 可审计交互摘要
@@ -193,10 +198,12 @@ dispatch-task
                 └── children/...
 ```
 
-三阶段核心阅读入口是：
+核心阅读入口是：
 
 ```text
 冻结前：development-plan.md
+图结构：execution-graph.md
+运行过程：run-timeline.md
 开发结果写回后：development-review.md
 门禁执行后：acceptance-report.md
 ```
@@ -273,6 +280,9 @@ python -X utf8 <skill-root>/scripts/hdg.py --help
 | `prepare-hierarchy` | 通过 stdin 准备完整需求树，生成整树和节点方案及进度 |
 | `freeze-hierarchy` | 用一次人工确认冻结整棵树并记录 active/manual |
 | `ready-tasks` | 动态计算根或子树中当前可调度 Task |
+| `graph-status` | 查询完整图、节点状态、attempt 和 graph run |
+| `graph-frontier` | 查询当前允许动作与结构化阻断原因 |
+| `graph-events` | 查询带前序哈希校验的运行事件链 |
 | `task-context` | 只读诊断未认领 Task 的上下文预览，不授权开工 |
 | `dispatch-task` | 原子校验 READY、认领 Task 并生成独立执行上下文与 handoff |
 | `claim-task` | 仅执行原子认领；正常开工优先使用 `dispatch-task` |
@@ -306,6 +316,8 @@ git diff --check
 
 ## 详细参考
 
+- [项目工程说明（Graph Engineering）](docs/project-engineering.md)
+- [Graph Engineering 升级设计](docs/graph-engineering-upgrade.md)
 - [Skill 入口](skills/layered-delivery/SKILL.md)
 - [完整工作流与状态关闭](skills/layered-delivery/references/workflow.md)
 - [层级路由](skills/layered-delivery/references/routing-profiles.md)

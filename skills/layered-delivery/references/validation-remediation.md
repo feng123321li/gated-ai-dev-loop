@@ -62,10 +62,11 @@ python -X utf8 <skill-root>/scripts/hdg.py remediate-task --item <task-id> --exp
 1. 校验 Task、当前 baseline、验收项、完成状态、活动 claim 和范围冲突；
 2. 校验所有“不改变契约”断言，计算 artifact 摘要；
 3. 把 artifact、摘要、记录时间和修正前状态快照追加到 `interaction_events`；
-4. 保持原 baseline、层级指纹、根目录和 `development-plan.md` 不变；
-5. 把原 Task 重置为 `FROZEN`，使其既有 gate 失效；若子 Task 的父级 gate 已通过，则逐级失效到需求根；
-6. 重置根级最终验收状态，要求修正后重新完成 Task gate、父级聚合 gate 和最终验收；
-7. 在 Task context 中生成 `authorizedFileChanges = 冻结 fileChanges + 全部验证修正补充文件`；
-8. 在 `development-review.md`、`acceptance-report.md` 和 `interaction-log.md` 展示修正原因、验收项、文件和时间。
+4. 保持原 baseline、层级指纹、graph fingerprint、根目录和 `development-plan.md` 不变；
+5. 从原 Task execution 节点沿显式边计算下游闭包；若闭包内存在活动 claim，则保持原状态并阻断；
+6. 把原 Task 与闭包中已推进的依赖消费者、Task/Capability/Delivery gate、review 和 confirmation 失效，重置相应工作项汇总状态；
+7. 为需要重新运行的节点创建下一 attempt，并追加 `GRAPH_INVALIDATED` 图事件；
+8. 在 Task context 中生成 `authorizedFileChanges = 冻结 fileChanges + 全部验证修正补充文件`；
+9. 在 `development-review.md`、`acceptance-report.md`、`interaction-log.md` 和 `run-timeline.md` 展示修正原因、验收项、文件、节点和时间。
 
-修正后的开发继续使用原 Task ID：重新计算 READY、`dispatch-task`、回归、复测、`task-result` 和 `accept-item`。Gate 的 baseline 仍是原冻结 baseline，但实际变更文件可来自 `authorizedFileChanges`。因此审计能同时回答“人工最初冻结了什么”和“验证阶段为什么补充了哪些文件”，不会制造第二个需求根。
+修正后的开发继续使用原 Task ID：重新查询 `graph-frontier`、`dispatch-task`、回归、复测、`task-result` 和 `accept-item`。Gate 的 baseline 仍是原冻结 baseline，但实际变更文件可来自 `authorizedFileChanges`。因此审计能同时回答“人工最初冻结了什么”“验证阶段为什么补充了哪些文件”和“哪些下游节点因此重新运行”，不会制造第二个需求根。

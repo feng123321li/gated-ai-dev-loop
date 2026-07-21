@@ -15,6 +15,7 @@ from .execution import (
     record_task_result,
 )
 from .host_runtime import is_agent_runtime
+from .graph_runtime import get_graph_frontier, get_graph_status, list_graph_events
 from .interactions import list_interactions, record_interaction
 from .jsonio import rendered_json
 from .planning import (
@@ -30,6 +31,9 @@ COMMANDS = (
     "prepare-hierarchy",
     "freeze-hierarchy",
     "ready-tasks",
+    "graph-status",
+    "graph-frontier",
+    "graph-events",
     "task-context",
     "dispatch-task",
     "claim-task",
@@ -55,6 +59,9 @@ COMMAND_OPTIONS = {
         "--json", "--help", "--item", "--expected-hierarchy", "--development-mode", "--confirmed", "--dogfood",
     },
     "ready-tasks": {"--json", "--help", "--item"},
+    "graph-status": {"--json", "--help", "--item"},
+    "graph-frontier": {"--json", "--help", "--item"},
+    "graph-events": {"--json", "--help", "--item"},
     "task-context": {"--json", "--help", "--item", "--dogfood"},
     "claim-task": {"--json", "--help", "--item", "--owner", "--operation", "--dogfood"},
     "dispatch-task": {"--json", "--help", "--item", "--owner", "--operation", "--dogfood"},
@@ -77,6 +84,9 @@ Commands:
   prepare-hierarchy --definition - --host-runtime <agent>  # reads one complete requirement tree from stdin
   freeze-hierarchy --item <root-id> --expected-hierarchy <sha256> --development-mode active|manual --confirmed
   ready-tasks --item <root-or-subtree-id>
+  graph-status --item <root-or-subtree-id>
+  graph-frontier --item <root-or-subtree-id>
+  graph-events --item <root-or-subtree-id>
   task-context --item <task-id>
   dispatch-task --item <task-id> --owner <owner> --operation <id>
   claim-task --item <task-id> --owner <owner> --operation <id>
@@ -194,6 +204,12 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
         )
     if command == "ready-tasks":
         return list_ready_tasks(root=cwd, work_item_id=_required(parsed, "--item"))
+    if command == "graph-status":
+        return get_graph_status(root=cwd, work_item_id=_required(parsed, "--item"))
+    if command == "graph-frontier":
+        return get_graph_frontier(root=cwd, work_item_id=_required(parsed, "--item"))
+    if command == "graph-events":
+        return list_graph_events(root=cwd, work_item_id=_required(parsed, "--item"))
     if command == "task-context":
         return build_task_context(**common, item_id=_required(parsed, "--item"))
     if command == "claim-task":

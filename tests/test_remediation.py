@@ -7,14 +7,29 @@ from pathlib import Path
 from hdg.acceptance import accept_work_item, record_acceptance
 from hdg.errors import GatedLoopError
 from hdg.execution import dispatch_task, list_ready_tasks, record_task_result
+from hdg.graph_model import execution_node_id
+from hdg.graph_runtime import get_graph_status
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.remediation import record_validation_remediation
 from hdg.repository import GovernanceRepository
 
-from .fixtures import delivery_hierarchy, task_hierarchy
+from .fixtures import delivery_hierarchy, task_hierarchy, two_task_capability_hierarchy
 
 
 class ValidationRemediationTests(unittest.TestCase):
+    @staticmethod
+    def _dependent_tasks_hierarchy() -> dict:
+        hierarchy = two_task_capability_hierarchy()
+        capability = hierarchy["root"]["definition"]
+        worker = hierarchy["root"]["children"][1]["definition"]
+        worker["execution"]["dependsOn"] = ["t-python-controller"]
+        next(
+            plan
+            for plan in capability["developmentPlan"]["childPlans"]
+            if plan["id"] == "t-python-worker"
+        )["dependsOn"] = ["t-python-controller"]
+        return hierarchy
+
     @staticmethod
     def _prepare_implemented_task(root: str) -> tuple[dict, str, str]:
         prepared = prepare_hierarchy(root=root, hierarchy=task_hierarchy(), host_runtime="codex")
@@ -349,6 +364,102 @@ class ValidationRemediationTests(unittest.TestCase):
                 self.assertEqual(by_id[item_id]["status"], "FROZEN")
                 self.assertEqual(by_id[item_id]["gate"], {"status": "NOT_RUN", "evidence": None})
             self.assertEqual(by_id[delivery_id]["acceptance"]["status"], "NOT_READY")
+
+    def test_remediation_invalidates_verified_dependency_consumers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=self._dependent_tasks_hierarchy(),
+                host_runtime="codex",
+            )
+            freeze_hierarchy(
+                root=temporary,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                development_mode="active",
+                confirmed=True,
+            )
+
+            task_specs = (
+                (
+                    "t-python-controller",
+                    "op-controller",
+                    ["src/controller.py", "tests/test_controller.py"],
+                    ["python", "-m", "unittest", "tests.test_controller"],
+                ),
+                (
+                    "t-python-worker",
+                    "op-worker",
+                    ["src/worker.py", "tests/test_worker.py"],
+                    ["python", "-m", "unittest", "tests.test_worker"],
+                ),
+            )
+            for task_id, operation_id, changed_files, command in task_specs:
+                dispatch_task(
+                    root=temporary,
+                    item_id=task_id,
+                    owner="developer",
+                    operation_id=operation_id,
+                )
+                record_task_result(
+                    root=temporary,
+                    item_id=task_id,
+                    operation_id=operation_id,
+                    status="IMPLEMENTED",
+                    evidence={
+                        "schemaVersion": 3,
+                        "kind": "TASK_RESULT",
+                        "taskId": task_id,
+                        "operationId": operation_id,
+                        "status": "IMPLEMENTED",
+                        "summary": "Implemented one dependency graph Task.",
+                        "changedFiles": changed_files,
+                        "tests": [{"argv": command, "exitCode": 0, "testsRun": 1}],
+                        "blockers": [],
+                    },
+                )
+                accept_work_item(
+                    root=temporary,
+                    item_id=task_id,
+                    evidence={
+                        "schemaVersion": 3,
+                        "kind": "WORK_ITEM_GATE",
+                        "workItemId": task_id,
+                        "baselineFingerprint": prepared["baselineFingerprints"][task_id],
+                        "verdict": "PASS",
+                        "summary": "The dependency graph Task passed.",
+                        "scope": {"changedFiles": changed_files, "outOfScopeFiles": []},
+                        "acceptance": [{"id": "A-001", "status": "PASS", "evidence": "Verified."}],
+                        "tests": [{
+                            "argv": command,
+                            "exitCode": 0,
+                            "testsRun": 1,
+                            "summary": "Passed.",
+                        }],
+                        "findings": {"p0": [], "p1": [], "p2": []},
+                    },
+                )
+
+            controller_id = "t-python-controller"
+            worker_id = "t-python-worker"
+            remediated = record_validation_remediation(
+                root=temporary,
+                item_id=controller_id,
+                expected_baseline_fingerprint=prepared["baselineFingerprints"][controller_id],
+                evidence=self._remediation(
+                    controller_id,
+                    prepared["baselineFingerprints"][controller_id],
+                ),
+            )
+            self.assertIn(execution_node_id(worker_id), remediated["invalidatedNodeIds"])
+            registry = GovernanceRepository(temporary).read_registry()
+            by_id = {item["id"]: item for item in registry["workItems"]}
+            self.assertEqual(by_id[controller_id]["status"], "FROZEN")
+            self.assertEqual(by_id[worker_id]["status"], "FROZEN")
+            status = get_graph_status(root=temporary, work_item_id=prepared["rootId"])
+            attempts = {node["id"]: node["attempt"] for node in status["nodes"]}
+            self.assertEqual(attempts[execution_node_id(controller_id)], 2)
+            self.assertEqual(attempts[execution_node_id(worker_id)], 2)
 
 
 if __name__ == "__main__":

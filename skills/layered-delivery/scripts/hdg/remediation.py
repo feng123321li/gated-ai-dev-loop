@@ -5,6 +5,7 @@ from typing import Any
 
 from .errors import fail
 from .evidence import evidence_record, valid_validation_remediation_artifact
+from .graph_model import execution_node_id
 from .model import scope_patterns_overlap
 from .repository import GovernanceRepository, timestamp
 
@@ -42,6 +43,21 @@ def _reset_for_remediation(entry: dict[str, Any], at: str) -> None:
     entry["updatedAt"] = at
 
 
+def _downstream_nodes(graph: dict[str, Any], source_node_id: str) -> list[str]:
+    outgoing: dict[str, list[str]] = {}
+    for edge in graph["edges"]:
+        outgoing.setdefault(edge["source"], []).append(edge["target"])
+    visited: set[str] = set()
+    pending = [source_node_id]
+    while pending:
+        node_id = pending.pop()
+        if node_id in visited:
+            continue
+        visited.add(node_id)
+        pending.extend(outgoing.get(node_id, []))
+    return sorted(visited)
+
+
 def record_validation_remediation(
     *,
     root: str,
@@ -66,6 +82,29 @@ def record_validation_remediation(
 
         chain = _hierarchy_chain(repository, registry, entry)
         root_entry = chain[-1]
+        stored_graph = repository.read_graph_definition(root_entry["id"])
+        graph_run = repository.read_graph_run(root_entry["id"])
+        invalidated_node_ids = _downstream_nodes(
+            stored_graph["graph"],
+            execution_node_id(item_id),
+        )
+        nodes_by_id = {
+            node["id"]: node for node in stored_graph["graph"]["nodes"]
+        }
+        invalidated_work_item_ids = {
+            nodes_by_id[node_id]["workItemId"] for node_id in invalidated_node_ids
+        }
+        active_invalidated_claims = sorted(
+            candidate["id"]
+            for candidate in registry["workItems"]
+            if candidate["id"] in invalidated_work_item_ids and candidate.get("claim")
+        )
+        if active_invalidated_claims:
+            fail(
+                "DELIVERY_GRAPH_INVALIDATION_ACTIVE_CLAIM",
+                "Graph invalidation cannot cross an actively claimed downstream Task",
+                taskIds=active_invalidated_claims,
+            )
         definition, state, _ = repository.assert_current_lineage(registry, entry)
         acceptance_ids = {item["id"] for item in definition["acceptance"]}
         if not valid_validation_remediation_artifact(
@@ -162,8 +201,43 @@ def record_validation_remediation(
             recorded_at=at,
         )
 
-        for affected in chain:
+        affected_entries = [
+            candidate
+            for candidate in registry["workItems"]
+            if candidate["id"] in invalidated_work_item_ids
+            and candidate["status"] in {"IMPLEMENTED", "BLOCKED", "VERIFIED"}
+        ]
+        if entry not in affected_entries:
+            affected_entries.append(entry)
+        current_nodes = {node["nodeId"]: node for node in graph_run["nodes"]}
+        retry_node_ids = sorted(
+            {
+                node_id
+                for node_id in invalidated_node_ids
+                if current_nodes[node_id]["status"]
+                in {"CLAIMED", "SUCCEEDED", "BLOCKED", "COMPLETED"}
+            }
+            | {execution_node_id(item_id)}
+        )
+        graph_attempts = repository.begin_graph_attempts(
+            root_entry["id"],
+            retry_node_ids,
+            at=at,
+        )
+        for affected in affected_entries:
             _reset_for_remediation(affected, at)
+        repository.append_graph_event(
+            root_id=root_entry["id"],
+            node_id=execution_node_id(item_id),
+            event_type="GRAPH_INVALIDATED",
+            actor="AGENT",
+            operation_id=None,
+            payload={
+                "invalidatedNodeIds": invalidated_node_ids,
+                "attempts": graph_attempts,
+            },
+            recorded_at=at,
+        )
         registry["currentFocus"] = {
             "workItemId": item_id,
             "purpose": "VALIDATION_REMEDIATION_RETRY",
@@ -172,7 +246,7 @@ def record_validation_remediation(
         registry["updatedAt"] = at
 
         repository.write_development_review(entry, definition, at)
-        for affected in chain:
+        for affected in affected_entries:
             if not affected.get("acceptanceReport"):
                 continue
             affected_definition = repository.read_package(registry, affected)[0]
@@ -186,5 +260,7 @@ def record_validation_remediation(
             "remediation": remediation_record,
             "authorizedFileChanges": repository.effective_task_file_changes(definition),
             "developmentReview": {"markdownPath": f"{base}/development-review.md"},
+            "invalidatedNodeIds": invalidated_node_ids,
+            "graphAttempts": graph_attempts,
             "nextAction": "继续调度原 Task，完成验证修正、回归、复测和同一门禁；不得创建重复需求根。",
         }

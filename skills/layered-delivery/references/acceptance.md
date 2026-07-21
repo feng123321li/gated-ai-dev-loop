@@ -14,7 +14,7 @@ Task 只有在状态为 IMPLEMENTED 时可运行 gate。`task-result` 写回后�
 
 PASS 后 Task 为 VERIFIED；FAIL 后为 BLOCKED，并把范围、测试、验收项和 findings 写入用户报告。Agent 修复后使用当前 baseline 指纹执行 `retry-item`，自动回到 FROZEN 并继续回归与复测；只有冻结需求或授权需要变化时才回到人工评审。开发 Agent 的结论不能替代 gate，正常 PASS 路径使用 `accept-item`。
 
-如果失败只是暴露原验收项所需文件被开发方案漏列，且目标、需求、验收、接口行为、数据、拓扑和外部权限不变，Agent 不创建新的根 Task。它通过 `remediate-task --evidence -` 在原 Task 下记录修正原因、验收项和补充文件；控制器保持 baseline 不变，失效该 Task 与已通过的祖先 gate，修正后重新执行完整门禁。具体证据见 [validation-remediation.md](validation-remediation.md)。
+如果失败只是暴露原验收项所需文件被开发方案漏列，且目标、需求、验收、接口行为、数据、拓扑和外部权限不变，Agent 不创建新的根 Task。它通过 `remediate-task --evidence -` 在原 Task 下记录修正原因、验收项和补充文件；控制器保持 baseline 与图定义不变，沿显式图边失效必要后继、依赖消费者和聚合 gate，修正后从新 attempt 重新执行完整门禁。具体证据见 [validation-remediation.md](validation-remediation.md)。
 
 根 Task 在此 gate PASS 后达到浅层根 VERIFIED 并进入最终验收；它不需要虚构 Capability gate。
 

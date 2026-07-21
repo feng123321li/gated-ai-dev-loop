@@ -4,6 +4,8 @@ from typing import Any
 
 from .errors import fail
 from .evidence import evidence_record, valid_gate_artifact, valid_review_artifact
+from .graph_model import confirmation_node_id, gate_node_id, review_node_id
+from .graph_runtime import hierarchy_root_entry
 from .repository import GovernanceRepository, timestamp
 
 
@@ -112,6 +114,16 @@ def record_work_item_gate(
         }
         registry["revision"] += 1
         registry["updatedAt"] = at
+        root_entry = hierarchy_root_entry(registry, entry)
+        repository.append_graph_event(
+            root_id=root_entry["id"],
+            node_id=gate_node_id(item_id),
+            event_type="GATE_PASSED" if status == "PASS" else "GATE_FAILED",
+            actor="AGENT",
+            operation_id=None,
+            payload={"status": status, "evidence": verified_reference},
+            recorded_at=at,
+        )
         repository.write_acceptance_report(entry, definition, at)
         repository.write_registry(registry)
         return {
@@ -218,6 +230,20 @@ def record_acceptance(
         }
         registry["revision"] += 1
         registry["updatedAt"] = at
+        node_id = (
+            confirmation_node_id(item_id)
+            if action == "USER_CONFIRMED"
+            else review_node_id(item_id)
+        )
+        repository.append_graph_event(
+            root_id=item_id,
+            node_id=node_id,
+            event_type="USER_CONFIRMED" if action == "USER_CONFIRMED" else "REVIEW_PASSED",
+            actor="USER" if action == "USER_CONFIRMED" else "REVIEWER",
+            operation_id=None,
+            payload={"action": action, "evidence": reference},
+            recorded_at=at,
+        )
         repository.write_acceptance_report(entry, definition, at)
         repository.write_registry(registry)
         return {

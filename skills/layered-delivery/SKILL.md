@@ -1,11 +1,11 @@
 ---
 name: layered-delivery
-description: "治理可独立交付的软件需求。按最小必要深度组织为 Task、Capability→Task 或 Delivery→Capability→Task；每个需求只生成一个嵌套根目录，根级方案一次评审冻结整棵树，各节点保留独立 development-plan.md 和 progress.md。开发结果写回后生成 development-review，门禁后生成 acceptance report。适用于新需求规划、分层开发、恢复、审计和验收。"
+description: "治理可独立交付的软件需求。按最小必要深度组织为 Task、Capability→Task 或 Delivery→Capability→Task，由控制器编译执行图与治理图；根级方案一次评审冻结整棵树和图，graph frontier 驱动 Task、门禁、审查与确认。适用于新需求规划、分层开发、恢复、审计和验收。"
 ---
 
 # Layered Delivery
 
-使用 Python 3.10+ 标准库控制器，把一个软件需求治理成一棵可恢复、可审查、可机械门禁的交付树。不要用纯对话代替控制器状态。
+使用 Python 3.10+ 标准库控制器，把一个软件需求治理成一棵可评审的交付树，并确定性编译为可恢复、可调度、可机械门禁的 Delivery Graph。不要用纯对话代替控制器状态。
 
 ## 核心规则
 
@@ -15,6 +15,10 @@ description: "治理可独立交付的软件需求。按最小必要深度组织
 - 开发、回归、门禁、独立审查或最终验收发现的修正，只要仍为同一冻结目标和验收契约，就必须回到原 Task；不得为修复同一需求另建根 Task。
 - 项目级 `governance.sqlite3` 是唯一机器权威；每个实际节点都有独立的 Markdown baseline、开发方案、节点进度和阶段报告。需求根的整树总进度使用 `progress.md`，根节点自身进度使用 `node-progress.md`，子节点自身进度使用各自目录的 `progress.md`。
 - 一次人工同意冻结整棵树。不得逐节点准备或逐节点批准。
+- 用户评审层级与开发方案，控制器编译执行图与治理图；不要让用户直接定义任意节点、边或循环。
+- Task execution、Task/Capability/Delivery gate、root review 和 user confirmation 是显式图节点。gate、review 和 confirmation 不能只作为对话约定。
+- `graph-frontier` 是运行时调度权威；`ready-tasks` 只是其中 `DISPATCH_TASK` 动作的 Task ID 投影。
+- retry/remediation 只创建新的 node attempt 或传播失效，不能改写已冻结图定义。
 - Skill 与 CLI 统一使用当前 Python 控制器和当前数据契约。
 
 ## 层级选择
@@ -41,13 +45,13 @@ description: "治理可独立交付的软件需求。按最小必要深度组织
    ```
 
    协调节点声明的每个 child 必须在同一次 definition 中递归物化。
-4. 通过 stdin 准备整树；控制器同时生成根级聚合方案/整树进度和每个节点自己的方案/节点进度：
+4. 通过 stdin 准备整树；控制器同时生成根级聚合方案、确定性 Delivery Graph、整树进度和每个节点自己的方案/节点进度：
 
    ```text
    python -X utf8 <skill-root>/scripts/hdg.py prepare-hierarchy --definition - --host-runtime <agent> --json
    ```
 
-5. 向用户展示返回的 `humanArtifacts.developmentPlan`，并概述根 ID、树形层级、开发目的、文件、接口/共享契约、依赖波次和测试映射。准备只生成待评审方案，不授权开发。
+5. 向用户展示返回的 `humanArtifacts.developmentPlan` 与 `humanArtifacts.executionGraph`，并概述根 ID、树形层级、开发目的、文件、接口/共享契约、依赖波次、测试映射和图节点摘要。准备只生成待评审方案和只读图，不授权开发。
 6. 用户要求修改时，重新准备同一个完整需求树。确认前请用户查看根级 `development-plan.md`，并选择一次 `active` 或 `manual` 开发方式。
 7. 用户明确同意当前方案并给出开发方式后，Agent 使用 `prepare-hierarchy` 返回的 `hierarchyFingerprint` 一次提交：
 
@@ -56,8 +60,8 @@ description: "治理可独立交付的软件需求。按最小必要深度组织
    ```
 
    人不需要知道、复制或复述指纹。控制器用同一次确认冻结整树并记录根级方式；方案变化后旧指纹必须被拒绝。
-8. `active` 下，当前 Agent 冻结后立即自主计算 READY Task 并决定多子 Agent、单 Agent 或当前 Agent 串行。`manual` 下，当前规划会话不开发，控制器在需求根生成完整 `requirement-handoff.md`、同内容 `handoffPrompt` 和简短 `handoffCommand`。manual 冻结成功后的最终回复必须直接展示返回的 `handoffCommand`，使用纯文本代码块供用户一次复制到新会话；不得只给出 `requirement-handoff.md` 链接，也不得要求用户打开文件后全选复制。文件链接作为查看完整交接和冻结方案的辅助入口放在代码块之后。接收 Agent 随后自行计算 READY、逐 Task `dispatch-task`、开发、门禁并推进整棵树，不得要求用户逐 Task 回复启动。两种方式的执行宿主都在子 Agent 不可用或并发不足时自动降级，不请求用户重新选择方式。Agent 数量、并发度和降级策略属于运行策略，不写入冻结方案或层级指纹。
-9. 开发阶段不设置额外人工门禁。Agent 在冻结目标和安全边界内循环“实现 → 回归测试 → 修复 → 复测”，逐 Task 写回 `IMPLEMENTED` 或 `BLOCKED`。同 baseline 且没有活动 claim 的 BLOCKED 由 Agent 自动执行 `retry-item`、重新计算 READY 并继续。若验证发现为满足原验收项必须补充冻结方案遗漏的精确文件，但目标、需求、验收、接口行为、数据契约、拓扑和外部授权均不变，则使用 `remediate-task --evidence -` 在原 Task 下追加验证修正授权，自动失效该 Task 及已通过的祖先门禁，再继续原 Task；不得重新 `prepare-hierarchy` 创建重复需求根。只有上述契约或授权事实确实变化时才回到人工评审。开发结果不能自行宣布 PASS。
+8. `active` 下，当前 Agent 冻结后立即查询 `graph-frontier`，按 `DISPATCH_TASK`、`RUN_GATE`、`REQUEST_REVIEW`、`REQUEST_USER_CONFIRMATION` 推进，并决定多子 Agent、单 Agent 或当前 Agent 串行。`manual` 下，当前规划会话不开发，控制器在需求根生成完整 `requirement-handoff.md`、同内容 `handoffPrompt` 和简短 `handoffCommand`。manual 冻结成功后的最终回复必须直接展示返回的 `handoffCommand`，使用纯文本代码块供用户一次复制到新会话；不得只给出 `requirement-handoff.md` 链接，也不得要求用户打开文件后全选复制。文件链接作为查看完整交接和冻结方案的辅助入口放在代码块之后。接收 Agent 随后从同一 graph run 恢复 frontier、逐 Task `dispatch-task`、开发、门禁并推进整棵图，不得要求用户逐 Task 回复启动。两种方式的执行宿主都在子 Agent 不可用或并发不足时自动降级，不请求用户重新选择方式。Agent 数量、并发度和降级策略属于运行策略，不写入冻结方案、层级指纹或图指纹。
+9. 开发阶段不设置额外人工门禁。Agent 在冻结目标和安全边界内循环“实现 → 回归测试 → 修复 → 复测”，逐 Task 写回 `IMPLEMENTED` 或 `BLOCKED`。同 baseline 且没有活动 claim 的 BLOCKED 由 Agent自动执行 `retry-item` 创建下一 node attempt、重新读取 frontier 并继续。若验证发现为满足原验收项必须补充冻结方案遗漏的精确文件，但目标、需求、验收、接口行为、数据契约、拓扑和外部授权均不变，则使用 `remediate-task --evidence -` 在原 Task 下追加验证修正授权。控制器从该 Task execution 沿显式图边失效必要后继、依赖消费者和聚合门禁，再创建新 attempt；失效范围有活动 claim 时阻断。不得重新 `prepare-hierarchy` 创建重复需求根。只有上述契约或授权事实确实变化时才回到人工评审。开发结果不能自行宣布 PASS。
 10. `workspace-overview.md` 只保留按最近更新时间倒序的全局需求索引，展示根类型、状态、门禁、后代进度和方案/总进度/月度明细入口；物理目录仍使用稳定根 ID，不追加日期。`workspace-overview/YYYY-MM.md` 是月度索引，每个需求的层级表格写入 `workspace-overview/YYYY-MM/<root-id>.md`；全局索引直接链接单需求文件，不依赖跨文件标题锚点。这样避免单一总览过长和 Markdown 折叠树形文本。显示日期使用 Python 运行时动态获取的本机时区，SQLite 原始时间保持 UTC；创建时间和需求开始时间精确到分，只有最终用户确认后的 `COMPLETED` 才展示完成日期，否则显示“未完成”。需求根 `progress.md` 继续使用 Markdown 表格展示整树明细：第一列保留与 `development-plan.md` 相同的工作项 ID、父子顺序和层级，其余列分别展示阶段、状态、门禁、当前执行、节点文件和阶段性产物。根节点行的节点进度链接 `node-progress.md`，子节点行链接各自 `progress.md`，不得让根节点进度回链整树文件。“当前执行”对协调节点显示“不适用”，对待执行 Task 显示“未认领”，开发中显示 owner/operationId，结果写回后显示“已释放”。每次控制器写回都会从 SQLite 自动重建这些文件，不依赖 Agent 手工改表。
 11. 使用 `task-result` 写回结果并生成 `development-review.md`；验证修正会在同一文件追加“验证修正”明细，并进入原 Task 的授权文件集合。全部相关回归和复测通过后，使用 `accept-item` 提交门禁验收并生成 `acceptance-report.md`。结构化上下文、结果、修正和报告只存 SQLite。父级必须在子级全部 VERIFIED 后运行自己的聚合 gate。
 12. 根工作项 gate PASS 后向用户提交交付，由用户人工验收并最终确认；只有 `COMPLETED` 表示需求完成。
@@ -74,15 +78,19 @@ description: "治理可独立交付的软件需求。按最小必要深度组织
 
 Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或数据内容明确写“无”，不得虚构。父级 `childPlans` 必须覆盖全部直接子级，且不能把同一段目标复制到三层。字段说明和示例见 [development-plan.md](references/development-plan.md)。
 
-## 三阶段可读文件
+## 核心可读文件
 
 ```text
 冻结前：development-plan.md
+图结构：execution-graph.md
+运行过程：run-timeline.md
 开发结果写回后：development-review.md
 门禁执行后：acceptance-report.md
 ```
 
 - 根级 `development-plan.md`：整树唯一冻结评审入口，描述完整层级计划。各子节点同名文件保留该节点的独立开发内容。
+- 根级 `execution-graph.md`：中文 / English 展示执行图与治理图；只读投影，不是机器权威。
+- 根级 `run-timeline.md`：展示 graph run、node attempt、状态、owner 和不可变事件序列。
 - `development-review.md`：对照冻结计划与实际文件、接口、测试和偏差；只表示等待门禁，不表示 PASS。
 - `acceptance-report.md`：门禁证据、验收项、测试结果、范围偏差、P0/P1/P2 和结论；根报告持续更新到最终确认。
 
@@ -95,6 +103,7 @@ Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或�
 ## SQLite 与交互记录
 
 - 每个项目只有一个 `.layered-delivery/governance.sqlite3`；多个需求根通过 ID 隔离，不为每个 `<root-id>` 建库。
+- SQLite 同时保存 graph definition、graph/node run 与带前序哈希的 graph event；`graph-status`、`graph-frontier` 和 `graph-events` 是只读查询入口。
 - `workspace-overview.md` 会列出只读隔离的历史 evidence 节点。不能直接操作隔离节点；其他有效需求、同树兄弟 Task 和已有 claim 不因它被连带阻断。
 - `<root-id>` 目录只有 Markdown 投影。手工删除目录不会删除需求状态，后续刷新还会重建；不得用手删目录代替控制器状态操作。
 - 需要保留人机协作事实时，用 `record-interaction` 写入简短的指令、决策或状态摘要；`interaction-log` 查询结构化事件，需求根 `interaction-log.md` 供人工审计。不得保存隐藏思考过程、密钥或不必要的原始对话。
@@ -112,6 +121,7 @@ Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或�
 
 ## 按需参考
 
+- 图编译、frontier、attempt 与事件：[graph-engineering.md](references/graph-engineering.md)
 - registry、包结构与恢复：[task-registry.md](references/task-registry.md)
 - 生命周期与自动重试：[registry-lifecycle.md](references/registry-lifecycle.md)
 - baseline、指纹与一次冻结：[baselines.md](references/baselines.md)

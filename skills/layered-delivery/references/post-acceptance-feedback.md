@@ -6,7 +6,7 @@
 
 如果反馈只是指出当前冻结需求尚未满足，且所有所需文件已经位于冻结 `developmentPlan.fileChanges`，则保留原 baseline：Agent 记录真实阻断，自动执行 `retry-item`，继续实现、回归、修复和复测，再重新提交 gate 与验收。
 
-如果目标、需求、验收、接口行为、数据契约、子级结构、测试命令和外部权限均不变，只是验证发现完成原验收项所需的精确文件在方案中漏列，则使用 `remediate-task` 在原 Task 下追加验证修正。原 baseline 和 `development-plan.md` 保持不变，补充文件、原因和证据进入 SQLite 审计链以及开发复核/验收报告；Task 与已通过的祖先 gate 失效后重新执行。此类反馈仍是原需求，不新建根 Task，也不重新请求开发方式。
+如果目标、需求、验收、接口行为、数据契约、子级结构、测试命令和外部权限均不变，只是验证发现完成原验收项所需的精确文件在方案中漏列，则使用 `remediate-task` 在原 Task 下追加验证修正。原 baseline、graph definition 和 `development-plan.md` 保持不变，补充文件、原因和证据进入 SQLite 审计链以及开发复核/验收报告；控制器沿显式图边失效必要后继、依赖消费者和聚合 gate，再从新 attempt 重新执行。此类反馈仍是原需求，不新建根 Task，也不重新请求开发方式。
 
 ## 契约变化或新目标
 

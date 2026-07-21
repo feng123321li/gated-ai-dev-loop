@@ -24,12 +24,12 @@
 
 执行宿主可按以下安全循环自主调度：
 
-1. 调用 `ready-tasks --item <root-id>` 获取当前候选；
-2. 按依赖、范围互斥和可用并发槽选择本波 Task；
+1. 调用 `graph-frontier --item <root-id>` 获取当前结构化动作、并行组与阻断原因；
+2. 从 `DISPATCH_TASK` 动作中按可用并发槽选择本波 Task；依赖和范围互斥已由控制器校验，宿主不得另行扩大候选；
 3. 为每个 Task 生成不同 operationId，先执行 `dispatch-task` 完成 claim 和 handoff；
 4. 再启动相互隔离的全新开发 Agent；
 5. 分别写回结果并完成 Task 门禁；
-6. 循环实现、回归、修复和复测，写回结果后重新计算 READY，直到发生真实阻断或全部 Task VERIFIED。
+6. 循环实现、回归、修复和复测，写回结果后重新查询 frontier，继续 `RUN_GATE`、后继 `DISPATCH_TASK`、review 和 confirmation，直到发生真实阻断或图完成。
 
 Agent 数量、并发度和调度顺序不固定。并发不足时自动串行；子 Agent 完全不可用时由执行宿主继续开发，不改变根级方式，也不询问用户。每个 Task 仍需独立 claim、结果和证据，以便归属、恢复和验收。manual 只在规划会话停止自动开发并输出一份根级 `requirement-handoff.md`；接收会话启动后使用同一安全循环处理全树，不逐 Task 返回人工交接。这些调度与回退规则只存在于 Skill 运行说明中，不写入冻结方案、baseline、层级指纹或根级方式记录。
 

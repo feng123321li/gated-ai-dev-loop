@@ -6,6 +6,15 @@ from typing import Any
 from .constants import SCHEMA_VERSION
 from .errors import fail
 from .fs_safe import read_regular_file, safe_path
+from .graph_model import (
+    compile_delivery_graph,
+    execution_node_id,
+    gate_node_id,
+    graph_fingerprint,
+    graph_summary,
+)
+from .graph_projections import render_delivery_graph
+from .graph_runtime import hierarchy_root_entry
 from .model import (
     hierarchy_fingerprint,
     iter_hierarchy_nodes,
@@ -79,11 +88,18 @@ def _hierarchy_state(
     at: str | None = None,
 ) -> dict[str, Any]:
     root_id = hierarchy["root"]["definition"]["id"]
+    hierarchy_value = hierarchy_fingerprint(hierarchy)
+    graph = compile_delivery_graph(
+        hierarchy,
+        hierarchy_fingerprint=hierarchy_value,
+    )
+    graph_value = graph_fingerprint(graph)
     value = {
         "schemaVersion": SCHEMA_VERSION,
         "rootId": root_id,
         "stage": "BASELINE_FROZEN" if status == "APPROVED" else "WAITING_FOR_BASELINE_CONFIRMATION",
-        "hierarchyFingerprint": hierarchy_fingerprint(hierarchy),
+        "hierarchyFingerprint": hierarchy_value,
+        "graphFingerprint": graph_value,
         "items": [
             {
                 "id": record["definition"]["id"],
@@ -97,7 +113,8 @@ def _hierarchy_state(
         "review": {
             "schemaVersion": SCHEMA_VERSION,
             "status": status,
-            "hierarchyFingerprint": hierarchy_fingerprint(hierarchy),
+            "hierarchyFingerprint": hierarchy_value,
+            "graphFingerprint": graph_value,
             "reviewedBy": "user" if status == "APPROVED" else None,
             "reviewedAt": at if status == "APPROVED" else None,
         },
@@ -114,6 +131,10 @@ def _hierarchy_packages(
     records = _hierarchy_records(hierarchy)
     root_path = records[0]["packagePath"]
     root_plan = render_hierarchy_plan(hierarchy, states, hierarchy_state)
+    graph = compile_delivery_graph(
+        hierarchy,
+        hierarchy_fingerprint=hierarchy_state["hierarchyFingerprint"],
+    )
     packages: list[tuple[Path, dict[str, str]]] = []
     for index, record in enumerate(records):
         relative = Path(record["packagePath"]).relative_to(root_path)
@@ -122,6 +143,11 @@ def _hierarchy_packages(
             states[record["definition"]["id"]],
             human_plan=root_plan if index == 0 else None,
         )
+        if index == 0:
+            files["execution-graph.md"] = render_delivery_graph(
+                graph,
+                graph_fingerprint=hierarchy_state["graphFingerprint"],
+            )
         packages.append((relative, files))
     return packages
 
@@ -135,7 +161,10 @@ def _hierarchy_from_registry(
         fail("WORK_ITEM_HIERARCHY_ROOT_REQUIRED", "Hierarchy operations require a root work item")
     root_target = repository.item_path(root_entry)
     hierarchy_state = repository.read_hierarchy_state(root_entry["id"])
-    expected_keys = {"schemaVersion", "rootId", "stage", "hierarchyFingerprint", "items", "review"}
+    expected_keys = {
+        "schemaVersion", "rootId", "stage", "hierarchyFingerprint", "graphFingerprint",
+        "items", "review",
+    }
     if (
         set(hierarchy_state) != expected_keys
         or hierarchy_state.get("schemaVersion") != SCHEMA_VERSION
@@ -175,9 +204,13 @@ def _hierarchy_from_registry(
     ]
     review = hierarchy_state["review"]
     review_valid = (
-        set(review) == {"schemaVersion", "status", "hierarchyFingerprint", "reviewedBy", "reviewedAt"}
+        set(review) == {
+            "schemaVersion", "status", "hierarchyFingerprint", "graphFingerprint",
+            "reviewedBy", "reviewedAt",
+        }
         and review.get("schemaVersion") == SCHEMA_VERSION
         and review.get("hierarchyFingerprint") == hierarchy_state.get("hierarchyFingerprint")
+        and review.get("graphFingerprint") == hierarchy_state.get("graphFingerprint")
         and (
             (
                 hierarchy_state.get("stage") == "WAITING_FOR_BASELINE_CONFIRMATION"
@@ -196,6 +229,12 @@ def _hierarchy_from_registry(
     if (
         hierarchy_state["items"] != expected_items
         or hierarchy_state["hierarchyFingerprint"] != hierarchy_fingerprint(hierarchy)
+        or hierarchy_state["graphFingerprint"] != graph_fingerprint(
+            compile_delivery_graph(
+                hierarchy,
+                hierarchy_fingerprint=hierarchy_state["hierarchyFingerprint"],
+            )
+        )
         or not review_valid
     ):
         fail("WORK_ITEM_HIERARCHY_CHANGED", "Hierarchy package changed after preparation")
@@ -206,6 +245,24 @@ def _hierarchy_from_registry(
         fail("WORK_ITEM_HIERARCHY_PLAN_CHANGED", "Hierarchy development plan is missing or unreadable")
     if actual_plan != expected_plan:
         fail("WORK_ITEM_HIERARCHY_PLAN_CHANGED", "Hierarchy development plan changed after preparation")
+    stored_graph = repository.read_graph_definition(root_entry["id"])
+    if (
+        stored_graph["graphFingerprint"] != hierarchy_state["graphFingerprint"]
+        or stored_graph["graph"]["hierarchyFingerprint"] != hierarchy_state["hierarchyFingerprint"]
+    ):
+        fail("DELIVERY_GRAPH_CHANGED", "Delivery graph changed after preparation")
+    graph_projection = root_target / "execution-graph.md"
+    try:
+        actual_graph_projection = read_regular_file(root_target, graph_projection).decode("utf-8")
+    except Exception:
+        fail("DELIVERY_GRAPH_PROJECTION_CHANGED", "Delivery graph projection is missing or unreadable")
+    expected_graph_projection = render_delivery_graph(
+        stored_graph["graph"],
+        graph_fingerprint=stored_graph["graphFingerprint"],
+        run=repository.read_graph_run(root_entry["id"], allow_missing=True),
+    )
+    if actual_graph_projection != expected_graph_projection:
+        fail("DELIVERY_GRAPH_PROJECTION_CHANGED", "Delivery graph projection changed after preparation")
     return hierarchy, states, hierarchy_state, root_target
 
 
@@ -244,6 +301,7 @@ def prepare_hierarchy(
                 fail("WORK_ITEM_SOURCE_CHANGED", "A frozen hierarchy cannot be prepared again; plan a complete new requirement")
             old_ids = {node["definition"]["id"] for node in iter_hierarchy_nodes(old_hierarchy)}
             if hierarchy_fingerprint(old_hierarchy) == hierarchy_fingerprint(normalized):
+                stored_graph = repository.read_graph_definition(root_id)
                 return {
                     "created": False,
                     "revised": False,
@@ -252,12 +310,15 @@ def prepare_hierarchy(
                     "itemIds": [record["definition"]["id"] for record in records],
                     "stage": old_state["stage"],
                     "hierarchyFingerprint": old_state["hierarchyFingerprint"],
+                    "graphFingerprint": stored_graph["graphFingerprint"],
+                    "graphSummary": graph_summary(stored_graph["graph"]),
                     "baselineFingerprints": {
                         item_id: state["baselineFingerprint"] for item_id, state in old_states.items()
                     },
                     "artifactDir": str(old_target),
                     "humanArtifacts": {
                         "developmentPlan": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/development-plan.md",
+                        "executionGraph": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/execution-graph.md",
                         "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
                     },
                     "nextAction": "人工评审 development-plan.md 并选择 active/manual；同意后一次确认冻结，无需复述指纹。",
@@ -290,6 +351,15 @@ def prepare_hierarchy(
         repository.recompute_progress(registry)
         repository.validate_operational_registry(registry)
         repository.store_hierarchy(records, states, hierarchy_state)
+        graph = compile_delivery_graph(
+            normalized,
+            hierarchy_fingerprint=hierarchy_state["hierarchyFingerprint"],
+        )
+        repository.store_graph_definition(
+            graph,
+            graph_fingerprint_value=hierarchy_state["graphFingerprint"],
+            created_at=at,
+        )
         repository.write_hierarchy_package(
             target,
             _hierarchy_packages(repository, normalized, states, hierarchy_state),
@@ -304,12 +374,15 @@ def prepare_hierarchy(
             "itemIds": [record["definition"]["id"] for record in records],
             "stage": hierarchy_state["stage"],
             "hierarchyFingerprint": hierarchy_state["hierarchyFingerprint"],
+            "graphFingerprint": hierarchy_state["graphFingerprint"],
+            "graphSummary": graph_summary(graph),
             "baselineFingerprints": {
                 item_id: state["baselineFingerprint"] for item_id, state in states.items()
             },
             "artifactDir": str(target),
             "humanArtifacts": {
                 "developmentPlan": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/development-plan.md",
+                "executionGraph": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/execution-graph.md",
                 "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
             },
             "nextAction": "人工评审 development-plan.md 并选择 active/manual；同意后一次确认冻结，无需复述指纹。",
@@ -331,6 +404,8 @@ def _frozen_human_artifacts(root_id: str, handoff: str | None) -> dict[str, str 
     return {
         "developmentPlan": f"{base}/development-plan.md",
         "progress": f"{base}/progress.md",
+        "executionGraph": f"{base}/execution-graph.md",
+        "runTimeline": f"{base}/run-timeline.md",
         "requirementHandoff": f"{base}/requirement-handoff.md" if handoff is not None else None,
         "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
     }
@@ -372,11 +447,18 @@ def freeze_hierarchy(
             repository.write_registry(registry)
             handoff = _manual_requirement_handoff(root_entry, registry)
             handoff_command = render_requirement_handoff_command(root_id) if handoff is not None else None
+            stored_graph = repository.read_graph_definition(root_id)
+            graph_run = repository.read_graph_run(root_id)
             return {
                 "created": False,
                 "idempotent": True,
                 "rootId": root_id,
                 "hierarchyFingerprint": hierarchy_state["hierarchyFingerprint"],
+                "graphFingerprint": stored_graph["graphFingerprint"],
+                "graphRun": {
+                    key: graph_run[key]
+                    for key in ("runId", "status", "startedAt", "updatedAt", "recordRevision")
+                },
                 "frozenItemIds": [record["definition"]["id"] for record in records],
                 "rootBaselineFingerprint": states[root_id]["baselineFingerprint"],
                 "developmentMode": root_entry["developmentMode"],
@@ -429,6 +511,21 @@ def freeze_hierarchy(
             entry["recordRevision"] += 1
             entry["updatedAt"] = at
         root_entry["developmentMode"] = development_mode_record
+        repository.freeze_graph_definition(
+            root_id,
+            expected_graph_fingerprint=frozen_hierarchy_state["graphFingerprint"],
+            frozen_at=at,
+        )
+        graph_run = repository.start_graph_run(root_id, started_at=at)
+        repository.append_graph_event(
+            root_id=root_id,
+            node_id=None,
+            event_type="GRAPH_RUN_STARTED",
+            actor="AGENT",
+            operation_id=None,
+            payload={"developmentMode": development_mode},
+            recorded_at=at,
+        )
         registry["currentFocus"] = {
             "workItemId": root_id,
             "purpose": "ACTIVE_REQUIREMENT_DISPATCH" if development_mode == "active" else "MANUAL_REQUIREMENT_HANDOFF",
@@ -436,6 +533,7 @@ def freeze_hierarchy(
         registry["revision"] += 1
         registry["updatedAt"] = at
         repository.write_registry(registry)
+        graph_run = repository.read_graph_run(root_id)
         handoff = _manual_requirement_handoff(root_entry, registry)
         handoff_command = render_requirement_handoff_command(root_id) if handoff is not None else None
         return {
@@ -444,6 +542,11 @@ def freeze_hierarchy(
             "rootId": root_id,
             "stage": "BASELINE_FROZEN",
             "hierarchyFingerprint": frozen_hierarchy_state["hierarchyFingerprint"],
+            "graphFingerprint": frozen_hierarchy_state["graphFingerprint"],
+            "graphRun": {
+                key: graph_run[key]
+                for key in ("runId", "status", "startedAt", "updatedAt", "recordRevision")
+            },
             "frozenItemIds": [record["definition"]["id"] for record in records],
             "rootBaselineFingerprint": frozen_states[root_id]["baselineFingerprint"],
             "developmentMode": development_mode_record,
@@ -477,6 +580,17 @@ def retry_work_item(
         if entry["baselineFingerprint"] != expected_baseline_fingerprint:
             fail("WORK_ITEM_REVISION_CONFLICT", "The retry baseline fingerprint is not current")
         definition = repository.assert_current_lineage(registry, entry)[0]
+        retry_node_ids = (
+            [gate_node_id(item_id)]
+            if entry["kind"] != "TASK" or entry["gate"]["status"] == "FAIL"
+            else [execution_node_id(item_id)]
+        )
+        root_id = hierarchy_root_entry(registry, entry)["id"]
+        graph_attempts = repository.begin_graph_attempts(
+            root_id,
+            retry_node_ids,
+            at=at,
+        )
         entry["status"] = "FROZEN"
         entry["gate"] = {"status": "NOT_RUN", "evidence": None}
         if entry["parentId"] is None:
@@ -489,10 +603,24 @@ def retry_work_item(
         }
         registry["revision"] += 1
         registry["updatedAt"] = at
+        repository.append_graph_event(
+            root_id=root_id,
+            node_id=retry_node_ids[0],
+            event_type="NODE_RETRY_SCHEDULED",
+            actor="AGENT",
+            operation_id=None,
+            payload={"attempts": graph_attempts},
+            recorded_at=at,
+        )
         if entry.get("acceptanceReport"):
             repository.write_acceptance_report(entry, definition, at)
         repository.write_registry(registry)
-        return {"id": item_id, "status": entry["status"], "baselineFingerprint": entry["baselineFingerprint"]}
+        return {
+            "id": item_id,
+            "status": entry["status"],
+            "baselineFingerprint": entry["baselineFingerprint"],
+            "graphAttempts": graph_attempts,
+        }
 
 
 def refresh_work_item_projections(*, root: str, explicit_dogfood: bool = False) -> dict[str, Any]:

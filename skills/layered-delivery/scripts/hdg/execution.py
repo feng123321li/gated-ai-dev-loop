@@ -7,6 +7,8 @@ from .constants import SCHEMA_VERSION
 from .errors import fail
 from .evidence import evidence_record, valid_task_result_artifact
 from .fs_safe import atomic_write
+from .graph_model import execution_node_id
+from .graph_runtime import derive_node_states, get_graph_frontier
 from .model import scope_patterns_overlap, work_item_child_contract_fingerprint
 from .projections import render_task_handoff
 from .repository import GovernanceRepository, timestamp
@@ -31,20 +33,6 @@ def _task_write_scope(
     return sorted(set(scope))
 
 
-def _is_descendant(registry: dict[str, Any], entry: dict[str, Any], ancestor_id: str) -> bool:
-    by_id = {item["id"]: item for item in registry["workItems"]}
-    current = entry
-    visited: set[str] = set()
-    while current:
-        if current["id"] == ancestor_id:
-            return True
-        if not current["parentId"] or current["id"] in visited:
-            return False
-        visited.add(current["id"])
-        current = by_id.get(current["parentId"])
-    return False
-
-
 def _hierarchy_root_entry(registry: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
     current = entry
     visited: set[str] = set()
@@ -66,30 +54,22 @@ def _task_ready(
     registry: dict[str, Any],
     entry: dict[str, Any],
 ) -> bool:
-    if (
-        repository.is_item_isolated(entry["id"])
-        or entry["kind"] != "TASK"
-        or entry["stage"] != "BASELINE_FROZEN"
-        or entry["status"] != "FROZEN"
-        or entry.get("claim")
-    ):
+    if repository.is_item_isolated(entry["id"]) or entry["kind"] != "TASK":
         return False
-    if _hierarchy_root_entry(registry, entry).get("developmentMode") is None:
+    root_entry = _hierarchy_root_entry(registry, entry)
+    stored_graph = repository.read_graph_definition(root_entry["id"])
+    graph_run = repository.read_graph_run(root_entry["id"], allow_missing=True)
+    node_state = next(
+        (
+            state
+            for state in derive_node_states(stored_graph["graph"], registry, graph_run)
+            if state["id"] == execution_node_id(entry["id"])
+        ),
+        None,
+    )
+    if node_state is None or node_state["status"] != "READY":
         return False
     definition = repository.assert_current_lineage(registry, entry)[0]
-    if entry["parentId"] is not None:
-        capability_entry = repository.item_by_id(registry, entry["parentId"])
-        capability = repository.read_package(registry, capability_entry)[0]
-        if any(
-            next((item for item in registry["workItems"] if item["id"] == dependency), {}).get("status") != "VERIFIED"
-            for dependency in capability["decomposition"]["dependsOn"]
-        ):
-            return False
-    if any(
-        next((item for item in registry["workItems"] if item["id"] == dependency), {}).get("status") != "VERIFIED"
-        for dependency in definition["execution"]["dependsOn"]
-    ):
-        return False
     for claimed in (item for item in registry["workItems"] if item.get("claim")):
         claimed_definition = repository.read_package(registry, claimed)[0]
         if scope_patterns_overlap(
@@ -101,14 +81,34 @@ def _task_ready(
 
 
 def list_ready_tasks(*, root: str, work_item_id: str) -> list[str]:
-    repository = GovernanceRepository(root)
-    registry = repository.read_operational_registry()
-    repository.item_by_id(registry, work_item_id)
-    return [
-        entry["id"]
-        for entry in sorted(registry["workItems"], key=lambda item: item["id"])
-        if _is_descendant(registry, entry, work_item_id) and _task_ready(repository, registry, entry)
-    ]
+    frontier = get_graph_frontier(root=root, work_item_id=work_item_id)
+    return sorted(
+        action["workItemId"]
+        for action in frontier["actions"]
+        if action["action"] == "DISPATCH_TASK"
+    )
+
+
+def _append_task_graph_event(
+    repository: GovernanceRepository,
+    registry: dict[str, Any],
+    entry: dict[str, Any],
+    *,
+    event_type: str,
+    operation_id: str,
+    payload: dict[str, Any],
+    at: str,
+) -> None:
+    root_entry = _hierarchy_root_entry(registry, entry)
+    repository.append_graph_event(
+        root_id=root_entry["id"],
+        node_id=execution_node_id(entry["id"]),
+        event_type=event_type,
+        actor="AGENT",
+        operation_id=operation_id,
+        payload=payload,
+        recorded_at=at,
+    )
 
 
 def claim_task(
@@ -140,6 +140,15 @@ def claim_task(
         registry["currentFocus"] = {"workItemId": item_id, "purpose": "EXECUTION"}
         registry["revision"] += 1
         registry["updatedAt"] = at
+        _append_task_graph_event(
+            repository,
+            registry,
+            entry,
+            event_type="TASK_CLAIMED",
+            operation_id=operation_id,
+            payload={"owner": entry["claim"]["owner"], "status": entry["status"]},
+            at=at,
+        )
         repository.write_registry(registry)
         return {"id": item_id, "status": entry["status"], "claim": entry["claim"]}
 
@@ -190,6 +199,15 @@ def record_task_result(
         entry["updatedAt"] = at
         registry["revision"] += 1
         registry["updatedAt"] = at
+        _append_task_graph_event(
+            repository,
+            registry,
+            entry,
+            event_type="TASK_IMPLEMENTED" if status == "IMPLEMENTED" else "TASK_BLOCKED",
+            operation_id=operation_id,
+            payload={"status": status, "evidence": reference},
+            at=at,
+        )
         repository.write_development_review(entry, definition, at)
         repository.write_registry(registry)
         base = f".layered-delivery/{entry['packagePath']}"
@@ -347,6 +365,15 @@ def dispatch_task(
         registry["currentFocus"] = {"workItemId": item_id, "purpose": "EXECUTION"}
         registry["revision"] += 1
         registry["updatedAt"] = at
+        _append_task_graph_event(
+            repository,
+            registry,
+            entry,
+            event_type="TASK_CLAIMED",
+            operation_id=operation_id,
+            payload={"owner": claim["owner"], "status": entry["status"]},
+            at=at,
+        )
         repository.write_registry(registry)
         return {
             "id": item_id,

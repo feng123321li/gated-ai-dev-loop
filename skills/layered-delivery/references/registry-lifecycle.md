@@ -30,7 +30,7 @@ Task CLAIMED --写回结果--> IMPLEMENTED | BLOCKED
 Task IMPLEMENTED --accept-item 通过--> VERIFIED + acceptance report
 Task IMPLEMENTED --accept-item 未通过--> BLOCKED + acceptance report
 Task/协调节点 BLOCKED --retry-item 校验当前指纹--> FROZEN
-Task IMPLEMENTED/BLOCKED/VERIFIED --remediate-task 同契约补充文件--> 原 Task FROZEN + 已通过祖先 FROZEN
+Task IMPLEMENTED/BLOCKED/VERIFIED --remediate-task 同契约补充文件--> 原 Task FROZEN + 图下游已推进节点失效并创建新 attempt
 协调节点 FROZEN --全部直接子级 VERIFIED + 聚合门禁通过--> VERIFIED
 治理根 VERIFIED --独立/人工审查通过--> WAITING_FOR_USER_CONFIRMATION
 WAITING_FOR_USER_CONFIRMATION --用户确认--> COMPLETED

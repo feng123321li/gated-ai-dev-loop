@@ -1,6 +1,6 @@
-# Layered Delivery Graph Engineering 升级设计草案
+# Layered Delivery Graph Engineering 升级设计与实施说明
 
-> 状态：已确认；核心 Graph Engineering 已实施（2026-07-21），后续可观测性增强保留为路线图
+> 状态：已确认并完整实施（2026-07-21），包括关键路径、frontier 看板、图坐标证据绑定与事件回放恢复
 >
 > 目标版本：继续使用当前完整 schema v3
 >
@@ -605,6 +605,7 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 ```text
 .layered-delivery/work-items/<root-id>/
 ├── execution-graph.md     # 冻结图、当前节点状态、边和 frontier
+├── frontier.md            # 双语关键路径、允许动作、并行组和阻断看板
 ├── run-timeline.md        # node attempt 与关键事件时间线
 └── progress.md            # 继续保留整树交付进度
 ```
@@ -618,8 +619,8 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 | 文件 | 责任 |
 |---|---|
 | `src/hdg/graph_model.py` | Graph IR、节点/边校验、图指纹，并把完整 hierarchy 确定性编译成合同图 |
-| `src/hdg/graph_runtime.py` | 节点状态、frontier、图状态和事件查询 |
-| `src/hdg/graph_projections.py` | `execution-graph.md`、`run-timeline.md` 和 Mermaid 图渲染 |
+| `src/hdg/graph_runtime.py` | 事件回放、节点状态、关键路径、frontier、图状态和恢复 |
+| `src/hdg/graph_projections.py` | `execution-graph.md`、`frontier.md`、`run-timeline.md` 和 Mermaid 图渲染 |
 
 构建 Skill 后，同步生成对应的 `skills/layered-delivery/scripts/hdg/**` 文件。
 
@@ -629,11 +630,11 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 |---|---|
 | `src/hdg/model.py` | 保留层级 definition 与依赖合法性校验 |
 | `src/hdg/planning.py` | prepare 时编译图；freeze 时绑定 graph fingerprint 并创建 run |
-| `src/hdg/repository.py` | 增加 graph 表、精确 schema 校验、事务读写、恢复和事件链 |
+| `src/hdg/repository.py` | 增加 graph/evidence 表、精确 schema 校验、图坐标证据绑定、事件链回放和快照重建 |
 | `src/hdg/execution.py` | `_task_ready` 改为 graph frontier 的 Task 视图；dispatch/result 驱动 node event |
 | `src/hdg/acceptance.py` | Task/Capability/Delivery gate 统一映射到 gate node |
 | `src/hdg/remediation.py` | 根据显式边计算失效闭包并创建下一 attempt |
-| `src/hdg/cli.py` | 增加 graph-status、graph-frontier、graph-events 命令 |
+| `src/hdg/cli.py` | 增加 graph-status、graph-frontier、graph-events、graph-replay、rebuild-graph-run 命令 |
 | `README.md` | 从“分层树调度”更新为“分层合同 + 图运行 + 节点循环” |
 | `skills/layered-delivery/SKILL.md` | 用 graph frontier 描述 active/manual 自动推进流程 |
 | `skills/layered-delivery/references/*.md` | 更新 baseline、执行、并发、事务、恢复、验收和跟踪契约 |
@@ -644,8 +645,8 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 
 | 测试文件 | 覆盖内容 |
 |---|---|
-| `tests/test_graph_model.py` | 节点/边精确字段、确定性指纹、未知类型、环路、非法 join |
-| `tests/test_graph_runtime.py` | frontier、并行、fan-in、gate、review、confirmation |
+| `tests/test_graph_model.py` | 节点/边精确字段、确定性指纹、未知类型、环路、非法 join、关键路径 fan-in |
+| `tests/test_graph_runtime.py` | frontier 看板、并行、fan-in、gate、review、confirmation、bound evidence、事件回放与重建 |
 | `tests/test_remediation.py` | Task、依赖消费者和聚合 gate 的失效闭包与下一 attempt |
 
 现有 hierarchy、planning、execution、acceptance、remediation 和安全测试继续保留，用来证明升级没有削弱原治理契约。
@@ -710,13 +711,16 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 - 已完成需求不可原地重开；
 - graph run 与现有 acceptance report 完全一致。
 
-### 阶段四：宿主协议与可观测性（核心完成，可继续增强关键路径视图）
+### 阶段四：宿主协议与可观测性（已完成）
 
 交付：
 
 - 统一 frontier action 协议；
 - active/manual handoff 使用同一 graph run；
-- 当前 frontier、并行组和阻断原因查询；关键路径专用视图保留为后续增强；
+- 当前 frontier、并行组、关键路径、下一个汇聚点和阻断原因查询；
+- 双语 `frontier.md` Markdown 看板；
+- evidence artifact 对 `runId/nodeId/attempt/graphFingerprint` 的直接绑定；
+- 完整事件回放、快照一致性检查和显式确认重建；
 - node attempt 时间线；
 - 文档与 Skill 全面切换到 Graph + Loop 表述。
 
@@ -726,6 +730,7 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 - 宿主不需要从自然语言推断下一条控制器命令；
 - 无子 Agent 时自动串行不改变图；
 - 任意节点失败后可以从 SQLite 准确恢复下一动作。
+- 任意快照偏差都会被回放校验阻断，并可从有效事件链确定性重建。
 
 ## 12. 逻辑实施拆分（未创建 dogfood 运行包）
 
@@ -810,6 +815,9 @@ Graph engineering 升级完成必须同时满足：
 - frontier 能完整表达 Task、gate、review 和 confirmation 动作；
 - 并行、依赖、范围冲突和 fan-in 行为可机械验证；
 - 每个节点支持 attempt、claim、证据、事件和恢复；
+- frontier 提供关键路径与双语 Markdown 看板；
+- artifact 证据绑定到精确 run、node、attempt 和 graph fingerprint；
+- 完整事件回放能重建运行状态并检测或修复快照偏差；
 - retry 和 remediation 不修改冻结拓扑；
 - remediation 精确失效受影响节点与必要后继；
 - SQLite 仍是唯一机器权威，Markdown 可完全重建；

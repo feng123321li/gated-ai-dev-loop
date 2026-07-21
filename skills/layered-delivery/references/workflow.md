@@ -6,7 +6,7 @@
 2. 只读恢复项目级 `governance.sqlite3`。数据库 schema、ID、拓扑、路径、指纹或普通字段不一致时保持阻断，不迁移、不猜测。仅当历史节点只有 evidence 引用过期、完整 artifact 仍在 SQLite 且其余契约有效时，将该节点只读隔离并在总览告警；其他新需求、有效兄弟 Task 和已有 claim 继续。Markdown 缺失时可从数据库刷新。
 3. 起草层级事实卡，选择最浅合法形态：独立 Task、Capability→Task 或 Delivery→Capability→Task。为每个实际节点起草自己的 baseline 与 `developmentPlan`。
 4. 把整棵需求树组织成 `{"schemaVersion":3,"root":{"definition":{...},"children":[...]}}`。协调节点声明的每个 child 必须在这棵树里完整物化。
-5. 运行 `prepare-hierarchy`。一个需求只生成 `work-items/<root-id>/` 一个顶层目录，子节点按 `children/<id>/` 递归嵌套；根级 `development-plan.md/progress.md` 聚合完整树，控制器同时编译 `execution-graph.md`，根节点自身进度写入 `node-progress.md`，每个实际子节点生成自己的 `development-plan.md/progress.md`。
+5. 运行 `prepare-hierarchy`。一个需求只生成 `work-items/<root-id>/` 一个顶层目录，子节点按 `children/<id>/` 递归嵌套；根级 `development-plan.md/progress.md` 聚合完整树，控制器同时编译 `execution-graph.md` 和 `frontier.md`，根节点自身进度写入 `node-progress.md`，每个实际子节点生成自己的 `development-plan.md/progress.md`。
 6. 人工查看根级 `development-plan.md` 与 `execution-graph.md`，同时选择 active/manual。需要修改就重新准备整棵树；同意时只需确认当前方案和所选方式，无需知道或复述层级/图指纹。
 7. Agent 使用准备结果中的 `hierarchyFingerprint`，调用一次 `freeze-hierarchy --expected-hierarchy ... --development-mode ... --confirmed`。控制器在同一事务中记录方式并冻结全部节点；指纹已变化则拒绝旧确认。
 8. active 下由当前 Agent 冻结后查询 `graph-frontier` 并直接自主推进；manual 在需求根生成完整 `requirement-handoff.md`，并返回简短 `handoffCommand`。规划会话必须把 `handoffCommand` 放入纯文本代码块供用户一次复制，不能只给文件链接；接收 Agent 即成为同一 graph run 的执行宿主。两种宿主都按 frontier 动作自主决定多子 Agent、单 Agent 或当前 Agent 串行，循环实现、回归、修复和复测；运行能力变化时自动调整，不再次询问开发方式或要求人工逐 Task 启动。
@@ -44,6 +44,7 @@ work-items/
 └── <root-id>/
     ├── development-plan.md
     ├── execution-graph.md  # 执行图 + 治理图
+    ├── frontier.md         # 关键路径、动作与阻断看板
     ├── run-timeline.md     # graph run、attempt 与事件
     ├── progress.md       # 整树总进度
     ├── node-progress.md  # 根节点自身进度

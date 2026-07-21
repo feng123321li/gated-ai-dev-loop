@@ -12,7 +12,7 @@
 - 根级 `development-plan.md` 是整棵需求树唯一的冻结评审入口，一次人工确认冻结全部节点。
 - 层级由用户评审，Delivery Graph 由控制器确定性编译；用户不直接维护任意节点和边。
 - Task execution、各级 gate、root review 和 user confirmation 都是显式图节点。
-- `ready-tasks` 是 graph frontier 的 Task 投影；完整运行时权威由冻结图、graph run、node attempt 和事件链共同表达。
+- `ready-tasks` 是 graph frontier 的 Task 投影；冻结图定义运行合同，带图指纹的哈希事件链是运行事实，graph run 和 node attempt 是可由事件完整重建的查询快照。
 - 项目级 `.layered-delivery/governance.sqlite3` 是唯一机器权威，Markdown 只是可重建的人类投影。
 - 同一冻结目标和验收契约内的修正必须回到原 Task，不得为修复同一需求创建第二个根。
 - Agent 不自动提交、推送、合并、迁移、发布或改变外部状态；这些动作需要单独明确授权。
@@ -183,6 +183,7 @@ dispatch-task
         ├── baseline.md
         ├── development-plan.md        # 整树冻结评审入口
         ├── execution-graph.md         # 执行图 + 治理图双语投影
+        ├── frontier.md                # 当前关键路径、可执行动作与阻断看板
         ├── run-timeline.md            # 节点 attempt、状态与事件链
         ├── progress.md                # 整树总进度
         ├── node-progress.md           # 根节点自身进度
@@ -203,6 +204,7 @@ dispatch-task
 ```text
 冻结前：development-plan.md
 图结构：execution-graph.md
+下一步与关键路径：frontier.md
 运行过程：run-timeline.md
 开发结果写回后：development-review.md
 门禁执行后：acceptance-report.md
@@ -220,6 +222,7 @@ Markdown 不是机器权威。手工删除需求目录不会删除 SQLite 状态
 - 数据库 schema、协调根、ID、拓扑、路径、普通字段或指纹损坏时阻断，不迁移、不猜测。
 - 仅当历史节点只有 evidence 引用过期、完整 artifact 仍在 SQLite 且其他契约有效时，控制器将该节点只读隔离；它不能被直接操作，但不阻断新需求、有效兄弟 Task 或已有 claim。
 - Markdown 投影缺失时使用 `refresh-projections` 从 SQLite 重建，不能从 Markdown 反向猜测机器状态。
+- `graph-replay` 从完整事件链重算所有 node attempt、图状态与回放指纹，并检查查询快照是否一致；只有确认快照损坏时，才使用带 `--confirmed` 的 `rebuild-graph-run` 重建 `graph_runs/node_runs`。
 - `record-interaction` 只记录必要的用户指令、Agent 更新、决策或状态摘要；`interaction-log` 查询结构化事件，根级 `interaction-log.md` 供人工审计。
 - 交互记录不得保存隐藏思考过程、密钥或不必要的原始对话。
 
@@ -233,7 +236,7 @@ Markdown 不是机器权威。手工删除需求目录不会删除 SQLite 状态
 - `record-interaction --interaction -`
 - `task-result`、`remediate-task`、`gate-item`、`accept-item`、`acceptance-item` 的 `--evidence -`
 
-控制器拒绝文件路径，不生成 `_hdg_*.json`、`.hdg-tmp/**`、系统 `%TEMP%` 或其他中间 JSON。完整 artifact 与控制器计算的规范 JSON SHA-256 在同一 SQLite 写事务内保存；Agent 不直接写数据库，也不提供自算摘要。
+控制器拒绝文件路径，不生成 `_hdg_*.json`、`.hdg-tmp/**`、系统 `%TEMP%` 或其他中间 JSON。完整 artifact 与控制器计算的规范 JSON SHA-256 在同一 SQLite 写事务内保存；图事件证据还会由控制器绑定 `runId/nodeId/attempt/graphFingerprint`，形成不可移植到其他节点或尝试的 bound evidence。Agent 不直接写数据库，也不提供自算摘要或绑定字段。
 
 PowerShell 使用单引号 here-string 管道，Claude Code Bash 使用当前 shell 的带引号 heredoc。不得再嵌套 `bash -lc`、`sh -c`、`cmd /c` 或另一个 shell 包装。详细示例见 [stdin-transport.md](skills/layered-delivery/references/stdin-transport.md)。
 
@@ -283,6 +286,8 @@ python -X utf8 <skill-root>/scripts/hdg.py --help
 | `graph-status` | 查询完整图、节点状态、attempt 和 graph run |
 | `graph-frontier` | 查询当前允许动作与结构化阻断原因 |
 | `graph-events` | 查询带前序哈希校验的运行事件链 |
+| `graph-replay` | 从完整事件链重算运行状态并检查快照一致性 |
+| `rebuild-graph-run` | 经显式确认后按事件回放重建 graph/node run 查询快照 |
 | `task-context` | 只读诊断未认领 Task 的上下文预览，不授权开工 |
 | `dispatch-task` | 原子校验 READY、认领 Task 并生成独立执行上下文与 handoff |
 | `claim-task` | 仅执行原子认领；正常开工优先使用 `dispatch-task` |

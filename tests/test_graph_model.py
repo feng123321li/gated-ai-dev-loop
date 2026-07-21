@@ -13,6 +13,7 @@ from hdg.graph_model import (
     review_node_id,
     validate_delivery_graph,
 )
+from hdg.graph_runtime import critical_path
 from hdg.model import hierarchy_fingerprint, validate_hierarchy_definition
 
 from .fixtures import task_hierarchy, two_task_capability_hierarchy
@@ -132,6 +133,21 @@ class DeliveryGraphModelTests(unittest.TestCase):
         with self.assertRaises(GatedLoopError) as raised:
             validate_delivery_graph(graph)
         self.assertEqual(raised.exception.code, "DELIVERY_GRAPH_NODE_INVALID")
+
+    def test_critical_path_identifies_the_next_fan_in_join(self) -> None:
+        graph = self._compile(two_task_capability_hierarchy())
+        nodes = [
+            {"id": node["id"], "status": "PENDING"}
+            for node in graph["nodes"]
+        ]
+        path = critical_path(graph, nodes)
+        self.assertEqual(path["remainingNodes"], 5)
+        self.assertEqual(path["nextJoinNodeId"], gate_node_id("c-python-runtime"))
+        self.assertEqual(path["nodeIds"][-3:], [
+            gate_node_id("c-python-runtime"),
+            review_node_id("c-python-runtime"),
+            confirmation_node_id("c-python-runtime"),
+        ])
 
 
 if __name__ == "__main__":

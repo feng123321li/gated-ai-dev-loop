@@ -8,7 +8,7 @@ from .errors import fail
 from .evidence import evidence_record, valid_task_result_artifact
 from .fs_safe import atomic_write
 from .graph_model import execution_node_id
-from .graph_runtime import derive_node_states, get_graph_frontier
+from .graph_runtime import get_graph_frontier, replay_graph_events
 from .model import scope_patterns_overlap, work_item_child_contract_fingerprint
 from .projections import render_task_handoff
 from .repository import GovernanceRepository, timestamp
@@ -59,11 +59,18 @@ def _task_ready(
     root_entry = _hierarchy_root_entry(registry, entry)
     stored_graph = repository.read_graph_definition(root_entry["id"])
     graph_run = repository.read_graph_run(root_entry["id"], allow_missing=True)
+    if graph_run is None:
+        return False
+    replay = replay_graph_events(
+        stored_graph["graph"],
+        graph_run,
+        repository.read_graph_events(root_entry["id"]),
+    )
     node_state = next(
         (
             state
-            for state in derive_node_states(stored_graph["graph"], registry, graph_run)
-            if state["id"] == execution_node_id(entry["id"])
+            for state in replay["nodes"]
+            if state["nodeId"] == execution_node_id(entry["id"])
         ),
         None,
     )
@@ -98,6 +105,7 @@ def _append_task_graph_event(
     operation_id: str,
     payload: dict[str, Any],
     at: str,
+    evidence_artifact: dict[str, Any] | None = None,
 ) -> None:
     root_entry = _hierarchy_root_entry(registry, entry)
     repository.append_graph_event(
@@ -108,6 +116,7 @@ def _append_task_graph_event(
         operation_id=operation_id,
         payload=payload,
         recorded_at=at,
+        evidence_artifact=evidence_artifact,
     )
 
 
@@ -207,6 +216,7 @@ def record_task_result(
             operation_id=operation_id,
             payload={"status": status, "evidence": reference},
             at=at,
+            evidence_artifact=artifact,
         )
         repository.write_development_review(entry, definition, at)
         repository.write_registry(registry)

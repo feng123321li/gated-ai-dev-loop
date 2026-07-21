@@ -123,6 +123,7 @@ def record_work_item_gate(
             operation_id=None,
             payload={"status": status, "evidence": verified_reference},
             recorded_at=at,
+            evidence_artifact=verified_artifact,
         )
         repository.write_acceptance_report(entry, definition, at)
         repository.write_registry(registry)
@@ -243,6 +244,7 @@ def record_acceptance(
             operation_id=None,
             payload={"action": action, "evidence": reference},
             recorded_at=at,
+            evidence_artifact=artifact,
         )
         repository.write_acceptance_report(entry, definition, at)
         repository.write_registry(registry)

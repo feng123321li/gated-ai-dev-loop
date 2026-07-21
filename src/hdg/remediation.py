@@ -237,6 +237,7 @@ def record_validation_remediation(
                 "attempts": graph_attempts,
             },
             recorded_at=at,
+            evidence_artifact=artifact,
         )
         registry["currentFocus"] = {
             "workItemId": item_id,

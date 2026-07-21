@@ -71,4 +71,4 @@ prepare-hierarchy
 → acceptance-item
 ```
 
-`remediate-task` 只为未完成需求的同契约验证修正追加精确文件授权。artifact、摘要和修正前状态快照存入现有 `interaction_events`，图失效与新 attempt 存入 graph run/event，不新增 JSON 文件、不修改 baseline，也不创建第二个需求根。诊断、恢复与执行命令还包括 `graph-status`、`graph-frontier`、`graph-events`、`task-context`、`claim-task`、`gate-item`、`retry-item`、`ready-tasks` 和 `refresh-projections`。
+`remediate-task` 只为未完成需求的同契约验证修正追加精确文件授权。artifact、摘要和修正前状态快照存入现有 `interaction_events`，图失效与新 attempt 存入 graph run/event，不新增 JSON 文件、不修改 baseline，也不创建第二个需求根。图事件是运行事实权威，graph/node run 是可回放重建的查询快照；artifact 由控制器绑定精确 `runId/nodeId/attempt/graphFingerprint`。诊断、恢复与执行命令还包括 `graph-status`、`graph-frontier`、`graph-events`、`graph-replay`、经确认的 `rebuild-graph-run`、`task-context`、`claim-task`、`gate-item`、`retry-item`、`ready-tasks` 和 `refresh-projections`。

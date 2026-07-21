@@ -319,6 +319,7 @@ def prepare_hierarchy(
                     "humanArtifacts": {
                         "developmentPlan": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/development-plan.md",
                         "executionGraph": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/execution-graph.md",
+                        "frontier": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/frontier.md",
                         "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
                     },
                     "nextAction": "人工评审 development-plan.md 并选择 active/manual；同意后一次确认冻结，无需复述指纹。",
@@ -383,6 +384,7 @@ def prepare_hierarchy(
             "humanArtifacts": {
                 "developmentPlan": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/development-plan.md",
                 "executionGraph": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/execution-graph.md",
+                "frontier": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/frontier.md",
                 "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
             },
             "nextAction": "人工评审 development-plan.md 并选择 active/manual；同意后一次确认冻结，无需复述指纹。",
@@ -405,6 +407,7 @@ def _frozen_human_artifacts(root_id: str, handoff: str | None) -> dict[str, str 
         "developmentPlan": f"{base}/development-plan.md",
         "progress": f"{base}/progress.md",
         "executionGraph": f"{base}/execution-graph.md",
+        "frontier": f"{base}/frontier.md",
         "runTimeline": f"{base}/run-timeline.md",
         "requirementHandoff": f"{base}/requirement-handoff.md" if handoff is not None else None,
         "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",

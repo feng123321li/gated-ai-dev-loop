@@ -124,3 +124,79 @@ def render_run_timeline(
     if not events:
         lines.append("| - | - | 尚未开始 / Not started | - | - |")
     return "\n".join(lines) + "\n"
+
+
+def render_frontier_dashboard(
+    graph_status: dict[str, Any],
+    frontier: dict[str, Any],
+) -> str:
+    run = graph_status.get("run")
+    critical = frontier["criticalPath"]
+    by_id = {node["id"]: node for node in graph_status["nodes"]}
+    lines = [
+        "# 图前沿 / Graph Frontier",
+        "",
+        f"- 需求根 / Root: `{graph_status['rootId']}`",
+        f"- 图指纹 / Graph fingerprint: `{graph_status['graphFingerprint']}`",
+        f"- 运行 / Run: `{run['runId'] if run else 'NOT_STARTED'}`",
+        f"- 状态 / Status: `{run['status'] if run else 'NOT_STARTED'}`",
+        f"- 可执行动作 / Actionable: **{frontier['summary']['actionable']}**",
+        f"- 阻断节点 / Blocked: **{frontier['summary']['blocked']}**",
+        f"- 已认领 / Claimed: **{frontier['summary']['claimed']}**",
+        "",
+        "> 本文件由事件回放和治理数据库重建，仅供阅读；机器权威是图事件链。",
+        "",
+        "## 关键路径 / Critical Path",
+        "",
+        f"- 剩余节点 / Remaining nodes: **{critical['remainingNodes']}**",
+        f"- 下一汇聚 / Next join: `{critical['nextJoinNodeId'] or '-'}`",
+        f"- 路径阻断 / Path blocked: `{'YES' if critical['blocked'] else 'NO'}`",
+        "",
+    ]
+    if critical["nodeIds"]:
+        lines.extend(["```mermaid", "flowchart LR"])
+        for index, node_id in enumerate(critical["nodeIds"]):
+            node = by_id[node_id]
+            alias = f"C{index + 1}"
+            label = f"{node['workItemId']}<br/>{NODE_LABELS[node['kind']]}<br/>{node['status']}"
+            lines.append(f"    {alias}[\"{label}\"]")
+            if index:
+                lines.append(f"    C{index} --> {alias}")
+        lines.extend(["```", ""])
+    else:
+        lines.extend(["已无剩余关键路径 / No remaining critical path.", ""])
+
+    lines.extend([
+        "## 可执行动作 / Actionable Actions",
+        "",
+        "| 节点 / Node | 动作 / Action | 工作项 / Work item | 尝试 / Attempt | 并行组 / Parallel group | 关键 / Critical | 就绪原因 / Ready because | 命令提示 / Command hint |",
+        "|---|---|---|---:|---|---|---|---|",
+    ])
+    for action in frontier["actions"]:
+        reasons = ", ".join(action["readyBecause"]).replace("|", "\\|")
+        hint = action["commandHint"].replace("|", "\\|")
+        lines.append(
+            f"| `{action['nodeId']}` | `{action['action']}` | `{action['workItemId']}` | "
+            f"{action['attempt']} | `{action['parallelGroup'] or '-'}` | "
+            f"{'是 / Yes' if action['critical'] else '否 / No'} | {reasons} | `{hint}` |"
+        )
+    if not frontier["actions"]:
+        lines.append("| - | - | - | - | - | - | 无 / None | - |")
+
+    lines.extend([
+        "",
+        "## 阻断节点 / Blocked Nodes",
+        "",
+        "| 节点 / Node | 类型 / Kind | 工作项 / Work item | 状态 / Status | 尝试 / Attempt | 阻断原因 / Blocked by |",
+        "|---|---|---|---|---:|---|",
+    ])
+    for blocked in frontier["blocked"]:
+        reasons = ", ".join(blocked["blockedBy"]).replace("|", "\\|")
+        kind = NODE_LABELS.get(blocked["nodeKind"], "-")
+        lines.append(
+            f"| `{blocked['nodeId'] or '-'}` | {kind} | `{blocked['workItemId']}` | "
+            f"`{blocked['status']}` | {blocked['attempt'] or '-'} | {reasons} |"
+        )
+    if not frontier["blocked"]:
+        lines.append("| - | - | - | - | - | 无 / None |")
+    return "\n".join(lines) + "\n"

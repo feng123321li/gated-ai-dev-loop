@@ -11,10 +11,23 @@ from pathlib import Path
 from hdg.acceptance import accept_work_item, record_acceptance
 from hdg.cli import run_cli
 from hdg.errors import GatedLoopError
+from hdg.evidence import evidence_record
 from hdg.execution import dispatch_task, record_task_result
-from hdg.graph_model import execution_node_id, gate_node_id
-from hdg.graph_runtime import get_graph_frontier, get_graph_status, list_graph_events
+from hdg.graph_model import (
+    confirmation_node_id,
+    execution_node_id,
+    gate_node_id,
+    review_node_id,
+)
+from hdg.graph_runtime import (
+    get_graph_frontier,
+    get_graph_replay,
+    get_graph_status,
+    list_graph_events,
+    rebuild_graph_run,
+)
 from hdg.planning import freeze_hierarchy, prepare_hierarchy, retry_work_item
+from hdg.repository import GovernanceRepository
 
 from .fixtures import task_hierarchy
 
@@ -77,6 +90,60 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
             "findings": {"p0": [], "p1": [], "p2": []},
         }
 
+    @staticmethod
+    def _review() -> dict:
+        return {
+            "schemaVersion": 3,
+            "kind": "INDEPENDENT_REVIEW",
+            "reviewer": "fresh-reviewer",
+            "isolation": "FRESH_READ_ONLY",
+            "verdict": "PASS",
+            "findings": {"p0": 0, "p1": 0},
+        }
+
+    @staticmethod
+    def _confirmation() -> dict:
+        return {
+            "schemaVersion": 3,
+            "kind": "USER_CONFIRMATION",
+            "confirmedBy": "user",
+            "decision": "CONFIRMED",
+        }
+
+    def _complete_root_task(self, root: str, prepared: dict) -> dict[str, dict]:
+        task_id = prepared["rootId"]
+        task_result = self._task_result(task_id, "op-complete")
+        gate = self._gate(task_id, prepared["baselineFingerprints"][task_id])
+        review = self._review()
+        confirmation = self._confirmation()
+        dispatch_task(root=root, item_id=task_id, owner="developer", operation_id="op-complete")
+        record_task_result(
+            root=root,
+            item_id=task_id,
+            operation_id="op-complete",
+            status="IMPLEMENTED",
+            evidence=task_result,
+        )
+        accept_work_item(root=root, item_id=task_id, evidence=gate)
+        record_acceptance(
+            root=root,
+            item_id=task_id,
+            action="INDEPENDENT_REVIEW_PASS",
+            evidence=review,
+        )
+        record_acceptance(
+            root=root,
+            item_id=task_id,
+            action="USER_CONFIRMED",
+            evidence=confirmation,
+        )
+        return {
+            "taskResult": task_result,
+            "gate": gate,
+            "review": review,
+            "confirmation": confirmation,
+        }
+
     def test_prepare_persists_compiled_graph_and_projects_bilingual_views(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepared = prepare_hierarchy(
@@ -101,7 +168,10 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                     )
                 }
                 self.assertTrue(
-                    {"graph_definitions", "graph_nodes", "graph_edges", "graph_runs", "node_runs", "graph_events"}
+                    {
+                        "graph_definitions", "graph_nodes", "graph_edges", "graph_runs",
+                        "node_runs", "graph_events", "graph_evidence",
+                    }
                     .issubset(tables)
                 )
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM graph_definitions").fetchone()[0], 1)
@@ -243,10 +313,174 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
             self.assertEqual(after_execute["attempt"], 2)
             self.assertEqual(after_execute["status"], "READY")
 
+            replay = get_graph_replay(root=temporary, work_item_id=task_id)
+            execution_attempts = [
+                (item["attempt"], item["status"])
+                for item in replay["attempts"]
+                if item["nodeId"] == execution_node_id(task_id)
+            ]
+            self.assertEqual(execution_attempts, [(1, "BLOCKED"), (2, "READY")])
+
+            database = Path(temporary, ".layered-delivery", "governance.sqlite3")
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute(
+                    "DELETE FROM node_runs WHERE node_id = ? AND attempt = 1",
+                    (execution_node_id(task_id),),
+                )
+                connection.commit()
+            damaged = get_graph_replay(root=temporary, work_item_id=task_id)
+            self.assertFalse(damaged["consistentWithSnapshots"])
+            self.assertEqual(damaged["mismatches"][0]["attempt"], 1)
+            repaired = rebuild_graph_run(root=temporary, work_item_id=task_id, confirmed=True)
+            self.assertTrue(repaired["consistentWithSnapshots"])
+            self.assertEqual(
+                [
+                    (item["attempt"], item["status"])
+                    for item in repaired["attempts"]
+                    if item["nodeId"] == execution_node_id(task_id)
+                ],
+                [(1, "BLOCKED"), (2, "READY")],
+            )
+
+    def test_frontier_projects_a_bilingual_critical_path_dashboard(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = self._prepare_and_freeze(temporary)
+            task_id = prepared["rootId"]
+            frontier = get_graph_frontier(root=temporary, work_item_id=task_id)
+            self.assertEqual(
+                frontier["criticalPath"]["nodeIds"],
+                [
+                    execution_node_id(task_id),
+                    gate_node_id(task_id),
+                    review_node_id(task_id),
+                    confirmation_node_id(task_id),
+                ],
+            )
+            self.assertEqual(frontier["criticalPath"]["remainingNodes"], 4)
+            self.assertIsNone(frontier["criticalPath"]["nextJoinNodeId"])
+            dashboard = Path(prepared["artifactDir"], "frontier.md").read_text(encoding="utf-8")
+            self.assertIn("# 图前沿 / Graph Frontier", dashboard)
+            self.assertIn("## 关键路径 / Critical Path", dashboard)
+            self.assertIn("## 可执行动作 / Actionable Actions", dashboard)
+            self.assertIn("## 阻断节点 / Blocked Nodes", dashboard)
+            self.assertIn("```mermaid", dashboard)
+            self.assertIn("任务执行 / Task Execution", dashboard)
+
+    def test_graph_evidence_is_bound_to_run_node_attempt_and_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = self._prepare_and_freeze(temporary)
+            artifacts = self._complete_root_task(temporary, prepared)
+            events = list_graph_events(root=temporary, work_item_id=prepared["rootId"])
+            evidence_events = [
+                event
+                for event in events
+                if event["eventType"]
+                in {"TASK_IMPLEMENTED", "GATE_PASSED", "REVIEW_PASSED", "USER_CONFIRMED"}
+            ]
+            self.assertEqual(len(evidence_events), 4)
+            expected_artifacts = [
+                artifacts["taskResult"], artifacts["gate"], artifacts["review"],
+                artifacts["confirmation"],
+            ]
+            for event, artifact in zip(evidence_events, expected_artifacts):
+                binding = event["payload"]["evidenceBinding"]
+                self.assertEqual(
+                    set(binding),
+                    {
+                        "schemaVersion", "runId", "nodeId", "attempt", "graphFingerprint",
+                        "artifactSha256", "boundEvidenceSha256",
+                    },
+                )
+                self.assertEqual(binding["runId"], prepared["frozen"]["graphRun"]["runId"])
+                self.assertEqual(binding["nodeId"], event["nodeId"])
+                self.assertEqual(binding["attempt"], event["attempt"])
+                self.assertEqual(binding["graphFingerprint"], prepared["graphFingerprint"])
+                self.assertEqual(binding["artifactSha256"], evidence_record(artifact)["sha256"])
+
+            records = GovernanceRepository(temporary).read_graph_evidence(prepared["rootId"])
+            self.assertEqual(len(records), 4)
+            for record, artifact in zip(records, expected_artifacts):
+                self.assertEqual(record["boundArtifact"]["artifact"], artifact)
+                self.assertEqual(
+                    record["boundArtifact"]["binding"]["boundEvidenceSha256"],
+                    record["boundEvidenceSha256"],
+                )
+
+    def test_tampered_graph_evidence_binding_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = self._prepare_and_freeze(temporary)
+            task_id = prepared["rootId"]
+            dispatch_task(root=temporary, item_id=task_id, owner="developer", operation_id="op-tamper")
+            record_task_result(
+                root=temporary,
+                item_id=task_id,
+                operation_id="op-tamper",
+                status="IMPLEMENTED",
+                evidence=self._task_result(task_id, "op-tamper"),
+            )
+            database = Path(temporary, ".layered-delivery", "governance.sqlite3")
+            with closing(sqlite3.connect(database)) as connection:
+                row = connection.execute(
+                    "SELECT evidence_id, bound_artifact_json FROM graph_evidence"
+                ).fetchone()
+                artifact = json.loads(row[1])
+                artifact["artifact"]["summary"] = "tampered"
+                connection.execute(
+                    "UPDATE graph_evidence SET bound_artifact_json = ? WHERE evidence_id = ?",
+                    (json.dumps(artifact), row[0]),
+                )
+                connection.commit()
+            with self.assertRaises(GatedLoopError) as raised:
+                list_graph_events(root=temporary, work_item_id=task_id)
+            self.assertEqual(raised.exception.code, "DELIVERY_GRAPH_EVIDENCE_INVALID")
+
+    def test_event_replay_reconstructs_and_repairs_node_snapshots(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = self._prepare_and_freeze(temporary)
+            self._complete_root_task(temporary, prepared)
+            root_id = prepared["rootId"]
+            replay = get_graph_replay(root=temporary, work_item_id=root_id)
+            self.assertTrue(replay["consistentWithSnapshots"])
+            self.assertEqual(replay["status"], "COMPLETED")
+            self.assertEqual(replay["eventCount"], 6)
+            self.assertRegex(replay["replayFingerprint"], r"^[0-9a-f]{64}$")
+            self.assertEqual(
+                next(
+                    node for node in replay["nodes"]
+                    if node["nodeId"] == confirmation_node_id(root_id)
+                )["status"],
+                "COMPLETED",
+            )
+
+            database = Path(temporary, ".layered-delivery", "governance.sqlite3")
+            with closing(sqlite3.connect(database)) as connection:
+                connection.execute(
+                    "UPDATE node_runs SET status = 'PENDING' WHERE node_id = ?",
+                    (confirmation_node_id(root_id),),
+                )
+                connection.commit()
+            replay = get_graph_replay(root=temporary, work_item_id=root_id)
+            self.assertFalse(replay["consistentWithSnapshots"])
+            self.assertEqual(replay["mismatches"][0]["nodeId"], confirmation_node_id(root_id))
+            with self.assertRaises(GatedLoopError) as raised:
+                get_graph_status(root=temporary, work_item_id=root_id)
+            self.assertEqual(raised.exception.code, "DELIVERY_GRAPH_REPLAY_MISMATCH")
+
+            repaired = rebuild_graph_run(
+                root=temporary,
+                work_item_id=root_id,
+                confirmed=True,
+            )
+            self.assertTrue(repaired["consistentWithSnapshots"])
+            self.assertEqual(
+                get_graph_status(root=temporary, work_item_id=root_id)["run"]["status"],
+                "COMPLETED",
+            )
+
     def test_graph_commands_are_available_through_the_cli(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepared = self._prepare_and_freeze(temporary)
-            for command in ("graph-status", "graph-frontier", "graph-events"):
+            for command in ("graph-status", "graph-frontier", "graph-events", "graph-replay"):
                 stdout = io.StringIO()
                 stderr = io.StringIO()
                 code = run_cli(
@@ -257,6 +491,17 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                 )
                 self.assertEqual(code, 0, stderr.getvalue())
                 self.assertTrue(json.loads(stdout.getvalue())["ok"])
+
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            code = run_cli(
+                ["rebuild-graph-run", "--item", prepared["rootId"], "--confirmed", "--json"],
+                cwd=temporary,
+                stdout=stdout,
+                stderr=stderr,
+            )
+            self.assertEqual(code, 0, stderr.getvalue())
+            self.assertTrue(json.loads(stdout.getvalue())["ok"])
 
 
 if __name__ == "__main__":

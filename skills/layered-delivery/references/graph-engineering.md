@@ -4,8 +4,8 @@
 
 - Human authority: the reviewed hierarchy and root `development-plan.md`.
 - Compiled authority: the deterministic Delivery Graph stored in SQLite.
-- Runtime authority: graph run, latest node attempts, registry facts, and hash-chained graph events.
-- Human projections: `execution-graph.md` and `run-timeline.md`; never infer machine state from them.
+- Runtime fact authority: graph-fingerprint-bound, hash-chained graph events. Graph and node runs are replayable query snapshots.
+- Human projections: `execution-graph.md`, `frontier.md`, and `run-timeline.md`; never infer machine state from them.
 
 The user does not define arbitrary graph nodes or edges. `prepare-hierarchy` compiles the validated hierarchy into one graph with two typed views:
 
@@ -45,6 +45,8 @@ Possible actions:
 
 `blocked` explains why nodes are not actionable, including predecessor nodes, scope conflicts, isolation, or an unfrozen requirement. Resolve the recorded condition and query the frontier again; do not route around it.
 
+The frontier also returns `criticalPath`, including the longest remaining path, the next join, and whether the path is blocked. The controller renders the same information, current actions, parallel groups, and blockers into the bilingual `frontier.md` dashboard.
+
 ## Status and events
 
 Use:
@@ -52,11 +54,24 @@ Use:
 ```text
 python -X utf8 <skill-root>/scripts/hdg.py graph-status --item <root-or-subtree-id> --json
 python -X utf8 <skill-root>/scripts/hdg.py graph-events --item <root-or-subtree-id> --json
+python -X utf8 <skill-root>/scripts/hdg.py graph-replay --item <root-or-subtree-id> --json
 ```
 
 `graph-status` returns the graph fingerprint, graph run, typed nodes, edges, current node status, attempt, owner, operationId, and blockers.
 
-`graph-events` returns the ordered hash-chained event stream. Normal lifecycle events include graph start, Task claim/result, gate result, review, and final confirmation. Retry and remediation add their own events.
+`graph-events` returns the ordered graph-fingerprint-bound, hash-chained event stream. Normal lifecycle events include graph start, Task claim/result, gate result, review, and final confirmation. Retry and remediation add their own events.
+
+For artifact-driven events, the controller stores a bound evidence wrapper containing the original artifact and a binding over `runId`, `nodeId`, `attempt`, `graphFingerprint`, and the artifact hash. The binding has its own canonical SHA-256. Hosts submit only the original artifact; never manufacture binding fields or reuse a bound artifact at another graph coordinate.
+
+`graph-replay` applies the complete event stream from `GRAPH_RUN_STARTED`, reconstructs every node attempt and graph status, computes a replay fingerprint, and reports any mismatch with the graph/node run snapshots. A mismatch blocks normal status and frontier queries.
+
+If the event and evidence chains validate and only query snapshots are damaged, an explicitly confirmed recovery may run:
+
+```text
+python -X utf8 <skill-root>/scripts/hdg.py rebuild-graph-run --item <root-id> --confirmed --json
+```
+
+This rebuilds graph/node run snapshots from events and records the recovery interaction. It never edits the frozen graph, events, or evidence.
 
 Never modify graph tables, registry rows, attempts, or events directly.
 

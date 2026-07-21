@@ -27,7 +27,11 @@ from .evidence import (
 )
 from .fs_safe import atomic_create_directory, atomic_replace_directory, atomic_write, read_regular_file, safe_path
 from .graph_model import graph_fingerprint, validate_delivery_graph
-from .graph_projections import render_delivery_graph, render_run_timeline
+from .graph_projections import (
+    render_delivery_graph,
+    render_frontier_dashboard,
+    render_run_timeline,
+)
 from .host_runtime import is_agent_runtime
 from .jsonio import canonical_json, sha256_bytes
 from .model import (
@@ -76,7 +80,7 @@ STATE_FIELDS = {
 DATABASE_TABLES = {
     "workspace", "work_items", "hierarchies", "task_contexts", "reports",
     "interaction_events", "graph_definitions", "graph_nodes", "graph_edges",
-    "graph_runs", "node_runs", "graph_events",
+    "graph_runs", "node_runs", "graph_events", "graph_evidence",
 }
 
 
@@ -343,6 +347,7 @@ class GovernanceRepository:
                 event_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_uuid TEXT NOT NULL UNIQUE,
                 run_id TEXT NOT NULL,
+                graph_fingerprint TEXT NOT NULL,
                 node_id TEXT,
                 attempt INTEGER,
                 event_type TEXT NOT NULL,
@@ -356,6 +361,20 @@ class GovernanceRepository:
             )""",
             """CREATE INDEX IF NOT EXISTS graph_events_run_order
                 ON graph_events(run_id, event_id)""",
+            """CREATE TABLE IF NOT EXISTS graph_evidence (
+                evidence_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bound_evidence_sha256 TEXT NOT NULL UNIQUE,
+                run_id TEXT NOT NULL,
+                graph_fingerprint TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                artifact_sha256 TEXT NOT NULL,
+                bound_artifact_json TEXT NOT NULL,
+                recorded_at TEXT NOT NULL,
+                FOREIGN KEY (run_id) REFERENCES graph_runs(run_id) ON DELETE CASCADE
+            )""",
+            """CREATE INDEX IF NOT EXISTS graph_evidence_run_node
+                ON graph_evidence(run_id, node_id, attempt)""",
         )
         for statement in statements:
             connection.execute(statement)
@@ -981,14 +1000,9 @@ class GovernanceRepository:
                     return None
                 fail("DELIVERY_GRAPH_RUN_MISSING", f"Delivery graph run is missing: {root_id}")
             node_rows = connection.execute(
-                "SELECT current.run_id, current.node_id, current.attempt, current.status, current.owner, "
-                "current.operation_id, current.claimed_at, current.finished_at, "
-                "current.latest_evidence_hash, current.record_revision "
-                "FROM node_runs current JOIN ("
-                "SELECT run_id, node_id, MAX(attempt) AS attempt FROM node_runs "
-                "WHERE run_id = ? GROUP BY run_id, node_id"
-                ") latest ON latest.run_id = current.run_id AND latest.node_id = current.node_id "
-                "AND latest.attempt = current.attempt ORDER BY current.node_id",
+                "SELECT run_id, node_id, attempt, status, owner, operation_id, claimed_at, "
+                "finished_at, latest_evidence_hash, record_revision FROM node_runs "
+                "WHERE run_id = ? ORDER BY node_id, attempt",
                 (row["run_id"],),
             ).fetchall()
         if (
@@ -999,6 +1013,23 @@ class GovernanceRepository:
             or not _plain_int(row["record_revision"], minimum=1)
         ):
             fail("DELIVERY_GRAPH_RUN_INVALID", f"Delivery graph run is invalid: {root_id}")
+        attempts = [
+            {
+                "nodeId": item["node_id"],
+                "attempt": item["attempt"],
+                "status": item["status"],
+                "owner": item["owner"],
+                "operationId": item["operation_id"],
+                "claimedAt": item["claimed_at"],
+                "finishedAt": item["finished_at"],
+                "latestEvidenceHash": item["latest_evidence_hash"],
+                "recordRevision": item["record_revision"],
+            }
+            for item in node_rows
+        ]
+        latest_by_node: dict[str, dict[str, Any]] = {}
+        for attempt in attempts:
+            latest_by_node[attempt["nodeId"]] = attempt
         return {
             "runId": row["run_id"],
             "rootId": row["root_id"],
@@ -1008,20 +1039,8 @@ class GovernanceRepository:
             "updatedAt": row["updated_at"],
             "completedAt": row["completed_at"],
             "recordRevision": row["record_revision"],
-            "nodes": [
-                {
-                    "nodeId": item["node_id"],
-                    "attempt": item["attempt"],
-                    "status": item["status"],
-                    "owner": item["owner"],
-                    "operationId": item["operation_id"],
-                    "claimedAt": item["claimed_at"],
-                    "finishedAt": item["finished_at"],
-                    "latestEvidenceHash": item["latest_evidence_hash"],
-                    "recordRevision": item["record_revision"],
-                }
-                for item in node_rows
-            ],
+            "nodes": [latest_by_node[node_id] for node_id in sorted(latest_by_node)],
+            "attempts": attempts,
         }
 
     def begin_graph_attempts(
@@ -1064,6 +1083,7 @@ class GovernanceRepository:
         operation_id: str | None,
         payload: dict[str, Any],
         recorded_at: str,
+        evidence_artifact: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         run = self.read_graph_run(root_id)
         if node_id is not None:
@@ -1074,6 +1094,51 @@ class GovernanceRepository:
         else:
             attempt = None
         connection = self._active_connection()
+        event_payload = deepcopy(payload)
+        if evidence_artifact is not None:
+            if node_id is None or attempt is None or "evidenceBinding" in event_payload:
+                fail("DELIVERY_GRAPH_EVIDENCE_INVALID", "Graph evidence requires one unambiguous node attempt")
+            artifact_sha256 = evidence_record(evidence_artifact)["sha256"]
+            binding_material = {
+                "schemaVersion": SCHEMA_VERSION,
+                "runId": run["runId"],
+                "nodeId": node_id,
+                "attempt": attempt,
+                "graphFingerprint": run["graphFingerprint"],
+                "artifactSha256": artifact_sha256,
+                "artifact": evidence_artifact,
+            }
+            bound_sha256 = sha256_bytes(canonical_json(binding_material).encode("utf-8"))
+            binding = {
+                key: binding_material[key]
+                for key in (
+                    "schemaVersion", "runId", "nodeId", "attempt", "graphFingerprint",
+                    "artifactSha256",
+                )
+            }
+            binding["boundEvidenceSha256"] = bound_sha256
+            bound_artifact = {
+                "schemaVersion": SCHEMA_VERSION,
+                "kind": "GRAPH_BOUND_EVIDENCE",
+                "binding": binding,
+                "artifact": evidence_artifact,
+            }
+            connection.execute(
+                "INSERT INTO graph_evidence(bound_evidence_sha256, run_id, graph_fingerprint, "
+                "node_id, attempt, artifact_sha256, bound_artifact_json, recorded_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    bound_sha256,
+                    run["runId"],
+                    run["graphFingerprint"],
+                    node_id,
+                    attempt,
+                    artifact_sha256,
+                    canonical_json(bound_artifact),
+                    recorded_at,
+                ),
+            )
+            event_payload["evidenceBinding"] = binding
         previous_row = connection.execute(
             "SELECT event_hash FROM graph_events WHERE run_id = ? ORDER BY event_id DESC LIMIT 1",
             (run["runId"],),
@@ -1083,29 +1148,31 @@ class GovernanceRepository:
         hash_payload = {
             "eventUuid": event_uuid,
             "runId": run["runId"],
+            "graphFingerprint": run["graphFingerprint"],
             "nodeId": node_id,
             "attempt": attempt,
             "eventType": event_type,
             "actor": actor,
             "operationId": operation_id,
-            "payload": payload,
+            "payload": event_payload,
             "recordedAt": recorded_at,
             "previousHash": previous_hash,
         }
         event_hash = sha256_bytes(canonical_json(hash_payload).encode("utf-8"))
         connection.execute(
-            "INSERT INTO graph_events(event_uuid, run_id, node_id, attempt, event_type, actor, "
+            "INSERT INTO graph_events(event_uuid, run_id, graph_fingerprint, node_id, attempt, event_type, actor, "
             "operation_id, payload_json, recorded_at, previous_hash, event_hash) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 event_uuid,
                 run["runId"],
+                run["graphFingerprint"],
                 node_id,
                 attempt,
                 event_type,
                 actor,
                 operation_id,
-                canonical_json(payload),
+                canonical_json(event_payload),
                 recorded_at,
                 previous_hash,
                 event_hash,
@@ -1113,19 +1180,82 @@ class GovernanceRepository:
         )
         return {**hash_payload, "eventHash": event_hash}
 
+    def read_graph_evidence(self, root_id: str) -> list[dict[str, Any]]:
+        run = self.read_graph_run(root_id, allow_missing=True)
+        if run is None:
+            return []
+        with self._read_connection() as connection:
+            rows = connection.execute(
+                "SELECT evidence_id, bound_evidence_sha256, run_id, graph_fingerprint, "
+                "node_id, attempt, artifact_sha256, bound_artifact_json, recorded_at "
+                "FROM graph_evidence WHERE run_id = ? ORDER BY evidence_id",
+                (run["runId"],),
+            ).fetchall()
+        records = []
+        for row in rows:
+            try:
+                bound_artifact = json.loads(row["bound_artifact_json"])
+            except (TypeError, json.JSONDecodeError):
+                fail("DELIVERY_GRAPH_EVIDENCE_INVALID", "Stored graph evidence is invalid")
+            binding = bound_artifact.get("binding") if isinstance(bound_artifact, dict) else None
+            artifact = bound_artifact.get("artifact") if isinstance(bound_artifact, dict) else None
+            expected_binding = {
+                "schemaVersion": SCHEMA_VERSION,
+                "runId": row["run_id"],
+                "nodeId": row["node_id"],
+                "attempt": row["attempt"],
+                "graphFingerprint": row["graph_fingerprint"],
+                "artifactSha256": row["artifact_sha256"],
+                "boundEvidenceSha256": row["bound_evidence_sha256"],
+            }
+            material = {
+                key: expected_binding[key]
+                for key in (
+                    "schemaVersion", "runId", "nodeId", "attempt", "graphFingerprint",
+                    "artifactSha256",
+                )
+            }
+            material["artifact"] = artifact
+            valid = (
+                isinstance(bound_artifact, dict)
+                and set(bound_artifact) == {"schemaVersion", "kind", "binding", "artifact"}
+                and bound_artifact.get("schemaVersion") == SCHEMA_VERSION
+                and bound_artifact.get("kind") == "GRAPH_BOUND_EVIDENCE"
+                and binding == expected_binding
+                and isinstance(artifact, dict)
+                and evidence_record(artifact)["sha256"] == row["artifact_sha256"]
+                and sha256_bytes(canonical_json(material).encode("utf-8"))
+                == row["bound_evidence_sha256"]
+                and row["graph_fingerprint"] == run["graphFingerprint"]
+                and valid_timestamp(row["recorded_at"])
+            )
+            if not valid:
+                fail("DELIVERY_GRAPH_EVIDENCE_INVALID", "Stored graph evidence binding changed")
+            records.append({
+                "evidenceId": row["evidence_id"],
+                "boundEvidenceSha256": row["bound_evidence_sha256"],
+                "boundArtifact": bound_artifact,
+                "recordedAt": row["recorded_at"],
+            })
+        return records
+
     def read_graph_events(self, root_id: str) -> list[dict[str, Any]]:
         run = self.read_graph_run(root_id, allow_missing=True)
         if run is None:
             return []
         with self._read_connection() as connection:
             rows = connection.execute(
-                "SELECT event_id, event_uuid, run_id, node_id, attempt, event_type, actor, "
+                "SELECT event_id, event_uuid, run_id, graph_fingerprint, node_id, attempt, event_type, actor, "
                 "operation_id, payload_json, recorded_at, previous_hash, event_hash "
                 "FROM graph_events WHERE run_id = ? ORDER BY event_id",
                 (run["runId"],),
             ).fetchall()
         result = []
         previous_hash = None
+        evidence_bindings = {
+            record["boundEvidenceSha256"]: record["boundArtifact"]["binding"]
+            for record in self.read_graph_evidence(root_id)
+        }
         for row in rows:
             try:
                 payload = json.loads(row["payload_json"])
@@ -1134,6 +1264,7 @@ class GovernanceRepository:
             hash_payload = {
                 "eventUuid": row["event_uuid"],
                 "runId": row["run_id"],
+                "graphFingerprint": row["graph_fingerprint"],
                 "nodeId": row["node_id"],
                 "attempt": row["attempt"],
                 "eventType": row["event_type"],
@@ -1144,7 +1275,25 @@ class GovernanceRepository:
                 "previousHash": row["previous_hash"],
             }
             expected_hash = sha256_bytes(canonical_json(hash_payload).encode("utf-8"))
-            if row["previous_hash"] != previous_hash or row["event_hash"] != expected_hash:
+            binding = payload.get("evidenceBinding") if isinstance(payload, dict) else None
+            binding_valid = (
+                binding is None
+                or (
+                    isinstance(binding, dict)
+                    and binding.get("runId") == run["runId"]
+                    and binding.get("graphFingerprint") == run["graphFingerprint"]
+                    and binding.get("nodeId") == row["node_id"]
+                    and binding.get("attempt") == row["attempt"]
+                    and binding
+                    == evidence_bindings.get(binding.get("boundEvidenceSha256"))
+                )
+            )
+            if (
+                row["graph_fingerprint"] != run["graphFingerprint"]
+                or row["previous_hash"] != previous_hash
+                or row["event_hash"] != expected_hash
+                or not binding_valid
+            ):
                 fail("DELIVERY_GRAPH_EVENT_INVALID", "Stored graph event chain is invalid")
             previous_hash = row["event_hash"]
             result.append({
@@ -1155,10 +1304,9 @@ class GovernanceRepository:
         return result
 
     def sync_graph_runs(self, registry: dict[str, Any]) -> None:
-        from .graph_runtime import derive_node_states
+        from .graph_runtime import replay_graph_events
 
         connection = self._active_connection()
-        by_id = {entry["id"]: entry for entry in registry["workItems"]}
         roots_with_runs = [
             row["root_id"]
             for row in connection.execute("SELECT root_id FROM graph_runs ORDER BY root_id")
@@ -1166,23 +1314,21 @@ class GovernanceRepository:
         for root_id in roots_with_runs:
             stored = self.read_graph_definition(root_id)
             run = self.read_graph_run(root_id)
+            replay = replay_graph_events(
+                stored["graph"],
+                run,
+                self.read_graph_events(root_id),
+            )
             current_by_node = {node["nodeId"]: node for node in run["nodes"]}
             changed = False
-            for state in derive_node_states(stored["graph"], registry, run):
-                current = current_by_node[state["id"]]
-                entry = by_id[state["workItemId"]]
-                claim = entry.get("claim") if state["kind"] == "TASK_EXECUTION" else None
-                evidence_hash = (entry.get("latestEvidence") or {}).get("sha256")
-                owner = (claim or {}).get("owner")
-                operation_id = (claim or {}).get("operationId")
-                claimed_at = (claim or {}).get("claimedAt")
-                finished_at = (
-                    registry["updatedAt"]
-                    if state["status"] in {"SUCCEEDED", "BLOCKED", "COMPLETED"}
-                    else None
-                )
-                desired = (
-                    state["status"], owner, operation_id, claimed_at, finished_at, evidence_hash
+            for state in replay["nodes"]:
+                current = current_by_node[state["nodeId"]]
+                desired = tuple(
+                    state[field]
+                    for field in (
+                        "status", "owner", "operationId", "claimedAt", "finishedAt",
+                        "latestEvidenceHash",
+                    )
                 )
                 actual = (
                     current["status"], current["owner"], current["operationId"],
@@ -1194,26 +1340,56 @@ class GovernanceRepository:
                     "UPDATE node_runs SET status = ?, owner = ?, operation_id = ?, claimed_at = ?, "
                     "finished_at = ?, latest_evidence_hash = ?, record_revision = record_revision + 1 "
                     "WHERE run_id = ? AND node_id = ? AND attempt = ?",
-                    (*desired, run["runId"], state["id"], current["attempt"]),
+                    (*desired, run["runId"], state["nodeId"], current["attempt"]),
                 )
                 changed = True
-            root_entry = by_id[root_id]
-            completed = (root_entry.get("acceptance") or {}).get("status") == "COMPLETED"
-            refreshed = self.read_graph_run(root_id)
-            run_status = (
-                "COMPLETED"
-                if completed
-                else "BLOCKED"
-                if any(node["status"] == "BLOCKED" for node in refreshed["nodes"])
-                else "ACTIVE"
-            )
-            completed_at = registry["updatedAt"] if completed else None
-            if changed or run_status != run["status"] or completed_at != run["completedAt"]:
+            if (
+                changed
+                or replay["status"] != run["status"]
+                or replay["updatedAt"] != run["updatedAt"]
+                or replay["completedAt"] != run["completedAt"]
+            ):
                 connection.execute(
                     "UPDATE graph_runs SET status = ?, updated_at = ?, completed_at = ?, "
                     "record_revision = record_revision + 1 WHERE run_id = ?",
-                    (run_status, registry["updatedAt"], completed_at, run["runId"]),
+                    (
+                        replay["status"], replay["updatedAt"], replay["completedAt"],
+                        run["runId"],
+                    ),
                 )
+
+    def rebuild_graph_run_from_events(self, root_id: str) -> dict[str, Any]:
+        from .graph_runtime import replay_graph_events
+
+        connection = self._active_connection()
+        stored = self.read_graph_definition(root_id)
+        run = self.read_graph_run(root_id)
+        replay = replay_graph_events(
+            stored["graph"],
+            run,
+            self.read_graph_events(root_id),
+        )
+        connection.execute("DELETE FROM node_runs WHERE run_id = ?", (run["runId"],))
+        for node in replay["attempts"]:
+            connection.execute(
+                "INSERT INTO node_runs(run_id, node_id, attempt, status, owner, operation_id, "
+                "claimed_at, finished_at, latest_evidence_hash, record_revision) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run["runId"], node["nodeId"], node["attempt"], node["status"],
+                    node["owner"], node["operationId"], node["claimedAt"], node["finishedAt"],
+                    node["latestEvidenceHash"], node["recordRevision"],
+                ),
+            )
+        connection.execute(
+            "UPDATE graph_runs SET status = ?, started_at = ?, updated_at = ?, completed_at = ?, "
+            "record_revision = record_revision + 1 WHERE run_id = ?",
+            (
+                replay["status"], replay["startedAt"], replay["updatedAt"],
+                replay["completedAt"], run["runId"],
+            ),
+        )
+        return replay
 
     def replace_package(
         self,
@@ -1380,6 +1556,7 @@ class GovernanceRepository:
             "ACCEPTANCE": "交付验收状态更新",
             "RETRY": "阻断任务重试",
             "VALIDATION_REMEDIATION_RETRY": "原任务验证修正重试",
+            "GRAPH_REPLAY_REBUILD": "按图事件回放重建运行快照",
         }.get(purpose, purpose)
 
     def append_interaction_event(
@@ -1603,27 +1780,71 @@ class GovernanceRepository:
                     run=graph_run,
                 ),
             )
-            from .graph_runtime import derive_node_states
+            from .graph_runtime import (
+                build_graph_frontier,
+                critical_path,
+                derive_node_states,
+                replay_graph_events,
+                replay_mismatches,
+            )
 
-            persisted_nodes = {
-                node["nodeId"]: node for node in (graph_run or {}).get("nodes", [])
-            }
+            graph_events = self.read_graph_events(root["id"])
+            replay = (
+                replay_graph_events(stored_graph["graph"], graph_run, graph_events)
+                if graph_run is not None
+                else None
+            )
+            if replay is not None:
+                mismatches = replay_mismatches(replay, graph_run)
+                if mismatches:
+                    fail(
+                        "DELIVERY_GRAPH_REPLAY_MISMATCH",
+                        "Cannot project graph snapshots that differ from event replay",
+                        mismatches=mismatches,
+                    )
+                graph_nodes = [
+                    {
+                        "id": node["nodeId"],
+                        **{key: value for key, value in node.items() if key != "nodeId"},
+                    }
+                    for node in replay["nodes"]
+                ]
+            else:
+                graph_nodes = [
+                    {
+                        **state,
+                        "attempt": None,
+                        "owner": None,
+                        "operationId": None,
+                        "claimedAt": None,
+                        "finishedAt": None,
+                        "latestEvidenceHash": None,
+                        "recordRevision": None,
+                    }
+                    for state in derive_node_states(stored_graph["graph"], registry)
+                ]
             graph_status = {
                 "rootId": root["id"],
                 "graphFingerprint": stored_graph["graphFingerprint"],
                 "run": graph_run,
-                "nodes": [
-                    {
-                        **state,
-                        "attempt": persisted_nodes.get(state["id"], {}).get("attempt"),
-                        "owner": persisted_nodes.get(state["id"], {}).get("owner"),
-                    }
-                    for state in derive_node_states(stored_graph["graph"], registry, graph_run)
-                ],
+                "nodes": graph_nodes,
+                "criticalPath": critical_path(stored_graph["graph"], graph_nodes),
             }
+            frontier = build_graph_frontier(
+                self,
+                registry,
+                root,
+                stored_graph,
+                graph_run,
+                graph_nodes,
+            )
             atomic_write(
                 self.item_path(root) / "run-timeline.md",
-                render_run_timeline(graph_status, self.read_graph_events(root["id"])),
+                render_run_timeline(graph_status, graph_events),
+            )
+            atomic_write(
+                self.item_path(root) / "frontier.md",
+                render_frontier_dashboard(graph_status, frontier),
             )
 
         connection = self._active_connection()

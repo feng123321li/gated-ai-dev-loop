@@ -146,6 +146,8 @@ Task 内部仍然运行原有 Loop：理解冻结上下文 → 实现 → 测试
 
 控制器不再依赖宿主自己解释一段循环说明，而是计算当前 graph frontier。
 
+frontier 不只是“下一批 Task”。它同时返回当前关键路径、下一个汇聚点、可执行动作、并行组和结构化阻断原因；控制器还把这些内容生成双语 `frontier.md` 看板。关键路径按冻结 DAG 中距离完成最远的未完成路径计算，随着事件推进自动变化，不修改图定义。
+
 `graph-frontier` 可能返回以下结构化动作：
 
 | 动作 | 含义 |
@@ -189,7 +191,7 @@ stateDiagram-v2
 
 ## 9. 状态、证据与审计
 
-每个冻结需求拥有一个 graph run。每个节点拥有 attempt、状态、owner、operationId、时间和证据摘要。
+每个冻结需求拥有一个 graph run。每个节点拥有 attempt、状态、owner、operationId、时间和证据摘要。运行事实的权威来源是绑定冻结图指纹的事件链；`graph_runs` 和 `node_runs` 是为了高效查询而保留的可重建快照。
 
 关键变化会写入不可变图事件链，例如：
 
@@ -202,7 +204,9 @@ stateDiagram-v2
 - `NODE_RETRY_SCHEDULED`
 - `GRAPH_INVALIDATED`
 
-每条事件保存前序哈希，读取时重新校验事件链。系统不依赖聊天记忆解释“为什么运行到这里”。
+每条事件保存 `graphFingerprint` 和前序哈希，读取时重新校验事件链。凡是由 Task 结果、gate、review、confirmation 或 remediation artifact 驱动的事件，控制器都会保存一份 bound evidence，将原 artifact 直接绑定到 `runId/nodeId/attempt/graphFingerprint`，并对绑定整体再次计算 SHA-256。证据因此不能被静默挪用到另一次运行、另一个节点或另一个 attempt。
+
+`graph-replay` 从 `GRAPH_RUN_STARTED` 开始顺序应用完整事件，重建每一次 node attempt、READY/PENDING 推导、claim、结果、失效传播和最终图状态，并输出 `replayFingerprint`。正常查询发现回放结果与快照不一致时会阻断；确认只是快照损坏后，可用 `rebuild-graph-run --confirmed` 从事件链重建快照，而不是猜测或改写历史事件。
 
 ## 10. SQLite 与可读文件
 
@@ -221,7 +225,8 @@ schema v3 在原有 workspace、work item、hierarchy、context、report 和 int
 | `graph_edges` | 有类型的依赖、成功和汇聚边 |
 | `graph_runs` | 当前冻结图的运行状态 |
 | `node_runs` | 节点 attempt、认领、结果和证据摘要 |
-| `graph_events` | 带前序哈希的运行事件链 |
+| `graph_events` | 绑定图指纹、带前序哈希的运行事实链 |
+| `graph_evidence` | 直接绑定 run、node、attempt 与 graph fingerprint 的完整 artifact |
 
 Markdown 只是可重建的人类投影：
 
@@ -233,6 +238,7 @@ Markdown 只是可重建的人类投影：
     └── <root-id>/
         ├── development-plan.md
         ├── execution-graph.md
+        ├── frontier.md
         ├── run-timeline.md
         ├── progress.md
         ├── development-review.md
@@ -242,6 +248,7 @@ Markdown 只是可重建的人类投影：
 ```
 
 - `execution-graph.md` 同时展示中文 / English 的执行图和治理图；
+- `frontier.md` 展示中文 / English 的关键路径图、下一个汇聚点、当前动作和阻断表；
 - `run-timeline.md` 展示当前节点 attempt、状态、owner 和事件；
 - 删除 Markdown 不会删除机器状态，`refresh-projections` 可以从 SQLite 重建。
 
@@ -267,15 +274,25 @@ prepare-hierarchy
 python -X utf8 <skill-root>/scripts/hdg.py graph-status --item <root-or-subtree-id> --json
 python -X utf8 <skill-root>/scripts/hdg.py graph-frontier --item <root-or-subtree-id> --json
 python -X utf8 <skill-root>/scripts/hdg.py graph-events --item <root-or-subtree-id> --json
+python -X utf8 <skill-root>/scripts/hdg.py graph-replay --item <root-or-subtree-id> --json
 ```
 
 - `graph-status`：查看全部节点、边、attempt 和运行状态；
 - `graph-frontier`：查看当前允许的动作及阻断原因；
-- `graph-events`：查看可校验的运行事件链。
+- `graph-events`：查看可校验的运行事件链和 evidence binding；
+- `graph-replay`：从事件重算完整状态并检查 graph/node run 快照一致性。
 
 ### 11.3 恢复中断工作
 
-从 SQLite 读取当前需求，查询 `graph-frontier`，继续返回的结构化动作。不要重新准备、重新冻结，也不要通过 Markdown 猜测状态。
+从 SQLite 读取当前需求，先查询 `graph-replay` 验证事件链与快照，再查询 `graph-frontier` 继续返回的结构化动作。不要重新准备、重新冻结，也不要通过 Markdown 猜测状态。
+
+只有 `graph-replay` 报告事件回放有效但快照不一致，并且操作者已经确认恢复目标时，才运行：
+
+```text
+python -X utf8 <skill-root>/scripts/hdg.py rebuild-graph-run --item <root-id> --confirmed --json
+```
+
+该命令只重建 `graph_runs/node_runs`，不改写冻结图、事件链或 evidence，并记录一次恢复审计事件。
 
 ## 12. active 与 manual
 

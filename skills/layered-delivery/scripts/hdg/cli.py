@@ -15,7 +15,13 @@ from .execution import (
     record_task_result,
 )
 from .host_runtime import is_agent_runtime
-from .graph_runtime import get_graph_frontier, get_graph_status, list_graph_events
+from .graph_runtime import (
+    get_graph_frontier,
+    get_graph_replay,
+    get_graph_status,
+    list_graph_events,
+    rebuild_graph_run,
+)
 from .interactions import list_interactions, record_interaction
 from .jsonio import rendered_json
 from .planning import (
@@ -34,6 +40,8 @@ COMMANDS = (
     "graph-status",
     "graph-frontier",
     "graph-events",
+    "graph-replay",
+    "rebuild-graph-run",
     "task-context",
     "dispatch-task",
     "claim-task",
@@ -62,6 +70,8 @@ COMMAND_OPTIONS = {
     "graph-status": {"--json", "--help", "--item"},
     "graph-frontier": {"--json", "--help", "--item"},
     "graph-events": {"--json", "--help", "--item"},
+    "graph-replay": {"--json", "--help", "--item"},
+    "rebuild-graph-run": {"--json", "--help", "--item", "--confirmed", "--dogfood"},
     "task-context": {"--json", "--help", "--item", "--dogfood"},
     "claim-task": {"--json", "--help", "--item", "--owner", "--operation", "--dogfood"},
     "dispatch-task": {"--json", "--help", "--item", "--owner", "--operation", "--dogfood"},
@@ -87,6 +97,8 @@ Commands:
   graph-status --item <root-or-subtree-id>
   graph-frontier --item <root-or-subtree-id>
   graph-events --item <root-or-subtree-id>
+  graph-replay --item <root-or-subtree-id>
+  rebuild-graph-run --item <root-or-subtree-id> --confirmed
   task-context --item <task-id>
   dispatch-task --item <task-id> --owner <owner> --operation <id>
   claim-task --item <task-id> --owner <owner> --operation <id>
@@ -210,6 +222,14 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
         return get_graph_frontier(root=cwd, work_item_id=_required(parsed, "--item"))
     if command == "graph-events":
         return list_graph_events(root=cwd, work_item_id=_required(parsed, "--item"))
+    if command == "graph-replay":
+        return get_graph_replay(root=cwd, work_item_id=_required(parsed, "--item"))
+    if command == "rebuild-graph-run":
+        return rebuild_graph_run(
+            **common,
+            work_item_id=_required(parsed, "--item"),
+            confirmed=parsed["confirmed"],
+        )
     if command == "task-context":
         return build_task_context(**common, item_id=_required(parsed, "--item"))
     if command == "claim-task":

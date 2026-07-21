@@ -17,7 +17,7 @@ description: "治理可独立交付的软件需求。按最小必要深度组织
 - 一次人工同意冻结整棵树。不得逐节点准备或逐节点批准。
 - 用户评审层级与开发方案，控制器编译执行图与治理图；不要让用户直接定义任意节点、边或循环。
 - Task execution、Task/Capability/Delivery gate、root review 和 user confirmation 是显式图节点。gate、review 和 confirmation 不能只作为对话约定。
-- `graph-frontier` 是运行时调度权威；`ready-tasks` 只是其中 `DISPATCH_TASK` 动作的 Task ID 投影。
+- 带 graph fingerprint 的哈希事件链是运行事实权威；graph/node run 是可回放重建的查询快照。`graph-frontier` 是调度入口，`ready-tasks` 只是其中 `DISPATCH_TASK` 动作的 Task ID 投影。
 - retry/remediation 只创建新的 node attempt 或传播失效，不能改写已冻结图定义。
 - Skill 与 CLI 统一使用当前 Python 控制器和当前数据契约。
 
@@ -83,6 +83,7 @@ Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或�
 ```text
 冻结前：development-plan.md
 图结构：execution-graph.md
+下一步与关键路径：frontier.md
 运行过程：run-timeline.md
 开发结果写回后：development-review.md
 门禁执行后：acceptance-report.md
@@ -90,6 +91,7 @@ Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或�
 
 - 根级 `development-plan.md`：整树唯一冻结评审入口，描述完整层级计划。各子节点同名文件保留该节点的独立开发内容。
 - 根级 `execution-graph.md`：中文 / English 展示执行图与治理图；只读投影，不是机器权威。
+- 根级 `frontier.md`：中文 / English 展示当前关键路径、下一个汇聚点、允许动作和阻断原因；只读投影。
 - 根级 `run-timeline.md`：展示 graph run、node attempt、状态、owner 和不可变事件序列。
 - `development-review.md`：对照冻结计划与实际文件、接口、测试和偏差；只表示等待门禁，不表示 PASS。
 - `acceptance-report.md`：门禁证据、验收项、测试结果、范围偏差、P0/P1/P2 和结论；根报告持续更新到最终确认。
@@ -103,7 +105,8 @@ Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或�
 ## SQLite 与交互记录
 
 - 每个项目只有一个 `.layered-delivery/governance.sqlite3`；多个需求根通过 ID 隔离，不为每个 `<root-id>` 建库。
-- SQLite 同时保存 graph definition、graph/node run 与带前序哈希的 graph event；`graph-status`、`graph-frontier` 和 `graph-events` 是只读查询入口。
+- SQLite 同时保存 graph definition、可重建 graph/node run、带图指纹和前序哈希的 graph event，以及绑定 `runId/nodeId/attempt/graphFingerprint` 的完整 evidence artifact。`graph-status`、`graph-frontier`、`graph-events` 和 `graph-replay` 是只读查询入口。
+- 控制器自动创建 evidence binding；Agent 只提交原始 artifact，不得自行填充摘要或图坐标。若 `graph-replay` 证明事件链有效但快照不一致，正常查询保持阻断；只有用户明确确认恢复时才执行 `rebuild-graph-run --item <root-id> --confirmed`，该命令不改写图、事件或 evidence。
 - `workspace-overview.md` 会列出只读隔离的历史 evidence 节点。不能直接操作隔离节点；其他有效需求、同树兄弟 Task 和已有 claim 不因它被连带阻断。
 - `<root-id>` 目录只有 Markdown 投影。手工删除目录不会删除需求状态，后续刷新还会重建；不得用手删目录代替控制器状态操作。
 - 需要保留人机协作事实时，用 `record-interaction` 写入简短的指令、决策或状态摘要；`interaction-log` 查询结构化事件，需求根 `interaction-log.md` 供人工审计。不得保存隐藏思考过程、密钥或不必要的原始对话。

@@ -84,7 +84,7 @@ class CliAndSafetyTests(unittest.TestCase):
                 json.loads(stderr.getvalue())["error"]["code"],
                 "HIERARCHY_DEFINITION_STDIN_REQUIRED",
             )
-            self.assertFalse(Path(temporary, ".hierarchical-delivery-governance").exists())
+            self.assertFalse(Path(temporary, ".layered-delivery").exists())
 
     def test_interaction_file_paths_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -244,7 +244,7 @@ class CliAndSafetyTests(unittest.TestCase):
             )
 
             self.assertEqual(list(Path(temporary).rglob("*.json")), [])
-            database = Path(temporary, ".hierarchical-delivery-governance", "governance.sqlite3")
+            database = Path(temporary, ".layered-delivery", "governance.sqlite3")
             with closing(sqlite3.connect(database)) as connection:
                 entry = json.loads(
                     connection.execute(
@@ -333,7 +333,7 @@ class CliAndSafetyTests(unittest.TestCase):
                 json.loads(stderr.getvalue())["error"]["code"],
                 "WORK_ITEM_RESULT_EVIDENCE_INVALID",
             )
-            database = Path(temporary, ".hierarchical-delivery-governance", "governance.sqlite3")
+            database = Path(temporary, ".layered-delivery", "governance.sqlite3")
             with closing(sqlite3.connect(database)) as connection:
                 entry = json.loads(
                     connection.execute(

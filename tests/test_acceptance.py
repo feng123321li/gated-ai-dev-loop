@@ -94,7 +94,7 @@ class AcceptanceFlowTests(unittest.TestCase):
             self.assertIn("计划文件", development_review)
             self.assertIn("实际文件", development_review)
             self.assertIn("不代表门禁通过", development_review)
-            self.assertFalse(Path(temporary, ".hierarchical-delivery-governance", "work-items", task_id, "acceptance-report.md").exists())
+            self.assertFalse(Path(temporary, ".layered-delivery", "work-items", task_id, "acceptance-report.md").exists())
             gate = {
                 "schemaVersion": 3,
                 "kind": "WORK_ITEM_GATE",
@@ -150,7 +150,7 @@ class AcceptanceFlowTests(unittest.TestCase):
             self.assertTrue(Path(temporary, completed["acceptanceReport"]["markdownPath"]).is_file())
             monthly_root = Path(
                 temporary,
-                ".hierarchical-delivery-governance",
+                ".layered-delivery",
                 "workspace-overview",
             )
             monthly_index = next(monthly_root.glob("*.md"))

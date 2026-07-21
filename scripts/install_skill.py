@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 
-SKILL_NAME = "hierarchical-delivery-governance"
+SKILL_NAME = "layered-delivery"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE = REPOSITORY_ROOT / "skills" / SKILL_NAME
 

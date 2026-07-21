@@ -1,9 +1,9 @@
 ---
-name: hierarchical-delivery-governance
+name: layered-delivery
 description: "治理可独立交付的软件需求。按最小必要深度组织为 Task、Capability→Task 或 Delivery→Capability→Task；每个需求只生成一个嵌套根目录，根级方案一次评审冻结整棵树，各节点保留独立 development-plan.md 和 progress.md。开发结果写回后生成 development-review，门禁后生成 acceptance report。适用于新需求规划、分层开发、恢复、审计和验收。"
 ---
 
-# Hierarchical Delivery Governance
+# Layered Delivery
 
 使用 Python 3.10+ 标准库控制器，把一个软件需求治理成一棵可恢复、可审查、可机械门禁的交付树。不要用纯对话代替控制器状态。
 
@@ -33,7 +33,7 @@ description: "治理可独立交付的软件需求。按最小必要深度组织
    python -X utf8 <skill-root>/scripts/hdg.py --help
    ```
 
-2. 只读检查 `.hierarchical-delivery-governance/governance.sqlite3`。存在时从当前数据库恢复；数据库 schema、ID、拓扑、路径、层级或指纹损坏则阻断，不迁移、不猜测。仅当历史工作项的 evidence 引用不符合当前契约、完整 artifact 仍在 SQLite 且其他结构全部有效时，控制器把该节点设为只读隔离：不迁移、不改写它，但允许其他新需求和有效兄弟节点继续。只有 Markdown 投影缺失时才使用 `refresh-projections` 从数据库重建。
+2. 只读检查 `.layered-delivery/governance.sqlite3`。存在时从当前数据库恢复；数据库 schema、ID、拓扑、路径、层级或指纹损坏则阻断，不迁移、不猜测。仅当历史工作项的 evidence 引用不符合当前契约、完整 artifact 仍在 SQLite 且其他结构全部有效时，控制器把该节点设为只读隔离：不迁移、不改写它，但允许其他新需求和有效兄弟节点继续。只有 Markdown 投影缺失时才使用 `refresh-projections` 从数据库重建。
 3. 确定最浅合法层级，并形成完整树 definition：
 
    ```json
@@ -94,7 +94,7 @@ Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或�
 
 ## SQLite 与交互记录
 
-- 每个项目只有一个 `.hierarchical-delivery-governance/governance.sqlite3`；多个需求根通过 ID 隔离，不为每个 `<root-id>` 建库。
+- 每个项目只有一个 `.layered-delivery/governance.sqlite3`；多个需求根通过 ID 隔离，不为每个 `<root-id>` 建库。
 - `workspace-overview.md` 会列出只读隔离的历史 evidence 节点。不能直接操作隔离节点；其他有效需求、同树兄弟 Task 和已有 claim 不因它被连带阻断。
 - `<root-id>` 目录只有 Markdown 投影。手工删除目录不会删除需求状态，后续刷新还会重建；不得用手删目录代替控制器状态操作。
 - 需要保留人机协作事实时，用 `record-interaction` 写入简短的指令、决策或状态摘要；`interaction-log` 查询结构化事件，需求根 `interaction-log.md` 供人工审计。不得保存隐藏思考过程、密钥或不必要的原始对话。

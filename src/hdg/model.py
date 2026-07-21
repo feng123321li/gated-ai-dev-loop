@@ -81,8 +81,8 @@ def normalize_scope_pattern(value: object) -> str:
         or PureWindowsPath(normalized).is_absolute()
         or ".." in segments
         or ":" in normalized
-        or normalized == ".hierarchical-delivery-governance"
-        or normalized.startswith(".hierarchical-delivery-governance/")
+        or normalized == ".layered-delivery"
+        or normalized.startswith(".layered-delivery/")
         or not supported
     )
     if invalid:
@@ -1015,7 +1015,7 @@ def render_hierarchy_plan(
 
 
 def resolve_self_hosting_policy(*, project_name: str | None, explicit_dogfood: bool = False) -> dict[str, Any]:
-    if project_name == "hierarchical-delivery-governance" and not explicit_dogfood:
+    if project_name == "layered-delivery" and not explicit_dogfood:
         return {
             "route": "SELF_HOSTING_MAINTENANCE",
             "createsRuntimePackage": False,

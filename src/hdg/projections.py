@@ -7,7 +7,7 @@ from typing import Any
 
 from .constants import SCHEMA_VERSION
 
-GOVERNANCE_DIRECTORY = ".hierarchical-delivery-governance"
+GOVERNANCE_DIRECTORY = ".layered-delivery"
 WORK_ITEMS_DIRECTORY = "work-items"
 
 
@@ -387,7 +387,7 @@ def render_requirement_handoff(
         "",
         "## 接收会话执行规则",
         "",
-        "1. 在项目根目录使用当前 `hierarchical-delivery-governance` Skill，先读取 SQLite 治理状态、完整冻结方案和实时进度；不要重新准备或重新冻结需求。",
+        "1. 在项目根目录使用当前 `layered-delivery` Skill，先读取 SQLite 治理状态、完整冻结方案和实时进度；不要重新准备或重新冻结需求。",
         f"2. 以根工作项 `{root['id']}` 调用 `ready-tasks`，按依赖动态计算 READY Task；一次交接不等于一次认领全部 Task。",
         "3. 对本轮 READY Task 分别生成唯一 operationId，并在实际开工前调用 `dispatch-task`。可安全并行时使用隔离子 Agent；不可并行时自动串行。",
         "4. 每个 Task 严格使用自己的 context、scope、结果和证据，循环实现、回归测试、修复和复测；写回 `IMPLEMENTED` 或 `BLOCKED` 后完成该 Task 门禁。",
@@ -403,7 +403,7 @@ def render_requirement_handoff(
 def render_requirement_handoff_command(root_id: str) -> str:
     """Render the short prompt that a user can paste directly into a new session."""
     return (
-        f"继续执行治理需求 {root_id}。使用 hierarchical-delivery-governance Skill "
+        f"继续执行治理需求 {root_id}。使用 layered-delivery Skill "
         "从当前项目的治理数据库恢复已冻结方案，接管整棵需求树并自动完成开发、测试和门禁；"
         "不要重新准备或冻结需求，也不要逐 Task 请求人工启动。"
     )

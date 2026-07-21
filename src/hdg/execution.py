@@ -192,7 +192,7 @@ def record_task_result(
         registry["updatedAt"] = at
         repository.write_development_review(entry, definition, at)
         repository.write_registry(registry)
-        base = f".hierarchical-delivery-governance/{entry['packagePath']}"
+        base = f".layered-delivery/{entry['packagePath']}"
         return {
             "id": item_id,
             "status": status,

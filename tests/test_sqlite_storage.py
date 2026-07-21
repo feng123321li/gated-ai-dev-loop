@@ -21,7 +21,7 @@ from .fixtures import task_hierarchy
 class SQLiteStorageTests(unittest.TestCase):
     @staticmethod
     def _governance_root(root: str) -> Path:
-        return Path(root, ".hierarchical-delivery-governance")
+        return Path(root, ".layered-delivery")
 
     def assert_no_persisted_json(self, root: str) -> None:
         json_files = list(self._governance_root(root).rglob("*.json"))

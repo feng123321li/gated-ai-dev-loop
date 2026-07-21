@@ -1,6 +1,0 @@
-interface:
-  display_name: "分层式 AI 交付治理"
-  short_description: "冻结前评审分层开发方案，再治理开发、门禁与验收"
-  default_prompt: "使用 $hierarchical-delivery-governance 以最浅合法树治理当前需求：生成一份根级开发方案，人工评审并选择开发方式后一次冻结整树；active 由 Agent 自主调度并循环实现、回归和复测，再完成开发复核、分级门禁、交付与用户人工验收。"
-policy:
-  allow_implicit_invocation: true

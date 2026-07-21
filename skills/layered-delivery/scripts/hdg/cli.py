@@ -93,7 +93,7 @@ Commands:
 Common options:
   --json  Render the command result or error as structured JSON.
 
-In the hierarchical-delivery-governance implementation repository, every command that writes control state also requires --dogfood.
+In the layered-delivery implementation repository, every command that writes control state also requires --dogfood.
 """
 
 

@@ -59,7 +59,7 @@ from .projections import (
 WORK_ITEM_DATABASE_FILE = "governance.sqlite3"
 LEGACY_REGISTRY_FILE = "work-item-registry.json"
 WORK_ITEMS_DIRECTORY = "work-items"
-GOVERNANCE_DIRECTORY = ".hierarchical-delivery-governance"
+GOVERNANCE_DIRECTORY = ".layered-delivery"
 WORK_ITEM_REGISTRY_SCHEMA_VERSION = SCHEMA_VERSION
 ENTRY_FIELDS = {
     "id", "kind", "gateLevel", "authorityKind", "parentId", "childIds", "packagePath",

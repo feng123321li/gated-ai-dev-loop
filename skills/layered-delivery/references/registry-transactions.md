@@ -37,6 +37,6 @@ Agent 返回结果时必须提交相同 operationId，并将完整结果 artifac
 
 ## Git 与删除边界
 
-`.hierarchical-delivery-governance/**` 应被忽略且不被 Git 跟踪。开发 Agent 对数据库和投影只读。宿主不自动提交、推送、合并、发布或清理用户已有改动。
+`.layered-delivery/**` 应被忽略且不被 Git 跟踪。开发 Agent 对数据库和投影只读。宿主不自动提交、推送、合并、发布或清理用户已有改动。
 
 手工删除 `<root-id>` Markdown 目录不会删除 SQLite 状态。当前控制器没有获得明确删除授权时不得清理数据库记录；未来的删除能力必须在一个事务中按根 ID 删除整棵树，再清理对应投影，并明确交互审计记录的保留策略。

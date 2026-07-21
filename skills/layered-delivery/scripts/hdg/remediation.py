@@ -85,7 +85,7 @@ def record_validation_remediation(
             (record for record in existing_remediations if record["evidence"] == reference),
             None,
         )
-        base = f".hierarchical-delivery-governance/{entry['packagePath']}"
+        base = f".layered-delivery/{entry['packagePath']}"
         if repeated is not None:
             return {
                 "id": item_id,

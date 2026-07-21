@@ -18,6 +18,19 @@ def file_map(root: Path) -> dict[str, bytes]:
 
 
 class InstallAndBundleTests(unittest.TestCase):
+    def test_runtime_control_directory_is_git_ignored(self) -> None:
+        repository_root = Path(__file__).resolve().parents[1]
+        gitignore = (repository_root / ".gitignore").read_text(encoding="utf-8")
+        self.assertIn(".layered-delivery/", gitignore.splitlines())
+
+    def test_canonical_skill_name_is_layered_delivery(self) -> None:
+        skill_root = TARGET_PACKAGE.parent.parent
+        self.assertEqual(skill_root.name, "layered-delivery")
+        skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+        agent_metadata = (skill_root / "agents" / "openai.yaml").read_text(encoding="utf-8")
+        self.assertIn("name: layered-delivery", skill)
+        self.assertIn("$layered-delivery", agent_metadata)
+
     def test_manual_skill_contract_requires_a_copyable_session_command(self) -> None:
         skill = (TARGET_PACKAGE.parent.parent / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("必须直接展示返回的 `handoffCommand`", skill)
@@ -40,9 +53,9 @@ class InstallAndBundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             temporary_path = Path(temporary)
             home = temporary_path / "home"
-            source = temporary_path / "source" / "hierarchical-delivery-governance"
+            source = temporary_path / "source" / "layered-delivery"
             source.mkdir(parents=True)
-            (source / "SKILL.md").write_text("---\nname: hierarchical-delivery-governance\ndescription: test\n---\n", encoding="utf-8")
+            (source / "SKILL.md").write_text("---\nname: layered-delivery\ndescription: test\n---\n", encoding="utf-8")
             (source / "scripts").mkdir()
             (source / "scripts" / "hdg.py").write_text("print('ok')\n", encoding="utf-8")
             result = install_skill(
@@ -52,9 +65,10 @@ class InstallAndBundleTests(unittest.TestCase):
                 cwd=temporary_path,
                 environ={},
             )
+            self.assertEqual(result["skill"], "layered-delivery")
             self.assertEqual([item["action"] for item in result["results"]], ["created", "created"])
-            self.assertTrue((home / ".codex" / "skills" / "hierarchical-delivery-governance" / "scripts" / "hdg.py").is_file())
-            self.assertTrue((home / ".claude" / "skills" / "hierarchical-delivery-governance" / "scripts" / "hdg.py").is_file())
+            self.assertTrue((home / ".codex" / "skills" / "layered-delivery" / "scripts" / "hdg.py").is_file())
+            self.assertTrue((home / ".claude" / "skills" / "layered-delivery" / "scripts" / "hdg.py").is_file())
 
     def test_runtime_imports_only_standard_library_or_local_modules(self) -> None:
         allowed_roots = {

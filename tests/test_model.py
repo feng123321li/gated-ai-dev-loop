@@ -193,10 +193,10 @@ class WorkItemModelTests(unittest.TestCase):
         self.assertFalse(scope_patterns_overlap(["src/a.py"], ["src/b.py"]))
 
     def test_self_hosting_requires_explicit_dogfood(self) -> None:
-        policy = resolve_self_hosting_policy(project_name="hierarchical-delivery-governance")
+        policy = resolve_self_hosting_policy(project_name="layered-delivery")
         self.assertFalse(policy["createsRuntimePackage"])
         self.assertTrue(resolve_self_hosting_policy(
-            project_name="hierarchical-delivery-governance", explicit_dogfood=True
+            project_name="layered-delivery", explicit_dogfood=True
         )["createsRuntimePackage"])
 
 

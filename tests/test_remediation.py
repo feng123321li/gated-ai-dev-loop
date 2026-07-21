@@ -116,7 +116,7 @@ class ValidationRemediationTests(unittest.TestCase):
             )
             package = Path(
                 temporary,
-                ".hierarchical-delivery-governance",
+                ".layered-delivery",
                 "work-items",
                 task_id,
             )

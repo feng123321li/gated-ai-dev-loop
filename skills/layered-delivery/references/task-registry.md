@@ -2,7 +2,7 @@
 
 ## 唯一机器权威
 
-`.hierarchical-delivery-governance/governance.sqlite3` 是项目内唯一机器权威。一个项目只使用一个数据库；多个用户需求通过根 `work_item_id` 隔离，不为每个 `<root-id>` 创建数据库。
+`.layered-delivery/governance.sqlite3` 是项目内唯一机器权威。一个项目只使用一个数据库；多个用户需求通过根 `work_item_id` 隔离，不为每个 `<root-id>` 创建数据库。
 
 数据库使用 Python 标准库 `sqlite3`，当前 `PRAGMA user_version=3`。主要记录包括：
 

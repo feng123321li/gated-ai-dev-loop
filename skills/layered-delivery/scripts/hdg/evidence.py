@@ -147,7 +147,7 @@ def valid_acceptance(value: object) -> bool:
 def valid_acceptance_report(value: object, entry: dict[str, Any]) -> bool:
     if value is None:
         return True
-    expected = f".hierarchical-delivery-governance/{entry['packagePath']}"
+    expected = f".layered-delivery/{entry['packagePath']}"
     return (
         isinstance(value, dict)
         and set(value) == {"schemaVersion", "status", "markdownPath", "generatedAt"}

@@ -95,7 +95,7 @@ class PlanningTests(unittest.TestCase):
     def test_database_rejects_non_current_schema_without_migration(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepare_hierarchy(root=temporary, hierarchy=task_hierarchy(), host_runtime="codex")
-            path = Path(temporary, ".hierarchical-delivery-governance", "governance.sqlite3")
+            path = Path(temporary, ".layered-delivery", "governance.sqlite3")
             with closing(sqlite3.connect(path)) as connection:
                 connection.execute("PRAGMA user_version = 2")
                 connection.commit()
@@ -106,7 +106,7 @@ class PlanningTests(unittest.TestCase):
     def test_registry_rejects_unknown_fields_inside_current_entries(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepare_hierarchy(root=temporary, hierarchy=task_hierarchy(), host_runtime="codex")
-            path = Path(temporary, ".hierarchical-delivery-governance", "governance.sqlite3")
+            path = Path(temporary, ".layered-delivery", "governance.sqlite3")
             with closing(sqlite3.connect(path)) as connection:
                 row = connection.execute("SELECT entry_json FROM work_items").fetchone()
                 entry = json.loads(row[0])
@@ -148,7 +148,7 @@ class PlanningTests(unittest.TestCase):
                 operation_id="op-existing-worker",
             )
 
-            database = Path(temporary, ".hierarchical-delivery-governance", "governance.sqlite3")
+            database = Path(temporary, ".layered-delivery", "governance.sqlite3")
             with closing(sqlite3.connect(database)) as connection:
                 row = connection.execute(
                     "SELECT entry_json FROM work_items WHERE id = ?",
@@ -253,7 +253,7 @@ class PlanningTests(unittest.TestCase):
             self.assertEqual(worker["status"], "IMPLEMENTED")
             overview = Path(
                 temporary,
-                ".hierarchical-delivery-governance",
+                ".layered-delivery",
                 "workspace-overview.md",
             ).read_text(encoding="utf-8")
             self.assertIn("只读隔离", overview)
@@ -273,7 +273,7 @@ class PlanningTests(unittest.TestCase):
                 development_mode="active",
                 confirmed=True,
             )
-            database = Path(temporary, ".hierarchical-delivery-governance", "governance.sqlite3")
+            database = Path(temporary, ".layered-delivery", "governance.sqlite3")
             with closing(sqlite3.connect(database)) as connection:
                 row = connection.execute(
                     "SELECT entry_json FROM work_items WHERE id = ?",
@@ -293,13 +293,13 @@ class PlanningTests(unittest.TestCase):
     def test_self_hosting_project_blocks_mutation_without_dogfood(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             Path(temporary, "pyproject.toml").write_text(
-                '[project]\nname = "hierarchical-delivery-governance"\n',
+                '[project]\nname = "layered-delivery"\n',
                 encoding="utf-8",
             )
             with self.assertRaises(GatedLoopError) as raised:
                 prepare_hierarchy(root=temporary, hierarchy=task_hierarchy(), host_runtime="codex")
             self.assertEqual(raised.exception.code, "SELF_HOSTING_DOGFOOD_REQUIRED")
-            self.assertFalse(Path(temporary, ".hierarchical-delivery-governance").exists())
+            self.assertFalse(Path(temporary, ".layered-delivery").exists())
 
 
 if __name__ == "__main__":

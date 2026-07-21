@@ -1,4 +1,4 @@
-# Hierarchical Delivery Governance
+# Layered Delivery
 
 面向 AI Agent 的分层交付治理 Skill。它使用 Python 3.10+ 标准库控制器，把一个软件需求组织成可恢复、可人工评审、可机械门禁的交付树，并以 SQLite 保存唯一机器状态。
 
@@ -10,7 +10,7 @@
 - 使用满足真实聚合责任的最浅结构；Task 是唯一执行叶子。
 - 一个用户需求在 `work-items/` 下只有一个顶层目录，子节点按真实父子关系递归放入 `children/`。
 - 根级 `development-plan.md` 是整棵需求树唯一的冻结评审入口，一次人工确认冻结全部节点。
-- 项目级 `.hierarchical-delivery-governance/governance.sqlite3` 是唯一机器权威，Markdown 只是可重建的人类投影。
+- 项目级 `.layered-delivery/governance.sqlite3` 是唯一机器权威，Markdown 只是可重建的人类投影。
 - 同一冻结目标和验收契约内的修正必须回到原 Task，不得为修复同一需求创建第二个根。
 - Agent 不自动提交、推送、合并、迁移、发布或改变外部状态；这些动作需要单独明确授权。
 
@@ -123,7 +123,7 @@ python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --e
 最终回复必须直接用纯文本代码块展示 `handoffCommand`，不能只给 `requirement-handoff.md` 链接，也不能要求用户打开文件后全选复制。文件链接放在代码块之后，仅用于查看完整交接与冻结方案。
 
 ```text
-继续执行治理需求 <root-id>。使用 hierarchical-delivery-governance Skill 从当前项目的治理数据库恢复已冻结方案，接管整棵需求树并自动完成开发、测试和门禁；不要重新准备或冻结需求，也不要逐 Task 请求人工启动。
+继续执行治理需求 <root-id>。使用 layered-delivery Skill 从当前项目的治理数据库恢复已冻结方案，接管整棵需求树并自动完成开发、测试和门禁；不要重新准备或冻结需求，也不要逐 Task 请求人工启动。
 ```
 
 新会话收到一次交接后成为整树执行宿主。它仍按依赖即时计算 READY 并逐 Task `dispatch-task`，但不再要求人工逐项启动。
@@ -160,7 +160,7 @@ dispatch-task
 每个项目只有一个机器权威：
 
 ```text
-.hierarchical-delivery-governance/governance.sqlite3
+.layered-delivery/governance.sqlite3
 ```
 
 它保存全部需求的工作项、层级、冻结状态、Task 上下文、claim、operationId、完整 evidence、开发复核、验收报告和交互事件。多个需求通过根工作项 ID 隔离，不为每个 `<root-id>` 建库。
@@ -168,7 +168,7 @@ dispatch-task
 人类可读文件由 SQLite 重建：
 
 ```text
-.hierarchical-delivery-governance/
+.layered-delivery/
 ├── governance.sqlite3                 # 唯一机器权威，schema v3
 ├── workspace-overview.md              # 按最近更新时间倒序的全局需求索引
 ├── workspace-overview/
@@ -228,7 +228,7 @@ Markdown 不是机器权威。手工删除需求目录不会删除 SQLite 状态
 
 控制器拒绝文件路径，不生成 `_hdg_*.json`、`.hdg-tmp/**`、系统 `%TEMP%` 或其他中间 JSON。完整 artifact 与控制器计算的规范 JSON SHA-256 在同一 SQLite 写事务内保存；Agent 不直接写数据库，也不提供自算摘要。
 
-PowerShell 使用单引号 here-string 管道，Claude Code Bash 使用当前 shell 的带引号 heredoc。不得再嵌套 `bash -lc`、`sh -c`、`cmd /c` 或另一个 shell 包装。详细示例见 [stdin-transport.md](skills/hierarchical-delivery-governance/references/stdin-transport.md)。
+PowerShell 使用单引号 here-string 管道，Claude Code Bash 使用当前 shell 的带引号 heredoc。不得再嵌套 `bash -lc`、`sh -c`、`cmd /c` 或另一个 shell 包装。详细示例见 [stdin-transport.md](skills/layered-delivery/references/stdin-transport.md)。
 
 ## 开发与安全边界
 
@@ -240,7 +240,7 @@ PowerShell 使用单引号 here-string 管道，Claude Code Bash 使用当前 sh
 
 ## 多仓库与多服务
 
-当前控制器只维护一个协调根。跨仓库或多服务需求的所有文件必须能从协调根以安全相对路径访问，控制面只存在于协调根的 `.hierarchical-delivery-governance/`，不能复制到各子仓库。
+当前控制器只维护一个协调根。跨仓库或多服务需求的所有文件必须能从协调根以安全相对路径访问，控制面只存在于协调根的 `.layered-delivery/`，不能复制到各子仓库。
 
 每个 Task 的 `scope` 和 `fileChanges` 应包含仓库目录；测试从协调根执行；提供方与消费方通过 `dependsOn` 表达先后关系；跨服务接口、schema、事件或配置进入父级 `sharedContracts`。无法从协调根安全访问的路径必须在准备需求树前阻断。
 
@@ -290,7 +290,7 @@ python -X utf8 <skill-root>/scripts/hdg.py --help
 
 ## 仓库维护
 
-本仓库的 Python 项目名和规范 Skill 名均为 `hierarchical-delivery-governance`。维护源码时直接修改 `src/`、Skill、CLI、文档和测试，不为维护工作创建 `.hierarchical-delivery-governance/**` 运行包，也不调用运行态的批准、准备或冻结命令。
+本仓库的 Python 项目名和规范 Skill 名均为 `layered-delivery`。维护源码时直接修改 `src/`、Skill、CLI、文档和测试，不为维护工作创建 `.layered-delivery/**` 运行包，也不调用运行态的批准、准备或冻结命令。
 
 只有用户明确要求 dogfood/演练运行任务包时，控制面写命令才可执行，并且必须显式携带 `--dogfood`，同时满足命令原有确认条件。
 
@@ -300,20 +300,20 @@ python -X utf8 <skill-root>/scripts/hdg.py --help
 python scripts/build_skill.py
 python -m unittest discover -s tests -t . -v
 python -m compileall -q src scripts tests
-python -X utf8 <skill-validator>/quick_validate.py skills/hierarchical-delivery-governance
+python -X utf8 <skill-validator>/quick_validate.py skills/layered-delivery
 git diff --check
 ```
 
 ## 详细参考
 
-- [Skill 入口](skills/hierarchical-delivery-governance/SKILL.md)
-- [完整工作流与状态关闭](skills/hierarchical-delivery-governance/references/workflow.md)
-- [层级路由](skills/hierarchical-delivery-governance/references/routing-profiles.md)
-- [开发方案字段](skills/hierarchical-delivery-governance/references/development-plan.md)
-- [Task 独立上下文与 manual 交接](skills/hierarchical-delivery-governance/references/development.md)
-- [进度与投影](skills/hierarchical-delivery-governance/references/tracking.md)
-- [验收与最终确认](skills/hierarchical-delivery-governance/references/acceptance.md)
-- [同一 Task 的验证修正](skills/hierarchical-delivery-governance/references/validation-remediation.md)
-- [SQLite 注册表与恢复](skills/hierarchical-delivery-governance/references/task-registry.md)
-- [多仓库边界](skills/hierarchical-delivery-governance/references/multi-workspace.md)
-- [stdin 传输](skills/hierarchical-delivery-governance/references/stdin-transport.md)
+- [Skill 入口](skills/layered-delivery/SKILL.md)
+- [完整工作流与状态关闭](skills/layered-delivery/references/workflow.md)
+- [层级路由](skills/layered-delivery/references/routing-profiles.md)
+- [开发方案字段](skills/layered-delivery/references/development-plan.md)
+- [Task 独立上下文与 manual 交接](skills/layered-delivery/references/development.md)
+- [进度与投影](skills/layered-delivery/references/tracking.md)
+- [验收与最终确认](skills/layered-delivery/references/acceptance.md)
+- [同一 Task 的验证修正](skills/layered-delivery/references/validation-remediation.md)
+- [SQLite 注册表与恢复](skills/layered-delivery/references/task-registry.md)
+- [多仓库边界](skills/layered-delivery/references/multi-workspace.md)
+- [stdin 传输](skills/layered-delivery/references/stdin-transport.md)

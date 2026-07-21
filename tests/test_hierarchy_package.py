@@ -38,7 +38,7 @@ class HierarchyPackageTests(unittest.TestCase):
                 host_runtime="codex",
             )
 
-            work_items = Path(temporary, ".hierarchical-delivery-governance", "work-items")
+            work_items = Path(temporary, ".layered-delivery", "work-items")
             self.assertEqual([item.name for item in work_items.iterdir()], ["c-python-runtime"])
             root = work_items / "c-python-runtime"
             child = root / "children" / "t-python-controller"
@@ -73,7 +73,7 @@ class HierarchyPackageTests(unittest.TestCase):
         for hierarchy, root_id, deepest_path in cases:
             with self.subTest(root_id=root_id), tempfile.TemporaryDirectory() as temporary:
                 prepare_hierarchy(root=temporary, hierarchy=hierarchy, host_runtime="codex")
-                work_items = Path(temporary, ".hierarchical-delivery-governance", "work-items")
+                work_items = Path(temporary, ".layered-delivery", "work-items")
                 self.assertEqual([item.name for item in work_items.iterdir()], [root_id])
                 registry = GovernanceRepository(temporary).read_registry()
                 self.assertIn(deepest_path, {item["packagePath"] for item in registry["workItems"]})
@@ -172,13 +172,13 @@ class HierarchyPackageTests(unittest.TestCase):
             self.assertFalse((root_path / "children" / "t-python-worker" / "development-mode.json").exists())
             workspace_overview = Path(
                 temporary,
-                ".hierarchical-delivery-governance",
+                ".layered-delivery",
                 "workspace-overview.md",
             ).read_text(encoding="utf-8")
             self.assertNotIn("开发建议：active（需求评审时选择）", workspace_overview)
             monthly_root = Path(
                 temporary,
-                ".hierarchical-delivery-governance",
+                ".layered-delivery",
                 "workspace-overview",
             )
             monthly_index = next(monthly_root.glob("*.md"))
@@ -332,7 +332,7 @@ class HierarchyPackageTests(unittest.TestCase):
             )
             self.assertEqual(
                 root_artifacts["requirementHandoff"],
-                ".hierarchical-delivery-governance/work-items/c-python-runtime/requirement-handoff.md",
+                ".layered-delivery/work-items/c-python-runtime/requirement-handoff.md",
             )
 
             idempotent = freeze_hierarchy(
@@ -372,7 +372,7 @@ class HierarchyPackageTests(unittest.TestCase):
             with self.assertRaises(GatedLoopError) as raised:
                 prepare_hierarchy(root=temporary, hierarchy=hierarchy, host_runtime="codex")
             self.assertEqual(raised.exception.code, "WORK_ITEM_HIERARCHY_INCOMPLETE")
-            self.assertFalse(Path(temporary, ".hierarchical-delivery-governance").exists())
+            self.assertFalse(Path(temporary, ".layered-delivery").exists())
 
     def test_workspace_overview_projects_the_parent_child_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -383,13 +383,13 @@ class HierarchyPackageTests(unittest.TestCase):
             )
             overview = Path(
                 temporary,
-                ".hierarchical-delivery-governance",
+                ".layered-delivery",
                 "workspace-overview.md",
             ).read_text(encoding="utf-8")
             monthly_files = list(
                 Path(
                     temporary,
-                    ".hierarchical-delivery-governance",
+                    ".layered-delivery",
                     "workspace-overview",
                 ).glob("*.md")
             )
@@ -496,7 +496,7 @@ class HierarchyPackageTests(unittest.TestCase):
                 host_runtime="codex",
                 now="2026-07-15T12:00:00Z",
             )
-            governance = Path(temporary, ".hierarchical-delivery-governance")
+            governance = Path(temporary, ".layered-delivery")
             monthly_root = governance / "workspace-overview"
             self.assertEqual(
                 sorted(path.name for path in monthly_root.glob("*.md")),
@@ -580,24 +580,24 @@ class HierarchyPackageTests(unittest.TestCase):
             )
             self.assertEqual(
                 root_artifacts["progress"],
-                ".hierarchical-delivery-governance/work-items/c-python-runtime/progress.md",
+                ".layered-delivery/work-items/c-python-runtime/progress.md",
             )
             self.assertEqual(
                 root_artifacts["nodeProgress"],
-                ".hierarchical-delivery-governance/work-items/c-python-runtime/node-progress.md",
+                ".layered-delivery/work-items/c-python-runtime/node-progress.md",
             )
             self.assertEqual(
                 task_artifacts["developmentPlan"],
-                ".hierarchical-delivery-governance/work-items/c-python-runtime/children/"
+                ".layered-delivery/work-items/c-python-runtime/children/"
                 "t-python-controller/development-plan.md",
             )
             self.assertEqual(
                 task_artifacts["hierarchyDevelopmentPlan"],
-                ".hierarchical-delivery-governance/work-items/c-python-runtime/development-plan.md",
+                ".layered-delivery/work-items/c-python-runtime/development-plan.md",
             )
             self.assertEqual(
                 task_artifacts["nodeProgress"],
-                ".hierarchical-delivery-governance/work-items/c-python-runtime/children/"
+                ".layered-delivery/work-items/c-python-runtime/children/"
                 "t-python-controller/progress.md",
             )
             self.assertIn("| 等待开发方案确认 | 等待开发方案评审 | 未运行 |", prepared_progress)

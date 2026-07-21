@@ -48,7 +48,7 @@
 - `id` 为安全小写 ID；`title/goal` 和所有说明字符串必须非空且不能含 TBD/TODO/FIXME 等占位符；
 - `scope/nonGoals/requirements/acceptance/testCommands/risks/decisions` 都是非空数组；测试命令是 argv 数组，不是 shell 字符串；
 - requirement ID 使用 `R-001` 形式，acceptance ID 使用 `A-001` 形式；每个 requirement 至少被一个 acceptance 的 `requirementIds` 覆盖；
-- `scope` 只能是精确相对路径或尾部 `/**` 前缀，不能进入 `.hierarchical-delivery-governance`；
+- `scope` 只能是精确相对路径或尾部 `/**` 前缀，不能进入 `.layered-delivery`；
 - 下列“允许空数组”的字段除外：根/无依赖的 `dependsOn`、Task `interfaces`、Task `dataAndTransactions`、协调层 `sharedContracts`。其他在示例中出现的数组均应按机器校验提供非空内容。
 
 三个 kind 的专有字段集合固定为：

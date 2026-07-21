@@ -23,9 +23,9 @@ class WorkItemFlowTests(unittest.TestCase):
             package = Path(result["artifactDir"])
             self.assertTrue((package / "development-plan.md").is_file())
             self.assertTrue(
-                Path(temporary, ".hierarchical-delivery-governance", "governance.sqlite3").is_file()
+                Path(temporary, ".layered-delivery", "governance.sqlite3").is_file()
             )
-            self.assertEqual(list(Path(temporary, ".hierarchical-delivery-governance").rglob("*.json")), [])
+            self.assertEqual(list(Path(temporary, ".layered-delivery").rglob("*.json")), [])
 
             frozen = freeze_hierarchy(
                 root=temporary,
@@ -37,13 +37,13 @@ class WorkItemFlowTests(unittest.TestCase):
             self.assertEqual(frozen["stage"], "BASELINE_FROZEN")
             self.assertEqual(
                 frozen["humanArtifacts"]["requirementHandoff"],
-                ".hierarchical-delivery-governance/work-items/t-python-controller/requirement-handoff.md",
+                ".layered-delivery/work-items/t-python-controller/requirement-handoff.md",
             )
             self.assertIn("一次接管整棵需求树", frozen["handoffPrompt"])
             self.assertIn("不要要求用户逐 Task 回复启动", frozen["handoffPrompt"])
             self.assertEqual(
                 frozen["handoffCommand"],
-                "继续执行治理需求 t-python-controller。使用 hierarchical-delivery-governance Skill "
+                "继续执行治理需求 t-python-controller。使用 layered-delivery Skill "
                 "从当前项目的治理数据库恢复已冻结方案，接管整棵需求树并自动完成开发、测试和门禁；"
                 "不要重新准备或冻结需求，也不要逐 Task 请求人工启动。",
             )

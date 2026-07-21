@@ -10,7 +10,7 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PACKAGE = REPOSITORY_ROOT / "src" / "hdg"
-SKILL_SCRIPTS = REPOSITORY_ROOT / "skills" / "hierarchical-delivery-governance" / "scripts"
+SKILL_SCRIPTS = REPOSITORY_ROOT / "skills" / "layered-delivery" / "scripts"
 TARGET_PACKAGE = SKILL_SCRIPTS / "hdg"
 TARGET_ENTRY = SKILL_SCRIPTS / "hdg.py"
 

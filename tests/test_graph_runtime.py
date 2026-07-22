@@ -167,7 +167,18 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
             self.assertIn("![执行图 / Execution Graph](assets/execution-graph.svg)", graph_markdown)
             self.assertIn("![治理图 / Governance Graph](assets/governance-graph.svg)", graph_markdown)
             self.assertIn("<summary>查看 Mermaid 源图 / Show Mermaid source</summary>", graph_markdown)
-            state_markdown = (package / "state-transition-graph.md").read_text(encoding="utf-8")
+            governance = Path(temporary, ".layered-delivery")
+            self.assertEqual(
+                prepared["humanArtifacts"]["stateTransitionGraph"],
+                ".layered-delivery/state-transition-graph.md",
+            )
+            self.assertFalse((package / "state-transition-graph.md").exists())
+            state_markdown = (governance / "state-transition-graph.md").read_text(encoding="utf-8")
+            workspace_overview = (governance / "workspace-overview.md").read_text(encoding="utf-8")
+            self.assertIn(
+                "[状态迁移图 / State Transition Graph](state-transition-graph.md)",
+                workspace_overview,
+            )
             self.assertIn(
                 "![开发执行流程 / Development Execution Flow](assets/development-flow.svg)",
                 state_markdown,
@@ -179,10 +190,17 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
             for relative_path in (
                 "assets/execution-graph.svg",
                 "assets/governance-graph.svg",
+            ):
+                visual = package / relative_path
+                self.assertTrue(visual.is_file())
+                root_element = ET.fromstring(visual.read_text(encoding="utf-8"))
+                self.assertEqual(root_element.tag, "{http://www.w3.org/2000/svg}svg")
+            for relative_path in (
                 "assets/development-flow.svg",
                 "assets/node-state-machine.svg",
             ):
-                visual = package / relative_path
+                self.assertFalse((package / relative_path).exists())
+                visual = governance / relative_path
                 self.assertTrue(visual.is_file())
                 root_element = ET.fromstring(visual.read_text(encoding="utf-8"))
                 self.assertEqual(root_element.tag, "{http://www.w3.org/2000/svg}svg")
@@ -205,6 +223,30 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM graph_definitions").fetchone()[0], 1)
                 self.assertEqual(connection.execute("SELECT COUNT(*) FROM graph_runs").fetchone()[0], 0)
 
+    def test_multiple_requirements_share_one_workspace_state_transition_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            first = prepare_hierarchy(
+                root=temporary,
+                hierarchy=task_hierarchy(),
+                host_runtime="codex",
+            )
+            shared = Path(temporary, ".layered-delivery", "state-transition-graph.md")
+            first_contents = shared.read_text(encoding="utf-8")
+
+            second = prepare_hierarchy(
+                root=temporary,
+                hierarchy=task_hierarchy(id="t-second-controller"),
+                host_runtime="codex",
+            )
+
+            self.assertEqual(shared.read_text(encoding="utf-8"), first_contents)
+            self.assertEqual(
+                first["humanArtifacts"]["stateTransitionGraph"],
+                second["humanArtifacts"]["stateTransitionGraph"],
+            )
+            self.assertFalse(Path(first["artifactDir"], "state-transition-graph.md").exists())
+            self.assertFalse(Path(second["artifactDir"], "state-transition-graph.md").exists())
+
     def test_freeze_rejects_a_tampered_graph_projection(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepared = prepare_hierarchy(
@@ -224,6 +266,55 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                     development_mode="active",
                     confirmed=True,
                 )
+            self.assertEqual(raised.exception.code, "DELIVERY_GRAPH_PROJECTION_CHANGED")
+
+    def test_freeze_rejects_a_tampered_shared_state_transition_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=task_hierarchy(),
+                host_runtime="codex",
+            )
+            Path(
+                temporary,
+                ".layered-delivery",
+                "state-transition-graph.md",
+            ).write_text("tampered runtime policy\n", encoding="utf-8")
+
+            with self.assertRaises(GatedLoopError) as raised:
+                freeze_hierarchy(
+                    root=temporary,
+                    root_id=prepared["rootId"],
+                    expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                    development_mode="active",
+                    confirmed=True,
+                )
+
+            self.assertEqual(raised.exception.code, "DELIVERY_GRAPH_PROJECTION_CHANGED")
+
+    def test_freeze_rejects_a_tampered_shared_runtime_visual_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=task_hierarchy(),
+                host_runtime="codex",
+            )
+            Path(
+                temporary,
+                ".layered-delivery",
+                "assets",
+                "node-state-machine.svg",
+            ).write_text("<svg>tampered</svg>\n", encoding="utf-8")
+
+            with self.assertRaises(GatedLoopError) as raised:
+                freeze_hierarchy(
+                    root=temporary,
+                    root_id=prepared["rootId"],
+                    expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                    development_mode="active",
+                    confirmed=True,
+                )
+
             self.assertEqual(raised.exception.code, "DELIVERY_GRAPH_PROJECTION_CHANGED")
 
     def test_freeze_rejects_a_tampered_graph_visual_projection(self) -> None:

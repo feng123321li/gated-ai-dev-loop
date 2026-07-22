@@ -78,7 +78,7 @@ flowchart TD
 
 ```text
 prepare-hierarchy
-→ 人工评审 development-plan.md + execution-graph.md + state-transition-graph.md 并选择 active/manual
+→ 人工评审需求级 development-plan.md + execution-graph.md，并查看工作区级 state-transition-graph.md；选择 active/manual
 → freeze-hierarchy
 → graph-frontier / 读取 dispatchPlan / 自动 dispatch-task
 → task-result / development-review.md
@@ -179,12 +179,16 @@ dispatch-task
 
 它保存全部需求的工作项、层级、冻结状态、Task 上下文、claim、operationId、完整 evidence、开发复核、验收报告和交互事件。多个需求通过根工作项 ID 隔离，不为每个 `<root-id>` 建库。
 
-人类可读文件由 SQLite 重建：
+人类可读文件由 SQLite 和控制器当前 schema v3 的共享 runtime 策略重建：
 
 ```text
 .layered-delivery/
 ├── governance.sqlite3                 # 唯一机器权威，schema v3
 ├── workspace-overview.md              # 按最近更新时间倒序的全局需求索引
+├── state-transition-graph.md          # 工作区共享的开发流程 + 运行时 FSM + 路由契约
+├── assets/
+│   ├── development-flow.svg           # 工作区共享运行时投影
+│   └── node-state-machine.svg
 ├── workspace-overview/
 │   ├── YYYY-MM.md                     # 月度索引
 │   └── YYYY-MM/
@@ -194,12 +198,9 @@ dispatch-task
         ├── baseline.md
         ├── development-plan.md        # 整树冻结评审入口
         ├── execution-graph.md         # 嵌入 SVG 的执行图 + 治理图双语投影
-        ├── state-transition-graph.md  # 嵌入 SVG 的开发流程 + 运行时 FSM + 路由契约
         ├── assets/
         │   ├── execution-graph.svg
-        │   ├── governance-graph.svg
-        │   ├── development-flow.svg
-        │   └── node-state-machine.svg
+        │   └── governance-graph.svg
         ├── frontier.md                # 自动 Agent 计划、关键路径、迁移、预算、建议动作与阻断看板
         ├── run-timeline.md            # attempt、迁移、失败分类、租约与事件链
         ├── progress.md                # 整树总进度
@@ -221,7 +222,7 @@ dispatch-task
 ```text
 冻结前：development-plan.md
 图结构：execution-graph.md
-运行与失败路由：state-transition-graph.md
+运行与失败路由：.layered-delivery/state-transition-graph.md（工作区共享）
 下一步与关键路径：frontier.md
 运行过程：run-timeline.md
 开发结果写回后：development-review.md
@@ -230,7 +231,7 @@ dispatch-task
 
 根 `progress.md` 以表格保持与方案相同的节点顺序和层级，并分别展示阶段、状态、门禁、当前执行、节点文件和阶段产物。“当前执行”对协调节点显示“不适用”，对未认领 Task 显示“未认领”，活动 Task 显示 `owner / operationId`，结果写回后显示“已释放”。根节点进度链接 `node-progress.md`，不能回链整树 `progress.md`。
 
-`workspace-overview.md` 只保留稳定根 ID 的全局索引；月度和单需求明细写入 `workspace-overview/`。显示时间使用运行时本机时区，SQLite 原始时间保持 UTC；完成日期只能来自最终用户确认后的 `COMPLETED`。
+`workspace-overview.md` 只保留稳定根 ID 的全局索引，并直接链接同级共享的 `state-transition-graph.md`；月度和单需求明细写入 `workspace-overview/`。显示时间使用运行时本机时区，SQLite 原始时间保持 UTC；完成日期只能来自最终用户确认后的 `COMPLETED`。
 
 Markdown 不是机器权威。手工删除需求目录不会删除 SQLite 状态，后续刷新还会重建，因此不能用删除文件代替治理状态操作。
 

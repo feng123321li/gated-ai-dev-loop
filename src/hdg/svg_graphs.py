@@ -286,8 +286,7 @@ def render_plane_svg(graph: dict[str, Any], plane: str) -> str:
     return _svg_document(width=width, height=height, title=title, subtitle=subtitle, body=body)
 
 
-def render_development_flow_svg(graph: dict[str, Any]) -> str:
-    runtime = graph["runtime"]
+def render_development_flow_svg(runtime: dict[str, Any]) -> str:
     retry = runtime["retryPolicy"]
     width = 1380
     height = 850
@@ -357,8 +356,7 @@ def render_development_flow_svg(graph: dict[str, Any]) -> str:
     )
 
 
-def render_node_state_machine_svg(graph: dict[str, Any]) -> str:
-    runtime = graph["runtime"]
+def render_node_state_machine_svg(runtime: dict[str, Any]) -> str:
     present = set(runtime["states"])
     width = 1280
     height = 690
@@ -446,10 +444,15 @@ def render_node_state_machine_svg(graph: dict[str, Any]) -> str:
     )
 
 
-def render_graph_svg_assets(graph: dict[str, Any]) -> dict[str, str]:
+def render_delivery_graph_svg_assets(graph: dict[str, Any]) -> dict[str, str]:
     return {
         GRAPH_ASSET_PATHS["execution"]: render_plane_svg(graph, "EXECUTION"),
         GRAPH_ASSET_PATHS["governance"]: render_plane_svg(graph, "GOVERNANCE"),
-        GRAPH_ASSET_PATHS["developmentFlow"]: render_development_flow_svg(graph),
-        GRAPH_ASSET_PATHS["nodeStateMachine"]: render_node_state_machine_svg(graph),
+    }
+
+
+def render_runtime_policy_svg_assets(runtime: dict[str, Any]) -> dict[str, str]:
+    return {
+        GRAPH_ASSET_PATHS["developmentFlow"]: render_development_flow_svg(runtime),
+        GRAPH_ASSET_PATHS["nodeStateMachine"]: render_node_state_machine_svg(runtime),
     }

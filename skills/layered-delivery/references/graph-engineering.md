@@ -5,7 +5,7 @@
 - 人工权威：经过评审的层级结构和根级 `development-plan.md`。
 - 编译权威：控制器确定性编译并保存到 SQLite 的 Delivery Graph。
 - 运行事实权威：绑定图指纹、前后哈希相连的图事件链。graph run 和 node run 只是可通过事件回放重建的查询快照。
-- 人类可读投影：`execution-graph.md`、`state-transition-graph.md`、`frontier.md` 和 `run-timeline.md`。不得从这些 Markdown 文件反向推断机器状态。
+- 人类可读投影：需求级 `execution-graph.md`、`frontier.md`、`run-timeline.md`，以及工作区共享的 `state-transition-graph.md`。不得从这些 Markdown 文件反向推断机器状态。
 
 ## 职责边界
 
@@ -174,6 +174,6 @@ python -X utf8 <skill-root>/scripts/hdg.py rebuild-graph-run --item <root-id> --
 
 生成文件都是只读投影，可以通过 `refresh-projections` 重建。
 
-`execution-graph.md` 和 `state-transition-graph.md` 默认嵌入控制器用 Python 标准库确定性生成的 SVG，因此不依赖 Markdown 查看器支持 Mermaid。Mermaid 源图、节点表和迁移表放入折叠区，继续承担兼容与审计用途。四个 SVG 位于根工作项 `assets/`，与 Markdown 一样可由 `refresh-projections` 重建，并在冻结前参与投影防篡改校验。
+需求根 `execution-graph.md` 和工作区 `.layered-delivery/state-transition-graph.md` 默认嵌入控制器用 Python 标准库确定性生成的 SVG，因此不依赖 Markdown 查看器支持 Mermaid。Mermaid 源图、节点表和迁移表放入折叠区，继续承担兼容与审计用途。执行图与治理图 SVG 位于需求根 `assets/`；开发流程与节点 FSM SVG 位于工作区 `.layered-delivery/assets/`。它们都可由 `refresh-projections` 重建，并在冻结前参与投影防篡改校验。
 
-`state-transition-graph.md` 由冻结的运行时策略生成，必须同时展示开发执行流程和节点 FSM，包括失败分类、重试耗尽、暂停/恢复和取消。
+工作区 `state-transition-graph.md` 由控制器当前 schema v3 的共享运行时策略生成，必须同时展示开发执行流程和节点 FSM，包括失败分类、重试耗尽、暂停/恢复和取消。由于有效 Delivery Graph 的 `runtime` 必须等于该共享策略，需求根不得重复保存这份投影。

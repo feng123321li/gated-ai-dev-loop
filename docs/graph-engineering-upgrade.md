@@ -619,20 +619,22 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 新增人类投影：
 
 ```text
-.layered-delivery/work-items/<root-id>/
-├── execution-graph.md     # 嵌入 SVG 的冻结执行图与治理图
-├── state-transition-graph.md # 嵌入 SVG 的双语开发流程、FSM 与路由策略
+.layered-delivery/
+├── state-transition-graph.md # 工作区共享的双语开发流程、FSM 与路由策略
 ├── assets/
-│   ├── execution-graph.svg
-│   ├── governance-graph.svg
 │   ├── development-flow.svg
 │   └── node-state-machine.svg
-├── frontier.md            # 双语自动 Agent 计划、关键路径、迁移、预算、允许动作和阻断看板
-├── run-timeline.md        # attempt、租约、失败分类与事件时间线
-└── progress.md            # 继续保留整树交付进度
+└── work-items/<root-id>/
+    ├── execution-graph.md     # 嵌入 SVG 的冻结执行图与治理图
+    ├── assets/
+    │   ├── execution-graph.svg
+    │   └── governance-graph.svg
+    ├── frontier.md            # 双语自动 Agent 计划、关键路径、迁移、预算、允许动作和阻断看板
+    ├── run-timeline.md        # attempt、租约、失败分类与事件时间线
+    └── progress.md            # 继续保留整树交付进度
 ```
 
-这些文件仍然全部由 SQLite 重建，不是机器权威。
+需求级文件由 SQLite 重建，共享状态迁移图由控制器当前 schema v3 runtime 策略重建；二者都不是机器权威。
 
 ## 10. 具体代码改动
 
@@ -642,7 +644,7 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 |---|---|
 | `src/hdg/graph_model.py` | Graph IR、节点/边校验、图指纹，并把完整 hierarchy 确定性编译成合同图 |
 | `src/hdg/graph_runtime.py` | 事件回放、节点状态、关键路径、frontier、图状态和恢复 |
-| `src/hdg/graph_projections.py` | `execution-graph.md`、`state-transition-graph.md`、`frontier.md`、`run-timeline.md`、SVG 嵌入和折叠 Mermaid 渲染 |
+| `src/hdg/graph_projections.py` | 需求级 `execution-graph.md`、工作区级 `state-transition-graph.md`、`frontier.md`、`run-timeline.md`、SVG 嵌入和折叠 Mermaid 渲染 |
 | `src/hdg/svg_graphs.py` | 不依赖第三方工具的确定性 SVG 执行图、治理图、开发流程与节点 FSM |
 
 构建 Skill 后，同步生成对应的 `skills/layered-delivery/scripts/hdg/**` 文件。
@@ -843,7 +845,7 @@ Graph engineering 升级完成必须同时满足：
 - claim 具有租约与心跳，过期执行可确定性归类为 `WORKER_LOST`；
 - BLOCKED Task 结果具有结构化 failure class，自动重试严格受 3 次总尝试预算控制；
 - 暂停、恢复、尝试耗尽和运行取消是显式 FSM 事件；
-- `state-transition-graph.md` 从冻结 runtime 策略生成中文 / English 开发流程与状态图；
+- 工作区级 `state-transition-graph.md` 从共享 runtime 策略生成中文 / English 开发流程与状态图；
 - frontier 提供关键路径与双语 Markdown 看板；
 - artifact 证据绑定到精确 run、node、attempt 和 graph fingerprint；
 - 完整事件回放能重建运行状态并检测或修复快照偏差；
@@ -884,7 +886,7 @@ Graph engineering 升级完成必须同时满足：
 ### 17.2 生成文件变化
 
 - `development-plan.md` 新增 `运行时策略 / Runtime Policy`，评审者在冻结前即可看到最大尝试次数、自动恢复类别和 claim 租约；
-- `state-transition-graph.md` 是新增的同源投影，包含 Graph 自动计算 Agent 数、容量排队的开发流程、节点 FSM 和完整迁移表；
+- 工作区级 `state-transition-graph.md` 是共享同源投影，包含 Graph 自动计算 Agent 数、容量排队的开发流程、节点 FSM 和完整迁移表；需求根不再重复生成；
 - `frontier.md` 新增自动 Agent 调度计划与流程图，以及 transition、route condition、attempt budget、failure class、remaining attempts、last transition 和 recommended action；
 - `run-timeline.md` 新增 lease、failure class、last transition 和路由条件；
 - `execution-graph.md` 继续只表达冻结执行/治理合同，避免与运行时循环混为一图。
@@ -893,7 +895,7 @@ Graph engineering 升级完成必须同时满足：
 
 ```text
 prepare-hierarchy
-→ 评审 development-plan.md + execution-graph.md + state-transition-graph.md
+→ 评审需求级 development-plan.md + execution-graph.md + 工作区级 state-transition-graph.md
 → freeze-hierarchy
 → graph-frontier / 读取 dispatchPlan / 自动 dispatch-task
 → heartbeat-task（长任务）

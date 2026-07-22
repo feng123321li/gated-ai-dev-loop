@@ -291,6 +291,11 @@ Markdown 只是可重建的人类投影：
         ├── development-plan.md
         ├── execution-graph.md
         ├── state-transition-graph.md
+        ├── assets/
+        │   ├── execution-graph.svg
+        │   ├── governance-graph.svg
+        │   ├── development-flow.svg
+        │   └── node-state-machine.svg
         ├── frontier.md
         ├── run-timeline.md
         ├── progress.md
@@ -300,8 +305,9 @@ Markdown 只是可重建的人类投影：
         └── children/...
 ```
 
-- `execution-graph.md` 同时展示中文 / English 的执行图和治理图；
-- `state-transition-graph.md` 从冻结 runtime 策略生成，展示开发执行流程、FSM、失败分类、重试耗尽、暂停恢复与取消；
+- `execution-graph.md` 首屏嵌入中文 / English SVG 执行图和治理图，Mermaid 与节点审计表折叠保留；
+- `state-transition-graph.md` 首屏嵌入 SVG 开发执行流程和节点 FSM，完整 Mermaid 与迁移表折叠保留；
+- `assets/*.svg` 使用 Python 标准库确定性生成，不依赖查看器支持 Mermaid，并可随 Markdown 一起重建；
 - `frontier.md` 展示中文 / English 的自动 Agent 调度计划与流程图、关键路径图、下一个汇聚点、迁移、尝试预算、建议动作和阻断表；
 - `run-timeline.md` 展示当前节点 attempt、状态、owner、租约、失败分类和事件；
 - 删除 Markdown 不会删除机器状态，`refresh-projections` 可以从 SQLite 重建。

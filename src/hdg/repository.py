@@ -34,6 +34,7 @@ from .graph_projections import (
     render_run_timeline,
     render_state_transition_graph,
 )
+from .svg_graphs import render_graph_svg_assets
 from .host_runtime import is_agent_runtime
 from .jsonio import canonical_json, sha256_bytes
 from .model import (
@@ -1869,6 +1870,8 @@ class GovernanceRepository:
                     graph_fingerprint=stored_graph["graphFingerprint"],
                 ),
             )
+            for relative_path, contents in render_graph_svg_assets(stored_graph["graph"]).items():
+                atomic_write(self.item_path(root) / relative_path, contents)
             from .graph_runtime import (
                 build_graph_frontier,
                 critical_path,

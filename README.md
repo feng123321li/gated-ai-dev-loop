@@ -191,8 +191,13 @@ dispatch-task
     └── <root-id>/                     # 一个需求只有一个顶层目录
         ├── baseline.md
         ├── development-plan.md        # 整树冻结评审入口
-        ├── execution-graph.md         # 执行图 + 治理图双语投影
-        ├── state-transition-graph.md  # 开发流程 + 运行时 FSM + 路由契约
+        ├── execution-graph.md         # 嵌入 SVG 的执行图 + 治理图双语投影
+        ├── state-transition-graph.md  # 嵌入 SVG 的开发流程 + 运行时 FSM + 路由契约
+        ├── assets/
+        │   ├── execution-graph.svg
+        │   ├── governance-graph.svg
+        │   ├── development-flow.svg
+        │   └── node-state-machine.svg
         ├── frontier.md                # 自动 Agent 计划、关键路径、迁移、预算、建议动作与阻断看板
         ├── run-timeline.md            # attempt、迁移、失败分类、租约与事件链
         ├── progress.md                # 整树总进度

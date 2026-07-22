@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .svg_graphs import GRAPH_ASSET_PATHS
+
 
 NODE_LABELS = {
     "TASK_EXECUTION": "任务执行 / Task Execution",
@@ -52,6 +54,17 @@ def _mermaid(graph: dict[str, Any], plane: str) -> list[str]:
     return lines
 
 
+def _details(summary: str, contents: list[str]) -> list[str]:
+    return [
+        "<details>",
+        f"<summary>{summary}</summary>",
+        "",
+        *contents,
+        "",
+        "</details>",
+    ]
+
+
 def render_delivery_graph(
     graph: dict[str, Any],
     *,
@@ -72,15 +85,26 @@ def render_delivery_graph(
         "",
         "执行图描述任务依赖、并行、成功流转和分级汇聚。",
         "",
-        *_mermaid(graph, "EXECUTION"),
+        f"![执行图 / Execution Graph]({GRAPH_ASSET_PATHS['execution']})",
+        "",
+        *_details(
+            "查看 Mermaid 源图 / Show Mermaid source",
+            _mermaid(graph, "EXECUTION"),
+        ),
         "",
         "## 治理图 / Governance Graph",
         "",
         "治理图描述门禁、独立审查和用户最终确认。",
         "",
-        *_mermaid(graph, "GOVERNANCE"),
+        f"![治理图 / Governance Graph]({GRAPH_ASSET_PATHS['governance']})",
         "",
-        "## 节点 / Nodes",
+        *_details(
+            "查看 Mermaid 源图 / Show Mermaid source",
+            _mermaid(graph, "GOVERNANCE"),
+        ),
+        "",
+        "<details>",
+        "<summary>查看节点审计表 / Show node audit table</summary>",
         "",
         "| 节点 / Node | 类型 / Kind | 平面 / Planes | 工作项 / Work item |",
         "|---|---|---|---|",
@@ -90,6 +114,7 @@ def render_delivery_graph(
             f"| `{node['id']}` | {NODE_LABELS[node['kind']]} | "
             f"{', '.join(PLANE_LABELS[item] for item in node['planes'])} | `{node['workItemId']}` |"
         )
+    lines.extend(["", "</details>"])
     return "\n".join(lines) + "\n"
 
 
@@ -131,6 +156,11 @@ def render_state_transition_graph(
         "",
         "## 开发执行流程 / Development Execution Flow",
         "",
+        f"![开发执行流程 / Development Execution Flow]({GRAPH_ASSET_PATHS['developmentFlow']})",
+        "",
+        "<details>",
+        "<summary>查看 Mermaid 源图 / Show Mermaid source</summary>",
+        "",
         "```mermaid",
         "flowchart TD",
         '    A["需求冻结 / Requirement Frozen"] --> B["自动前沿计算 / Automatic Frontier Calculation"]',
@@ -162,7 +192,14 @@ def render_state_transition_graph(
         '    B -. "确认取消 / Confirm Cancel" .-> Z["取消 / Cancelled"]',
         "```",
         "",
+        "</details>",
+        "",
         "## 节点有限状态机 / Node FSM",
+        "",
+        f"![节点有限状态机 / Node FSM]({GRAPH_ASSET_PATHS['nodeStateMachine']})",
+        "",
+        "<details>",
+        "<summary>查看 Mermaid 源图 / Show Mermaid source</summary>",
         "",
         "```mermaid",
         "stateDiagram-v2",
@@ -180,7 +217,10 @@ def render_state_transition_graph(
     lines.extend([
         "```",
         "",
-        "## 路由与迁移契约 / Routing and Transition Contract",
+        "</details>",
+        "",
+        "<details>",
+        "<summary>查看完整路由与迁移契约 / Show routing and transition contract</summary>",
         "",
         "| 事件 / Event | 起始状态 / From | 目标状态 / To | 路由条件 / Route | 自动 / Automatic | 新尝试 / New attempt |",
         "|---|---|---|---|---|---|",
@@ -195,6 +235,8 @@ def render_state_transition_graph(
             f"{'是 / Yes' if transition['createsAttempt'] else '否 / No'} |"
         )
     lines.extend([
+        "",
+        "</details>",
         "",
         "## 状态说明 / State Legend",
         "",

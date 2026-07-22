@@ -18,6 +18,7 @@ from .graph_projections import (
     render_runtime_policy_summary,
     render_state_transition_graph,
 )
+from .svg_graphs import render_graph_svg_assets
 from .graph_runtime import hierarchy_root_entry
 from .model import (
     hierarchy_fingerprint,
@@ -160,6 +161,7 @@ def _hierarchy_packages(
                 graph,
                 graph_fingerprint=hierarchy_state["graphFingerprint"],
             )
+            files.update(render_graph_svg_assets(graph))
         packages.append((relative, files))
     return packages
 
@@ -300,6 +302,20 @@ def _hierarchy_from_registry(
             "DELIVERY_GRAPH_PROJECTION_CHANGED",
             "State transition graph projection changed after preparation",
         )
+    for relative_path, expected_asset in render_graph_svg_assets(stored_graph["graph"]).items():
+        asset_path = root_target / relative_path
+        try:
+            actual_asset = read_regular_file(root_target, asset_path).decode("utf-8")
+        except Exception:
+            fail(
+                "DELIVERY_GRAPH_PROJECTION_CHANGED",
+                f"Graph visual projection is missing or unreadable: {relative_path}",
+            )
+        if actual_asset != expected_asset:
+            fail(
+                "DELIVERY_GRAPH_PROJECTION_CHANGED",
+                f"Graph visual projection changed after preparation: {relative_path}",
+            )
     return hierarchy, states, hierarchy_state, root_target
 
 

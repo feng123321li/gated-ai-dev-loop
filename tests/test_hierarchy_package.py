@@ -567,8 +567,10 @@ class HierarchyPackageTests(unittest.TestCase):
             )
             self.assertNotIn("— 阶段", prepared_progress)
             (root / "node-progress.md").unlink()
+            (root / "assets" / "development-flow.svg").unlink()
             refreshed = refresh_work_item_projections(root=temporary)
             self.assertTrue((root / "node-progress.md").is_file())
+            self.assertTrue((root / "assets" / "development-flow.svg").is_file())
             task_artifacts = next(
                 item["humanArtifacts"]
                 for item in refreshed["workItems"]

@@ -57,8 +57,13 @@ workspace-overview/
 work-items/
 └── <root-id>/
     ├── development-plan.md
-    ├── execution-graph.md  # 执行图 + 治理图
-    ├── state-transition-graph.md # 开发流程、FSM 与失败路由
+    ├── execution-graph.md  # 嵌入 SVG 的执行图 + 治理图
+    ├── state-transition-graph.md # 嵌入 SVG 的开发流程、FSM 与失败路由
+    ├── assets/
+    │   ├── execution-graph.svg
+    │   ├── governance-graph.svg
+    │   ├── development-flow.svg
+    │   └── node-state-machine.svg
     ├── frontier.md         # 关键路径、动作与阻断看板
     ├── run-timeline.md     # graph run、attempt 与事件
     ├── progress.md       # 整树总进度

@@ -5,6 +5,7 @@ import json
 import sqlite3
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from contextlib import closing
 from pathlib import Path
 
@@ -163,6 +164,28 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
             self.assertIn("# 交付图 / Delivery Graph", graph_markdown)
             self.assertIn("## 执行图 / Execution Graph", graph_markdown)
             self.assertIn("## 治理图 / Governance Graph", graph_markdown)
+            self.assertIn("![执行图 / Execution Graph](assets/execution-graph.svg)", graph_markdown)
+            self.assertIn("![治理图 / Governance Graph](assets/governance-graph.svg)", graph_markdown)
+            self.assertIn("<summary>查看 Mermaid 源图 / Show Mermaid source</summary>", graph_markdown)
+            state_markdown = (package / "state-transition-graph.md").read_text(encoding="utf-8")
+            self.assertIn(
+                "![开发执行流程 / Development Execution Flow](assets/development-flow.svg)",
+                state_markdown,
+            )
+            self.assertIn(
+                "![节点有限状态机 / Node FSM](assets/node-state-machine.svg)",
+                state_markdown,
+            )
+            for relative_path in (
+                "assets/execution-graph.svg",
+                "assets/governance-graph.svg",
+                "assets/development-flow.svg",
+                "assets/node-state-machine.svg",
+            ):
+                visual = package / relative_path
+                self.assertTrue(visual.is_file())
+                root_element = ET.fromstring(visual.read_text(encoding="utf-8"))
+                self.assertEqual(root_element.tag, "{http://www.w3.org/2000/svg}svg")
 
             database = Path(temporary, ".layered-delivery", "governance.sqlite3")
             with closing(sqlite3.connect(database)) as connection:
@@ -193,6 +216,28 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                 "tampered graph\n",
                 encoding="utf-8",
             )
+            with self.assertRaises(GatedLoopError) as raised:
+                freeze_hierarchy(
+                    root=temporary,
+                    root_id=prepared["rootId"],
+                    expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                    development_mode="active",
+                    confirmed=True,
+                )
+            self.assertEqual(raised.exception.code, "DELIVERY_GRAPH_PROJECTION_CHANGED")
+
+    def test_freeze_rejects_a_tampered_graph_visual_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=task_hierarchy(),
+                host_runtime="codex",
+            )
+            Path(
+                prepared["artifactDir"],
+                "assets",
+                "execution-graph.svg",
+            ).write_text("<svg>tampered</svg>\n", encoding="utf-8")
             with self.assertRaises(GatedLoopError) as raised:
                 freeze_hierarchy(
                     root=temporary,

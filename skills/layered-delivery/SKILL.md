@@ -93,8 +93,9 @@ Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或�
 ```
 
 - 根级 `development-plan.md`：整树唯一冻结评审入口，描述完整层级计划。各子节点同名文件保留该节点的独立开发内容。
-- 根级 `execution-graph.md`：中文 / English 展示执行图与治理图；只读投影，不是机器权威。
-- 根级 `state-transition-graph.md`：中文 / English 展示开发执行流程、节点 FSM、失败分类、重试预算、暂停恢复与取消；从冻结 runtime 策略生成。
+- 根级 `execution-graph.md`：优先嵌入控制器确定性生成的中文 / English SVG 执行图与治理图；Mermaid 源图和节点表折叠保留用于兼容与审计。只读投影，不是机器权威。
+- 根级 `state-transition-graph.md`：优先嵌入中文 / English SVG 开发执行流程和节点 FSM；完整 Mermaid、迁移表折叠保留，继续展示失败分类、重试预算、暂停恢复与取消。SVG 与 Markdown 都从冻结 runtime 策略生成。
+- 根级 `assets/*.svg`：`execution-graph.svg`、`governance-graph.svg`、`development-flow.svg`、`node-state-machine.svg`；`refresh-projections` 可从 SQLite 与冻结图重建。
 - 根级 `frontier.md`：中文 / English 展示当前关键路径、下一个汇聚点、允许动作和阻断原因；只读投影。
 - 根级 `run-timeline.md`：展示 graph run、node attempt、状态、owner 和不可变事件序列。
 - `development-review.md`：对照冻结计划与实际文件、接口、测试和偏差；只表示等待门禁，不表示 PASS。

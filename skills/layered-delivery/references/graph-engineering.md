@@ -174,4 +174,6 @@ python -X utf8 <skill-root>/scripts/hdg.py rebuild-graph-run --item <root-id> --
 
 生成文件都是只读投影，可以通过 `refresh-projections` 重建。
 
+`execution-graph.md` 和 `state-transition-graph.md` 默认嵌入控制器用 Python 标准库确定性生成的 SVG，因此不依赖 Markdown 查看器支持 Mermaid。Mermaid 源图、节点表和迁移表放入折叠区，继续承担兼容与审计用途。四个 SVG 位于根工作项 `assets/`，与 Markdown 一样可由 `refresh-projections` 重建，并在冻结前参与投影防篡改校验。
+
 `state-transition-graph.md` 由冻结的运行时策略生成，必须同时展示开发执行流程和节点 FSM，包括失败分类、重试耗尽、暂停/恢复和取消。

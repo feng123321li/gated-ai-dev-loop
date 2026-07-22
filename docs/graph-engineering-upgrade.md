@@ -1,6 +1,6 @@
 # Layered Delivery Graph Engineering 升级设计与实施说明
 
-> 状态：已确认并完整实施（2026-07-22），包括契约 DAG、运行时 FSM、失败 Router、Graph 自动 Agent 调度、claim 租约、自动恢复、暂停/取消、关键路径、frontier 看板、图坐标证据绑定与事件回放恢复
+> 状态：已确认并完整实施（2026-07-22），包括契约 DAG、运行时 FSM、失败 Router、Graph 自动 Agent 调度、确定性 SVG 可视化、claim 租约、自动恢复、暂停/取消、关键路径、frontier 看板、图坐标证据绑定与事件回放恢复
 >
 > 目标版本：继续使用当前完整 schema v3
 >
@@ -620,8 +620,13 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 
 ```text
 .layered-delivery/work-items/<root-id>/
-├── execution-graph.md     # 冻结执行图与治理图
-├── state-transition-graph.md # 双语开发流程、FSM 与路由策略
+├── execution-graph.md     # 嵌入 SVG 的冻结执行图与治理图
+├── state-transition-graph.md # 嵌入 SVG 的双语开发流程、FSM 与路由策略
+├── assets/
+│   ├── execution-graph.svg
+│   ├── governance-graph.svg
+│   ├── development-flow.svg
+│   └── node-state-machine.svg
 ├── frontier.md            # 双语自动 Agent 计划、关键路径、迁移、预算、允许动作和阻断看板
 ├── run-timeline.md        # attempt、租约、失败分类与事件时间线
 └── progress.md            # 继续保留整树交付进度
@@ -637,7 +642,8 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 |---|---|
 | `src/hdg/graph_model.py` | Graph IR、节点/边校验、图指纹，并把完整 hierarchy 确定性编译成合同图 |
 | `src/hdg/graph_runtime.py` | 事件回放、节点状态、关键路径、frontier、图状态和恢复 |
-| `src/hdg/graph_projections.py` | `execution-graph.md`、`state-transition-graph.md`、`frontier.md`、`run-timeline.md` 和 Mermaid 图渲染 |
+| `src/hdg/graph_projections.py` | `execution-graph.md`、`state-transition-graph.md`、`frontier.md`、`run-timeline.md`、SVG 嵌入和折叠 Mermaid 渲染 |
+| `src/hdg/svg_graphs.py` | 不依赖第三方工具的确定性 SVG 执行图、治理图、开发流程与节点 FSM |
 
 构建 Skill 后，同步生成对应的 `skills/layered-delivery/scripts/hdg/**` 文件。
 

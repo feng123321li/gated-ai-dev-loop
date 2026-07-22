@@ -33,11 +33,13 @@ description: "治理可独立交付的软件需求。按最小必要深度组织
 
 ## 正常流程
 
-1. 从当前 `SKILL.md` 解析 `<skill-root>`，只读运行：
+1. 从当前 Skill 元数据解析 `<skill-root>`（即当前已加载 `SKILL.md` 所在目录），只读运行：
 
    ```text
    python -X utf8 <skill-root>/scripts/hdg.py --help
    ```
+
+   `<skill-root>` 是宿主无关的逻辑占位符。实际执行时由宿主解析为当前安装位置，不得固化用户目录、Skill 安装位置或操作系统路径，也不得把解析后的本机绝对路径写入交接、方案或治理状态。
 
 2. 只读检查 `.layered-delivery/governance.sqlite3`。存在时从当前数据库恢复；数据库 schema、ID、拓扑、路径、层级或指纹损坏则阻断，不迁移、不猜测。仅当历史工作项的 evidence 引用不符合当前契约、完整 artifact 仍在 SQLite 且其他结构全部有效时，控制器把该节点设为只读隔离：不迁移、不改写它，但允许其他新需求和有效兄弟节点继续。只有 Markdown 投影缺失时才使用 `refresh-projections` 从数据库重建。
 3. 确定最浅合法层级，并形成完整树 definition：
@@ -62,7 +64,7 @@ description: "治理可独立交付的软件需求。按最小必要深度组织
    ```
 
    人不需要知道、复制或复述指纹。控制器用同一次确认冻结整树并记录根级方式；方案变化后旧指纹必须被拒绝。
-8. `active` 下，当前 Agent 冻结后立即查询 `graph-frontier`，严格消费控制器返回的 `dispatchPlan` 与 `DISPATCH_TASK`、`RUN_GATE`、`REQUEST_REVIEW`、`REQUEST_USER_CONFIRMATION` 动作。Graph 自动计算本轮全部安全 Task、稳定派发顺序、目标 Agent 数和并行组；执行适配器不得挑选子集或另定顺序。平台容量不足时只把未立即启动项按原顺序排队，子 Agent 不可用时由当前 Agent 串行消费同一队列，每次状态迁移后重新计算，均不请求用户选择。`manual` 下，当前规划会话不开发，控制器在需求根生成完整 `requirement-handoff.md`、同内容 `handoffPrompt` 和简短 `handoffCommand`。manual 冻结成功后的最终回复必须直接展示返回的 `handoffCommand`，使用纯文本代码块供用户一次复制到新会话；不得只给出 `requirement-handoff.md` 链接，也不得要求用户打开文件后全选复制。文件链接作为查看完整交接和冻结方案的辅助入口放在代码块之后。接收 Agent 随后从同一 graph run 恢复并自动执行完整调度计划、开发、门禁和恢复，推进整棵图，不得要求用户逐 Task 回复启动。运行时调度计划不写入冻结方案、层级指纹或图指纹。
+8. `active` 下，当前 Agent 冻结后立即查询 `graph-frontier`，严格消费控制器返回的 `dispatchPlan` 与 `DISPATCH_TASK`、`RUN_GATE`、`REQUEST_REVIEW`、`REQUEST_USER_CONFIRMATION` 动作。Graph 自动计算本轮全部安全 Task、稳定派发顺序、目标 Agent 数和并行组；执行适配器不得挑选子集或另定顺序。平台容量不足时只把未立即启动项按原顺序排队，子 Agent 不可用时由当前 Agent 串行消费同一队列，每次状态迁移后重新计算，均不请求用户选择。`manual` 下，当前规划会话不开发，控制器在需求根生成完整 `requirement-handoff.md`、同内容 `handoffPrompt` 和简短 `handoffCommand`。manual 冻结成功后的最终回复必须直接展示返回的 `handoffCommand`，使用纯文本代码块供用户一次复制到新会话；不得只给出 `requirement-handoff.md` 链接，也不得要求用户打开文件后全选复制。文件链接作为查看完整交接和冻结方案的辅助入口放在代码块之后。接收 Agent 随后从同一 graph run 的 `graph-frontier` 恢复并自动执行完整调度计划、开发、门禁和恢复，推进整棵图；`task-context` 只是诊断预览，不是恢复或开工入口。不得要求用户逐 Task 回复启动。运行时调度计划不写入冻结方案、层级指纹或图指纹。
 9. 开发阶段不设置额外人工门禁。Graph 执行循环在冻结目标和安全边界内驱动 Agent 循环“实现 → 回归测试 → 修复 → 复测”，逐 Task 写回 `IMPLEMENTED` 或 `BLOCKED`。BLOCKED artifact 必须提供 `failure.class/code/summary`。`RETRYABLE` 由控制器在尝试预算内自动创建下一 attempt；第三次仍失败则写入 `RETRY_EXHAUSTED` 并阻断。`CONTRACT_CHANGE`、`EXTERNAL_AUTHORITY`、`NON_RETRYABLE` 和 `REMEDIATION_REQUIRED` 必须按 frontier 建议路由，不能误重试。长任务用 `heartbeat-task` 续租；Graph 执行循环定期执行 `advance-graph`，让过期 claim 按 `WORKER_LOST` 自动恢复。只有显式用户意图才使用 `pause-task`、`resume-task` 或经确认的 `cancel-graph-run`。若验证发现为满足原验收项必须补充冻结方案遗漏的精确文件，但目标、需求、验收、接口行为、数据契约、拓扑和外部授权均不变，则使用 `remediate-task --evidence -` 在原 Task 下追加验证修正授权。控制器从该 Task execution 沿显式图边失效必要后继、依赖消费者和聚合门禁，再创建新 attempt；失效范围有活动 claim 时阻断。不得重新 `prepare-hierarchy` 创建重复需求根。只有上述契约或授权事实确实变化时才回到人工评审。开发结果不能自行宣布 PASS。
 10. `workspace-overview.md` 只保留按最近更新时间倒序的全局需求索引，展示根类型、状态、门禁、后代进度和方案/总进度/月度明细入口；物理目录仍使用稳定根 ID，不追加日期。`workspace-overview/YYYY-MM.md` 是月度索引，每个需求的层级表格写入 `workspace-overview/YYYY-MM/<root-id>.md`；全局索引直接链接单需求文件，不依赖跨文件标题锚点。这样避免单一总览过长和 Markdown 折叠树形文本。显示日期使用 Python 运行时动态获取的本机时区，SQLite 原始时间保持 UTC；创建时间和需求开始时间精确到分，只有最终用户确认后的 `COMPLETED` 才展示完成日期，否则显示“未完成”。需求根 `progress.md` 继续使用 Markdown 表格展示整树明细：第一列保留与 `development-plan.md` 相同的工作项 ID、父子顺序和层级，其余列分别展示阶段、状态、门禁、当前执行、节点文件和阶段性产物。根节点行的节点进度链接 `node-progress.md`，子节点行链接各自 `progress.md`，不得让根节点进度回链整树文件。“当前执行”对协调节点显示“不适用”，对待执行 Task 显示“未认领”，开发中显示 owner/operationId，结果写回后显示“已释放”。每次控制器写回都会从 SQLite 自动重建这些文件，不依赖 Agent 手工改表。
 11. 使用 `task-result` 写回结果并生成 `development-review.md`；验证修正会在同一文件追加“验证修正”明细，并进入原 Task 的授权文件集合。全部相关回归和复测通过后，使用 `accept-item` 提交门禁验收并生成 `acceptance-report.md`。结构化上下文、结果、修正和报告只存 SQLite。父级必须在子级全部 VERIFIED 后运行自己的聚合 gate。
@@ -103,9 +105,11 @@ Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或�
 
 ## 输入与路径
 
+所有 CLI 调用都必须从当前 Skill 元数据解析 `<skill-root>`。只读查询（包括 `graph-status`、`graph-frontier`、`graph-events`、`graph-replay` 和 `task-context`）的 JSON 直接消费 stdout，不得使用临时 JSON 中转；控制器非零退出时先保留 stderr 并停止解析，不能让下游 JSON 解析器用空 stdout 或错误文本遮蔽真实错误。
+
 `task-result`、`remediate-task`、`gate-item`、`accept-item` 和 `acceptance-item` 的完整证据 artifact 必须使用 `--evidence -` 从 stdin 直接提交；文件路径输入会被拒绝，不生成 `.hdg-tmp`、`%TEMP%` 或其他临时 JSON。控制器在 SQLite 写事务内按当前工作项、operationId、baseline 和动作校验 artifact，计算规范 JSON 的 SHA-256，并把完整 artifact 与摘要一起写入 SQLite；Agent 不直接写数据库，也不自行提交路径或摘要。
 
-`--definition` 和 `--interaction` 的一次性 JSON 也必须使用 `-` 从 stdin 读取；控制器拒绝任何文件路径。Claude Code 的 Bash 工具必须在当前 shell 直接使用带引号的 heredoc，不得嵌套 `bash -lc`、`sh -c` 或其他 shell 包装；heredoc 失败时修正输入命令，不得降级为 `Write(_hdg_*.json)`、仓库临时文件或 `%TEMP%` 文件。PowerShell 使用 here-string 管道。完整、安全的宿主示例见 [stdin-transport.md](references/stdin-transport.md)。
+`--definition` 和 `--interaction` 的一次性 JSON 也必须使用 `-` 从 stdin 读取；控制器拒绝任何文件路径。宿主使用自身提供的 stdin 直连能力，不嵌套额外 shell；传输失败时修正当前调用，不得降级为仓库文件、系统临时文件或跨运行时路径。完整的宿主无关契约与按 shell 能力区分的适配示例见 [stdin-transport.md](references/stdin-transport.md)。
 
 ## SQLite 与交互记录
 
@@ -139,6 +143,6 @@ Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或�
 - 进度与父级聚合：[tracking.md](references/tracking.md)
 - 门禁、独立审查与最终确认：[acceptance.md](references/acceptance.md)
 - 同一 Task 的验证修正：[validation-remediation.md](references/validation-remediation.md)
-- definition、interaction 与 evidence 的无临时文件 stdin 传输：[stdin-transport.md](references/stdin-transport.md)
+- 控制器入口解析、查询输出与结构化 stdin 的宿主无关传输：[stdin-transport.md](references/stdin-transport.md)
 - 多工作区：[multi-workspace.md](references/multi-workspace.md)
 - 验收后反馈：[post-acceptance-feedback.md](references/post-acceptance-feedback.md)

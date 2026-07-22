@@ -36,6 +36,18 @@ class InstallAndBundleTests(unittest.TestCase):
         self.assertIn("必须直接展示返回的 `handoffCommand`", skill)
         self.assertIn("不得只给出 `requirement-handoff.md` 链接", skill)
 
+    def test_skill_contract_keeps_controller_invocation_host_portable(self) -> None:
+        skill_root = TARGET_PACKAGE.parent.parent
+        skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+        transport = (skill_root / "references" / "stdin-transport.md").read_text(encoding="utf-8")
+        self.assertIn("从当前 Skill 元数据解析 `<skill-root>`", skill)
+        self.assertIn("不得固化用户目录、Skill 安装位置或操作系统路径", skill)
+        self.assertIn("直接消费 stdout", skill)
+        self.assertIn("保留 stderr", skill)
+        self.assertIn("宿主无关调用契约", transport)
+        self.assertIn("不得使用临时 JSON 中转只读查询结果", transport)
+        self.assertIn("恢复入口是 `graph-frontier`，不是 `task-context`", transport)
+
     def test_build_is_reproducible_and_bundle_matches_source(self) -> None:
         build_skill()
         self.assertEqual(file_map(SOURCE_PACKAGE), file_map(TARGET_PACKAGE))

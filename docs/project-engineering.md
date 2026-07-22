@@ -314,6 +314,8 @@ Markdown 只是可重建的人类投影：
 
 ## 11. 怎么使用
 
+所有命令中的 `<skill-root>` 都是宿主无关的逻辑占位符，由执行适配器从当前已加载 Skill 的元数据解析。不得根据用户名、用户主目录、`.claude`、`.codex` 或操作系统猜测安装位置，也不得把解析后的本机绝对路径写进 handoff、冻结方案或治理状态。控制器从项目根目录运行；具体 shell 只负责把 stdin/stdout/stderr 可靠连接到进程，不改变治理协议。
+
 ### 11.1 新需求
 
 ```text
@@ -337,6 +339,8 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item <root-or-subtree-
 python -X utf8 <skill-root>/scripts/hdg.py graph-replay --item <root-or-subtree-id> --json
 python -X utf8 <skill-root>/scripts/hdg.py advance-graph --item <root-or-subtree-id> --json
 ```
+
+这些只读查询的 JSON 应直接从 stdout 消费，不通过临时文件中转。生产者非零退出时先保留 stderr 并停止解析，不能继续对空 stdout 调用 JSON 解析器。manual 接收会话从 `graph-frontier` 恢复；`task-context` 只是未认领 Task 的诊断预览，不会授权执行。
 
 - `graph-status`：查看全部节点、边、attempt 和运行状态；
 - `graph-frontier`：查看当前允许的动作、自动 Agent 调度计划及阻断原因；

@@ -8,6 +8,7 @@ from .errors import fail
 from .fs_safe import read_regular_file, safe_path
 from .graph_model import (
     compile_delivery_graph,
+    compile_runtime_policy,
     execution_node_id,
     gate_node_id,
     graph_fingerprint,
@@ -18,8 +19,8 @@ from .graph_projections import (
     render_runtime_policy_summary,
     render_state_transition_graph,
 )
-from .svg_graphs import render_graph_svg_assets
 from .graph_runtime import hierarchy_root_entry
+from .svg_graphs import render_delivery_graph_svg_assets, render_runtime_policy_svg_assets
 from .model import (
     hierarchy_fingerprint,
     iter_hierarchy_nodes,
@@ -157,11 +158,7 @@ def _hierarchy_packages(
                 graph,
                 graph_fingerprint=hierarchy_state["graphFingerprint"],
             )
-            files["state-transition-graph.md"] = render_state_transition_graph(
-                graph,
-                graph_fingerprint=hierarchy_state["graphFingerprint"],
-            )
-            files.update(render_graph_svg_assets(graph))
+            files.update(render_delivery_graph_svg_assets(graph))
         packages.append((relative, files))
     return packages
 
@@ -285,24 +282,27 @@ def _hierarchy_from_registry(
     )
     if actual_graph_projection != expected_graph_projection:
         fail("DELIVERY_GRAPH_PROJECTION_CHANGED", "Delivery graph projection changed after preparation")
-    state_projection = root_target / "state-transition-graph.md"
+    runtime_policy = compile_runtime_policy()
+    state_projection = repository.governance_root / "state-transition-graph.md"
     try:
-        actual_state_projection = read_regular_file(root_target, state_projection).decode("utf-8")
+        actual_state_projection = read_regular_file(
+            repository.governance_root,
+            state_projection,
+        ).decode("utf-8")
     except Exception:
         fail(
             "DELIVERY_GRAPH_PROJECTION_CHANGED",
             "State transition graph projection is missing or unreadable",
         )
-    expected_state_projection = render_state_transition_graph(
-        stored_graph["graph"],
-        graph_fingerprint=stored_graph["graphFingerprint"],
-    )
+    expected_state_projection = render_state_transition_graph(runtime_policy)
     if actual_state_projection != expected_state_projection:
         fail(
             "DELIVERY_GRAPH_PROJECTION_CHANGED",
             "State transition graph projection changed after preparation",
         )
-    for relative_path, expected_asset in render_graph_svg_assets(stored_graph["graph"]).items():
+    for relative_path, expected_asset in render_delivery_graph_svg_assets(
+        stored_graph["graph"]
+    ).items():
         asset_path = root_target / relative_path
         try:
             actual_asset = read_regular_file(root_target, asset_path).decode("utf-8")
@@ -315,6 +315,25 @@ def _hierarchy_from_registry(
             fail(
                 "DELIVERY_GRAPH_PROJECTION_CHANGED",
                 f"Graph visual projection changed after preparation: {relative_path}",
+            )
+    for relative_path, expected_asset in render_runtime_policy_svg_assets(
+        runtime_policy
+    ).items():
+        asset_path = repository.governance_root / relative_path
+        try:
+            actual_asset = read_regular_file(
+                repository.governance_root,
+                asset_path,
+            ).decode("utf-8")
+        except Exception:
+            fail(
+                "DELIVERY_GRAPH_PROJECTION_CHANGED",
+                f"Runtime policy visual projection is missing or unreadable: {relative_path}",
+            )
+        if actual_asset != expected_asset:
+            fail(
+                "DELIVERY_GRAPH_PROJECTION_CHANGED",
+                f"Runtime policy visual projection changed after preparation: {relative_path}",
             )
     return hierarchy, states, hierarchy_state, root_target
 
@@ -372,7 +391,7 @@ def prepare_hierarchy(
                     "humanArtifacts": {
                         "developmentPlan": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/development-plan.md",
                         "executionGraph": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/execution-graph.md",
-                        "stateTransitionGraph": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/state-transition-graph.md",
+                        "stateTransitionGraph": f"{GOVERNANCE_DIRECTORY}/state-transition-graph.md",
                         "frontier": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/frontier.md",
                         "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
                     },
@@ -438,7 +457,7 @@ def prepare_hierarchy(
             "humanArtifacts": {
                 "developmentPlan": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/development-plan.md",
                 "executionGraph": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/execution-graph.md",
-                "stateTransitionGraph": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/state-transition-graph.md",
+                "stateTransitionGraph": f"{GOVERNANCE_DIRECTORY}/state-transition-graph.md",
                 "frontier": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/frontier.md",
                 "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
             },
@@ -462,7 +481,7 @@ def _frozen_human_artifacts(root_id: str, handoff: str | None) -> dict[str, str 
         "developmentPlan": f"{base}/development-plan.md",
         "progress": f"{base}/progress.md",
         "executionGraph": f"{base}/execution-graph.md",
-        "stateTransitionGraph": f"{base}/state-transition-graph.md",
+        "stateTransitionGraph": f"{GOVERNANCE_DIRECTORY}/state-transition-graph.md",
         "frontier": f"{base}/frontier.md",
         "runTimeline": f"{base}/run-timeline.md",
         "requirementHandoff": f"{base}/requirement-handoff.md" if handoff is not None else None,

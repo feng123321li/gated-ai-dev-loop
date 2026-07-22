@@ -26,7 +26,7 @@ from .evidence import (
     valid_timestamp,
 )
 from .fs_safe import atomic_create_directory, atomic_replace_directory, atomic_write, read_regular_file, safe_path
-from .graph_model import graph_fingerprint, validate_delivery_graph
+from .graph_model import compile_runtime_policy, graph_fingerprint, validate_delivery_graph
 from .graph_projections import (
     render_delivery_graph,
     render_frontier_dashboard,
@@ -34,7 +34,7 @@ from .graph_projections import (
     render_run_timeline,
     render_state_transition_graph,
 )
-from .svg_graphs import render_graph_svg_assets
+from .svg_graphs import render_delivery_graph_svg_assets, render_runtime_policy_svg_assets
 from .host_runtime import is_agent_runtime
 from .jsonio import canonical_json, sha256_bytes
 from .model import (
@@ -1816,6 +1816,16 @@ class GovernanceRepository:
 
     def refresh_markdown_projections(self, registry: dict[str, Any]) -> None:
         """Rebuild every human artifact that has a complete SQLite source."""
+        runtime_policy = compile_runtime_policy()
+        atomic_write(
+            self.governance_root / "state-transition-graph.md",
+            render_state_transition_graph(runtime_policy),
+        )
+        for relative_path, contents in render_runtime_policy_svg_assets(
+            runtime_policy
+        ).items():
+            atomic_write(self.governance_root / relative_path, contents)
+
         by_id = {item["id"]: item for item in registry["workItems"]}
         definitions: dict[str, dict[str, Any]] = {}
         states: dict[str, dict[str, Any]] = {}
@@ -1863,15 +1873,21 @@ class GovernanceRepository:
                     run=graph_run,
                 ),
             )
-            atomic_write(
-                self.item_path(root) / "state-transition-graph.md",
-                render_state_transition_graph(
-                    stored_graph["graph"],
-                    graph_fingerprint=stored_graph["graphFingerprint"],
-                ),
-            )
-            for relative_path, contents in render_graph_svg_assets(stored_graph["graph"]).items():
+            for relative_path, contents in render_delivery_graph_svg_assets(
+                stored_graph["graph"]
+            ).items():
                 atomic_write(self.item_path(root) / relative_path, contents)
+            for relative_path in (
+                "state-transition-graph.md",
+                "assets/development-flow.svg",
+                "assets/node-state-machine.svg",
+            ):
+                legacy_projection = safe_path(self.item_path(root), relative_path)
+                try:
+                    read_regular_file(self.item_path(root), legacy_projection)
+                except FileNotFoundError:
+                    continue
+                legacy_projection.unlink()
             from .graph_runtime import (
                 build_graph_frontier,
                 critical_path,

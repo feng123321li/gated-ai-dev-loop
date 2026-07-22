@@ -83,9 +83,13 @@ class RuntimeFsmTests(unittest.TestCase):
             artifact_dir = Path(prepared["artifactDir"])
             self.assertEqual(
                 prepared["humanArtifacts"]["stateTransitionGraph"],
-                f".layered-delivery/work-items/{prepared['rootId']}/state-transition-graph.md",
+                ".layered-delivery/state-transition-graph.md",
             )
-            transition_graph = (artifact_dir / "state-transition-graph.md").read_text(
+            transition_graph = Path(
+                temporary,
+                ".layered-delivery",
+                "state-transition-graph.md",
+            ).read_text(
                 encoding="utf-8"
             )
             self.assertIn("# 状态迁移图 / State Transition Graph", transition_graph)

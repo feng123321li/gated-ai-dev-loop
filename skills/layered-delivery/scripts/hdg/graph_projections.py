@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .jsonio import fingerprint
 from .svg_graphs import GRAPH_ASSET_PATHS
 
 
@@ -78,6 +79,8 @@ def render_delivery_graph(
         f"- 层级指纹 / Hierarchy fingerprint: `{graph['hierarchyFingerprint']}`",
         f"- 图指纹 / Graph fingerprint: `{graph_fingerprint}`",
         f"- 运行状态 / Run status: `{run['status'] if run else 'NOT_STARTED'}`",
+        "- 共享运行时策略 / Shared runtime policy: "
+        "[state-transition-graph.md](../../state-transition-graph.md)",
         "",
         "> 本文件由治理数据库重建，仅供阅读；机器权威仍是 `governance.sqlite3`。",
         "",
@@ -132,6 +135,8 @@ def render_runtime_policy_summary(graph: dict[str, Any]) -> str:
         f"- 认领租约 / Claim lease: **{claim['leaseSeconds']} 秒 / seconds**",
         f"- 建议心跳间隔 / Heartbeat interval: **{claim['heartbeatSeconds']} 秒 / seconds**",
         f"- 租约到期动作 / On lease expired: `{claim['onExpired']}`",
+        "- 完整状态迁移图 / Full state transition graph: "
+        "[state-transition-graph.md](../../state-transition-graph.md)",
         "",
         "> 契约依赖图保持无环；失败回退、重试、暂停与恢复由运行时有限状态机表达。",
         "> The contract dependency graph remains acyclic; runtime cycles live in the FSM.",
@@ -140,19 +145,16 @@ def render_runtime_policy_summary(graph: dict[str, Any]) -> str:
 
 
 def render_state_transition_graph(
-    graph: dict[str, Any],
-    *,
-    graph_fingerprint: str,
+    runtime: dict[str, Any],
 ) -> str:
-    runtime = graph["runtime"]
     lines = [
         "# 状态迁移图 / State Transition Graph",
         "",
-        f"- 需求根 / Root: `{graph['rootId']}`",
-        f"- 图指纹 / Graph fingerprint: `{graph_fingerprint}`",
+        f"- 运行时策略指纹 / Runtime policy fingerprint: `{fingerprint(runtime)}`",
+        "- 作用域 / Scope: `workspace`",
         "",
-        "> 本图与控制器冻结的 `runtime` 策略同源生成；它是可审计投影，不是第二份规则。",
-        "> Generated from the same frozen runtime policy used by the controller.",
+        "> 本图由控制器当前 schema v3 的共享 `runtime` 策略生成；它是工作区级可审计投影，不是第二份规则。",
+        "> Generated from the shared schema v3 runtime policy used by every requirement graph in this workspace.",
         "",
         "## 开发执行流程 / Development Execution Flow",
         "",

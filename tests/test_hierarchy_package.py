@@ -567,10 +567,17 @@ class HierarchyPackageTests(unittest.TestCase):
             )
             self.assertNotIn("— 阶段", prepared_progress)
             (root / "node-progress.md").unlink()
-            (root / "assets" / "development-flow.svg").unlink()
+            governance = Path(temporary, ".layered-delivery")
+            global_flow = governance / "assets" / "development-flow.svg"
+            self.assertTrue(global_flow.is_file())
+            global_flow.unlink()
+            (root / "state-transition-graph.md").write_text("legacy\n", encoding="utf-8")
+            (root / "assets" / "development-flow.svg").write_text("legacy\n", encoding="utf-8")
             refreshed = refresh_work_item_projections(root=temporary)
             self.assertTrue((root / "node-progress.md").is_file())
-            self.assertTrue((root / "assets" / "development-flow.svg").is_file())
+            self.assertTrue(global_flow.is_file())
+            self.assertFalse((root / "state-transition-graph.md").exists())
+            self.assertFalse((root / "assets" / "development-flow.svg").exists())
             task_artifacts = next(
                 item["humanArtifacts"]
                 for item in refreshed["workItems"]

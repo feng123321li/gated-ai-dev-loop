@@ -95,7 +95,7 @@ def item_human_artifacts(
         "developmentPlan": posixpath.join(base, "development-plan.md"),
         "hierarchyDevelopmentPlan": posixpath.join(plan_base, "development-plan.md"),
         "executionGraph": posixpath.join(plan_base, "execution-graph.md"),
-        "stateTransitionGraph": posixpath.join(plan_base, "state-transition-graph.md"),
+        "stateTransitionGraph": posixpath.join(GOVERNANCE_DIRECTORY, "state-transition-graph.md"),
         "frontier": posixpath.join(plan_base, "frontier.md"),
         "runTimeline": posixpath.join(plan_base, "run-timeline.md"),
         "baseline": posixpath.join(base, "baseline.md"),
@@ -157,6 +157,7 @@ def render_workspace_overview(
         "> 本文件是面向用户和协作者的可读投影；机器权威为 `governance.sqlite3`。",
         f"> 注册表版本：{registry['revision']}",
         f"> 当前焦点：{registry['currentFocus']['workItemId'] or '无'}",
+        "> 共享运行时策略：[状态迁移图 / State Transition Graph](state-transition-graph.md)",
     ]
     isolated = sorted(isolated_item_ids or set())
     if isolated:

@@ -9,13 +9,27 @@
 5. 运行 `prepare-hierarchy`。一个需求只生成 `work-items/<root-id>/` 一个顶层目录，子节点按 `children/<id>/` 递归嵌套；根级 `development-plan.md/progress.md` 聚合完整树，控制器同时编译 `execution-graph.md`、`state-transition-graph.md` 和 `frontier.md`，根节点自身进度写入 `node-progress.md`，每个实际子节点生成自己的 `development-plan.md/progress.md`。
 6. 人工查看根级 `development-plan.md`、`execution-graph.md` 与 `state-transition-graph.md`，同时选择 active/manual。需要修改就重新准备整棵树；同意时只需确认当前方案和所选方式，无需知道或复述层级/图指纹。
 7. Agent 使用准备结果中的 `hierarchyFingerprint`，调用一次 `freeze-hierarchy --expected-hierarchy ... --development-mode ... --confirmed`。控制器在同一事务中记录方式并冻结全部节点；指纹已变化则拒绝旧确认。
-8. active 下由当前 Agent 冻结后查询 `graph-frontier` 并直接自主推进；manual 在需求根生成完整 `requirement-handoff.md`，并返回简短 `handoffCommand`。规划会话必须把 `handoffCommand` 放入纯文本代码块供用户一次复制，不能只给文件链接；接收 Agent 即成为同一 graph run 的执行宿主。两种宿主都按 frontier 动作自主决定多子 Agent、单 Agent 或当前 Agent 串行，循环实现、回归、修复和复测；运行能力变化时自动调整，不再次询问开发方式或要求人工逐 Task 启动。
+8. active 下由当前 Agent 冻结后查询 `graph-frontier` 并直接推进；manual 在需求根生成完整 `requirement-handoff.md`，并返回简短 `handoffCommand`。规划会话必须把 `handoffCommand` 放入纯文本代码块供用户一次复制，不能只给文件链接；接收 Agent 即成为同一 graph run 的执行入口。两种方式都严格消费 Graph 自动计算的 `dispatchPlan`：控制器决定完整安全 Task 集合、目标 Agent 数和稳定顺序，平台容量只决定立即启动或排队，不能挑选子集；不再次询问开发方式或要求人工逐 Task 启动。
 9. 开发结果的完整 artifact 通过 `task-result --evidence -` 从 stdin 交给控制器。控制器在同一 SQLite 写事务内校验当前 operationId、计算摘要并保存 artifact 与摘要，然后生成 `development-review.md`；开发结果不代表 PASS，也不产生临时 evidence 文件。
 10. 回归、门禁、独立审查或最终验收发现遗漏时，先判断是否仍为原冻结目标和验收契约。已有授权文件内直接重试；仅缺少完成原验收项所需的精确文件，且目标、需求、验收、接口行为、数据、拓扑和外部权限不变时，通过 `remediate-task --evidence -` 追加到原 Task。控制器保持 baseline 与图定义不变，从该 Task execution 沿显式边失效必要后继、依赖消费者和聚合 gate，再创建新 attempt；不得 `prepare-hierarchy` 新建重复需求根。
-11. 全部相关回归和复测通过后，宿主形成严格 gate artifact，并通过 `accept-item --evidence -` 从 stdin 直接提交。控制器在同一事务中按当前 baseline 和追加验证修正校验、计算摘要并保存结构化验收记录，随后生成 `acceptance-report.md`；Task 全部 VERIFIED 后依次运行 Capability、Delivery 自身聚合门禁。
+11. 全部相关回归和复测通过后，Graph 执行循环形成严格 gate artifact，并通过 `accept-item --evidence -` 从 stdin 直接提交。控制器在同一事务中按当前 baseline 和追加验证修正校验、计算摘要并保存结构化验收记录，随后生成 `acceptance-report.md`；Task 全部 VERIFIED 后依次运行 Capability、Delivery 自身聚合门禁。
 12. 治理根 gate PASS 后向用户提交交付，由用户人工验收并确认；验收报告持续更新至 `COMPLETED`。
 
 任何步骤都不能从“优化、开发、项目、治理”等自然语言关键词推导创建或冻结授权。
+
+## 人与 Graph 的职责总流程
+
+```mermaid
+flowchart LR
+    H1["用户/需求宿主<br/>讨论需求与方案"] --> H2{"确认冻结方案？"}
+    H2 -->|"修改 / Revise"| H1
+    H2 -->|"确认 / Confirm"| G["Graph 中段自治<br/>依赖 + 自动 Agent 调度 + 门禁 + 失败恢复"]
+    G --> A["工程门禁与独立审查通过"]
+    A --> H3["用户/需求宿主<br/>最终验收确认"]
+    G -. "合同变化或外部授权 / Contract Change or Authority" .-> H1
+```
+
+执行平台只承载 Agent 与队列，不拥有中段任务选择、Agent 数量、调度顺序或失败路由决策权。
 
 ## 层级与目录
 
@@ -77,23 +91,23 @@ flowchart TD
     D -->|"明确同意"| E["一次记录开发方式并冻结整棵树"]
     E --> F{"已选择的开发方式"}
     F -->|"主动开发"| G["所有任务进入已冻结状态"]
-    G --> H["智能体自主调度并循环开发与测试"]
+    G --> H["Graph 自动计算 Agent 数并循环开发与测试"]
     F -->|"手动开发"| I["所有任务进入已冻结状态"]
     I --> J["生成一份根级需求交接"]
     J --> K["人工一次复制到新会话"]
     K --> H
 ```
 
-人工在同一次前期评审中确认当前根级计划和开发方式；层级指纹由 Agent 和控制器绑定，无需人工复述。manual 的“一次交接”不表示一次认领全部 Task：接收会话仍按依赖即时认领各 Task，但不再让人逐个转交。Agent 数量、并发度、调度顺序和降级路径由执行宿主决定，不进入冻结方案。
+人工在同一次前期评审中确认当前根级计划和开发方式；层级指纹由 Agent 和控制器绑定，无需人工复述。manual 的“一次交接”不表示一次认领全部 Task：接收会话读取 Graph 自动生成的完整调度计划，但不再让人逐个转交。目标 Agent 数、并行组、调度顺序和降级路径由 Graph 在每次迁移后计算，不进入冻结方案；执行平台只负责立即启动或排队。
 
 ### 2. 单个任务的开发与门禁
 
 ```mermaid
 flowchart TD
-    A["任务已冻结"] --> B{"当前是否可调度？"}
+    A["任务已冻结"] --> B{"Graph 判定当前是否可调度？"}
     B -->|"否"| W["等待依赖、解除范围冲突或补全配置"]
     W --> B
-    B -->|"是"| C["调度并认领任务"]
+    B -->|"是"| C["Graph 计划自动派发并认领任务"]
     C --> D["实现并运行回归测试"]
     D --> E{"是否仍有失败？"}
     E -->|"是"| F["修复并复测"]
@@ -144,7 +158,7 @@ flowchart TD
 
 ## 恢复与失败关闭
 
-执行宿主应在长任务中调用 `heartbeat-task`，并周期性调用 `advance-graph`。控制器只对结构化 `RETRYABLE` 与租约过期产生的 `WORKER_LOST` 做预算内自动重试；第三次失败后写入 `RETRY_EXHAUSTED`。暂停和恢复使用显式命令及事件；取消整个运行必须由用户明确确认。
+Graph 执行循环应在长任务中调用 `heartbeat-task`，并周期性调用 `advance-graph`。控制器只对结构化 `RETRYABLE` 与租约过期产生的 `WORKER_LOST` 做预算内自动重试；第三次失败后写入 `RETRY_EXHAUSTED`。暂停和恢复使用显式命令及事件；取消整个运行必须由用户明确确认。
 
 - 恢复优先使用用户给出的精确 ID/路径、有效焦点或唯一候选；多个候选时请求选择。
 - 只读隔离项不能作为命令目标，也不能被事务修改或删除；它不阻断其他有效工作项。隔离集合在写事务中发生变化时必须回滚。

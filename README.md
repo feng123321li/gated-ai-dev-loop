@@ -14,19 +14,19 @@
 - Task execution、各级 gate、root review 和 user confirmation 都是显式图节点。
 - 冻结的依赖合同是 DAG；运行时由有限状态机和路由策略驱动，允许受控重试、回退、暂停与恢复。因此完整 Graph Engineering 不是“只有 DAG”。
 - `ready-tasks` 是 graph frontier 的 Task 投影；冻结图定义运行合同，带图指纹的哈希事件链是运行事实，graph run 和 node attempt 是可由事件完整重建的查询快照。
+- `graph-frontier.dispatchPlan` 自动计算完整安全 Task 集合、稳定顺序和目标 Agent 数；执行平台只能立即启动或按原顺序排队，不能挑选子集。
 - 项目级 `.layered-delivery/governance.sqlite3` 是唯一机器权威，Markdown 只是可重建的人类投影。
 - 同一冻结目标和验收契约内的修正必须回到原 Task，不得为修复同一需求创建第二个根。
 - Agent 不自动提交、推送、合并、迁移、发布或改变外部状态；这些动作需要单独明确授权。
 
 ## 人工参与边界
 
-人在正常流程中只参与三个环节：
+人在正常流程中只参与前后两个阶段：
 
-1. 查看根级 `development-plan.md`，确认需求、完整开发方案和开发方式；
-2. 选择一次 `active` 或 `manual` 并明确同意当前方案；
-3. 根工作项门禁、独立审查和交付完成后，进行最终验收与确认。
+1. 前段查看根级 `development-plan.md`，讨论需求和完整开发方案，选择一次 `active` 或 `manual` 并明确确认冻结；
+2. 末段在根工作项门禁、独立审查和交付完成后，进行最终验收与确认。
 
-人工不需要知道、复制或复述层级指纹，也不逐 Task 批准、交接或回复启动。冻结后的 READY 计算、认领、并发或串行、回归、修复、复测和可恢复重试由执行宿主负责。
+人工不需要知道、复制或复述层级指纹，也不逐 Task 批准、交接或回复启动。冻结后的 READY、目标 Agent 数、自动派发、工程门禁、失败分类、回归、修复、复测和恢复由 Graph 管理。执行平台只提供 Agent/队列容量，不拥有任务选择或失败路由决策权。
 
 ## 层级选择
 
@@ -56,7 +56,7 @@ flowchart TD
     I -->|"主动 / Active"| J["当前会话接管 / Current Session"]
     I -->|"手动交接 / Manual"| K["生成交接命令 / Create Handoff"]
     K --> L["新会话接管 / New Session"]
-    J --> M["推进图前沿 / Advance Graph Frontier"]
+    J --> M["Graph 自动计算 Agent 调度 / Automatic Agent Dispatch"]
     L --> M
     X --> M
     M --> N["实现与验证 / Implement & Verify"]
@@ -80,7 +80,7 @@ flowchart TD
 prepare-hierarchy
 → 人工评审 development-plan.md + execution-graph.md + state-transition-graph.md 并选择 active/manual
 → freeze-hierarchy
-→ graph-frontier / dispatch-task
+→ graph-frontier / 读取 dispatchPlan / 自动 dispatch-task
 → task-result / development-review.md
 → 必要时 remediate-task 回到原 Task
 → accept-item / acceptance-report.md
@@ -119,7 +119,7 @@ python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --e
 
 ### active
 
-当前会话冻结后立即成为整树执行宿主。它根据依赖、写入冲突和可用能力决定使用隔离子 Agent、单 Agent 或当前 Agent 串行；能力不足时自动降级，不重新询问开发方式。
+当前会话冻结后立即启动 Graph 执行循环。Graph 根据依赖、写入冲突和活动 claim 生成 `dispatchPlan`，自动决定完整 Task 顺序与目标 Agent 数。执行平台按计划启动隔离子 Agent；容量不足时稳定排队或由当前 Agent 串行消费，不重新询问开发方式。
 
 ### manual
 
@@ -135,11 +135,11 @@ python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --e
 继续执行治理需求 <root-id>。使用 layered-delivery Skill 从当前项目的治理数据库恢复已冻结方案，接管整棵需求树并自动完成开发、测试和门禁；不要重新准备或冻结需求，也不要逐 Task 请求人工启动。
 ```
 
-新会话收到一次交接后成为整树执行宿主。它仍按依赖即时计算 READY 并逐 Task `dispatch-task`，但不再要求人工逐项启动。
+新会话收到一次交接后成为整树 Graph 执行入口。它读取控制器自动计算的 READY 与 `dispatchPlan`，按完整顺序逐 Task `dispatch-task`，不要求人工逐项启动，也不自行挑选 Task。
 
 ## 开发、写回与门禁
 
-执行宿主从 graph frontier 调度依赖已验证、路径不冲突且实际可访问的 READY Task。每个 Task 使用独立的 owner、operationId、attempt、上下文、授权文件、结果和门禁证据：
+Graph 执行循环从 frontier 自动调度依赖已验证、路径不冲突且实际可访问的 READY Task。每个 Task 使用独立的 owner、operationId、attempt、上下文、授权文件、结果和门禁证据：
 
 ```text
 dispatch-task
@@ -163,7 +163,7 @@ dispatch-task
 
 ### 同一 Task 的验证修正
 
-若回归、门禁、独立审查或最终验收发现冻结方案漏列了完成原验收项所需的精确文件，并且目标、需求、验收、接口行为、数据契约、拓扑和外部授权都未改变，执行宿主使用 `remediate-task --evidence -` 在原 Task 追加授权。
+若回归、门禁、独立审查或最终验收发现冻结方案漏列了完成原验收项所需的精确文件，并且目标、需求、验收、接口行为、数据契约、拓扑和外部授权都未改变，Graph 执行循环按 `REMEDIATION_REQUIRED` 路由使用 `remediate-task --evidence -` 在原 Task 追加授权。
 
 控制器保持原 baseline、层级指纹、图指纹和 `development-plan.md` 不变，记录修正原因、关联验收项和补充文件，并从该 Task execution 沿显式图边失效必要后继与聚合 gate，再创建新的 node attempt。只有契约或授权事实确实变化时才回到人工评审；不得通过重新 `prepare-hierarchy` 创建重复需求根。
 
@@ -193,7 +193,7 @@ dispatch-task
         ├── development-plan.md        # 整树冻结评审入口
         ├── execution-graph.md         # 执行图 + 治理图双语投影
         ├── state-transition-graph.md  # 开发流程 + 运行时 FSM + 路由契约
-        ├── frontier.md                # 关键路径、迁移、预算、建议动作与阻断看板
+        ├── frontier.md                # 自动 Agent 计划、关键路径、迁移、预算、建议动作与阻断看板
         ├── run-timeline.md            # attempt、迁移、失败分类、租约与事件链
         ├── progress.md                # 整树总进度
         ├── node-progress.md           # 根节点自身进度
@@ -295,7 +295,7 @@ python -X utf8 <skill-root>/scripts/hdg.py --help
 | `freeze-hierarchy` | 用一次人工确认冻结整棵树并记录 active/manual |
 | `ready-tasks` | 动态计算根或子树中当前可调度 Task |
 | `graph-status` | 查询完整图、节点状态、attempt 和 graph run |
-| `graph-frontier` | 查询当前允许动作与结构化阻断原因 |
+| `graph-frontier` | 查询当前允许动作、自动 Agent 调度计划与结构化阻断原因 |
 | `graph-events` | 查询带前序哈希校验的运行事件链 |
 | `graph-replay` | 从完整事件链重算运行状态并检查快照一致性 |
 | `rebuild-graph-run` | 经显式确认后按事件回放重建 graph/node run 查询快照 |

@@ -884,6 +884,18 @@ def build_graph_frontier(
             "requestedItemId": requested["id"],
             "runId": None,
             "graphFingerprint": stored["graphFingerprint"],
+            "dispatchPlan": {
+                "authority": "GRAPH_CONTROLLER",
+                "strategy": "AUTO_DISPATCH_ALL_SAFE",
+                "parallelGroup": None,
+                "dispatchTaskIds": [],
+                "desiredNewAgentCount": 0,
+                "activeAgentCount": 0,
+                "desiredTotalAgentCount": 0,
+                "hostSelectionAllowed": False,
+                "capacityPolicy": "QUEUE_REMAINDER_STABLE",
+                "recalculateAfterEveryTransition": True,
+            },
             "actions": [],
             "blocked": [{
                 "nodeId": None,
@@ -964,6 +976,8 @@ def build_graph_frontier(
                 "workItemId": state["workItemId"],
                 "attempt": state["attempt"],
                 "parallelGroup": f"frontier-{run['recordRevision']}",
+                "autoDispatch": True,
+                "dispatchOrdinal": len(selected_scopes),
                 "readyBecause": state["readyBecause"] + ["scope-available"],
                 "critical": state["id"] in critical_nodes,
                 "commandHint": f"dispatch-task --item {state['workItemId']} --owner <owner> --operation <id>",
@@ -1075,19 +1089,43 @@ def build_graph_frontier(
                 "recommendedAction": recommended,
                 "lastTransition": state.get("lastTransition"),
             })
+    dispatch_actions = [
+        action for action in actions if action["action"] == "DISPATCH_TASK"
+    ]
+    active_agent_count = sum(
+        state["status"] == "CLAIMED" and state["kind"] == "TASK_EXECUTION"
+        for state in requested_states
+    )
+    desired_new_agent_count = len(dispatch_actions)
     return {
         "schemaVersion": SCHEMA_VERSION,
         "rootId": graph["rootId"],
         "requestedItemId": requested["id"],
         "runId": run["runId"],
         "graphFingerprint": stored["graphFingerprint"],
+        "dispatchPlan": {
+            "authority": "GRAPH_CONTROLLER",
+            "strategy": "AUTO_DISPATCH_ALL_SAFE",
+            "parallelGroup": (
+                dispatch_actions[0]["parallelGroup"] if dispatch_actions else None
+            ),
+            "dispatchTaskIds": [
+                action["workItemId"] for action in dispatch_actions
+            ],
+            "desiredNewAgentCount": desired_new_agent_count,
+            "activeAgentCount": active_agent_count,
+            "desiredTotalAgentCount": active_agent_count + desired_new_agent_count,
+            "hostSelectionAllowed": False,
+            "capacityPolicy": "QUEUE_REMAINDER_STABLE",
+            "recalculateAfterEveryTransition": True,
+        },
         "actions": actions,
         "blocked": blocked,
         "criticalPath": path,
         "summary": {
             "actionable": len(actions),
             "blocked": len(blocked),
-            "claimed": sum(state["status"] == "CLAIMED" for state in requested_states),
+            "claimed": active_agent_count,
         },
     }
 

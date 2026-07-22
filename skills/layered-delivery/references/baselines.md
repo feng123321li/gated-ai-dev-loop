@@ -55,7 +55,7 @@
 - Task：`BASELINE_FROZEN / FROZEN`；
 - `developmentPlan` 进入 Task 独立上下文；
 - 根级开发方式只记录在 SQLite，同一次冻结确认中的 active/manual 由全部 Task 继承；
-- active 的 Agent 数量、并发度、调度顺序和降级路径由运行时自主决定，不进入冻结方案或指纹；
+- active 的 Agent 数量、并发度、调度顺序和降级路径由 Graph frontier 的 `dispatchPlan` 自动计算；执行适配器只负责启动或稳定排队，不拥有任务选择权。这些瞬时计划不进入冻结方案或指纹；
 - 每次生成上下文、claim 和 gate 前重新校验整条父链。
 
 子 baseline 仍绑定父级稳定契约与自己的 child contract。无关兄弟不会进入该 child-specific 指纹，但整树层级指纹会绑定本次统一评审包含的全部节点。

@@ -133,9 +133,14 @@ def render_state_transition_graph(
         "",
         "```mermaid",
         "flowchart TD",
-        '    A["需求冻结 / Requirement Frozen"] --> B["前沿计算 / Frontier Calculation"]',
-        '    B --> C1["任务 A / Task A"]',
-        '    B --> C2["任务 B / Task B"]',
+        '    A["需求冻结 / Requirement Frozen"] --> B["自动前沿计算 / Automatic Frontier Calculation"]',
+        '    B --> C{"安全 READY Task / Safe READY Tasks"}',
+        '    C --> S["Graph 计算 Agent 数与顺序 / Graph Calculates Agent Count & Order"]',
+        '    S --> C1["自动派发任务 A / Auto-dispatch Task A"]',
+        '    S --> C2["自动派发任务 B / Auto-dispatch Task B"]',
+        '    S -. "容量不足则稳定排队 / Queue When Capacity Is Limited" .-> Q["执行队列 / Execution Queue"]',
+        '    Q --> C1',
+        '    Q --> C2',
         '    C1 --> D["结果汇合 / Result Join"]',
         '    C2 --> D',
         '    C1 -. "执行失败 / Failure" .-> F["失败分类 / Failure Classification"]',
@@ -256,6 +261,7 @@ def render_frontier_dashboard(
 ) -> str:
     run = graph_status.get("run")
     critical = frontier["criticalPath"]
+    dispatch = frontier["dispatchPlan"]
     by_id = {node["id"]: node for node in graph_status["nodes"]}
     lines = [
         "# 图前沿 / Graph Frontier",
@@ -270,6 +276,34 @@ def render_frontier_dashboard(
         "",
         "> 本文件由事件回放和治理数据库重建，仅供阅读；机器权威是图事件链。",
         "",
+        "## 自动 Agent 调度计划 / Automatic Agent Dispatch Plan",
+        "",
+        f"- 决策权威 / Authority: `{dispatch['authority']}`",
+        f"- 调度策略 / Strategy: `{dispatch['strategy']}`",
+        f"- 新增 Agent 目标数 / Desired new agents: **{dispatch['desiredNewAgentCount']}**",
+        f"- 活动 Agent 数 / Active agents: **{dispatch['activeAgentCount']}**",
+        f"- 总 Agent 目标数 / Desired total agents: **{dispatch['desiredTotalAgentCount']}**",
+        f"- 并行组 / Parallel group: `{dispatch['parallelGroup'] or '-'}`",
+        f"- 容量策略 / Capacity policy: `{dispatch['capacityPolicy']}`",
+        "- 宿主可挑选子集 / Host may select subset: "
+        f"`{'YES' if dispatch['hostSelectionAllowed'] else 'NO'}`",
+        "",
+        "> Graph 已确定全部本轮安全任务及稳定顺序。执行端必须消费完整队列；容量不足只会让余项排队，不能由宿主改选任务。",
+        "",
+        "```mermaid",
+        "flowchart LR",
+        '    G["Graph 前沿计算 / Graph Frontier"] --> P["自动调度计划 / Automatic Dispatch Plan"]',
+    ]
+    task_ids = dispatch["dispatchTaskIds"]
+    if task_ids:
+        for index, task_id in enumerate(task_ids, start=1):
+            lines.append(f'    P --> T{index}["{index}. {task_id}"]')
+        lines.append('    P -. "容量不足 / Limited Capacity" .-> Q["稳定排队 / Stable Queue"]')
+    else:
+        lines.append('    P --> N["无待派发 Task / No Task to Dispatch"]')
+    lines.extend([
+        "```",
+        "",
         "## 关键路径 / Critical Path",
         "",
         f"- 剩余节点 / Remaining nodes: **{critical['remainingNodes']}**",
@@ -277,7 +311,7 @@ def render_frontier_dashboard(
         f"- 路径阻断 / Path blocked: `{'YES' if critical['blocked'] else 'NO'}`",
         f"- 路径暂停 / Path paused: `{'YES' if critical.get('paused') else 'NO'}`",
         "",
-    ]
+    ])
     if critical["nodeIds"]:
         lines.extend(["```mermaid", "flowchart LR"])
         for index, node_id in enumerate(critical["nodeIds"]):

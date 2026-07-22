@@ -456,8 +456,8 @@ def _frozen_human_artifacts(root_id: str, handoff: str | None) -> dict[str, str 
 
 def _frozen_next_action(development_mode: str) -> str:
     if development_mode == "active":
-        return "Agent 自主循环实现、回归测试和复测；可安全并发时使用隔离子 Agent，否则自动串行。"
-    return "把 handoffCommand 一次复制到新会话；接收会话自行推进整棵需求树，无需人工逐 Task 启动。"
+        return "查询 graph-frontier 并完整消费 Graph 自动计算的 Agent 调度计划；容量不足时按原顺序排队。"
+    return "把 handoffCommand 一次复制到新会话；接收会话按 Graph 自动调度计划推进整棵需求树，无需人工逐 Task 启动。"
 
 
 def freeze_hierarchy(

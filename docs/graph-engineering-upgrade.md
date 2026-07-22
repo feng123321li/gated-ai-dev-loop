@@ -1,6 +1,6 @@
 # Layered Delivery Graph Engineering 升级设计与实施说明
 
-> 状态：已确认并完整实施（2026-07-21），包括契约 DAG、运行时 FSM、失败 Router、claim 租约、自动恢复、暂停/取消、关键路径、frontier 看板、图坐标证据绑定与事件回放恢复
+> 状态：已确认并完整实施（2026-07-22），包括契约 DAG、运行时 FSM、失败 Router、Graph 自动 Agent 调度、claim 租约、自动恢复、暂停/取消、关键路径、frontier 看板、图坐标证据绑定与事件回放恢复
 >
 > 目标版本：继续使用当前完整 schema v3
 >
@@ -26,13 +26,13 @@
 - 当前“实现 → 测试 → 修复 → 复测”循环继续作为 Task 节点内部执行机制；
 - 控制器把层级和依赖编译成执行图，把 baseline、门禁、审查、确认和修正回流编译成治理图；
 - SQLite 持久化图定义、图运行、节点尝试和事件；
-- 宿主不再只查询 READY Task，而是查询整个执行图的当前 frontier，并按结构化动作推进；
+- Graph 不再只给出 READY Task，而是通过 frontier 的 `dispatchPlan` 自动计算完整安全 Task、稳定顺序和目标 Agent 数，再按结构化动作推进；
 - 冻结依赖保持 DAG，运行时循环由 FSM 和 Router Policy 表达；可重试失败与失联执行在预算内自动恢复，耗尽后机械阻断；
 - 用户不需要手写节点和边，也不需要逐 Task 指挥 Agent。
 
 项目名称继续使用 `layered-delivery`。Graph engineering 是内部架构升级，不建议再次更名。
 
-## 2. 当前系统已经具备什么
+## 2. 升级前系统已经具备什么
 
 当前系统不是纯粹的单 Agent Loop，已经包含一部分图能力：
 
@@ -464,7 +464,7 @@ flowchart TD
 
 ## 8. Frontier Scheduler
 
-当前 `ready-tasks` 只回答“哪些 Task 可以开始”。升级后的 scheduler 应回答：
+`ready-tasks` 只回答“哪些 Task 可以开始”。升级后的 scheduler 由 `graph-frontier` 与 `dispatchPlan` 回答：
 
 - 当前有哪些可执行动作；
 - 每个动作为什么 READY；
@@ -487,6 +487,17 @@ graph-events --item <root-id>
   "rootId": "c-user-export",
   "runId": "run-c-user-export-001",
   "graphFingerprint": "sha256:...",
+  "dispatchPlan": {
+    "authority": "GRAPH_CONTROLLER",
+    "strategy": "AUTO_DISPATCH_ALL_SAFE",
+    "dispatchTaskIds": ["t-export-backend"],
+    "desiredNewAgentCount": 1,
+    "activeAgentCount": 0,
+    "desiredTotalAgentCount": 1,
+    "hostSelectionAllowed": false,
+    "capacityPolicy": "QUEUE_REMAINDER_STABLE",
+    "recalculateAfterEveryTransition": true
+  },
   "actions": [
     {
       "nodeId": "task:t-export-backend:execute",
@@ -507,9 +518,9 @@ graph-events --item <root-id>
 
 Frontier 动作至少包括：
 
-| action | 宿主动作 |
+| action | Graph 执行循环动作 |
 |---|---|
-| `DISPATCH_TASK` | 调用 `dispatch-task`，再启动隔离 Agent 或由当前 Agent 执行 |
+| `DISPATCH_TASK` | 按 `dispatchPlan` 完整顺序调用 `dispatch-task`，再启动隔离 Agent 或稳定排队 |
 | `RUN_GATE` | 形成对应层级 gate evidence 并调用 `accept-item` |
 | `RETRY_NODE` | 校验当前 baseline/attempt 后调用 `retry-item` |
 | `REQUEST_REVIEW` | 启动全新只读审查或准备人工审查包 |
@@ -525,7 +536,7 @@ Frontier 动作至少包括：
 5. 更新工作项汇总状态；
 6. 重建投影。
 
-宿主不直接修改 graph/node 状态。
+执行平台不直接修改 graph/node 状态，也不能挑选 `dispatchPlan` 的子集。
 
 ## 9. 升级后的使用方式
 
@@ -536,7 +547,7 @@ Frontier 动作至少包括：
 1. 提出软件需求；
 2. 查看根级 `development-plan.md`，其中新增执行图、并行波次、关键汇聚点和门禁路径；
 3. 选择 active/manual 并一次确认冻结；
-4. Agent 根据 graph frontier 自动推进；
+4. Graph 根据 frontier 自动计算 Agent 数、完整 Task 顺序，并管理开发、门禁和失败恢复；
 5. 根 gate 和独立审查完成后，用户最终确认。
 
 用户不需要：
@@ -546,6 +557,8 @@ Frontier 动作至少包括：
 - 逐 Task 回复“开始”；
 - 手动把一个 Agent 的输出搬给另一个 Agent；
 - 判断哪个父级 gate 现在可以运行。
+
+这形成明确的前—中—后职责边界：用户/需求宿主负责前段方案讨论确认和末段最终验收，Graph 负责冻结后的中间工程过程；执行平台只提供 Agent 与队列容量。
 
 ### 9.2 准备与冻结
 
@@ -576,18 +589,20 @@ prepare-hierarchy
 
 ### 9.3 active 模式
 
-执行宿主循环：
+Graph 执行循环：
 
 ```text
 graph-frontier
-→ 执行本轮 DISPATCH_TASK / RUN_GATE 动作
+→ 读取 dispatchPlan 的完整 Task 顺序与目标 Agent 数
+→ 自动执行本轮 DISPATCH_TASK / RUN_GATE 动作
+→ 容量不足的 Task 按原顺序排队
 → 写回 task-result / accept-item
 → 控制器自动 advance_graph
 → 再次读取 graph-frontier
 → 直到 REQUEST_REVIEW、REQUEST_USER_CONFIRMATION 或真实 BLOCKED
 ```
 
-宿主有多个隔离 Agent 时，可以执行同一 `parallelGroup` 中范围互斥的 Task；否则自动串行。并发能力变化不改变 graph fingerprint。
+Graph 会消费同一 `parallelGroup` 中全部范围互斥 Task。执行平台有容量时立即启动相应隔离 Agent；容量不足时稳定排队；完全没有子 Agent 能力时由当前 Agent 串行消费。平台不能改变任务选择或顺序，并发能力变化也不改变 graph fingerprint。
 
 ### 9.4 manual 模式
 
@@ -607,7 +622,7 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 .layered-delivery/work-items/<root-id>/
 ├── execution-graph.md     # 冻结执行图与治理图
 ├── state-transition-graph.md # 双语开发流程、FSM 与路由策略
-├── frontier.md            # 双语关键路径、迁移、预算、允许动作和阻断看板
+├── frontier.md            # 双语自动 Agent 计划、关键路径、迁移、预算、允许动作和阻断看板
 ├── run-timeline.md        # attempt、租约、失败分类与事件时间线
 └── progress.md            # 继续保留整树交付进度
 ```
@@ -714,11 +729,12 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 - 已完成需求不可原地重开；
 - graph run 与现有 acceptance report 完全一致。
 
-### 阶段四：宿主协议与可观测性（已完成）
+### 阶段四：Graph 执行协议与可观测性（已完成）
 
 交付：
 
 - 统一 frontier action 协议；
+- `dispatchPlan` 自动计算完整 Task 队列、目标 Agent 数和容量回退；
 - active/manual handoff 使用同一 graph run；
 - 当前 frontier、并行组、关键路径、下一个汇聚点和阻断原因查询；
 - 双语 `frontier.md` Markdown 看板；
@@ -730,7 +746,7 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 验收条件：
 
 - active 和 manual 只在交接位置不同，后续运行语义一致；
-- 宿主不需要从自然语言推断下一条控制器命令；
+- 执行适配器不需要从自然语言推断下一条控制器命令，也不能挑选 Task 子集；
 - 无子 Agent 时自动串行不改变图；
 - 任意节点失败后可以从 SQLite 准确恢复下一动作。
 - 任意快照偏差都会被回放校验阻断，并可从有效事件链确定性重建。
@@ -772,7 +788,7 @@ c-graph-experience
 |---|---|---|
 | 下一步是什么 | 宿主组合 READY、状态和 Skill 说明判断 | `graph-frontier` 返回结构化动作 |
 | 为什么不能执行 | 通常需要检查依赖、claim 和范围 | 节点直接展示 `blockedBy` 和原因 |
-| 并行 | READY Task 列表 + 宿主决策 | 显式 parallelGroup + 范围再校验 |
+| 并行 | READY Task 列表 + 宿主决策 | `dispatchPlan` 自动计算 Agent 数、完整顺序、parallelGroup 与范围互斥 |
 | 父级 gate | 验收模块中的固定判断 | 显式 ALL_OF join 和 gate node |
 | 独立审查 | 根 acceptance 状态 | 显式 ROOT_REVIEW 节点 |
 | 用户确认 | 单独 acceptance action | 显式 USER_CONFIRMATION 终点 |
@@ -798,7 +814,7 @@ c-graph-experience
 
 ### 风险四：自动重试造成双写
 
-控制：heartbeat 超时只产生风险告警，不自动重新派遣。只有确认旧 claim 已释放，才能创建下一 attempt。
+控制：claim 租约过期由 `advance-graph` 确定性写入 `CLAIM_LEASE_EXPIRED`，释放旧 claim，归类为 `WORKER_LOST`，再在尝试预算内创建下一 attempt；operationId 不得复用。
 
 ### 风险五：事件和投影导致 SQLite 写事务过重
 
@@ -862,8 +878,8 @@ Graph engineering 升级完成必须同时满足：
 ### 17.2 生成文件变化
 
 - `development-plan.md` 新增 `运行时策略 / Runtime Policy`，评审者在冻结前即可看到最大尝试次数、自动恢复类别和 claim 租约；
-- `state-transition-graph.md` 是新增的同源投影，包含 `开发执行流程 / Development Execution Flow`、节点 FSM 和完整迁移表；
-- `frontier.md` 新增 transition、route condition、attempt budget、failure class、remaining attempts、last transition 和 recommended action；
+- `state-transition-graph.md` 是新增的同源投影，包含 Graph 自动计算 Agent 数、容量排队的开发流程、节点 FSM 和完整迁移表；
+- `frontier.md` 新增自动 Agent 调度计划与流程图，以及 transition、route condition、attempt budget、failure class、remaining attempts、last transition 和 recommended action；
 - `run-timeline.md` 新增 lease、failure class、last transition 和路由条件；
 - `execution-graph.md` 继续只表达冻结执行/治理合同，避免与运行时循环混为一图。
 
@@ -873,7 +889,7 @@ Graph engineering 升级完成必须同时满足：
 prepare-hierarchy
 → 评审 development-plan.md + execution-graph.md + state-transition-graph.md
 → freeze-hierarchy
-→ graph-frontier / dispatch-task
+→ graph-frontier / 读取 dispatchPlan / 自动 dispatch-task
 → heartbeat-task（长任务）
 → task-result（BLOCKED 时必须分类）
 → advance-graph（周期性处理可机械恢复条件）

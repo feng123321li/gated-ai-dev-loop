@@ -2,7 +2,7 @@
 
 ## Task gate
 
-Task 只有在状态为 IMPLEMENTED 时可运行 gate。`task-result` 写回后，控制器把结构化结果保存到 SQLite，并立即生成状态为“等待门禁”的 `development-review.md`，用于复核冻结计划与实际开发结果；此时尚未生成验收报告，宿主不能在此状态结束工作。正常 gate 使用 `accept-item`，并在门禁执行后生成 `acceptance-report.md`。控制器验证：
+Task 只有在状态为 IMPLEMENTED 时可运行 gate。`task-result` 写回后，控制器把结构化结果保存到 SQLite，并立即生成状态为“等待门禁”的 `development-review.md`，用于复核冻结计划与实际开发结果；此时尚未生成验收报告，Graph 执行循环不能在此状态结束工作。正常 gate 使用 `accept-item`，并在门禁执行后生成 `acceptance-report.md`。控制器验证：
 
 - baseline 与实际存在的父链指纹；根 Task 无父链；
 - 真实 diff 归属和 Scope；

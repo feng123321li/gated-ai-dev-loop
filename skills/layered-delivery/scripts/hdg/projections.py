@@ -125,10 +125,10 @@ def next_action(
     ):
         root = _requirement_root(entry, by_id)
         if entry["id"] == root["id"]:
-            return "使用 requirement-handoff.md 一次性交接整棵需求树；接收会话按依赖推进，无需人工逐 Task 启动。"
-        return "由根级需求交接会话按依赖调度；无需人工逐 Task 启动。"
+            return "使用 requirement-handoff.md 一次性交接整棵需求树；接收会话按 Graph 自动调度计划推进，无需人工逐 Task 启动。"
+        return "由根级需求交接会话消费 Graph 自动调度计划；无需人工逐 Task 启动。"
     if entry["status"] == "FROZEN" and entry["kind"] == "TASK":
-        return "Agent 按依赖自主调度，循环实现、回归测试和复测。"
+        return "Graph 自动计算 Agent 调度计划，执行循环按计划实现、回归测试和复测。"
     if entry["status"] == "FROZEN":
         return "等待当前树中的子级完成后运行聚合门禁。"
     if entry["status"] == "CLAIMED":
@@ -392,10 +392,10 @@ def render_requirement_handoff(
         "## 接收会话执行规则",
         "",
         "1. 在项目根目录使用当前 `layered-delivery` Skill，先读取 SQLite 治理状态、完整冻结方案和实时进度；不要重新准备或重新冻结需求。",
-        f"2. 以根工作项 `{root['id']}` 调用 `ready-tasks`，按依赖动态计算 READY Task；一次交接不等于一次认领全部 Task。",
-        "3. 对本轮 READY Task 分别生成唯一 operationId，并在实际开工前调用 `dispatch-task`。可安全并行时使用隔离子 Agent；不可并行时自动串行。",
+        f"2. 以根工作项 `{root['id']}` 调用 `graph-frontier`，读取 `dispatchPlan` 自动计算的完整安全 Task 顺序、并行组和目标 Agent 数；不得自行挑选 Task 子集。",
+        "3. 对 `dispatchPlan.dispatchTaskIds` 中的 Task 按顺序生成唯一 operationId，并调用 `dispatch-task`。平台有容量时启动隔离子 Agent，容量不足时按原顺序排队，无子 Agent 时由当前 Agent 串行消费。",
         "4. 每个 Task 严格使用自己的 context、scope、结果和证据，循环实现、回归测试、修复和复测；写回 `IMPLEMENTED` 或 `BLOCKED` 后完成该 Task 门禁。",
-        "5. 每次状态写回后重新计算 READY Task，自动推进后续波次；全部子级 VERIFIED 后运行 Capability/Delivery 聚合门禁。",
+        "5. 每次状态写回后重新查询 frontier，由 Graph 重算目标 Agent 数与后续波次；全部子级 VERIFIED 后运行 Capability/Delivery 聚合门禁。",
         "6. 不要要求用户逐 Task 回复启动，也不要在正常 Task 切换、并发降级或自动重试时请求人工确认。",
         "7. 只有冻结目标、范围、接口、授权必须改变或出现无法自动消除的真实阻断时才返回用户；根门禁通过后提交最终交付，由用户人工验收。",
         "8. 不修改 SQLite、baseline、治理投影或 `.git/**`；未获得单独授权时不提交、推送、合并、发布或改变外部状态。",
@@ -408,7 +408,7 @@ def render_requirement_handoff_command(root_id: str) -> str:
     """Render the short prompt that a user can paste directly into a new session."""
     return (
         f"继续执行治理需求 {root_id}。使用 layered-delivery Skill "
-        "从当前项目的治理数据库恢复已冻结方案，接管整棵需求树并自动完成开发、测试和门禁；"
+        "从当前项目的治理数据库恢复已冻结方案，按 Graph 自动调度计划接管整棵需求树并完成开发、测试和门禁；"
         "不要重新准备或冻结需求，也不要逐 Task 请求人工启动。"
     )
 

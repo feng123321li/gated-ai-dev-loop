@@ -7,6 +7,14 @@
 - 运行事实权威：绑定图指纹、前后哈希相连的图事件链。graph run 和 node run 只是可通过事件回放重建的查询快照。
 - 人类可读投影：`execution-graph.md`、`state-transition-graph.md`、`frontier.md` 和 `run-timeline.md`。不得从这些 Markdown 文件反向推断机器状态。
 
+## 职责边界
+
+- 前段由用户/需求宿主讨论需求、评审方案并明确确认冻结；
+- 中段由 Graph 管理依赖、READY、目标 Agent 数、自动派发、工程门禁、失败分类、重试、回退和恢复；
+- 末段由 Graph 提交已经过工程门禁与独立审查的结果，用户/需求宿主做最终验收确认。
+
+执行适配器只把 Graph 动作映射到实际 Agent、进程或队列。它可以报告容量，但不能挑选任务子集、改写顺序、跳过动作或自行决定失败路线。
+
 用户不直接定义任意图节点或边。`prepare-hierarchy` 将通过校验的层级结构编译成一张图，并提供两种有类型的视图：
 
 - 执行图：包含 Task 执行、Task/Capability/Delivery 门禁、依赖、成功边和汇聚关系。
@@ -31,7 +39,7 @@ Graph Engineering 不等于只有 DAG。控制器将以下职责分开处理：
 - 不增加或删除图节点；
 - 不改写依赖边或汇聚边；
 - 不跳过门禁、审查或确认节点；
-- 运行时可以选择 Agent 数量、并行度和 owner；
+- Graph 运行时自动计算目标 Agent 数、并行组和派发顺序；执行适配器只分配 owner/operationId 并消费完整计划；
 - 重试和同合同修正只能创建新 attempt，不能创建新的图定义。
 
 ## 图前沿
@@ -42,22 +50,36 @@ Graph Engineering 不等于只有 DAG。控制器将以下职责分开处理：
 python -X utf8 <skill-root>/scripts/hdg.py graph-frontier --item <root-or-subtree-id> --json
 ```
 
+返回值中的 `dispatchPlan` 是自动 Agent 调度合同：
+
+| 字段 | 含义 |
+|---|---|
+| `authority` | 固定为 `GRAPH_CONTROLLER`，表示调度选择由控制器作出 |
+| `strategy` | `AUTO_DISPATCH_ALL_SAFE`，消费全部本轮安全 Task |
+| `dispatchTaskIds` | Graph 确定的完整稳定顺序，不是供宿主挑选的候选列表 |
+| `desiredNewAgentCount` | 本轮需要新启动的 Agent 目标数 |
+| `activeAgentCount` | 当前子树中已认领 Task 的 Agent 数 |
+| `desiredTotalAgentCount` | 当前 Graph 运行的 Agent 总目标数 |
+| `hostSelectionAllowed` | 固定为 `false` |
+| `capacityPolicy` | `QUEUE_REMAINDER_STABLE`；容量不足时保持原顺序排队 |
+| `recalculateAfterEveryTransition` | 每次状态迁移后重新计算 |
+
 可能返回的动作：
 
-| 动作 | 宿主应执行的操作 |
+| 动作 | Graph 执行循环应执行的操作 |
 |---|---|
-| `DISPATCH_TASK` | 使用唯一的 owner 和 operationId 派发该 Task |
+| `DISPATCH_TASK` | Graph 执行循环按 `dispatchPlan` 顺序，使用唯一 owner 和 operationId 自动派发该 Task |
 | `RUN_GATE` | 为当前工作项构建并提交门禁证据 |
 | `REQUEST_REVIEW` | 执行隔离的独立审查，或取得被接受的人工审查结果 |
 | `REQUEST_USER_CONFIRMATION` | 向用户提交最终结果并取得独立的最终确认 |
 | `HEARTBEAT_TASK` | 在当前 operation 的租约到期前续租 |
 | `RESUME_TASK` | 恢复被显式暂停的 Task attempt |
 
-`ready-tasks` 只返回当前 `DISPATCH_TASK` 动作中的 `workItemId`。宿主不得另行实现第二套就绪判断逻辑。
+`ready-tasks` 只返回当前 `DISPATCH_TASK` 动作中的 `workItemId`，用于兼容性只读查看。执行适配器不得另行实现第二套就绪判断或从中人工挑选；实际执行以完整 `dispatchPlan` 为准。
 
 `blocked` 解释节点当前不可执行的原因，包括前置节点未完成、文件范围冲突、只读隔离或需求尚未冻结。应解决已记录的条件后重新查询 frontier，不能绕过它自行选择路径。
 
-frontier 还会返回 `criticalPath`，其中包括最长剩余路径、下一个汇聚点，以及路径是否被阻断或暂停。可执行动作会携带迁移、路由条件、尝试预算、租约和命令提示；阻断项会携带失败分类、剩余尝试次数、是否耗尽、最近迁移和建议动作。控制器将相同信息渲染到双语 `frontier.md` 看板。
+frontier 还会返回 `criticalPath`，其中包括最长剩余路径、下一个汇聚点，以及路径是否被阻断或暂停。可执行动作会携带迁移、路由条件、尝试预算、租约和命令提示；`DISPATCH_TASK` 额外携带自动派发标记和顺序。阻断项会携带失败分类、剩余尝试次数、是否耗尽、最近迁移和建议动作。控制器将自动 Agent 计划、相同信息和调度流程图渲染到双语 `frontier.md` 看板。
 
 ## 认领、心跳与自动推进
 
@@ -94,7 +116,7 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-replay --item <root-or-subtree-
 
 `graph-events` 返回按顺序排列、绑定图指纹且带前序哈希的事件链。正常生命周期事件包括图启动、Task 认领/心跳/结果、租约过期、暂停/恢复、门禁结果、重试/耗尽、审查、最终确认、同合同修正失效传播和取消。
 
-对于由 artifact 驱动的事件，控制器会保存一份 bound evidence，其中包含原始 artifact，以及对 `runId`、`nodeId`、`attempt`、`graphFingerprint` 和 artifact 哈希的绑定；绑定整体还会计算独立的规范 SHA-256。宿主只提交原始 artifact，不得自行构造绑定字段，也不得将 bound artifact 复用到其他图坐标。
+对于由 artifact 驱动的事件，控制器会保存一份 bound evidence，其中包含原始 artifact，以及对 `runId`、`nodeId`、`attempt`、`graphFingerprint` 和 artifact 哈希的绑定；绑定整体还会计算独立的规范 SHA-256。Graph 执行循环只提交原始 artifact，不得自行构造绑定字段，也不得将 bound artifact 复用到其他图坐标。
 
 `graph-replay` 从 `GRAPH_RUN_STARTED` 开始应用完整事件流，重建每个 node attempt 和 graph 状态，计算 replay fingerprint，并报告事件回放结果与 graph/node run 快照之间的差异。出现差异时，正常状态和 frontier 查询必须阻断。
 
@@ -127,7 +149,7 @@ python -X utf8 <skill-root>/scripts/hdg.py rebuild-graph-run --item <root-id> --
 | `EXTERNAL_AUTHORITY` | 请求用户授予外部权限 |
 | `NON_RETRYABLE` | 请求人工干预 |
 
-当自动恢复类失败在第 3 次 attempt 仍未成功时，控制器写入 `RETRY_EXHAUSTED`，将节点标记为尝试耗尽，并阻断 graph run。`retry-item` 仍用于符合条件的门禁或人工恢复场景；普通的可重试 Task 失败不再要求宿主手动调用它。
+当自动恢复类失败在第 3 次 attempt 仍未成功时，控制器写入 `RETRY_EXHAUSTED`，将节点标记为尝试耗尽，并阻断 graph run。`retry-item` 仍用于符合条件的门禁或人工恢复场景；普通的可重试 Task 失败由 Graph 自动路由，不再要求执行平台手动调用它。
 
 新的 Task 派发不得复用失败 attempt 的 operationId。
 

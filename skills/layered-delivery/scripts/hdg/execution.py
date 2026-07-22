@@ -10,11 +10,12 @@ from .evidence import evidence_record, valid_task_result_artifact
 from .fs_safe import atomic_write
 from .graph_model import DEFAULT_CLAIM_LEASE_SECONDS, execution_node_id
 from .graph_runtime import (
+    build_graph_frontier,
     failure_routing_decision,
     get_graph_frontier,
     replay_graph_events,
 )
-from .model import scope_patterns_overlap, work_item_child_contract_fingerprint
+from .model import work_item_child_contract_fingerprint
 from .projections import render_task_handoff
 from .repository import GovernanceRepository, timestamp, timestamp_after
 
@@ -55,16 +56,6 @@ def _safe_operation_id(value: object, field: str) -> str:
     return value
 
 
-def _task_write_scope(
-    repository: GovernanceRepository,
-    definition: dict[str, Any],
-) -> list[str]:
-    scope = list(definition["scope"])
-    if definition["kind"] == "TASK":
-        scope.extend(item["path"] for item in repository.effective_task_file_changes(definition))
-    return sorted(set(scope))
-
-
 def _hierarchy_root_entry(registry: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
     current = entry
     visited: set[str] = set()
@@ -98,34 +89,27 @@ def _task_ready(
         graph_run,
         repository.read_graph_events(root_entry["id"]),
     )
-    node_state = next(
-        (
-            state
-            for state in replay["nodes"]
-            if state["nodeId"] == execution_node_id(entry["id"])
-        ),
-        None,
+    states = [
+        {
+            "id": node["nodeId"],
+            **{key: value for key, value in node.items() if key != "nodeId"},
+        }
+        for node in replay["nodes"]
+    ]
+    frontier = build_graph_frontier(
+        repository,
+        registry,
+        root_entry,
+        stored_graph,
+        graph_run,
+        states,
     )
-    if node_state is None or node_state["status"] != "READY":
-        return False
-    definition = repository.assert_current_lineage(registry, entry)[0]
-    for claimed in (item for item in registry["workItems"] if item.get("claim")):
-        claimed_definition = repository.read_package(registry, claimed)[0]
-        if scope_patterns_overlap(
-            _task_write_scope(repository, definition),
-            _task_write_scope(repository, claimed_definition),
-        ):
-            return False
-    return True
+    return entry["id"] in frontier["dispatchPlan"]["dispatchTaskIds"]
 
 
 def list_ready_tasks(*, root: str, work_item_id: str) -> list[str]:
     frontier = get_graph_frontier(root=root, work_item_id=work_item_id)
-    return sorted(
-        action["workItemId"]
-        for action in frontier["actions"]
-        if action["action"] == "DISPATCH_TASK"
-    )
+    return list(frontier["dispatchPlan"]["dispatchTaskIds"])
 
 
 def _append_task_graph_event(

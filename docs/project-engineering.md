@@ -57,7 +57,7 @@ flowchart LR
     L --> G["交付图 / Graph<br/>多节点协作与治理"]
 ```
 
-一张图可以包含多个 Agent 节点；每个 Agent 节点可以有自己的 Prompt、Context、Harness 和 Loop。门禁、汇聚和用户确认节点则不一定调用模型。
+一张图包含多个工作单元节点；多个 Agent 可以分别认领不同的 Task execution 节点，每个执行者都有自己的 Prompt、Context、Harness 和 Loop。Agent 是运行时 owner，不是永久合同节点；门禁、汇聚和用户确认节点不一定调用模型。
 
 ## 4. 分层交付模型
 
@@ -84,8 +84,9 @@ flowchart TD
     EG --> F
     GG --> F
     F --> GR["图运行 / Graph Run"]
-    GR --> FS["前沿调度器 / Frontier Scheduler"]
-    FS --> TE["任务执行 / Task Execution"]
+    GR --> FS["自动前沿调度器 / Automatic Frontier Scheduler"]
+    FS --> DP["Agent 调度计划 / Agent Dispatch Plan<br/>数量、顺序、并行组"]
+    DP --> TE["任务执行或稳定排队 / Execute or Stable Queue"]
     FS --> GA["门禁动作 / Gate Action"]
     FS --> RV["审查与确认 / Review & Confirmation"]
     TE --> EV["事件与证据 / Events & Evidence"]
@@ -138,15 +139,15 @@ Task 内部仍然运行原有 Loop：理解冻结上下文 → 实现 → 测试
 3. 确定性编译 Delivery Graph；
 4. 分别计算层级指纹和图指纹。
 
-`freeze-hierarchy` 用同一次用户确认冻结整棵层级和编译结果。冻结后，运行时可以改变 Agent 数量和串并行策略，但不能新增节点、改写依赖或跳过门禁。
+`freeze-hierarchy` 用同一次用户确认冻结整棵层级和编译结果。冻结后，Graph 会在每次状态迁移后重新计算目标 Agent 数、并行组和稳定派发顺序，但不能新增节点、改写依赖或跳过门禁。这些瞬时调度计划不进入图指纹。
 
 这就是“层级由用户评审，图由控制器编译”。
 
 ## 7. 运行时如何推进
 
-控制器不再依赖宿主自己解释一段循环说明，而是计算当前 graph frontier。
+控制器不再依赖宿主自己解释一段循环说明，而是计算当前 graph frontier。用户/需求宿主只负责冻结前的方案讨论确认和工程完成后的最终验收；中间调度与恢复由 Graph 管理。
 
-frontier 不只是“下一批 Task”。它同时返回当前关键路径、下一个汇聚点、可执行动作、并行组和结构化阻断原因；控制器还把这些内容生成双语 `frontier.md` 看板。关键路径按冻结 DAG 中距离完成最远的未完成路径计算，随着事件推进自动变化，不修改图定义。
+frontier 不只是“下一批 Task”。它同时返回 `dispatchPlan`、当前关键路径、下一个汇聚点、可执行动作、并行组和结构化阻断原因。`dispatchPlan` 给出完整安全 Task 顺序、目标新增/活动/总 Agent 数，并明确禁止执行平台选择子集；平台容量不足时只按原顺序排队。控制器把这些内容生成双语 `frontier.md` 看板。关键路径按冻结 DAG 中距离完成最远的未完成路径计算，随着事件推进自动变化，不修改图定义。
 
 `graph-frontier` 可能返回以下结构化动作：
 
@@ -160,6 +161,29 @@ frontier 不只是“下一批 Task”。它同时返回当前关键路径、下
 | `RESUME_TASK` | Task 已显式暂停，可以恢复同一 attempt |
 
 `ready-tasks` 仍然保留，但它现在是 graph frontier 中 `DISPATCH_TASK` 动作的兼容投影，不再是另一套调度算法。
+
+### 7.1 自动 Agent 调度
+
+`parallel-development.md` 仍然需要，但它的职责已经变化：它不再教宿主“这一轮开几个 Agent、选哪些 Task”，而是定义 Graph 如何计算安全并行集合，以及执行平台如何无条件消费结果。
+
+每次 frontier 计算都会返回：
+
+```json
+{
+  "dispatchPlan": {
+    "authority": "GRAPH_CONTROLLER",
+    "strategy": "AUTO_DISPATCH_ALL_SAFE",
+    "dispatchTaskIds": ["t-api", "t-ui"],
+    "desiredNewAgentCount": 2,
+    "activeAgentCount": 0,
+    "desiredTotalAgentCount": 2,
+    "hostSelectionAllowed": false,
+    "capacityPolicy": "QUEUE_REMAINDER_STABLE"
+  }
+}
+```
+
+Graph 先按冻结依赖、当前 attempt、活动 claim 和精确写范围计算完整安全队列。执行平台若有两个槽就立即启动两个 Agent；只有一个槽就启动第一个并让第二个保持原顺序排队；没有子 Agent 能力就由当前 Agent 串行消费。三种情况的任务选择完全相同，不需要用户或宿主临场判断。
 
 ```mermaid
 stateDiagram-v2
@@ -187,7 +211,7 @@ stateDiagram-v2
     Ready --> Completed: 最终确认节点 / Final Confirmation Node
 ```
 
-### 7.1 为什么“Graph 不等于 DAG”但依赖图仍是 DAG
+### 7.2 为什么“Graph 不等于 DAG”但依赖图仍是 DAG
 
 系统把两类关系分开：
 
@@ -278,7 +302,7 @@ Markdown 只是可重建的人类投影：
 
 - `execution-graph.md` 同时展示中文 / English 的执行图和治理图；
 - `state-transition-graph.md` 从冻结 runtime 策略生成，展示开发执行流程、FSM、失败分类、重试耗尽、暂停恢复与取消；
-- `frontier.md` 展示中文 / English 的关键路径图、下一个汇聚点、迁移、尝试预算、建议动作和阻断表；
+- `frontier.md` 展示中文 / English 的自动 Agent 调度计划与流程图、关键路径图、下一个汇聚点、迁移、尝试预算、建议动作和阻断表；
 - `run-timeline.md` 展示当前节点 attempt、状态、owner、租约、失败分类和事件；
 - 删除 Markdown 不会删除机器状态，`refresh-projections` 可以从 SQLite 重建。
 
@@ -291,7 +315,7 @@ prepare-hierarchy
 → 评审 development-plan.md、execution-graph.md 与 state-transition-graph.md
 → 选择 active 或 manual
 → freeze-hierarchy
-→ graph-frontier / dispatch-task
+→ graph-frontier / 读取 dispatchPlan / 自动 dispatch-task
 → task-result
 → accept-item
 → acceptance-item
@@ -309,7 +333,7 @@ python -X utf8 <skill-root>/scripts/hdg.py advance-graph --item <root-or-subtree
 ```
 
 - `graph-status`：查看全部节点、边、attempt 和运行状态；
-- `graph-frontier`：查看当前允许的动作及阻断原因；
+- `graph-frontier`：查看当前允许的动作、自动 Agent 调度计划及阻断原因；
 - `graph-events`：查看可校验的运行事件链和 evidence binding；
 - `graph-replay`：从事件重算完整状态并检查 graph/node run 快照一致性。
 - `advance-graph`：执行可机械判定的自动路由，当前包括 claim 过期后的失联恢复。
@@ -339,7 +363,7 @@ python -X utf8 <skill-root>/scripts/hdg.py rebuild-graph-run --item <root-id> --
 
 两种开发方式使用同一个冻结图和运行时：
 
-- `active`：当前会话成为执行宿主，持续读取 frontier 并推进；
+- `active`：当前会话启动 Graph 执行循环，持续读取自动调度计划并推进；
 - `manual`：规划会话只生成需求级 handoff，新会话恢复同一个 graph run。
 
 差异只是由哪个会话承担执行，不是两套流程。

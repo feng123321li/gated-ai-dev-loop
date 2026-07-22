@@ -44,7 +44,7 @@ class WorkItemFlowTests(unittest.TestCase):
             self.assertEqual(
                 frozen["handoffCommand"],
                 "继续执行治理需求 t-python-controller。使用 layered-delivery Skill "
-                "从当前项目的治理数据库恢复已冻结方案，接管整棵需求树并自动完成开发、测试和门禁；"
+                "从当前项目的治理数据库恢复已冻结方案，按 Graph 自动调度计划接管整棵需求树并完成开发、测试和门禁；"
                 "不要重新准备或冻结需求，也不要逐 Task 请求人工启动。",
             )
             self.assertEqual(

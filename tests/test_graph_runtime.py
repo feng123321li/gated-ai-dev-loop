@@ -29,7 +29,7 @@ from hdg.graph_runtime import (
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.repository import GovernanceRepository
 
-from .fixtures import task_hierarchy
+from .fixtures import task_hierarchy, two_task_capability_hierarchy
 
 
 class DeliveryGraphRuntimeTests(unittest.TestCase):
@@ -289,6 +289,119 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
             timeline = Path(prepared["artifactDir"], "run-timeline.md").read_text(encoding="utf-8")
             self.assertIn("# 运行时间线 / Run Timeline", timeline)
             self.assertIn("USER_CONFIRMED", timeline)
+
+    def test_frontier_computes_the_complete_automatic_agent_dispatch_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=two_task_capability_hierarchy(),
+                host_runtime="codex",
+            )
+            freeze_hierarchy(
+                root=temporary,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                development_mode="active",
+                confirmed=True,
+            )
+
+            frontier = get_graph_frontier(
+                root=temporary,
+                work_item_id=prepared["rootId"],
+            )
+            plan = frontier["dispatchPlan"]
+            self.assertEqual(plan["authority"], "GRAPH_CONTROLLER")
+            self.assertEqual(plan["strategy"], "AUTO_DISPATCH_ALL_SAFE")
+            self.assertEqual(
+                plan["dispatchTaskIds"],
+                ["t-python-controller", "t-python-worker"],
+            )
+            self.assertEqual(plan["desiredNewAgentCount"], 2)
+            self.assertEqual(plan["activeAgentCount"], 0)
+            self.assertEqual(plan["desiredTotalAgentCount"], 2)
+            self.assertFalse(plan["hostSelectionAllowed"])
+            self.assertEqual(plan["capacityPolicy"], "QUEUE_REMAINDER_STABLE")
+            dispatches = [
+                action
+                for action in frontier["actions"]
+                if action["action"] == "DISPATCH_TASK"
+            ]
+            self.assertEqual(
+                [action["dispatchOrdinal"] for action in dispatches],
+                [1, 2],
+            )
+            self.assertTrue(all(action["autoDispatch"] for action in dispatches))
+
+            dispatch_task(
+                root=temporary,
+                item_id="t-python-controller",
+                owner="graph-agent-1",
+                operation_id="op-auto-1",
+            )
+            recalculated = get_graph_frontier(
+                root=temporary,
+                work_item_id=prepared["rootId"],
+            )["dispatchPlan"]
+            self.assertEqual(recalculated["dispatchTaskIds"], ["t-python-worker"])
+            self.assertEqual(recalculated["desiredNewAgentCount"], 1)
+            self.assertEqual(recalculated["activeAgentCount"], 1)
+            self.assertEqual(recalculated["desiredTotalAgentCount"], 2)
+
+            dashboard = Path(
+                prepared["artifactDir"], "frontier.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn(
+                "## 自动 Agent 调度计划 / Automatic Agent Dispatch Plan",
+                dashboard,
+            )
+            self.assertIn("Graph 已确定全部本轮安全任务及稳定顺序", dashboard)
+
+    def test_dispatch_rejects_a_ready_task_excluded_by_the_graph_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            first = self._prepare_and_freeze(temporary)
+            second = prepare_hierarchy(
+                root=temporary,
+                hierarchy=task_hierarchy(
+                    id="t-python-controller-shadow",
+                    title="Python controller shadow",
+                ),
+                host_runtime="codex",
+            )
+            freeze_hierarchy(
+                root=temporary,
+                root_id=second["rootId"],
+                expected_hierarchy_fingerprint=second["hierarchyFingerprint"],
+                development_mode="active",
+                confirmed=True,
+            )
+            dispatch_task(
+                root=temporary,
+                item_id=first["rootId"],
+                owner="graph-agent-1",
+                operation_id="op-active-scope",
+            )
+
+            frontier = get_graph_frontier(
+                root=temporary,
+                work_item_id=second["rootId"],
+            )
+            self.assertEqual(frontier["dispatchPlan"]["dispatchTaskIds"], [])
+            shadow_block = next(
+                item
+                for item in frontier["blocked"]
+                if item["workItemId"] == second["rootId"]
+                and item["nodeKind"] == "TASK_EXECUTION"
+            )
+            self.assertEqual(shadow_block["recommendedAction"], "WAIT_FOR_SCOPE")
+
+            with self.assertRaises(GatedLoopError) as raised:
+                dispatch_task(
+                    root=temporary,
+                    item_id=second["rootId"],
+                    owner="graph-agent-2",
+                    operation_id="op-out-of-plan",
+                )
+            self.assertEqual(raised.exception.code, "WORK_ITEM_NOT_READY")
 
     def test_retry_creates_a_new_node_attempt_without_changing_the_graph(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

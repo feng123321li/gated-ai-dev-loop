@@ -391,14 +391,16 @@ def render_requirement_handoff(
         "",
         "## 接收会话执行规则",
         "",
-        "1. 在项目根目录使用当前 `layered-delivery` Skill，先读取 SQLite 治理状态、完整冻结方案和实时进度；不要重新准备或重新冻结需求。",
-        f"2. 以根工作项 `{root['id']}` 调用 `graph-frontier`，读取 `dispatchPlan` 自动计算的完整安全 Task 顺序、并行组和目标 Agent 数；不得自行挑选 Task 子集。",
-        "3. 对 `dispatchPlan.dispatchTaskIds` 中的 Task 按顺序生成唯一 operationId，并调用 `dispatch-task`。平台有容量时启动隔离子 Agent，容量不足时按原顺序排队，无子 Agent 时由当前 Agent 串行消费。",
-        "4. 每个 Task 严格使用自己的 context、scope、结果和证据，循环实现、回归测试、修复和复测；写回 `IMPLEMENTED` 或 `BLOCKED` 后完成该 Task 门禁。",
-        "5. 每次状态写回后重新查询 frontier，由 Graph 重算目标 Agent 数与后续波次；全部子级 VERIFIED 后运行 Capability/Delivery 聚合门禁。",
-        "6. 不要要求用户逐 Task 回复启动，也不要在正常 Task 切换、并发降级或自动重试时请求人工确认。",
-        "7. 只有冻结目标、范围、接口、授权必须改变或出现无法自动消除的真实阻断时才返回用户；根门禁通过后提交最终交付，由用户人工验收。",
-        "8. 不修改 SQLite、baseline、治理投影或 `.git/**`；未获得单独授权时不提交、推送、合并、发布或改变外部状态。",
+        "1. 在项目根目录使用当前 `layered-delivery` Skill，从当前 Skill 元数据解析控制器入口；不得固化用户目录、Skill 安装位置或操作系统路径，也不得把解析后的本机绝对路径写入交接、方案或治理状态。",
+        "2. 先读取 SQLite 治理状态、完整冻结方案和实时进度；恢复入口是 `graph-frontier`，不是 `task-context`，不要重新准备或重新冻结需求。",
+        f"3. 以根工作项 `{root['id']}` 调用 `graph-frontier --json`，直接消费控制器的 JSON stdout，读取 `dispatchPlan` 自动计算的完整安全 Task 顺序、并行组和目标 Agent 数；不得创建临时 JSON，也不得自行挑选 Task 子集。",
+        "4. 控制器非零退出时保留控制器的 stderr 并停止解析，不要把空 stdout 或错误文本继续交给 JSON 解析器；`task-context` 只用于未认领 Task 的只读诊断，不能授权开工。",
+        "5. 对 `dispatchPlan.dispatchTaskIds` 中的 Task 按顺序生成唯一 operationId，并调用 `dispatch-task`。平台有容量时启动隔离子 Agent，容量不足时按原顺序排队，无子 Agent 时由当前 Agent 串行消费。",
+        "6. 每个 Task 严格使用自己的 context、scope、结果和证据，循环实现、回归测试、修复和复测；写回 `IMPLEMENTED` 或 `BLOCKED` 后完成该 Task 门禁。",
+        "7. 每次状态写回后重新查询 frontier，由 Graph 重算目标 Agent 数与后续波次；全部子级 VERIFIED 后运行 Capability/Delivery 聚合门禁。",
+        "8. 不要要求用户逐 Task 回复启动，也不要在正常 Task 切换、并发降级或自动重试时请求人工确认。",
+        "9. 只有冻结目标、范围、接口、授权必须改变或出现无法自动消除的真实阻断时才返回用户；根门禁通过后提交最终交付，由用户人工验收。",
+        "10. 不修改 SQLite、baseline、治理投影或 `.git/**`；未获得单独授权时不提交、推送、合并、发布或改变外部状态。",
         "",
     ])
     return "\n".join(lines)
@@ -407,9 +409,10 @@ def render_requirement_handoff(
 def render_requirement_handoff_command(root_id: str) -> str:
     """Render the short prompt that a user can paste directly into a new session."""
     return (
-        f"继续执行治理需求 {root_id}。使用 layered-delivery Skill "
+        f"继续执行治理需求 {root_id}。使用当前 layered-delivery Skill 从当前 Skill 元数据解析控制器入口，"
         "从当前项目的治理数据库恢复已冻结方案，按 Graph 自动调度计划接管整棵需求树并完成开发、测试和门禁；"
-        "不要重新准备或冻结需求，也不要逐 Task 请求人工启动。"
+        "以 graph-frontier 为恢复入口并直接消费控制器 JSON 输出，不固化用户目录、Skill 安装位置或操作系统路径，"
+        "不使用临时 JSON 中转，也不要重新准备、冻结需求或逐 Task 请求人工启动。"
     )
 
 

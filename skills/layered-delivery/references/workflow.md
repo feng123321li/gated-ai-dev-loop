@@ -2,14 +2,14 @@
 
 ## 主流程
 
-1. 从当前 Skill 安装目录运行 `python -X utf8 <skill-root>/scripts/hdg.py --help`。Python 3.10+ 是唯一运行时，不要求 Node、npm 或第三方包。
+1. 从当前 Skill 元数据解析 `<skill-root>`（当前已加载 `SKILL.md` 所在目录），再运行 `python -X utf8 <skill-root>/scripts/hdg.py --help`。不得根据用户名、用户主目录、Skill 宿主或操作系统猜测安装位置，也不得把解析后的本机绝对路径固化到交接、方案或治理状态。Python 3.10+ 是唯一运行时，不要求 Node、npm 或第三方包。
 2. 只读恢复项目级 `governance.sqlite3`。数据库 schema、ID、拓扑、路径、指纹或普通字段不一致时保持阻断，不迁移、不猜测。仅当历史节点只有 evidence 引用过期、完整 artifact 仍在 SQLite 且其余契约有效时，将该节点只读隔离并在总览告警；其他新需求、有效兄弟 Task 和已有 claim 继续。Markdown 缺失时可从数据库刷新。
 3. 起草层级事实卡，选择最浅合法形态：独立 Task、Capability→Task 或 Delivery→Capability→Task。为每个实际节点起草自己的 baseline 与 `developmentPlan`。
 4. 把整棵需求树组织成 `{"schemaVersion":3,"root":{"definition":{...},"children":[...]}}`。协调节点声明的每个 child 必须在这棵树里完整物化。
 5. 运行 `prepare-hierarchy`。一个需求只生成 `work-items/<root-id>/` 一个顶层目录，子节点按 `children/<id>/` 递归嵌套；根级 `development-plan.md/progress.md` 聚合完整树，控制器同时编译 `execution-graph.md`、`state-transition-graph.md` 和 `frontier.md`，根节点自身进度写入 `node-progress.md`，每个实际子节点生成自己的 `development-plan.md/progress.md`。
 6. 人工查看根级 `development-plan.md`、`execution-graph.md` 与 `state-transition-graph.md`，同时选择 active/manual。需要修改就重新准备整棵树；同意时只需确认当前方案和所选方式，无需知道或复述层级/图指纹。
 7. Agent 使用准备结果中的 `hierarchyFingerprint`，调用一次 `freeze-hierarchy --expected-hierarchy ... --development-mode ... --confirmed`。控制器在同一事务中记录方式并冻结全部节点；指纹已变化则拒绝旧确认。
-8. active 下由当前 Agent 冻结后查询 `graph-frontier` 并直接推进；manual 在需求根生成完整 `requirement-handoff.md`，并返回简短 `handoffCommand`。规划会话必须把 `handoffCommand` 放入纯文本代码块供用户一次复制，不能只给文件链接；接收 Agent 即成为同一 graph run 的执行入口。两种方式都严格消费 Graph 自动计算的 `dispatchPlan`：控制器决定完整安全 Task 集合、目标 Agent 数和稳定顺序，平台容量只决定立即启动或排队，不能挑选子集；不再次询问开发方式或要求人工逐 Task 启动。
+8. active 下由当前 Agent 冻结后查询 `graph-frontier` 并直接推进；manual 在需求根生成完整 `requirement-handoff.md`，并返回简短 `handoffCommand`。规划会话必须把 `handoffCommand` 放入纯文本代码块供用户一次复制，不能只给文件链接；接收 Agent 即成为同一 graph run 的执行入口。恢复入口是 `graph-frontier` 而不是只读诊断用的 `task-context`；查询 JSON 直接消费 stdout，非零退出时保留 stderr 并停止解析，不创建临时 JSON。两种方式都严格消费 Graph 自动计算的 `dispatchPlan`：控制器决定完整安全 Task 集合、目标 Agent 数和稳定顺序，平台容量只决定立即启动或排队，不能挑选子集；不再次询问开发方式或要求人工逐 Task 启动。
 9. 开发结果的完整 artifact 通过 `task-result --evidence -` 从 stdin 交给控制器。控制器在同一 SQLite 写事务内校验当前 operationId、计算摘要并保存 artifact 与摘要，然后生成 `development-review.md`；开发结果不代表 PASS，也不产生临时 evidence 文件。
 10. 回归、门禁、独立审查或最终验收发现遗漏时，先判断是否仍为原冻结目标和验收契约。已有授权文件内直接重试；仅缺少完成原验收项所需的精确文件，且目标、需求、验收、接口行为、数据、拓扑和外部权限不变时，通过 `remediate-task --evidence -` 追加到原 Task。控制器保持 baseline 与图定义不变，从该 Task execution 沿显式边失效必要后继、依赖消费者和聚合 gate，再创建新 attempt；不得 `prepare-hierarchy` 新建重复需求根。
 11. 全部相关回归和复测通过后，Graph 执行循环形成严格 gate artifact，并通过 `accept-item --evidence -` 从 stdin 直接提交。控制器在同一事务中按当前 baseline 和追加验证修正校验、计算摘要并保存结构化验收记录，随后生成 `acceptance-report.md`；Task 全部 VERIFIED 后依次运行 Capability、Delivery 自身聚合门禁。

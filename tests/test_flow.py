@@ -41,11 +41,24 @@ class WorkItemFlowTests(unittest.TestCase):
             )
             self.assertIn("一次接管整棵需求树", frozen["handoffPrompt"])
             self.assertIn("不要要求用户逐 Task 回复启动", frozen["handoffPrompt"])
+            self.assertIn("从当前 Skill 元数据解析控制器入口", frozen["handoffPrompt"])
+            self.assertIn("恢复入口是 `graph-frontier`，不是 `task-context`", frozen["handoffPrompt"])
+            self.assertIn("直接消费控制器的 JSON stdout", frozen["handoffPrompt"])
+            self.assertIn("保留控制器的 stderr", frozen["handoffPrompt"])
+            self.assertIn("不得固化用户目录、Skill 安装位置或操作系统路径", frozen["handoffPrompt"])
+            self.assertIn("不得创建临时 JSON", frozen["handoffPrompt"])
+            machine_paths = (
+                "C:\\Users\\", "/Users/", "/home/", "/tmp/", ".claude/skills", ".codex/skills",
+            )
+            for machine_path in machine_paths:
+                self.assertNotIn(machine_path, frozen["handoffPrompt"])
+                self.assertNotIn(machine_path, frozen["handoffCommand"])
             self.assertEqual(
                 frozen["handoffCommand"],
-                "继续执行治理需求 t-python-controller。使用 layered-delivery Skill "
+                "继续执行治理需求 t-python-controller。使用当前 layered-delivery Skill 从当前 Skill 元数据解析控制器入口，"
                 "从当前项目的治理数据库恢复已冻结方案，按 Graph 自动调度计划接管整棵需求树并完成开发、测试和门禁；"
-                "不要重新准备或冻结需求，也不要逐 Task 请求人工启动。",
+                "以 graph-frontier 为恢复入口并直接消费控制器 JSON 输出，不固化用户目录、Skill 安装位置或操作系统路径，"
+                "不使用临时 JSON 中转，也不要重新准备、冻结需求或逐 Task 请求人工启动。",
             )
             self.assertEqual(
                 (package / "requirement-handoff.md").read_text(encoding="utf-8"),

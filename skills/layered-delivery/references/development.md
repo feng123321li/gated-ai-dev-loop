@@ -6,6 +6,8 @@
 
 `requirement-handoff.md` 是 manual 根级需求的一次性交接提示词，冻结与投影刷新都会从 SQLite 重建；它列出完整树并要求接收会话消费 Graph 自动计算的调度计划，完成 dispatch、结果写回和逐级门禁。`development-handoff.md` 仍是 `dispatch-task` 后生成的单 Task 执行上下文，只在执行循环内部交给对应开发 Agent，不再要求人逐 Task 复制。`task-context --json` 只返回不得用于开工的未认领诊断预览。开发 Agent 不接收 Delivery 分析对话、Capability 讨论、其他 Task 对话或执行入口隐式记忆。
 
+接收会话必须从当前 Skill 元数据解析控制器入口，以 `graph-frontier --json` 恢复 graph run 并直接消费 stdout；不得固化用户目录、Skill 安装位置或操作系统路径，也不得用临时 JSON 中转只读查询结果。控制器非零退出时保留 stderr 并停止解析，不能让空 stdout 导致的二次 JSON 错误遮蔽原始失败。`task-context` 只用于诊断，正式开工上下文必须来自 Graph 计划后的 `dispatch-task`。
+
 ## 开发 Agent 契约
 
 开发过程不冻结某个固定 Agent 数量、并发度或调度顺序；Graph 在每次状态迁移后根据依赖、范围冲突和当前 claim 自动重算 `dispatchPlan`。执行适配器必须消费完整计划，不能自行挑选 Task。交付证据仍必须满足：

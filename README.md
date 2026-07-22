@@ -89,11 +89,13 @@ prepare-hierarchy
 
 ## 准备与一次冻结
 
-启动时先从当前 Skill 安装目录验证控制器入口：
+启动时先从当前 Skill 元数据解析 `<skill-root>`（当前已加载 `SKILL.md` 所在目录），再验证控制器入口：
 
 ```text
 python -X utf8 <skill-root>/scripts/hdg.py --help
 ```
+
+`<skill-root>` 是宿主无关的逻辑占位符，不是固定目录。执行时可以解析成本机绝对路径，但不能根据用户名、用户主目录、`.claude`、`.codex` 或操作系统猜测安装位置，也不能把解析结果固化到交接命令、冻结方案或治理状态。控制器从被治理项目根目录运行，协议不按操作系统分叉。
 
 新需求使用 schema v3 的完整嵌套 definition，通过 stdin 一次准备整棵树：
 
@@ -132,10 +134,10 @@ python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --e
 最终回复必须直接用纯文本代码块展示 `handoffCommand`，不能只给 `requirement-handoff.md` 链接，也不能要求用户打开文件后全选复制。文件链接放在代码块之后，仅用于查看完整交接与冻结方案。
 
 ```text
-继续执行治理需求 <root-id>。使用 layered-delivery Skill 从当前项目的治理数据库恢复已冻结方案，接管整棵需求树并自动完成开发、测试和门禁；不要重新准备或冻结需求，也不要逐 Task 请求人工启动。
+继续执行治理需求 <root-id>。使用当前 layered-delivery Skill 从当前 Skill 元数据解析控制器入口，从当前项目的治理数据库恢复已冻结方案，按 Graph 自动调度计划接管整棵需求树并完成开发、测试和门禁；以 graph-frontier 为恢复入口并直接消费控制器 JSON 输出，不固化用户目录、Skill 安装位置或操作系统路径，不使用临时 JSON 中转，也不要重新准备、冻结需求或逐 Task 请求人工启动。
 ```
 
-新会话收到一次交接后成为整树 Graph 执行入口。它读取控制器自动计算的 READY 与 `dispatchPlan`，按完整顺序逐 Task `dispatch-task`，不要求人工逐项启动，也不自行挑选 Task。
+新会话收到一次交接后成为整树 Graph 执行入口。它从 `graph-frontier` 读取控制器自动计算的 READY 与 `dispatchPlan`，按完整顺序逐 Task `dispatch-task`，不要求人工逐项启动，也不自行挑选 Task。`task-context` 只用于诊断预览，不能替代恢复或正式派发。
 
 ## 开发、写回与门禁
 
@@ -244,7 +246,9 @@ Markdown 不是机器权威。手工删除需求目录不会删除 SQLite 状态
 
 旧 JSON 控制目录、旧 schema 和路径式 evidence 不迁移、不兼容。
 
-## 结构化输入与临时文件
+## 控制器调用与结构化传输
+
+只读查询的 JSON 直接写到 stdout。Agent 不得把 `graph-frontier`、`task-context` 等查询结果先写入临时 JSON 再读取；控制器非零退出时必须保留 stderr 并停止解析，不能让下游 `JSONDecodeError` 遮蔽真正错误。
 
 以下结构化数据只能通过 stdin 直接提交：
 
@@ -254,7 +258,7 @@ Markdown 不是机器权威。手工删除需求目录不会删除 SQLite 状态
 
 控制器拒绝文件路径，不生成 `_hdg_*.json`、`.hdg-tmp/**`、系统 `%TEMP%` 或其他中间 JSON。完整 artifact 与控制器计算的规范 JSON SHA-256 在同一 SQLite 写事务内保存；图事件证据还会由控制器绑定 `runId/nodeId/attempt/graphFingerprint`，形成不可移植到其他节点或尝试的 bound evidence。Agent 不直接写数据库，也不提供自算摘要或绑定字段。
 
-PowerShell 使用单引号 here-string 管道，Claude Code Bash 使用当前 shell 的带引号 heredoc。不得再嵌套 `bash -lc`、`sh -c`、`cmd /c` 或另一个 shell 包装。详细示例见 [stdin-transport.md](skills/layered-delivery/references/stdin-transport.md)。
+宿主使用当前 shell 原生支持的 stdin 直连能力，不再嵌套另一个 shell。heredoc 与 here-string 只是按 shell 能力区分的适配方式，不是操作系统分支。完整的宿主无关契约与示例见 [stdin-transport.md](skills/layered-delivery/references/stdin-transport.md)。
 
 ## 开发与安全边界
 
@@ -286,7 +290,7 @@ python scripts/install_skill.py --target codex --scope user --force
 python scripts/install_skill.py --target claude --scope user --force
 ```
 
-安装后从实际 Skill 目录运行当前控制器，不能依赖旧副本或全局命令：
+安装后从当前 Skill 元数据解析实际目录并运行控制器，不能依赖旧副本、固定用户目录或全局命令：
 
 ```text
 python -X utf8 <skill-root>/scripts/hdg.py --help

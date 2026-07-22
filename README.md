@@ -123,13 +123,16 @@ python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --e
 
 当前会话冻结后立即启动 Graph 执行循环。Graph 根据依赖、写入冲突和活动 claim 生成 `dispatchPlan`，自动决定完整 Task 顺序与目标 Agent 数。执行平台按计划启动隔离子 Agent；容量不足时稳定排队或由当前 Agent 串行消费，不重新询问开发方式。
 
+当前宿主是 Claude Code 时，`prepare-hierarchy` 会返回 `hostAutomation`。用户选择 active 前必须通过用户级设置、模式选择器或 `--permission-mode auto` 启用 Auto；`acceptEdits` 仍会为测试和控制器进程请求 Process 授权，不能在 Task 已认领后再等待配置权限。
+
 ### manual
 
 规划会话冻结后不修改业务代码。控制器同时提供：
 
 - `requirement-handoff.md`：完整需求级交接文档；
 - `handoffPrompt`：与完整交接文档相同的内容；
-- `handoffCommand`：可直接复制到新任务的简短指令。
+- `handoffCommand`：可直接复制到新任务的简短指令；
+- `claudeCodeAutoHandoff`：交接到 Claude Code 时使用的 Desktop 提示、交互式 Auto 命令和 `-p` 无人值守命令。
 
 最终回复必须直接用纯文本代码块展示 `handoffCommand`，不能只给 `requirement-handoff.md` 链接，也不能要求用户打开文件后全选复制。文件链接放在代码块之后，仅用于查看完整交接与冻结方案。
 
@@ -138,6 +141,8 @@ python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --e
 ```
 
 新会话收到一次交接后成为整树 Graph 执行入口。它从 `graph-frontier` 读取控制器自动计算的 READY 与 `dispatchPlan`，按完整顺序逐 Task `dispatch-task`，不要求人工逐项启动，也不自行挑选 Task。`task-context` 只用于诊断预览，不能替代恢复或正式派发。
+
+Claude Code 的权限模式不能由聊天提示或仓库项目设置切换。长期使用可由用户在用户级 settings 中把 `permissions.defaultMode` 设为 `auto`；单次 CLI 交接可直接使用 `claudeCodeAutoHandoff.unattendedCommand`。不默认使用只适合隔离环境的 `bypassPermissions`。详见 [Claude Code 自动执行与权限前置条件](skills/layered-delivery/references/claude-automation.md)。
 
 ## 开发、写回与门禁
 

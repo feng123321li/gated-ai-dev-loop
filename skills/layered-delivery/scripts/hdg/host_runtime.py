@@ -12,6 +12,13 @@ def is_agent_runtime(value: object) -> bool:
     return isinstance(value, str) and bool(AGENT_RUNTIME_PATTERN.fullmatch(value))
 
 
+def is_claude_runtime(value: object) -> bool:
+    return bool(
+        is_agent_runtime(value)
+        and (value == "claude" or value.startswith("claude-") or value.startswith("claude."))
+    )
+
+
 def require_host_runtime(value: object) -> str:
     if not is_agent_runtime(value):
         raise GatedLoopError(

@@ -23,8 +23,8 @@
 
 ## Active 与 Manual
 
-- `active`：冻结后由 Graph 自动推进。控制器计算 READY、安全并行集合、目标 Agent 数和稳定顺序；执行 Agent/适配器完整消费计划。运行能力变化只影响立即启动还是排队，不请求用户重新选择。开发持续循环到相关回归和复测通过，或形成真实阻断。
-- `manual`：当前规划会话不创建开发 Agent。`freeze-hierarchy` 在需求根生成一份 `requirement-handoff.md`，在 `handoffPrompt` 返回同样的完整内容，并通过 `handoffCommand` 返回可直接复制到新会话的简短指令。规划会话的最终回复必须用纯文本代码块展示 `handoffCommand`，完整交接与冻结方案链接放在代码块之后；不能只返回文件链接。用户一次复制短指令到任意全新 Agent 后，接收会话成为 Graph 执行入口，读取 `dispatchPlan`、为每个计划 Task 生成唯一 operationId 并执行 `dispatch-task`。平台可并行时启动隔离子 Agent，容量不足时稳定排队并串行消费；不得挑选子集，也不得要求用户逐 Task 再次回复或复制交接。
+- `active`：冻结后由 Graph 自动推进。控制器计算 READY、安全并行集合、目标 Agent 数和稳定顺序；执行 Agent/适配器完整消费计划。运行能力变化只影响立即启动还是排队，不请求用户重新选择。开发持续循环到相关回归和复测通过，或形成真实阻断。当前宿主是 Claude Code 时，必须先满足 `hostAutomation` 的 Auto 权限前置条件，再冻结和认领 Task。
+- `manual`：当前规划会话不创建开发 Agent。`freeze-hierarchy` 在需求根生成一份 `requirement-handoff.md`，在 `handoffPrompt` 返回同样的完整内容，并通过 `handoffCommand` 返回可直接复制到新会话的简短指令。规划会话的最终回复必须用纯文本代码块展示 `handoffCommand`，完整交接与冻结方案链接放在代码块之后；不能只返回文件链接。交接目标是 Claude Code 时，同时展示 `claudeCodeAutoHandoff` 中适合界面的 Auto 启动方式。用户一次复制短指令到任意全新 Agent 后，接收会话成为 Graph 执行入口，读取 `dispatchPlan`、为每个计划 Task 生成唯一 operationId 并执行 `dispatch-task`。平台可并行时启动隔离子 Agent，容量不足时稳定排队并串行消费；不得挑选子集，也不得要求用户逐 Task 再次回复或复制交接。
 
 用户在评审 `development-plan.md` 时选择一次根级方式；Agent 使用同一次确认调用：
 

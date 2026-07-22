@@ -2,7 +2,7 @@
 
 ## 投影原则
 
-项目级 `governance.sqlite3` 是节点、层级和进度的唯一机器权威。`workspace-overview.md` 只保留按最近更新时间倒序的全局需求索引；索引展示本机时区的创建时间和更新时间（均精确到分），以及根类型、状态、门禁、后代进度和入口。`workspace-overview/YYYY-MM.md` 是月度索引，详细层级写入 `workspace-overview/YYYY-MM/<root-id>.md`，每个需求保留开始时间、完成日期和 Delivery→Capability→Task 表格。完成日期只能来自 `COMPLETED` 的最终用户确认时间，不能用 gate 时间或最近更新时间代替。物理目录保持稳定根 ID，不添加日期；SQLite 时间保持 UTC。每个需求根的 `progress.md` 使用 Markdown 表格，在第一列保留与该根 `development-plan.md` 相同的工作项 ID、父子顺序和层级。投影不能把父子节点渲染成彼此并列的需求行，也不能使用会被 Markdown 折叠为长段落的连续普通文本行。
+项目级 `governance.sqlite3` 是节点、层级和进度的唯一机器权威。`workspace-overview.md` 只保留按最近更新时间倒序的全局需求索引；索引展示本机时区的创建时间和更新时间（均精确到分），以及根类型、状态、门禁、后代进度和入口。所有面向人的状态报告同样必须把 SQLite 和控制器 JSON 中的 UTC 时间转换为当前运行环境的本机时区，并显式标注 UTC 偏移（例如 `UTC+08:00`）；SQLite、事件链和 JSON 机器字段继续保持 UTC 原值。`workspace-overview/YYYY-MM.md` 是月度索引，详细层级写入 `workspace-overview/YYYY-MM/<root-id>.md`，每个需求保留开始时间、完成日期和 Delivery→Capability→Task 表格。完成日期只能来自 `COMPLETED` 的最终用户确认时间，不能用 gate 时间或最近更新时间代替。物理目录保持稳定根 ID，不添加日期。每个需求根的 `progress.md` 使用 Markdown 表格，在第一列保留与该根 `development-plan.md` 相同的工作项 ID、父子顺序和层级。投影不能把父子节点渲染成彼此并列的需求行，也不能使用会被 Markdown 折叠为长段落的连续普通文本行。
 
 月度明细链接必须直接指向以需求根 ID 命名的独立 Markdown 文件，不携带标题片段，确保原始 Markdown 编辑器和预览查看器都可导航。
 

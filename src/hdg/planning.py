@@ -32,6 +32,8 @@ from .model import (
 )
 from .projections import (
     item_human_artifacts,
+    render_claude_code_auto_handoff,
+    render_host_automation,
     render_requirement_handoff,
     render_requirement_handoff_command,
 )
@@ -395,7 +397,8 @@ def prepare_hierarchy(
                         "frontier": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/frontier.md",
                         "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
                     },
-                    "nextAction": "人工评审 development-plan.md 并选择 active/manual；同意后一次确认冻结，无需复述指纹。",
+                    "hostAutomation": render_host_automation(old_states[root_id]["hostRuntime"]),
+                    "nextAction": _prepared_next_action(old_states[root_id]["hostRuntime"]),
                 }
         new_ids = {record["definition"]["id"] for record in records}
         conflicts = sorted(item_id for item_id in new_ids if item_id in existing_by_id and item_id not in old_ids)
@@ -461,8 +464,15 @@ def prepare_hierarchy(
                 "frontier": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/frontier.md",
                 "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
             },
-            "nextAction": "人工评审 development-plan.md 并选择 active/manual；同意后一次确认冻结，无需复述指纹。",
+            "hostAutomation": render_host_automation(runtime),
+            "nextAction": _prepared_next_action(runtime),
         }
+
+
+def _prepared_next_action(host_runtime: str) -> str:
+    if render_host_automation(host_runtime) is not None:
+        return "人工评审 development-plan.md；选择 active 前满足 hostAutomation，再一次确认冻结，无需复述指纹。"
+    return "人工评审 development-plan.md 并选择 active/manual；同意后一次确认冻结，无需复述指纹。"
 
 
 def _manual_requirement_handoff(
@@ -489,10 +499,12 @@ def _frozen_human_artifacts(root_id: str, handoff: str | None) -> dict[str, str 
     }
 
 
-def _frozen_next_action(development_mode: str) -> str:
+def _frozen_next_action(development_mode: str, host_runtime: str) -> str:
     if development_mode == "active":
+        if render_host_automation(host_runtime) is not None:
+            return "确认 hostAutomation 已满足，再查询 graph-frontier 并在首次 dispatch-task 前保持 Auto；随后完整消费自动调度计划。"
         return "查询 graph-frontier 并完整消费 Graph 自动计算的 Agent 调度计划；容量不足时按原顺序排队。"
-    return "把 handoffCommand 一次复制到新会话；接收会话按 Graph 自动调度计划推进整棵需求树，无需人工逐 Task 启动。"
+    return "把 handoffCommand 一次复制到新会话；交接到 Claude Code 时使用 claudeCodeAutoHandoff，随后按 Graph 自动推进整棵需求树。"
 
 
 def freeze_hierarchy(
@@ -525,6 +537,7 @@ def freeze_hierarchy(
             repository.write_registry(registry)
             handoff = _manual_requirement_handoff(root_entry, registry)
             handoff_command = render_requirement_handoff_command(root_id) if handoff is not None else None
+            claude_auto_handoff = render_claude_code_auto_handoff(root_id) if handoff is not None else None
             stored_graph = repository.read_graph_definition(root_id)
             graph_run = repository.read_graph_run(root_id)
             return {
@@ -543,7 +556,9 @@ def freeze_hierarchy(
                 "humanArtifacts": _frozen_human_artifacts(root_id, handoff),
                 "handoffPrompt": handoff,
                 "handoffCommand": handoff_command,
-                "nextAction": _frozen_next_action(development_mode),
+                "claudeCodeAutoHandoff": claude_auto_handoff,
+                "hostAutomation": render_host_automation(states[root_id]["hostRuntime"]),
+                "nextAction": _frozen_next_action(development_mode, states[root_id]["hostRuntime"]),
             }
         if any(states[record["definition"]["id"]]["stage"] != "WAITING_FOR_BASELINE_CONFIRMATION" for record in records):
             fail("WORK_ITEM_STAGE_INVALID", "Every hierarchy node must be waiting for the same freeze")
@@ -614,6 +629,7 @@ def freeze_hierarchy(
         graph_run = repository.read_graph_run(root_id)
         handoff = _manual_requirement_handoff(root_entry, registry)
         handoff_command = render_requirement_handoff_command(root_id) if handoff is not None else None
+        claude_auto_handoff = render_claude_code_auto_handoff(root_id) if handoff is not None else None
         return {
             "created": True,
             "idempotent": False,
@@ -636,7 +652,9 @@ def freeze_hierarchy(
             "humanArtifacts": _frozen_human_artifacts(root_id, handoff),
             "handoffPrompt": handoff,
             "handoffCommand": handoff_command,
-            "nextAction": _frozen_next_action(development_mode),
+            "claudeCodeAutoHandoff": claude_auto_handoff,
+            "hostAutomation": render_host_automation(frozen_states[root_id]["hostRuntime"]),
+            "nextAction": _frozen_next_action(development_mode, frozen_states[root_id]["hostRuntime"]),
         }
 
 

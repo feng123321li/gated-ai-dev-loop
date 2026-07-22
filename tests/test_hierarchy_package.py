@@ -92,6 +92,35 @@ class HierarchyPackageTests(unittest.TestCase):
             self.assertIn(prepared["hierarchyFingerprint"], plan)
             self.assertIn("无需复制或复述指纹", plan)
             self.assertIn("无需复述指纹", prepared["nextAction"])
+            self.assertEqual(prepared["hostAutomation"]["hostRuntime"], "claude-code")
+            self.assertEqual(prepared["hostAutomation"]["recommendedPermissionMode"], "auto")
+            self.assertFalse(prepared["hostAutomation"]["acceptEditsIsUnattended"])
+            self.assertFalse(prepared["hostAutomation"]["promptCanChangePermissionMode"])
+            self.assertEqual(
+                prepared["hostAutomation"]["userSettings"],
+                {"permissions": {"defaultMode": "auto"}},
+            )
+            self.assertIn("选择 active 前满足 hostAutomation", prepared["nextAction"])
+
+    def test_claude_active_freeze_requires_permission_preflight_before_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=task_hierarchy(),
+                host_runtime="claude-code",
+            )
+            frozen = freeze_hierarchy(
+                root=temporary,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                development_mode="active",
+                confirmed=True,
+            )
+
+            self.assertEqual(frozen["hostAutomation"], prepared["hostAutomation"])
+            self.assertIn("首次 dispatch-task 之前", frozen["hostAutomation"]["claimPrecondition"])
+            self.assertIn("hostAutomation", frozen["nextAction"])
+            self.assertIsNone(frozen["claudeCodeAutoHandoff"])
 
     def test_one_confirmation_freezes_every_node_in_the_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -346,6 +375,10 @@ class HierarchyPackageTests(unittest.TestCase):
             self.assertTrue(idempotent["idempotent"])
             self.assertEqual(idempotent["handoffPrompt"], handoff)
             self.assertEqual(idempotent["handoffCommand"], frozen["handoffCommand"])
+            self.assertEqual(
+                idempotent["claudeCodeAutoHandoff"],
+                frozen["claudeCodeAutoHandoff"],
+            )
 
     def test_hierarchy_plan_tampering_blocks_the_single_freeze(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

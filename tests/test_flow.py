@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,6 +21,7 @@ class WorkItemFlowTests(unittest.TestCase):
                 host_runtime="codex",
             )
             self.assertTrue(result["created"])
+            self.assertIsNone(result["hostAutomation"])
             package = Path(result["artifactDir"])
             self.assertTrue((package / "development-plan.md").is_file())
             self.assertTrue(
@@ -47,6 +49,13 @@ class WorkItemFlowTests(unittest.TestCase):
             self.assertIn("保留控制器的 stderr", frozen["handoffPrompt"])
             self.assertIn("不得固化用户目录、Skill 安装位置或操作系统路径", frozen["handoffPrompt"])
             self.assertIn("不得创建临时 JSON", frozen["handoffPrompt"])
+            self.assertIn(
+                "面向人的状态报告必须把控制器 UTC 时间转换为当前运行环境的本机时区",
+                frozen["handoffPrompt"],
+            )
+            self.assertIn("显式标注 UTC 偏移", frozen["handoffPrompt"])
+            self.assertIn("Claude Code 无人值守前置条件", frozen["handoffPrompt"])
+            self.assertIn("`acceptEdits` 仍会为测试和控制器进程请求授权", frozen["handoffPrompt"])
             machine_paths = (
                 "C:\\Users\\", "/Users/", "/home/", "/tmp/", ".claude/skills", ".codex/skills",
             )
@@ -58,8 +67,33 @@ class WorkItemFlowTests(unittest.TestCase):
                 "继续执行治理需求 t-python-controller。使用当前 layered-delivery Skill 从当前 Skill 元数据解析控制器入口，"
                 "从当前项目的治理数据库恢复已冻结方案，按 Graph 自动调度计划接管整棵需求树并完成开发、测试和门禁；"
                 "以 graph-frontier 为恢复入口并直接消费控制器 JSON 输出，不固化用户目录、Skill 安装位置或操作系统路径，"
-                "不使用临时 JSON 中转，也不要重新准备、冻结需求或逐 Task 请求人工启动。",
+                "不使用临时 JSON 中转，也不要重新准备、冻结需求或逐 Task 请求人工启动；"
+                "面向人的状态报告须把控制器 UTC 时间转换为当前运行环境的本机时区并显式标注 UTC 偏移，机器字段保持不变；"
+                "若接收宿主是 Claude Code，必须在 dispatch-task 认领前由用户级设置、模式选择器或启动参数启用 auto；"
+                "acceptEdits 不足以避免 Process 授权，且会话不得自行修改权限配置或启用 bypassPermissions。",
             )
+            claude_handoff = frozen["claudeCodeAutoHandoff"]
+            self.assertIsNone(frozen["hostAutomation"])
+            self.assertIn("claudeCodeAutoHandoff", frozen["nextAction"])
+            self.assertEqual(claude_handoff["permissionMode"], "auto")
+            self.assertEqual(
+                claude_handoff["interactiveArgv"],
+                ["claude", "--permission-mode", "auto", frozen["handoffCommand"]],
+            )
+            self.assertEqual(
+                claude_handoff["unattendedArgv"],
+                ["claude", "-p", "--permission-mode", "auto", frozen["handoffCommand"]],
+            )
+            quoted_prompt = json.dumps(frozen["handoffCommand"], ensure_ascii=False)
+            self.assertEqual(
+                claude_handoff["interactiveCommand"],
+                f"claude --permission-mode auto {quoted_prompt}",
+            )
+            self.assertEqual(
+                claude_handoff["unattendedCommand"],
+                f"claude -p --permission-mode auto {quoted_prompt}",
+            )
+            self.assertIn("模式选择器", claude_handoff["desktopInstruction"])
             self.assertEqual(
                 (package / "requirement-handoff.md").read_text(encoding="utf-8"),
                 frozen["handoffPrompt"],

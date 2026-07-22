@@ -55,22 +55,31 @@ description: "治理可独立交付的软件需求。按最小必要深度组织
    python -X utf8 <skill-root>/scripts/hdg.py prepare-hierarchy --definition - --host-runtime <agent> --json
    ```
 
-5. 向用户展示返回的 `humanArtifacts.developmentPlan`、`humanArtifacts.executionGraph` 与 `humanArtifacts.stateTransitionGraph`，并概述根 ID、树形层级、开发目的、文件、接口/共享契约、依赖波次、测试映射、图节点摘要和运行时失败路由。准备只生成待评审方案和只读图，不授权开发。
+5. 向用户展示返回的 `humanArtifacts.developmentPlan`、`humanArtifacts.executionGraph` 与 `humanArtifacts.stateTransitionGraph`，并概述根 ID、树形层级、开发目的、文件、接口/共享契约、依赖波次、测试映射、图节点摘要和运行时失败路由。准备只生成待评审方案和只读图，不授权开发。当前宿主是 Claude Code 时，返回的 `hostAutomation` 是 active 的权限前置条件；必须在用户选择 active 并冻结前展示，不能等 Task 已认领后再处理 Process 授权。
 6. 用户要求修改时，重新准备同一个完整需求树。确认前请用户查看根级 `development-plan.md`，并选择一次 `active` 或 `manual` 开发方式。
-7. 用户明确同意当前方案并给出开发方式后，Agent 使用 `prepare-hierarchy` 返回的 `hierarchyFingerprint` 一次提交：
+7. 用户明确同意当前方案并给出开发方式后，Agent 使用 `prepare-hierarchy` 返回的 `hierarchyFingerprint` 一次提交。若当前宿主是 Claude Code 且选择 active，须先由用户级设置、模式选择器或启动参数满足 `hostAutomation`，再冻结并立即执行；聊天提示不能代替权限模式配置：
 
    ```text
    python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --expected-hierarchy <fingerprint> --development-mode active|manual --confirmed --json
    ```
 
    人不需要知道、复制或复述指纹。控制器用同一次确认冻结整树并记录根级方式；方案变化后旧指纹必须被拒绝。
-8. `active` 下，当前 Agent 冻结后立即查询 `graph-frontier`，严格消费控制器返回的 `dispatchPlan` 与 `DISPATCH_TASK`、`RUN_GATE`、`REQUEST_REVIEW`、`REQUEST_USER_CONFIRMATION` 动作。Graph 自动计算本轮全部安全 Task、稳定派发顺序、目标 Agent 数和并行组；执行适配器不得挑选子集或另定顺序。平台容量不足时只把未立即启动项按原顺序排队，子 Agent 不可用时由当前 Agent 串行消费同一队列，每次状态迁移后重新计算，均不请求用户选择。`manual` 下，当前规划会话不开发，控制器在需求根生成完整 `requirement-handoff.md`、同内容 `handoffPrompt` 和简短 `handoffCommand`。manual 冻结成功后的最终回复必须直接展示返回的 `handoffCommand`，使用纯文本代码块供用户一次复制到新会话；不得只给出 `requirement-handoff.md` 链接，也不得要求用户打开文件后全选复制。文件链接作为查看完整交接和冻结方案的辅助入口放在代码块之后。接收 Agent 随后从同一 graph run 的 `graph-frontier` 恢复并自动执行完整调度计划、开发、门禁和恢复，推进整棵图；`task-context` 只是诊断预览，不是恢复或开工入口。不得要求用户逐 Task 回复启动。运行时调度计划不写入冻结方案、层级指纹或图指纹。
+8. `active` 下，当前 Agent 冻结后立即查询 `graph-frontier`，严格消费控制器返回的 `dispatchPlan` 与 `DISPATCH_TASK`、`RUN_GATE`、`REQUEST_REVIEW`、`REQUEST_USER_CONFIRMATION` 动作。Graph 自动计算本轮全部安全 Task、稳定派发顺序、目标 Agent 数和并行组；执行适配器不得挑选子集或另定顺序。平台容量不足时只把未立即启动项按原顺序排队，子 Agent 不可用时由当前 Agent 串行消费同一队列，每次状态迁移后重新计算，均不请求用户选择。`manual` 下，当前规划会话不开发，控制器在需求根生成完整 `requirement-handoff.md`、同内容 `handoffPrompt` 和简短 `handoffCommand`。manual 冻结成功后的最终回复必须直接展示返回的 `handoffCommand`，使用纯文本代码块供用户一次复制到新会话；不得只给出 `requirement-handoff.md` 链接，也不得要求用户打开文件后全选复制。若用户明确交接到 Claude Code，还必须展示 `claudeCodeAutoHandoff`：Desktop/IDE 使用 `desktopInstruction` 后粘贴 `handoffCommand`，CLI 交互式任务使用 `interactiveCommand`，无人值守任务使用 `unattendedCommand`。文件链接作为查看完整交接和冻结方案的辅助入口放在代码块之后。接收 Agent 随后从同一 graph run 的 `graph-frontier` 恢复并自动执行完整调度计划、开发、门禁和恢复，推进整棵图；`task-context` 只是诊断预览，不是恢复或开工入口。不得要求用户逐 Task 回复启动。运行时调度计划不写入冻结方案、层级指纹或图指纹。
 9. 开发阶段不设置额外人工门禁。Graph 执行循环在冻结目标和安全边界内驱动 Agent 循环“实现 → 回归测试 → 修复 → 复测”，逐 Task 写回 `IMPLEMENTED` 或 `BLOCKED`。BLOCKED artifact 必须提供 `failure.class/code/summary`。`RETRYABLE` 由控制器在尝试预算内自动创建下一 attempt；第三次仍失败则写入 `RETRY_EXHAUSTED` 并阻断。`CONTRACT_CHANGE`、`EXTERNAL_AUTHORITY`、`NON_RETRYABLE` 和 `REMEDIATION_REQUIRED` 必须按 frontier 建议路由，不能误重试。长任务用 `heartbeat-task` 续租；Graph 执行循环定期执行 `advance-graph`，让过期 claim 按 `WORKER_LOST` 自动恢复。只有显式用户意图才使用 `pause-task`、`resume-task` 或经确认的 `cancel-graph-run`。若验证发现为满足原验收项必须补充冻结方案遗漏的精确文件，但目标、需求、验收、接口行为、数据契约、拓扑和外部授权均不变，则使用 `remediate-task --evidence -` 在原 Task 下追加验证修正授权。控制器从该 Task execution 沿显式图边失效必要后继、依赖消费者和聚合门禁，再创建新 attempt；失效范围有活动 claim 时阻断。不得重新 `prepare-hierarchy` 创建重复需求根。只有上述契约或授权事实确实变化时才回到人工评审。开发结果不能自行宣布 PASS。
-10. `workspace-overview.md` 只保留按最近更新时间倒序的全局需求索引，展示根类型、状态、门禁、后代进度和方案/总进度/月度明细入口；物理目录仍使用稳定根 ID，不追加日期。`workspace-overview/YYYY-MM.md` 是月度索引，每个需求的层级表格写入 `workspace-overview/YYYY-MM/<root-id>.md`；全局索引直接链接单需求文件，不依赖跨文件标题锚点。这样避免单一总览过长和 Markdown 折叠树形文本。显示日期使用 Python 运行时动态获取的本机时区，SQLite 原始时间保持 UTC；创建时间和需求开始时间精确到分，只有最终用户确认后的 `COMPLETED` 才展示完成日期，否则显示“未完成”。需求根 `progress.md` 继续使用 Markdown 表格展示整树明细：第一列保留与 `development-plan.md` 相同的工作项 ID、父子顺序和层级，其余列分别展示阶段、状态、门禁、当前执行、节点文件和阶段性产物。根节点行的节点进度链接 `node-progress.md`，子节点行链接各自 `progress.md`，不得让根节点进度回链整树文件。“当前执行”对协调节点显示“不适用”，对待执行 Task 显示“未认领”，开发中显示 owner/operationId，结果写回后显示“已释放”。每次控制器写回都会从 SQLite 自动重建这些文件，不依赖 Agent 手工改表。
+10. `workspace-overview.md` 只保留按最近更新时间倒序的全局需求索引，展示根类型、状态、门禁、后代进度和方案/总进度/月度明细入口；物理目录仍使用稳定根 ID，不追加日期。`workspace-overview/YYYY-MM.md` 是月度索引，每个需求的层级表格写入 `workspace-overview/YYYY-MM/<root-id>.md`；全局索引直接链接单需求文件，不依赖跨文件标题锚点。这样避免单一总览过长和 Markdown 折叠树形文本。面向人的状态报告必须把 SQLite 和控制器 JSON 中的 UTC 时间转换为当前运行环境的本机时区，并显式标注 UTC 偏移（例如 `UTC+08:00`）；SQLite、事件链和 JSON 机器字段保持 UTC 原值。工作区投影的创建时间和需求开始时间精确到分，只有最终用户确认后的 `COMPLETED` 才展示完成日期，否则显示“未完成”。需求根 `progress.md` 继续使用 Markdown 表格展示整树明细：第一列保留与 `development-plan.md` 相同的工作项 ID、父子顺序和层级，其余列分别展示阶段、状态、门禁、当前执行、节点文件和阶段性产物。根节点行的节点进度链接 `node-progress.md`，子节点行链接各自 `progress.md`，不得让根节点进度回链整树文件。“当前执行”对协调节点显示“不适用”，对待执行 Task 显示“未认领”，开发中显示 owner/operationId，结果写回后显示“已释放”。每次控制器写回都会从 SQLite 自动重建这些文件，不依赖 Agent 手工改表。
 11. 使用 `task-result` 写回结果并生成 `development-review.md`；验证修正会在同一文件追加“验证修正”明细，并进入原 Task 的授权文件集合。全部相关回归和复测通过后，使用 `accept-item` 提交门禁验收并生成 `acceptance-report.md`。结构化上下文、结果、修正和报告只存 SQLite。父级必须在子级全部 VERIFIED 后运行自己的聚合 gate。
 12. 根工作项 gate PASS 后向用户提交交付，由用户人工验收并最终确认；只有 `COMPLETED` 表示需求完成。
 
 完整状态流和命令参数见 [workflow.md](references/workflow.md) 与控制器 `--help`。
+
+## Claude Code 无人值守权限
+
+- Claude Code 的权限模式不能由聊天提示切换。只能由用户级或托管设置、Desktop/IDE 模式选择器，或 CLI `--permission-mode auto` 启动参数设置；项目级 `.claude/settings*.json` 不能把会话切换到 Auto。
+- `acceptEdits` 不是无人值守模式：它会自动接受编辑，但 Python、测试和控制器等 Process 仍可能请求授权。自动交接和 Claude active 都优先使用 `auto`。
+- Claude active 必须在冻结前满足 `hostAutomation.claimPrecondition`。manual 交接到 Claude 优先使用控制器返回的 `claudeCodeAutoHandoff`。不得先 `dispatch-task` 占用租约，再等待用户处理权限弹窗。
+- 不自动修改用户的 Claude 权限设置，不把 `bypassPermissions` 作为默认方案；只有用户明确配置的隔离容器或虚拟机才可考虑该模式。Auto 对敏感或越权动作仍可阻断，这类阻断按外部授权或 Graph 失败路由处理。
+
+完整配置与两类入口见 [claude-automation.md](references/claude-automation.md)。
 
 ## 冻结前 development plan
 
@@ -146,3 +155,4 @@ Task 的 `fileChanges` 必须是 scope 内精确路径；不适用的接口或�
 - 控制器入口解析、查询输出与结构化 stdin 的宿主无关传输：[stdin-transport.md](references/stdin-transport.md)
 - 多工作区：[multi-workspace.md](references/multi-workspace.md)
 - 验收后反馈：[post-acceptance-feedback.md](references/post-acceptance-feedback.md)
+- Claude active 与 manual 自动交接权限：[claude-automation.md](references/claude-automation.md)

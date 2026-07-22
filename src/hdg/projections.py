@@ -6,9 +6,29 @@ from datetime import datetime
 from typing import Any
 
 from .constants import SCHEMA_VERSION
+from .host_runtime import is_claude_runtime
 
 GOVERNANCE_DIRECTORY = ".layered-delivery"
 WORK_ITEMS_DIRECTORY = "work-items"
+
+
+def render_host_automation(host_runtime: str) -> dict[str, Any] | None:
+    """Describe the host-owned preflight required before a Claude active run."""
+    if not is_claude_runtime(host_runtime):
+        return None
+    return {
+        "hostRuntime": host_runtime,
+        "recommendedPermissionMode": "auto",
+        "acceptEditsIsUnattended": False,
+        "promptCanChangePermissionMode": False,
+        "userSettings": {"permissions": {"defaultMode": "auto"}},
+        "settingsScope": "user-or-managed",
+        "cliPermissionArgs": ["--permission-mode", "auto"],
+        "claimPrecondition": (
+            "在 active 冻结后的首次 dispatch-task 之前，通过用户级设置、模式选择器或启动参数启用 Auto；"
+            "不要先持有 Task 租约再等待 Process 授权。"
+        ),
+    }
 
 
 def _node_progress_filename(entry: dict[str, Any]) -> str:
@@ -376,6 +396,12 @@ def render_requirement_handoff(
         "- 完整冻结方案：[development-plan.md](development-plan.md)",
         "- 实时进度：[progress.md](progress.md)",
         "",
+        "## Claude Code 无人值守前置条件",
+        "",
+        "- 仅当接收宿主是 Claude Code 时适用：权限模式不能由本交接提示切换，必须由用户级设置、模式选择器或启动参数在认领 Task 前启用 `auto`。",
+        "- `acceptEdits` 仍会为测试和控制器进程请求授权，不是无人值守模式；不得先调用 `dispatch-task` 持有租约再等待 Process 弹窗。",
+        "- 会话不得自行修改 Claude 权限配置，也不得自行启用 `bypassPermissions`；后者只适用于用户明确配置的隔离容器或虚拟机。",
+        "",
         "## 冻结需求树",
         "",
     ]
@@ -399,9 +425,10 @@ def render_requirement_handoff(
         "5. 对 `dispatchPlan.dispatchTaskIds` 中的 Task 按顺序生成唯一 operationId，并调用 `dispatch-task`。平台有容量时启动隔离子 Agent，容量不足时按原顺序排队，无子 Agent 时由当前 Agent 串行消费。",
         "6. 每个 Task 严格使用自己的 context、scope、结果和证据，循环实现、回归测试、修复和复测；写回 `IMPLEMENTED` 或 `BLOCKED` 后完成该 Task 门禁。",
         "7. 每次状态写回后重新查询 frontier，由 Graph 重算目标 Agent 数与后续波次；全部子级 VERIFIED 后运行 Capability/Delivery 聚合门禁。",
-        "8. 不要要求用户逐 Task 回复启动，也不要在正常 Task 切换、并发降级或自动重试时请求人工确认。",
-        "9. 只有冻结目标、范围、接口、授权必须改变或出现无法自动消除的真实阻断时才返回用户；根门禁通过后提交最终交付，由用户人工验收。",
-        "10. 不修改 SQLite、baseline、治理投影或 `.git/**`；未获得单独授权时不提交、推送、合并、发布或改变外部状态。",
+        "8. 面向人的状态报告必须把控制器 UTC 时间转换为当前运行环境的本机时区，并显式标注 UTC 偏移（例如 `UTC+08:00`）；SQLite、事件链和控制器 JSON 的机器时间字段保持不变。",
+        "9. 不要要求用户逐 Task 回复启动，也不要在正常 Task 切换、并发降级或自动重试时请求人工确认。",
+        "10. 只有冻结目标、范围、接口、授权必须改变或出现无法自动消除的真实阻断时才返回用户；根门禁通过后提交最终交付，由用户人工验收。",
+        "11. 不修改 SQLite、baseline、治理投影或 `.git/**`；未获得单独授权时不提交、推送、合并、发布或改变外部状态。",
         "",
     ])
     return "\n".join(lines)
@@ -413,8 +440,28 @@ def render_requirement_handoff_command(root_id: str) -> str:
         f"继续执行治理需求 {root_id}。使用当前 layered-delivery Skill 从当前 Skill 元数据解析控制器入口，"
         "从当前项目的治理数据库恢复已冻结方案，按 Graph 自动调度计划接管整棵需求树并完成开发、测试和门禁；"
         "以 graph-frontier 为恢复入口并直接消费控制器 JSON 输出，不固化用户目录、Skill 安装位置或操作系统路径，"
-        "不使用临时 JSON 中转，也不要重新准备、冻结需求或逐 Task 请求人工启动。"
+        "不使用临时 JSON 中转，也不要重新准备、冻结需求或逐 Task 请求人工启动；"
+        "面向人的状态报告须把控制器 UTC 时间转换为当前运行环境的本机时区并显式标注 UTC 偏移，机器字段保持不变；"
+        "若接收宿主是 Claude Code，必须在 dispatch-task 认领前由用户级设置、模式选择器或启动参数启用 auto；"
+        "acceptEdits 不足以避免 Process 授权，且会话不得自行修改权限配置或启用 bypassPermissions。"
     )
+
+
+def render_claude_code_auto_handoff(root_id: str) -> dict[str, Any]:
+    """Render portable Claude CLI launches that select Auto outside the chat prompt."""
+    prompt = render_requirement_handoff_command(root_id)
+    quoted_prompt = json.dumps(prompt, ensure_ascii=False)
+    return {
+        "permissionMode": "auto",
+        "interactiveArgv": ["claude", "--permission-mode", "auto", prompt],
+        "unattendedArgv": ["claude", "-p", "--permission-mode", "auto", prompt],
+        "interactiveCommand": f"claude --permission-mode auto {quoted_prompt}",
+        "unattendedCommand": f"claude -p --permission-mode auto {quoted_prompt}",
+        "desktopInstruction": (
+            "在 Claude Code Desktop/IDE 的模式选择器中先选择 Auto，再粘贴 handoffCommand；"
+            "该选择由宿主管理，聊天提示不能代替。"
+        ),
+    }
 
 
 def render_item_progress(
@@ -803,6 +850,7 @@ def render_task_handoff(context: dict[str, Any]) -> str:
         "- 只实现这个冻结的叶子 Task，并且只写入 task.authorizedFileChanges；验证修正文件是原 Task 的追加授权，不是新需求。",
         "- 不修改 SQLite、baseline、进度投影、`.git/**` 或外部状态。",
         "- 运行列出的测试命令，只报告真实存在的证据。",
+        "- 面向人的状态报告必须把控制器 UTC 时间转换为当前运行环境的本机时区，并显式标注 UTC 偏移；机器时间字段保持不变。",
         "- 不提交、推送、发布，也不得自行报告 PASS。",
         "- 最终只返回 IMPLEMENTED 或 BLOCKED，并携带当前 Operation ID、变更文件和测试事实。",
         "- IMPLEMENTED 时 failure 必须为 null；BLOCKED 时必须改为 class/code/summary，并使用 RETRYABLE、REMEDIATION_REQUIRED、CONTRACT_CHANGE、EXTERNAL_AUTHORITY 或 NON_RETRYABLE 分类。",

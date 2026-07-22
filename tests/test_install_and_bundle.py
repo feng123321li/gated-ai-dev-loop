@@ -32,9 +32,22 @@ class InstallAndBundleTests(unittest.TestCase):
         self.assertIn("$layered-delivery", agent_metadata)
 
     def test_manual_skill_contract_requires_a_copyable_session_command(self) -> None:
-        skill = (TARGET_PACKAGE.parent.parent / "SKILL.md").read_text(encoding="utf-8")
+        skill_root = TARGET_PACKAGE.parent.parent
+        skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+        claude_automation = (skill_root / "references" / "claude-automation.md").read_text(encoding="utf-8")
         self.assertIn("必须直接展示返回的 `handoffCommand`", skill)
         self.assertIn("不得只给出 `requirement-handoff.md` 链接", skill)
+        self.assertIn(
+            "面向人的状态报告必须把 SQLite 和控制器 JSON 中的 UTC 时间转换为当前运行环境的本机时区",
+            skill,
+        )
+        self.assertIn("Claude Code 的权限模式不能由聊天提示切换", skill)
+        self.assertIn("`acceptEdits` 不是无人值守模式", skill)
+        self.assertIn("claudeCodeAutoHandoff", skill)
+        self.assertIn("claude-automation.md", skill)
+        self.assertIn("claude -p --permission-mode auto", claude_automation)
+        self.assertIn("项目级 `.claude/settings.json`", claude_automation)
+        self.assertIn("不默认使用 `bypassPermissions`", claude_automation)
 
     def test_skill_contract_keeps_controller_invocation_host_portable(self) -> None:
         skill_root = TARGET_PACKAGE.parent.parent

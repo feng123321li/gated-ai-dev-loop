@@ -58,11 +58,13 @@ class PlanningTests(unittest.TestCase):
 
     def test_reprepare_of_the_same_tree_is_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            first = prepare_hierarchy(root=temporary, hierarchy=task_hierarchy(), host_runtime="codex")
+            first = prepare_hierarchy(root=temporary, hierarchy=task_hierarchy(), host_runtime="claude-code")
             first_revision = GovernanceRepository(temporary).read_registry()["revision"]
             second = prepare_hierarchy(root=temporary, hierarchy=task_hierarchy(), host_runtime="codex")
             self.assertTrue(second["idempotent"])
             self.assertEqual(second["hierarchyFingerprint"], first["hierarchyFingerprint"])
+            self.assertEqual(second["hostAutomation"], first["hostAutomation"])
+            self.assertEqual(second["hostAutomation"]["hostRuntime"], "claude-code")
             self.assertEqual(GovernanceRepository(temporary).read_registry()["revision"], first_revision)
 
     def test_concurrent_prepares_preserve_every_registry_entry(self) -> None:

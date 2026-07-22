@@ -1,6 +1,6 @@
 # Layered Delivery Graph Engineering 升级设计与实施说明
 
-> 状态：已确认并完整实施（2026-07-21），包括关键路径、frontier 看板、图坐标证据绑定与事件回放恢复
+> 状态：已确认并完整实施（2026-07-21），包括契约 DAG、运行时 FSM、失败 Router、claim 租约、自动恢复、暂停/取消、关键路径、frontier 看板、图坐标证据绑定与事件回放恢复
 >
 > 目标版本：继续使用当前完整 schema v3
 >
@@ -27,6 +27,7 @@
 - 控制器把层级和依赖编译成执行图，把 baseline、门禁、审查、确认和修正回流编译成治理图；
 - SQLite 持久化图定义、图运行、节点尝试和事件；
 - 宿主不再只查询 READY Task，而是查询整个执行图的当前 frontier，并按结构化动作推进；
+- 冻结依赖保持 DAG，运行时循环由 FSM 和 Router Policy 表达；可重试失败与失联执行在预算内自动恢复，耗尽后机械阻断；
 - 用户不需要手写节点和边，也不需要逐 Task 指挥 Agent。
 
 项目名称继续使用 `layered-delivery`。Graph engineering 是内部架构升级，不建议再次更名。
@@ -604,9 +605,10 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 
 ```text
 .layered-delivery/work-items/<root-id>/
-├── execution-graph.md     # 冻结图、当前节点状态、边和 frontier
-├── frontier.md            # 双语关键路径、允许动作、并行组和阻断看板
-├── run-timeline.md        # node attempt 与关键事件时间线
+├── execution-graph.md     # 冻结执行图与治理图
+├── state-transition-graph.md # 双语开发流程、FSM 与路由策略
+├── frontier.md            # 双语关键路径、迁移、预算、允许动作和阻断看板
+├── run-timeline.md        # attempt、租约、失败分类与事件时间线
 └── progress.md            # 继续保留整树交付进度
 ```
 
@@ -620,7 +622,7 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 |---|---|
 | `src/hdg/graph_model.py` | Graph IR、节点/边校验、图指纹，并把完整 hierarchy 确定性编译成合同图 |
 | `src/hdg/graph_runtime.py` | 事件回放、节点状态、关键路径、frontier、图状态和恢复 |
-| `src/hdg/graph_projections.py` | `execution-graph.md`、`frontier.md`、`run-timeline.md` 和 Mermaid 图渲染 |
+| `src/hdg/graph_projections.py` | `execution-graph.md`、`state-transition-graph.md`、`frontier.md`、`run-timeline.md` 和 Mermaid 图渲染 |
 
 构建 Skill 后，同步生成对应的 `skills/layered-delivery/scripts/hdg/**` 文件。
 
@@ -634,7 +636,7 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 | `src/hdg/execution.py` | `_task_ready` 改为 graph frontier 的 Task 视图；dispatch/result 驱动 node event |
 | `src/hdg/acceptance.py` | Task/Capability/Delivery gate 统一映射到 gate node |
 | `src/hdg/remediation.py` | 根据显式边计算失效闭包并创建下一 attempt |
-| `src/hdg/cli.py` | 增加 graph-status、graph-frontier、graph-events、graph-replay、rebuild-graph-run 命令 |
+| `src/hdg/cli.py` | 提供 status/frontier/events/replay、advance、heartbeat、pause/resume、cancel 与 rebuild 命令 |
 | `README.md` | 从“分层树调度”更新为“分层合同 + 图运行 + 节点循环” |
 | `skills/layered-delivery/SKILL.md` | 用 graph frontier 描述 active/manual 自动推进流程 |
 | `skills/layered-delivery/references/*.md` | 更新 baseline、执行、并发、事务、恢复、验收和跟踪契约 |
@@ -647,6 +649,7 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 |---|---|
 | `tests/test_graph_model.py` | 节点/边精确字段、确定性指纹、未知类型、环路、非法 join、关键路径 fan-in |
 | `tests/test_graph_runtime.py` | frontier 看板、并行、fan-in、gate、review、confirmation、bound evidence、事件回放与重建 |
+| `tests/test_runtime_fsm.py` | runtime policy、流程图、失败分类、自动重试耗尽、租约失联恢复、暂停/恢复与取消 |
 | `tests/test_remediation.py` | Task、依赖消费者和聚合 gate 的失效闭包与下一 attempt |
 
 现有 hierarchy、planning、execution、acceptance、remediation 和安全测试继续保留，用来证明升级没有削弱原治理契约。
@@ -815,6 +818,10 @@ Graph engineering 升级完成必须同时满足：
 - frontier 能完整表达 Task、gate、review 和 confirmation 动作；
 - 并行、依赖、范围冲突和 fan-in 行为可机械验证；
 - 每个节点支持 attempt、claim、证据、事件和恢复；
+- claim 具有租约与心跳，过期执行可确定性归类为 `WORKER_LOST`；
+- BLOCKED Task 结果具有结构化 failure class，自动重试严格受 3 次总尝试预算控制；
+- 暂停、恢复、尝试耗尽和运行取消是显式 FSM 事件；
+- `state-transition-graph.md` 从冻结 runtime 策略生成中文 / English 开发流程与状态图；
 - frontier 提供关键路径与双语 Markdown 看板；
 - artifact 证据绑定到精确 run、node、attempt 和 graph fingerprint；
 - 完整事件回放能重建运行状态并检测或修复快照偏差；
@@ -836,3 +843,41 @@ Graph engineering 升级完成必须同时满足：
 3. **按四阶段渐进实施**，先构建只读图，再切换运行时权威，避免一次重写全部生命周期。
 
 以上三项均已接受并落实到当前 schema v3 实现。
+
+## 17. 本轮运行时升级的实际差异
+
+### 17.1 开发过程变化
+
+升级前，宿主看到 BLOCKED 后通常自行判断是否调用 `retry-item`；执行者失联也可能长期停留在 CLAIMED。升级后：
+
+1. `dispatch-task` 创建带 30 分钟租约的 claim；
+2. 长任务使用 `heartbeat-task` 续租；
+3. `task-result: BLOCKED` 必须提交 `failure.class/code/summary`；
+4. `RETRYABLE` 在 attempt 1、2 失败时由控制器直接创建下一 attempt；
+5. attempt 3 仍失败时写入 `RETRY_EXHAUSTED`，frontier 建议人工干预；
+6. `advance-graph` 把过期 claim 归类为 `WORKER_LOST` 并按相同预算恢复；
+7. `CONTRACT_CHANGE`、`EXTERNAL_AUTHORITY`、`NON_RETRYABLE`、`REMEDIATION_REQUIRED` 分别路由，不会被笼统重试；
+8. `pause-task`、`resume-task` 和经确认的 `cancel-graph-run` 提供显式运行控制。
+
+### 17.2 生成文件变化
+
+- `development-plan.md` 新增 `运行时策略 / Runtime Policy`，评审者在冻结前即可看到最大尝试次数、自动恢复类别和 claim 租约；
+- `state-transition-graph.md` 是新增的同源投影，包含 `开发执行流程 / Development Execution Flow`、节点 FSM 和完整迁移表；
+- `frontier.md` 新增 transition、route condition、attempt budget、failure class、remaining attempts、last transition 和 recommended action；
+- `run-timeline.md` 新增 lease、failure class、last transition 和路由条件；
+- `execution-graph.md` 继续只表达冻结执行/治理合同，避免与运行时循环混为一图。
+
+### 17.3 使用方式变化
+
+```text
+prepare-hierarchy
+→ 评审 development-plan.md + execution-graph.md + state-transition-graph.md
+→ freeze-hierarchy
+→ graph-frontier / dispatch-task
+→ heartbeat-task（长任务）
+→ task-result（BLOCKED 时必须分类）
+→ advance-graph（周期性处理可机械恢复条件）
+→ gate / review / confirmation
+```
+
+这仍然是 `layered-delivery` Skill：Skill 提供触发入口和工程规则，Python 控制器执行图语义，SQLite 保存事实，Markdown 面向人类解释整个工程。

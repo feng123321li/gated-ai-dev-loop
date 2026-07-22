@@ -8,7 +8,7 @@ import sqlite3
 import uuid
 from copy import deepcopy
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -30,7 +30,9 @@ from .graph_model import graph_fingerprint, validate_delivery_graph
 from .graph_projections import (
     render_delivery_graph,
     render_frontier_dashboard,
+    render_runtime_policy_summary,
     render_run_timeline,
+    render_state_transition_graph,
 )
 from .host_runtime import is_agent_runtime
 from .jsonio import canonical_json, sha256_bytes
@@ -82,6 +84,18 @@ DATABASE_TABLES = {
     "interaction_events", "graph_definitions", "graph_nodes", "graph_edges",
     "graph_runs", "node_runs", "graph_events", "graph_evidence",
 }
+DATABASE_COLUMN_CONTRACTS = {
+    "graph_runs": (
+        "run_id", "root_id", "graph_fingerprint", "status", "started_at",
+        "updated_at", "completed_at", "cancelled_at", "record_revision",
+    ),
+    "node_runs": (
+        "run_id", "node_id", "attempt", "status", "owner", "operation_id",
+        "claimed_at", "finished_at", "latest_evidence_hash", "lease_expires_at",
+        "last_heartbeat_at", "failure_class", "last_transition", "retry_exhausted",
+        "record_revision",
+    ),
+}
 
 
 def _plain_int(value: object, *, minimum: int = 0) -> bool:
@@ -114,15 +128,25 @@ def _valid_gate(value: object) -> bool:
 
 
 def _valid_claim(value: object) -> bool:
-    return (
+    valid = (
         isinstance(value, dict)
-        and set(value) == {"owner", "operationId", "claimedAt"}
+        and set(value) == {
+            "owner", "operationId", "claimedAt", "lastHeartbeatAt", "leaseExpiresAt",
+        }
         and isinstance(value.get("owner"), str)
         and bool(value["owner"])
         and isinstance(value.get("operationId"), str)
         and bool(value["operationId"])
         and valid_timestamp(value.get("claimedAt"))
+        and valid_timestamp(value.get("lastHeartbeatAt"))
+        and valid_timestamp(value.get("leaseExpiresAt"))
     )
+    if not valid:
+        return False
+    claimed = datetime.fromisoformat(value["claimedAt"].replace("Z", "+00:00"))
+    heartbeat = datetime.fromisoformat(value["lastHeartbeatAt"].replace("Z", "+00:00"))
+    expires = datetime.fromisoformat(value["leaseExpiresAt"].replace("Z", "+00:00"))
+    return claimed <= heartbeat < expires
 
 
 def _valid_latest_result(value: object) -> bool:
@@ -151,6 +175,12 @@ def timestamp(now: object = None) -> str:
     if date.tzinfo is None:
         date = date.replace(tzinfo=timezone.utc)
     return date.astimezone(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def timestamp_after(value: object, seconds: int) -> str:
+    at = timestamp(value)
+    date = datetime.fromisoformat(at.replace("Z", "+00:00")) + timedelta(seconds=seconds)
+    return timestamp(date)
 
 
 class GovernanceRepository:
@@ -325,6 +355,7 @@ class GovernanceRepository:
                 started_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 completed_at TEXT,
+                cancelled_at TEXT,
                 record_revision INTEGER NOT NULL,
                 FOREIGN KEY (root_id) REFERENCES graph_definitions(root_id) ON DELETE CASCADE,
                 FOREIGN KEY (graph_fingerprint) REFERENCES graph_definitions(graph_fingerprint)
@@ -339,6 +370,11 @@ class GovernanceRepository:
                 claimed_at TEXT,
                 finished_at TEXT,
                 latest_evidence_hash TEXT,
+                lease_expires_at TEXT,
+                last_heartbeat_at TEXT,
+                failure_class TEXT,
+                last_transition TEXT,
+                retry_exhausted INTEGER NOT NULL,
                 record_revision INTEGER NOT NULL,
                 PRIMARY KEY (run_id, node_id, attempt),
                 FOREIGN KEY (run_id) REFERENCES graph_runs(run_id) ON DELETE CASCADE
@@ -396,6 +432,18 @@ class GovernanceRepository:
                 missing=sorted(DATABASE_TABLES - tables),
                 unexpected=sorted(tables - DATABASE_TABLES),
             )
+        for table, expected in DATABASE_COLUMN_CONTRACTS.items():
+            actual = tuple(
+                row["name"] for row in connection.execute(f"PRAGMA table_info({table})")
+            )
+            if actual != expected:
+                fail(
+                    "WORK_ITEM_DATABASE_SCHEMA_UNSUPPORTED",
+                    "Governance database does not match the current complete schema v3",
+                    table=table,
+                    expectedColumns=list(expected),
+                    actualColumns=list(actual),
+                )
 
     def _active_connection(self) -> sqlite3.Connection:
         if self._connection is None:
@@ -971,14 +1019,16 @@ class GovernanceRepository:
         run_id = f"run-{uuid.uuid4().hex}"
         connection.execute(
             "INSERT INTO graph_runs(run_id, root_id, graph_fingerprint, status, started_at, "
-            "updated_at, completed_at, record_revision) VALUES (?, ?, ?, 'ACTIVE', ?, ?, NULL, 1)",
+            "updated_at, completed_at, cancelled_at, record_revision) "
+            "VALUES (?, ?, ?, 'ACTIVE', ?, ?, NULL, NULL, 1)",
             (run_id, root_id, stored["graphFingerprint"], started_at, started_at),
         )
         for node in stored["graph"]["nodes"]:
             connection.execute(
                 "INSERT INTO node_runs(run_id, node_id, attempt, status, owner, operation_id, "
-                "claimed_at, finished_at, latest_evidence_hash, record_revision) "
-                "VALUES (?, ?, 1, 'PENDING', NULL, NULL, NULL, NULL, NULL, 1)",
+                "claimed_at, finished_at, latest_evidence_hash, lease_expires_at, "
+                "last_heartbeat_at, failure_class, last_transition, retry_exhausted, record_revision) "
+                "VALUES (?, ?, 1, 'PENDING', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, 1)",
                 (run_id, node["id"]),
             )
         return self.read_graph_run(root_id)
@@ -992,7 +1042,7 @@ class GovernanceRepository:
         with self._read_connection() as connection:
             row = connection.execute(
                 "SELECT run_id, root_id, graph_fingerprint, status, started_at, updated_at, "
-                "completed_at, record_revision FROM graph_runs WHERE root_id = ?",
+                "completed_at, cancelled_at, record_revision FROM graph_runs WHERE root_id = ?",
                 (root_id,),
             ).fetchone()
             if row is None:
@@ -1001,15 +1051,17 @@ class GovernanceRepository:
                 fail("DELIVERY_GRAPH_RUN_MISSING", f"Delivery graph run is missing: {root_id}")
             node_rows = connection.execute(
                 "SELECT run_id, node_id, attempt, status, owner, operation_id, claimed_at, "
-                "finished_at, latest_evidence_hash, record_revision FROM node_runs "
+                "finished_at, latest_evidence_hash, lease_expires_at, last_heartbeat_at, "
+                "failure_class, last_transition, retry_exhausted, record_revision FROM node_runs "
                 "WHERE run_id = ? ORDER BY node_id, attempt",
                 (row["run_id"],),
             ).fetchall()
         if (
-            row["status"] not in {"ACTIVE", "BLOCKED", "COMPLETED"}
+            row["status"] not in {"ACTIVE", "BLOCKED", "PAUSED", "CANCELLED", "COMPLETED"}
             or not valid_timestamp(row["started_at"])
             or not valid_timestamp(row["updated_at"])
             or (row["completed_at"] is not None and not valid_timestamp(row["completed_at"]))
+            or (row["cancelled_at"] is not None and not valid_timestamp(row["cancelled_at"]))
             or not _plain_int(row["record_revision"], minimum=1)
         ):
             fail("DELIVERY_GRAPH_RUN_INVALID", f"Delivery graph run is invalid: {root_id}")
@@ -1023,6 +1075,11 @@ class GovernanceRepository:
                 "claimedAt": item["claimed_at"],
                 "finishedAt": item["finished_at"],
                 "latestEvidenceHash": item["latest_evidence_hash"],
+                "leaseExpiresAt": item["lease_expires_at"],
+                "lastHeartbeatAt": item["last_heartbeat_at"],
+                "failureClass": item["failure_class"],
+                "lastTransition": item["last_transition"],
+                "retryExhausted": bool(item["retry_exhausted"]),
                 "recordRevision": item["record_revision"],
             }
             for item in node_rows
@@ -1038,6 +1095,7 @@ class GovernanceRepository:
             "startedAt": row["started_at"],
             "updatedAt": row["updated_at"],
             "completedAt": row["completed_at"],
+            "cancelledAt": row["cancelled_at"],
             "recordRevision": row["record_revision"],
             "nodes": [latest_by_node[node_id] for node_id in sorted(latest_by_node)],
             "attempts": attempts,
@@ -1066,8 +1124,9 @@ class GovernanceRepository:
             attempt = current + 1
             connection.execute(
                 "INSERT INTO node_runs(run_id, node_id, attempt, status, owner, operation_id, "
-                "claimed_at, finished_at, latest_evidence_hash, record_revision) "
-                "VALUES (?, ?, ?, 'PENDING', NULL, NULL, NULL, NULL, NULL, 1)",
+                "claimed_at, finished_at, latest_evidence_hash, lease_expires_at, "
+                "last_heartbeat_at, failure_class, last_transition, retry_exhausted, record_revision) "
+                "VALUES (?, ?, ?, 'PENDING', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, 1)",
                 (run["runId"], node_id, attempt),
             )
             attempts.append({"nodeId": node_id, "attempt": attempt, "startedAt": at})
@@ -1319,28 +1378,37 @@ class GovernanceRepository:
                 run,
                 self.read_graph_events(root_id),
             )
-            current_by_node = {node["nodeId"]: node for node in run["nodes"]}
+            current_by_attempt = {
+                (node["nodeId"], node["attempt"]): node
+                for node in run["attempts"]
+            }
             changed = False
-            for state in replay["nodes"]:
-                current = current_by_node[state["nodeId"]]
+            for state in replay["attempts"]:
+                current = current_by_attempt[(state["nodeId"], state["attempt"])]
                 desired = tuple(
                     state[field]
                     for field in (
                         "status", "owner", "operationId", "claimedAt", "finishedAt",
-                        "latestEvidenceHash",
+                        "latestEvidenceHash", "leaseExpiresAt", "lastHeartbeatAt",
+                        "failureClass", "lastTransition", "retryExhausted", "recordRevision",
                     )
                 )
                 actual = (
                     current["status"], current["owner"], current["operationId"],
-                    current["claimedAt"], current["finishedAt"], current["latestEvidenceHash"]
+                    current["claimedAt"], current["finishedAt"], current["latestEvidenceHash"],
+                    current["leaseExpiresAt"], current["lastHeartbeatAt"],
+                    current["failureClass"], current["lastTransition"], current["retryExhausted"],
+                    current["recordRevision"],
                 )
                 if desired == actual:
                     continue
                 connection.execute(
                     "UPDATE node_runs SET status = ?, owner = ?, operation_id = ?, claimed_at = ?, "
-                    "finished_at = ?, latest_evidence_hash = ?, record_revision = record_revision + 1 "
+                    "finished_at = ?, latest_evidence_hash = ?, lease_expires_at = ?, "
+                    "last_heartbeat_at = ?, failure_class = ?, last_transition = ?, retry_exhausted = ?, "
+                    "record_revision = ? "
                     "WHERE run_id = ? AND node_id = ? AND attempt = ?",
-                    (*desired, run["runId"], state["nodeId"], current["attempt"]),
+                    (*desired, run["runId"], state["nodeId"], state["attempt"]),
                 )
                 changed = True
             if (
@@ -1348,12 +1416,14 @@ class GovernanceRepository:
                 or replay["status"] != run["status"]
                 or replay["updatedAt"] != run["updatedAt"]
                 or replay["completedAt"] != run["completedAt"]
+                or replay["cancelledAt"] != run["cancelledAt"]
             ):
                 connection.execute(
-                    "UPDATE graph_runs SET status = ?, updated_at = ?, completed_at = ?, "
+                    "UPDATE graph_runs SET status = ?, updated_at = ?, completed_at = ?, cancelled_at = ?, "
                     "record_revision = record_revision + 1 WHERE run_id = ?",
                     (
                         replay["status"], replay["updatedAt"], replay["completedAt"],
+                        replay["cancelledAt"],
                         run["runId"],
                     ),
                 )
@@ -1373,20 +1443,23 @@ class GovernanceRepository:
         for node in replay["attempts"]:
             connection.execute(
                 "INSERT INTO node_runs(run_id, node_id, attempt, status, owner, operation_id, "
-                "claimed_at, finished_at, latest_evidence_hash, record_revision) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "claimed_at, finished_at, latest_evidence_hash, lease_expires_at, "
+                "last_heartbeat_at, failure_class, last_transition, retry_exhausted, record_revision) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run["runId"], node["nodeId"], node["attempt"], node["status"],
                     node["owner"], node["operationId"], node["claimedAt"], node["finishedAt"],
-                    node["latestEvidenceHash"], node["recordRevision"],
+                    node["latestEvidenceHash"], node["leaseExpiresAt"],
+                    node["lastHeartbeatAt"], node["failureClass"],
+                    node["lastTransition"], int(node["retryExhausted"]), node["recordRevision"],
                 ),
             )
         connection.execute(
-            "UPDATE graph_runs SET status = ?, started_at = ?, updated_at = ?, completed_at = ?, "
+            "UPDATE graph_runs SET status = ?, started_at = ?, updated_at = ?, completed_at = ?, cancelled_at = ?, "
             "record_revision = record_revision + 1 WHERE run_id = ?",
             (
                 replay["status"], replay["startedAt"], replay["updatedAt"],
-                replay["completedAt"], run["runId"],
+                replay["completedAt"], replay["cancelledAt"], run["runId"],
             ),
         )
         return replay
@@ -1557,6 +1630,11 @@ class GovernanceRepository:
             "RETRY": "阻断任务重试",
             "VALIDATION_REMEDIATION_RETRY": "原任务验证修正重试",
             "GRAPH_REPLAY_REBUILD": "按图事件回放重建运行快照",
+            "TASK_HEARTBEAT": "任务认领心跳续租",
+            "TASK_PAUSED": "任务执行显式暂停",
+            "TASK_RESUMED": "任务执行恢复",
+            "GRAPH_ADVANCED": "图控制器自动推进与恢复",
+            "GRAPH_RUN_CANCELLED": "图运行已确认取消",
         }.get(purpose, purpose)
 
     def append_interaction_event(
@@ -1757,7 +1835,12 @@ class GovernanceRepository:
                 "root": build(root),
             })
             hierarchy_state = self.read_hierarchy_state(root["id"])
-            root_plan = render_hierarchy_plan(hierarchy, states, hierarchy_state)
+            stored_graph = self.read_graph_definition(root["id"])
+            root_plan = (
+                render_hierarchy_plan(hierarchy, states, hierarchy_state)
+                + "\n"
+                + render_runtime_policy_summary(stored_graph["graph"])
+            )
 
             def project(entry: dict[str, Any], *, is_root: bool) -> None:
                 target = self.item_path(entry)
@@ -1770,7 +1853,6 @@ class GovernanceRepository:
                     project(by_id[child_id], is_root=False)
 
             project(root, is_root=True)
-            stored_graph = self.read_graph_definition(root["id"])
             graph_run = self.read_graph_run(root["id"], allow_missing=True)
             atomic_write(
                 self.item_path(root) / "execution-graph.md",
@@ -1778,6 +1860,13 @@ class GovernanceRepository:
                     stored_graph["graph"],
                     graph_fingerprint=stored_graph["graphFingerprint"],
                     run=graph_run,
+                ),
+            )
+            atomic_write(
+                self.item_path(root) / "state-transition-graph.md",
+                render_state_transition_graph(
+                    stored_graph["graph"],
+                    graph_fingerprint=stored_graph["graphFingerprint"],
                 ),
             )
             from .graph_runtime import (
@@ -1819,6 +1908,11 @@ class GovernanceRepository:
                         "claimedAt": None,
                         "finishedAt": None,
                         "latestEvidenceHash": None,
+                        "leaseExpiresAt": None,
+                        "lastHeartbeatAt": None,
+                        "failureClass": None,
+                        "lastTransition": None,
+                        "retryExhausted": False,
                         "recordRevision": None,
                     }
                     for state in derive_node_states(stored_graph["graph"], registry)

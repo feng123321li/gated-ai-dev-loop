@@ -12,6 +12,7 @@
 - 根级 `development-plan.md` 是整棵需求树唯一的冻结评审入口，一次人工确认冻结全部节点。
 - 层级由用户评审，Delivery Graph 由控制器确定性编译；用户不直接维护任意节点和边。
 - Task execution、各级 gate、root review 和 user confirmation 都是显式图节点。
+- 冻结的依赖合同是 DAG；运行时由有限状态机和路由策略驱动，允许受控重试、回退、暂停与恢复。因此完整 Graph Engineering 不是“只有 DAG”。
 - `ready-tasks` 是 graph frontier 的 Task 投影；冻结图定义运行合同，带图指纹的哈希事件链是运行事实，graph run 和 node attempt 是可由事件完整重建的查询快照。
 - 项目级 `.layered-delivery/governance.sqlite3` 是唯一机器权威，Markdown 只是可重建的人类投影。
 - 同一冻结目标和验收契约内的修正必须回到原 Task，不得为修复同一需求创建第二个根。
@@ -59,10 +60,15 @@ flowchart TD
     L --> M
     X --> M
     M --> N["实现与验证 / Implement & Verify"]
-    N --> O{"需要同合同修正？ / Remediation?"}
-    O -->|"是 / Yes"| P["失效下游并创建新尝试 / Invalidate & Retry"]
+    N --> O{"结果 / Result"}
+    O -->|"成功 / Success"| Q["分级门禁 / Layered Gates"]
+    O -->|"失败 / Failure"| FC["失败分类 / Failure Classification"]
+    FC -->|"可重试 / Retryable"| RB{"仍有尝试预算？ / Attempts Remaining?"}
+    RB -->|"是 / Yes"| M
+    RB -->|"否 / No"| BX["尝试耗尽并阻断 / Retry Exhausted"]
+    FC -->|"同合同修正 / Remediation"| P["失效下游并创建新尝试 / Invalidate & Retry"]
+    FC -->|"合同或授权变化 / Contract or Authority"| HR["请求评审或授权 / Review or Authority"]
     P --> M
-    O -->|"否 / No"| Q["分级门禁 / Layered Gates"]
     Q --> S["根级审查 / Root Review"]
     S --> T["用户确认 / User Confirmation"]
     T --> U["已完成 / Completed"]
@@ -72,7 +78,7 @@ flowchart TD
 
 ```text
 prepare-hierarchy
-→ 人工评审 development-plan.md + execution-graph.md 并选择 active/manual
+→ 人工评审 development-plan.md + execution-graph.md + state-transition-graph.md 并选择 active/manual
 → freeze-hierarchy
 → graph-frontier / dispatch-task
 → task-result / development-review.md
@@ -147,6 +153,9 @@ dispatch-task
 ```
 
 - `IMPLEMENTED` 只表示开发结果已写回并等待门禁，不表示 PASS。
+- `BLOCKED` 必须携带结构化 `failure.class/code/summary`。`RETRYABLE` 和租约失联 `WORKER_LOST` 在最多 3 次尝试内由控制器自动创建新 attempt；耗尽后写入 `RETRY_EXHAUSTED` 并阻断。
+- `CONTRACT_CHANGE`、`EXTERNAL_AUTHORITY`、`NON_RETRYABLE` 和 `REMEDIATION_REQUIRED` 只进入对应人工或修正路由，不被错误地自动重跑。
+- 活动 claim 使用 30 分钟租约；执行者用 `heartbeat-task` 续租。`advance-graph` 会机械识别过期 claim，并按 `WORKER_LOST` 路由恢复。
 - Task 通过后为 `VERIFIED`；Capability 和 Delivery 必须等直接子级全部 VERIFIED 后运行自己的聚合门禁，不能因子级全绿自动 PASS。
 - 同 baseline 且没有活动 claim 的 `BLOCKED` 可用 `retry-item` 自动恢复并继续。
 - 测试、范围、验收项或证据不完整时门禁不能 PASS；P0/P1 必须为空，P2 必须展示。
@@ -183,8 +192,9 @@ dispatch-task
         ├── baseline.md
         ├── development-plan.md        # 整树冻结评审入口
         ├── execution-graph.md         # 执行图 + 治理图双语投影
-        ├── frontier.md                # 当前关键路径、可执行动作与阻断看板
-        ├── run-timeline.md            # 节点 attempt、状态与事件链
+        ├── state-transition-graph.md  # 开发流程 + 运行时 FSM + 路由契约
+        ├── frontier.md                # 关键路径、迁移、预算、建议动作与阻断看板
+        ├── run-timeline.md            # attempt、迁移、失败分类、租约与事件链
         ├── progress.md                # 整树总进度
         ├── node-progress.md           # 根节点自身进度
         ├── interaction-log.md         # 可审计交互摘要
@@ -204,6 +214,7 @@ dispatch-task
 ```text
 冻结前：development-plan.md
 图结构：execution-graph.md
+运行与失败路由：state-transition-graph.md
 下一步与关键路径：frontier.md
 运行过程：run-timeline.md
 开发结果写回后：development-review.md
@@ -288,8 +299,13 @@ python -X utf8 <skill-root>/scripts/hdg.py --help
 | `graph-events` | 查询带前序哈希校验的运行事件链 |
 | `graph-replay` | 从完整事件链重算运行状态并检查快照一致性 |
 | `rebuild-graph-run` | 经显式确认后按事件回放重建 graph/node run 查询快照 |
+| `advance-graph` | 执行确定性自动路由，包括过期 claim 的失联恢复 |
+| `cancel-graph-run` | 经显式确认后取消当前 graph run，并记录终止事件 |
 | `task-context` | 只读诊断未认领 Task 的上下文预览，不授权开工 |
 | `dispatch-task` | 原子校验 READY、认领 Task 并生成独立执行上下文与 handoff |
+| `heartbeat-task` | 为当前 operation 续期 claim 租约并记录心跳事件 |
+| `pause-task` | 显式暂停当前 Task attempt 并释放 claim |
+| `resume-task` | 将暂停的 Task attempt 恢复到可计算的 READY/PENDING |
 | `claim-task` | 仅执行原子认领；正常开工优先使用 `dispatch-task` |
 | `task-result` | 通过 stdin 写回 IMPLEMENTED/BLOCKED，并生成开发复核 |
 | `remediate-task` | 在同一验收契约下向原 Task 追加精确文件授权 |

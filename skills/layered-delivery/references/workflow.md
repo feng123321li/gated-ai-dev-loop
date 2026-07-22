@@ -6,8 +6,8 @@
 2. 只读恢复项目级 `governance.sqlite3`。数据库 schema、ID、拓扑、路径、指纹或普通字段不一致时保持阻断，不迁移、不猜测。仅当历史节点只有 evidence 引用过期、完整 artifact 仍在 SQLite 且其余契约有效时，将该节点只读隔离并在总览告警；其他新需求、有效兄弟 Task 和已有 claim 继续。Markdown 缺失时可从数据库刷新。
 3. 起草层级事实卡，选择最浅合法形态：独立 Task、Capability→Task 或 Delivery→Capability→Task。为每个实际节点起草自己的 baseline 与 `developmentPlan`。
 4. 把整棵需求树组织成 `{"schemaVersion":3,"root":{"definition":{...},"children":[...]}}`。协调节点声明的每个 child 必须在这棵树里完整物化。
-5. 运行 `prepare-hierarchy`。一个需求只生成 `work-items/<root-id>/` 一个顶层目录，子节点按 `children/<id>/` 递归嵌套；根级 `development-plan.md/progress.md` 聚合完整树，控制器同时编译 `execution-graph.md` 和 `frontier.md`，根节点自身进度写入 `node-progress.md`，每个实际子节点生成自己的 `development-plan.md/progress.md`。
-6. 人工查看根级 `development-plan.md` 与 `execution-graph.md`，同时选择 active/manual。需要修改就重新准备整棵树；同意时只需确认当前方案和所选方式，无需知道或复述层级/图指纹。
+5. 运行 `prepare-hierarchy`。一个需求只生成 `work-items/<root-id>/` 一个顶层目录，子节点按 `children/<id>/` 递归嵌套；根级 `development-plan.md/progress.md` 聚合完整树，控制器同时编译 `execution-graph.md`、`state-transition-graph.md` 和 `frontier.md`，根节点自身进度写入 `node-progress.md`，每个实际子节点生成自己的 `development-plan.md/progress.md`。
+6. 人工查看根级 `development-plan.md`、`execution-graph.md` 与 `state-transition-graph.md`，同时选择 active/manual。需要修改就重新准备整棵树；同意时只需确认当前方案和所选方式，无需知道或复述层级/图指纹。
 7. Agent 使用准备结果中的 `hierarchyFingerprint`，调用一次 `freeze-hierarchy --expected-hierarchy ... --development-mode ... --confirmed`。控制器在同一事务中记录方式并冻结全部节点；指纹已变化则拒绝旧确认。
 8. active 下由当前 Agent 冻结后查询 `graph-frontier` 并直接自主推进；manual 在需求根生成完整 `requirement-handoff.md`，并返回简短 `handoffCommand`。规划会话必须把 `handoffCommand` 放入纯文本代码块供用户一次复制，不能只给文件链接；接收 Agent 即成为同一 graph run 的执行宿主。两种宿主都按 frontier 动作自主决定多子 Agent、单 Agent 或当前 Agent 串行，循环实现、回归、修复和复测；运行能力变化时自动调整，不再次询问开发方式或要求人工逐 Task 启动。
 9. 开发结果的完整 artifact 通过 `task-result --evidence -` 从 stdin 交给控制器。控制器在同一 SQLite 写事务内校验当前 operationId、计算摘要并保存 artifact 与摘要，然后生成 `development-review.md`；开发结果不代表 PASS，也不产生临时 evidence 文件。
@@ -44,6 +44,7 @@ work-items/
 └── <root-id>/
     ├── development-plan.md
     ├── execution-graph.md  # 执行图 + 治理图
+    ├── state-transition-graph.md # 开发流程、FSM 与失败路由
     ├── frontier.md         # 关键路径、动作与阻断看板
     ├── run-timeline.md     # graph run、attempt 与事件
     ├── progress.md       # 整树总进度
@@ -142,6 +143,8 @@ flowchart TD
 能力和交付都必须在全部直接子级已验证后运行自己的聚合门禁，不能把子级完成等同于父级通过。同契约验证修正必须回到原 Task，并沿显式图边失效必要后继、依赖消费者和聚合 gate；普通门禁失败按当前节点创建新 attempt 并重试。两者都不进入最终确认，也不新建重复需求根。
 
 ## 恢复与失败关闭
+
+执行宿主应在长任务中调用 `heartbeat-task`，并周期性调用 `advance-graph`。控制器只对结构化 `RETRYABLE` 与租约过期产生的 `WORKER_LOST` 做预算内自动重试；第三次失败后写入 `RETRY_EXHAUSTED`。暂停和恢复使用显式命令及事件；取消整个运行必须由用户明确确认。
 
 - 恢复优先使用用户给出的精确 ID/路径、有效焦点或唯一候选；多个候选时请求选择。
 - 只读隔离项不能作为命令目标，也不能被事务修改或删除；它不阻断其他有效工作项。隔离集合在写事务中发生变化时必须回滚。

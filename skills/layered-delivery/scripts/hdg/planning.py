@@ -13,7 +13,11 @@ from .graph_model import (
     graph_fingerprint,
     graph_summary,
 )
-from .graph_projections import render_delivery_graph
+from .graph_projections import (
+    render_delivery_graph,
+    render_runtime_policy_summary,
+    render_state_transition_graph,
+)
 from .graph_runtime import hierarchy_root_entry
 from .model import (
     hierarchy_fingerprint,
@@ -130,10 +134,14 @@ def _hierarchy_packages(
 ) -> list[tuple[Path, dict[str, str]]]:
     records = _hierarchy_records(hierarchy)
     root_path = records[0]["packagePath"]
-    root_plan = render_hierarchy_plan(hierarchy, states, hierarchy_state)
     graph = compile_delivery_graph(
         hierarchy,
         hierarchy_fingerprint=hierarchy_state["hierarchyFingerprint"],
+    )
+    root_plan = (
+        render_hierarchy_plan(hierarchy, states, hierarchy_state)
+        + "\n"
+        + render_runtime_policy_summary(graph)
     )
     packages: list[tuple[Path, dict[str, str]]] = []
     for index, record in enumerate(records):
@@ -145,6 +153,10 @@ def _hierarchy_packages(
         )
         if index == 0:
             files["execution-graph.md"] = render_delivery_graph(
+                graph,
+                graph_fingerprint=hierarchy_state["graphFingerprint"],
+            )
+            files["state-transition-graph.md"] = render_state_transition_graph(
                 graph,
                 graph_fingerprint=hierarchy_state["graphFingerprint"],
             )
@@ -238,7 +250,15 @@ def _hierarchy_from_registry(
         or not review_valid
     ):
         fail("WORK_ITEM_HIERARCHY_CHANGED", "Hierarchy package changed after preparation")
-    expected_plan = render_hierarchy_plan(hierarchy, states, hierarchy_state).encode("utf-8")
+    expected_graph = compile_delivery_graph(
+        hierarchy,
+        hierarchy_fingerprint=hierarchy_state["hierarchyFingerprint"],
+    )
+    expected_plan = (
+        render_hierarchy_plan(hierarchy, states, hierarchy_state)
+        + "\n"
+        + render_runtime_policy_summary(expected_graph)
+    ).encode("utf-8")
     try:
         actual_plan = read_regular_file(root_target, root_target / "development-plan.md")
     except Exception:
@@ -263,6 +283,23 @@ def _hierarchy_from_registry(
     )
     if actual_graph_projection != expected_graph_projection:
         fail("DELIVERY_GRAPH_PROJECTION_CHANGED", "Delivery graph projection changed after preparation")
+    state_projection = root_target / "state-transition-graph.md"
+    try:
+        actual_state_projection = read_regular_file(root_target, state_projection).decode("utf-8")
+    except Exception:
+        fail(
+            "DELIVERY_GRAPH_PROJECTION_CHANGED",
+            "State transition graph projection is missing or unreadable",
+        )
+    expected_state_projection = render_state_transition_graph(
+        stored_graph["graph"],
+        graph_fingerprint=stored_graph["graphFingerprint"],
+    )
+    if actual_state_projection != expected_state_projection:
+        fail(
+            "DELIVERY_GRAPH_PROJECTION_CHANGED",
+            "State transition graph projection changed after preparation",
+        )
     return hierarchy, states, hierarchy_state, root_target
 
 
@@ -319,6 +356,7 @@ def prepare_hierarchy(
                     "humanArtifacts": {
                         "developmentPlan": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/development-plan.md",
                         "executionGraph": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/execution-graph.md",
+                        "stateTransitionGraph": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/state-transition-graph.md",
                         "frontier": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/frontier.md",
                         "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
                     },
@@ -384,6 +422,7 @@ def prepare_hierarchy(
             "humanArtifacts": {
                 "developmentPlan": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/development-plan.md",
                 "executionGraph": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/execution-graph.md",
+                "stateTransitionGraph": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/state-transition-graph.md",
                 "frontier": f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}/{root_id}/frontier.md",
                 "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
             },
@@ -407,6 +446,7 @@ def _frozen_human_artifacts(root_id: str, handoff: str | None) -> dict[str, str 
         "developmentPlan": f"{base}/development-plan.md",
         "progress": f"{base}/progress.md",
         "executionGraph": f"{base}/execution-graph.md",
+        "stateTransitionGraph": f"{base}/state-transition-graph.md",
         "frontier": f"{base}/frontier.md",
         "runTimeline": f"{base}/run-timeline.md",
         "requirementHandoff": f"{base}/requirement-handoff.md" if handoff is not None else None,

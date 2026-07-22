@@ -62,6 +62,7 @@ class ValidationRemediationTests(unittest.TestCase):
                     "testsRun": 1,
                 }],
                 "blockers": [],
+                "failure": None,
             },
         )
         return prepared, task_id, baseline
@@ -196,6 +197,7 @@ class ValidationRemediationTests(unittest.TestCase):
                         "testsRun": 1,
                     }],
                     "blockers": [],
+                    "failure": None,
                 },
             )
             self.assertEqual(
@@ -318,6 +320,7 @@ class ValidationRemediationTests(unittest.TestCase):
                         "testsRun": 1,
                     }],
                     "blockers": [],
+                    "failure": None,
                 },
             )
 
@@ -416,6 +419,7 @@ class ValidationRemediationTests(unittest.TestCase):
                         "changedFiles": changed_files,
                         "tests": [{"argv": command, "exitCode": 0, "testsRun": 1}],
                         "blockers": [],
+                        "failure": None,
                     },
                 )
                 accept_work_item(

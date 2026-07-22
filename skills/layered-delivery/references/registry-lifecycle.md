@@ -15,6 +15,8 @@ Task 执行状态：
 - `BLOCKED`：开发或 gate 阻断；
 - `VERIFIED`：Task gate PASS。
 
+对应的图节点 FSM 还显式包含 `PENDING / READY / CLAIMED / SUCCEEDED / BLOCKED / PAUSED / CANCELLED / COMPLETED`。工作项状态用于产品治理，图节点状态用于运行调度；两者由控制器事务同步，不允许 Agent 自行拼接。
+
 有 Delivery 父级的 Capability，其 `dependsOn` 未全部 VERIFIED 时，后代 Task 即使自身 Task 依赖满足也不 READY。根 Capability 不声明 Capability 依赖，根 Task 不声明 Task 依赖。
 
 Delivery/Capability 保持 `FROZEN`，直到 decomposition 为 SEALED、全部计划直接子级 VERIFIED 且自身 gate PASS，之后为 `VERIFIED`。根 Task 在自身 gate PASS 后 VERIFIED；根 Capability 在自己的聚合 gate PASS 后 VERIFIED。READY 是 Task 的派生谓词，不是这里的持久状态。
@@ -27,6 +29,12 @@ Delivery/Capability 保持 `FROZEN`，直到 decomposition 为 SEALED、全部�
 整树 PREPARED --人工评审方案、选择方式并一次确认--> 全部 baseline FROZEN
 Task FROZEN --dispatch-task 认领并生成 handoff--> CLAIMED
 Task CLAIMED --写回结果--> IMPLEMENTED | BLOCKED
+Task CLAIMED --heartbeat-task--> CLAIMED + 租约延长
+Task CLAIMED --pause-task--> PAUSED + 释放 claim
+Task PAUSED --resume-task--> READY | PENDING
+Task CLAIMED --租约过期 + advance-graph--> BLOCKED(WORKER_LOST) --预算内--> 新 attempt READY
+Task BLOCKED(RETRYABLE) --预算内自动路由--> 新 attempt READY
+Task BLOCKED(RETRYABLE/WORKER_LOST) --第三次失败--> RETRY_EXHAUSTED
 Task IMPLEMENTED --accept-item 通过--> VERIFIED + acceptance report
 Task IMPLEMENTED --accept-item 未通过--> BLOCKED + acceptance report
 Task/协调节点 BLOCKED --retry-item 校验当前指纹--> FROZEN
@@ -34,6 +42,7 @@ Task IMPLEMENTED/BLOCKED/VERIFIED --remediate-task 同契约补充文件--> 原 
 协调节点 FROZEN --全部直接子级 VERIFIED + 聚合门禁通过--> VERIFIED
 治理根 VERIFIED --独立/人工审查通过--> WAITING_FOR_USER_CONFIRMATION
 WAITING_FOR_USER_CONFIRMATION --用户确认--> COMPLETED
+活动 Graph Run --用户确认取消--> CANCELLED
 ```
 
 协调工作项没有 CLAIMED/IMPLEMENTED；它们通过 child 状态和自己的 gate 推进。
@@ -51,7 +60,7 @@ WAITING_FOR_USER_CONFIRMATION --用户确认--> COMPLETED
 
 BLOCKED 必须记录事实、责任方和解除条件。依赖完成或环境恢复后重新计算 READY；不要直接跳过 gate。父链或冻结契约发生变化时保持阻断，重新准备、评审并冻结完整需求树。
 
-同一 baseline 下重试任何 BLOCKED 工作项时，Agent 使用 `retry-item` 提交当前 expected baseline 指纹并自动继续。Task 回到 FROZEN 后重新计算 READY；Capability/Delivery 回到 FROZEN 后重新运行聚合 gate。重试不修改需求、拓扑或 scope；冻结契约需要变化时保持阻断并重新进行完整需求规划。
+Task 结果为 BLOCKED 时必须结构化分类。`RETRYABLE` 和控制器产生的 `WORKER_LOST` 在 3 次总尝试预算内自动创建下一 attempt；耗尽后保持阻断。`REMEDIATION_REQUIRED`、`CONTRACT_CHANGE`、`EXTERNAL_AUTHORITY`、`NON_RETRYABLE` 不自动重试，分别路由到修正、评审、授权或人工干预。`retry-item` 仍用于符合条件的门禁或显式人工恢复，但不再是普通 Task 可重试失败的必经步骤。所有重试都不修改需求、拓扑或 scope；冻结契约需要变化时保持阻断并重新进行完整需求规划。
 
 若验证发现原验收项所需的精确文件在冻结方案中遗漏，但目标、需求、验收、接口行为、数据契约、拓扑和外部权限均不变，使用 `remediate-task` 把补充文件追加到原 Task 的有效授权。原 baseline 不改，Task 回到 FROZEN；已通过的 Capability、Delivery gate 和根级最终验收状态逐级失效，修正后必须重新运行。此路径不是新需求，不生成新根，也不再次选择开发方式。
 

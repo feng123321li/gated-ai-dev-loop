@@ -230,6 +230,7 @@ class PlanningTests(unittest.TestCase):
                     "testsRun": 1,
                 }],
                 "blockers": [],
+                "failure": None,
             }
             recorded = record_task_result(
                 root=temporary,

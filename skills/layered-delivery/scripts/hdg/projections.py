@@ -95,6 +95,7 @@ def item_human_artifacts(
         "developmentPlan": posixpath.join(base, "development-plan.md"),
         "hierarchyDevelopmentPlan": posixpath.join(plan_base, "development-plan.md"),
         "executionGraph": posixpath.join(plan_base, "execution-graph.md"),
+        "stateTransitionGraph": posixpath.join(plan_base, "state-transition-graph.md"),
         "frontier": posixpath.join(plan_base, "frontier.md"),
         "runTimeline": posixpath.join(plan_base, "run-timeline.md"),
         "baseline": posixpath.join(base, "baseline.md"),
@@ -645,6 +646,13 @@ def render_development_review(report: dict[str, Any]) -> str:
     lines.extend(["", "## 开发者结果", "", f"- 摘要：{result.get('summary', '未提供')}"])
     blockers = result.get("blockers", [])
     lines.append(f"- 阻断：{'；'.join(blockers) or '无'}")
+    failure = result.get("failure")
+    if failure:
+        lines.extend([
+            f"- 失败分类：`{failure['class']}`",
+            f"- 失败代码：`{failure['code']}`",
+            f"- 失败说明：{failure['summary']}",
+        ])
     lines.extend(["", "## 测试事实", ""])
     if tests:
         for test in tests:
@@ -772,6 +780,7 @@ def render_task_handoff(context: dict[str, Any]) -> str:
         "changedFiles": [],
         "tests": [{"argv": ["<exact frozen argv>"], "exitCode": 0, "testsRun": 0}],
         "blockers": [],
+        "failure": None,
     }
     display_operation = context["operation"]["operationId"] if context.get("operation") else "尚未认领；不得开始开发"
     pretty = lambda value: json.dumps(value, ensure_ascii=False, indent=2, separators=(",", ": "))
@@ -792,6 +801,7 @@ def render_task_handoff(context: dict[str, Any]) -> str:
         "- 运行列出的测试命令，只报告真实存在的证据。",
         "- 不提交、推送、发布，也不得自行报告 PASS。",
         "- 最终只返回 IMPLEMENTED 或 BLOCKED，并携带当前 Operation ID、变更文件和测试事实。",
+        "- IMPLEMENTED 时 failure 必须为 null；BLOCKED 时必须改为 class/code/summary，并使用 RETRYABLE、REMEDIATION_REQUIRED、CONTRACT_CHANGE、EXTERNAL_AUTHORITY 或 NON_RETRYABLE 分类。",
         "- 宿主必须用 task-result 回收结果；返回开发结果后必须继续验收，IMPLEMENTED 不是完成状态。",
         "- 门禁通过后仍需独立验收、生成用户验收报告并取得用户确认。",
         "",

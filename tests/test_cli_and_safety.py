@@ -37,6 +37,11 @@ class CliAndSafetyTests(unittest.TestCase):
         self.assertIn("--development-mode active|manual", help_text)
         self.assertNotIn("select-development-mode", help_text)
         self.assertIn("retry-item --item <id> --expected-baseline <sha256>", help_text)
+        self.assertIn("advance-graph --item <root-or-subtree-id>", help_text)
+        self.assertIn("heartbeat-task --item <task-id> --operation <id>", help_text)
+        self.assertIn("pause-task --item <task-id> --operation <id>", help_text)
+        self.assertIn("resume-task --item <task-id>", help_text)
+        self.assertIn("cancel-graph-run --item <root-or-subtree-id> --confirmed", help_text)
         self.assertIn("remediate-task --item <task-id> --expected-baseline <sha256> --evidence -", help_text)
         self.assertNotIn("retry-item --item <id> --expected-baseline <sha256> --confirmed", help_text)
         self.assertNotIn("prepare-item", help_text)
@@ -162,6 +167,7 @@ class CliAndSafetyTests(unittest.TestCase):
                     "testsRun": 1,
                 }],
                 "blockers": [],
+                "failure": None,
             }
             self.assertEqual(
                 run_cli(
@@ -314,6 +320,7 @@ class CliAndSafetyTests(unittest.TestCase):
                 "changedFiles": [],
                 "tests": [],
                 "blockers": [],
+                "failure": None,
             }
             stderr = io.StringIO()
             self.assertEqual(
@@ -394,6 +401,7 @@ class CliAndSafetyTests(unittest.TestCase):
                     "changedFiles": ["src/controller.py"],
                     "tests": [{"argv": ["python", "-m", "unittest"], "exitCode": 0, "testsRun": 1}],
                     "blockers": [],
+                    "failure": None,
                 },
             )
             artifact = {

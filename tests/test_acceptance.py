@@ -6,7 +6,7 @@ from pathlib import Path
 
 from hdg.acceptance import accept_work_item, record_acceptance
 from hdg.execution import dispatch_task, record_task_result
-from hdg.planning import freeze_hierarchy, prepare_hierarchy, retry_work_item
+from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.repository import GovernanceRepository
 
 from .fixtures import task_hierarchy
@@ -35,8 +35,13 @@ class AcceptanceFlowTests(unittest.TestCase):
                 "changedFiles": ["src/controller.py"],
                 "tests": [{"argv": ["python", "-m", "unittest"], "exitCode": 1, "testsRun": 1}],
                 "blockers": ["Regression failure"],
+                "failure": {
+                    "class": "RETRYABLE",
+                    "code": "REGRESSION_FAILURE",
+                    "summary": "The regression can be retried within the frozen contract.",
+                },
             }
-            record_task_result(
+            result = record_task_result(
                 root=temporary,
                 item_id=task_id,
                 operation_id="op-retry",
@@ -44,12 +49,8 @@ class AcceptanceFlowTests(unittest.TestCase):
                 evidence=blocked,
             )
 
-            retried = retry_work_item(
-                root=temporary,
-                item_id=task_id,
-                expected_baseline_fingerprint=prepared["baselineFingerprints"][task_id],
-            )
-            self.assertEqual(retried["status"], "FROZEN")
+            self.assertEqual(result["routingDecision"]["action"], "RETRY_NODE")
+            self.assertEqual(result["status"], "BLOCKED")
 
     def test_task_reaches_completed_with_distinct_review_and_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -79,6 +80,7 @@ class AcceptanceFlowTests(unittest.TestCase):
                 "changedFiles": ["src/controller.py", "tests/test_controller.py"],
                 "tests": [{"argv": ["python", "-m", "unittest", "tests.test_controller"], "exitCode": 0, "testsRun": 1}],
                 "blockers": [],
+                "failure": None,
             }
             result_record = record_task_result(
                 root=temporary,

@@ -47,6 +47,6 @@ python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --e
 
 ## 结果接收
 
-宿主用 claim 的 operationId 接收完整结果 artifact，并以 `--evidence -` 从 stdin 直接执行 `task-result`。控制器在同一 SQLite 写事务内核对当前 claim、operationId 和 artifact，计算规范 JSON 摘要，记录 `IMPLEMENTED/BLOCKED`、artifact 与摘要并清除 claim；不创建临时 evidence 文件。控制器随即生成 `development-review.md`，对照冻结计划展示实际改动、接口、回归测试、复测和偏差；`IMPLEMENTED` 只表示等待门禁。Agent 应先修复回归失败并完成复测，再以相同方式提交严格 gate artifact、执行 `accept-item` 并生成验收报告。根工作项通过聚合门禁后向用户提交交付，由用户人工验收和最终确认；开发会话的 IMPLEMENTED 不能当作完成。
+宿主用 claim 的 operationId 接收完整结果 artifact，并以 `--evidence -` 从 stdin 直接执行 `task-result`。控制器在同一 SQLite 写事务内核对当前 claim、operationId、未过期租约和 artifact，计算规范 JSON 摘要，记录 `IMPLEMENTED/BLOCKED`、artifact 与摘要并清除 claim；不创建临时 evidence 文件。`IMPLEMENTED` 的 `failure` 必须为 `null`；`BLOCKED` 必须提供 `failure.class/code/summary`，让控制器在同一事务中决定自动重试、尝试耗尽、同合同修正、合同评审、外部授权或人工干预。控制器随即生成 `development-review.md`，对照冻结计划展示实际改动、接口、回归测试、复测和偏差；`IMPLEMENTED` 只表示等待门禁。Agent 应先修复回归失败并完成复测，再以相同方式提交严格 gate artifact、执行 `accept-item` 并生成验收报告。根工作项通过聚合门禁后向用户提交交付，由用户人工验收和最终确认；开发会话的 IMPLEMENTED 不能当作完成。
 
 验证阶段若发现原验收项所需文件漏列，当前 claim 必须先正常写回并释放，再由宿主执行 `remediate-task`。控制器把补充文件加入下一次 context 的 `authorizedFileChanges`，原 Task 重新 READY 后再认领；开发 Agent 不自行编辑 baseline、计划或 SQLite，也不另起需求根。

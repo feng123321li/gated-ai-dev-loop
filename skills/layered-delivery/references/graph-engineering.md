@@ -1,55 +1,88 @@
-# Graph Engineering
+# Graph Engineering 运行规则
 
-## Authority
+## 权威来源
 
-- Human authority: the reviewed hierarchy and root `development-plan.md`.
-- Compiled authority: the deterministic Delivery Graph stored in SQLite.
-- Runtime fact authority: graph-fingerprint-bound, hash-chained graph events. Graph and node runs are replayable query snapshots.
-- Human projections: `execution-graph.md`, `frontier.md`, and `run-timeline.md`; never infer machine state from them.
+- 人工权威：经过评审的层级结构和根级 `development-plan.md`。
+- 编译权威：控制器确定性编译并保存到 SQLite 的 Delivery Graph。
+- 运行事实权威：绑定图指纹、前后哈希相连的图事件链。graph run 和 node run 只是可通过事件回放重建的查询快照。
+- 人类可读投影：`execution-graph.md`、`state-transition-graph.md`、`frontier.md` 和 `run-timeline.md`。不得从这些 Markdown 文件反向推断机器状态。
 
-The user does not define arbitrary graph nodes or edges. `prepare-hierarchy` compiles the validated hierarchy into one graph with two typed views:
+用户不直接定义任意图节点或边。`prepare-hierarchy` 将通过校验的层级结构编译成一张图，并提供两种有类型的视图：
 
-- Execution Graph: Task execution, Task/Capability/Delivery gates, dependencies, success edges, and joins.
-- Governance Graph: gates, root review, user confirmation, and governance transitions.
+- 执行图：包含 Task 执行、Task/Capability/Delivery 门禁、依赖、成功边和汇聚关系。
+- 治理图：包含各级门禁、根级审查、用户确认和治理迁移。
 
-## Frozen graph contract
+## 契约 DAG 与运行时 FSM
 
-Preparation returns both `hierarchyFingerprint` and `graphFingerprint`. One `freeze-hierarchy` confirmation freezes the complete hierarchy, development mode, and compiled graph.
+Graph Engineering 不等于只有 DAG。控制器将以下职责分开处理：
 
-After freeze:
+- 契约 DAG：保存冻结节点、依赖边、并行分支、fan-in 汇聚、门禁、审查和确认。它必须保持无环，确保就绪状态与关键路径可以确定性计算。
+- 运行时 FSM：保存节点状态和有类型的状态迁移。它允许重试、同合同修正、暂停/恢复和执行者失联恢复形成受控回路，但不修改冻结的依赖拓扑。
+- 路由策略（Router Policy）：根据失败分类、尝试预算、路由条件和下一动作决定运行方向。该策略由控制器维护，并纳入图指纹。
 
-- do not add or remove graph nodes;
-- do not rewrite dependency or join edges;
-- do not skip gate, review, or confirmation nodes;
-- runtime may choose Agent count, parallelism, and owner;
-- retry and remediation create attempts, not new graph definitions.
+节点是工作单元；Agent 是已认领 Task 节点的当前执行者。不要把每个 Agent 都建模成永久图节点。
 
-## Frontier
+## 冻结图合同
 
-Use:
+准备阶段同时返回 `hierarchyFingerprint` 和 `graphFingerprint`。一次 `freeze-hierarchy` 确认会冻结完整层级、开发方式和编译后的图。
+
+冻结后必须遵守：
+
+- 不增加或删除图节点；
+- 不改写依赖边或汇聚边；
+- 不跳过门禁、审查或确认节点；
+- 运行时可以选择 Agent 数量、并行度和 owner；
+- 重试和同合同修正只能创建新 attempt，不能创建新的图定义。
+
+## 图前沿
+
+使用：
 
 ```text
 python -X utf8 <skill-root>/scripts/hdg.py graph-frontier --item <root-or-subtree-id> --json
 ```
 
-Possible actions:
+可能返回的动作：
 
-| Action | Required response |
+| 动作 | 宿主应执行的操作 |
 |---|---|
-| `DISPATCH_TASK` | Dispatch that Task with a unique owner and operationId |
-| `RUN_GATE` | Build and submit evidence for that work item gate |
-| `REQUEST_REVIEW` | Perform isolated independent review or obtain accepted human review |
-| `REQUEST_USER_CONFIRMATION` | Present the final result and obtain distinct user confirmation |
+| `DISPATCH_TASK` | 使用唯一的 owner 和 operationId 派发该 Task |
+| `RUN_GATE` | 为当前工作项构建并提交门禁证据 |
+| `REQUEST_REVIEW` | 执行隔离的独立审查，或取得被接受的人工审查结果 |
+| `REQUEST_USER_CONFIRMATION` | 向用户提交最终结果并取得独立的最终确认 |
+| `HEARTBEAT_TASK` | 在当前 operation 的租约到期前续租 |
+| `RESUME_TASK` | 恢复被显式暂停的 Task attempt |
 
-`ready-tasks` returns only the `workItemId` values of current `DISPATCH_TASK` actions. Do not implement separate readiness logic in the host.
+`ready-tasks` 只返回当前 `DISPATCH_TASK` 动作中的 `workItemId`。宿主不得另行实现第二套就绪判断逻辑。
 
-`blocked` explains why nodes are not actionable, including predecessor nodes, scope conflicts, isolation, or an unfrozen requirement. Resolve the recorded condition and query the frontier again; do not route around it.
+`blocked` 解释节点当前不可执行的原因，包括前置节点未完成、文件范围冲突、只读隔离或需求尚未冻结。应解决已记录的条件后重新查询 frontier，不能绕过它自行选择路径。
 
-The frontier also returns `criticalPath`, including the longest remaining path, the next join, and whether the path is blocked. The controller renders the same information, current actions, parallel groups, and blockers into the bilingual `frontier.md` dashboard.
+frontier 还会返回 `criticalPath`，其中包括最长剩余路径、下一个汇聚点，以及路径是否被阻断或暂停。可执行动作会携带迁移、路由条件、尝试预算、租约和命令提示；阻断项会携带失败分类、剩余尝试次数、是否耗尽、最近迁移和建议动作。控制器将相同信息渲染到双语 `frontier.md` 看板。
 
-## Status and events
+## 认领、心跳与自动推进
 
-Use:
+每个 claim 都包含 `claimedAt`、`lastHeartbeatAt` 和 `leaseExpiresAt`。默认租约为 30 分钟，建议每 5 分钟发送一次心跳。
+
+```text
+python -X utf8 <skill-root>/scripts/hdg.py heartbeat-task --item <task-id> --operation <id> --json
+python -X utf8 <skill-root>/scripts/hdg.py advance-graph --item <root-or-subtree-id> --json
+```
+
+`heartbeat-task` 只能延长匹配且尚未过期的 operation。`advance-graph` 会确定性识别过期 claim，写入 `CLAIM_LEASE_EXPIRED`，将其归类为 `WORKER_LOST`，然后创建新 attempt 或写入 `RETRY_EXHAUSTED`。它不会猜测任意业务失败是否可以重试。
+
+显式运行控制命令如下：
+
+```text
+python -X utf8 <skill-root>/scripts/hdg.py pause-task --item <task-id> --operation <id> --json
+python -X utf8 <skill-root>/scripts/hdg.py resume-task --item <task-id> --json
+python -X utf8 <skill-root>/scripts/hdg.py cancel-graph-run --item <root-id> --confirmed --json
+```
+
+暂停和恢复沿用同一个 attempt。取消是经过明确确认的 graph run 终止迁移，不属于失败重试。
+
+## 状态与事件
+
+使用：
 
 ```text
 python -X utf8 <skill-root>/scripts/hdg.py graph-status --item <root-or-subtree-id> --json
@@ -57,47 +90,66 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item <root-or-subtree-
 python -X utf8 <skill-root>/scripts/hdg.py graph-replay --item <root-or-subtree-id> --json
 ```
 
-`graph-status` returns the graph fingerprint, graph run, typed nodes, edges, current node status, attempt, owner, operationId, and blockers.
+`graph-status` 返回图指纹、冻结的运行时策略、graph run、有类型的节点和边，以及节点当前状态、attempt、owner、operationId、claim 租约、最近迁移、失败分类、尝试耗尽状态和阻断原因。
 
-`graph-events` returns the ordered graph-fingerprint-bound, hash-chained event stream. Normal lifecycle events include graph start, Task claim/result, gate result, review, and final confirmation. Retry and remediation add their own events.
+`graph-events` 返回按顺序排列、绑定图指纹且带前序哈希的事件链。正常生命周期事件包括图启动、Task 认领/心跳/结果、租约过期、暂停/恢复、门禁结果、重试/耗尽、审查、最终确认、同合同修正失效传播和取消。
 
-For artifact-driven events, the controller stores a bound evidence wrapper containing the original artifact and a binding over `runId`, `nodeId`, `attempt`, `graphFingerprint`, and the artifact hash. The binding has its own canonical SHA-256. Hosts submit only the original artifact; never manufacture binding fields or reuse a bound artifact at another graph coordinate.
+对于由 artifact 驱动的事件，控制器会保存一份 bound evidence，其中包含原始 artifact，以及对 `runId`、`nodeId`、`attempt`、`graphFingerprint` 和 artifact 哈希的绑定；绑定整体还会计算独立的规范 SHA-256。宿主只提交原始 artifact，不得自行构造绑定字段，也不得将 bound artifact 复用到其他图坐标。
 
-`graph-replay` applies the complete event stream from `GRAPH_RUN_STARTED`, reconstructs every node attempt and graph status, computes a replay fingerprint, and reports any mismatch with the graph/node run snapshots. A mismatch blocks normal status and frontier queries.
+`graph-replay` 从 `GRAPH_RUN_STARTED` 开始应用完整事件流，重建每个 node attempt 和 graph 状态，计算 replay fingerprint，并报告事件回放结果与 graph/node run 快照之间的差异。出现差异时，正常状态和 frontier 查询必须阻断。
 
-If the event and evidence chains validate and only query snapshots are damaged, an explicitly confirmed recovery may run:
+如果事件链和证据链校验通过，只有查询快照损坏，可以在明确确认后执行：
 
 ```text
 python -X utf8 <skill-root>/scripts/hdg.py rebuild-graph-run --item <root-id> --confirmed --json
 ```
 
-This rebuilds graph/node run snapshots from events and records the recovery interaction. It never edits the frozen graph, events, or evidence.
+该命令从事件重建 graph/node run 快照，并记录恢复交互；它不会修改冻结图、事件或 evidence。
 
-Never modify graph tables, registry rows, attempts, or events directly.
+不得直接修改图表、registry 记录、attempt 或事件。
 
-## Retry
+## 失败分类与重试
 
-`retry-item` is legal only for an unclaimed BLOCKED work item with the current baseline fingerprint. It creates a new attempt for the failed execution or gate node and preserves the graph fingerprint.
+状态为 BLOCKED 的 `TASK_RESULT` 必须包含：
 
-Do not reuse the failed operationId for a new Task dispatch.
+```json
+{"failure":{"class":"RETRYABLE","code":"REGRESSION_FAILURE","summary":"说明本次 attempt 失败的原因。"}}
+```
 
-## Remediation invalidation
+路由规则是确定性的：
 
-`remediate-task` applies only when the goal, requirements, acceptance, interfaces, data contract, test commands, topology, and external authority remain unchanged.
+| 失败分类 | 路由 |
+|---|---|
+| `RETRYABLE` | 在 3 次总尝试预算内自动创建下一 attempt |
+| `WORKER_LOST` | 仅由控制器用于过期 claim，使用相同的自动重试预算 |
+| `REMEDIATION_REQUIRED` | 提交同合同验证修正证据 |
+| `CONTRACT_CHANGE` | 返回人工评审，不得静默重试 |
+| `EXTERNAL_AUTHORITY` | 请求用户授予外部权限 |
+| `NON_RETRYABLE` | 请求人工干预 |
 
-The controller starts at the Task execution node and follows outgoing graph edges. It invalidates progressed downstream nodes that depend on the repaired result, including consumers and aggregate gates. It creates new attempts for invalidated progressed nodes while keeping the original graph definition and baseline.
+当自动恢复类失败在第 3 次 attempt 仍未成功时，控制器写入 `RETRY_EXHAUSTED`，将节点标记为尝试耗尽，并阻断 graph run。`retry-item` 仍用于符合条件的门禁或人工恢复场景；普通的可重试 Task 失败不再要求宿主手动调用它。
 
-If an affected downstream Task has an active claim, remediation is blocked. Release or finish that claim before retrying the remediation command.
+新的 Task 派发不得复用失败 attempt 的 operationId。
 
-Completed requirements are immutable; later changes require a new requirement.
+## 同合同修正与失效传播
 
-## Bilingual graph projections
+只有目标、需求、验收、接口、数据合同、测试命令、拓扑和外部权限均保持不变时，才允许执行 `remediate-task`。
 
-All architecture and generated graph diagrams use `中文 / English` labels. The graph projection must distinguish:
+控制器从 Task execution 节点开始沿出边计算受影响范围，使依赖修正结果且已经推进的下游节点失效，其中包括消费方和聚合门禁。控制器为失效且已推进的节点创建新 attempt，同时保持原图定义和 baseline 不变。
 
-- `执行图 / Execution Graph`
-- `治理图 / Governance Graph`
-- node kind and work item ID
-- typed edges such as `成功 / Success`, `通过后 / Requires Pass`, and `全部汇聚 / All Of`
+如果受影响的下游 Task 存在活动 claim，同合同修正必须阻断。应先结束或释放该 claim，再重新执行修正命令。
 
-The generated files are read-only projections and can be rebuilt with `refresh-projections`.
+已经完成的需求不可原地修改；后续变化必须形成新需求。
+
+## 双语图投影
+
+所有架构图和生成的图使用 `中文 / English` 标签。图投影必须区分：
+
+- `执行图 / Execution Graph`；
+- `治理图 / Governance Graph`；
+- 节点类型和工作项 ID；
+- `成功 / Success`、`通过后 / Requires Pass`、`全部汇聚 / All Of` 等有类型的边。
+
+生成文件都是只读投影，可以通过 `refresh-projections` 重建。
+
+`state-transition-graph.md` 由冻结的运行时策略生成，必须同时展示开发执行流程和节点 FSM，包括失败分类、重试耗尽、暂停/恢复和取消。

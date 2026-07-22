@@ -11,11 +11,16 @@ from .execution import (
     build_task_context,
     claim_task,
     dispatch_task,
+    heartbeat_task,
     list_ready_tasks,
+    pause_task,
     record_task_result,
+    resume_task,
 )
 from .host_runtime import is_agent_runtime
 from .graph_runtime import (
+    advance_graph,
+    cancel_graph_run,
     get_graph_frontier,
     get_graph_replay,
     get_graph_status,
@@ -42,8 +47,13 @@ COMMANDS = (
     "graph-events",
     "graph-replay",
     "rebuild-graph-run",
+    "advance-graph",
+    "cancel-graph-run",
     "task-context",
     "dispatch-task",
+    "heartbeat-task",
+    "pause-task",
+    "resume-task",
     "claim-task",
     "task-result",
     "remediate-task",
@@ -72,9 +82,14 @@ COMMAND_OPTIONS = {
     "graph-events": {"--json", "--help", "--item"},
     "graph-replay": {"--json", "--help", "--item"},
     "rebuild-graph-run": {"--json", "--help", "--item", "--confirmed", "--dogfood"},
+    "advance-graph": {"--json", "--help", "--item", "--dogfood"},
+    "cancel-graph-run": {"--json", "--help", "--item", "--confirmed", "--dogfood"},
     "task-context": {"--json", "--help", "--item", "--dogfood"},
     "claim-task": {"--json", "--help", "--item", "--owner", "--operation", "--dogfood"},
     "dispatch-task": {"--json", "--help", "--item", "--owner", "--operation", "--dogfood"},
+    "heartbeat-task": {"--json", "--help", "--item", "--operation", "--dogfood"},
+    "pause-task": {"--json", "--help", "--item", "--operation", "--dogfood"},
+    "resume-task": {"--json", "--help", "--item", "--dogfood"},
     "task-result": {"--json", "--help", "--item", "--operation", "--status", "--evidence", "--dogfood"},
     "remediate-task": {"--json", "--help", "--item", "--expected-baseline", "--evidence", "--dogfood"},
     "retry-item": {"--json", "--help", "--item", "--expected-baseline", "--dogfood"},
@@ -99,8 +114,13 @@ Commands:
   graph-events --item <root-or-subtree-id>
   graph-replay --item <root-or-subtree-id>
   rebuild-graph-run --item <root-or-subtree-id> --confirmed
+  advance-graph --item <root-or-subtree-id>
+  cancel-graph-run --item <root-or-subtree-id> --confirmed
   task-context --item <task-id>
   dispatch-task --item <task-id> --owner <owner> --operation <id>
+  heartbeat-task --item <task-id> --operation <id>
+  pause-task --item <task-id> --operation <id>
+  resume-task --item <task-id>
   claim-task --item <task-id> --owner <owner> --operation <id>
   task-result --item <task-id> --operation <id> --status IMPLEMENTED|BLOCKED --evidence -
   remediate-task --item <task-id> --expected-baseline <sha256> --evidence -
@@ -230,6 +250,14 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
             work_item_id=_required(parsed, "--item"),
             confirmed=parsed["confirmed"],
         )
+    if command == "advance-graph":
+        return advance_graph(**common, work_item_id=_required(parsed, "--item"))
+    if command == "cancel-graph-run":
+        return cancel_graph_run(
+            **common,
+            work_item_id=_required(parsed, "--item"),
+            confirmed=parsed["confirmed"],
+        )
     if command == "task-context":
         return build_task_context(**common, item_id=_required(parsed, "--item"))
     if command == "claim-task":
@@ -246,6 +274,20 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
             owner=_required(parsed, "--owner"),
             operation_id=_required(parsed, "--operation"),
         )
+    if command == "heartbeat-task":
+        return heartbeat_task(
+            **common,
+            item_id=_required(parsed, "--item"),
+            operation_id=_required(parsed, "--operation"),
+        )
+    if command == "pause-task":
+        return pause_task(
+            **common,
+            item_id=_required(parsed, "--item"),
+            operation_id=_required(parsed, "--operation"),
+        )
+    if command == "resume-task":
+        return resume_task(**common, item_id=_required(parsed, "--item"))
     if command == "retry-item":
         return retry_work_item(
             **common,

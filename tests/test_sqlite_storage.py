@@ -97,6 +97,7 @@ class SQLiteStorageTests(unittest.TestCase):
                     "testsRun": 1,
                 }],
                 "blockers": [],
+                "failure": None,
             }
             record_task_result(
                 root=temporary,

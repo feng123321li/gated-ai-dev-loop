@@ -1,20 +1,52 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
 
 from .constants import SCHEMA_VERSION
 from .errors import fail
 from .evidence import evidence_record, valid_task_result_artifact
 from .fs_safe import atomic_write
-from .graph_model import execution_node_id
-from .graph_runtime import get_graph_frontier, replay_graph_events
+from .graph_model import DEFAULT_CLAIM_LEASE_SECONDS, execution_node_id
+from .graph_runtime import (
+    failure_routing_decision,
+    get_graph_frontier,
+    replay_graph_events,
+)
 from .model import scope_patterns_overlap, work_item_child_contract_fingerprint
 from .projections import render_task_handoff
-from .repository import GovernanceRepository, timestamp
+from .repository import GovernanceRepository, timestamp, timestamp_after
 
 
 OPERATION_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+
+def _parse_timestamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _claim_expired(claim: dict[str, Any], at: str) -> bool:
+    return _parse_timestamp(at) >= _parse_timestamp(claim["leaseExpiresAt"])
+
+
+def _new_claim(*, owner: str, operation_id: str, at: str) -> dict[str, str]:
+    return {
+        "owner": _safe_operation_id(owner, "owner"),
+        "operationId": _safe_operation_id(operation_id, "operationId"),
+        "claimedAt": at,
+        "lastHeartbeatAt": at,
+        "leaseExpiresAt": timestamp_after(at, DEFAULT_CLAIM_LEASE_SECONDS),
+    }
+
+
+def _claim_payload(claim: dict[str, str], status: str) -> dict[str, str]:
+    return {
+        "owner": claim["owner"],
+        "status": status,
+        "lastHeartbeatAt": claim["lastHeartbeatAt"],
+        "leaseExpiresAt": claim["leaseExpiresAt"],
+    }
 
 
 def _safe_operation_id(value: object, field: str) -> str:
@@ -138,11 +170,7 @@ def claim_task(
             fail("WORK_ITEM_DEVELOPMENT_MODE_REQUIRED", f"{item_id} requires a development mode selected during requirement freeze")
         if not _task_ready(repository, registry, entry):
             fail("WORK_ITEM_NOT_READY", f"{item_id} is not ready for dispatch")
-        entry["claim"] = {
-            "owner": _safe_operation_id(owner, "owner"),
-            "operationId": _safe_operation_id(operation_id, "operationId"),
-            "claimedAt": at,
-        }
+        entry["claim"] = _new_claim(owner=owner, operation_id=operation_id, at=at)
         entry["status"] = "CLAIMED"
         entry["recordRevision"] += 1
         entry["updatedAt"] = at
@@ -155,7 +183,7 @@ def claim_task(
             entry,
             event_type="TASK_CLAIMED",
             operation_id=operation_id,
-            payload={"owner": entry["claim"]["owner"], "status": entry["status"]},
+            payload=_claim_payload(entry["claim"], entry["status"]),
             at=at,
         )
         repository.write_registry(registry)
@@ -193,7 +221,16 @@ def record_task_result(
         entry = repository.item_by_id(registry, item_id)
         if entry["kind"] != "TASK" or entry["status"] != "CLAIMED" or (entry.get("claim") or {}).get("operationId") != operation_id:
             fail("WORK_ITEM_OPERATION_INVALID", f"{item_id} does not have the supplied active operation")
+        if _claim_expired(entry["claim"], at):
+            fail("WORK_ITEM_CLAIM_EXPIRED", f"{item_id} claim lease has expired")
         definition = repository.assert_current_lineage(registry, entry)[0]
+        root_entry = _hierarchy_root_entry(registry, entry)
+        stored_graph = repository.read_graph_definition(root_entry["id"])
+        graph_run = repository.read_graph_run(root_entry["id"])
+        node_id = execution_node_id(entry["id"])
+        node_attempt = next(
+            node["attempt"] for node in graph_run["nodes"] if node["nodeId"] == node_id
+        )
         reference, artifact = _validated_task_result_artifact(
             evidence,
             item_id=item_id,
@@ -214,10 +251,55 @@ def record_task_result(
             entry,
             event_type="TASK_IMPLEMENTED" if status == "IMPLEMENTED" else "TASK_BLOCKED",
             operation_id=operation_id,
-            payload={"status": status, "evidence": reference},
+            payload={
+                "status": status,
+                "evidence": reference,
+                "failure": artifact["failure"],
+            },
             at=at,
             evidence_artifact=artifact,
         )
+        routing_decision = None
+        if status == "BLOCKED":
+            routing_decision = failure_routing_decision(
+                stored_graph["graph"],
+                attempt=node_attempt,
+                failure_class=artifact["failure"]["class"],
+            )
+            if routing_decision["action"] == "RETRY_NODE":
+                attempts = repository.begin_graph_attempts(
+                    root_entry["id"],
+                    [node_id],
+                    at=at,
+                )
+                repository.append_graph_event(
+                    root_id=root_entry["id"],
+                    node_id=node_id,
+                    event_type="NODE_RETRY_SCHEDULED",
+                    actor="CONTROLLER",
+                    operation_id=None,
+                    payload={
+                        "attempts": attempts,
+                        "failureClass": routing_decision["failureClass"],
+                        "routeCondition": routing_decision["routeCondition"],
+                    },
+                    recorded_at=at,
+                )
+                entry["status"] = "FROZEN"
+            elif routing_decision["action"] == "BLOCK_RUN":
+                repository.append_graph_event(
+                    root_id=root_entry["id"],
+                    node_id=node_id,
+                    event_type="RETRY_EXHAUSTED",
+                    actor="CONTROLLER",
+                    operation_id=None,
+                    payload={
+                        "failureClass": routing_decision["failureClass"],
+                        "routeCondition": routing_decision["routeCondition"],
+                        "maxAttempts": routing_decision["maxAttempts"],
+                    },
+                    recorded_at=at,
+                )
         repository.write_development_review(entry, definition, at)
         repository.write_registry(registry)
         base = f".layered-delivery/{entry['packagePath']}"
@@ -227,6 +309,7 @@ def record_task_result(
             "developmentReview": {
                 "markdownPath": f"{base}/development-review.md",
             },
+            "routingDecision": routing_decision,
         }
 
 
@@ -300,6 +383,8 @@ def _task_context(
             "owner": entry["claim"]["owner"],
             "operationId": entry["claim"]["operationId"],
             "claimedAt": entry["claim"]["claimedAt"],
+            "lastHeartbeatAt": entry["claim"]["lastHeartbeatAt"],
+            "leaseExpiresAt": entry["claim"]["leaseExpiresAt"],
         } if entry.get("claim") else None,
         "task": {
             "id": definition["id"],
@@ -360,11 +445,7 @@ def dispatch_task(
             fail("WORK_ITEM_DEVELOPMENT_MODE_REQUIRED", f"{item_id} requires a development mode selected during requirement freeze")
         if not _task_ready(repository, registry, entry):
             fail("WORK_ITEM_NOT_READY", f"{item_id} is not ready for dispatch")
-        claim = {
-            "owner": _safe_operation_id(owner, "owner"),
-            "operationId": _safe_operation_id(operation_id, "operationId"),
-            "claimedAt": at,
-        }
+        claim = _new_claim(owner=owner, operation_id=operation_id, at=at)
         entry["claim"] = claim
         entry["status"] = "CLAIMED"
         context, handoff, target = _task_context(repository, registry, entry)
@@ -381,7 +462,7 @@ def dispatch_task(
             entry,
             event_type="TASK_CLAIMED",
             operation_id=operation_id,
-            payload={"owner": claim["owner"], "status": entry["status"]},
+            payload=_claim_payload(claim, entry["status"]),
             at=at,
         )
         repository.write_registry(registry)
@@ -392,3 +473,126 @@ def dispatch_task(
             **context,
             "handoffPrompt": handoff,
         }
+
+
+def heartbeat_task(
+    *,
+    root: str,
+    item_id: str,
+    operation_id: str,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    repository = GovernanceRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    at = timestamp(now)
+    with repository.transaction() as registry:
+        entry = repository.item_by_id(registry, item_id)
+        claim = entry.get("claim") or {}
+        if entry["kind"] != "TASK" or entry["status"] != "CLAIMED" or claim.get("operationId") != operation_id:
+            fail("WORK_ITEM_OPERATION_INVALID", f"{item_id} does not have the supplied active operation")
+        if _claim_expired(claim, at):
+            fail("WORK_ITEM_CLAIM_EXPIRED", f"{item_id} claim lease has expired")
+        claim["lastHeartbeatAt"] = at
+        claim["leaseExpiresAt"] = timestamp_after(at, DEFAULT_CLAIM_LEASE_SECONDS)
+        entry["recordRevision"] += 1
+        entry["updatedAt"] = at
+        registry["currentFocus"] = {"workItemId": item_id, "purpose": "TASK_HEARTBEAT"}
+        registry["revision"] += 1
+        registry["updatedAt"] = at
+        _append_task_graph_event(
+            repository,
+            registry,
+            entry,
+            event_type="TASK_HEARTBEAT",
+            operation_id=operation_id,
+            payload={
+                "lastHeartbeatAt": claim["lastHeartbeatAt"],
+                "leaseExpiresAt": claim["leaseExpiresAt"],
+            },
+            at=at,
+        )
+        repository.write_registry(registry)
+        return {"id": item_id, "status": entry["status"], "claim": claim}
+
+
+def pause_task(
+    *,
+    root: str,
+    item_id: str,
+    operation_id: str,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    repository = GovernanceRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    at = timestamp(now)
+    with repository.transaction() as registry:
+        entry = repository.item_by_id(registry, item_id)
+        claim = entry.get("claim") or {}
+        if entry["kind"] != "TASK" or entry["status"] != "CLAIMED" or claim.get("operationId") != operation_id:
+            fail("WORK_ITEM_OPERATION_INVALID", f"{item_id} does not have the supplied active operation")
+        if _claim_expired(claim, at):
+            fail("WORK_ITEM_CLAIM_EXPIRED", f"{item_id} claim lease has expired")
+        _append_task_graph_event(
+            repository,
+            registry,
+            entry,
+            event_type="NODE_PAUSED",
+            operation_id=operation_id,
+            payload={"reason": "explicit-pause"},
+            at=at,
+        )
+        entry["claim"] = None
+        entry["status"] = "FROZEN"
+        entry["recordRevision"] += 1
+        entry["updatedAt"] = at
+        registry["currentFocus"] = {"workItemId": item_id, "purpose": "TASK_PAUSED"}
+        registry["revision"] += 1
+        registry["updatedAt"] = at
+        repository.write_registry(registry)
+        return {"id": item_id, "status": entry["status"], "nodeStatus": "PAUSED"}
+
+
+def resume_task(
+    *,
+    root: str,
+    item_id: str,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    repository = GovernanceRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    at = timestamp(now)
+    with repository.transaction() as registry:
+        entry = repository.item_by_id(registry, item_id)
+        if entry["kind"] != "TASK" or entry["status"] != "FROZEN" or entry.get("claim") is not None:
+            fail("WORK_ITEM_NOT_PAUSED", f"{item_id} is not paused")
+        root_entry = _hierarchy_root_entry(registry, entry)
+        stored = repository.read_graph_definition(root_entry["id"])
+        run = repository.read_graph_run(root_entry["id"])
+        replay = replay_graph_events(
+            stored["graph"], run, repository.read_graph_events(root_entry["id"])
+        )
+        node = next(
+            state for state in replay["nodes"]
+            if state["nodeId"] == execution_node_id(item_id)
+        )
+        if node["status"] != "PAUSED":
+            fail("WORK_ITEM_NOT_PAUSED", f"{item_id} is not paused")
+        _append_task_graph_event(
+            repository,
+            registry,
+            entry,
+            event_type="NODE_RESUMED",
+            operation_id=None,
+            payload={"reason": "explicit-resume"},
+            at=at,
+        )
+        entry["recordRevision"] += 1
+        entry["updatedAt"] = at
+        registry["currentFocus"] = {"workItemId": item_id, "purpose": "TASK_RESUMED"}
+        registry["revision"] += 1
+        registry["updatedAt"] = at
+        repository.write_registry(registry)
+        return {"id": item_id, "status": entry["status"], "nodeStatus": "READY"}

@@ -15,6 +15,16 @@ PLANE_LABELS = {
     "EXECUTION": "执行 / Execution",
     "GOVERNANCE": "治理 / Governance",
 }
+STATE_LABELS = {
+    "PENDING": "等待 / Pending",
+    "READY": "就绪 / Ready",
+    "CLAIMED": "执行中 / Claimed",
+    "SUCCEEDED": "成功 / Succeeded",
+    "BLOCKED": "阻断 / Blocked",
+    "PAUSED": "暂停 / Paused",
+    "CANCELLED": "取消 / Cancelled",
+    "COMPLETED": "完成 / Completed",
+}
 
 
 def _mermaid(graph: dict[str, Any], plane: str) -> list[str]:
@@ -83,6 +93,116 @@ def render_delivery_graph(
     return "\n".join(lines) + "\n"
 
 
+def render_runtime_policy_summary(graph: dict[str, Any]) -> str:
+    runtime = graph["runtime"]
+    retry = runtime["retryPolicy"]
+    claim = runtime["claimPolicy"]
+    automatic = ", ".join(f"`{item}`" for item in retry["automaticFailureClasses"])
+    return "\n".join([
+        "## 运行时策略 / Runtime Policy",
+        "",
+        f"- 最大尝试次数 / Max attempts: **{retry['maxAttempts']}**",
+        f"- 自动恢复失败类 / Auto-recovery failure classes: {automatic}",
+        f"- 尝试耗尽动作 / On retry exhausted: `{retry['onExhausted']}`",
+        f"- 认领租约 / Claim lease: **{claim['leaseSeconds']} 秒 / seconds**",
+        f"- 建议心跳间隔 / Heartbeat interval: **{claim['heartbeatSeconds']} 秒 / seconds**",
+        f"- 租约到期动作 / On lease expired: `{claim['onExpired']}`",
+        "",
+        "> 契约依赖图保持无环；失败回退、重试、暂停与恢复由运行时有限状态机表达。",
+        "> The contract dependency graph remains acyclic; runtime cycles live in the FSM.",
+        "",
+    ])
+
+
+def render_state_transition_graph(
+    graph: dict[str, Any],
+    *,
+    graph_fingerprint: str,
+) -> str:
+    runtime = graph["runtime"]
+    lines = [
+        "# 状态迁移图 / State Transition Graph",
+        "",
+        f"- 需求根 / Root: `{graph['rootId']}`",
+        f"- 图指纹 / Graph fingerprint: `{graph_fingerprint}`",
+        "",
+        "> 本图与控制器冻结的 `runtime` 策略同源生成；它是可审计投影，不是第二份规则。",
+        "> Generated from the same frozen runtime policy used by the controller.",
+        "",
+        "## 开发执行流程 / Development Execution Flow",
+        "",
+        "```mermaid",
+        "flowchart TD",
+        '    A["需求冻结 / Requirement Frozen"] --> B["前沿计算 / Frontier Calculation"]',
+        '    B --> C1["任务 A / Task A"]',
+        '    B --> C2["任务 B / Task B"]',
+        '    C1 --> D["结果汇合 / Result Join"]',
+        '    C2 --> D',
+        '    C1 -. "执行失败 / Failure" .-> F["失败分类 / Failure Classification"]',
+        '    C2 -. "执行失败 / Failure" .-> F',
+        '    D --> G{"门禁与审查 / Gate & Review"}',
+        '    G -->|"通过 / Pass"| H["后继节点或完成 / Successor or Complete"]',
+        '    G -. "未通过 / Fail" .-> F',
+        '    F -->|"可重试 / Retryable"| R{"仍有尝试预算？ / Attempts Remaining?"}',
+        '    R -->|"是 / Yes"| B',
+        '    R -->|"否 / No"| X["尝试耗尽 / Retry Exhausted"]',
+        '    F -->|"需修复 / Remediation"| M["提交修复 / Submit Remediation"]',
+        '    F -->|"合约变化 / Contract Change"| V["人工评审 / Human Review"]',
+        '    F -->|"外部授权 / External Authority"| U["请求用户授权 / Request Authority"]',
+        '    F -->|"不可重试 / Non-retryable"| I["人工干预 / Intervention"]',
+        '    M --> B',
+        '    V --> B',
+        '    C1 -. "暂停 / Pause" .-> P["暂停 / Paused"]',
+        '    P -->|"恢复 / Resume"| B',
+        '    B -. "确认取消 / Confirm Cancel" .-> Z["取消 / Cancelled"]',
+        "```",
+        "",
+        "## 节点有限状态机 / Node FSM",
+        "",
+        "```mermaid",
+        "stateDiagram-v2",
+        "    [*] --> PENDING",
+    ]
+    for state in runtime["states"]:
+        lines.append(f'    state "{STATE_LABELS[state]}" as {state}')
+    for transition in runtime["transitions"]:
+        for from_state in transition["fromStates"]:
+            for to_state in transition["toStates"]:
+                lines.append(
+                    f"    {from_state} --> {to_state}: "
+                    f"{transition['eventType']} / {transition['routeCondition']}"
+                )
+    lines.extend([
+        "```",
+        "",
+        "## 路由与迁移契约 / Routing and Transition Contract",
+        "",
+        "| 事件 / Event | 起始状态 / From | 目标状态 / To | 路由条件 / Route | 自动 / Automatic | 新尝试 / New attempt |",
+        "|---|---|---|---|---|---|",
+    ])
+    for transition in runtime["transitions"]:
+        from_states = ", ".join(transition["fromStates"])
+        to_states = ", ".join(transition["toStates"])
+        lines.append(
+            f"| `{transition['eventType']}` | `{from_states}` | `{to_states}` | "
+            f"`{transition['routeCondition']}` | "
+            f"{'是 / Yes' if transition['automatic'] else '否 / No'} | "
+            f"{'是 / Yes' if transition['createsAttempt'] else '否 / No'} |"
+        )
+    lines.extend([
+        "",
+        "## 状态说明 / State Legend",
+        "",
+    ])
+    for state in runtime["states"]:
+        terminal = state in runtime["terminalStates"]
+        lines.append(
+            f"- `{state}` — {STATE_LABELS[state]}"
+            f"{'；终止状态 / terminal' if terminal else ''}"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def render_run_timeline(
     graph_status: dict[str, Any],
     events: list[dict[str, Any]],
@@ -98,31 +218,35 @@ def render_run_timeline(
         "",
         "## 当前节点 / Current Nodes",
         "",
-        "| 节点 / Node | 状态 / Status | 尝试 / Attempt | 执行者 / Owner |",
-        "|---|---|---:|---|",
+        "| 节点 / Node | 状态 / Status | 尝试 / Attempt | 执行者 / Owner | 最近迁移 / Last transition | 失败分类 / Failure class | 租约到期 / Lease expires |",
+        "|---|---|---:|---|---|---|---|",
     ]
     for node in graph_status["nodes"]:
         lines.append(
             f"| `{node['id']}` | `{node['status']}` | "
             f"{node['attempt'] if node['attempt'] is not None else '-'} | "
-            f"{node['owner'] or '-'} |"
+            f"{node['owner'] or '-'} | `{node.get('lastTransition') or '-'}` | "
+            f"`{node.get('failureClass') or '-'}` | {node.get('leaseExpiresAt') or '-'} |"
         )
     lines.extend(
         [
             "",
             "## 事件 / Events",
             "",
-            "| 序号 / ID | 时间 / Time | 事件 / Event | 节点 / Node | 操作 / Operation |",
-            "|---:|---|---|---|---|",
+            "| 序号 / ID | 时间 / Time | 事件 / Event | 节点 / Node | 操作 / Operation | 失败分类 / Failure class | 路由条件 / Route |",
+            "|---:|---|---|---|---|---|---|",
         ]
     )
     for event in events:
+        failure = event["payload"].get("failure") or {}
         lines.append(
             f"| {event['eventId']} | {event['recordedAt']} | `{event['eventType']}` | "
-            f"`{event['nodeId'] or '-'}` | `{event['operationId'] or '-'}` |"
+            f"`{event['nodeId'] or '-'}` | `{event['operationId'] or '-'}` | "
+            f"`{failure.get('class') or event['payload'].get('failureClass') or '-'}` | "
+            f"`{event['payload'].get('routeCondition') or '-'}` |"
         )
     if not events:
-        lines.append("| - | - | 尚未开始 / Not started | - | - |")
+        lines.append("| - | - | 尚未开始 / Not started | - | - | - | - |")
     return "\n".join(lines) + "\n"
 
 
@@ -151,6 +275,7 @@ def render_frontier_dashboard(
         f"- 剩余节点 / Remaining nodes: **{critical['remainingNodes']}**",
         f"- 下一汇聚 / Next join: `{critical['nextJoinNodeId'] or '-'}`",
         f"- 路径阻断 / Path blocked: `{'YES' if critical['blocked'] else 'NO'}`",
+        f"- 路径暂停 / Path paused: `{'YES' if critical.get('paused') else 'NO'}`",
         "",
     ]
     if critical["nodeIds"]:
@@ -169,34 +294,41 @@ def render_frontier_dashboard(
     lines.extend([
         "## 可执行动作 / Actionable Actions",
         "",
-        "| 节点 / Node | 动作 / Action | 工作项 / Work item | 尝试 / Attempt | 并行组 / Parallel group | 关键 / Critical | 就绪原因 / Ready because | 命令提示 / Command hint |",
-        "|---|---|---|---:|---|---|---|---|",
+        "| 节点 / Node | 动作 / Action | 迁移 / Transition | 路由 / Route | 工作项 / Work item | 尝试预算 / Attempt budget | 并行组 / Parallel group | 关键 / Critical | 就绪原因 / Ready because | 命令提示 / Command hint |",
+        "|---|---|---|---|---|---|---|---|---|---|",
     ])
     for action in frontier["actions"]:
         reasons = ", ".join(action["readyBecause"]).replace("|", "\\|")
         hint = action["commandHint"].replace("|", "\\|")
         lines.append(
-            f"| `{action['nodeId']}` | `{action['action']}` | `{action['workItemId']}` | "
-            f"{action['attempt']} | `{action['parallelGroup'] or '-'}` | "
+            f"| `{action['nodeId']}` | `{action['action']}` | `{action.get('transition') or '-'}` | "
+            f"`{action.get('routeCondition') or '-'}` | `{action['workItemId']}` | "
+            f"{action['attempt']}/{action.get('maxAttempts') or '-'} "
+            f"(剩余 / remaining {action.get('remainingAttempts', '-')}) | "
+            f"`{action['parallelGroup'] or '-'}` | "
             f"{'是 / Yes' if action['critical'] else '否 / No'} | {reasons} | `{hint}` |"
         )
     if not frontier["actions"]:
-        lines.append("| - | - | - | - | - | - | 无 / None | - |")
+        lines.append("| - | - | - | - | - | - | - | - | 无 / None | - |")
 
     lines.extend([
         "",
         "## 阻断节点 / Blocked Nodes",
         "",
-        "| 节点 / Node | 类型 / Kind | 工作项 / Work item | 状态 / Status | 尝试 / Attempt | 阻断原因 / Blocked by |",
-        "|---|---|---|---|---:|---|",
+        "| 节点 / Node | 类型 / Kind | 工作项 / Work item | 状态 / Status | 尝试 / Attempt | 失败分类 / Failure class | 剩余尝试 / Remaining | 建议动作 / Recommended | 最近迁移 / Last transition | 阻断原因 / Blocked by |",
+        "|---|---|---|---|---:|---|---:|---|---|---|",
     ])
     for blocked in frontier["blocked"]:
         reasons = ", ".join(blocked["blockedBy"]).replace("|", "\\|")
         kind = NODE_LABELS.get(blocked["nodeKind"], "-")
         lines.append(
             f"| `{blocked['nodeId'] or '-'}` | {kind} | `{blocked['workItemId']}` | "
-            f"`{blocked['status']}` | {blocked['attempt'] or '-'} | {reasons} |"
+            f"`{blocked['status']}` | {blocked['attempt'] or '-'} | "
+            f"`{blocked.get('failureClass') or '-'}` | "
+            f"{blocked.get('remainingAttempts') if blocked.get('remainingAttempts') is not None else '-'} | "
+            f"`{blocked.get('recommendedAction') or '-'}` | "
+            f"`{blocked.get('lastTransition') or '-'}` | {reasons} |"
         )
     if not frontier["blocked"]:
-        lines.append("| - | - | - | - | - | 无 / None |")
+        lines.append("| - | - | - | - | - | - | - | - | - | 无 / None |")
     return "\n".join(lines) + "\n"

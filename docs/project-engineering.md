@@ -156,6 +156,8 @@ frontier 不只是“下一批 Task”。它同时返回当前关键路径、下
 | `RUN_GATE` | 当前工作项已满足门禁前置条件 |
 | `REQUEST_REVIEW` | 根门禁已通过，等待独立或人工审查 |
 | `REQUEST_USER_CONFIRMATION` | 审查已通过，等待用户最终确认 |
+| `HEARTBEAT_TASK` | Task 正在执行，续期当前 operation 的 claim 租约 |
+| `RESUME_TASK` | Task 已显式暂停，可以恢复同一 attempt |
 
 `ready-tasks` 仍然保留，但它现在是 graph frontier 中 `DISPATCH_TASK` 动作的兼容投影，不再是另一套调度算法。
 
@@ -166,21 +168,43 @@ stateDiagram-v2
     state "已认领 / Claimed" as Claimed
     state "已成功 / Succeeded" as Succeeded
     state "已阻断 / Blocked" as Blocked
+    state "已暂停 / Paused" as Paused
+    state "已取消 / Cancelled" as Cancelled
     state "已完成 / Completed" as Completed
     [*] --> Pending
     Pending --> Ready: 前置节点通过 / Preconditions Passed
     Ready --> Claimed: 派发 / Dispatch
     Claimed --> Succeeded: 结果或门禁通过 / Result or Gate Passed
     Claimed --> Blocked: 失败或显式阻断 / Failure or Blocked
-    Blocked --> Ready: 新尝试 / New Attempt
-    Succeeded --> Completed: 最终确认 / Final Confirmation
+    Claimed --> Claimed: 心跳续租 / Heartbeat
+    Claimed --> Paused: 显式暂停 / Pause
+    Paused --> Ready: 恢复 / Resume
+    Blocked --> Ready: 预算内新尝试 / New Attempt
+    Blocked --> Blocked: 尝试耗尽 / Retry Exhausted
+    Pending --> Cancelled: 确认取消 / Cancel
+    Ready --> Cancelled: 确认取消 / Cancel
+    Claimed --> Cancelled: 确认取消 / Cancel
+    Ready --> Completed: 最终确认节点 / Final Confirmation Node
 ```
+
+### 7.1 为什么“Graph 不等于 DAG”但依赖图仍是 DAG
+
+系统把两类关系分开：
+
+- **契约 DAG / Contract DAG**：冻结 Task 依赖、并行分支、fan-in、分级 gate、root review 和 user confirmation。它必须无环，保证 READY、汇聚和关键路径可确定计算。
+- **运行时 FSM / Runtime FSM**：描述节点的 PENDING、READY、CLAIMED、SUCCEEDED、BLOCKED、PAUSED、CANCELLED、COMPLETED 及合法迁移。自动重试、同合同修正、失联恢复和暂停恢复可以形成受控回路。
+- **路由策略 / Router Policy**：根据 failure class、route condition 和 attempt budget 决定下一动作。策略由控制器编译并进入 graph fingerprint，而不是由 Agent 临场猜测。
+
+因此整体 Graph Engineering 支持循环，但不会把失败回退边混进冻结依赖拓扑。节点是工作单元，Agent 是认领 Task 节点的 owner；Agent 本身不必成为永久节点。
 
 ## 8. 重试、修正和失效传播
 
 图定义是冻结合同，attempt 是运行事实。
 
-- `retry-item` 不修改图，而是为失败节点创建新的 attempt；
+- `RETRYABLE` Task 失败在 3 次总尝试预算内自动创建新的 attempt；第三次仍失败写入 `RETRY_EXHAUSTED`；
+- claim 使用 30 分钟租约和心跳，`advance-graph` 把过期执行判为 `WORKER_LOST` 后按相同预算恢复；
+- `CONTRACT_CHANGE`、`EXTERNAL_AUTHORITY`、`NON_RETRYABLE` 与 `REMEDIATION_REQUIRED` 不自动重跑，而是进入评审、授权、干预或修正路由；
+- `retry-item` 保留给符合条件的门禁或显式人工恢复，不修改图，只创建 attempt；
 - `remediate-task` 只允许在原目标和验收合同不变时，为原 Task 追加遗漏的精确文件；
 - remediation 从被修正 Task 的 execution 节点沿显式边计算下游闭包；
 - 已完成的依赖消费者、聚合 gate、根审查和确认会失效并重新运行；
@@ -197,12 +221,16 @@ stateDiagram-v2
 
 - `GRAPH_RUN_STARTED`
 - `TASK_CLAIMED`
+- `TASK_HEARTBEAT` / `CLAIM_LEASE_EXPIRED`
 - `TASK_IMPLEMENTED` / `TASK_BLOCKED`
+- `NODE_PAUSED` / `NODE_RESUMED`
 - `GATE_PASSED` / `GATE_FAILED`
 - `REVIEW_PASSED`
 - `USER_CONFIRMED`
 - `NODE_RETRY_SCHEDULED`
+- `RETRY_EXHAUSTED`
 - `GRAPH_INVALIDATED`
+- `GRAPH_RUN_CANCELLED`
 
 每条事件保存 `graphFingerprint` 和前序哈希，读取时重新校验事件链。凡是由 Task 结果、gate、review、confirmation 或 remediation artifact 驱动的事件，控制器都会保存一份 bound evidence，将原 artifact 直接绑定到 `runId/nodeId/attempt/graphFingerprint`，并对绑定整体再次计算 SHA-256。证据因此不能被静默挪用到另一次运行、另一个节点或另一个 attempt。
 
@@ -238,6 +266,7 @@ Markdown 只是可重建的人类投影：
     └── <root-id>/
         ├── development-plan.md
         ├── execution-graph.md
+        ├── state-transition-graph.md
         ├── frontier.md
         ├── run-timeline.md
         ├── progress.md
@@ -248,8 +277,9 @@ Markdown 只是可重建的人类投影：
 ```
 
 - `execution-graph.md` 同时展示中文 / English 的执行图和治理图；
-- `frontier.md` 展示中文 / English 的关键路径图、下一个汇聚点、当前动作和阻断表；
-- `run-timeline.md` 展示当前节点 attempt、状态、owner 和事件；
+- `state-transition-graph.md` 从冻结 runtime 策略生成，展示开发执行流程、FSM、失败分类、重试耗尽、暂停恢复与取消；
+- `frontier.md` 展示中文 / English 的关键路径图、下一个汇聚点、迁移、尝试预算、建议动作和阻断表；
+- `run-timeline.md` 展示当前节点 attempt、状态、owner、租约、失败分类和事件；
 - 删除 Markdown 不会删除机器状态，`refresh-projections` 可以从 SQLite 重建。
 
 ## 11. 怎么使用
@@ -258,7 +288,7 @@ Markdown 只是可重建的人类投影：
 
 ```text
 prepare-hierarchy
-→ 评审 development-plan.md 与 execution-graph.md
+→ 评审 development-plan.md、execution-graph.md 与 state-transition-graph.md
 → 选择 active 或 manual
 → freeze-hierarchy
 → graph-frontier / dispatch-task
@@ -275,12 +305,23 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-status --item <root-or-subtree-
 python -X utf8 <skill-root>/scripts/hdg.py graph-frontier --item <root-or-subtree-id> --json
 python -X utf8 <skill-root>/scripts/hdg.py graph-events --item <root-or-subtree-id> --json
 python -X utf8 <skill-root>/scripts/hdg.py graph-replay --item <root-or-subtree-id> --json
+python -X utf8 <skill-root>/scripts/hdg.py advance-graph --item <root-or-subtree-id> --json
 ```
 
 - `graph-status`：查看全部节点、边、attempt 和运行状态；
 - `graph-frontier`：查看当前允许的动作及阻断原因；
 - `graph-events`：查看可校验的运行事件链和 evidence binding；
 - `graph-replay`：从事件重算完整状态并检查 graph/node run 快照一致性。
+- `advance-graph`：执行可机械判定的自动路由，当前包括 claim 过期后的失联恢复。
+
+活动 Task 的运行控制命令为：
+
+```text
+heartbeat-task --item <task-id> --operation <id>
+pause-task --item <task-id> --operation <id>
+resume-task --item <task-id>
+cancel-graph-run --item <root-id> --confirmed
+```
 
 ### 11.3 恢复中断工作
 

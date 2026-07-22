@@ -19,9 +19,38 @@ GRAPH_NODE_KINDS = (
 )
 GRAPH_EDGE_KINDS = ("ON_SUCCESS", "REQUIRES_PASS", "ALL_OF")
 GRAPH_PLANES = ("EXECUTION", "GOVERNANCE")
-GRAPH_FIELDS = {"schemaVersion", "rootId", "hierarchyFingerprint", "nodes", "edges"}
+RUNTIME_STATES = (
+    "PENDING",
+    "READY",
+    "CLAIMED",
+    "SUCCEEDED",
+    "BLOCKED",
+    "PAUSED",
+    "CANCELLED",
+    "COMPLETED",
+)
+RUNTIME_TERMINAL_STATES = ("CANCELLED", "COMPLETED")
+FAILURE_CLASSES = (
+    "RETRYABLE",
+    "REMEDIATION_REQUIRED",
+    "CONTRACT_CHANGE",
+    "EXTERNAL_AUTHORITY",
+    "NON_RETRYABLE",
+    "WORKER_LOST",
+    "GATE_FAILURE",
+)
+DEFAULT_MAX_ATTEMPTS = 3
+DEFAULT_CLAIM_LEASE_SECONDS = 30 * 60
+DEFAULT_HEARTBEAT_SECONDS = 5 * 60
+GRAPH_FIELDS = {
+    "schemaVersion", "rootId", "hierarchyFingerprint", "nodes", "edges", "runtime",
+}
 GRAPH_NODE_FIELDS = {"id", "kind", "planes", "workItemId"}
 GRAPH_EDGE_FIELDS = {"id", "source", "target", "kind", "plane", "joinGroup"}
+RUNTIME_TRANSITION_FIELDS = {
+    "id", "eventType", "fromStates", "toStates", "routeCondition", "nodeKinds",
+    "automatic", "createsAttempt",
+}
 GRAPH_IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9:._-]*$")
 FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
 
@@ -74,6 +103,136 @@ def _edge(
         "plane": plane,
         "joinGroup": join_group,
     }
+
+
+def _transition(
+    event_type: str,
+    from_states: list[str],
+    to_states: str | list[str],
+    route_condition: str,
+    node_kinds: list[str],
+    *,
+    automatic: bool,
+    creates_attempt: bool = False,
+) -> dict[str, Any]:
+    return {
+        "id": f"transition:{event_type.lower().replace('_', '-')}",
+        "eventType": event_type,
+        "fromStates": sorted(from_states),
+        "toStates": sorted([to_states] if isinstance(to_states, str) else to_states),
+        "routeCondition": route_condition,
+        "nodeKinds": sorted(node_kinds),
+        "automatic": automatic,
+        "createsAttempt": creates_attempt,
+    }
+
+
+def compile_runtime_policy() -> dict[str, Any]:
+    """Return the controller-owned FSM and router policy frozen into every graph."""
+    all_kinds = list(GRAPH_NODE_KINDS)
+    gate_kinds = [kind for kind in GRAPH_NODE_KINDS if kind.endswith("_GATE")]
+    retry_kinds = ["TASK_EXECUTION", *gate_kinds]
+    transitions = [
+        _transition(
+            "GRAPH_RUN_STARTED", ["PENDING"], ["PENDING", "READY"], "ON_START", all_kinds,
+            automatic=True,
+        ),
+        _transition(
+            "TASK_CLAIMED", ["READY"], "CLAIMED", "ON_DISPATCH", ["TASK_EXECUTION"],
+            automatic=False,
+        ),
+        _transition(
+            "TASK_HEARTBEAT", ["CLAIMED"], "CLAIMED", "ON_HEARTBEAT", ["TASK_EXECUTION"],
+            automatic=False,
+        ),
+        _transition(
+            "TASK_IMPLEMENTED", ["CLAIMED"], "SUCCEEDED", "ON_SUCCESS", ["TASK_EXECUTION"],
+            automatic=False,
+        ),
+        _transition(
+            "TASK_BLOCKED", ["CLAIMED"], "BLOCKED", "ON_FAILURE", ["TASK_EXECUTION"],
+            automatic=False,
+        ),
+        _transition(
+            "CLAIM_LEASE_EXPIRED", ["CLAIMED"], "BLOCKED", "ON_LEASE_EXPIRED",
+            ["TASK_EXECUTION"], automatic=True,
+        ),
+        _transition(
+            "NODE_PAUSED", ["CLAIMED"], "PAUSED", "ON_PAUSE", ["TASK_EXECUTION"],
+            automatic=False,
+        ),
+        _transition(
+            "NODE_RESUMED", ["PAUSED"], ["PENDING", "READY"], "ON_RESUME", ["TASK_EXECUTION"],
+            automatic=False,
+        ),
+        _transition(
+            "GATE_PASSED", ["READY"], "SUCCEEDED", "ON_PASS", gate_kinds,
+            automatic=False,
+        ),
+        _transition(
+            "GATE_FAILED", ["READY"], "BLOCKED", "ON_FAILURE", gate_kinds,
+            automatic=False,
+        ),
+        _transition(
+            "REVIEW_PASSED", ["READY"], "SUCCEEDED", "ON_PASS", ["ROOT_REVIEW"],
+            automatic=False,
+        ),
+        _transition(
+            "USER_CONFIRMED", ["READY"], "COMPLETED", "ON_CONFIRMATION",
+            ["USER_CONFIRMATION"], automatic=False,
+        ),
+        _transition(
+            "NODE_RETRY_SCHEDULED", ["BLOCKED"], ["PENDING", "READY"], "ON_RETRY_ALLOWED",
+            retry_kinds, automatic=True, creates_attempt=True,
+        ),
+        _transition(
+            "GRAPH_INVALIDATED", ["BLOCKED", "COMPLETED", "SUCCEEDED"], ["PENDING", "READY"],
+            "ON_REMEDIATION", all_kinds, automatic=False, creates_attempt=True,
+        ),
+        _transition(
+            "RETRY_EXHAUSTED", ["BLOCKED"], "BLOCKED", "ON_RETRY_EXHAUSTED",
+            retry_kinds, automatic=True,
+        ),
+        _transition(
+            "GRAPH_RUN_CANCELLED", ["BLOCKED", "CLAIMED", "PAUSED", "PENDING", "READY"],
+            "CANCELLED", "ON_CANCEL", all_kinds, automatic=False,
+        ),
+    ]
+    return {
+        "states": list(RUNTIME_STATES),
+        "terminalStates": list(RUNTIME_TERMINAL_STATES),
+        "retryPolicy": {
+            "maxAttempts": DEFAULT_MAX_ATTEMPTS,
+            "automaticFailureClasses": ["RETRYABLE", "WORKER_LOST"],
+            "onExhausted": "BLOCK_RUN",
+        },
+        "claimPolicy": {
+            "leaseSeconds": DEFAULT_CLAIM_LEASE_SECONDS,
+            "heartbeatSeconds": DEFAULT_HEARTBEAT_SECONDS,
+            "onExpired": "RETRY_NODE",
+        },
+        "transitions": sorted(transitions, key=lambda item: item["id"]),
+    }
+
+
+def runtime_transition(
+    graph: dict[str, Any],
+    *,
+    event_type: str,
+    node_kind: str,
+    from_state: str,
+) -> dict[str, Any]:
+    for transition in graph["runtime"]["transitions"]:
+        if (
+            transition["eventType"] == event_type
+            and node_kind in transition["nodeKinds"]
+            and from_state in transition["fromStates"]
+        ):
+            return transition
+    fail(
+        "DELIVERY_GRAPH_TRANSITION_INVALID",
+        f"{event_type} is not legal for {node_kind} from {from_state}",
+    )
 
 
 def _walk_hierarchy(hierarchy: dict[str, Any]) -> list[dict[str, Any]]:
@@ -189,6 +348,7 @@ def compile_delivery_graph(
         "hierarchyFingerprint": hierarchy_fingerprint,
         "nodes": sorted(nodes, key=lambda item: item["id"]),
         "edges": sorted(edges, key=lambda item: item["id"]),
+        "runtime": compile_runtime_policy(),
     }
     return validate_delivery_graph(graph)
 
@@ -223,6 +383,8 @@ def validate_delivery_graph(value: object) -> dict[str, Any]:
         fail("DELIVERY_GRAPH_FINGERPRINT_INVALID", "Delivery graph hierarchy fingerprint is invalid")
     if not isinstance(value.get("nodes"), list) or not isinstance(value.get("edges"), list):
         fail("DELIVERY_GRAPH_INVALID", "Delivery graph nodes and edges must be arrays")
+    if value.get("runtime") != compile_runtime_policy():
+        fail("DELIVERY_GRAPH_RUNTIME_INVALID", "Delivery graph runtime FSM or router policy is invalid")
 
     nodes: list[dict[str, Any]] = []
     node_ids: set[str] = set()
@@ -310,4 +472,5 @@ def graph_summary(graph: dict[str, Any]) -> dict[str, int]:
         "taskExecutions": sum(node["kind"] == "TASK_EXECUTION" for node in normalized["nodes"]),
         "gateNodes": sum(node["kind"].endswith("_GATE") for node in normalized["nodes"]),
         "reviewNodes": sum(node["kind"] in {"ROOT_REVIEW", "USER_CONFIRMATION"} for node in normalized["nodes"]),
+        "runtimeTransitions": len(normalized["runtime"]["transitions"]),
     }

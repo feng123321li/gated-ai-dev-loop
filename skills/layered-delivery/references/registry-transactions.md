@@ -4,7 +4,7 @@
 
 所有机器状态变更都通过项目级 `governance.sqlite3` 执行。写命令使用 SQLite `BEGIN IMMEDIATE`：等待当前短事务完成、在事务内重读 revision、校验预期指纹、提交一次状态变更，再重建 Markdown 投影。控制器不创建额外文件锁。
 
-长时间的 Agent、测试或人工动作不能持有数据库事务，必须用持久化 claim/operation 表示所有权。数据库连接设置有限等待；无法取得写锁时明确失败，不绕过事务另写文件。
+长时间的 Agent、测试或人工动作不能持有数据库事务，必须用持久化 claim/operation 表示所有权。claim 包含 30 分钟租约与最近心跳；长任务用 `heartbeat-task` 续租，控制器用 `advance-graph` 把过期 claim 归类为 `WORKER_LOST` 并按尝试预算恢复。数据库连接设置有限等待；无法取得写锁时明确失败，不绕过事务另写文件。
 
 ## 写入顺序
 

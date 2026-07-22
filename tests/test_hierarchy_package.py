@@ -653,6 +653,7 @@ class HierarchyPackageTests(unittest.TestCase):
                         "testsRun": 1,
                     }],
                     "blockers": [],
+                    "failure": None,
                 },
             )
             implemented_progress = (root / "progress.md").read_text(encoding="utf-8")

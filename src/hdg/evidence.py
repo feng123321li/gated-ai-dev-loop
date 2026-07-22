@@ -7,10 +7,12 @@ from typing import Any
 from .constants import SCHEMA_VERSION
 from .errors import GatedLoopError, fail
 from .jsonio import canonical_json, fingerprint
+from .graph_model import FAILURE_CLASSES
 
 
 FINGERPRINT = re.compile(r"^[a-f0-9]{64}$")
 SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+FAILURE_CODE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 ACCEPTANCE_STATUSES = {
     "NOT_READY", "WAITING_FOR_INDEPENDENT_REVIEW", "WAITING_FOR_USER_CONFIRMATION", "COMPLETED",
 }
@@ -159,11 +161,24 @@ def valid_acceptance_report(value: object, entry: dict[str, Any]) -> bool:
 
 
 def valid_task_result_artifact(value: object, *, item_id: str, operation_id: str, status: str) -> bool:
+    failure = value.get("failure") if isinstance(value, dict) else None
+    failure_valid = (
+        failure is None
+        if status == "IMPLEMENTED"
+        else (
+            isinstance(failure, dict)
+            and set(failure) == {"class", "code", "summary"}
+            and failure.get("class") in FAILURE_CLASSES[:5]
+            and isinstance(failure.get("code"), str)
+            and bool(FAILURE_CODE.fullmatch(failure["code"]))
+            and non_empty_string(failure.get("summary"))
+        )
+    )
     return (
         isinstance(value, dict)
         and set(value) == {
             "schemaVersion", "kind", "taskId", "operationId", "status", "summary",
-            "changedFiles", "tests", "blockers",
+            "changedFiles", "tests", "blockers", "failure",
         }
         and value.get("schemaVersion") == SCHEMA_VERSION
         and value.get("kind") == "TASK_RESULT"
@@ -185,6 +200,9 @@ def valid_task_result_artifact(value: object, *, item_id: str, operation_id: str
         )
         and isinstance(value.get("blockers"), list)
         and all(non_empty_string(item) for item in value["blockers"])
+        and failure_valid
+        and (status != "IMPLEMENTED" or not value["blockers"])
+        and (status != "BLOCKED" or bool(value["blockers"]))
     )
 
 

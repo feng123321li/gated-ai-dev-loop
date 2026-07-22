@@ -4,6 +4,8 @@ import unittest
 
 from hdg.errors import GatedLoopError
 from hdg.graph_model import (
+    DEFAULT_CLAIM_LEASE_SECONDS,
+    DEFAULT_MAX_ATTEMPTS,
     compile_delivery_graph,
     confirmation_node_id,
     execution_node_id,
@@ -60,8 +62,41 @@ class DeliveryGraphModelTests(unittest.TestCase):
         self.assertRegex(graph_fingerprint(graph), r"^[0-9a-f]{64}$")
         self.assertEqual(
             graph_summary(graph),
-            {"nodes": 4, "edges": 3, "taskExecutions": 1, "gateNodes": 1, "reviewNodes": 2},
+            {
+                "nodes": 4,
+                "edges": 3,
+                "taskExecutions": 1,
+                "gateNodes": 1,
+                "reviewNodes": 2,
+                "runtimeTransitions": len(graph["runtime"]["transitions"]),
+            },
         )
+        runtime = graph["runtime"]
+        self.assertEqual(runtime["retryPolicy"]["maxAttempts"], DEFAULT_MAX_ATTEMPTS)
+        self.assertEqual(
+            runtime["claimPolicy"]["leaseSeconds"],
+            DEFAULT_CLAIM_LEASE_SECONDS,
+        )
+        self.assertEqual(
+            runtime["terminalStates"],
+            ["CANCELLED", "COMPLETED"],
+        )
+        self.assertTrue(
+            {
+                "TASK_BLOCKED",
+                "NODE_RETRY_SCHEDULED",
+                "RETRY_EXHAUSTED",
+                "NODE_PAUSED",
+                "NODE_RESUMED",
+                "CLAIM_LEASE_EXPIRED",
+                "GRAPH_RUN_CANCELLED",
+            }.issubset({item["eventType"] for item in runtime["transitions"]})
+        )
+        resumed = next(
+            item for item in runtime["transitions"]
+            if item["eventType"] == "NODE_RESUMED"
+        )
+        self.assertEqual(resumed["toStates"], ["PENDING", "READY"])
 
     def test_task_dependencies_and_parent_gate_compile_to_typed_edges(self) -> None:
         source = two_task_capability_hierarchy()
@@ -133,6 +168,12 @@ class DeliveryGraphModelTests(unittest.TestCase):
         with self.assertRaises(GatedLoopError) as raised:
             validate_delivery_graph(graph)
         self.assertEqual(raised.exception.code, "DELIVERY_GRAPH_NODE_INVALID")
+
+        graph = self._compile(task_hierarchy())
+        graph["runtime"]["retryPolicy"]["maxAttempts"] = 0
+        with self.assertRaises(GatedLoopError) as raised:
+            validate_delivery_graph(graph)
+        self.assertEqual(raised.exception.code, "DELIVERY_GRAPH_RUNTIME_INVALID")
 
     def test_critical_path_identifies_the_next_fan_in_join(self) -> None:
         graph = self._compile(two_task_capability_hierarchy())

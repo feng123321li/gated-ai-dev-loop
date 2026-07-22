@@ -26,7 +26,7 @@ from hdg.graph_runtime import (
     list_graph_events,
     rebuild_graph_run,
 )
-from hdg.planning import freeze_hierarchy, prepare_hierarchy, retry_work_item
+from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.repository import GovernanceRepository
 
 from .fixtures import task_hierarchy
@@ -65,6 +65,11 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                 "testsRun": 1,
             }],
             "blockers": [] if status == "IMPLEMENTED" else ["Regression failure"],
+            "failure": None if status == "IMPLEMENTED" else {
+                "class": "RETRYABLE",
+                "code": "REGRESSION_FAILURE",
+                "summary": "The regression can be retried within the frozen contract.",
+            },
         }
 
     @staticmethod
@@ -297,19 +302,9 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                 status="BLOCKED",
                 evidence=self._task_result(task_id, "op-blocked", status="BLOCKED"),
             )
-            before = get_graph_status(root=temporary, work_item_id=task_id)
-            before_execute = next(node for node in before["nodes"] if node["id"] == execution_node_id(task_id))
-            self.assertEqual(before_execute["attempt"], 1)
-            self.assertEqual(before_execute["status"], "BLOCKED")
-
-            retry_work_item(
-                root=temporary,
-                item_id=task_id,
-                expected_baseline_fingerprint=prepared["baselineFingerprints"][task_id],
-            )
             after = get_graph_status(root=temporary, work_item_id=task_id)
             after_execute = next(node for node in after["nodes"] if node["id"] == execution_node_id(task_id))
-            self.assertEqual(after["graphFingerprint"], before["graphFingerprint"])
+            self.assertEqual(after["graphFingerprint"], prepared["graphFingerprint"])
             self.assertEqual(after_execute["attempt"], 2)
             self.assertEqual(after_execute["status"], "READY")
 

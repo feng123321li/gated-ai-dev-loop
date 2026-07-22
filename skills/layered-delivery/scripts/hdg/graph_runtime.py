@@ -1,16 +1,62 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from .constants import SCHEMA_VERSION
 from .errors import fail
-from .graph_model import graph_summary
+from .graph_model import graph_summary, runtime_transition
 from .jsonio import fingerprint
 from .model import scope_patterns_overlap
 
 
 SUCCESS_STATES = {"SUCCEEDED", "COMPLETED"}
-TERMINAL_STATES = SUCCESS_STATES | {"BLOCKED"}
+TERMINAL_STATES = SUCCESS_STATES | {"BLOCKED", "CANCELLED"}
+
+
+def retry_budget(graph: dict[str, Any], attempt: int) -> dict[str, int | bool]:
+    maximum = graph["runtime"]["retryPolicy"]["maxAttempts"]
+    remaining = max(0, maximum - attempt)
+    return {
+        "attempt": attempt,
+        "maxAttempts": maximum,
+        "remainingAttempts": remaining,
+        "retryExhausted": remaining == 0,
+    }
+
+
+def failure_routing_decision(
+    graph: dict[str, Any],
+    *,
+    attempt: int,
+    failure_class: str,
+) -> dict[str, Any]:
+    budget = retry_budget(graph, attempt)
+    automatic = failure_class in graph["runtime"]["retryPolicy"]["automaticFailureClasses"]
+    if automatic and not budget["retryExhausted"]:
+        action = "RETRY_NODE"
+    elif automatic:
+        action = graph["runtime"]["retryPolicy"]["onExhausted"]
+    elif failure_class == "REMEDIATION_REQUIRED":
+        action = "SUBMIT_REMEDIATION"
+    elif failure_class == "CONTRACT_CHANGE":
+        action = "REQUEST_REVIEW"
+    elif failure_class == "EXTERNAL_AUTHORITY":
+        action = "REQUEST_USER_AUTHORITY"
+    else:
+        action = "REQUEST_INTERVENTION"
+    return {
+        "failureClass": failure_class,
+        "routeCondition": (
+            "ON_RETRY_EXHAUSTED"
+            if automatic and budget["retryExhausted"]
+            else "ON_FAILURE"
+        ),
+        "action": action,
+        "automatic": automatic,
+        **budget,
+        "nextAttempt": attempt + 1 if action == "RETRY_NODE" else None,
+    }
 
 
 def hierarchy_root_entry(
@@ -170,7 +216,8 @@ def _set_replay_node(node: dict[str, Any], **changes: Any) -> None:
         return
     persisted_fields = {
         "status", "owner", "operationId", "claimedAt", "finishedAt",
-        "latestEvidenceHash",
+        "latestEvidenceHash", "leaseExpiresAt", "lastHeartbeatAt", "failureClass",
+        "lastTransition", "retryExhausted",
     }
     persisted_changed = any(
         key in persisted_fields and node.get(key) != value
@@ -227,10 +274,12 @@ def _refresh_replay_readiness(
 
 
 def _new_replay_attempts(
+    graph: dict[str, Any],
     attempts: object,
     current: dict[str, dict[str, Any]],
     histories: dict[str, list[dict[str, Any]]],
     *,
+    event_type: str,
     recorded_at: str,
 ) -> None:
     if not isinstance(attempts, list) or not attempts:
@@ -248,6 +297,12 @@ def _new_replay_attempts(
         ):
             fail("DELIVERY_GRAPH_REPLAY_INVALID", "Retry event contains an invalid node attempt")
         previous = current[item["nodeId"]]
+        runtime_transition(
+            graph,
+            event_type=event_type,
+            node_kind=previous["kind"],
+            from_state=previous["status"],
+        )
         if item["attempt"] != previous["attempt"] + 1:
             fail("DELIVERY_GRAPH_REPLAY_INVALID", "Retry attempt sequence is invalid")
         seen.add(item["nodeId"])
@@ -263,6 +318,11 @@ def _new_replay_attempts(
             "claimedAt": None,
             "finishedAt": None,
             "latestEvidenceHash": None,
+            "leaseExpiresAt": None,
+            "lastHeartbeatAt": None,
+            "failureClass": None,
+            "lastTransition": event_type,
+            "retryExhausted": False,
             "recordRevision": 1,
             "blockedBy": [],
             "readyBecause": [],
@@ -292,6 +352,11 @@ def replay_graph_events(
             "claimedAt": None,
             "finishedAt": None,
             "latestEvidenceHash": None,
+            "leaseExpiresAt": None,
+            "lastHeartbeatAt": None,
+            "failureClass": None,
+            "lastTransition": None,
+            "retryExhausted": False,
             "recordRevision": 1,
             "blockedBy": ["graph-run-not-started"],
             "readyBecause": [],
@@ -301,6 +366,7 @@ def replay_graph_events(
 
     started = False
     completed_at: str | None = None
+    cancelled_at: str | None = None
     for index, event in enumerate(events):
         if (
             event.get("runId") != run["runId"]
@@ -314,10 +380,50 @@ def replay_graph_events(
             if index != 0 or started or node_id is not None or event["attempt"] is not None:
                 fail("DELIVERY_GRAPH_REPLAY_INVALID", "Graph start event is invalid")
             started = True
+            prior_revisions = {
+                node_id: state["recordRevision"] for node_id, state in current.items()
+            }
+            for state in current.values():
+                runtime_transition(
+                    graph,
+                    event_type=event_type,
+                    node_kind=state["kind"],
+                    from_state=state["status"],
+                )
+                state["lastTransition"] = event_type
             _refresh_replay_readiness(graph, current, started=True)
+            for node_id, state in current.items():
+                if state["recordRevision"] == prior_revisions[node_id]:
+                    state["recordRevision"] += 1
             continue
         if not started:
             fail("DELIVERY_GRAPH_REPLAY_INVALID", "Graph event occurred before the run started")
+        if event_type == "GRAPH_RUN_CANCELLED":
+            if node_id is not None or event["attempt"] is not None or cancelled_at is not None:
+                fail("DELIVERY_GRAPH_REPLAY_INVALID", "Graph cancellation event is invalid")
+            for state in current.values():
+                if state["status"] in SUCCESS_STATES or state["status"] == "CANCELLED":
+                    continue
+                runtime_transition(
+                    graph,
+                    event_type=event_type,
+                    node_kind=state["kind"],
+                    from_state=state["status"],
+                )
+                _set_replay_node(
+                    state,
+                    status="CANCELLED",
+                    owner=None,
+                    operationId=None,
+                    finishedAt=event["recordedAt"],
+                    lastTransition=event_type,
+                    blockedBy=["graph-run-cancelled"],
+                    readyBecause=[],
+                )
+            cancelled_at = event["recordedAt"]
+            continue
+        if cancelled_at is not None:
+            fail("DELIVERY_GRAPH_REPLAY_INVALID", "Graph event occurred after cancellation")
         if node_id not in current:
             fail("DELIVERY_GRAPH_REPLAY_INVALID", "Graph event references an unknown node")
 
@@ -327,9 +433,11 @@ def replay_graph_events(
             ):
                 fail("DELIVERY_GRAPH_REPLAY_INVALID", "Graph invalidation evidence is not bound")
             _new_replay_attempts(
+                graph,
                 payload.get("attempts"),
                 current,
                 histories,
+                event_type=event_type,
                 recorded_at=event["recordedAt"],
             )
             if current[node_id]["attempt"] != event["attempt"]:
@@ -346,11 +454,25 @@ def replay_graph_events(
             if isinstance(binding, dict)
             else None
         )
+        runtime_transition(
+            graph,
+            event_type=event_type,
+            node_kind=node["kind"],
+            from_state=node["status"],
+        )
         if event_type == "TASK_CLAIMED":
             if node["kind"] != "TASK_EXECUTION" or node["status"] != "READY":
                 fail("DELIVERY_GRAPH_REPLAY_INVALID", "Task claim transition is invalid")
             owner = payload.get("owner")
-            if not isinstance(owner, str) or not owner or not event.get("operationId"):
+            lease_expires_at = payload.get("leaseExpiresAt")
+            last_heartbeat_at = payload.get("lastHeartbeatAt")
+            if (
+                not isinstance(owner, str)
+                or not owner
+                or not event.get("operationId")
+                or not isinstance(lease_expires_at, str)
+                or not isinstance(last_heartbeat_at, str)
+            ):
                 fail("DELIVERY_GRAPH_REPLAY_INVALID", "Task claim identity is invalid")
             _set_replay_node(
                 node,
@@ -358,7 +480,73 @@ def replay_graph_events(
                 owner=owner,
                 operationId=event["operationId"],
                 claimedAt=event["recordedAt"],
+                leaseExpiresAt=lease_expires_at,
+                lastHeartbeatAt=last_heartbeat_at,
+                failureClass=None,
+                lastTransition=event_type,
+                retryExhausted=False,
                 blockedBy=[],
+                readyBecause=[],
+            )
+        elif event_type == "TASK_HEARTBEAT":
+            if (
+                node["kind"] != "TASK_EXECUTION"
+                or node["operationId"] != event.get("operationId")
+                or not isinstance(payload.get("leaseExpiresAt"), str)
+                or payload.get("lastHeartbeatAt") != event["recordedAt"]
+            ):
+                fail("DELIVERY_GRAPH_REPLAY_INVALID", "Task heartbeat transition is invalid")
+            _set_replay_node(
+                node,
+                leaseExpiresAt=payload["leaseExpiresAt"],
+                lastHeartbeatAt=payload["lastHeartbeatAt"],
+                lastTransition=event_type,
+            )
+        elif event_type == "NODE_PAUSED":
+            if node["kind"] != "TASK_EXECUTION" or node["operationId"] != event.get("operationId"):
+                fail("DELIVERY_GRAPH_REPLAY_INVALID", "Task pause transition is invalid")
+            _set_replay_node(
+                node,
+                status="PAUSED",
+                owner=None,
+                operationId=None,
+                lastTransition=event_type,
+                blockedBy=["explicitly-paused"],
+                readyBecause=[],
+            )
+        elif event_type == "NODE_RESUMED":
+            if node["kind"] != "TASK_EXECUTION" or event.get("operationId") is not None:
+                fail("DELIVERY_GRAPH_REPLAY_INVALID", "Task resume transition is invalid")
+            incoming = [
+                edge for edge in graph["edges"] if edge["target"] == node_id
+            ]
+            unmet = [
+                edge["source"]
+                for edge in incoming
+                if current[edge["source"]]["status"] not in SUCCESS_STATES
+            ]
+            _set_replay_node(
+                node,
+                status="PENDING" if unmet else "READY",
+                lastTransition=event_type,
+                blockedBy=unmet,
+                readyBecause=(
+                    [] if unmet else [f"passed:{edge['source']}" for edge in sorted(incoming, key=lambda item: item["id"])]
+                    or ["no-unmet-predecessors"]
+                ),
+            )
+        elif event_type == "CLAIM_LEASE_EXPIRED":
+            if node["kind"] != "TASK_EXECUTION" or node["operationId"] != event.get("operationId"):
+                fail("DELIVERY_GRAPH_REPLAY_INVALID", "Claim lease expiration transition is invalid")
+            _set_replay_node(
+                node,
+                status="BLOCKED",
+                owner=None,
+                operationId=None,
+                finishedAt=event["recordedAt"],
+                failureClass="WORKER_LOST",
+                lastTransition=event_type,
+                blockedBy=["claim-lease-expired"],
                 readyBecause=[],
             )
         elif event_type in {"TASK_IMPLEMENTED", "TASK_BLOCKED"}:
@@ -369,6 +557,12 @@ def replay_graph_events(
                 or evidence_hash is None
             ):
                 fail("DELIVERY_GRAPH_REPLAY_INVALID", "Task result transition is invalid")
+            failure_class = None
+            if event_type == "TASK_BLOCKED":
+                failure = payload.get("failure")
+                if not isinstance(failure, dict) or not isinstance(failure.get("class"), str):
+                    fail("DELIVERY_GRAPH_REPLAY_INVALID", "Task failure classification is invalid")
+                failure_class = failure["class"]
             _set_replay_node(
                 node,
                 status="SUCCEEDED" if event_type == "TASK_IMPLEMENTED" else "BLOCKED",
@@ -376,6 +570,8 @@ def replay_graph_events(
                 operationId=None,
                 finishedAt=event["recordedAt"],
                 latestEvidenceHash=evidence_hash,
+                failureClass=failure_class,
+                lastTransition=event_type,
                 blockedBy=[] if event_type == "TASK_IMPLEMENTED" else ["task-execution-blocked"],
                 readyBecause=[],
             )
@@ -387,6 +583,8 @@ def replay_graph_events(
                 status="SUCCEEDED" if event_type == "GATE_PASSED" else "BLOCKED",
                 finishedAt=event["recordedAt"],
                 latestEvidenceHash=evidence_hash,
+                failureClass=None if event_type == "GATE_PASSED" else "GATE_FAILURE",
+                lastTransition=event_type,
                 blockedBy=[] if event_type == "GATE_PASSED" else ["gate-failed"],
                 readyBecause=[],
             )
@@ -398,6 +596,7 @@ def replay_graph_events(
                 status="SUCCEEDED",
                 finishedAt=event["recordedAt"],
                 latestEvidenceHash=evidence_hash,
+                lastTransition=event_type,
                 blockedBy=[],
                 readyBecause=[],
             )
@@ -410,7 +609,16 @@ def replay_graph_events(
                 status="COMPLETED",
                 finishedAt=completed_at,
                 latestEvidenceHash=evidence_hash,
+                lastTransition=event_type,
                 blockedBy=[],
+                readyBecause=[],
+            )
+        elif event_type == "RETRY_EXHAUSTED":
+            _set_replay_node(
+                node,
+                retryExhausted=True,
+                lastTransition=event_type,
+                blockedBy=["retry-exhausted"],
                 readyBecause=[],
             )
         else:
@@ -426,8 +634,13 @@ def replay_graph_events(
         for attempt in histories[node["id"]]
     ]
     status = (
-        "COMPLETED"
+        "CANCELLED"
+        if cancelled_at is not None
+        else "COMPLETED"
         if any(node["kind"] == "USER_CONFIRMATION" and node["status"] == "COMPLETED" for node in nodes)
+        else "PAUSED"
+        if any(node["status"] == "PAUSED" for node in nodes)
+        and not any(node["status"] in {"READY", "CLAIMED"} for node in nodes)
         else "BLOCKED"
         if any(node["status"] == "BLOCKED" for node in nodes)
         else "ACTIVE"
@@ -441,6 +654,7 @@ def replay_graph_events(
         "startedAt": events[0]["recordedAt"],
         "updatedAt": events[-1]["recordedAt"],
         "completedAt": completed_at,
+        "cancelledAt": cancelled_at,
         "eventCount": len(events),
         "nodes": nodes,
         "attempts": attempts,
@@ -458,7 +672,8 @@ def replay_mismatches(
     }
     compared_fields = (
         "status", "owner", "operationId", "claimedAt", "finishedAt", "latestEvidenceHash",
-        "recordRevision",
+        "leaseExpiresAt", "lastHeartbeatAt", "failureClass", "lastTransition",
+        "retryExhausted", "recordRevision",
     )
     mismatches: list[dict[str, Any]] = []
     replay_attempts = {
@@ -488,7 +703,7 @@ def replay_mismatches(
         field: {"expected": replay[field], "actual": run.get(field)}
         for field in (
             "rootId", "runId", "graphFingerprint", "status", "startedAt", "updatedAt",
-            "completedAt",
+            "completedAt", "cancelledAt",
         )
         if run.get(field) != replay[field]
     }
@@ -533,7 +748,7 @@ def critical_path(
             key=lambda item: (item[0], tuple(reversed(item[1]))),
             default=(0, []),
         )
-        unfinished = states[node_id]["status"] not in SUCCESS_STATES
+        unfinished = states[node_id]["status"] not in SUCCESS_STATES | {"CANCELLED"}
         best[node_id] = (
             successor_score + (1 if unfinished else 0),
             ([node_id] if unfinished else []) + successor_path,
@@ -549,6 +764,7 @@ def critical_path(
         "remainingNodes": remaining,
         "nextJoinNodeId": next_join,
         "blocked": any(states[node_id]["status"] == "BLOCKED" for node_id in path),
+        "paused": any(states[node_id]["status"] == "PAUSED" for node_id in path),
     }
 
 
@@ -600,6 +816,11 @@ def get_graph_status(*, root: str, work_item_id: str) -> dict[str, Any]:
                 "claimedAt": None,
                 "finishedAt": None,
                 "latestEvidenceHash": None,
+                "leaseExpiresAt": None,
+                "lastHeartbeatAt": None,
+                "failureClass": None,
+                "lastTransition": None,
+                "retryExhausted": False,
                 "recordRevision": None,
             }
             for state in derive_node_states(graph, registry)
@@ -631,11 +852,13 @@ def get_graph_status(*, root: str, work_item_id: str) -> dict[str, Any]:
         "run": None if run is None else {
             key: run[key]
             for key in (
-                "runId", "status", "startedAt", "updatedAt", "completedAt", "recordRevision"
+                "runId", "status", "startedAt", "updatedAt", "completedAt", "cancelledAt",
+                "recordRevision",
             )
         },
         "nodes": nodes,
         "edges": graph["edges"],
+        "runtime": graph["runtime"],
         "criticalPath": critical_path(graph, nodes),
         "replay": None if replay is None else {
             "eventCount": replay["eventCount"],
@@ -669,6 +892,10 @@ def build_graph_frontier(
                 "attempt": None,
                 "status": "PENDING",
                 "blockedBy": ["requirement-not-frozen"],
+                "failureClass": None,
+                "remainingAttempts": None,
+                "retryExhausted": False,
+                "recommendedAction": "FREEZE_REQUIREMENT",
             }],
             "criticalPath": critical_path(graph, states),
             "summary": {"actionable": 0, "blocked": 1, "claimed": 0},
@@ -691,6 +918,7 @@ def build_graph_frontier(
     path = critical_path(graph, states)
     critical_nodes = set(path["nodeIds"])
     for state in requested_states:
+        budget = retry_budget(graph, state["attempt"])
         if state["status"] == "READY" and state["kind"] == "TASK_EXECUTION":
             entry = by_item[state["workItemId"]]
             if repository.is_item_isolated(entry["id"]):
@@ -701,6 +929,10 @@ def build_graph_frontier(
                     "attempt": state["attempt"],
                     "status": state["status"],
                     "blockedBy": ["read-only-isolated"],
+                    "failureClass": state.get("failureClass"),
+                    "remainingAttempts": budget["remainingAttempts"],
+                    "retryExhausted": state.get("retryExhausted", False),
+                    "recommendedAction": "REQUEST_INTERVENTION",
                 })
                 continue
             definition = repository.assert_current_lineage(registry, entry)[0]
@@ -718,6 +950,10 @@ def build_graph_frontier(
                     "attempt": state["attempt"],
                     "status": state["status"],
                     "blockedBy": [f"scope-conflict:{task_id}" for task_id in sorted(conflicts)],
+                    "failureClass": state.get("failureClass"),
+                    "remainingAttempts": budget["remainingAttempts"],
+                    "retryExhausted": state.get("retryExhausted", False),
+                    "recommendedAction": "WAIT_FOR_SCOPE",
                 })
                 continue
             selected_scopes.append((entry["id"], scope))
@@ -731,6 +967,9 @@ def build_graph_frontier(
                 "readyBecause": state["readyBecause"] + ["scope-available"],
                 "critical": state["id"] in critical_nodes,
                 "commandHint": f"dispatch-task --item {state['workItemId']} --owner <owner> --operation <id>",
+                "transition": "TASK_CLAIMED",
+                "routeCondition": "ON_DISPATCH",
+                **budget,
             })
         elif state["status"] == "READY":
             action = (
@@ -754,11 +993,75 @@ def build_graph_frontier(
                     if action == "RUN_GATE"
                     else f"acceptance-item --item {state['workItemId']} --action <action> --evidence -"
                 ),
+                "transition": (
+                    "GATE_PASSED"
+                    if action == "RUN_GATE"
+                    else "REVIEW_PASSED"
+                    if action == "REQUEST_REVIEW"
+                    else "USER_CONFIRMED"
+                ),
+                "routeCondition": "ON_PASS" if action != "REQUEST_USER_CONFIRMATION" else "ON_CONFIRMATION",
+                **budget,
             })
-        elif state["status"] in {"PENDING", "BLOCKED", "CLAIMED"}:
+        elif state["status"] == "CLAIMED" and state["kind"] == "TASK_EXECUTION":
+            actions.append({
+                "nodeId": state["id"],
+                "nodeKind": state["kind"],
+                "action": "HEARTBEAT_TASK",
+                "workItemId": state["workItemId"],
+                "attempt": state["attempt"],
+                "parallelGroup": None,
+                "readyBecause": [f"claimed:{state.get('operationId') or 'unknown'}"],
+                "critical": state["id"] in critical_nodes,
+                "commandHint": (
+                    f"heartbeat-task --item {state['workItemId']} "
+                    f"--operation {state.get('operationId') or '<id>'}"
+                ),
+                "transition": "TASK_HEARTBEAT",
+                "routeCondition": "ON_HEARTBEAT",
+                "leaseExpiresAt": state.get("leaseExpiresAt"),
+                **budget,
+            })
+        elif state["status"] == "PAUSED" and state["kind"] == "TASK_EXECUTION":
+            actions.append({
+                "nodeId": state["id"],
+                "nodeKind": state["kind"],
+                "action": "RESUME_TASK",
+                "workItemId": state["workItemId"],
+                "attempt": state["attempt"],
+                "parallelGroup": None,
+                "readyBecause": ["explicitly-paused"],
+                "critical": state["id"] in critical_nodes,
+                "commandHint": f"resume-task --item {state['workItemId']}",
+                "transition": "NODE_RESUMED",
+                "routeCondition": "ON_RESUME",
+                **budget,
+            })
+        elif state["status"] in {"PENDING", "BLOCKED", "CLAIMED", "CANCELLED"}:
             reasons = state["blockedBy"]
             if state["status"] == "CLAIMED":
                 reasons = [f"claimed:{state.get('operationId') or 'unknown'}"]
+            failure_class = state.get("failureClass")
+            if state.get("retryExhausted"):
+                recommended = "REQUEST_INTERVENTION"
+            elif state["status"] == "CANCELLED":
+                recommended = "NONE"
+            elif state["status"] == "BLOCKED" and failure_class:
+                recommended = (
+                    failure_routing_decision(
+                        graph,
+                        attempt=state["attempt"],
+                        failure_class=failure_class,
+                    )["action"]
+                    if failure_class != "GATE_FAILURE"
+                    else (
+                        "RETRY_NODE"
+                        if budget["remainingAttempts"]
+                        else "REQUEST_INTERVENTION"
+                    )
+                )
+            else:
+                recommended = "WAIT_FOR_PREDECESSORS"
             blocked.append({
                 "nodeId": state["id"],
                 "nodeKind": state["kind"],
@@ -766,6 +1069,11 @@ def build_graph_frontier(
                 "attempt": state["attempt"],
                 "status": state["status"],
                 "blockedBy": reasons,
+                "failureClass": failure_class,
+                "remainingAttempts": budget["remainingAttempts"],
+                "retryExhausted": state.get("retryExhausted", False),
+                "recommendedAction": recommended,
+                "lastTransition": state.get("lastTransition"),
             })
     return {
         "schemaVersion": SCHEMA_VERSION,
@@ -868,3 +1176,188 @@ def list_graph_events(*, root: str, work_item_id: str) -> list[dict[str, Any]]:
         next(item for item in registry["workItems"] if item["id"] == work_item_id),
     )
     return repository.read_graph_events(root_entry["id"])
+
+
+def _runtime_time(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def advance_graph(
+    *,
+    root: str,
+    work_item_id: str,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    """Apply deterministic controller routes such as expired-claim recovery."""
+    from .repository import GovernanceRepository, timestamp
+
+    repository = GovernanceRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    at = timestamp(now)
+    decisions: list[dict[str, Any]] = []
+    with repository.transaction() as registry:
+        requested, root_entry = _root_for_requested_item(registry, work_item_id)
+        stored = repository.read_graph_definition(root_entry["id"])
+        run = repository.read_graph_run(root_entry["id"])
+        replay = replay_graph_events(
+            stored["graph"],
+            run,
+            repository.read_graph_events(root_entry["id"]),
+        )
+        if replay["status"] in {"CANCELLED", "COMPLETED"}:
+            return {
+                "rootId": root_entry["id"],
+                "runId": run["runId"],
+                "status": replay["status"],
+                "decisions": [],
+            }
+        by_item = {item["id"]: item for item in registry["workItems"]}
+        for state in replay["nodes"]:
+            entry = by_item[state["workItemId"]]
+            if (
+                state["kind"] != "TASK_EXECUTION"
+                or state["status"] != "CLAIMED"
+                or not is_descendant(registry, entry, requested["id"])
+                or not state.get("leaseExpiresAt")
+                or _runtime_time(at) < _runtime_time(state["leaseExpiresAt"])
+            ):
+                continue
+            claim = entry.get("claim") or {}
+            if claim.get("operationId") != state.get("operationId"):
+                fail(
+                    "DELIVERY_GRAPH_REPLAY_MISMATCH",
+                    "Graph claim and work item claim disagree during automatic recovery",
+                )
+            repository.append_graph_event(
+                root_id=root_entry["id"],
+                node_id=state["nodeId"],
+                event_type="CLAIM_LEASE_EXPIRED",
+                actor="CONTROLLER",
+                operation_id=state["operationId"],
+                payload={
+                    "leaseExpiresAt": state["leaseExpiresAt"],
+                    "failureClass": "WORKER_LOST",
+                },
+                recorded_at=at,
+            )
+            entry["claim"] = None
+            entry["status"] = "BLOCKED"
+            decision = failure_routing_decision(
+                stored["graph"],
+                attempt=state["attempt"],
+                failure_class="WORKER_LOST",
+            )
+            if decision["action"] == "RETRY_NODE":
+                attempts = repository.begin_graph_attempts(
+                    root_entry["id"], [state["nodeId"]], at=at
+                )
+                repository.append_graph_event(
+                    root_id=root_entry["id"],
+                    node_id=state["nodeId"],
+                    event_type="NODE_RETRY_SCHEDULED",
+                    actor="CONTROLLER",
+                    operation_id=None,
+                    payload={
+                        "attempts": attempts,
+                        "failureClass": "WORKER_LOST",
+                        "routeCondition": decision["routeCondition"],
+                    },
+                    recorded_at=at,
+                )
+                entry["status"] = "FROZEN"
+            else:
+                repository.append_graph_event(
+                    root_id=root_entry["id"],
+                    node_id=state["nodeId"],
+                    event_type="RETRY_EXHAUSTED",
+                    actor="CONTROLLER",
+                    operation_id=None,
+                    payload={
+                        "failureClass": "WORKER_LOST",
+                        "routeCondition": decision["routeCondition"],
+                        "maxAttempts": decision["maxAttempts"],
+                    },
+                    recorded_at=at,
+                )
+            entry["recordRevision"] += 1
+            entry["updatedAt"] = at
+            decisions.append({"nodeId": state["nodeId"], **decision})
+        if decisions:
+            registry["currentFocus"] = {
+                "workItemId": requested["id"],
+                "purpose": "GRAPH_ADVANCED",
+            }
+            registry["revision"] += 1
+            registry["updatedAt"] = at
+            repository.write_registry(registry)
+    status = get_graph_status(root=root, work_item_id=work_item_id)
+    return {
+        "rootId": status["rootId"],
+        "runId": status["run"]["runId"],
+        "status": status["run"]["status"],
+        "decisions": decisions,
+    }
+
+
+def cancel_graph_run(
+    *,
+    root: str,
+    work_item_id: str,
+    confirmed: bool = False,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    if not confirmed:
+        fail("CONFIRMATION_REQUIRED", "Graph run cancellation requires explicit confirmation")
+    from .repository import GovernanceRepository, timestamp
+
+    repository = GovernanceRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    at = timestamp(now)
+    with repository.transaction() as registry:
+        requested, root_entry = _root_for_requested_item(registry, work_item_id)
+        stored = repository.read_graph_definition(root_entry["id"])
+        run = repository.read_graph_run(root_entry["id"])
+        replay = replay_graph_events(
+            stored["graph"],
+            run,
+            repository.read_graph_events(root_entry["id"]),
+        )
+        if replay["status"] == "CANCELLED":
+            return {
+                "rootId": root_entry["id"],
+                "runId": run["runId"],
+                "status": "CANCELLED",
+                "cancelledAt": replay["cancelledAt"],
+            }
+        if replay["status"] == "COMPLETED":
+            fail("DELIVERY_GRAPH_ALREADY_COMPLETED", "A completed graph run cannot be cancelled")
+        for entry in registry["workItems"]:
+            if is_descendant(registry, entry, root_entry["id"]) and entry.get("claim"):
+                entry["claim"] = None
+                entry["status"] = "FROZEN"
+                entry["recordRevision"] += 1
+                entry["updatedAt"] = at
+        repository.append_graph_event(
+            root_id=root_entry["id"],
+            node_id=None,
+            event_type="GRAPH_RUN_CANCELLED",
+            actor="USER",
+            operation_id=None,
+            payload={"confirmed": True, "requestedItemId": requested["id"]},
+            recorded_at=at,
+        )
+        registry["currentFocus"] = {
+            "workItemId": requested["id"],
+            "purpose": "GRAPH_RUN_CANCELLED",
+        }
+        registry["revision"] += 1
+        registry["updatedAt"] = at
+        repository.write_registry(registry)
+        return {
+            "rootId": root_entry["id"],
+            "runId": run["runId"],
+            "status": "CANCELLED",
+            "cancelledAt": at,
+        }

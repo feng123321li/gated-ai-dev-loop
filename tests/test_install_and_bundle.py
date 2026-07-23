@@ -100,16 +100,6 @@ class InstallAndBundleTests(unittest.TestCase):
         claude_manifest = json.loads(
             (plugin_root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
         )
-        codex_marketplace = json.loads(
-            (REPOSITORY_ROOT / ".agents" / "plugins" / "marketplace.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        claude_marketplace = json.loads(
-            (REPOSITORY_ROOT / ".claude-plugin" / "marketplace.json").read_text(
-                encoding="utf-8"
-            )
-        )
         project_version = next(
             line.split("=", 1)[1].strip().strip('"')
             for line in (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8").splitlines()
@@ -129,24 +119,19 @@ class InstallAndBundleTests(unittest.TestCase):
             codex_manifest["interface"]["shortDescription"],
             "治理可评审、可恢复的 AI 辅助软件交付",
         )
-        self.assertEqual(
-            claude_marketplace["description"],
-            "面向 AI 辅助开发的分层交付治理插件市场",
-        )
         self.assertEqual(codex_manifest["skills"], "./skills/")
-        self.assertEqual(codex_marketplace["name"], "layered-delivery")
-        self.assertEqual(claude_marketplace["name"], codex_marketplace["name"])
-        self.assertEqual(
-            codex_marketplace["plugins"][0]["source"],
-            {"source": "local", "path": "./plugins/layered-delivery"},
+
+    def test_repository_is_plugin_source_not_a_marketplace(self) -> None:
+        self.assertFalse(
+            (REPOSITORY_ROOT / ".agents" / "plugins" / "marketplace.json").exists()
         )
-        self.assertEqual(
-            claude_marketplace["plugins"][0]["source"],
-            "./plugins/layered-delivery",
+        self.assertFalse(
+            (REPOSITORY_ROOT / ".claude-plugin" / "marketplace.json").exists()
         )
-        self.assertEqual(
-            claude_marketplace["plugins"][0]["version"],
-            codex_manifest["version"],
+        readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "Marketplace\n只维护指向 `plugins/layered-delivery` 的 Git 版本映射",
+            readme,
         )
 
     def test_readme_documents_public_skill_installation(self) -> None:

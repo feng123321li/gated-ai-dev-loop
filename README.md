@@ -63,12 +63,14 @@ python scripts/build_skill.py
 python scripts/build_skill.py
 python <plugin-creator>/scripts/validate_plugin.py plugins/layered-delivery
 claude plugin validate plugins/layered-delivery
-claude plugin validate .
 python -m unittest discover -s tests -t . -v
 python -m compileall -q src scripts tests
 python -X utf8 <skill-validator>/quick_validate.py skills/layered-delivery
 git diff --check
 ```
+
+本仓库是 `layered-delivery` Plugin 与 Skill 的唯一源码。公司内部 Marketplace
+只维护指向 `plugins/layered-delivery` 的 Git 版本映射，不复制本仓库的插件载荷。
 
 源码维护不创建 `.layered-delivery/**` 运行包。只有明确要求 dogfood 时，控制面写命令才可执行并携带 `--dogfood`。
 

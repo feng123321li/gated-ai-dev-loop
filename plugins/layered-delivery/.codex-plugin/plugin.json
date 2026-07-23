@@ -1,0 +1,34 @@
+{
+  "name": "layered-delivery",
+  "version": "0.10.0",
+  "description": "面向 AI 辅助开发、可人工评审的分层交付治理插件",
+  "author": {
+    "name": "layered-delivery contributors",
+    "url": "https://github.com/feng123321li/layered-delivery"
+  },
+  "homepage": "https://github.com/feng123321li/layered-delivery",
+  "repository": "https://github.com/feng123321li/layered-delivery",
+  "license": "MIT",
+  "keywords": [
+    "ai-development",
+    "delivery-governance",
+    "workflow"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "分层交付",
+    "shortDescription": "治理可评审、可恢复的 AI 辅助软件交付",
+    "longDescription": "通过人工评审、一次冻结、图调度、分级门禁和本地持久状态，治理完整的 AI 辅助软件交付流程。",
+    "developerName": "layered-delivery contributors",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/feng123321li/layered-delivery",
+    "defaultPrompt": [
+      "使用 layered-delivery 规划并治理当前开发需求。"
+    ],
+    "brandColor": "#2563EB"
+  }
+}

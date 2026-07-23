@@ -4,35 +4,13 @@
 
 ## 安装
 
-GitHub：
+GitHub 直接安装 Skill：
 
 ```text
-codex plugin marketplace add feng123321li/layered-delivery --ref main
-codex plugin add layered-delivery@layered-delivery
-
-claude plugin marketplace add feng123321li/layered-delivery
-claude plugin install layered-delivery@layered-delivery --scope user
+npx skills add feng123321li/layered-delivery --skill layered-delivery --global --agent codex --agent claude-code --yes
 ```
 
-Git SSH（公司内网）：
-
-```text
-codex plugin marketplace add git@git.i-sanger.com:ai/skill/layered-delivery.git --ref main
-codex plugin add layered-delivery@layered-delivery
-
-claude plugin marketplace add git@git.i-sanger.com:ai/skill/layered-delivery.git
-claude plugin install layered-delivery@layered-delivery --scope user
-```
-
-两个安装源二选一。更新插件：
-
-```text
-codex plugin marketplace upgrade layered-delivery
-codex plugin add layered-delivery@layered-delivery
-
-claude plugin marketplace update layered-delivery
-claude plugin update layered-delivery@layered-delivery
-```
+更新时重新执行上述命令。
 
 ## 核心契约
 

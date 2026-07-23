@@ -149,21 +149,25 @@ class InstallAndBundleTests(unittest.TestCase):
             codex_manifest["version"],
         )
 
-    def test_readme_documents_public_and_internal_plugin_installation(self) -> None:
+    def test_readme_documents_public_skill_installation(self) -> None:
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
         self.assertLess(readme.index("## 安装"), readme.index("## 核心契约"))
-        for expected in (
-            "codex plugin marketplace add feng123321li/layered-delivery",
-            "codex plugin add layered-delivery@layered-delivery",
-            "claude plugin marketplace add feng123321li/layered-delivery",
-            "claude plugin install layered-delivery@layered-delivery --scope user",
-            "git@git.i-sanger.com:ai/skill/layered-delivery.git",
-        ):
-            self.assertIn(expected, readme)
-        self.assertNotIn(
-            "https://git.i-sanger.com/ai/skill/layered-delivery.git",
+        self.assertIn(
+            (
+                "npx skills add feng123321li/layered-delivery --skill layered-delivery "
+                "--global --agent codex --agent claude-code --yes"
+            ),
             readme,
         )
+        for retired in (
+            "codex plugin marketplace add feng123321li/layered-delivery",
+            "claude plugin marketplace add feng123321li/layered-delivery",
+            "git@git.i-sanger.com",
+            "majorbio-skills",
+            "git@git.i-sanger.com:ai/skill/layered-delivery.git",
+            "https://git.i-sanger.com/ai/skill/layered-delivery.git",
+        ):
+            self.assertNotIn(retired, readme)
 
     def test_legacy_python_installer_is_retired(self) -> None:
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")

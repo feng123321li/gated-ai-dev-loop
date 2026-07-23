@@ -46,6 +46,15 @@ class PlanningTests(unittest.TestCase):
             )
             self.assertTrue(second["revised"])
             self.assertNotEqual(first["hierarchyFingerprint"], second["hierarchyFingerprint"])
+            for prepared in (first, second):
+                contract = prepared["responseContract"]
+                self.assertEqual(contract["kind"], "PLAN_CONFIRMATION")
+                self.assertEqual(
+                    [choice["developmentMode"] for choice in contract["requiredChoices"]],
+                    ["active", "manual"],
+                )
+                self.assertIn("active 开发", contract["prompt"])
+                self.assertIn("manual 开发", contract["prompt"])
             with self.assertRaises(GatedLoopError) as raised:
                 freeze_hierarchy(
                     root=temporary,
@@ -65,6 +74,11 @@ class PlanningTests(unittest.TestCase):
             self.assertEqual(second["hierarchyFingerprint"], first["hierarchyFingerprint"])
             self.assertEqual(second["hostAutomation"], first["hostAutomation"])
             self.assertEqual(second["hostAutomation"]["hostRuntime"], "claude-code")
+            self.assertEqual(second["responseContract"], first["responseContract"])
+            self.assertEqual(
+                [choice["developmentMode"] for choice in second["responseContract"]["requiredChoices"]],
+                ["active", "manual"],
+            )
             self.assertEqual(GovernanceRepository(temporary).read_registry()["revision"], first_revision)
 
     def test_concurrent_prepares_preserve_every_registry_entry(self) -> None:

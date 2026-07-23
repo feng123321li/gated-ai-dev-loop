@@ -121,6 +121,14 @@ class HierarchyPackageTests(unittest.TestCase):
             self.assertIn("首次 dispatch-task 之前", frozen["hostAutomation"]["claimPrecondition"])
             self.assertIn("hostAutomation", frozen["nextAction"])
             self.assertIsNone(frozen["claudeCodeAutoHandoff"])
+            self.assertEqual(
+                frozen["responseContract"],
+                {
+                    "kind": "ACTIVE_EXECUTION",
+                    "resumeFromGraphFrontier": True,
+                    "askDevelopmentModeAgain": False,
+                },
+            )
 
     def test_one_confirmation_freezes_every_node_in_the_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -320,6 +328,39 @@ class HierarchyPackageTests(unittest.TestCase):
             self.assertFalse(results["active"]["handoffExists"])
             self.assertTrue(results["manual"]["handoffExists"])
 
+    def test_manual_freeze_requires_a_copyable_but_not_verbatim_handoff_response(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=task_hierarchy(),
+                host_runtime="codex",
+            )
+            frozen = freeze_hierarchy(
+                root=temporary,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                development_mode="manual",
+                confirmed=True,
+            )
+
+            contract = frozen["responseContract"]
+            self.assertEqual(contract["kind"], "MANUAL_HANDOFF")
+            self.assertTrue(contract["mustProvideCopyablePrompt"])
+            self.assertEqual(contract["codeBlockLanguage"], "text")
+            self.assertEqual(contract["suggestedPrompt"], frozen["handoffCommand"])
+            self.assertTrue(contract["equivalentPromptAllowed"])
+            self.assertFalse(contract["linkOnlyAllowed"])
+            self.assertEqual(
+                contract["requiredSemantics"],
+                [
+                    "rootId",
+                    "resumeFromGraphFrontier",
+                    "consumeCompleteDispatchPlan",
+                    "doNotPrepareOrFreezeAgain",
+                    "completeDevelopmentTestsAndGates",
+                ],
+            )
+
     def test_manual_freeze_creates_one_handoff_for_the_complete_requirement_tree(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepared = prepare_hierarchy(
@@ -375,6 +416,7 @@ class HierarchyPackageTests(unittest.TestCase):
             self.assertTrue(idempotent["idempotent"])
             self.assertEqual(idempotent["handoffPrompt"], handoff)
             self.assertEqual(idempotent["handoffCommand"], frozen["handoffCommand"])
+            self.assertEqual(idempotent["responseContract"], frozen["responseContract"])
             self.assertEqual(
                 idempotent["claudeCodeAutoHandoff"],
                 frozen["claudeCodeAutoHandoff"],

@@ -399,6 +399,9 @@ def prepare_hierarchy(
                     },
                     "hostAutomation": render_host_automation(old_states[root_id]["hostRuntime"]),
                     "nextAction": _prepared_next_action(old_states[root_id]["hostRuntime"]),
+                    "responseContract": _prepared_response_contract(
+                        old_states[root_id]["hostRuntime"]
+                    ),
                 }
         new_ids = {record["definition"]["id"] for record in records}
         conflicts = sorted(item_id for item_id in new_ids if item_id in existing_by_id and item_id not in old_ids)
@@ -466,13 +469,34 @@ def prepare_hierarchy(
             },
             "hostAutomation": render_host_automation(runtime),
             "nextAction": _prepared_next_action(runtime),
+            "responseContract": _prepared_response_contract(runtime),
         }
+
+
+def _prepared_response_contract(host_runtime: str) -> dict[str, Any]:
+    prompt = "确认当前方案后，请回复 `active 开发` 或 `manual 开发`。"
+    if render_host_automation(host_runtime) is not None:
+        prompt += "选择 `active` 前须先满足 `hostAutomation`。"
+    return {
+        "kind": "PLAN_CONFIRMATION",
+        "requiredChoices": [
+            {"developmentMode": "active", "reply": "active 开发"},
+            {"developmentMode": "manual", "reply": "manual 开发"},
+        ],
+        "prompt": prompt,
+    }
 
 
 def _prepared_next_action(host_runtime: str) -> str:
     if render_host_automation(host_runtime) is not None:
-        return "人工评审 development-plan.md；选择 active 前满足 hostAutomation，再一次确认冻结，无需复述指纹。"
-    return "人工评审 development-plan.md 并选择 active/manual；同意后一次确认冻结，无需复述指纹。"
+        return (
+            "人工评审 development-plan.md 并同时提供 active/manual；"
+            "选择 active 前满足 hostAutomation，再一次确认冻结，无需复述指纹。"
+        )
+    return (
+        "人工评审 development-plan.md 并同时提供 active/manual；"
+        "同意后一次确认冻结，无需复述指纹。"
+    )
 
 
 def _manual_requirement_handoff(
@@ -505,6 +529,38 @@ def _frozen_next_action(development_mode: str, host_runtime: str) -> str:
             return "确认 hostAutomation 已满足，再查询 graph-frontier 并在首次 dispatch-task 前保持 Auto；随后完整消费自动调度计划。"
         return "查询 graph-frontier 并完整消费 Graph 自动计算的 Agent 调度计划；容量不足时按原顺序排队。"
     return "把 handoffCommand 一次复制到新会话；交接到 Claude Code 时使用 claudeCodeAutoHandoff，随后按 Graph 自动推进整棵需求树。"
+
+
+def _frozen_response_contract(
+    development_mode: str,
+    handoff_command: str | None,
+) -> dict[str, Any]:
+    if development_mode == "active":
+        return {
+            "kind": "ACTIVE_EXECUTION",
+            "resumeFromGraphFrontier": True,
+            "askDevelopmentModeAgain": False,
+        }
+    if handoff_command is None:
+        fail(
+            "WORK_ITEM_HANDOFF_MISSING",
+            "Manual development mode requires a copyable handoff prompt",
+        )
+    return {
+        "kind": "MANUAL_HANDOFF",
+        "mustProvideCopyablePrompt": True,
+        "codeBlockLanguage": "text",
+        "suggestedPrompt": handoff_command,
+        "equivalentPromptAllowed": True,
+        "linkOnlyAllowed": False,
+        "requiredSemantics": [
+            "rootId",
+            "resumeFromGraphFrontier",
+            "consumeCompleteDispatchPlan",
+            "doNotPrepareOrFreezeAgain",
+            "completeDevelopmentTestsAndGates",
+        ],
+    }
 
 
 def freeze_hierarchy(
@@ -559,6 +615,10 @@ def freeze_hierarchy(
                 "claudeCodeAutoHandoff": claude_auto_handoff,
                 "hostAutomation": render_host_automation(states[root_id]["hostRuntime"]),
                 "nextAction": _frozen_next_action(development_mode, states[root_id]["hostRuntime"]),
+                "responseContract": _frozen_response_contract(
+                    development_mode,
+                    handoff_command,
+                ),
             }
         if any(states[record["definition"]["id"]]["stage"] != "WAITING_FOR_BASELINE_CONFIRMATION" for record in records):
             fail("WORK_ITEM_STAGE_INVALID", "Every hierarchy node must be waiting for the same freeze")
@@ -655,6 +715,10 @@ def freeze_hierarchy(
             "claudeCodeAutoHandoff": claude_auto_handoff,
             "hostAutomation": render_host_automation(frozen_states[root_id]["hostRuntime"]),
             "nextAction": _frozen_next_action(development_mode, frozen_states[root_id]["hostRuntime"]),
+            "responseContract": _frozen_response_contract(
+                development_mode,
+                handoff_command,
+            ),
         }
 
 

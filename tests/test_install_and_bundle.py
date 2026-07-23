@@ -35,7 +35,9 @@ class InstallAndBundleTests(unittest.TestCase):
         skill_root = TARGET_PACKAGE.parent.parent
         skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
         claude_automation = (skill_root / "references" / "claude-automation.md").read_text(encoding="utf-8")
-        self.assertIn("必须直接展示返回的 `handoffCommand`", skill)
+        self.assertIn("必须同时展示 `active` 和 `manual` 两种开发方式", skill)
+        self.assertIn("允许使用返回的 `handoffCommand`，也允许生成语义等价文本", skill)
+        self.assertIn("不要求逐字复述 `handoffCommand`", skill)
         self.assertIn("不得只给出 `requirement-handoff.md` 链接", skill)
         self.assertIn(
             "面向人的状态报告必须把 SQLite 和控制器 JSON 中的 UTC 时间转换为当前运行环境的本机时区",

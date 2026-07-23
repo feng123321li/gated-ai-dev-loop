@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import ast
-import tempfile
+import io
+import json
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
-from scripts.build_skill import SOURCE_PACKAGE, TARGET_ENTRY, TARGET_PACKAGE, build_skill
-from scripts.install_skill import Options, install_skill, parse_args
+from scripts.build_skill import (
+    PLUGIN_SKILL,
+    REPOSITORY_ROOT,
+    SOURCE_PACKAGE,
+    TARGET_ENTRY,
+    TARGET_PACKAGE,
+    build_skill,
+    main as build_main,
+)
 
 
 def file_map(root: Path) -> dict[str, bytes]:
@@ -68,34 +78,97 @@ class InstallAndBundleTests(unittest.TestCase):
         self.assertEqual(file_map(SOURCE_PACKAGE), file_map(TARGET_PACKAGE))
         self.assertTrue(TARGET_ENTRY.is_file())
         self.assertIn("from hdg.cli import main", TARGET_ENTRY.read_text(encoding="utf-8"))
+        self.assertEqual(file_map(TARGET_PACKAGE.parent.parent), file_map(PLUGIN_SKILL))
 
-    def test_installer_argument_contract(self) -> None:
-        options = parse_args(["--target", "codex", "--scope", "project", "--project-root", "C:/work", "--dry-run"])
-        self.assertEqual(options.target, "codex")
-        self.assertTrue(options.dry_run)
-        with self.assertRaises(ValueError):
-            parse_args(["--target", "unknown"])
+    def test_build_cli_reports_success_and_failure(self) -> None:
+        standard_output = io.StringIO()
+        with redirect_stdout(standard_output):
+            self.assertEqual(build_main(), 0)
+        self.assertIn("Built dual-host plugin Skill payload", standard_output.getvalue())
 
-    def test_installer_copies_a_self_contained_skill(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            temporary_path = Path(temporary)
-            home = temporary_path / "home"
-            source = temporary_path / "source" / "layered-delivery"
-            source.mkdir(parents=True)
-            (source / "SKILL.md").write_text("---\nname: layered-delivery\ndescription: test\n---\n", encoding="utf-8")
-            (source / "scripts").mkdir()
-            (source / "scripts" / "hdg.py").write_text("print('ok')\n", encoding="utf-8")
-            result = install_skill(
-                Options(target="both", scope="user"),
-                source=source,
-                home=home,
-                cwd=temporary_path,
-                environ={},
+        standard_error = io.StringIO()
+        with patch("scripts.build_skill.build_skill", side_effect=RuntimeError("broken")):
+            with redirect_stderr(standard_error):
+                self.assertEqual(build_main(), 1)
+        self.assertIn("Build failed: broken", standard_error.getvalue())
+
+    def test_dual_host_plugin_manifests_share_identity_and_version(self) -> None:
+        plugin_root = PLUGIN_SKILL.parent.parent
+        codex_manifest = json.loads(
+            (plugin_root / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8")
+        )
+        claude_manifest = json.loads(
+            (plugin_root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8")
+        )
+        codex_marketplace = json.loads(
+            (REPOSITORY_ROOT / ".agents" / "plugins" / "marketplace.json").read_text(
+                encoding="utf-8"
             )
-            self.assertEqual(result["skill"], "layered-delivery")
-            self.assertEqual([item["action"] for item in result["results"]], ["created", "created"])
-            self.assertTrue((home / ".codex" / "skills" / "layered-delivery" / "scripts" / "hdg.py").is_file())
-            self.assertTrue((home / ".claude" / "skills" / "layered-delivery" / "scripts" / "hdg.py").is_file())
+        )
+        claude_marketplace = json.loads(
+            (REPOSITORY_ROOT / ".claude-plugin" / "marketplace.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        project_version = next(
+            line.split("=", 1)[1].strip().strip('"')
+            for line in (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8").splitlines()
+            if line.startswith("version = ")
+        )
+
+        self.assertEqual(codex_manifest["name"], "layered-delivery")
+        self.assertEqual(claude_manifest["name"], codex_manifest["name"])
+        self.assertEqual(claude_manifest["version"], codex_manifest["version"])
+        self.assertEqual(codex_manifest["version"], project_version)
+        self.assertEqual(
+            codex_manifest["description"],
+            "面向 AI 辅助开发、可人工评审的分层交付治理插件",
+        )
+        self.assertEqual(claude_manifest["description"], codex_manifest["description"])
+        self.assertEqual(
+            codex_manifest["interface"]["shortDescription"],
+            "治理可评审、可恢复的 AI 辅助软件交付",
+        )
+        self.assertEqual(
+            claude_marketplace["description"],
+            "面向 AI 辅助开发的分层交付治理插件市场",
+        )
+        self.assertEqual(codex_manifest["skills"], "./skills/")
+        self.assertEqual(codex_marketplace["name"], "layered-delivery")
+        self.assertEqual(claude_marketplace["name"], codex_marketplace["name"])
+        self.assertEqual(
+            codex_marketplace["plugins"][0]["source"],
+            {"source": "local", "path": "./plugins/layered-delivery"},
+        )
+        self.assertEqual(
+            claude_marketplace["plugins"][0]["source"],
+            "./plugins/layered-delivery",
+        )
+        self.assertEqual(
+            claude_marketplace["plugins"][0]["version"],
+            codex_manifest["version"],
+        )
+
+    def test_readme_documents_public_and_internal_plugin_installation(self) -> None:
+        readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertLess(readme.index("## 安装"), readme.index("## 核心契约"))
+        for expected in (
+            "codex plugin marketplace add feng123321li/layered-delivery",
+            "codex plugin add layered-delivery@layered-delivery",
+            "claude plugin marketplace add feng123321li/layered-delivery",
+            "claude plugin install layered-delivery@layered-delivery --scope user",
+            "git@git.i-sanger.com:ai/skill/layered-delivery.git",
+        ):
+            self.assertIn(expected, readme)
+        self.assertNotIn(
+            "https://git.i-sanger.com/ai/skill/layered-delivery.git",
+            readme,
+        )
+
+    def test_legacy_python_installer_is_retired(self) -> None:
+        readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertFalse((REPOSITORY_ROOT / "scripts" / "install_skill.py").exists())
+        self.assertNotIn("python scripts/install_skill.py", readme)
 
     def test_runtime_imports_only_standard_library_or_local_modules(self) -> None:
         allowed_roots = {
@@ -109,7 +182,6 @@ class InstallAndBundleTests(unittest.TestCase):
             *SOURCE_PACKAGE.glob("*.py"),
             repository_root / "bin" / "hdg.py",
             repository_root / "scripts" / "build_skill.py",
-            repository_root / "scripts" / "install_skill.py",
         ]
         for path in runtime_paths:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

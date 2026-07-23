@@ -107,7 +107,7 @@ python -X utf8 <skill-root>/scripts/hdg.py --help
 python -X utf8 <skill-root>/scripts/hdg.py prepare-hierarchy --definition - --host-runtime <agent> --json
 ```
 
-准备只生成待评审方案，不授权开发。Agent 应向用户展示根 ID、层级、开发目的、精确文件、接口或共享契约、依赖波次和测试映射，并提供根级 `development-plan.md`。方案修改后重新准备同一个完整需求树。
+准备只生成待评审方案，不授权开发。Agent 应向用户展示根 ID、层级、开发目的、精确文件、接口或共享契约、依赖波次和测试映射，并提供根级 `development-plan.md`。方案修改后重新准备同一个完整需求树。每次准备或修订返回的 `responseContract` 都要求确认提示同时保留 `active` 和 `manual`，不能因为反复修改而省略某种方式。
 
 用户明确同意当前方案并选择开发方式后，Agent 使用准备结果中的当前指纹一次冻结：
 
@@ -134,7 +134,7 @@ python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --e
 - `handoffCommand`：可直接复制到新任务的简短指令；
 - `claudeCodeAutoHandoff`：交接到 Claude Code 时使用的 Desktop 提示、交互式 Auto 命令和 `-p` 无人值守命令。
 
-最终回复必须直接用纯文本代码块展示 `handoffCommand`，不能只给 `requirement-handoff.md` 链接，也不能要求用户打开文件后全选复制。文件链接放在代码块之后，仅用于查看完整交接与冻结方案。
+manual 冻结后的首次最终回复必须按 `responseContract` 给出可一次复制到其他 Agent 的纯文本代码块。可以直接使用 `handoffCommand`，也可以提供覆盖 `requiredSemantics` 的语义等价文本，不要求逐字一致；不能只给 `requirement-handoff.md` 链接，也不能要求用户打开文件后补充复制。文件链接放在代码块之后，仅用于查看完整交接与冻结方案。
 
 ```text
 继续执行治理需求 <root-id>。使用当前 layered-delivery Skill 从当前 Skill 元数据解析控制器入口，从当前项目的治理数据库恢复已冻结方案，按 Graph 自动调度计划接管整棵需求树并完成开发、测试和门禁；以 graph-frontier 为恢复入口并直接消费控制器 JSON 输出，不固化用户目录、Skill 安装位置或操作系统路径，不使用临时 JSON 中转，也不要重新准备、冻结需求或逐 Task 请求人工启动。

@@ -39,24 +39,38 @@ class InstallAndBundleTests(unittest.TestCase):
         skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
         agent_metadata = (skill_root / "agents" / "openai.yaml").read_text(encoding="utf-8")
         self.assertIn("name: layered-delivery", skill)
+        self.assertIn("当工作区存在 `.layered-delivery/` 时接管现有 SQLite/Graph 运行", skill)
         self.assertIn("$layered-delivery", agent_metadata)
+        self.assertIn("allow_implicit_invocation: true", agent_metadata)
 
-    def test_manual_skill_contract_requires_a_copyable_session_command(self) -> None:
+    def test_skill_entry_stays_lean_and_routes_details_on_demand(self) -> None:
         skill_root = TARGET_PACKAGE.parent.parent
         skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+        self.assertLess(len(skill), 4500)
+        self.assertIn("首次只读取本文件", skill)
+        self.assertIn("不得预读全部 references", skill)
+        self.assertIn("按动作读取", skill)
+        self.assertIn("evidenceContractRef", skill)
+        self.assertIn("不得读取控制器源码或 memory 文件反推格式", skill)
+
+    def test_manual_contract_details_live_in_routed_references(self) -> None:
+        skill_root = TARGET_PACKAGE.parent.parent
+        skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+        workflow = (skill_root / "references" / "workflow.md").read_text(encoding="utf-8")
+        tracking = (skill_root / "references" / "tracking.md").read_text(encoding="utf-8")
         claude_automation = (skill_root / "references" / "claude-automation.md").read_text(encoding="utf-8")
         self.assertIn("必须同时展示 `active` 和 `manual` 两种开发方式", skill)
-        self.assertIn("允许使用返回的 `handoffCommand`，也允许生成语义等价文本", skill)
-        self.assertIn("不要求逐字复述 `handoffCommand`", skill)
-        self.assertIn("不得只给出 `requirement-handoff.md` 链接", skill)
+        self.assertIn("可以使用 `handoffCommand`", workflow)
+        self.assertIn("不要求逐字一致", workflow)
+        self.assertIn("不能只给文件链接", workflow)
         self.assertIn(
-            "面向人的状态报告必须把 SQLite 和控制器 JSON 中的 UTC 时间转换为当前运行环境的本机时区",
-            skill,
+            "所有面向人的状态报告同样必须把 SQLite 和控制器 JSON 中的 UTC 时间转换为当前运行环境的本机时区",
+            tracking,
         )
-        self.assertIn("Claude Code 的权限模式不能由聊天提示切换", skill)
-        self.assertIn("`acceptEdits` 不是无人值守模式", skill)
-        self.assertIn("claudeCodeAutoHandoff", skill)
         self.assertIn("claude-automation.md", skill)
+        self.assertIn("不能由聊天提示、Skill 或仓库内容自行切换", claude_automation)
+        self.assertIn("`acceptEdits` 只自动接受文件编辑", claude_automation)
+        self.assertIn("claudeCodeAutoHandoff", claude_automation)
         self.assertIn("claude -p --permission-mode auto", claude_automation)
         self.assertIn("项目级 `.claude/settings.json`", claude_automation)
         self.assertIn("不默认使用 `bypassPermissions`", claude_automation)
@@ -67,9 +81,9 @@ class InstallAndBundleTests(unittest.TestCase):
         transport = (skill_root / "references" / "stdin-transport.md").read_text(encoding="utf-8")
         self.assertIn("从当前 Skill 元数据解析 `<skill-root>`", skill)
         self.assertIn("不得固化用户目录、Skill 安装位置或操作系统路径", skill)
-        self.assertIn("直接消费 stdout", skill)
-        self.assertIn("保留 stderr", skill)
         self.assertIn("宿主无关调用契约", transport)
+        self.assertIn("必须直接消费 stdout", transport)
+        self.assertIn("必须保留 stderr", transport)
         self.assertIn("不得使用临时 JSON 中转只读查询结果", transport)
         self.assertIn("恢复入口是 `graph-frontier`，不是 `task-context`", transport)
 

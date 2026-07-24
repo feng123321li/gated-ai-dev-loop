@@ -1,6 +1,6 @@
 interface:
   display_name: "分层交付"
-  short_description: "冻结前评审分层开发方案，并持续治理开发、门禁、交付与验收"
-  default_prompt: "使用 $layered-delivery 以最浅合法树治理当前需求：生成一份根级开发方案，人工评审并选择开发方式后一次冻结整树；active 由 Agent 自主调度并循环实现、回归和复测，再完成开发复核、分级门禁、交付与用户人工验收。"
+  short_description: "从治理目录恢复，或以最浅合法树治理开发、门禁与验收"
+  default_prompt: "使用 $layered-delivery 继续当前治理运行；若无现有治理状态，则以最浅合法树生成根级开发方案，人工一次评审冻结后由 Graph 推进开发、门禁、交付与用户验收。"
 policy:
   allow_implicit_invocation: true

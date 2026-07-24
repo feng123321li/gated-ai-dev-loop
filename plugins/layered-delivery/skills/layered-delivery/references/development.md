@@ -2,7 +2,7 @@
 
 ## 上下文生成
 
-只有根级开发方案已经通过一次整树冻结、开发方式已在同一次确认中写入 SQLite、实际父链有效且 Task/Capability 依赖都 VERIFIED 的 Task 才能生成上下文。正常流程使用 `dispatch-task` 在同一 SQLite 短事务中校验 READY、保存绑定 operationId 的结构化上下文和 handoff，并在 Markdown handoff 写入成功后提交 claim。`task-context` 只返回调度前诊断或恢复预览，不写入开工工件。上下文继承需求根开发方式，并包含 `gateLevel`、operation、Task 的完整 `developmentPlan`、验证修正记录、`authorizedFileChanges`、实际存在父级的协调开发计划与子契约、依赖证据、R/A、输入输出、测试 argv 和禁止事项；根 Task 的父契约和聚合依赖数组为空，`inheritConversation` 固定为 false。
+只有根级开发方案已经通过一次整树冻结、开发方式已在同一次确认中写入 SQLite、实际父链有效且 Task/Capability 依赖都 VERIFIED 的 Task 才能生成上下文。正常流程使用 `dispatch-task` 在同一 SQLite 短事务中校验 READY、保存绑定 operationId 的结构化上下文和 handoff，并在 Markdown handoff 写入成功后提交 claim。`task-context` 只返回调度前诊断或恢复预览，不写入开工工件。上下文继承需求根开发方式，并包含 `gateLevel`、operation、Task 的完整 `developmentPlan`、验证修正记录、`authorizedFileChanges`、实际存在父级的协调开发计划与子契约、依赖证据、R/A、输入输出、测试 argv、禁止事项和紧凑 `evidenceContractRefs`；完整 gate/remediation 模板由 `evidence-contract` 在真正需要时从 SQLite 单项读取，不复制进每个 Task 上下文。根 Task 的父契约和聚合依赖数组为空，`inheritConversation` 固定为 false。
 
 `requirement-handoff.md` 是 manual 根级需求的一次性交接提示词，冻结与投影刷新都会从 SQLite 重建；它列出完整树并要求接收会话消费 Graph 自动计算的调度计划，完成 dispatch、结果写回和逐级门禁。`development-handoff.md` 仍是 `dispatch-task` 后生成的单 Task 执行上下文，只在执行循环内部交给对应开发 Agent，不再要求人逐 Task 复制。`task-context --json` 只返回不得用于开工的未认领诊断预览。开发 Agent 不接收 Delivery 分析对话、Capability 讨论、其他 Task 对话或执行入口隐式记忆。
 

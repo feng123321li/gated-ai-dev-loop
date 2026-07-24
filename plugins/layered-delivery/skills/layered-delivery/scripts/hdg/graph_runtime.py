@@ -5,6 +5,12 @@ from typing import Any
 
 from .constants import SCHEMA_VERSION
 from .errors import fail
+from .evidence import (
+    confirmation_evidence_contract,
+    gate_evidence_contract,
+    review_evidence_contract,
+    validation_remediation_evidence_contract,
+)
 from .graph_model import graph_summary, runtime_transition
 from .jsonio import fingerprint
 from .model import scope_patterns_overlap
@@ -777,6 +783,58 @@ def _task_write_scope(repository: Any, definition: dict[str, Any]) -> list[str]:
     return sorted(set(scope))
 
 
+def evidence_contract_ref(work_item_id: str, contract_kind: str) -> dict[str, str]:
+    artifact_kinds = {
+        "gate": "WORK_ITEM_GATE",
+        "remediation": "VALIDATION_REMEDIATION",
+        "review": "ROOT_REVIEW",
+        "confirmation": "USER_CONFIRMATION",
+    }
+    return {
+        "artifactKind": artifact_kinds[contract_kind],
+        "commandHint": (
+            f"evidence-contract --item {work_item_id} --kind {contract_kind}"
+        ),
+    }
+
+
+def _remediation_contract(
+    repository: Any,
+    registry: dict[str, Any],
+    entry: dict[str, Any],
+) -> dict[str, Any]:
+    definition = repository.assert_current_lineage(registry, entry)[0]
+    return validation_remediation_evidence_contract(
+        entry,
+        definition,
+        authorized_file_changes=repository.effective_task_file_changes(definition),
+    )
+
+
+def _gate_contract(
+    repository: Any,
+    registry: dict[str, Any],
+    entry: dict[str, Any],
+) -> dict[str, Any]:
+    definition = repository.assert_current_lineage(registry, entry)[0]
+    additional_planned_files: set[str] = set()
+    if entry["kind"] == "TASK":
+        frozen_files = {
+            item["path"]
+            for item in definition["developmentPlan"].get("fileChanges", [])
+        }
+        effective_files = {
+            item["path"]
+            for item in repository.effective_task_file_changes(definition)
+        }
+        additional_planned_files = effective_files - frozen_files
+    return gate_evidence_contract(
+        entry,
+        definition,
+        additional_planned_files=additional_planned_files,
+    )
+
+
 def _root_for_requested_item(
     registry: dict[str, Any],
     work_item_id: str,
@@ -797,6 +855,64 @@ def _load_graph_view(*, root: str, work_item_id: str) -> tuple[Any, dict[str, An
     stored = repository.read_graph_definition(root_entry["id"])
     run = repository.read_graph_run(root_entry["id"], allow_missing=True)
     return repository, registry, requested, stored, run
+
+
+def get_evidence_contract(
+    *,
+    root: str,
+    work_item_id: str,
+    contract_kind: str,
+) -> dict[str, Any]:
+    """Read the current compact evidence contract from SQLite on demand."""
+    from .repository import GovernanceRepository
+
+    if contract_kind not in {"gate", "remediation", "review", "confirmation"}:
+        fail(
+            "WORK_ITEM_EVIDENCE_CONTRACT_KIND_INVALID",
+            "Evidence contract kind must be gate, remediation, review, or confirmation",
+        )
+    repository = GovernanceRepository(root)
+    registry = repository.read_operational_registry()
+    entry = repository.item_by_id(registry, work_item_id)
+    if contract_kind == "gate":
+        contract = _gate_contract(repository, registry, entry)
+        submit_command = f"accept-item --item {work_item_id} --evidence -"
+    elif contract_kind == "remediation":
+        if entry["kind"] != "TASK":
+            fail(
+                "WORK_ITEM_REMEDIATION_TASK_REQUIRED",
+                "Validation remediation evidence contracts require a frozen Task",
+            )
+        contract = _remediation_contract(repository, registry, entry)
+        submit_command = (
+            f"remediate-task --item {work_item_id} "
+            f"--expected-baseline {entry['baselineFingerprint']} --evidence -"
+        )
+    else:
+        if entry["parentId"] is not None:
+            fail(
+                "WORK_ITEM_ACCEPTANCE_ROOT_REQUIRED",
+                "Review and confirmation evidence contracts require a root work item",
+            )
+        contract = (
+            review_evidence_contract()
+            if contract_kind == "review"
+            else confirmation_evidence_contract()
+        )
+        submit_command = (
+            f"acceptance-item --item {work_item_id} --action <action> --evidence -"
+            if contract_kind == "review"
+            else f"acceptance-item --item {work_item_id} "
+            "--action USER_CONFIRMED --evidence -"
+        )
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "source": "governance.sqlite3",
+        "itemId": work_item_id,
+        "contractKind": contract_kind,
+        "submitCommandHint": submit_command,
+        "evidenceContract": contract,
+    }
 
 
 def get_graph_status(*, root: str, work_item_id: str) -> dict[str, Any]:
@@ -993,7 +1109,7 @@ def build_graph_frontier(
                 if state["kind"] == "ROOT_REVIEW"
                 else "REQUEST_USER_CONFIRMATION"
             )
-            actions.append({
+            action_record = {
                 "nodeId": state["id"],
                 "nodeKind": state["kind"],
                 "action": action,
@@ -1016,7 +1132,30 @@ def build_graph_frontier(
                 ),
                 "routeCondition": "ON_PASS" if action != "REQUEST_USER_CONFIRMATION" else "ON_CONFIRMATION",
                 **budget,
-            })
+            }
+            if action == "RUN_GATE":
+                action_record["evidenceContractRef"] = evidence_contract_ref(
+                    state["workItemId"],
+                    "gate",
+                )
+            elif action == "REQUEST_REVIEW":
+                action_record["evidenceContractRef"] = evidence_contract_ref(
+                    state["workItemId"],
+                    "review",
+                )
+                action_record["remediationContractRef"] = {
+                    "artifactKind": "VALIDATION_REMEDIATION",
+                    "commandHint": (
+                        "evidence-contract --item <original-task-id> "
+                        "--kind remediation"
+                    ),
+                }
+            else:
+                action_record["evidenceContractRef"] = evidence_contract_ref(
+                    state["workItemId"],
+                    "confirmation",
+                )
+            actions.append(action_record)
         elif state["status"] == "CLAIMED" and state["kind"] == "TASK_EXECUTION":
             actions.append({
                 "nodeId": state["id"],
@@ -1076,7 +1215,7 @@ def build_graph_frontier(
                 )
             else:
                 recommended = "WAIT_FOR_PREDECESSORS"
-            blocked.append({
+            blocked_record = {
                 "nodeId": state["id"],
                 "nodeKind": state["kind"],
                 "workItemId": state["workItemId"],
@@ -1088,7 +1227,21 @@ def build_graph_frontier(
                 "retryExhausted": state.get("retryExhausted", False),
                 "recommendedAction": recommended,
                 "lastTransition": state.get("lastTransition"),
-            })
+            }
+            if (
+                recommended == "SUBMIT_REMEDIATION"
+                and by_item[state["workItemId"]]["kind"] == "TASK"
+            ):
+                blocked_record["commandHint"] = (
+                    f"remediate-task --item {state['workItemId']} "
+                    f"--expected-baseline {by_item[state['workItemId']]['baselineFingerprint']} "
+                    "--evidence -"
+                )
+                blocked_record["evidenceContractRef"] = evidence_contract_ref(
+                    state["workItemId"],
+                    "remediation",
+                )
+            blocked.append(blocked_record)
     dispatch_actions = [
         action for action in actions if action["action"] == "DISPATCH_TASK"
     ]

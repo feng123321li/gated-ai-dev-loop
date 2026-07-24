@@ -4,7 +4,12 @@ from copy import deepcopy
 from typing import Any
 
 from .errors import fail
-from .evidence import evidence_record, valid_validation_remediation_artifact
+from .evidence import (
+    evidence_record,
+    valid_validation_remediation_artifact,
+    validation_remediation_artifact_issues,
+    validation_remediation_evidence_contract,
+)
 from .graph_model import execution_node_id
 from .model import scope_patterns_overlap
 from .repository import GovernanceRepository, timestamp
@@ -107,6 +112,12 @@ def record_validation_remediation(
             )
         definition, state, _ = repository.assert_current_lineage(registry, entry)
         acceptance_ids = {item["id"] for item in definition["acceptance"]}
+        authorized_file_changes = repository.effective_task_file_changes(definition)
+        remediation_contract = validation_remediation_evidence_contract(
+            entry,
+            definition,
+            authorized_file_changes=authorized_file_changes,
+        )
         if not valid_validation_remediation_artifact(
             evidence,
             item_id=item_id,
@@ -115,7 +126,14 @@ def record_validation_remediation(
         ):
             fail(
                 "WORK_ITEM_REMEDIATION_EVIDENCE_INVALID",
-                "Validation remediation must prove the frozen goal, contract, tests, topology, and authority are unchanged",
+                "Validation remediation evidence contradicts the emitted append-only contract",
+                issues=validation_remediation_artifact_issues(
+                    evidence,
+                    item_id=item_id,
+                    baseline_fingerprint=entry["baselineFingerprint"],
+                    acceptance_ids=acceptance_ids,
+                ),
+                evidenceContract=remediation_contract,
             )
         artifact = evidence
         reference = evidence_record(artifact)
@@ -147,15 +165,16 @@ def record_validation_remediation(
                 "Validation remediation requires an implemented, blocked, or verified Task",
             )
 
-        existing_changes = repository.effective_task_file_changes(definition)
+        existing_changes = authorized_file_changes
         existing_paths = {item["path"] for item in existing_changes}
         added_paths = {item["path"] for item in artifact["fileChanges"]}
         duplicate_paths = sorted(existing_paths & added_paths)
         if duplicate_paths:
             fail(
                 "WORK_ITEM_REMEDIATION_FILE_ALREADY_AUTHORIZED",
-                "Validation remediation can only append previously unauthorized exact files",
+                "Validation remediation can only append previously unauthorized exact files; retry the existing Task when no new file authorization is needed",
                 paths=duplicate_paths,
+                evidenceContract=remediation_contract,
             )
 
         for claimed in (item for item in registry["workItems"] if item.get("claim")):

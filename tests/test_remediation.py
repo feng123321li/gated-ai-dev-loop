@@ -8,7 +8,11 @@ from hdg.acceptance import accept_work_item, record_acceptance
 from hdg.errors import GatedLoopError
 from hdg.execution import dispatch_task, list_ready_tasks, record_task_result
 from hdg.graph_model import execution_node_id
-from hdg.graph_runtime import get_graph_status
+from hdg.graph_runtime import (
+    get_evidence_contract,
+    get_graph_frontier,
+    get_graph_status,
+)
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.remediation import record_validation_remediation
 from hdg.repository import GovernanceRepository
@@ -200,6 +204,25 @@ class ValidationRemediationTests(unittest.TestCase):
                     "failure": None,
                 },
             )
+            gate_action = get_graph_frontier(
+                root=temporary,
+                work_item_id=task_id,
+            )["actions"][0]
+            self.assertEqual(gate_action["action"], "RUN_GATE")
+            self.assertEqual(
+                get_evidence_contract(
+                    root=temporary,
+                    work_item_id=task_id,
+                    contract_kind="gate",
+                )["evidenceContract"]["constraints"][
+                    "allowedChangedFiles"
+                ],
+                [
+                    "src/controller.py",
+                    "src/controller_docs.py",
+                    "tests/test_controller.py",
+                ],
+            )
             self.assertEqual(
                 self._gate(temporary, task_id, baseline, ["src/controller_docs.py"])["status"],
                 "VERIFIED",
@@ -270,6 +293,18 @@ class ValidationRemediationTests(unittest.TestCase):
                     evidence=changed_contract,
                 )
             self.assertEqual(raised.exception.code, "WORK_ITEM_REMEDIATION_EVIDENCE_INVALID")
+            contract = raised.exception.details["evidenceContract"]
+            self.assertEqual(contract["artifactKind"], "VALIDATION_REMEDIATION")
+            self.assertEqual(contract["taskId"], task_id)
+            self.assertEqual(contract["baselineFingerprint"], baseline)
+            self.assertEqual(
+                contract["constraints"]["alreadyAuthorizedFiles"],
+                ["src/controller.py", "tests/test_controller.py"],
+            )
+            self.assertIn(
+                "assertions.interfacesUnchanged must be true",
+                raised.exception.details["issues"],
+            )
 
             duplicate = self._remediation(task_id, baseline)
             duplicate["fileChanges"][0]["path"] = "src/controller.py"
@@ -281,6 +316,16 @@ class ValidationRemediationTests(unittest.TestCase):
                     evidence=duplicate,
                 )
             self.assertEqual(raised.exception.code, "WORK_ITEM_REMEDIATION_FILE_ALREADY_AUTHORIZED")
+            self.assertEqual(
+                raised.exception.details["paths"],
+                ["src/controller.py"],
+            )
+            self.assertEqual(
+                raised.exception.details["evidenceContract"]["constraints"][
+                    "alreadyAuthorizedFiles"
+                ],
+                ["src/controller.py", "tests/test_controller.py"],
+            )
 
     def test_child_remediation_invalidates_verified_ancestor_gates_without_new_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

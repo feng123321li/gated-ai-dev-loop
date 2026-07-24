@@ -7,12 +7,13 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from contextlib import closing
+from copy import deepcopy
 from pathlib import Path
 
 from hdg.acceptance import accept_work_item, record_acceptance
 from hdg.cli import run_cli
 from hdg.errors import GatedLoopError
-from hdg.evidence import evidence_record
+from hdg.evidence import evidence_record, valid_gate_artifact
 from hdg.execution import dispatch_task, record_task_result
 from hdg.graph_model import (
     confirmation_node_id,
@@ -21,6 +22,7 @@ from hdg.graph_model import (
     review_node_id,
 )
 from hdg.graph_runtime import (
+    get_evidence_contract,
     get_graph_frontier,
     get_graph_replay,
     get_graph_status,
@@ -365,9 +367,76 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                 evidence=self._task_result(task_id, "op-graph"),
             )
             frontier = get_graph_frontier(root=temporary, work_item_id=task_id)
+            self.assertNotIn("artifactTemplate", json.dumps(frontier))
             self.assertEqual(
                 [(action["action"], action["nodeId"]) for action in frontier["actions"]],
                 [("RUN_GATE", gate_node_id(task_id))],
+            )
+            gate_action = frontier["actions"][0]
+            self.assertEqual(
+                gate_action["evidenceContractRef"],
+                {
+                    "artifactKind": "WORK_ITEM_GATE",
+                    "commandHint": f"evidence-contract --item {task_id} --kind gate",
+                },
+            )
+            gate_contract = get_evidence_contract(
+                root=temporary,
+                work_item_id=task_id,
+                contract_kind="gate",
+            )["evidenceContract"]
+            self.assertEqual(gate_contract["artifactKind"], "WORK_ITEM_GATE")
+            self.assertEqual(len(gate_contract["exactTopLevelKeys"]), 10)
+            self.assertEqual(
+                gate_contract["constraints"]["acceptanceIds"],
+                ["A-001"],
+            )
+            self.assertEqual(
+                gate_contract["constraints"]["testArgv"],
+                [["python", "-m", "unittest", "tests.test_controller"]],
+            )
+            self.assertEqual(
+                gate_contract["constraints"]["allowedChangedFiles"],
+                ["src/controller.py", "tests/test_controller.py"],
+            )
+            fillable_gate = deepcopy(gate_contract["artifactTemplate"])
+            fillable_gate["verdict"] = "PASS"
+            fillable_gate["summary"] = "The emitted gate evidence contract was filled directly."
+            fillable_gate["scope"]["changedFiles"] = [
+                "src/controller.py",
+                "tests/test_controller.py",
+            ]
+            fillable_gate["acceptance"][0].update({
+                "status": "PASS",
+                "evidence": "The frozen acceptance criterion passed.",
+            })
+            fillable_gate["tests"][0].update({
+                "exitCode": 0,
+                "summary": "The frozen test command passed.",
+            })
+            registry = GovernanceRepository(temporary).read_registry()
+            entry = next(item for item in registry["workItems"] if item["id"] == task_id)
+            definition = GovernanceRepository(temporary).read_package(registry, entry)[0]
+            self.assertTrue(valid_gate_artifact(fillable_gate, entry, definition))
+            invalid_gate = deepcopy(fillable_gate)
+            invalid_gate.pop("tests")
+            with self.assertRaises(GatedLoopError) as raised:
+                accept_work_item(
+                    root=temporary,
+                    item_id=task_id,
+                    evidence=invalid_gate,
+                )
+            self.assertEqual(
+                raised.exception.code,
+                "WORK_ITEM_GATE_EVIDENCE_INVALID",
+            )
+            self.assertIn(
+                "missing top-level keys: tests",
+                raised.exception.details["issues"],
+            )
+            self.assertEqual(
+                raised.exception.details["evidenceContract"],
+                gate_contract,
             )
 
             accept_work_item(
@@ -375,9 +444,46 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                 item_id=task_id,
                 evidence=self._gate(task_id, prepared["baselineFingerprints"][task_id]),
             )
+            review_action = get_graph_frontier(
+                root=temporary,
+                work_item_id=task_id,
+            )["actions"][0]
+            self.assertEqual(review_action["action"], "REQUEST_REVIEW")
             self.assertEqual(
-                get_graph_frontier(root=temporary, work_item_id=task_id)["actions"][0]["action"],
-                "REQUEST_REVIEW",
+                review_action["evidenceContractRef"]["commandHint"],
+                f"evidence-contract --item {task_id} --kind review",
+            )
+            self.assertEqual(
+                review_action["remediationContractRef"],
+                {
+                    "artifactKind": "VALIDATION_REMEDIATION",
+                    "commandHint": (
+                        "evidence-contract --item <original-task-id> "
+                        "--kind remediation"
+                    ),
+                },
+            )
+            review_contract = get_evidence_contract(
+                root=temporary,
+                work_item_id=task_id,
+                contract_kind="review",
+            )["evidenceContract"]
+            self.assertEqual(
+                set(review_contract["actionOptions"]),
+                {"INDEPENDENT_REVIEW_PASS", "HUMAN_REVIEW_ACCEPTED"},
+            )
+            remediation_contract = get_evidence_contract(
+                root=temporary,
+                work_item_id=task_id,
+                contract_kind="remediation",
+            )["evidenceContract"]
+            self.assertEqual(
+                remediation_contract["constraints"]["acceptanceIds"],
+                ["A-001"],
+            )
+            self.assertEqual(
+                remediation_contract["constraints"]["alreadyAuthorizedFiles"],
+                ["src/controller.py", "tests/test_controller.py"],
             )
             record_acceptance(
                 root=temporary,
@@ -392,9 +498,26 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                     "findings": {"p0": 0, "p1": 0},
                 },
             )
+            confirmation_action = get_graph_frontier(
+                root=temporary,
+                work_item_id=task_id,
+            )["actions"][0]
             self.assertEqual(
-                get_graph_frontier(root=temporary, work_item_id=task_id)["actions"][0]["action"],
+                confirmation_action["action"],
                 "REQUEST_USER_CONFIRMATION",
+            )
+            self.assertEqual(
+                get_evidence_contract(
+                    root=temporary,
+                    work_item_id=task_id,
+                    contract_kind="confirmation",
+                )["evidenceContract"]["artifactTemplate"],
+                {
+                    "schemaVersion": 3,
+                    "kind": "USER_CONFIRMATION",
+                    "confirmedBy": "<REQUIRED_NON_EMPTY_STRING>",
+                    "decision": "CONFIRMED",
+                },
             )
             record_acceptance(
                 root=temporary,

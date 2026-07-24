@@ -30,6 +30,14 @@ VALIDATION_REMEDIATION_ASSERTIONS = {
     "topologyUnchanged",
     "externalAuthorityUnchanged",
 }
+GATE_ARTIFACT_FIELDS = {
+    "schemaVersion", "kind", "workItemId", "baselineFingerprint", "verdict", "summary",
+    "scope", "acceptance", "tests", "findings",
+}
+VALIDATION_REMEDIATION_ARTIFACT_FIELDS = {
+    "schemaVersion", "kind", "taskId", "baselineFingerprint", "source", "summary",
+    "acceptanceIds", "fileChanges", "assertions",
+}
 
 
 def valid_timestamp(value: object) -> bool:
@@ -220,10 +228,7 @@ def valid_validation_remediation_artifact(
     file_changes = value.get("fileChanges")
     linked_acceptance = value.get("acceptanceIds")
     if not (
-        set(value) == {
-            "schemaVersion", "kind", "taskId", "baselineFingerprint", "source", "summary",
-            "acceptanceIds", "fileChanges", "assertions",
-        }
+        set(value) == VALIDATION_REMEDIATION_ARTIFACT_FIELDS
         and value.get("schemaVersion") == SCHEMA_VERSION
         and value.get("kind") == "VALIDATION_REMEDIATION"
         and value.get("taskId") == item_id
@@ -263,6 +268,280 @@ def valid_validation_remediation_artifact(
     return len(set(paths)) == len(paths)
 
 
+def gate_evidence_contract(
+    entry: dict[str, Any],
+    definition: dict[str, Any],
+    *,
+    additional_planned_files: set[str] | None = None,
+) -> dict[str, Any]:
+    """Return a deterministic, directly fillable contract for one gate artifact."""
+    allowed_changed_files = {
+        item["path"]
+        for item in definition["developmentPlan"].get("fileChanges", [])
+    }
+    allowed_changed_files.update(additional_planned_files or set())
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "artifactKind": "WORK_ITEM_GATE",
+        "workItemId": entry["id"],
+        "baselineFingerprint": entry["baselineFingerprint"],
+        "exactTopLevelKeys": sorted(GATE_ARTIFACT_FIELDS),
+        "artifactTemplate": {
+            "schemaVersion": SCHEMA_VERSION,
+            "kind": "WORK_ITEM_GATE",
+            "workItemId": entry["id"],
+            "baselineFingerprint": entry["baselineFingerprint"],
+            "verdict": "<PASS_OR_FAIL>",
+            "summary": "<REQUIRED_NON_EMPTY_STRING>",
+            "scope": {
+                "changedFiles": [],
+                "outOfScopeFiles": [],
+            },
+            "acceptance": [
+                {
+                    "id": item["id"],
+                    "status": "<PASS_OR_FAIL>",
+                    "evidence": "<REQUIRED_NON_EMPTY_STRING>",
+                }
+                for item in definition["acceptance"]
+            ],
+            "tests": [
+                {
+                    "argv": list(argv),
+                    "exitCode": "<INTEGER>",
+                    "summary": "<REQUIRED_NON_EMPTY_STRING>",
+                }
+                for argv in definition["testCommands"]
+            ],
+            "findings": {"p0": [], "p1": [], "p2": []},
+        },
+        "constraints": {
+            "acceptanceIds": [item["id"] for item in definition["acceptance"]],
+            "acceptanceCriteria": [
+                {
+                    "id": item["id"],
+                    "expectedResult": item["expectedResult"],
+                }
+                for item in definition["acceptance"]
+            ],
+            "testArgv": [list(argv) for argv in definition["testCommands"]],
+            "testArgvMatching": "ONE_EXACT_ARGV_ARRAY_PER_FROZEN_COMMAND",
+            "allowedChangedFiles": (
+                sorted(allowed_changed_files)
+                if definition["kind"] == "TASK"
+                else None
+            ),
+            "testsRun": "OPTIONAL_NON_NEGATIVE_INTEGER",
+            "passRequires": [
+                "outOfScopeFiles must be empty",
+                "every acceptance status must be PASS",
+                "every test exitCode must be 0",
+                "findings.p0 and findings.p1 must be empty",
+            ],
+        },
+    }
+
+
+def validation_remediation_evidence_contract(
+    entry: dict[str, Any],
+    definition: dict[str, Any],
+    *,
+    authorized_file_changes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return the exact append-only evidence contract for same-requirement remediation."""
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "artifactKind": "VALIDATION_REMEDIATION",
+        "taskId": entry["id"],
+        "baselineFingerprint": entry["baselineFingerprint"],
+        "exactTopLevelKeys": sorted(VALIDATION_REMEDIATION_ARTIFACT_FIELDS),
+        "artifactTemplate": {
+            "schemaVersion": SCHEMA_VERSION,
+            "kind": "VALIDATION_REMEDIATION",
+            "taskId": entry["id"],
+            "baselineFingerprint": entry["baselineFingerprint"],
+            "source": "<REGRESSION_OR_TASK_GATE_OR_INDEPENDENT_REVIEW_OR_USER_ACCEPTANCE>",
+            "summary": "<REQUIRED_NON_EMPTY_STRING>",
+            "acceptanceIds": ["<ONE_OR_MORE_FROZEN_ACCEPTANCE_IDS>"],
+            "fileChanges": [{
+                "path": "<PREVIOUSLY_UNAUTHORIZED_EXACT_FILE>",
+                "action": "<ADD_OR_MODIFY_OR_REMOVE>",
+                "purpose": "<REQUIRED_NON_EMPTY_STRING>",
+            }],
+            "assertions": {
+                key: True for key in sorted(VALIDATION_REMEDIATION_ASSERTIONS)
+            },
+        },
+        "constraints": {
+            "sourceValues": sorted(VALIDATION_REMEDIATION_SOURCES),
+            "acceptanceIds": [item["id"] for item in definition["acceptance"]],
+            "taskScope": list(definition["scope"]),
+            "alreadyAuthorizedFiles": sorted(
+                item["path"] for item in authorized_file_changes
+            ),
+            "fileActions": ["ADD", "MODIFY", "REMOVE"],
+            "filePathPolicy": "EXACT_NORMALIZED_PREVIOUSLY_UNAUTHORIZED_PATH",
+            "allAssertionsMustBeTrue": True,
+        },
+    }
+
+
+def review_evidence_contract() -> dict[str, Any]:
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "artifactKind": "ROOT_REVIEW",
+        "actionOptions": {
+            "INDEPENDENT_REVIEW_PASS": {
+                "schemaVersion": SCHEMA_VERSION,
+                "kind": "INDEPENDENT_REVIEW",
+                "reviewer": "<REQUIRED_NON_EMPTY_STRING>",
+                "isolation": "FRESH_READ_ONLY",
+                "verdict": "PASS",
+                "findings": {"p0": 0, "p1": 0},
+            },
+            "HUMAN_REVIEW_ACCEPTED": {
+                "schemaVersion": SCHEMA_VERSION,
+                "kind": "HUMAN_REVIEW",
+                "reviewer": "<REQUIRED_NON_EMPTY_STRING>",
+                "verdict": "ACCEPTED",
+            },
+        },
+    }
+
+
+def confirmation_evidence_contract() -> dict[str, Any]:
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "artifactKind": "USER_CONFIRMATION",
+        "artifactTemplate": {
+            "schemaVersion": SCHEMA_VERSION,
+            "kind": "USER_CONFIRMATION",
+            "confirmedBy": "<REQUIRED_NON_EMPTY_STRING>",
+            "decision": "CONFIRMED",
+        },
+    }
+
+
+def _key_issues(value: object, expected: set[str]) -> list[str]:
+    if not isinstance(value, dict):
+        return ["artifact must be a JSON mapping"]
+    issues: list[str] = []
+    missing = sorted(expected - set(value))
+    unexpected = sorted(set(value) - expected)
+    if missing:
+        issues.append(f"missing top-level keys: {', '.join(missing)}")
+    if unexpected:
+        issues.append(f"unexpected top-level keys: {', '.join(unexpected)}")
+    return issues
+
+
+def gate_artifact_issues(
+    value: object,
+    entry: dict[str, Any],
+    definition: dict[str, Any],
+    *,
+    additional_planned_files: set[str] | None = None,
+    requested_verdict: str | None = None,
+) -> list[str]:
+    issues = _key_issues(value, GATE_ARTIFACT_FIELDS)
+    if not isinstance(value, dict):
+        return issues
+    if value.get("schemaVersion") != SCHEMA_VERSION:
+        issues.append(f"schemaVersion must be {SCHEMA_VERSION}")
+    if value.get("kind") != "WORK_ITEM_GATE":
+        issues.append("kind must be WORK_ITEM_GATE")
+    if value.get("workItemId") != entry["id"]:
+        issues.append(f"workItemId must be {entry['id']}")
+    if value.get("baselineFingerprint") != entry["baselineFingerprint"]:
+        issues.append("baselineFingerprint must match the current frozen baseline")
+    if requested_verdict is not None and value.get("verdict") != requested_verdict:
+        issues.append(f"verdict must match requested status {requested_verdict}")
+
+    expected_acceptance = [item["id"] for item in definition["acceptance"]]
+    acceptance = value.get("acceptance")
+    if isinstance(acceptance, list):
+        received_acceptance = [
+            item.get("id") for item in acceptance if isinstance(item, dict)
+        ]
+        if sorted(received_acceptance) != sorted(expected_acceptance):
+            issues.append(
+                "acceptance ids must exactly match the frozen ids: "
+                + ", ".join(expected_acceptance)
+            )
+    elif "acceptance" in value:
+        issues.append("acceptance must be an array")
+
+    expected_tests = [canonical_json(argv) for argv in definition["testCommands"]]
+    tests = value.get("tests")
+    if isinstance(tests, list):
+        received_tests = [
+            canonical_json(item.get("argv"))
+            for item in tests
+            if isinstance(item, dict)
+        ]
+        if sorted(received_tests) != sorted(expected_tests):
+            issues.append("tests argv must contain one exact match for every frozen testCommand")
+    elif "tests" in value:
+        issues.append("tests must be an array")
+
+    scope = value.get("scope")
+    if definition["kind"] == "TASK" and isinstance(scope, dict):
+        allowed = {
+            item["path"]
+            for item in definition["developmentPlan"].get("fileChanges", [])
+        }
+        allowed.update(additional_planned_files or set())
+        unauthorized = sorted(
+            path.replace("\\", "/")
+            for path in scope.get("changedFiles", [])
+            if isinstance(path, str) and path.replace("\\", "/") not in allowed
+        )
+        if unauthorized:
+            issues.append(
+                "scope.changedFiles contains unauthorized files: "
+                + ", ".join(unauthorized)
+            )
+    return issues or ["artifact values violate the emitted evidence contract"]
+
+
+def validation_remediation_artifact_issues(
+    value: object,
+    *,
+    item_id: str,
+    baseline_fingerprint: str,
+    acceptance_ids: set[str],
+) -> list[str]:
+    issues = _key_issues(value, VALIDATION_REMEDIATION_ARTIFACT_FIELDS)
+    if not isinstance(value, dict):
+        return issues
+    if value.get("schemaVersion") != SCHEMA_VERSION:
+        issues.append(f"schemaVersion must be {SCHEMA_VERSION}")
+    if value.get("kind") != "VALIDATION_REMEDIATION":
+        issues.append("kind must be VALIDATION_REMEDIATION")
+    if value.get("taskId") != item_id:
+        issues.append(f"taskId must be {item_id}")
+    if value.get("baselineFingerprint") != baseline_fingerprint:
+        issues.append("baselineFingerprint must match the current frozen baseline")
+    if value.get("source") not in VALIDATION_REMEDIATION_SOURCES:
+        issues.append(
+            "source must be one of: "
+            + ", ".join(sorted(VALIDATION_REMEDIATION_SOURCES))
+        )
+    linked = value.get("acceptanceIds")
+    if not isinstance(linked, list) or not linked:
+        issues.append("acceptanceIds must contain one or more frozen acceptance ids")
+    elif any(item not in acceptance_ids for item in linked):
+        issues.append("acceptanceIds contains ids outside the frozen acceptance contract")
+    assertions = value.get("assertions")
+    if isinstance(assertions, dict):
+        for key in sorted(VALIDATION_REMEDIATION_ASSERTIONS):
+            if assertions.get(key) is not True:
+                issues.append(f"assertions.{key} must be true")
+    else:
+        issues.append("assertions must be a mapping with every frozen-contract assertion true")
+    return issues or ["artifact values violate the emitted evidence contract"]
+
+
 def valid_gate_artifact(
     value: object,
     entry: dict[str, Any],
@@ -275,10 +554,7 @@ def valid_gate_artifact(
     scope = value.get("scope")
     findings = value.get("findings")
     if not (
-        set(value) == {
-            "schemaVersion", "kind", "workItemId", "baselineFingerprint", "verdict", "summary",
-            "scope", "acceptance", "tests", "findings",
-        }
+        set(value) == GATE_ARTIFACT_FIELDS
         and value.get("schemaVersion") == SCHEMA_VERSION
         and value.get("kind") == "WORK_ITEM_GATE"
         and value.get("workItemId") == entry["id"]

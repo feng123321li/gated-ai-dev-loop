@@ -3,7 +3,15 @@ from __future__ import annotations
 from typing import Any
 
 from .errors import fail
-from .evidence import evidence_record, valid_gate_artifact, valid_review_artifact
+from .evidence import (
+    confirmation_evidence_contract,
+    evidence_record,
+    gate_artifact_issues,
+    gate_evidence_contract,
+    review_evidence_contract,
+    valid_gate_artifact,
+    valid_review_artifact,
+)
 from .graph_model import confirmation_node_id, gate_node_id, review_node_id
 from .graph_runtime import hierarchy_root_entry
 from .repository import GovernanceRepository, timestamp
@@ -41,7 +49,22 @@ def _validated_gate_artifact(
     ) or (
         status is not None and evidence.get("verdict") != status
     ):
-        fail("WORK_ITEM_GATE_EVIDENCE_INVALID", "Gate evidence is incomplete or contradicts the requested verdict")
+        fail(
+            "WORK_ITEM_GATE_EVIDENCE_INVALID",
+            "Gate evidence is incomplete or contradicts the emitted evidence contract",
+            issues=gate_artifact_issues(
+                evidence,
+                entry,
+                definition,
+                additional_planned_files=additional_planned_files,
+                requested_verdict=status,
+            ),
+            evidenceContract=gate_evidence_contract(
+                entry,
+                definition,
+                additional_planned_files=additional_planned_files,
+            ),
+        )
     return evidence_record(evidence), evidence
 
 
@@ -187,7 +210,15 @@ def record_acceptance(
         acceptance = entry["acceptance"]
         artifact = evidence
         if not valid_review_artifact(action, artifact):
-            fail("WORK_ITEM_ACCEPTANCE_EVIDENCE_INVALID", f"Acceptance evidence does not prove {action}")
+            fail(
+                "WORK_ITEM_ACCEPTANCE_EVIDENCE_INVALID",
+                f"Acceptance evidence does not prove {action}",
+                evidenceContract=(
+                    confirmation_evidence_contract()
+                    if action == "USER_CONFIRMED"
+                    else review_evidence_contract()
+                ),
+            )
         reference = evidence_record(artifact)
         if action == "USER_CONFIRMED":
             if acceptance["status"] != "WAITING_FOR_USER_CONFIRMATION":

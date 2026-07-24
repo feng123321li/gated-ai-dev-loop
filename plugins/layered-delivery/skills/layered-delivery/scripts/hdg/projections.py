@@ -156,7 +156,9 @@ def next_action(
     if entry["status"] == "IMPLEMENTED":
         return "形成严格 evidence 并执行 accept-item 门禁验收。"
     if entry["status"] == "BLOCKED":
-        return "Agent 处理阻断后按当前指纹自动执行 retry-item，并继续开发与复测。"
+        if entry["kind"] == "TASK" and entry["gate"]["status"] == "FAIL":
+            return "按 Graph 前沿在剩余预算内执行 retry-item，使任务执行与门禁进入新 attempt；重新认领后修复 P0/P1、回归并复测。"
+        return "按 Graph 失败路由执行预算内重试、修正、评审、授权或人工干预。"
     if entry["status"] == "VERIFIED" and entry["parentId"] is None:
         acceptance = entry.get("acceptance")
         if acceptance and acceptance["status"] == "WAITING_FOR_INDEPENDENT_REVIEW":
@@ -855,6 +857,7 @@ def render_task_handoff(context: dict[str, Any]) -> str:
         "- 最终只返回 IMPLEMENTED 或 BLOCKED，并携带当前 Operation ID、变更文件和测试事实。",
         "- IMPLEMENTED 时 failure 必须为 null；BLOCKED 时必须改为 class/code/summary，并使用 RETRYABLE、REMEDIATION_REQUIRED、CONTRACT_CHANGE、EXTERNAL_AUTHORITY 或 NON_RETRYABLE 分类。",
         "- 宿主必须用 task-result 回收结果；返回开发结果后必须继续验收，IMPLEMENTED 不是完成状态。",
+        "- Gate 或验证修正需要 evidence 时，宿主只按 evidenceContractRefs 调用只读 evidence-contract，从 SQLite 单项取得模板；不得读取控制器源码或 memory 文件反推 schema。",
         "- 门禁通过后仍需独立验收、生成用户验收报告并取得用户确认。",
         "",
         "结果返回格式（由治理宿主以 --evidence - 从 stdin 直接交给 task-result；不要生成临时 JSON 文件）：",

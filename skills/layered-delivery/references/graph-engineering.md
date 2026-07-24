@@ -149,7 +149,7 @@ python -X utf8 <skill-root>/scripts/hdg.py rebuild-graph-run --item <root-id> --
 | `EXTERNAL_AUTHORITY` | 请求用户授予外部权限 |
 | `NON_RETRYABLE` | 请求人工干预 |
 
-当自动恢复类失败在第 3 次 attempt 仍未成功时，控制器写入 `RETRY_EXHAUSTED`，将节点标记为尝试耗尽，并阻断 graph run。`retry-item` 仍用于符合条件的门禁或人工恢复场景；普通的可重试 Task 失败由 Graph 自动路由，不再要求执行平台手动调用它。
+当自动恢复类失败在第 3 次 attempt 仍未成功时，控制器写入 `RETRY_EXHAUSTED`，将节点标记为尝试耗尽，并阻断 graph run。`retry-item` 仍用于符合条件的门禁或人工恢复场景，但同样受当前节点的 3 次 attempt 预算约束。Task gate 重试会同时创建新的 execution 与 gate attempt，让修复重新经过认领、结果写回和门禁；协调节点 gate 只重试自身。普通的可重试 Task 失败由 Graph 自动路由，不再要求执行平台手动调用它。
 
 新的 Task 派发不得复用失败 attempt 的 operationId。
 

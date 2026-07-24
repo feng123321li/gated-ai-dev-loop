@@ -21,6 +21,7 @@ from .host_runtime import is_agent_runtime
 from .graph_runtime import (
     advance_graph,
     cancel_graph_run,
+    get_evidence_contract,
     get_graph_frontier,
     get_graph_replay,
     get_graph_status,
@@ -50,6 +51,7 @@ COMMANDS = (
     "advance-graph",
     "cancel-graph-run",
     "task-context",
+    "evidence-contract",
     "dispatch-task",
     "heartbeat-task",
     "pause-task",
@@ -68,7 +70,7 @@ COMMANDS = (
 VALUE_OPTIONS = {
     "--definition", "--host-runtime", "--item", "--owner", "--operation",
     "--status", "--evidence", "--expected-baseline",
-    "--action", "--development-mode", "--expected-hierarchy", "--interaction",
+    "--action", "--development-mode", "--expected-hierarchy", "--interaction", "--kind",
 }
 FLAG_OPTIONS = {"--json", "--help", "--confirmed", "--dogfood"}
 COMMAND_OPTIONS = {
@@ -85,6 +87,7 @@ COMMAND_OPTIONS = {
     "advance-graph": {"--json", "--help", "--item", "--dogfood"},
     "cancel-graph-run": {"--json", "--help", "--item", "--confirmed", "--dogfood"},
     "task-context": {"--json", "--help", "--item", "--dogfood"},
+    "evidence-contract": {"--json", "--help", "--item", "--kind"},
     "claim-task": {"--json", "--help", "--item", "--owner", "--operation", "--dogfood"},
     "dispatch-task": {"--json", "--help", "--item", "--owner", "--operation", "--dogfood"},
     "heartbeat-task": {"--json", "--help", "--item", "--operation", "--dogfood"},
@@ -117,6 +120,7 @@ Commands:
   advance-graph --item <root-or-subtree-id>
   cancel-graph-run --item <root-or-subtree-id> --confirmed
   task-context --item <task-id>
+  evidence-contract --item <id> --kind gate|remediation|review|confirmation
   dispatch-task --item <task-id> --owner <owner> --operation <id>
   heartbeat-task --item <task-id> --operation <id>
   pause-task --item <task-id> --operation <id>
@@ -260,6 +264,12 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
         )
     if command == "task-context":
         return build_task_context(**common, item_id=_required(parsed, "--item"))
+    if command == "evidence-contract":
+        return get_evidence_contract(
+            root=cwd,
+            work_item_id=_required(parsed, "--item"),
+            contract_kind=_required(parsed, "--kind"),
+        )
     if command == "claim-task":
         return claim_task(
             **common,

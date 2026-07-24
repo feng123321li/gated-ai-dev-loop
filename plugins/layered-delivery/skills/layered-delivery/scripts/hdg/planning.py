@@ -19,7 +19,7 @@ from .graph_projections import (
     render_runtime_policy_summary,
     render_state_transition_graph,
 )
-from .graph_runtime import hierarchy_root_entry
+from .graph_runtime import hierarchy_root_entry, retry_budget
 from .svg_graphs import render_delivery_graph_svg_assets, render_runtime_policy_svg_assets
 from .model import (
     hierarchy_fingerprint,
@@ -740,12 +740,33 @@ def retry_work_item(
         if entry["baselineFingerprint"] != expected_baseline_fingerprint:
             fail("WORK_ITEM_REVISION_CONFLICT", "The retry baseline fingerprint is not current")
         definition = repository.assert_current_lineage(registry, entry)[0]
-        retry_node_ids = (
-            [gate_node_id(item_id)]
-            if entry["kind"] != "TASK" or entry["gate"]["status"] == "FAIL"
-            else [execution_node_id(item_id)]
-        )
         root_id = hierarchy_root_entry(registry, entry)["id"]
+        gate_failed = entry["gate"]["status"] == "FAIL"
+        retry_node_id = (
+            gate_node_id(item_id)
+            if entry["kind"] != "TASK" or gate_failed
+            else execution_node_id(item_id)
+        )
+        stored_graph = repository.read_graph_definition(root_id)
+        graph_run = repository.read_graph_run(root_id)
+        current_node = next(
+            node for node in graph_run["nodes"] if node["nodeId"] == retry_node_id
+        )
+        budget = retry_budget(stored_graph["graph"], current_node["attempt"])
+        if budget["retryExhausted"]:
+            fail(
+                "WORK_ITEM_RETRY_EXHAUSTED",
+                f"{item_id} has exhausted its retry budget",
+            )
+        task_gate_remediation = entry["kind"] == "TASK" and gate_failed
+        failed_gate_artifact = (
+            entry["gate"]["artifact"] if task_gate_remediation else None
+        )
+        retry_node_ids = (
+            [execution_node_id(item_id), gate_node_id(item_id)]
+            if task_gate_remediation
+            else [retry_node_id]
+        )
         graph_attempts = repository.begin_graph_attempts(
             root_id,
             retry_node_ids,
@@ -759,18 +780,33 @@ def retry_work_item(
         entry["updatedAt"] = at
         registry["currentFocus"] = {
             "workItemId": item_id,
-            "purpose": "EXECUTION_RETRY" if entry["kind"] == "TASK" else "AGGREGATE_GATE_RETRY",
+            "purpose": (
+                "GATE_REMEDIATION_RETRY"
+                if task_gate_remediation
+                else "EXECUTION_RETRY"
+                if entry["kind"] == "TASK"
+                else "AGGREGATE_GATE_RETRY"
+            ),
         }
         registry["revision"] += 1
         registry["updatedAt"] = at
         repository.append_graph_event(
             root_id=root_id,
-            node_id=retry_node_ids[0],
-            event_type="NODE_RETRY_SCHEDULED",
+            node_id=execution_node_id(item_id) if task_gate_remediation else retry_node_id,
+            event_type="GRAPH_INVALIDATED" if task_gate_remediation else "NODE_RETRY_SCHEDULED",
             actor="AGENT",
             operation_id=None,
-            payload={"attempts": graph_attempts},
+            payload=(
+                {
+                    "invalidatedNodeIds": retry_node_ids,
+                    "attempts": graph_attempts,
+                    "failureClass": "GATE_FAILURE",
+                }
+                if task_gate_remediation
+                else {"attempts": graph_attempts}
+            ),
             recorded_at=at,
+            evidence_artifact=failed_gate_artifact,
         )
         if entry.get("acceptanceReport"):
             repository.write_acceptance_report(entry, definition, at)

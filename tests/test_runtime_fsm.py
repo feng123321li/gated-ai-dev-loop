@@ -5,6 +5,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from hdg.acceptance import accept_work_item
 from hdg.errors import GatedLoopError
 from hdg.execution import (
     dispatch_task,
@@ -13,15 +14,16 @@ from hdg.execution import (
     record_task_result,
     resume_task,
 )
-from hdg.graph_model import execution_node_id
+from hdg.graph_model import execution_node_id, gate_node_id
 from hdg.graph_runtime import (
     advance_graph,
     cancel_graph_run,
+    get_evidence_contract,
     get_graph_frontier,
     get_graph_status,
     list_graph_events,
 )
-from hdg.planning import freeze_hierarchy, prepare_hierarchy
+from hdg.planning import freeze_hierarchy, prepare_hierarchy, retry_work_item
 
 from .fixtures import task_hierarchy
 
@@ -74,6 +76,37 @@ class RuntimeFsmTests(unittest.TestCase):
                 "class": failure_class,
                 "code": "REGRESSION_FAILURE",
                 "summary": "A regression prevented the attempt from completing.",
+            },
+        }
+
+    @staticmethod
+    def _failed_gate(task_id: str, baseline: str, attempt: int) -> dict:
+        return {
+            "schemaVersion": 3,
+            "kind": "WORK_ITEM_GATE",
+            "workItemId": task_id,
+            "baselineFingerprint": baseline,
+            "verdict": "FAIL",
+            "summary": f"Gate attempt {attempt} found a blocking P1 issue.",
+            "scope": {
+                "changedFiles": ["src/controller.py", "tests/test_controller.py"],
+                "outOfScopeFiles": [],
+            },
+            "acceptance": [{
+                "id": "A-001",
+                "status": "FAIL",
+                "evidence": f"Blocking behavior remains after attempt {attempt}.",
+            }],
+            "tests": [{
+                "argv": ["python", "-m", "unittest", "tests.test_controller"],
+                "exitCode": 1,
+                "testsRun": 1,
+                "summary": "The gate regression failed.",
+            }],
+            "findings": {
+                "p0": [],
+                "p1": [f"P1 finding from gate attempt {attempt}."],
+                "p2": [],
             },
         }
 
@@ -177,6 +210,124 @@ class RuntimeFsmTests(unittest.TestCase):
                 "RETRY_EXHAUSTED",
             )
 
+    def test_task_gate_failure_returns_to_execution_and_honors_retry_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = self._prepare_and_freeze(temporary)
+            task_id = prepared["rootId"]
+            baseline = prepared["baselineFingerprints"][task_id]
+
+            for attempt in (1, 2, 3):
+                operation_id = f"op-gate-remediation-{attempt}"
+                dispatch_task(
+                    root=temporary,
+                    item_id=task_id,
+                    owner="developer",
+                    operation_id=operation_id,
+                    now=self.START + timedelta(minutes=attempt * 2),
+                )
+                record_task_result(
+                    root=temporary,
+                    item_id=task_id,
+                    operation_id=operation_id,
+                    status="IMPLEMENTED",
+                    evidence={
+                        "schemaVersion": 3,
+                        "kind": "TASK_RESULT",
+                        "taskId": task_id,
+                        "operationId": operation_id,
+                        "status": "IMPLEMENTED",
+                        "summary": f"Implemented gate remediation attempt {attempt}.",
+                        "changedFiles": ["src/controller.py", "tests/test_controller.py"],
+                        "tests": [{
+                            "argv": ["python", "-m", "unittest", "tests.test_controller"],
+                            "exitCode": 0,
+                            "testsRun": 1,
+                        }],
+                        "blockers": [],
+                        "failure": None,
+                    },
+                    now=self.START + timedelta(minutes=attempt * 2, seconds=30),
+                )
+                accept_work_item(
+                    root=temporary,
+                    item_id=task_id,
+                    evidence=self._failed_gate(task_id, baseline, attempt),
+                    now=self.START + timedelta(minutes=attempt * 2 + 1),
+                )
+
+                gate_block = next(
+                    item
+                    for item in get_graph_frontier(
+                        root=temporary,
+                        work_item_id=task_id,
+                    )["blocked"]
+                    if item["nodeId"] == gate_node_id(task_id)
+                )
+                expected_action = "RETRY_NODE" if attempt < 3 else "REQUEST_INTERVENTION"
+                self.assertEqual(gate_block["recommendedAction"], expected_action)
+
+                if attempt < 3:
+                    retried = retry_work_item(
+                        root=temporary,
+                        item_id=task_id,
+                        expected_baseline_fingerprint=baseline,
+                        now=self.START + timedelta(minutes=attempt * 2 + 1, seconds=30),
+                    )
+                    self.assertEqual(
+                        {item["nodeId"] for item in retried["graphAttempts"]},
+                        {execution_node_id(task_id), gate_node_id(task_id)},
+                    )
+                    states = {
+                        item["id"]: item
+                        for item in get_graph_status(
+                            root=temporary,
+                            work_item_id=task_id,
+                        )["nodes"]
+                    }
+                    self.assertEqual(
+                        (states[execution_node_id(task_id)]["attempt"],
+                         states[execution_node_id(task_id)]["status"]),
+                        (attempt + 1, "READY"),
+                    )
+                    self.assertEqual(
+                        (states[gate_node_id(task_id)]["attempt"],
+                         states[gate_node_id(task_id)]["status"]),
+                        (attempt + 1, "PENDING"),
+                    )
+                    self.assertEqual(
+                        [
+                            action["action"]
+                            for action in get_graph_frontier(
+                                root=temporary,
+                                work_item_id=task_id,
+                            )["actions"]
+                        ],
+                        ["DISPATCH_TASK"],
+                    )
+                else:
+                    with self.assertRaises(GatedLoopError) as raised:
+                        retry_work_item(
+                            root=temporary,
+                            item_id=task_id,
+                            expected_baseline_fingerprint=baseline,
+                            now=self.START + timedelta(minutes=attempt * 2 + 1, seconds=30),
+                        )
+                    self.assertEqual(
+                        raised.exception.code,
+                        "WORK_ITEM_RETRY_EXHAUSTED",
+                    )
+
+            self.assertEqual(
+                [
+                    event["eventType"]
+                    for event in list_graph_events(
+                        root=temporary,
+                        work_item_id=task_id,
+                    )
+                ].count("GRAPH_INVALIDATED"),
+                2,
+            )
+
     def test_contract_change_is_classified_but_not_automatically_retried(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepared = self._prepare_and_freeze(temporary)
@@ -215,6 +366,69 @@ class RuntimeFsmTests(unittest.TestCase):
             )
             self.assertEqual(blocked["failureClass"], "CONTRACT_CHANGE")
             self.assertEqual(blocked["recommendedAction"], "REQUEST_REVIEW")
+
+    def test_remediation_route_emits_the_exact_evidence_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = self._prepare_and_freeze(temporary)
+            task_id = prepared["rootId"]
+            dispatch_task(
+                root=temporary,
+                item_id=task_id,
+                owner="developer",
+                operation_id="op-remediation-required",
+                now=self.START + timedelta(minutes=1),
+            )
+            record_task_result(
+                root=temporary,
+                item_id=task_id,
+                operation_id="op-remediation-required",
+                status="BLOCKED",
+                evidence=self._blocked_result(
+                    task_id,
+                    "op-remediation-required",
+                    "REMEDIATION_REQUIRED",
+                ),
+                now=self.START + timedelta(minutes=2),
+            )
+
+            blocked = next(
+                item
+                for item in get_graph_frontier(
+                    root=temporary,
+                    work_item_id=task_id,
+                )["blocked"]
+                if item["nodeId"] == execution_node_id(task_id)
+            )
+            self.assertEqual(blocked["recommendedAction"], "SUBMIT_REMEDIATION")
+            self.assertEqual(
+                blocked["commandHint"],
+                f"remediate-task --item {task_id} "
+                f"--expected-baseline {prepared['baselineFingerprints'][task_id]} "
+                "--evidence -",
+            )
+            self.assertEqual(
+                blocked["evidenceContractRef"],
+                {
+                    "artifactKind": "VALIDATION_REMEDIATION",
+                    "commandHint": (
+                        f"evidence-contract --item {task_id} --kind remediation"
+                    ),
+                },
+            )
+            contract = get_evidence_contract(
+                root=temporary,
+                work_item_id=task_id,
+                contract_kind="remediation",
+            )["evidenceContract"]
+            self.assertEqual(contract["taskId"], task_id)
+            self.assertEqual(
+                contract["constraints"]["sourceValues"],
+                ["INDEPENDENT_REVIEW", "REGRESSION", "TASK_GATE", "USER_ACCEPTANCE"],
+            )
+            self.assertEqual(
+                contract["constraints"]["alreadyAuthorizedFiles"],
+                ["src/controller.py", "tests/test_controller.py"],
+            )
 
     def test_pause_resume_and_cancel_are_explicit_fsm_transitions(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -2,7 +2,7 @@
 
 ## Task gate
 
-Task 只有在状态为 IMPLEMENTED 时可运行 gate。`task-result` 写回后，控制器把结构化结果保存到 SQLite，并立即生成状态为“等待门禁”的 `development-review.md`，用于复核冻结计划与实际开发结果；此时尚未生成验收报告，Graph 执行循环不能在此状态结束工作。正常 gate 使用 `accept-item`，并在门禁执行后生成 `acceptance-report.md`。控制器验证：
+Task 只有在状态为 IMPLEMENTED 时可运行 gate。`task-result` 写回后，控制器把结构化结果保存到 SQLite，并立即生成状态为“等待门禁”的 `development-review.md`，用于复核冻结计划与实际开发结果；此时尚未生成验收报告，Graph 执行循环不能在此状态结束工作。`RUN_GATE` 的 frontier 动作只返回紧凑 `evidenceContractRef`；执行循环先调用 `evidence-contract --item <id> --kind gate --json`，从 SQLite 按需取得当前模板，再使用 `accept-item` 提交并生成 `acceptance-report.md`。不得读控制器源码或 memory 反推 schema，也不得把所有工作项模板预载入上下文。控制器验证：
 
 - baseline 与实际存在的父链指纹；根 Task 无父链；
 - 真实 diff 归属和 Scope；
@@ -12,7 +12,7 @@ Task 只有在状态为 IMPLEMENTED 时可运行 gate。`task-result` 写回后�
 - 从 stdin 收到的完整 evidence artifact 覆盖当前工作项和当前 baseline；控制器在当前 SQLite 写事务内完成校验与摘要计算；
 - PASS evidence 中 Scope 外变更为空、全部测试退出码为 0、全部验收项为 PASS、P0/P1 为空。
 
-PASS 后 Task 为 VERIFIED；FAIL 后为 BLOCKED，并把范围、测试、验收项和 findings 写入用户报告。Agent 修复后使用当前 baseline 指纹执行 `retry-item`，自动回到 FROZEN 并继续回归与复测；只有冻结需求或授权需要变化时才回到人工评审。开发 Agent 的结论不能替代 gate，正常 PASS 路径使用 `accept-item`。
+PASS 后 Task 为 VERIFIED；FAIL 后为 BLOCKED，并把范围、测试、验收项和 findings 写入用户报告。若 frontier 在当前 gate attempt 预算内给出 `RETRY_NODE`，执行循环先使用当前 baseline 指纹执行 `retry-item`；控制器同时为 Task execution 与 Task gate 创建新 attempt，使 frontier 回到 `DISPATCH_TASK`。Agent 重新认领后修复 P0/P1、回归、复测、写回结果，再重新执行 gate。第三次 gate 仍失败时 frontier 改为 `REQUEST_INTERVENTION`，`retry-item` 机械拒绝继续重试，不能形成无限审查循环。只有冻结需求或授权需要变化时才回到人工评审。开发 Agent 的结论不能替代 gate，正常 PASS 路径使用 `accept-item`。
 
 如果失败只是暴露原验收项所需文件被开发方案漏列，且目标、需求、验收、接口行为、数据、拓扑和外部权限不变，Agent 不创建新的根 Task。它通过 `remediate-task --evidence -` 在原 Task 下记录修正原因、验收项和补充文件；控制器保持 baseline 与图定义不变，沿显式图边失效必要后继、依赖消费者和聚合 gate，修正后从新 attempt 重新执行完整门禁。具体证据见 [validation-remediation.md](validation-remediation.md)。
 

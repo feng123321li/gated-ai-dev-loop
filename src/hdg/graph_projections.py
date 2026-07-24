@@ -372,41 +372,56 @@ def render_frontier_dashboard(
     lines.extend([
         "## 可执行动作 / Actionable Actions",
         "",
-        "| 节点 / Node | 动作 / Action | 迁移 / Transition | 路由 / Route | 工作项 / Work item | 尝试预算 / Attempt budget | 并行组 / Parallel group | 关键 / Critical | 就绪原因 / Ready because | 命令提示 / Command hint |",
-        "|---|---|---|---|---|---|---|---|---|---|",
+        "| 节点 / Node | 动作 / Action | 迁移 / Transition | 路由 / Route | 工作项 / Work item | 尝试预算 / Attempt budget | 并行组 / Parallel group | 关键 / Critical | 就绪原因 / Ready because | 命令提示 / Command hint | Evidence contract |",
+        "|---|---|---|---|---|---|---|---|---|---|---|",
     ])
     for action in frontier["actions"]:
         reasons = ", ".join(action["readyBecause"]).replace("|", "\\|")
         hint = action["commandHint"].replace("|", "\\|")
+        contract_hints = [
+            reference["commandHint"]
+            for reference in (
+                action.get("evidenceContractRef"),
+                action.get("remediationContractRef"),
+            )
+            if isinstance(reference, dict) and reference.get("commandHint")
+        ]
+        contract_hint = ("; ".join(contract_hints) or "-").replace("|", "\\|")
         lines.append(
             f"| `{action['nodeId']}` | `{action['action']}` | `{action.get('transition') or '-'}` | "
             f"`{action.get('routeCondition') or '-'}` | `{action['workItemId']}` | "
             f"{action['attempt']}/{action.get('maxAttempts') or '-'} "
             f"(剩余 / remaining {action.get('remainingAttempts', '-')}) | "
             f"`{action['parallelGroup'] or '-'}` | "
-            f"{'是 / Yes' if action['critical'] else '否 / No'} | {reasons} | `{hint}` |"
+            f"{'是 / Yes' if action['critical'] else '否 / No'} | {reasons} | "
+            f"`{hint}` | `{contract_hint}` |"
         )
     if not frontier["actions"]:
-        lines.append("| - | - | - | - | - | - | - | - | 无 / None | - |")
+        lines.append("| - | - | - | - | - | - | - | - | 无 / None | - | - |")
 
     lines.extend([
         "",
         "## 阻断节点 / Blocked Nodes",
         "",
-        "| 节点 / Node | 类型 / Kind | 工作项 / Work item | 状态 / Status | 尝试 / Attempt | 失败分类 / Failure class | 剩余尝试 / Remaining | 建议动作 / Recommended | 最近迁移 / Last transition | 阻断原因 / Blocked by |",
-        "|---|---|---|---|---:|---|---:|---|---|---|",
+        "| 节点 / Node | 类型 / Kind | 工作项 / Work item | 状态 / Status | 尝试 / Attempt | 失败分类 / Failure class | 剩余尝试 / Remaining | 建议动作 / Recommended | 最近迁移 / Last transition | 阻断原因 / Blocked by | Evidence contract |",
+        "|---|---|---|---|---:|---|---:|---|---|---|---|",
     ])
     for blocked in frontier["blocked"]:
         reasons = ", ".join(blocked["blockedBy"]).replace("|", "\\|")
         kind = NODE_LABELS.get(blocked["nodeKind"], "-")
+        contract_hint = (
+            (blocked.get("evidenceContractRef") or {}).get("commandHint")
+            or "-"
+        ).replace("|", "\\|")
         lines.append(
             f"| `{blocked['nodeId'] or '-'}` | {kind} | `{blocked['workItemId']}` | "
             f"`{blocked['status']}` | {blocked['attempt'] or '-'} | "
             f"`{blocked.get('failureClass') or '-'}` | "
             f"{blocked.get('remainingAttempts') if blocked.get('remainingAttempts') is not None else '-'} | "
             f"`{blocked.get('recommendedAction') or '-'}` | "
-            f"`{blocked.get('lastTransition') or '-'}` | {reasons} |"
+            f"`{blocked.get('lastTransition') or '-'}` | {reasons} | "
+            f"`{contract_hint}` |"
         )
     if not frontier["blocked"]:
-        lines.append("| - | - | - | - | - | - | - | - | - | 无 / None |")
+        lines.append("| - | - | - | - | - | - | - | - | - | 无 / None | - |")
     return "\n".join(lines) + "\n"

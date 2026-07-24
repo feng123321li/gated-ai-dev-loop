@@ -11,6 +11,7 @@ from .fs_safe import atomic_write
 from .graph_model import DEFAULT_CLAIM_LEASE_SECONDS, execution_node_id
 from .graph_runtime import (
     build_graph_frontier,
+    evidence_contract_ref,
     failure_routing_decision,
     get_graph_frontier,
     replay_graph_events,
@@ -387,6 +388,10 @@ def _task_context(
         "acceptance": definition["acceptance"],
         "execution": definition["execution"],
         "testCommands": definition["testCommands"],
+        "evidenceContractRefs": {
+            "gate": evidence_contract_ref(item_id, "gate"),
+            "remediation": evidence_contract_ref(item_id, "remediation"),
+        },
         "rules": {
             "inheritConversation": False,
             "allowRequirementChanges": False,

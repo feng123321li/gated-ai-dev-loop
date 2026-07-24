@@ -189,9 +189,30 @@ class HierarchyPackageTests(unittest.TestCase):
                 list_ready_tasks(root=temporary, work_item_id=prepared["rootId"]),
                 ["t-python-controller", "t-python-worker"],
             )
+            task_context = build_task_context(
+                root=temporary,
+                item_id="t-python-controller",
+            )
+            self.assertEqual(task_context["developmentMode"], "active")
+            self.assertNotIn("evidenceContracts", task_context)
+            self.assertNotIn("artifactTemplate", repr(task_context))
             self.assertEqual(
-                build_task_context(root=temporary, item_id="t-python-controller")["developmentMode"],
-                "active",
+                task_context["evidenceContractRefs"],
+                {
+                    "gate": {
+                        "artifactKind": "WORK_ITEM_GATE",
+                        "commandHint": (
+                            "evidence-contract --item t-python-controller --kind gate"
+                        ),
+                    },
+                    "remediation": {
+                        "artifactKind": "VALIDATION_REMEDIATION",
+                        "commandHint": (
+                            "evidence-contract --item t-python-controller "
+                            "--kind remediation"
+                        ),
+                    },
+                },
             )
             root_path = Path(prepared["artifactDir"])
             self.assertFalse((root_path / "development-mode.json").exists())

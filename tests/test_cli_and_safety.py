@@ -43,6 +43,10 @@ class CliAndSafetyTests(unittest.TestCase):
         self.assertIn("resume-task --item <task-id>", help_text)
         self.assertIn("cancel-graph-run --item <root-or-subtree-id> --confirmed", help_text)
         self.assertIn("remediate-task --item <task-id> --expected-baseline <sha256> --evidence -", help_text)
+        self.assertIn(
+            "evidence-contract --item <id> --kind gate|remediation|review|confirmation",
+            help_text,
+        )
         self.assertNotIn("retry-item --item <id> --expected-baseline <sha256> --confirmed", help_text)
         self.assertNotIn("prepare-item", help_text)
         self.assertNotIn("freeze-item", help_text)
@@ -65,6 +69,49 @@ class CliAndSafetyTests(unittest.TestCase):
             )
             self.assertEqual(code, 0, stderr.getvalue())
             self.assertTrue(json.loads(stdout.getvalue())["ok"])
+
+    def test_evidence_contract_is_read_on_demand_from_sqlite(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=task_hierarchy(),
+                host_runtime="codex",
+            )
+            freeze_hierarchy(
+                root=temporary,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                development_mode="active",
+                confirmed=True,
+            )
+            revision = GovernanceRepository(temporary).read_registry()["revision"]
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            code = run_cli(
+                [
+                    "evidence-contract",
+                    "--item",
+                    prepared["rootId"],
+                    "--kind",
+                    "gate",
+                    "--json",
+                ],
+                cwd=temporary,
+                stdout=stdout,
+                stderr=stderr,
+            )
+            self.assertEqual(code, 0, stderr.getvalue())
+            result = json.loads(stdout.getvalue())["result"]
+            self.assertEqual(result["source"], "governance.sqlite3")
+            self.assertEqual(result["contractKind"], "gate")
+            self.assertEqual(
+                result["evidenceContract"]["constraints"]["testArgv"],
+                [["python", "-m", "unittest", "tests.test_controller"]],
+            )
+            self.assertEqual(
+                GovernanceRepository(temporary).read_registry()["revision"],
+                revision,
+            )
 
     def test_definition_file_paths_are_rejected_without_creating_control_state(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

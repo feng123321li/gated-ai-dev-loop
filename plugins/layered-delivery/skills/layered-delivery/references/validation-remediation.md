@@ -19,8 +19,11 @@
 验证 Agent 先让当前执行结果落到 `IMPLEMENTED`、`BLOCKED` 或 `VERIFIED`，再通过 stdin 提交追加式修正证据：
 
 ```text
+python -X utf8 <skill-root>/scripts/hdg.py evidence-contract --item <task-id> --kind remediation --json
 python -X utf8 <skill-root>/scripts/hdg.py remediate-task --item <task-id> --expected-baseline <sha256> --evidence - --json
 ```
+
+第一条是只读按需查询：控制器从 SQLite 返回该 Task 当前 baseline、冻结 acceptance IDs、已有授权文件、允许 source/action、全部必须为 true 的 assertions 和可直接填充模板。frontier 与 Task context 只携带这条查询的紧凑引用，不内联整树 remediation 模板。不得通过读取 Python 源码或 memory 文件猜格式。
 
 证据结构：
 

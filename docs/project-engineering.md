@@ -228,7 +228,7 @@ stateDiagram-v2
 - `RETRYABLE` Task 失败在 3 次总尝试预算内自动创建新的 attempt；第三次仍失败写入 `RETRY_EXHAUSTED`；
 - claim 使用 30 分钟租约和心跳，`advance-graph` 把过期执行判为 `WORKER_LOST` 后按相同预算恢复；
 - `CONTRACT_CHANGE`、`EXTERNAL_AUTHORITY`、`NON_RETRYABLE` 与 `REMEDIATION_REQUIRED` 不自动重跑，而是进入评审、授权、干预或修正路由；
-- `retry-item` 保留给符合条件的门禁或显式人工恢复，不修改图，只创建 attempt；
+- `retry-item` 保留给符合条件的门禁或显式人工恢复，不修改冻结图，并受当前节点的 3 次 attempt 预算约束；Task gate 失败时同时重开 execution 与 gate attempt，协调节点 gate 只重开自身；
 - `remediate-task` 只允许在原目标和验收合同不变时，为原 Task 追加遗漏的精确文件；
 - remediation 从被修正 Task 的 execution 节点沿显式边计算下游闭包；
 - 已完成的依赖消费者、聚合 gate、根审查和确认会失效并重新运行；
@@ -342,6 +342,8 @@ python -X utf8 <skill-root>/scripts/hdg.py advance-graph --item <root-or-subtree
 ```
 
 这些只读查询的 JSON 应直接从 stdout 消费，不通过临时文件中转。生产者非零退出时先保留 stderr 并停止解析，不能继续对空 stdout 调用 JSON 解析器。manual 接收会话从 `graph-frontier` 恢复；`task-context` 只是未认领 Task 的诊断预览，不会授权执行。
+
+`graph-frontier` 和 Task context 只携带紧凑的 `evidenceContractRef`。需要提交 gate、remediation、review 或 confirmation evidence 时，执行 `evidence-contract --item <id> --kind <kind> --json`，由控制器从 `governance.sqlite3` 按需返回一个当前模板及精确 acceptance IDs、test argv 和有效授权文件。这样不需要读取控制器源码或 memory 文件，也不会把整棵树的 schema 模板重复塞入上下文。
 
 - `graph-status`：查看全部节点、边、attempt 和运行状态；
 - `graph-frontier`：查看当前允许的动作、自动 Agent 调度计划及阻断原因；

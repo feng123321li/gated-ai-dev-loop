@@ -120,7 +120,7 @@ Commands:
   advance-graph --item <root-or-subtree-id>
   cancel-graph-run --item <root-or-subtree-id> --confirmed
   task-context --item <task-id>
-  evidence-contract --item <id> --kind gate|remediation|review|confirmation
+  evidence-contract --item <id> --kind result|gate|remediation|review|confirmation
   dispatch-task --item <task-id> --owner <owner> --operation <id>
   heartbeat-task --item <task-id> --operation <id>
   pause-task --item <task-id> --operation <id>

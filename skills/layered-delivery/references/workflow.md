@@ -9,8 +9,8 @@
 5. 运行 `prepare-hierarchy`。一个需求只生成 `work-items/<root-id>/` 一个顶层目录，子节点按 `children/<id>/` 递归嵌套；根级 `development-plan.md/progress.md` 聚合完整树，控制器同时编译需求级 `execution-graph.md` 与 `frontier.md`，并在 `.layered-delivery/state-transition-graph.md` 维护当前 schema v3 共享的运行时状态投影。根节点自身进度写入 `node-progress.md`，每个实际子节点生成自己的 `development-plan.md/progress.md`。
 6. 人工查看根级 `development-plan.md`、`execution-graph.md` 与工作区级 `state-transition-graph.md`，同时选择 active/manual。Agent 必须消费准备结果的 `responseContract`，每次首次准备、方案修订或幂等重试后的确认提示都同时展示两种方式。需要修改就重新准备整棵树；同意时只需确认当前方案和所选方式，无需知道或复述层级/图指纹。
 7. Agent 使用准备结果中的 `hierarchyFingerprint`，调用一次 `freeze-hierarchy --expected-hierarchy ... --development-mode ... --confirmed`。控制器在同一事务中记录方式并冻结全部节点；指纹已变化则拒绝旧确认。
-8. active 下由当前 Agent 冻结后查询 `graph-frontier` 并直接推进；manual 在需求根生成完整 `requirement-handoff.md`，并返回简短 `handoffCommand`。规划会话必须按冻结结果的 `responseContract` 在首次最终回复中提供可一次复制到其他 Agent 的纯文本代码块；可以使用 `handoffCommand`，也可以生成覆盖 `requiredSemantics` 的语义等价文本，不要求逐字一致，且不能只给文件链接。接收 Agent 即成为同一 graph run 的执行入口。恢复入口是 `graph-frontier` 而不是只读诊断用的 `task-context`；需要 evidence 的动作按紧凑 `evidenceContractRef` 调用 `evidence-contract`，从 SQLite 只读取当前工作项的一个模板，不扫描源码/memory，也不把整树模板放进上下文。查询 JSON 直接消费 stdout，非零退出时保留 stderr 并停止解析，不创建临时 JSON。两种方式都严格消费 Graph 自动计算的 `dispatchPlan`：控制器决定完整安全 Task 集合、目标 Agent 数和稳定顺序，平台容量只决定立即启动或排队，不能挑选子集；不再次询问开发方式或要求人工逐 Task 启动。
-9. 开发结果的完整 artifact 通过 `task-result --evidence -` 从 stdin 交给控制器。控制器在同一 SQLite 写事务内校验当前 operationId、计算摘要并保存 artifact 与摘要，然后生成 `development-review.md`；开发结果不代表 PASS，也不产生临时 evidence 文件。
+8. active 下由当前 Agent 冻结后查询 `graph-frontier` 并直接推进；manual 在需求根生成完整 `requirement-handoff.md`，并返回简短 `handoffCommand`。规划会话必须按冻结结果的 `responseContract` 在首次最终回复中提供可一次复制到其他 Agent 的纯文本代码块；可以使用 `handoffCommand`，也可以生成覆盖 `requiredSemantics` 的语义等价文本，不要求逐字一致，且不能只给文件链接。接收 Agent 即成为同一 graph run 的执行入口。恢复入口是 `graph-frontier` 而不是只读诊断用的 `task-context`；需要 evidence 的动作按紧凑 `evidenceContractRef` 调用 `evidence-contract`，从 SQLite 只读取当前工作项的一个模板，不扫描源码/memory，也不把整树模板放进上下文。查询 JSON 直接消费 stdout，非零退出时保留 stderr 并停止解析，不创建临时 JSON。两种方式都严格消费 Graph 自动计算的 `dispatchPlan`：控制器决定完整安全 Task 集合、目标 Agent 数和稳定顺序，平台容量只决定立即启动或排队，不能挑选子集；排队项保持未认领，只有 worker 真正启动时才调用 `dispatch-task` 创建 claim。执行适配器以 frontier 的 `nextWakeAt` 为最长等待时间，自动消费到期的 `HEARTBEAT_TASK`，不把续租责任只留给开发 Agent。
+9. 开发结果写回前，执行循环先按正式上下文的 `evidenceContractRefs.result` 调用 `evidence-contract --kind result`，取得绑定当前 operationId 的 `IMPLEMENTED` 与 `BLOCKED` 模板。完整 artifact 再通过 `task-result --evidence -` 从 stdin 交给控制器；控制器在同一 SQLite 写事务内返回逐字段错误或计算摘要并保存 artifact 与摘要，然后生成 `development-review.md`。开发结果不代表 PASS，也不产生临时 evidence 文件。
 10. 回归、门禁、独立审查或最终验收发现遗漏时，先判断是否仍为原冻结目标和验收契约。已有授权文件内直接重试；仅缺少完成原验收项所需的精确文件，且目标、需求、验收、接口行为、数据、拓扑和外部权限不变时，通过 `remediate-task --evidence -` 追加到原 Task。控制器保持 baseline 与图定义不变，从该 Task execution 沿显式边失效必要后继、依赖消费者和聚合 gate，再创建新 attempt；不得 `prepare-hierarchy` 新建重复需求根。
 11. 全部相关回归和复测通过后，Graph 执行循环形成严格 gate artifact，并通过 `accept-item --evidence -` 从 stdin 直接提交。控制器在同一事务中按当前 baseline 和追加验证修正校验、计算摘要并保存结构化验收记录，随后生成 `acceptance-report.md`；Task 全部 VERIFIED 后依次运行 Capability、Delivery 自身聚合门禁。
 12. 治理根 gate PASS 后向用户提交交付，由用户人工验收并确认；验收报告持续更新至 `COMPLETED`。
@@ -165,7 +165,7 @@ flowchart TD
 
 ## 恢复与失败关闭
 
-Graph 执行循环应在长任务中调用 `heartbeat-task`，并周期性调用 `advance-graph`。控制器只对结构化 `RETRYABLE` 与租约过期产生的 `WORKER_LOST` 做预算内自动重试；第三次失败后写入 `RETRY_EXHAUSTED`。暂停和恢复使用显式命令及事件；取消整个运行必须由用户明确确认。
+Graph 执行循环按 `nextWakeAt` 调度心跳，每 5 分钟由执行适配器调用 `heartbeat-task`，并周期性调用 `advance-graph`。30 分钟软租约后有 2 分钟竞争宽限；宽限内当前 operation 可补心跳或写回结果，宽限结束后 `advance-graph` 将其归类为 `WORKER_LOST`，旧 operation 永久失效且不能复用。控制器只对结构化 `RETRYABLE` 与 `WORKER_LOST` 做预算内自动重试；第三次失败后写入 `RETRY_EXHAUSTED`。暂停和恢复使用显式命令及事件；取消整个运行必须由用户明确确认。
 
 - 恢复优先使用用户给出的精确 ID/路径、有效焦点或唯一候选；多个候选时请求选择。
 - 只读隔离项不能作为命令目标，也不能被事务修改或删除；它不阻断其他有效工作项。隔离集合在写事务中发生变化时必须回滚。

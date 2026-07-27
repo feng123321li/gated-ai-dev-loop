@@ -433,7 +433,7 @@ def render_node_state_machine_svg(runtime: dict[str, Any]) -> str:
     claim = runtime["claimPolicy"]
     body.extend([
         f'  <text x="70" y="620" class="subtitle">自动恢复：{_escape(", ".join(retry["automaticFailureClasses"]))}；最大尝试 {retry["maxAttempts"]} 次</text>',
-        f'  <text x="70" y="646" class="subtitle">Claim 租约：{claim["leaseSeconds"]} 秒；心跳建议：{claim["heartbeatSeconds"]} 秒</text>',
+        f'  <text x="70" y="646" class="subtitle">Claim 租约：{claim["leaseSeconds"]} 秒；心跳：{claim["heartbeatSeconds"]} 秒；宽限：{claim["graceSeconds"]} 秒</text>',
     ])
     return _svg_document(
         width=width,

@@ -44,7 +44,7 @@ class CliAndSafetyTests(unittest.TestCase):
         self.assertIn("cancel-graph-run --item <root-or-subtree-id> --confirmed", help_text)
         self.assertIn("remediate-task --item <task-id> --expected-baseline <sha256> --evidence -", help_text)
         self.assertIn(
-            "evidence-contract --item <id> --kind gate|remediation|review|confirmation",
+            "evidence-contract --item <id> --kind result|gate|remediation|review|confirmation",
             help_text,
         )
         self.assertNotIn("retry-item --item <id> --expected-baseline <sha256> --confirmed", help_text)
@@ -111,6 +111,76 @@ class CliAndSafetyTests(unittest.TestCase):
             self.assertEqual(
                 GovernanceRepository(temporary).read_registry()["revision"],
                 revision,
+            )
+
+    def test_task_result_contract_requires_and_binds_the_active_claim(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=task_hierarchy(),
+                host_runtime="codex",
+            )
+            freeze_hierarchy(
+                root=temporary,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                development_mode="active",
+                confirmed=True,
+            )
+            stderr = io.StringIO()
+            self.assertEqual(
+                run_cli(
+                    [
+                        "evidence-contract",
+                        "--item",
+                        prepared["rootId"],
+                        "--kind",
+                        "result",
+                        "--json",
+                    ],
+                    cwd=temporary,
+                    stdout=io.StringIO(),
+                    stderr=stderr,
+                ),
+                1,
+            )
+            self.assertEqual(
+                json.loads(stderr.getvalue())["error"]["code"],
+                "WORK_ITEM_RESULT_CONTRACT_NOT_READY",
+            )
+
+            dispatch_task(
+                root=temporary,
+                item_id=prepared["rootId"],
+                owner="developer",
+                operation_id="op-result-contract",
+            )
+            stdout = io.StringIO()
+            self.assertEqual(
+                run_cli(
+                    [
+                        "evidence-contract",
+                        "--item",
+                        prepared["rootId"],
+                        "--kind",
+                        "result",
+                        "--json",
+                    ],
+                    cwd=temporary,
+                    stdout=stdout,
+                    stderr=io.StringIO(),
+                ),
+                0,
+            )
+            result = json.loads(stdout.getvalue())["result"]
+            self.assertEqual(result["contractKind"], "result")
+            self.assertIn(
+                "--operation op-result-contract --status <IMPLEMENTED_OR_BLOCKED>",
+                result["submitCommandHint"],
+            )
+            self.assertEqual(
+                result["evidenceContract"]["operationId"],
+                "op-result-contract",
             )
 
     def test_definition_file_paths_are_rejected_without_creating_control_state(self) -> None:
@@ -383,9 +453,18 @@ class CliAndSafetyTests(unittest.TestCase):
                 ),
                 1,
             )
+            error = json.loads(stderr.getvalue())["error"]
             self.assertEqual(
-                json.loads(stderr.getvalue())["error"]["code"],
+                error["code"],
                 "WORK_ITEM_RESULT_EVIDENCE_INVALID",
+            )
+            self.assertIn(
+                "operationId must be op-current",
+                error["details"]["issues"],
+            )
+            self.assertEqual(
+                error["details"]["evidenceContract"]["operationId"],
+                "op-current",
             )
             database = Path(temporary, ".layered-delivery", "governance.sqlite3")
             with closing(sqlite3.connect(database)) as connection:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from .constants import SCHEMA_VERSION
@@ -9,6 +9,7 @@ from .evidence import (
     confirmation_evidence_contract,
     gate_evidence_contract,
     review_evidence_contract,
+    task_result_evidence_contract,
     validation_remediation_evidence_contract,
 )
 from .graph_model import graph_summary, runtime_transition
@@ -785,6 +786,7 @@ def _task_write_scope(repository: Any, definition: dict[str, Any]) -> list[str]:
 
 def evidence_contract_ref(work_item_id: str, contract_kind: str) -> dict[str, str]:
     artifact_kinds = {
+        "result": "TASK_RESULT",
         "gate": "WORK_ITEM_GATE",
         "remediation": "VALIDATION_REMEDIATION",
         "review": "ROOT_REVIEW",
@@ -808,6 +810,32 @@ def _remediation_contract(
         entry,
         definition,
         authorized_file_changes=repository.effective_task_file_changes(definition),
+    )
+
+
+def _result_contract(
+    repository: Any,
+    registry: dict[str, Any],
+    entry: dict[str, Any],
+) -> dict[str, Any]:
+    if entry["kind"] != "TASK":
+        fail(
+            "WORK_ITEM_RESULT_CONTRACT_TASK_REQUIRED",
+            "Task result evidence contracts require a Task",
+        )
+    if entry["status"] != "CLAIMED" or not entry.get("claim"):
+        fail(
+            "WORK_ITEM_RESULT_CONTRACT_NOT_READY",
+            "Task result evidence contracts require an active claim",
+            commandHint=f"dispatch-task --item {entry['id']} --owner <owner> --operation <id>",
+        )
+    definition = repository.assert_current_lineage(registry, entry)[0]
+    return task_result_evidence_contract(
+        entry,
+        definition,
+        authorized_file_changes=repository.effective_task_file_changes(
+            definition
+        ),
     )
 
 
@@ -846,10 +874,21 @@ def _root_for_requested_item(
     return entry, hierarchy_root_entry(registry, entry)
 
 
-def _load_graph_view(*, root: str, work_item_id: str) -> tuple[Any, dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any] | None]:
+def _load_graph_view(
+    *,
+    root: str,
+    work_item_id: str,
+    now: object = None,
+) -> tuple[
+    Any,
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any],
+    dict[str, Any] | None,
+]:
     from .repository import GovernanceRepository
 
-    repository = GovernanceRepository(root)
+    repository = GovernanceRepository(root, now=now)
     registry = repository.read_operational_registry()
     requested, root_entry = _root_for_requested_item(registry, work_item_id)
     stored = repository.read_graph_definition(root_entry["id"])
@@ -866,15 +905,25 @@ def get_evidence_contract(
     """Read the current compact evidence contract from SQLite on demand."""
     from .repository import GovernanceRepository
 
-    if contract_kind not in {"gate", "remediation", "review", "confirmation"}:
+    if contract_kind not in {
+        "result", "gate", "remediation", "review", "confirmation",
+    }:
         fail(
             "WORK_ITEM_EVIDENCE_CONTRACT_KIND_INVALID",
-            "Evidence contract kind must be gate, remediation, review, or confirmation",
+            "Evidence contract kind must be result, gate, remediation, review, or confirmation",
         )
     repository = GovernanceRepository(root)
     registry = repository.read_operational_registry()
     entry = repository.item_by_id(registry, work_item_id)
-    if contract_kind == "gate":
+    if contract_kind == "result":
+        contract = _result_contract(repository, registry, entry)
+        operation_id = entry["claim"]["operationId"]
+        submit_command = (
+            f"task-result --item {work_item_id} "
+            f"--operation {operation_id} "
+            "--status <IMPLEMENTED_OR_BLOCKED> --evidence -"
+        )
+    elif contract_kind == "gate":
         contract = _gate_contract(repository, registry, entry)
         submit_command = f"accept-item --item {work_item_id} --evidence -"
     elif contract_kind == "remediation":
@@ -991,8 +1040,13 @@ def build_graph_frontier(
     stored: dict[str, Any],
     run: dict[str, Any] | None,
     states: list[dict[str, Any]],
+    *,
+    at: str | None = None,
 ) -> dict[str, Any]:
+    from .repository import timestamp
+
     graph = stored["graph"]
+    at = at or timestamp(repository.now)
     if run is None:
         return {
             "schemaVersion": SCHEMA_VERSION,
@@ -1010,9 +1064,13 @@ def build_graph_frontier(
                 "desiredTotalAgentCount": 0,
                 "hostSelectionAllowed": False,
                 "capacityPolicy": "QUEUE_REMAINDER_STABLE",
+                "claimPolicy": "JUST_IN_TIME_ON_WORKER_START",
+                "queuedTasksRemainUnclaimed": True,
                 "recalculateAfterEveryTransition": True,
             },
             "actions": [],
+            "inFlight": [],
+            "nextWakeAt": None,
             "blocked": [{
                 "nodeId": None,
                 "nodeKind": None,
@@ -1026,7 +1084,12 @@ def build_graph_frontier(
                 "recommendedAction": "FREEZE_REQUIREMENT",
             }],
             "criticalPath": critical_path(graph, states),
-            "summary": {"actionable": 0, "blocked": 1, "claimed": 0},
+            "summary": {
+                "actionable": 0,
+                "blocked": 1,
+                "claimed": 0,
+                "inFlight": 0,
+            },
         }
     by_item = {item["id"]: item for item in registry["workItems"]}
 
@@ -1042,7 +1105,9 @@ def build_graph_frontier(
         if is_descendant(registry, by_item[state["workItemId"]], requested["id"])
     ]
     actions: list[dict[str, Any]] = []
+    in_flight: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
+    wake_times: list[str] = []
     path = critical_path(graph, states)
     critical_nodes = set(path["nodeIds"])
     for state in requested_states:
@@ -1115,6 +1180,7 @@ def build_graph_frontier(
                 "action": action,
                 "workItemId": state["workItemId"],
                 "attempt": state["attempt"],
+                "operationId": state.get("operationId"),
                 "parallelGroup": None,
                 "readyBecause": state["readyBecause"],
                 "critical": state["id"] in critical_nodes,
@@ -1157,10 +1223,18 @@ def build_graph_frontier(
                 )
             actions.append(action_record)
         elif state["status"] == "CLAIMED" and state["kind"] == "TASK_EXECUTION":
-            actions.append({
+            claim_policy = graph["runtime"]["claimPolicy"]
+            heartbeat_due_at = _runtime_timestamp_after(
+                state["lastHeartbeatAt"],
+                claim_policy["heartbeatSeconds"],
+            )
+            hard_expires_at = _runtime_timestamp_after(
+                state["leaseExpiresAt"],
+                claim_policy["graceSeconds"],
+            )
+            heartbeat_record = {
                 "nodeId": state["id"],
                 "nodeKind": state["kind"],
-                "action": "HEARTBEAT_TASK",
                 "workItemId": state["workItemId"],
                 "attempt": state["attempt"],
                 "parallelGroup": None,
@@ -1172,9 +1246,52 @@ def build_graph_frontier(
                 ),
                 "transition": "TASK_HEARTBEAT",
                 "routeCondition": "ON_HEARTBEAT",
+                "heartbeatDueAt": heartbeat_due_at,
                 "leaseExpiresAt": state.get("leaseExpiresAt"),
+                "hardExpiresAt": hard_expires_at,
                 **budget,
-            })
+            }
+            if _runtime_time(at) >= _runtime_time(hard_expires_at):
+                blocked.append({
+                    "nodeId": state["id"],
+                    "nodeKind": state["kind"],
+                    "workItemId": state["workItemId"],
+                    "attempt": state["attempt"],
+                    "status": state["status"],
+                    "blockedBy": ["claim-hard-expired"],
+                    "failureClass": "WORKER_LOST",
+                    "remainingAttempts": budget["remainingAttempts"],
+                    "retryExhausted": state.get("retryExhausted", False),
+                    "recommendedAction": "ADVANCE_GRAPH",
+                    "lastTransition": state.get("lastTransition"),
+                    "hardExpiresAt": hard_expires_at,
+                })
+            elif _runtime_time(at) >= _runtime_time(heartbeat_due_at):
+                remaining_seconds = int(
+                    (
+                        _runtime_time(state["leaseExpiresAt"])
+                        - _runtime_time(at)
+                    ).total_seconds()
+                )
+                if remaining_seconds <= 0:
+                    urgency = "OVERDUE"
+                elif remaining_seconds <= claim_policy["heartbeatSeconds"]:
+                    urgency = "CRITICAL"
+                else:
+                    urgency = "NORMAL"
+                actions.append({
+                    **heartbeat_record,
+                    "action": "HEARTBEAT_TASK",
+                    "urgency": urgency,
+                    "secondsUntilLeaseExpiry": remaining_seconds,
+                })
+            else:
+                in_flight.append({
+                    **heartbeat_record,
+                    "status": "CLAIMED",
+                    "scheduledAction": "HEARTBEAT_TASK",
+                })
+                wake_times.append(heartbeat_due_at)
         elif state["status"] == "PAUSED" and state["kind"] == "TASK_EXECUTION":
             actions.append({
                 "nodeId": state["id"],
@@ -1270,23 +1387,34 @@ def build_graph_frontier(
             "desiredTotalAgentCount": active_agent_count + desired_new_agent_count,
             "hostSelectionAllowed": False,
             "capacityPolicy": "QUEUE_REMAINDER_STABLE",
+            "claimPolicy": "JUST_IN_TIME_ON_WORKER_START",
+            "queuedTasksRemainUnclaimed": True,
             "recalculateAfterEveryTransition": True,
         },
         "actions": actions,
+        "inFlight": in_flight,
+        "nextWakeAt": min(wake_times) if wake_times else None,
         "blocked": blocked,
         "criticalPath": path,
         "summary": {
             "actionable": len(actions),
             "blocked": len(blocked),
             "claimed": active_agent_count,
+            "inFlight": len(in_flight),
         },
     }
 
 
-def get_graph_frontier(*, root: str, work_item_id: str) -> dict[str, Any]:
+def get_graph_frontier(
+    *,
+    root: str,
+    work_item_id: str,
+    now: object = None,
+) -> dict[str, Any]:
     repository, registry, requested, stored, run = _load_graph_view(
         root=root,
         work_item_id=work_item_id,
+        now=now,
     )
     if run is None:
         states = [
@@ -1310,7 +1438,17 @@ def get_graph_frontier(*, root: str, work_item_id: str) -> dict[str, Any]:
             {"id": node["nodeId"], **{key: value for key, value in node.items() if key != "nodeId"}}
             for node in replay["nodes"]
         ]
-    return build_graph_frontier(repository, registry, requested, stored, run, states)
+    from .repository import timestamp
+
+    return build_graph_frontier(
+        repository,
+        registry,
+        requested,
+        stored,
+        run,
+        states,
+        at=timestamp(now),
+    )
 
 
 def get_graph_replay(*, root: str, work_item_id: str) -> dict[str, Any]:
@@ -1373,6 +1511,14 @@ def _runtime_time(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def _runtime_timestamp_after(value: str, seconds: int) -> str:
+    return (
+        (_runtime_time(value) + timedelta(seconds=seconds))
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z")
+    )
+
+
 def advance_graph(
     *,
     root: str,
@@ -1411,7 +1557,14 @@ def advance_graph(
                 or state["status"] != "CLAIMED"
                 or not is_descendant(registry, entry, requested["id"])
                 or not state.get("leaseExpiresAt")
-                or _runtime_time(at) < _runtime_time(state["leaseExpiresAt"])
+                or _runtime_time(at) < _runtime_time(
+                    _runtime_timestamp_after(
+                        state["leaseExpiresAt"],
+                        stored["graph"]["runtime"]["claimPolicy"][
+                            "graceSeconds"
+                        ],
+                    )
+                )
             ):
                 continue
             claim = entry.get("claim") or {}
@@ -1428,6 +1581,12 @@ def advance_graph(
                 operation_id=state["operationId"],
                 payload={
                     "leaseExpiresAt": state["leaseExpiresAt"],
+                    "hardExpiresAt": _runtime_timestamp_after(
+                        state["leaseExpiresAt"],
+                        stored["graph"]["runtime"]["claimPolicy"][
+                            "graceSeconds"
+                        ],
+                    ),
                     "failureClass": "WORKER_LOST",
                 },
                 recorded_at=at,

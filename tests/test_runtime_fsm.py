@@ -80,6 +80,25 @@ class RuntimeFsmTests(unittest.TestCase):
         }
 
     @staticmethod
+    def _implemented_result(task_id: str, operation_id: str) -> dict:
+        return {
+            "schemaVersion": 3,
+            "kind": "TASK_RESULT",
+            "taskId": task_id,
+            "operationId": operation_id,
+            "status": "IMPLEMENTED",
+            "summary": "The implementation and frozen regression completed.",
+            "changedFiles": ["src/controller.py", "tests/test_controller.py"],
+            "tests": [{
+                "argv": ["python", "-m", "unittest", "tests.test_controller"],
+                "exitCode": 0,
+                "testsRun": 1,
+            }],
+            "blockers": [],
+            "failure": None,
+        }
+
+    @staticmethod
     def _failed_gate(task_id: str, baseline: str, attempt: int) -> dict:
         return {
             "schemaVersion": 3,
@@ -511,6 +530,69 @@ class RuntimeFsmTests(unittest.TestCase):
                 claimed["claim"]["leaseExpiresAt"],
                 self._at(self.START + timedelta(minutes=30)),
             )
+            self.assertEqual(
+                claimed["leasePolicy"],
+                {
+                    "leaseSeconds": 30 * 60,
+                    "heartbeatIntervalSeconds": 5 * 60,
+                    "graceSeconds": 2 * 60,
+                    "heartbeatDueAt": self._at(
+                        self.START + timedelta(minutes=5)
+                    ),
+                    "leaseExpiresAt": self._at(
+                        self.START + timedelta(minutes=30)
+                    ),
+                    "hardExpiresAt": self._at(
+                        self.START + timedelta(minutes=32)
+                    ),
+                    "responsibleParty": "EXECUTION_ADAPTER",
+                    "commandHint": (
+                        f"heartbeat-task --item {task_id} --operation op-lease"
+                    ),
+                },
+            )
+            dashboard = Path(
+                prepared["artifactDir"],
+                "frontier.md",
+            ).read_text(encoding="utf-8")
+            self.assertIn(
+                "JUST_IN_TIME_ON_WORKER_START",
+                dashboard,
+            )
+            self.assertIn(
+                "## 执行中与心跳计划 / In Flight and Heartbeat Schedule",
+                dashboard,
+            )
+            self.assertIn(
+                self._at(self.START + timedelta(minutes=5)),
+                dashboard,
+            )
+            waiting = get_graph_frontier(
+                root=temporary,
+                work_item_id=task_id,
+                now=self.START + timedelta(minutes=4, seconds=59),
+            )
+            self.assertEqual(waiting["actions"], [])
+            self.assertEqual(
+                waiting["nextWakeAt"],
+                self._at(self.START + timedelta(minutes=5)),
+            )
+            self.assertEqual(
+                waiting["inFlight"][0]["heartbeatDueAt"],
+                self._at(self.START + timedelta(minutes=5)),
+            )
+            due = get_graph_frontier(
+                root=temporary,
+                work_item_id=task_id,
+                now=self.START + timedelta(minutes=5),
+            )
+            heartbeat_action = due["actions"][0]
+            self.assertEqual(heartbeat_action["action"], "HEARTBEAT_TASK")
+            self.assertEqual(heartbeat_action["urgency"], "NORMAL")
+            self.assertEqual(
+                heartbeat_action["hardExpiresAt"],
+                self._at(self.START + timedelta(minutes=32)),
+            )
             heartbeat = heartbeat_task(
                 root=temporary,
                 item_id=task_id,
@@ -521,24 +603,84 @@ class RuntimeFsmTests(unittest.TestCase):
                 heartbeat["claim"]["leaseExpiresAt"],
                 self._at(self.START + timedelta(minutes=40)),
             )
+            self.assertEqual(
+                heartbeat["leasePolicy"]["heartbeatDueAt"],
+                self._at(self.START + timedelta(minutes=15)),
+            )
+            overdue = get_graph_frontier(
+                root=temporary,
+                work_item_id=task_id,
+                now=self.START + timedelta(minutes=40, seconds=30),
+            )
+            self.assertEqual(overdue["actions"][0]["urgency"], "OVERDUE")
+            self.assertEqual(
+                advance_graph(
+                    root=temporary,
+                    work_item_id=task_id,
+                    now=self.START + timedelta(minutes=41),
+                )["decisions"],
+                [],
+            )
+            record_task_result(
+                root=temporary,
+                item_id=task_id,
+                operation_id="op-lease",
+                status="IMPLEMENTED",
+                evidence=self._implemented_result(task_id, "op-lease"),
+                now=self.START + timedelta(minutes=41),
+            )
+            self.assertEqual(
+                next(
+                    item
+                    for item in get_graph_status(
+                        root=temporary,
+                        work_item_id=task_id,
+                    )["nodes"]
+                    if item["id"] == execution_node_id(task_id)
+                )["status"],
+                "SUCCEEDED",
+            )
+
+    def test_hard_expiry_reaps_claim_and_fences_reused_operation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = self._prepare_and_freeze(temporary)
+            task_id = prepared["rootId"]
+            dispatch_task(
+                root=temporary,
+                item_id=task_id,
+                owner="developer",
+                operation_id="op-expired",
+                now=self.START,
+            )
+            advanced = advance_graph(
+                root=temporary,
+                work_item_id=task_id,
+                now=self.START + timedelta(minutes=32),
+            )
+            self.assertEqual(advanced["decisions"][0]["failureClass"], "WORKER_LOST")
+            self.assertEqual(advanced["decisions"][0]["action"], "RETRY_NODE")
             with self.assertRaises(GatedLoopError) as raised:
                 record_task_result(
                     root=temporary,
                     item_id=task_id,
-                    operation_id="op-lease",
-                    status="BLOCKED",
-                    evidence=self._blocked_result(task_id, "op-lease", "RETRYABLE"),
-                    now=self.START + timedelta(minutes=41),
+                    operation_id="op-expired",
+                    status="IMPLEMENTED",
+                    evidence=self._implemented_result(task_id, "op-expired"),
+                    now=self.START + timedelta(minutes=32),
                 )
-            self.assertEqual(raised.exception.code, "WORK_ITEM_CLAIM_EXPIRED")
-
-            advanced = advance_graph(
-                root=temporary,
-                work_item_id=task_id,
-                now=self.START + timedelta(minutes=41),
+            self.assertEqual(raised.exception.code, "WORK_ITEM_OPERATION_INVALID")
+            with self.assertRaises(GatedLoopError) as raised:
+                dispatch_task(
+                    root=temporary,
+                    item_id=task_id,
+                    owner="developer",
+                    operation_id="op-expired",
+                    now=self.START + timedelta(minutes=32, seconds=1),
+                )
+            self.assertEqual(
+                raised.exception.code,
+                "WORK_ITEM_OPERATION_REUSED",
             )
-            self.assertEqual(advanced["decisions"][0]["failureClass"], "WORKER_LOST")
-            self.assertEqual(advanced["decisions"][0]["action"], "RETRY_NODE")
             state = next(
                 item for item in get_graph_status(
                     root=temporary,
@@ -551,7 +693,6 @@ class RuntimeFsmTests(unittest.TestCase):
                 root=temporary,
                 work_item_id=task_id,
             )]
-            self.assertIn("TASK_HEARTBEAT", event_types)
             self.assertIn("CLAIM_LEASE_EXPIRED", event_types)
             self.assertEqual(event_types[-1], "NODE_RETRY_SCHEDULED")
 

@@ -422,10 +422,10 @@ def render_requirement_handoff(
         "",
         "1. 在项目根目录使用当前 `layered-delivery` Skill，从当前 Skill 元数据解析控制器入口；不得固化用户目录、Skill 安装位置或操作系统路径，也不得把解析后的本机绝对路径写入交接、方案或治理状态。",
         "2. 先读取 SQLite 治理状态、完整冻结方案和实时进度；恢复入口是 `graph-frontier`，不是 `task-context`，不要重新准备或重新冻结需求。",
-        f"3. 以根工作项 `{root['id']}` 调用 `graph-frontier --json`，直接消费控制器的 JSON stdout，读取 `dispatchPlan` 自动计算的完整安全 Task 顺序、并行组和目标 Agent 数；不得创建临时 JSON，也不得自行挑选 Task 子集。",
+        f"3. 以根工作项 `{root['id']}` 调用 `graph-frontier --json`，直接消费控制器的 JSON stdout，读取 `dispatchPlan` 自动计算的完整安全 Task 顺序、并行组和目标 Agent 数，并以 `nextWakeAt` 为最长等待时间；不得创建临时 JSON，也不得自行挑选 Task 子集。",
         "4. 控制器非零退出时保留控制器的 stderr 并停止解析，不要把空 stdout 或错误文本继续交给 JSON 解析器；`task-context` 只用于未认领 Task 的只读诊断，不能授权开工。",
-        "5. 对 `dispatchPlan.dispatchTaskIds` 中的 Task 按顺序生成唯一 operationId，并调用 `dispatch-task`。平台有容量时启动隔离子 Agent，容量不足时按原顺序排队，无子 Agent 时由当前 Agent 串行消费。",
-        "6. 每个 Task 严格使用自己的 context、scope、结果和证据，循环实现、回归测试、修复和复测；写回 `IMPLEMENTED` 或 `BLOCKED` 后完成该 Task 门禁。",
+        "5. 对 `dispatchPlan.dispatchTaskIds` 中的 Task 保持完整稳定队列；只有 worker 真正取得执行容量时才生成本 graph run 中唯一的 operationId 并调用 `dispatch-task`，排队项保持未认领。平台有容量时启动隔离子 Agent，无子 Agent 时由当前 Agent 串行消费。",
+        "6. 执行适配器独立按 `nextWakeAt` 重新查询 frontier 并消费到期的 `HEARTBEAT_TASK`。每个 Task 严格使用自己的 context、scope、结果和证据，循环实现、回归测试、修复和复测；写回前按 `evidenceContractRefs.result` 查询绑定当前 operation 的模板，提交 `IMPLEMENTED` 或 `BLOCKED` 后完成该 Task 门禁。",
         "7. 每次状态写回后重新查询 frontier，由 Graph 重算目标 Agent 数与后续波次；全部子级 VERIFIED 后运行 Capability/Delivery 聚合门禁。",
         "8. 面向人的状态报告必须把控制器 UTC 时间转换为当前运行环境的本机时区，并显式标注 UTC 偏移（例如 `UTC+08:00`）；SQLite、事件链和控制器 JSON 的机器时间字段保持不变。",
         "9. 不要要求用户逐 Task 回复启动，也不要在正常 Task 切换、并发降级或自动重试时请求人工确认。",
@@ -822,19 +822,6 @@ def render_acceptance_report(report: dict[str, Any]) -> str:
 
 
 def render_task_handoff(context: dict[str, Any]) -> str:
-    operation_id = context["operation"]["operationId"] if context.get("operation") else "<claim-required>"
-    result_template = {
-        "schemaVersion": SCHEMA_VERSION,
-        "kind": "TASK_RESULT",
-        "taskId": context["task"]["id"],
-        "operationId": operation_id,
-        "status": "IMPLEMENTED|BLOCKED",
-        "summary": "<development facts>",
-        "changedFiles": [],
-        "tests": [{"argv": ["<exact frozen argv>"], "exitCode": 0, "testsRun": 0}],
-        "blockers": [],
-        "failure": None,
-    }
     display_operation = context["operation"]["operationId"] if context.get("operation") else "尚未认领；不得开始开发"
     pretty = lambda value: json.dumps(value, ensure_ascii=False, indent=2, separators=(",", ": "))
     return "\n".join([
@@ -856,14 +843,9 @@ def render_task_handoff(context: dict[str, Any]) -> str:
         "- 不提交、推送、发布，也不得自行报告 PASS。",
         "- 最终只返回 IMPLEMENTED 或 BLOCKED，并携带当前 Operation ID、变更文件和测试事实。",
         "- IMPLEMENTED 时 failure 必须为 null；BLOCKED 时必须改为 class/code/summary，并使用 RETRYABLE、REMEDIATION_REQUIRED、CONTRACT_CHANGE、EXTERNAL_AUTHORITY 或 NON_RETRYABLE 分类。",
-        "- 宿主必须用 task-result 回收结果；返回开发结果后必须继续验收，IMPLEMENTED 不是完成状态。",
-        "- Gate 或验证修正需要 evidence 时，宿主只按 evidenceContractRefs 调用只读 evidence-contract，从 SQLite 单项取得模板；不得读取控制器源码或 memory 文件反推 schema。",
+        "- 宿主必须先按 evidenceContractRefs.result 调用只读 evidence-contract，取得绑定当前 operation 的 IMPLEMENTED/BLOCKED 模板，再用 task-result 回收结果；IMPLEMENTED 不是完成状态。",
+        "- Result、Gate 或验证修正需要 evidence 时，宿主只按 evidenceContractRefs 从 SQLite 单项取得模板；不得读取控制器源码或 memory 文件反推 schema。",
         "- 门禁通过后仍需独立验收、生成用户验收报告并取得用户确认。",
-        "",
-        "结果返回格式（由治理宿主以 --evidence - 从 stdin 直接交给 task-result；不要生成临时 JSON 文件）：",
-        "```json",
-        pretty(result_template),
-        "```",
         "",
         "冻结上下文：",
         "```json",

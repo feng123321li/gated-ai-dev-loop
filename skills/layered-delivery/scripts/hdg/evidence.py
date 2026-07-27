@@ -30,6 +30,10 @@ VALIDATION_REMEDIATION_ASSERTIONS = {
     "topologyUnchanged",
     "externalAuthorityUnchanged",
 }
+TASK_RESULT_ARTIFACT_FIELDS = {
+    "schemaVersion", "kind", "taskId", "operationId", "status", "summary",
+    "changedFiles", "tests", "blockers", "failure",
+}
 GATE_ARTIFACT_FIELDS = {
     "schemaVersion", "kind", "workItemId", "baselineFingerprint", "verdict", "summary",
     "scope", "acceptance", "tests", "findings",
@@ -169,48 +173,11 @@ def valid_acceptance_report(value: object, entry: dict[str, Any]) -> bool:
 
 
 def valid_task_result_artifact(value: object, *, item_id: str, operation_id: str, status: str) -> bool:
-    failure = value.get("failure") if isinstance(value, dict) else None
-    failure_valid = (
-        failure is None
-        if status == "IMPLEMENTED"
-        else (
-            isinstance(failure, dict)
-            and set(failure) == {"class", "code", "summary"}
-            and failure.get("class") in FAILURE_CLASSES[:5]
-            and isinstance(failure.get("code"), str)
-            and bool(FAILURE_CODE.fullmatch(failure["code"]))
-            and non_empty_string(failure.get("summary"))
-        )
-    )
-    return (
-        isinstance(value, dict)
-        and set(value) == {
-            "schemaVersion", "kind", "taskId", "operationId", "status", "summary",
-            "changedFiles", "tests", "blockers", "failure",
-        }
-        and value.get("schemaVersion") == SCHEMA_VERSION
-        and value.get("kind") == "TASK_RESULT"
-        and value.get("taskId") == item_id
-        and value.get("operationId") == operation_id
-        and value.get("status") == status
-        and non_empty_string(value.get("summary"))
-        and isinstance(value.get("changedFiles"), list)
-        and all(non_empty_string(item) for item in value["changedFiles"])
-        and isinstance(value.get("tests"), list)
-        and all(
-            isinstance(test, dict)
-            and set(test) in ({"argv", "exitCode"}, {"argv", "exitCode", "testsRun"})
-            and isinstance(test.get("argv"), list)
-            and all(non_empty_string(item) for item in test["argv"])
-            and isinstance(test.get("exitCode"), int)
-            and not isinstance(test.get("exitCode"), bool)
-            for test in value["tests"]
-        )
-        and isinstance(value.get("blockers"), list)
-        and all(non_empty_string(item) for item in value["blockers"])
-        and failure_valid
-        and (status != "IMPLEMENTED" or not value["blockers"])
-        and (status != "BLOCKED" or bool(value["blockers"]))
+    return not task_result_artifact_issues(
+        value,
+        item_id=item_id,
+        operation_id=operation_id,
+        requested_status=status,
     )
 
 
@@ -342,6 +309,80 @@ def gate_evidence_contract(
     }
 
 
+def task_result_evidence_contract(
+    entry: dict[str, Any],
+    definition: dict[str, Any],
+    *,
+    authorized_file_changes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Return directly fillable result templates bound to the active claim."""
+    operation_id = entry["claim"]["operationId"]
+    test_templates = [
+        {
+            "argv": list(argv),
+            "exitCode": "<INTEGER>",
+            "testsRun": "<OPTIONAL_NON_NEGATIVE_INTEGER>",
+        }
+        for argv in definition["testCommands"]
+    ]
+    shared = {
+        "schemaVersion": SCHEMA_VERSION,
+        "kind": "TASK_RESULT",
+        "taskId": entry["id"],
+        "operationId": operation_id,
+        "summary": "<REQUIRED_NON_EMPTY_STRING>",
+        "changedFiles": [],
+        "tests": test_templates,
+    }
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "artifactKind": "TASK_RESULT",
+        "taskId": entry["id"],
+        "operationId": operation_id,
+        "exactTopLevelKeys": sorted(TASK_RESULT_ARTIFACT_FIELDS),
+        "artifactTemplates": {
+            "IMPLEMENTED": {
+                **shared,
+                "status": "IMPLEMENTED",
+                "blockers": [],
+                "failure": None,
+            },
+            "BLOCKED": {
+                **shared,
+                "status": "BLOCKED",
+                "blockers": ["<ONE_OR_MORE_REQUIRED_NON_EMPTY_STRINGS>"],
+                "failure": {
+                    "class": "<FAILURE_CLASS>",
+                    "code": "<UPPER_SNAKE_CASE_CODE>",
+                    "summary": "<REQUIRED_NON_EMPTY_STRING>",
+                },
+            },
+        },
+        "constraints": {
+            "statusValues": ["IMPLEMENTED", "BLOCKED"],
+            "frozenTestArgv": [
+                list(argv) for argv in definition["testCommands"]
+            ],
+            "authorizedChangedFiles": sorted(
+                item["path"] for item in authorized_file_changes
+            ),
+            "changedFilesPolicy": (
+                "REPORT_FACTUAL_FILES; AUTHORIZATION_IS_ENFORCED_BY_GATE"
+            ),
+            "testsRun": "OPTIONAL_NON_NEGATIVE_INTEGER",
+            "failureClasses": list(FAILURE_CLASSES[:5]),
+            "implementedRequires": [
+                "blockers must be empty",
+                "failure must be null",
+            ],
+            "blockedRequires": [
+                "blockers must contain one or more non-empty strings",
+                "failure must contain class, code, and summary",
+            ],
+        },
+    }
+
+
 def validation_remediation_evidence_contract(
     entry: dict[str, Any],
     definition: dict[str, Any],
@@ -432,6 +473,135 @@ def _key_issues(value: object, expected: set[str]) -> list[str]:
         issues.append(f"missing top-level keys: {', '.join(missing)}")
     if unexpected:
         issues.append(f"unexpected top-level keys: {', '.join(unexpected)}")
+    return issues
+
+
+def task_result_artifact_issues(
+    value: object,
+    *,
+    item_id: str,
+    operation_id: str,
+    requested_status: str,
+) -> list[str]:
+    """Return precise field-level issues for one Task result artifact."""
+    issues = _key_issues(value, TASK_RESULT_ARTIFACT_FIELDS)
+    if not isinstance(value, dict):
+        return issues
+    if value.get("schemaVersion") != SCHEMA_VERSION:
+        issues.append(f"schemaVersion must be {SCHEMA_VERSION}")
+    if value.get("kind") != "TASK_RESULT":
+        issues.append("kind must be TASK_RESULT")
+    if value.get("taskId") != item_id:
+        issues.append(f"taskId must be {item_id}")
+    if value.get("operationId") != operation_id:
+        issues.append(f"operationId must be {operation_id}")
+    if value.get("status") != requested_status:
+        issues.append(f"status must match requested status {requested_status}")
+    if not non_empty_string(value.get("summary")):
+        issues.append("summary must be a non-empty string")
+
+    changed_files = value.get("changedFiles")
+    if not isinstance(changed_files, list):
+        issues.append("changedFiles must be an array")
+    else:
+        for index, path in enumerate(changed_files):
+            if not non_empty_string(path):
+                issues.append(
+                    f"changedFiles[{index}] must be a non-empty string"
+                )
+
+    tests = value.get("tests")
+    if not isinstance(tests, list):
+        issues.append("tests must be an array")
+    else:
+        for index, test in enumerate(tests):
+            prefix = f"tests[{index}]"
+            if not isinstance(test, dict):
+                issues.append(f"{prefix} must be a mapping")
+                continue
+            keys = set(test)
+            allowed_keys = {"argv", "exitCode", "testsRun"}
+            missing = sorted({"argv", "exitCode"} - keys)
+            unexpected = sorted(keys - allowed_keys)
+            if missing:
+                issues.append(
+                    f"{prefix} missing keys: {', '.join(missing)}"
+                )
+            if unexpected:
+                issues.append(
+                    f"{prefix} unexpected keys: {', '.join(unexpected)}"
+                )
+            argv = test.get("argv")
+            if (
+                not isinstance(argv, list)
+                or any(not non_empty_string(item) for item in argv)
+            ):
+                issues.append(
+                    f"{prefix}.argv must be an array of non-empty strings"
+                )
+            exit_code = test.get("exitCode")
+            if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+                issues.append(f"{prefix}.exitCode must be an integer")
+            if "testsRun" in test:
+                tests_run = test["testsRun"]
+                if (
+                    not isinstance(tests_run, int)
+                    or isinstance(tests_run, bool)
+                    or tests_run < 0
+                ):
+                    issues.append(
+                        f"{prefix}.testsRun must be a non-negative integer"
+                    )
+
+    blockers = value.get("blockers")
+    if not isinstance(blockers, list):
+        issues.append("blockers must be an array")
+    elif any(not non_empty_string(item) for item in blockers):
+        issues.append("blockers must contain only non-empty strings")
+
+    failure = value.get("failure")
+    if requested_status == "IMPLEMENTED":
+        if isinstance(blockers, list) and blockers:
+            issues.append("IMPLEMENTED requires blockers to be empty")
+        if failure is not None:
+            issues.append("IMPLEMENTED requires failure to be null")
+    elif requested_status == "BLOCKED":
+        if isinstance(blockers, list) and not blockers:
+            issues.append(
+                "BLOCKED requires blockers to contain at least one item"
+            )
+        if not isinstance(failure, dict):
+            issues.append(
+                "BLOCKED requires failure to contain class, code, and summary"
+            )
+        else:
+            missing = sorted({"class", "code", "summary"} - set(failure))
+            unexpected = sorted(
+                set(failure) - {"class", "code", "summary"}
+            )
+            if missing:
+                issues.append(
+                    "failure missing keys: " + ", ".join(missing)
+                )
+            if unexpected:
+                issues.append(
+                    "failure unexpected keys: " + ", ".join(unexpected)
+                )
+            if failure.get("class") not in FAILURE_CLASSES[:5]:
+                issues.append(
+                    "failure.class must be one of: "
+                    + ", ".join(FAILURE_CLASSES[:5])
+                )
+            code = failure.get("code")
+            if not (
+                isinstance(code, str)
+                and bool(FAILURE_CODE.fullmatch(code))
+            ):
+                issues.append(
+                    "failure.code must be an upper snake case identifier"
+                )
+            if not non_empty_string(failure.get("summary")):
+                issues.append("failure.summary must be a non-empty string")
     return issues
 
 

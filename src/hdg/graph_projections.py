@@ -133,7 +133,9 @@ def render_runtime_policy_summary(graph: dict[str, Any]) -> str:
         f"- 自动恢复失败类 / Auto-recovery failure classes: {automatic}",
         f"- 尝试耗尽动作 / On retry exhausted: `{retry['onExhausted']}`",
         f"- 认领租约 / Claim lease: **{claim['leaseSeconds']} 秒 / seconds**",
-        f"- 建议心跳间隔 / Heartbeat interval: **{claim['heartbeatSeconds']} 秒 / seconds**",
+        f"- 心跳间隔 / Heartbeat interval: **{claim['heartbeatSeconds']} 秒 / seconds**",
+        f"- 竞争宽限 / Expiry grace: **{claim['graceSeconds']} 秒 / seconds**",
+        f"- 认领模式 / Claim mode: `{claim['claimMode']}`",
         f"- 租约到期动作 / On lease expired: `{claim['onExpired']}`",
         "- 完整状态迁移图 / Full state transition graph: "
         "[state-transition-graph.md](../../state-transition-graph.md)",
@@ -317,6 +319,8 @@ def render_frontier_dashboard(
         f"- 可执行动作 / Actionable: **{frontier['summary']['actionable']}**",
         f"- 阻断节点 / Blocked: **{frontier['summary']['blocked']}**",
         f"- 已认领 / Claimed: **{frontier['summary']['claimed']}**",
+        f"- 执行中 / In flight: **{frontier['summary'].get('inFlight', 0)}**",
+        f"- 下一唤醒 / Next wake: `{frontier.get('nextWakeAt') or '-'}`",
         "",
         "> 本文件由事件回放和治理数据库重建，仅供阅读；机器权威是图事件链。",
         "",
@@ -329,10 +333,13 @@ def render_frontier_dashboard(
         f"- 总 Agent 目标数 / Desired total agents: **{dispatch['desiredTotalAgentCount']}**",
         f"- 并行组 / Parallel group: `{dispatch['parallelGroup'] or '-'}`",
         f"- 容量策略 / Capacity policy: `{dispatch['capacityPolicy']}`",
+        f"- 认领策略 / Claim policy: `{dispatch.get('claimPolicy') or '-'}`",
+        "- 排队任务保持未认领 / Queued tasks remain unclaimed: "
+        f"`{'YES' if dispatch.get('queuedTasksRemainUnclaimed') else 'NO'}`",
         "- 宿主可挑选子集 / Host may select subset: "
         f"`{'YES' if dispatch['hostSelectionAllowed'] else 'NO'}`",
         "",
-        "> Graph 已确定全部本轮安全任务及稳定顺序。执行端必须消费完整队列；容量不足只会让余项排队，不能由宿主改选任务。",
+        "> Graph 已确定全部本轮安全任务及稳定顺序。执行端必须消费完整队列；容量不足时余项保持未认领并稳定排队，只有 worker 真正启动时才 dispatch/claim。",
         "",
         "```mermaid",
         "flowchart LR",
@@ -347,6 +354,26 @@ def render_frontier_dashboard(
         lines.append('    P --> N["无待派发 Task / No Task to Dispatch"]')
     lines.extend([
         "```",
+        "",
+        "## 执行中与心跳计划 / In Flight and Heartbeat Schedule",
+        "",
+        "| 节点 / Node | 工作项 / Work item | Operation | 状态 / Status | 心跳到期 / Heartbeat due | 租约到期 / Lease expires | 硬到期 / Hard expires | 计划动作 / Scheduled action | 命令提示 / Command hint |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ])
+    for active in frontier.get("inFlight", []):
+        lines.append(
+            f"| `{active['nodeId']}` | `{active['workItemId']}` | "
+            f"`{active.get('operationId') or '-'}` | "
+            f"`{active.get('status') or '-'}` | "
+            f"{active.get('heartbeatDueAt') or '-'} | "
+            f"{active.get('leaseExpiresAt') or '-'} | "
+            f"{active.get('hardExpiresAt') or '-'} | "
+            f"`{active.get('scheduledAction') or '-'}` | "
+            f"`{active.get('commandHint') or '-'}` |"
+        )
+    if not frontier.get("inFlight"):
+        lines.append("| - | - | - | - | - | - | - | - | - |")
+    lines.extend([
         "",
         "## 关键路径 / Critical Path",
         "",

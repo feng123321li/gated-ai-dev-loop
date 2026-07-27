@@ -36,7 +36,7 @@ description: "治理或恢复分层软件交付。当工作区存在 `.layered-d
 2. 展示返回的开发方案和图入口，说明范围、契约、依赖、测试与失败路由。每次确认提示都必须同时展示 `active` 和 `manual` 两种开发方式；修改方案时重新准备同一整树。
 3. 用户明确同意方案并选择方式后，使用返回的 `hierarchyFingerprint` 一次调用 `freeze-hierarchy`。Claude Code 还须先满足 [claude-automation.md](references/claude-automation.md) 的权限前置条件。
 4. 冻结后每次迁移都重新查询 `graph-frontier`，完整消费 `dispatchPlan`，不自行挑选 Task、排序或确定 Agent 数。
-5. `DISPATCH_TASK`：调用 `dispatch-task` 获取正式上下文，完成实现、回归后用 `task-result --evidence -` 写回。
+5. `DISPATCH_TASK`：完整消费调度计划并稳定排队，但只在 worker 真正取得执行容量时调用 `dispatch-task`，让 claim 按实际开工即时创建。执行适配器按 `nextWakeAt` 消费到期的 `HEARTBEAT_TASK`；结果写回前先按 `evidenceContractRefs.result` 查询当前 operation 的模板，再用 `task-result --evidence -` 提交。
 6. `RUN_GATE`、`REQUEST_REVIEW`、`REQUEST_USER_CONFIRMATION`：先执行 `evidenceContractRef` 指向的只读 `evidence-contract`，只获取当前工作项模板，再从 stdin 提交 evidence；不得读取控制器源码或 memory 文件反推格式。
 7. `RETRY_NODE` 或租约失败按 frontier 路由。Task gate 的 P0/P1 FAIL 必须回到 execution 修复、复测；预算耗尽后请求干预，不能无限重跑 gate。
 8. 原契约不变但漏列必要文件时，在原 Task 使用 `remediate-task`；契约、拓扑、数据或外部授权变化才回到人工评审。

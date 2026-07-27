@@ -62,6 +62,8 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-frontier --item <root-or-subtre
 | `desiredTotalAgentCount` | 当前 Graph 运行的 Agent 总目标数 |
 | `hostSelectionAllowed` | 固定为 `false` |
 | `capacityPolicy` | `QUEUE_REMAINDER_STABLE`；容量不足时保持原顺序排队 |
+| `claimPolicy` | `JUST_IN_TIME_ON_WORKER_START`；只有 worker 真正取得容量时才创建 claim |
+| `queuedTasksRemainUnclaimed` | 固定为 `true`；稳定队列中的 Task 不提前消耗租约 |
 | `recalculateAfterEveryTransition` | 每次状态迁移后重新计算 |
 
 可能返回的动作：
@@ -83,14 +85,16 @@ frontier 还会返回 `criticalPath`，其中包括最长剩余路径、下一�
 
 ## 认领、心跳与自动推进
 
-每个 claim 都包含 `claimedAt`、`lastHeartbeatAt` 和 `leaseExpiresAt`。默认租约为 30 分钟，建议每 5 分钟发送一次心跳。
+每个 claim 都包含 `claimedAt`、`lastHeartbeatAt` 和 `leaseExpiresAt`。默认软租约为 30 分钟、心跳间隔为 5 分钟、竞争宽限为 2 分钟。`dispatch-task` 与 `heartbeat-task` 返回 `leasePolicy`，其中含 `heartbeatDueAt`、`leaseExpiresAt`、`hardExpiresAt` 和精确命令提示。
 
 ```text
 python -X utf8 <skill-root>/scripts/hdg.py heartbeat-task --item <task-id> --operation <id> --json
 python -X utf8 <skill-root>/scripts/hdg.py advance-graph --item <root-or-subtree-id> --json
 ```
 
-`heartbeat-task` 只能延长匹配且尚未过期的 operation。`advance-graph` 会确定性识别过期 claim，写入 `CLAIM_LEASE_EXPIRED`，将其归类为 `WORKER_LOST`，然后创建新 attempt 或写入 `RETRY_EXHAUSTED`。它不会猜测任意业务失败是否可以重试。
+frontier 在心跳尚未到期时把 claim 放入 `inFlight` 并返回最早 `nextWakeAt`；只有到期后才把 `HEARTBEAT_TASK` 放入 `actions`，并标记 `NORMAL`、`CRITICAL` 或 `OVERDUE`。执行适配器必须以 `nextWakeAt` 为最长等待时间主动唤醒，不能等待开发 Agent 自己想起续租。
+
+`heartbeat-task` 可延长匹配且尚未硬过期的 operation。软租约到期后的 2 分钟内，如果 `advance-graph` 尚未完成失联迁移，同一 operation 仍可补心跳或提交结果；事务先到者生效。硬到期后 `advance-graph` 写入 `CLAIM_LEASE_EXPIRED`、归类为 `WORKER_LOST`，然后创建新 attempt 或写入 `RETRY_EXHAUSTED`。旧 operationId 在同一 graph run 中禁止复用，因此失联 worker 的迟到结果不能污染新 attempt。控制器不会用后台 daemon 假装 worker 存活，也不会猜测任意业务失败是否可以重试。
 
 显式运行控制命令如下：
 
@@ -151,7 +155,7 @@ python -X utf8 <skill-root>/scripts/hdg.py rebuild-graph-run --item <root-id> --
 
 当自动恢复类失败在第 3 次 attempt 仍未成功时，控制器写入 `RETRY_EXHAUSTED`，将节点标记为尝试耗尽，并阻断 graph run。`retry-item` 仍用于符合条件的门禁或人工恢复场景，但同样受当前节点的 3 次 attempt 预算约束。Task gate 重试会同时创建新的 execution 与 gate attempt，让修复重新经过认领、结果写回和门禁；协调节点 gate 只重试自身。普通的可重试 Task 失败由 Graph 自动路由，不再要求执行平台手动调用它。
 
-新的 Task 派发不得复用失败 attempt 的 operationId。
+新的 Task 派发不得复用当前 graph run 中任何历史 attempt 的 operationId，控制器机械拒绝复用。
 
 ## 同合同修正与失效传播
 

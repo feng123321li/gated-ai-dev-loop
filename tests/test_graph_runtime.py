@@ -353,11 +353,83 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
             self.assertEqual(frontier["actions"][0]["action"], "DISPATCH_TASK")
             self.assertEqual(frontier["actions"][0]["nodeId"], execution_node_id(task_id))
 
-            dispatch_task(root=temporary, item_id=task_id, owner="developer", operation_id="op-graph")
+            dispatched = dispatch_task(
+                root=temporary,
+                item_id=task_id,
+                owner="developer",
+                operation_id="op-graph",
+            )
+            self.assertEqual(
+                dispatched["evidenceContractRefs"]["result"],
+                {
+                    "artifactKind": "TASK_RESULT",
+                    "commandHint": (
+                        f"evidence-contract --item {task_id} --kind result"
+                    ),
+                },
+            )
+            self.assertNotIn(
+                '"kind": "TASK_RESULT"',
+                dispatched["handoffPrompt"],
+            )
+            self.assertIn(
+                f"evidence-contract --item {task_id} --kind result",
+                dispatched["handoffPrompt"],
+            )
+            result_contract = get_evidence_contract(
+                root=temporary,
+                work_item_id=task_id,
+                contract_kind="result",
+            )["evidenceContract"]
+            self.assertEqual(result_contract["artifactKind"], "TASK_RESULT")
+            self.assertEqual(result_contract["operationId"], "op-graph")
+            self.assertEqual(len(result_contract["exactTopLevelKeys"]), 10)
+            self.assertEqual(
+                set(result_contract["artifactTemplates"]),
+                {"IMPLEMENTED", "BLOCKED"},
+            )
+            self.assertEqual(
+                result_contract["constraints"]["frozenTestArgv"],
+                [["python", "-m", "unittest", "tests.test_controller"]],
+            )
+            self.assertEqual(
+                result_contract["constraints"]["authorizedChangedFiles"],
+                ["src/controller.py", "tests/test_controller.py"],
+            )
             status = get_graph_status(root=temporary, work_item_id=task_id)
             execute = next(node for node in status["nodes"] if node["id"] == execution_node_id(task_id))
             self.assertEqual(execute["status"], "CLAIMED")
             self.assertEqual(execute["operationId"], "op-graph")
+
+            invalid_result = deepcopy(
+                result_contract["artifactTemplates"]["IMPLEMENTED"]
+            )
+            invalid_result.pop("failure")
+            invalid_result["tests"][0]["exitCode"] = "0"
+            with self.assertRaises(GatedLoopError) as raised:
+                record_task_result(
+                    root=temporary,
+                    item_id=task_id,
+                    operation_id="op-graph",
+                    status="IMPLEMENTED",
+                    evidence=invalid_result,
+                )
+            self.assertEqual(
+                raised.exception.code,
+                "WORK_ITEM_RESULT_EVIDENCE_INVALID",
+            )
+            self.assertIn(
+                "missing top-level keys: failure",
+                raised.exception.details["issues"],
+            )
+            self.assertIn(
+                "tests[0].exitCode must be an integer",
+                raised.exception.details["issues"],
+            )
+            self.assertEqual(
+                raised.exception.details["evidenceContract"],
+                result_contract,
+            )
 
             record_task_result(
                 root=temporary,
@@ -580,6 +652,11 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
             self.assertEqual(plan["desiredTotalAgentCount"], 2)
             self.assertFalse(plan["hostSelectionAllowed"])
             self.assertEqual(plan["capacityPolicy"], "QUEUE_REMAINDER_STABLE")
+            self.assertEqual(
+                plan["claimPolicy"],
+                "JUST_IN_TIME_ON_WORKER_START",
+            )
+            self.assertTrue(plan["queuedTasksRemainUnclaimed"])
             dispatches = [
                 action
                 for action in frontier["actions"]

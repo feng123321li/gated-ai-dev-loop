@@ -77,6 +77,12 @@ class DeliveryGraphModelTests(unittest.TestCase):
             runtime["claimPolicy"]["leaseSeconds"],
             DEFAULT_CLAIM_LEASE_SECONDS,
         )
+        self.assertEqual(runtime["claimPolicy"]["heartbeatSeconds"], 5 * 60)
+        self.assertEqual(runtime["claimPolicy"]["graceSeconds"], 2 * 60)
+        self.assertEqual(
+            runtime["claimPolicy"]["claimMode"],
+            "JUST_IN_TIME_ON_WORKER_START",
+        )
         self.assertEqual(
             runtime["terminalStates"],
             ["CANCELLED", "COMPLETED"],

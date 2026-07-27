@@ -2,7 +2,7 @@
 
 ## 上下文生成
 
-只有根级开发方案已经通过一次整树冻结、开发方式已在同一次确认中写入 SQLite、实际父链有效且 Task/Capability 依赖都 VERIFIED 的 Task 才能生成上下文。正常流程使用 `dispatch-task` 在同一 SQLite 短事务中校验 READY、保存绑定 operationId 的结构化上下文和 handoff，并在 Markdown handoff 写入成功后提交 claim。`task-context` 只返回调度前诊断或恢复预览，不写入开工工件。上下文继承需求根开发方式，并包含 `gateLevel`、operation、Task 的完整 `developmentPlan`、验证修正记录、`authorizedFileChanges`、实际存在父级的协调开发计划与子契约、依赖证据、R/A、输入输出、测试 argv、禁止事项和紧凑 `evidenceContractRefs`；完整 gate/remediation 模板由 `evidence-contract` 在真正需要时从 SQLite 单项读取，不复制进每个 Task 上下文。根 Task 的父契约和聚合依赖数组为空，`inheritConversation` 固定为 false。
+只有根级开发方案已经通过一次整树冻结、开发方式已在同一次确认中写入 SQLite、实际父链有效且 Task/Capability 依赖都 VERIFIED 的 Task 才能生成上下文。正常流程只在 worker 真正取得执行容量时使用 `dispatch-task`，在同一 SQLite 短事务中校验 READY、保存绑定唯一 operationId 的结构化上下文和 handoff，并在 Markdown handoff 写入成功后提交 claim。`task-context` 只返回调度前诊断或恢复预览，不写入开工工件。正式上下文继承需求根开发方式，并包含 `gateLevel`、operation、`leasePolicy`、Task 的完整 `developmentPlan`、验证修正记录、`authorizedFileChanges`、实际存在父级的协调开发计划与子契约、依赖证据、R/A、输入输出、测试 argv、禁止事项和紧凑 `evidenceContractRefs`；完整 result/gate/remediation 模板由 `evidence-contract` 在真正需要时从 SQLite 单项读取，不复制进每个 Task 上下文或 handoff。根 Task 的父契约和聚合依赖数组为空，`inheritConversation` 固定为 false。
 
 `requirement-handoff.md` 是 manual 根级需求的一次性交接提示词，冻结与投影刷新都会从 SQLite 重建；它列出完整树并要求接收会话消费 Graph 自动计算的调度计划，完成 dispatch、结果写回和逐级门禁。`development-handoff.md` 仍是 `dispatch-task` 后生成的单 Task 执行上下文，只在执行循环内部交给对应开发 Agent，不再要求人逐 Task 复制。`task-context --json` 只返回不得用于开工的未认领诊断预览。开发 Agent 不接收 Delivery 分析对话、Capability 讨论、其他 Task 对话或执行入口隐式记忆。
 
@@ -49,6 +49,6 @@ python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --e
 
 ## 结果接收
 
-Graph 执行循环用 claim 的 operationId 接收完整结果 artifact，并以 `--evidence -` 从 stdin 直接执行 `task-result`。控制器在同一 SQLite 写事务内核对当前 claim、operationId、未过期租约和 artifact，计算规范 JSON 摘要，记录 `IMPLEMENTED/BLOCKED`、artifact 与摘要并清除 claim；不创建临时 evidence 文件。`IMPLEMENTED` 的 `failure` 必须为 `null`；`BLOCKED` 必须提供 `failure.class/code/summary`，让控制器在同一事务中决定自动重试、尝试耗尽、同合同修正、合同评审、外部授权或人工干预。控制器随即生成 `development-review.md`，对照冻结计划展示实际改动、接口、回归测试、复测和偏差；`IMPLEMENTED` 只表示等待门禁。Agent 应先修复回归失败并完成复测，再以相同方式提交严格 gate artifact、执行 `accept-item` 并生成验收报告。根工作项通过聚合门禁后向用户提交交付，由用户人工验收和最终确认；开发会话的 IMPLEMENTED 不能当作完成。
+Graph 执行循环先调用 `evidence-contract --item <task-id> --kind result --json`，取得绑定当前 claim/operationId 的两份可填写模板和冻结测试、有效授权、失败分类约束，再以 `--evidence -` 从 stdin 执行 `task-result`。控制器在同一 SQLite 写事务内核对当前 claim、operationId、尚未硬过期的租约和 artifact；不匹配时返回逐字段 `issues` 与当前 contract，匹配时计算规范 JSON 摘要，记录 `IMPLEMENTED/BLOCKED`、artifact 与摘要并清除 claim。`IMPLEMENTED` 的 blockers 必须为空且 `failure=null`；`BLOCKED` 必须提供非空 blockers 与 `failure.class/code/summary`。控制器随即生成 `development-review.md`，对照冻结计划展示实际改动、接口、回归测试、复测和偏差；`IMPLEMENTED` 只表示等待门禁。Agent 应先修复回归失败并完成复测，再以相同方式提交严格 gate artifact、执行 `accept-item` 并生成验收报告。根工作项通过聚合门禁后向用户提交交付，由用户人工验收和最终确认；开发会话的 IMPLEMENTED 不能当作完成。
 
 验证阶段若发现原验收项所需文件漏列，当前 claim 必须先正常写回并释放，再由 Graph 执行循环按修正路由执行 `remediate-task`。控制器把补充文件加入下一次 context 的 `authorizedFileChanges`，原 Task 重新 READY 后再认领；开发 Agent 不自行编辑 baseline、计划或 SQLite，也不另起需求根。

@@ -6,9 +6,18 @@ from typing import Any
 
 from .constants import SCHEMA_VERSION
 from .errors import fail
-from .evidence import evidence_record, valid_task_result_artifact
+from .evidence import (
+    evidence_record,
+    task_result_artifact_issues,
+    task_result_evidence_contract,
+)
 from .fs_safe import atomic_write
-from .graph_model import DEFAULT_CLAIM_LEASE_SECONDS, execution_node_id
+from .graph_model import (
+    DEFAULT_CLAIM_GRACE_SECONDS,
+    DEFAULT_CLAIM_LEASE_SECONDS,
+    DEFAULT_HEARTBEAT_SECONDS,
+    execution_node_id,
+)
 from .graph_runtime import (
     build_graph_frontier,
     evidence_contract_ref,
@@ -28,8 +37,12 @@ def _parse_timestamp(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def _claim_expired(claim: dict[str, Any], at: str) -> bool:
-    return _parse_timestamp(at) >= _parse_timestamp(claim["leaseExpiresAt"])
+def _claim_hard_expired(claim: dict[str, Any], at: str) -> bool:
+    hard_expires_at = timestamp_after(
+        claim["leaseExpiresAt"],
+        DEFAULT_CLAIM_GRACE_SECONDS,
+    )
+    return _parse_timestamp(at) >= _parse_timestamp(hard_expires_at)
 
 
 def _new_claim(*, owner: str, operation_id: str, at: str) -> dict[str, str]:
@@ -51,10 +64,52 @@ def _claim_payload(claim: dict[str, str], status: str) -> dict[str, str]:
     }
 
 
+def _lease_policy(item_id: str, claim: dict[str, str]) -> dict[str, Any]:
+    return {
+        "leaseSeconds": DEFAULT_CLAIM_LEASE_SECONDS,
+        "heartbeatIntervalSeconds": DEFAULT_HEARTBEAT_SECONDS,
+        "graceSeconds": DEFAULT_CLAIM_GRACE_SECONDS,
+        "heartbeatDueAt": timestamp_after(
+            claim["lastHeartbeatAt"],
+            DEFAULT_HEARTBEAT_SECONDS,
+        ),
+        "leaseExpiresAt": claim["leaseExpiresAt"],
+        "hardExpiresAt": timestamp_after(
+            claim["leaseExpiresAt"],
+            DEFAULT_CLAIM_GRACE_SECONDS,
+        ),
+        "responsibleParty": "EXECUTION_ADAPTER",
+        "commandHint": (
+            f"heartbeat-task --item {item_id} "
+            f"--operation {claim['operationId']}"
+        ),
+    }
+
+
 def _safe_operation_id(value: object, field: str) -> str:
     if not isinstance(value, str) or not OPERATION_ID.fullmatch(value):
         fail("WORK_ITEM_OPERATION_INVALID", f"{field} must be a safe lowercase identifier")
     return value
+
+
+def _assert_operation_id_unused(
+    repository: GovernanceRepository,
+    registry: dict[str, Any],
+    entry: dict[str, Any],
+    operation_id: str,
+) -> None:
+    root_entry = _hierarchy_root_entry(registry, entry)
+    if any(
+        event.get("eventType") == "TASK_CLAIMED"
+        and event.get("operationId") == operation_id
+        for event in repository.read_graph_events(root_entry["id"])
+    ):
+        fail(
+            "WORK_ITEM_OPERATION_REUSED",
+            "operationId must not be reused within the current graph run",
+            operationId=operation_id,
+            rootId=root_entry["id"],
+        )
 
 
 def _hierarchy_root_entry(registry: dict[str, Any], entry: dict[str, Any]) -> dict[str, Any]:
@@ -155,6 +210,13 @@ def claim_task(
             fail("WORK_ITEM_DEVELOPMENT_MODE_REQUIRED", f"{item_id} requires a development mode selected during requirement freeze")
         if not _task_ready(repository, registry, entry):
             fail("WORK_ITEM_NOT_READY", f"{item_id} is not ready for dispatch")
+        operation_id = _safe_operation_id(operation_id, "operationId")
+        _assert_operation_id_unused(
+            repository,
+            registry,
+            entry,
+            operation_id,
+        )
         entry["claim"] = _new_claim(owner=owner, operation_id=operation_id, at=at)
         entry["status"] = "CLAIMED"
         entry["recordRevision"] += 1
@@ -172,18 +234,40 @@ def claim_task(
             at=at,
         )
         repository.write_registry(registry)
-        return {"id": item_id, "status": entry["status"], "claim": entry["claim"]}
+        return {
+            "id": item_id,
+            "status": entry["status"],
+            "claim": entry["claim"],
+            "leasePolicy": _lease_policy(item_id, entry["claim"]),
+        }
 
 
 def _validated_task_result_artifact(
     evidence: object,
     *,
-    item_id: str,
-    operation_id: str,
+    entry: dict[str, Any],
+    definition: dict[str, Any],
+    authorized_file_changes: list[dict[str, Any]],
     status: str,
 ) -> tuple[dict[str, str], dict[str, Any]]:
-    if not valid_task_result_artifact(evidence, item_id=item_id, operation_id=operation_id, status=status):
-        fail("WORK_ITEM_RESULT_EVIDENCE_INVALID", "Task result evidence does not match the active operation")
+    operation_id = entry["claim"]["operationId"]
+    issues = task_result_artifact_issues(
+        evidence,
+        item_id=entry["id"],
+        operation_id=operation_id,
+        requested_status=status,
+    )
+    if issues:
+        fail(
+            "WORK_ITEM_RESULT_EVIDENCE_INVALID",
+            "Task result evidence does not match the active operation",
+            issues=issues,
+            evidenceContract=task_result_evidence_contract(
+                entry,
+                definition,
+                authorized_file_changes=authorized_file_changes,
+            ),
+        )
     return evidence_record(evidence), evidence
 
 
@@ -206,7 +290,7 @@ def record_task_result(
         entry = repository.item_by_id(registry, item_id)
         if entry["kind"] != "TASK" or entry["status"] != "CLAIMED" or (entry.get("claim") or {}).get("operationId") != operation_id:
             fail("WORK_ITEM_OPERATION_INVALID", f"{item_id} does not have the supplied active operation")
-        if _claim_expired(entry["claim"], at):
+        if _claim_hard_expired(entry["claim"], at):
             fail("WORK_ITEM_CLAIM_EXPIRED", f"{item_id} claim lease has expired")
         definition = repository.assert_current_lineage(registry, entry)[0]
         root_entry = _hierarchy_root_entry(registry, entry)
@@ -216,10 +300,14 @@ def record_task_result(
         node_attempt = next(
             node["attempt"] for node in graph_run["nodes"] if node["nodeId"] == node_id
         )
+        authorized_file_changes = repository.effective_task_file_changes(
+            definition
+        )
         reference, artifact = _validated_task_result_artifact(
             evidence,
-            item_id=item_id,
-            operation_id=operation_id,
+            entry=entry,
+            definition=definition,
+            authorized_file_changes=authorized_file_changes,
             status=status,
         )
         entry["status"] = status
@@ -371,6 +459,11 @@ def _task_context(
             "lastHeartbeatAt": entry["claim"]["lastHeartbeatAt"],
             "leaseExpiresAt": entry["claim"]["leaseExpiresAt"],
         } if entry.get("claim") else None,
+        "leasePolicy": (
+            _lease_policy(item_id, entry["claim"])
+            if entry.get("claim")
+            else None
+        ),
         "task": {
             "id": definition["id"],
             "title": definition["title"],
@@ -389,6 +482,9 @@ def _task_context(
         "execution": definition["execution"],
         "testCommands": definition["testCommands"],
         "evidenceContractRefs": {
+            **({
+                "result": evidence_contract_ref(item_id, "result"),
+            } if entry.get("claim") else {}),
             "gate": evidence_contract_ref(item_id, "gate"),
             "remediation": evidence_contract_ref(item_id, "remediation"),
         },
@@ -434,6 +530,13 @@ def dispatch_task(
             fail("WORK_ITEM_DEVELOPMENT_MODE_REQUIRED", f"{item_id} requires a development mode selected during requirement freeze")
         if not _task_ready(repository, registry, entry):
             fail("WORK_ITEM_NOT_READY", f"{item_id} is not ready for dispatch")
+        operation_id = _safe_operation_id(operation_id, "operationId")
+        _assert_operation_id_unused(
+            repository,
+            registry,
+            entry,
+            operation_id,
+        )
         claim = _new_claim(owner=owner, operation_id=operation_id, at=at)
         entry["claim"] = claim
         entry["status"] = "CLAIMED"
@@ -459,6 +562,7 @@ def dispatch_task(
             "id": item_id,
             "status": entry["status"],
             "claim": claim,
+            "leasePolicy": _lease_policy(item_id, claim),
             **context,
             "handoffPrompt": handoff,
         }
@@ -480,7 +584,7 @@ def heartbeat_task(
         claim = entry.get("claim") or {}
         if entry["kind"] != "TASK" or entry["status"] != "CLAIMED" or claim.get("operationId") != operation_id:
             fail("WORK_ITEM_OPERATION_INVALID", f"{item_id} does not have the supplied active operation")
-        if _claim_expired(claim, at):
+        if _claim_hard_expired(claim, at):
             fail("WORK_ITEM_CLAIM_EXPIRED", f"{item_id} claim lease has expired")
         claim["lastHeartbeatAt"] = at
         claim["leaseExpiresAt"] = timestamp_after(at, DEFAULT_CLAIM_LEASE_SECONDS)
@@ -502,7 +606,12 @@ def heartbeat_task(
             at=at,
         )
         repository.write_registry(registry)
-        return {"id": item_id, "status": entry["status"], "claim": claim}
+        return {
+            "id": item_id,
+            "status": entry["status"],
+            "claim": claim,
+            "leasePolicy": _lease_policy(item_id, claim),
+        }
 
 
 def pause_task(
@@ -521,7 +630,7 @@ def pause_task(
         claim = entry.get("claim") or {}
         if entry["kind"] != "TASK" or entry["status"] != "CLAIMED" or claim.get("operationId") != operation_id:
             fail("WORK_ITEM_OPERATION_INVALID", f"{item_id} does not have the supplied active operation")
-        if _claim_expired(claim, at):
+        if _claim_hard_expired(claim, at):
             fail("WORK_ITEM_CLAIM_EXPIRED", f"{item_id} claim lease has expired")
         _append_task_graph_event(
             repository,

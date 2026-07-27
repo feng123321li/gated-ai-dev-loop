@@ -87,6 +87,7 @@ git diff --check
 
 ## 详细文档
 
+- [版本更新记录](CHANGELOG.md)
 - [Skill 入口](skills/layered-delivery/SKILL.md)
 - [完整工作流](skills/layered-delivery/references/workflow.md)
 - [Graph Engineering](skills/layered-delivery/references/graph-engineering.md)

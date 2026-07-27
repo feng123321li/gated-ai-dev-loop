@@ -173,6 +173,20 @@ class InstallAndBundleTests(unittest.TestCase):
         ):
             self.assertNotIn(retired, readme)
 
+    def test_repository_changelog_tracks_the_current_version(self) -> None:
+        readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+        changelog = (REPOSITORY_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        project_version = next(
+            line.split("=", 1)[1].strip().strip('"')
+            for line in (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8").splitlines()
+            if line.startswith("version = ")
+        )
+
+        self.assertIn("[版本更新记录](CHANGELOG.md)", readme)
+        self.assertIn(f"## {project_version} — ", changelog)
+        self.assertIn("## 0.1.0 — ", changelog)
+        self.assertFalse((TARGET_PACKAGE.parent.parent / "CHANGELOG.md").exists())
+
     def test_legacy_python_installer_is_retired(self) -> None:
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
         self.assertFalse((REPOSITORY_ROOT / "scripts" / "install_skill.py").exists())

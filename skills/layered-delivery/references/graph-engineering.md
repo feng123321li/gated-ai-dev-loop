@@ -75,6 +75,7 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-frontier --item <root-or-subtre
 | `REQUEST_REVIEW` | 执行隔离的独立审查，或取得被接受的人工审查结果 |
 | `REQUEST_USER_CONFIRMATION` | 向用户提交最终结果并取得独立的最终确认 |
 | `HEARTBEAT_TASK` | 在当前 operation 的租约到期前续租 |
+| `ADVANCE_GRAPH` | 硬过期后确定性回收失联 claim，并按预算创建新 attempt 或写入耗尽状态 |
 | `RESUME_TASK` | 恢复被显式暂停的 Task attempt |
 
 `ready-tasks` 只返回当前 `DISPATCH_TASK` 动作中的 `workItemId`，用于兼容性只读查看。执行适配器不得另行实现第二套就绪判断或从中人工挑选；实际执行以完整 `dispatchPlan` 为准。
@@ -92,9 +93,9 @@ python -X utf8 <skill-root>/scripts/hdg.py heartbeat-task --item <task-id> --ope
 python -X utf8 <skill-root>/scripts/hdg.py advance-graph --item <root-or-subtree-id> --json
 ```
 
-frontier 在心跳尚未到期时把 claim 放入 `inFlight` 并返回最早 `nextWakeAt`；只有到期后才把 `HEARTBEAT_TASK` 放入 `actions`，并标记 `NORMAL`、`CRITICAL` 或 `OVERDUE`。执行适配器必须以 `nextWakeAt` 为最长等待时间主动唤醒，不能等待开发 Agent 自己想起续租。
+frontier 在心跳尚未到期时把 claim 放入 `inFlight` 并返回最早 `nextWakeAt`；只有到期后才把 `HEARTBEAT_TASK` 放入 `actions`，并标记 `NORMAL`、`CRITICAL` 或 `OVERDUE`。执行适配器必须以 `nextWakeAt` 为最长等待时间主动唤醒，不能等待开发 Agent 自己想起续租；宿主没有独立适配器时，当前会话承担这项责任，长实现、长测试和等待子 Agent 都不能停止 Graph 循环。
 
-`heartbeat-task` 可延长匹配且尚未硬过期的 operation。软租约到期后的 2 分钟内，如果 `advance-graph` 尚未完成失联迁移，同一 operation 仍可补心跳或提交结果；事务先到者生效。硬到期后 `advance-graph` 写入 `CLAIM_LEASE_EXPIRED`、归类为 `WORKER_LOST`，然后创建新 attempt 或写入 `RETRY_EXHAUSTED`。旧 operationId 在同一 graph run 中禁止复用，因此失联 worker 的迟到结果不能污染新 attempt。控制器不会用后台 daemon 假装 worker 存活，也不会猜测任意业务失败是否可以重试。
+`heartbeat-task` 可延长匹配且尚未硬过期的 operation。软租约到期后的 2 分钟内，如果 `advance-graph` 尚未完成失联迁移，同一 operation 仍可补心跳或提交结果；事务先到者生效。硬到期后 frontier 返回正式 `ADVANCE_GRAPH` 动作，执行循环必须调用 `advance-graph` 写入 `CLAIM_LEASE_EXPIRED`、归类为 `WORKER_LOST`，然后重新查询 frontier，按预算用全新 operationId 重新认领并提交已经完成的工作，或在 `RETRY_EXHAUSTED` 后请求干预；这不是人工重置。旧 operationId 在同一 graph run 中禁止复用，因此失联 worker 的迟到结果不能污染新 attempt。控制器不会用后台 daemon 假装 worker 存活，也不会猜测任意业务失败是否可以重试。
 
 显式运行控制命令如下：
 

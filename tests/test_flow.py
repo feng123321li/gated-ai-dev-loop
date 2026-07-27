@@ -50,6 +50,15 @@ class WorkItemFlowTests(unittest.TestCase):
             self.assertIn("不得固化用户目录、Skill 安装位置或操作系统路径", frozen["handoffPrompt"])
             self.assertIn("不得创建临时 JSON", frozen["handoffPrompt"])
             self.assertIn(
+                "硬过期时消费 frontier 的 `ADVANCE_GRAPH`",
+                frozen["handoffPrompt"],
+            )
+            self.assertIn("这是自动恢复，不请求人工重置", frozen["handoffPrompt"])
+            self.assertIn(
+                "代码和测试完成后必须先提交 Task 结果",
+                frozen["handoffPrompt"],
+            )
+            self.assertIn(
                 "面向人的状态报告必须把控制器 UTC 时间转换为当前运行环境的本机时区",
                 frozen["handoffPrompt"],
             )

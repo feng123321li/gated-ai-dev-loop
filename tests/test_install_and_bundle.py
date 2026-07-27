@@ -52,6 +52,8 @@ class InstallAndBundleTests(unittest.TestCase):
         self.assertIn("按动作读取", skill)
         self.assertIn("evidenceContractRef", skill)
         self.assertIn("不得读取控制器源码或 memory 文件反推格式", skill)
+        self.assertIn("`ADVANCE_GRAPH` 是租约硬过期后的确定性自动恢复动作", skill)
+        self.assertIn("不得以“代码和测试已完成”代替 Graph 收尾", skill)
 
     def test_manual_contract_details_live_in_routed_references(self) -> None:
         skill_root = TARGET_PACKAGE.parent.parent

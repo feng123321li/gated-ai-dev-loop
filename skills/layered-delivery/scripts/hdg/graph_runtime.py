@@ -1252,19 +1252,24 @@ def build_graph_frontier(
                 **budget,
             }
             if _runtime_time(at) >= _runtime_time(hard_expires_at):
-                blocked.append({
+                actions.append({
                     "nodeId": state["id"],
                     "nodeKind": state["kind"],
+                    "action": "ADVANCE_GRAPH",
                     "workItemId": state["workItemId"],
                     "attempt": state["attempt"],
-                    "status": state["status"],
-                    "blockedBy": ["claim-hard-expired"],
+                    "operationId": state.get("operationId"),
+                    "parallelGroup": None,
+                    "readyBecause": ["claim-hard-expired"],
+                    "critical": state["id"] in critical_nodes,
+                    "commandHint": (
+                        f"advance-graph --item {state['workItemId']}"
+                    ),
+                    "transition": "CLAIM_LEASE_EXPIRED",
+                    "routeCondition": "ON_WORKER_LOST",
                     "failureClass": "WORKER_LOST",
-                    "remainingAttempts": budget["remainingAttempts"],
-                    "retryExhausted": state.get("retryExhausted", False),
-                    "recommendedAction": "ADVANCE_GRAPH",
-                    "lastTransition": state.get("lastTransition"),
                     "hardExpiresAt": hard_expires_at,
+                    **budget,
                 })
             elif _runtime_time(at) >= _runtime_time(heartbeat_due_at):
                 remaining_seconds = int(

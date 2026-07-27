@@ -425,11 +425,11 @@ def render_requirement_handoff(
         f"3. 以根工作项 `{root['id']}` 调用 `graph-frontier --json`，直接消费控制器的 JSON stdout，读取 `dispatchPlan` 自动计算的完整安全 Task 顺序、并行组和目标 Agent 数，并以 `nextWakeAt` 为最长等待时间；不得创建临时 JSON，也不得自行挑选 Task 子集。",
         "4. 控制器非零退出时保留控制器的 stderr 并停止解析，不要把空 stdout 或错误文本继续交给 JSON 解析器；`task-context` 只用于未认领 Task 的只读诊断，不能授权开工。",
         "5. 对 `dispatchPlan.dispatchTaskIds` 中的 Task 保持完整稳定队列；只有 worker 真正取得执行容量时才生成本 graph run 中唯一的 operationId 并调用 `dispatch-task`，排队项保持未认领。平台有容量时启动隔离子 Agent，无子 Agent 时由当前 Agent 串行消费。",
-        "6. 执行适配器独立按 `nextWakeAt` 重新查询 frontier 并消费到期的 `HEARTBEAT_TASK`。每个 Task 严格使用自己的 context、scope、结果和证据，循环实现、回归测试、修复和复测；写回前按 `evidenceContractRefs.result` 查询绑定当前 operation 的模板，提交 `IMPLEMENTED` 或 `BLOCKED` 后完成该 Task 门禁。",
+        "6. 执行适配器独立按 `nextWakeAt` 重新查询 frontier 并消费到期的 `HEARTBEAT_TASK`；没有独立适配器时当前会话承担续租。每个 Task 严格使用自己的 context、scope、结果和证据，循环实现、回归测试、修复和复测；写回前按 `evidenceContractRefs.result` 查询绑定当前 operation 的模板，提交 `IMPLEMENTED` 或 `BLOCKED` 后完成该 Task 门禁。",
         "7. 每次状态写回后重新查询 frontier，由 Graph 重算目标 Agent 数与后续波次；全部子级 VERIFIED 后运行 Capability/Delivery 聚合门禁。",
         "8. 面向人的状态报告必须把控制器 UTC 时间转换为当前运行环境的本机时区，并显式标注 UTC 偏移（例如 `UTC+08:00`）；SQLite、事件链和控制器 JSON 的机器时间字段保持不变。",
         "9. 不要要求用户逐 Task 回复启动，也不要在正常 Task 切换、并发降级或自动重试时请求人工确认。",
-        "10. 只有冻结目标、范围、接口、授权必须改变或出现无法自动消除的真实阻断时才返回用户；根门禁通过后提交最终交付，由用户人工验收。",
+        "10. 硬过期时消费 frontier 的 `ADVANCE_GRAPH`，重新查询并用新 operation 重新认领；这是自动恢复，不请求人工重置。只有冻结目标、范围、接口、授权必须改变、`RETRY_EXHAUSTED` 或出现无法自动消除的真实阻断时才返回用户；代码和测试完成后必须先提交 Task 结果并继续消费 gate/review，根门禁通过后才提交最终交付，由用户人工验收。",
         "11. 不修改 SQLite、baseline、治理投影或 `.git/**`；未获得单独授权时不提交、推送、合并、发布或改变外部状态。",
         "",
     ])

@@ -36,10 +36,10 @@ description: "治理或恢复分层软件交付。当工作区存在 `.layered-d
 1. 新需求读取规划类 references，选择最浅层级并形成完整 schema v3 树；通过 stdin 调用 `prepare-hierarchy`。
 2. 展示返回的开发方案和图入口，说明范围、契约、依赖、测试与失败路由。每次确认提示都必须同时展示 `active` 和 `manual` 两种开发方式；修改方案时重新准备同一整树。
 3. 用户明确同意方案并选择方式后，使用返回的 `hierarchyFingerprint` 一次调用 `freeze-hierarchy`。Claude Code 还须先满足 [claude-automation.md](references/claude-automation.md) 的权限前置条件。
-4. 冻结后每次迁移都重新查询 `graph-frontier`，完整消费 `dispatchPlan`，不自行挑选 Task、排序或确定 Agent 数。
-5. `DISPATCH_TASK`：完整消费调度计划并稳定排队，但只在 worker 真正取得执行容量时调用 `dispatch-task`，让 claim 按实际开工即时创建。执行适配器按 `nextWakeAt` 消费到期的 `HEARTBEAT_TASK`；心跳使用控制器的轻量增量投影，不应触发整工作区 Markdown 重建。结果写回前先按 `evidenceContractRefs.result` 查询当前 operation 的模板，再用 `task-result --evidence -` 提交。
+4. 冻结后每次迁移都重新查询 `graph-frontier`，完整消费 `actions` 与 `dispatchPlan`，不自行挑选 Task、排序或确定 Agent 数；`ADVANCE_GRAPH` 是租约硬过期后的确定性自动恢复动作，不请求人工重置。
+5. `DISPATCH_TASK`：完整消费调度计划并稳定排队，但只在 worker 真正取得执行容量时调用 `dispatch-task`，让 claim 按实际开工即时创建。当前会话就是没有独立宿主适配器时的执行适配器，必须以 `nextWakeAt` 为最长等待时间消费到期的 `HEARTBEAT_TASK`，不能在长实现、长测试或等待子 Agent 时漏掉续租；心跳使用控制器的轻量增量投影，不应触发整工作区 Markdown 重建。
 6. `RUN_GATE`、`REQUEST_REVIEW`、`REQUEST_USER_CONFIRMATION`：先执行 `evidenceContractRef` 指向的只读 `evidence-contract`，只获取当前工作项模板，再从 stdin 提交 evidence；不得读取控制器源码或 memory 文件反推格式。
-7. `RETRY_NODE` 或租约失败按 frontier 路由。Task gate 的 P0/P1 FAIL 必须回到 execution 修复、复测；预算耗尽后请求干预，不能无限重跑 gate。
+7. Task 工作完成后，最终总结前必须先按 `evidenceContractRefs.result` 查询当前 operation 的模板，并用 `task-result --evidence -` 提交，再继续消费 gate/review 动作；不得以“代码和测试已完成”代替 Graph 收尾。`ADVANCE_GRAPH`、`RETRY_NODE` 或其他租约失败按 frontier 自动路由；硬过期时先推进、重新查询、用新 operation 重新认领并提交既有工作结果，只有 `RETRY_EXHAUSTED` 或真实契约/权限阻断才请求人工干预。Task gate 的 P0/P1 FAIL 必须回到 execution 修复、复测，不能无限重跑 gate。
 8. 原契约不变但漏列必要文件时，在原 Task 使用 `remediate-task`；契约、拓扑、数据或外部授权变化才回到人工评审。
 9. manual 规划会话按 `responseContract` 输出一次可复制交接；接收会话从治理目录和 `graph-frontier` 恢复，不重新选择方式或逐 Task 开工。
 10. 根 gate 和独立审查通过后请求最终用户确认；未确认时保持等待。

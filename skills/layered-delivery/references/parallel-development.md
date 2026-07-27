@@ -29,9 +29,9 @@ Graph 执行循环必须按以下方式自动调度：
 1. 调用 `graph-frontier --item <root-id>` 获取当前结构化动作、`dispatchPlan`、并行组与阻断原因；
 2. 读取 `dispatchPlan.dispatchTaskIds`、`desiredNewAgentCount` 与 `desiredTotalAgentCount`。这就是本轮完整且有序的自动调度结果，执行适配器不能选择其中一部分；
 3. 为计划中的每个 Task 按顺序预留稳定队列位置，但排队项保持未认领；平台确认某个 worker/Agent 真正取得执行容量后，才生成本 graph run 中从未使用过的 operationId 并执行 `dispatch-task`；
-4. 为已取得执行容量的 Task 启动相互隔离的全新开发 Agent；执行适配器独立按 frontier 的 `nextWakeAt` 唤醒并消费到期的 `HEARTBEAT_TASK`，没有子 Agent 能力时由当前 Agent 顺序消费同一调度合同；
+4. 为已取得执行容量的 Task 启动相互隔离的全新开发 Agent；执行适配器独立按 frontier 的 `nextWakeAt` 唤醒并消费到期的 `HEARTBEAT_TASK`，没有独立适配器时由当前 Agent 承担续租，没有子 Agent 能力时由当前 Agent 顺序消费同一调度合同；
 5. 先按 `evidenceContractRefs.result` 查询当前模板，再分别写回结果并完成 Task 门禁；
-6. 每次认领、结果、门禁、失败或恢复迁移后重新查询 frontier，由 Graph 重算 Agent 目标数与队列，继续 `RUN_GATE`、后继 `DISPATCH_TASK`、review 和 confirmation，直到发生真实阻断或图完成。
+6. 每次认领、结果、门禁、失败或恢复迁移后重新查询 frontier，由 Graph 重算 Agent 目标数与队列；硬过期时消费 `ADVANCE_GRAPH`，再用新 operation 重新认领并提交已完成工作，不请求人工重置；继续 `RUN_GATE`、后继 `DISPATCH_TASK`、review 和 confirmation，直到发生真实阻断或图完成。
 
 Agent 数量不是人工固定值。`desiredNewAgentCount` 是当前需要启动或入队的 Agent 数，`activeAgentCount` 是当前子树已认领 Task 数，`desiredTotalAgentCount` 是 Graph 给出的运行目标。执行平台的容量只改变立即运行或稳定排队，不改变 Graph 的任务选择；稳定排队不等于提前 claim。每个 Task 仍需独立 claim、唯一 operationId、结果和证据，以便归属、恢复和验收。manual 只在规划会话停止自动开发并输出一份根级 `requirement-handoff.md`；接收会话启动后使用同一 Graph 循环处理全树，不逐 Task 返回人工交接。这些瞬时调度与回退结果不写入冻结方案、baseline、层级指纹、图指纹或根级方式记录。
 

@@ -653,6 +653,42 @@ class RuntimeFsmTests(unittest.TestCase):
                 operation_id="op-expired",
                 now=self.START,
             )
+            expired_frontier = get_graph_frontier(
+                root=temporary,
+                work_item_id=task_id,
+                now=self.START + timedelta(minutes=32),
+            )
+            self.assertNotIn(
+                execution_node_id(task_id),
+                {
+                    item["nodeId"]
+                    for item in expired_frontier["blocked"]
+                },
+            )
+            self.assertEqual(
+                expired_frontier["actions"],
+                [{
+                    "nodeId": execution_node_id(task_id),
+                    "nodeKind": "TASK_EXECUTION",
+                    "action": "ADVANCE_GRAPH",
+                    "workItemId": task_id,
+                    "attempt": 1,
+                    "operationId": "op-expired",
+                    "parallelGroup": None,
+                    "readyBecause": ["claim-hard-expired"],
+                    "critical": True,
+                    "commandHint": f"advance-graph --item {task_id}",
+                    "transition": "CLAIM_LEASE_EXPIRED",
+                    "routeCondition": "ON_WORKER_LOST",
+                    "failureClass": "WORKER_LOST",
+                    "hardExpiresAt": self._at(
+                        self.START + timedelta(minutes=32)
+                    ),
+                    "maxAttempts": 3,
+                    "remainingAttempts": 2,
+                    "retryExhausted": False,
+                }],
+            )
             advanced = advance_graph(
                 root=temporary,
                 work_item_id=task_id,
@@ -682,6 +718,40 @@ class RuntimeFsmTests(unittest.TestCase):
                 raised.exception.code,
                 "WORK_ITEM_OPERATION_REUSED",
             )
+            retry_frontier = get_graph_frontier(
+                root=temporary,
+                work_item_id=task_id,
+                now=self.START + timedelta(minutes=32, seconds=1),
+            )
+            self.assertEqual(
+                retry_frontier["dispatchPlan"]["dispatchTaskIds"],
+                [task_id],
+            )
+            dispatch_task(
+                root=temporary,
+                item_id=task_id,
+                owner="developer",
+                operation_id="op-recovered",
+                now=self.START + timedelta(minutes=32, seconds=2),
+            )
+            result_contract = get_evidence_contract(
+                root=temporary,
+                work_item_id=task_id,
+                contract_kind="result",
+            )["evidenceContract"]
+            self.assertEqual(
+                result_contract["artifactTemplates"]["IMPLEMENTED"]["operationId"],
+                "op-recovered",
+            )
+            recorded = record_task_result(
+                root=temporary,
+                item_id=task_id,
+                operation_id="op-recovered",
+                status="IMPLEMENTED",
+                evidence=self._implemented_result(task_id, "op-recovered"),
+                now=self.START + timedelta(minutes=32, seconds=3),
+            )
+            self.assertEqual(recorded["status"], "IMPLEMENTED")
             state = next(
                 item for item in get_graph_status(
                     root=temporary,
@@ -689,13 +759,14 @@ class RuntimeFsmTests(unittest.TestCase):
                 )["nodes"]
                 if item["id"] == execution_node_id(task_id)
             )
-            self.assertEqual((state["attempt"], state["status"]), (2, "READY"))
+            self.assertEqual((state["attempt"], state["status"]), (2, "SUCCEEDED"))
             event_types = [event["eventType"] for event in list_graph_events(
                 root=temporary,
                 work_item_id=task_id,
             )]
             self.assertIn("CLAIM_LEASE_EXPIRED", event_types)
-            self.assertEqual(event_types[-1], "NODE_RETRY_SCHEDULED")
+            self.assertIn("NODE_RETRY_SCHEDULED", event_types)
+            self.assertEqual(event_types[-1], "TASK_IMPLEMENTED")
 
 
 if __name__ == "__main__":

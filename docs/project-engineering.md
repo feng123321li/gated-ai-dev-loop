@@ -158,6 +158,7 @@ frontier 不只是“下一批 Task”。它同时返回 `dispatchPlan`、当前
 | `REQUEST_REVIEW` | 根门禁已通过，等待独立或人工审查 |
 | `REQUEST_USER_CONFIRMATION` | 审查已通过，等待用户最终确认 |
 | `HEARTBEAT_TASK` | Task 正在执行，续期当前 operation 的 claim 租约 |
+| `ADVANCE_GRAPH` | Task claim 已硬过期，确定性回收并按预算进入新 attempt |
 | `RESUME_TASK` | Task 已显式暂停，可以恢复同一 attempt |
 
 `ready-tasks` 仍然保留，但它现在是 graph frontier 中 `DISPATCH_TASK` 动作的兼容投影，不再是另一套调度算法。
@@ -226,7 +227,7 @@ stateDiagram-v2
 图定义是冻结合同，attempt 是运行事实。
 
 - `RETRYABLE` Task 失败在 3 次总尝试预算内自动创建新的 attempt；第三次仍失败写入 `RETRY_EXHAUSTED`；
-- claim 使用 30 分钟租约和心跳，`advance-graph` 把过期执行判为 `WORKER_LOST` 后按相同预算恢复；
+- claim 使用 30 分钟租约和心跳；硬过期后 frontier 返回 `ADVANCE_GRAPH`，执行循环调用 `advance-graph` 把过期执行判为 `WORKER_LOST`，再按相同预算和全新 operation 自动恢复，不要求人工重置；
 - `CONTRACT_CHANGE`、`EXTERNAL_AUTHORITY`、`NON_RETRYABLE` 与 `REMEDIATION_REQUIRED` 不自动重跑，而是进入评审、授权、干预或修正路由；
 - `retry-item` 保留给符合条件的门禁或显式人工恢复，不修改冻结图，并受当前节点的 3 次 attempt 预算约束；Task gate 失败时同时重开 execution 与 gate attempt，协调节点 gate 只重开自身；
 - `remediate-task` 只允许在原目标和验收合同不变时，为原 Task 追加遗漏的精确文件；

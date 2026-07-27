@@ -247,6 +247,9 @@ def gate_evidence_contract(
         for item in definition["developmentPlan"].get("fileChanges", [])
     }
     allowed_changed_files.update(additional_planned_files or set())
+    requirements_by_id = {
+        item["id"]: item for item in definition["requirements"]
+    }
     return {
         "schemaVersion": SCHEMA_VERSION,
         "artifactKind": "WORK_ITEM_GATE",
@@ -267,6 +270,7 @@ def gate_evidence_contract(
             "acceptance": [
                 {
                     "id": item["id"],
+                    "requirementIds": list(item["requirementIds"]),
                     "status": "<PASS_OR_FAIL>",
                     "evidence": "<REQUIRED_NON_EMPTY_STRING>",
                 }
@@ -287,6 +291,11 @@ def gate_evidence_contract(
             "acceptanceCriteria": [
                 {
                     "id": item["id"],
+                    "requirementIds": list(item["requirementIds"]),
+                    "requirements": [
+                        requirements_by_id[requirement_id]
+                        for requirement_id in item["requirementIds"]
+                    ],
                     "expectedResult": item["expectedResult"],
                 }
                 for item in definition["acceptance"]
@@ -638,6 +647,22 @@ def gate_artifact_issues(
                 "acceptance ids must exactly match the frozen ids: "
                 + ", ".join(expected_acceptance)
             )
+        criteria_by_id = {
+            item["id"]: item for item in definition["acceptance"]
+        }
+        mismatched_trace = sorted(
+            item.get("id", f"index-{index}")
+            for index, item in enumerate(acceptance)
+            if isinstance(item, dict)
+            and item.get("id") in criteria_by_id
+            and item.get("requirementIds")
+            != criteria_by_id[item["id"]]["requirementIds"]
+        )
+        if mismatched_trace:
+            issues.append(
+                "acceptance requirementIds must match the frozen trace for: "
+                + ", ".join(mismatched_trace)
+            )
     elif "acceptance" in value:
         issues.append("acceptance must be an array")
 
@@ -741,7 +766,7 @@ def valid_gate_artifact(
         and len(value["acceptance"]) == len(definition["acceptance"])
         and all(
             isinstance(result, dict)
-            and set(result) == {"id", "status", "evidence"}
+            and set(result) == {"id", "requirementIds", "status", "evidence"}
             for result in value["acceptance"]
         )
         and isinstance(value.get("tests"), list)
@@ -769,7 +794,12 @@ def valid_gate_artifact(
         return False
     for criterion in definition["acceptance"]:
         result = acceptance_by_id.get(criterion["id"])
-        if not isinstance(result, dict) or result.get("status") not in {"PASS", "FAIL"} or not non_empty_string(result.get("evidence")):
+        if (
+            not isinstance(result, dict)
+            or result.get("requirementIds") != criterion["requirementIds"]
+            or result.get("status") not in {"PASS", "FAIL"}
+            or not non_empty_string(result.get("evidence"))
+        ):
             return False
     for argv in definition["testCommands"]:
         result = tests_by_argv.get(canonical_json(argv))

@@ -309,7 +309,12 @@ class CliAndSafetyTests(unittest.TestCase):
                     "changedFiles": ["src/controller.py", "tests/test_controller.py"],
                     "outOfScopeFiles": [],
                 },
-                "acceptance": [{"id": "A-001", "status": "PASS", "evidence": "Verified."}],
+                "acceptance": [{
+                    "id": "A-001",
+                    "requirementIds": ["R-001"],
+                    "status": "PASS",
+                    "evidence": "Verified.",
+                }],
                 "tests": [{
                     "argv": ["python", "-m", "unittest", "tests.test_controller"],
                     "exitCode": 0,

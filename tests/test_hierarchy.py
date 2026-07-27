@@ -21,7 +21,12 @@ class HierarchyFlowTests(unittest.TestCase):
             "verdict": "PASS",
             "summary": "The current frozen level passed.",
             "scope": {"changedFiles": changed_files, "outOfScopeFiles": []},
-            "acceptance": [{"id": "A-001", "status": "PASS", "evidence": "Verified."}],
+            "acceptance": [{
+                "id": "A-001",
+                "requirementIds": ["R-001"],
+                "status": "PASS",
+                "evidence": "Verified.",
+            }],
             "tests": [{"argv": command, "exitCode": 0, "testsRun": 1, "summary": "Passed."}],
             "findings": {"p0": [], "p1": [], "p2": []},
         }

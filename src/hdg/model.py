@@ -124,14 +124,22 @@ def _trace_records(values: object, prefix: str, field: str) -> list[dict[str, An
 
 def _validate_trace(requirements: list[dict[str, Any]], acceptance: list[dict[str, Any]]) -> None:
     requirement_ids = {item["id"] for item in requirements}
-    accepted: set[str] = set()
+    independently_accepted: set[str] = set()
     for entry in acceptance:
         for requirement_id in entry["requirementIds"]:
             if requirement_id not in requirement_ids:
                 fail("WORK_ITEM_TRACE_INVALID", f"{entry['id']} references unknown requirement {requirement_id}")
-            accepted.add(requirement_id)
-    if any(item["id"] not in accepted for item in requirements):
-        fail("WORK_ITEM_TRACE_INVALID", "Every requirement must be covered by acceptance")
+        if len(entry["requirementIds"]) == 1:
+            independently_accepted.add(entry["requirementIds"][0])
+    missing = sorted(requirement_ids - independently_accepted)
+    if missing:
+        fail(
+            "WORK_ITEM_TRACE_INVALID",
+            "Every requirement must have an independent acceptance criterion; "
+            "cross-requirement criteria may only add integration coverage. Missing: "
+            + ", ".join(missing),
+            requirementIds=missing,
+        )
 
 
 def _child_records(

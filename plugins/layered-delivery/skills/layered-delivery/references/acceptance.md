@@ -9,6 +9,7 @@ Task 只有在状态为 IMPLEMENTED 时可运行 gate。`task-result` 写回后�
 - Task 实际变更文件全部在人工评审并冻结的 `developmentPlan.fileChanges` 或控制器已记录的验证修正补充文件中；未经 `remediate-task` 记录的文件即使位于原 scope 内也不能 PASS；
 - 冻结测试 argv、退出码和适用的 Tests run；
 - 依赖输出和全部验收项；
+- `evidence-contract` 为每个验收项同时展示 requirement 文本、R/A 映射和 expectedResult；提交的每项 gate evidence 必须回显与冻结 baseline 完全一致的 `requirementIds` 并按独立 acceptance 逐项取证，不能用一个跨需求结论替代任一 requirement 的独立证据；
 - 从 stdin 收到的完整 evidence artifact 覆盖当前工作项和当前 baseline；控制器在当前 SQLite 写事务内完成校验与摘要计算；
 - PASS evidence 中 Scope 外变更为空、全部测试退出码为 0、全部验收项为 PASS、P0/P1 为空。
 
@@ -33,7 +34,7 @@ decomposition 为 SEALED 且所有计划 Capability VERIFIED 后，运行跨能�
 每个实际执行过门禁的工作项都在 SQLite 保存结构化报告，并维护一份面向用户的 `acceptance-report.md`：
 
 - Task result 后由 `development-review.md` 显示开发摘要、变更文件、开发侧测试事实和“等待门禁”，不提前创建验收报告；
-- gate 后显示冻结开发目的与接口/子级契约、计划文件与实际文件差异、验收项逐条结论、测试 argv/退出码/Tests run、Scope 外变更、P0/P1/P2 和门禁结论；
+- gate 后显示冻结开发目的与接口/子级契约、计划文件与实际文件差异、验收项及其覆盖需求的逐条结论、测试 argv/退出码/Tests run、Scope 外变更、P0/P1/P2 和门禁结论；
 - 根工作项继续显示独立/人工审查结论与用户确认，直到最终状态为“已完成”；
 - 同一 Task 存在验证修正时，开发复核和验收报告必须显示发现阶段、关联验收项、修正原因、补充授权文件和记录时间，并把这些文件纳入有效授权集合；
 - 子工作项报告在该级 VERIFIED 后结束，不重复请求用户确认。

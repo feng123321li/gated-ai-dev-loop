@@ -108,7 +108,12 @@ class AcceptanceFlowTests(unittest.TestCase):
                     "changedFiles": ["src/controller.py", "tests/test_controller.py"],
                     "outOfScopeFiles": [],
                 },
-                "acceptance": [{"id": "A-001", "status": "PASS", "evidence": "Unit test passed."}],
+                "acceptance": [{
+                    "id": "A-001",
+                    "requirementIds": ["R-001"],
+                    "status": "PASS",
+                    "evidence": "Unit test passed.",
+                }],
                 "tests": [{
                     "argv": ["python", "-m", "unittest", "tests.test_controller"],
                     "exitCode": 0,
@@ -119,6 +124,15 @@ class AcceptanceFlowTests(unittest.TestCase):
             }
             accepted = accept_work_item(root=temporary, item_id=task_id, evidence=gate)
             self.assertEqual(accepted["status"], "VERIFIED")
+            acceptance_report = Path(
+                temporary,
+                accepted["acceptanceReport"]["markdownPath"],
+            ).read_text(encoding="utf-8")
+            self.assertIn(
+                "| 编号 | 覆盖需求 | 预期结果 | 结论 | 证据 |",
+                acceptance_report,
+            )
+            self.assertIn("| A-001 | R-001 |", acceptance_report)
 
             review = {
                 "schemaVersion": 3,

@@ -113,6 +113,7 @@ class RuntimeFsmTests(unittest.TestCase):
             },
             "acceptance": [{
                 "id": "A-001",
+                "requirementIds": ["R-001"],
                 "status": "FAIL",
                 "evidence": f"Blocking behavior remains after attempt {attempt}.",
             }],

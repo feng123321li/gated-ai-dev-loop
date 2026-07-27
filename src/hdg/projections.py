@@ -751,14 +751,18 @@ def render_acceptance_report(report: dict[str, Any]) -> str:
         "",
         "## 验收项",
         "",
-        "| 编号 | 预期结果 | 结论 | 证据 |",
-        "| --- | --- | --- | --- |",
+        "| 编号 | 覆盖需求 | 预期结果 | 结论 | 证据 |",
+        "| --- | --- | --- | --- | --- |",
     ]
     results = {item["id"]: item for item in (gate_artifact or {}).get("acceptance", [])}
     for item in report["criteria"]:
         result = results.get(item["id"])
         conclusion = gate_text.get(result["status"], result["status"]) if result else "待验收"
-        lines.append(f"| {item['id']} | {item['expectedResult']} | {conclusion} | {result['evidence'] if result else '无'} |")
+        requirement_ids = ", ".join(item["requirementIds"])
+        lines.append(
+            f"| {item['id']} | {requirement_ids} | {item['expectedResult']} | "
+            f"{conclusion} | {result['evidence'] if result else '无'} |"
+        )
     plan = report["developmentPlan"]
     lines.extend(["", "## 冻结开发方案", ""])
     if "interfaces" in plan:

@@ -4,7 +4,12 @@ from copy import deepcopy
 import unittest
 
 from hdg.errors import GatedLoopError
-from hdg.evidence import evidence_record, valid_evidence_record, valid_gate_artifact
+from hdg.evidence import (
+    evidence_record,
+    gate_evidence_contract,
+    valid_evidence_record,
+    valid_gate_artifact,
+)
 from hdg.jsonio import fingerprint
 from hdg.model import (
     render_development_plan,
@@ -57,6 +62,83 @@ class WorkItemModelTests(unittest.TestCase):
                     validate_work_item_definition(source)
                 self.assertEqual(raised.exception.code, "WORK_ITEM_SCHEMA_INVALID")
 
+    def test_each_requirement_requires_an_independent_acceptance_criterion(self) -> None:
+        source = task_definition()
+        source["requirements"] = [
+            {"id": "R-001", "text": "The controller must run on Python."},
+            {"id": "R-002", "text": "The controller must preserve command semantics."},
+        ]
+        source["acceptance"] = [{
+            "id": "A-001",
+            "requirementIds": ["R-001", "R-002"],
+            "expectedResult": "The controller works as expected.",
+        }]
+        source["developmentPlan"]["scenarios"][0]["requirementIds"] = ["R-001", "R-002"]
+        source["developmentPlan"]["interfaces"][0]["requirementIds"] = ["R-001", "R-002"]
+
+        with self.assertRaises(GatedLoopError) as raised:
+            validate_work_item_definition(source)
+
+        self.assertEqual(raised.exception.code, "WORK_ITEM_TRACE_INVALID")
+        self.assertIn("R-001, R-002", str(raised.exception))
+
+    def test_cross_requirement_acceptance_is_allowed_after_independent_coverage(self) -> None:
+        source = task_definition()
+        source["requirements"] = [
+            {"id": "R-001", "text": "The controller must run on Python."},
+            {"id": "R-002", "text": "The controller must preserve command semantics."},
+        ]
+        source["acceptance"] = [
+            {
+                "id": "A-001",
+                "requirementIds": ["R-001"],
+                "expectedResult": "The Python entry point starts without third-party packages.",
+            },
+            {
+                "id": "A-002",
+                "requirementIds": ["R-002"],
+                "expectedResult": "The frozen command contract passes its regression suite.",
+            },
+            {
+                "id": "A-003",
+                "requirementIds": ["R-001", "R-002"],
+                "expectedResult": "The Python entry point passes the command compatibility suite.",
+            },
+        ]
+        source["developmentPlan"]["scenarios"][0]["requirementIds"] = ["R-001", "R-002"]
+        source["developmentPlan"]["interfaces"][0]["requirementIds"] = ["R-001", "R-002"]
+        source["developmentPlan"]["testPlan"][0]["acceptanceIds"] = ["A-001", "A-002", "A-003"]
+
+        definition = validate_work_item_definition(source)
+
+        self.assertEqual(
+            [item["id"] for item in definition["acceptance"]],
+            ["A-001", "A-002", "A-003"],
+        )
+
+    def test_gate_contract_exposes_requirement_trace_for_each_criterion(self) -> None:
+        definition = validate_work_item_definition(task_definition())
+        entry = {
+            "id": definition["id"],
+            "baselineFingerprint": work_item_baseline_fingerprint(definition),
+        }
+
+        contract = gate_evidence_contract(entry, definition)
+
+        self.assertEqual(contract["constraints"]["acceptanceCriteria"], [{
+            "id": "A-001",
+            "requirementIds": ["R-001"],
+            "requirements": [{
+                "id": "R-001",
+                "text": "The controller must run without Node or third-party Python packages.",
+            }],
+            "expectedResult": "The frozen Python command completes successfully.",
+        }])
+        self.assertEqual(
+            contract["artifactTemplate"]["acceptance"][0]["requirementIds"],
+            ["R-001"],
+        )
+
     def test_gate_evidence_rejects_unknown_fields_and_unplanned_files(self) -> None:
         definition = validate_work_item_definition(task_definition())
         entry = {
@@ -74,7 +156,12 @@ class WorkItemModelTests(unittest.TestCase):
                 "changedFiles": ["src/controller.py", "tests/test_controller.py"],
                 "outOfScopeFiles": [],
             },
-            "acceptance": [{"id": "A-001", "status": "PASS", "evidence": "Verified."}],
+            "acceptance": [{
+                "id": "A-001",
+                "requirementIds": ["R-001"],
+                "status": "PASS",
+                "evidence": "Verified.",
+            }],
             "tests": [{
                 "argv": ["python", "-m", "unittest", "tests.test_controller"],
                 "exitCode": 0,
@@ -90,6 +177,9 @@ class WorkItemModelTests(unittest.TestCase):
         outside_plan = deepcopy(artifact)
         outside_plan["scope"]["changedFiles"].append("src/unplanned.py")
         self.assertFalse(valid_gate_artifact(outside_plan, entry, definition))
+        wrong_trace = deepcopy(artifact)
+        wrong_trace["acceptance"][0]["requirementIds"] = ["R-999"]
+        self.assertFalse(valid_gate_artifact(wrong_trace, entry, definition))
 
     def test_evidence_record_is_controller_computed_digest_only(self) -> None:
         artifact = {"schemaVersion": 3, "kind": "USER_CONFIRMATION", "decision": "CONFIRMED"}

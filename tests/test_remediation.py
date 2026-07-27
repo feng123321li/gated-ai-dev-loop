@@ -84,7 +84,12 @@ class ValidationRemediationTests(unittest.TestCase):
                 "verdict": "PASS",
                 "summary": "The original acceptance contract passed.",
                 "scope": {"changedFiles": changed_files, "outOfScopeFiles": []},
-                "acceptance": [{"id": "A-001", "status": "PASS", "evidence": "Verified."}],
+                "acceptance": [{
+                    "id": "A-001",
+                    "requirementIds": ["R-001"],
+                    "status": "PASS",
+                    "evidence": "Verified.",
+                }],
                 "tests": [{
                     "argv": ["python", "-m", "unittest", "tests.test_controller"],
                     "exitCode": 0,
@@ -381,7 +386,12 @@ class ValidationRemediationTests(unittest.TestCase):
                         "verdict": "PASS",
                         "summary": "The current hierarchy level passed.",
                         "scope": {"changedFiles": changed_files, "outOfScopeFiles": []},
-                        "acceptance": [{"id": "A-001", "status": "PASS", "evidence": "Verified."}],
+                        "acceptance": [{
+                            "id": "A-001",
+                            "requirementIds": ["R-001"],
+                            "status": "PASS",
+                            "evidence": "Verified.",
+                        }],
                         "tests": [{
                             "argv": command,
                             "exitCode": 0,
@@ -478,7 +488,12 @@ class ValidationRemediationTests(unittest.TestCase):
                         "verdict": "PASS",
                         "summary": "The dependency graph Task passed.",
                         "scope": {"changedFiles": changed_files, "outOfScopeFiles": []},
-                        "acceptance": [{"id": "A-001", "status": "PASS", "evidence": "Verified."}],
+                        "acceptance": [{
+                            "id": "A-001",
+                            "requirementIds": ["R-001"],
+                            "status": "PASS",
+                            "evidence": "Verified.",
+                        }],
                         "tests": [{
                             "argv": command,
                             "exitCode": 0,

@@ -47,7 +47,8 @@
 - `schemaVersion` 固定为 `3`；`kind` 只能为 `DELIVERY|CAPABILITY|TASK`；协调层 `gateLevel` 固定 `FULL`，Task 为 `LIGHT|FULL`；
 - `id` 为安全小写 ID；`title/goal` 和所有说明字符串必须非空且不能含 TBD/TODO/FIXME 等占位符；
 - `scope/nonGoals/requirements/acceptance/testCommands/risks/decisions` 都是非空数组；测试命令是 argv 数组，不是 shell 字符串；
-- requirement ID 使用 `R-001` 形式，acceptance ID 使用 `A-001` 形式；每个 requirement 至少被一个 acceptance 的 `requirementIds` 覆盖；
+- requirement ID 使用 `R-001` 形式，acceptance ID 使用 `A-001` 形式；每个 requirement 必须至少有一个 `requirementIds` 只包含自身的独立 acceptance，不能只用一个跨需求 acceptance 同时覆盖多个 requirement；跨需求 acceptance 仅用于追加集成行为验收；
+- 每个独立 acceptance 的 `expectedResult` 必须写成可单独观察和取证的通过条件，不能使用“功能正常”“按预期工作”或对 requirement 的笼统复述；有关键失败、边界或兼容条件时一并写入；
 - `scope` 只能是精确相对路径或尾部 `/**` 前缀，不能进入 `.layered-delivery`；
 - 下列“允许空数组”的字段除外：根/无依赖的 `dependsOn`、Task `interfaces`、Task `dataAndTransactions`、协调层 `sharedContracts`。其他在示例中出现的数组均应按机器校验提供非空内容。
 

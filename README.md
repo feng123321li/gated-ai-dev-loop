@@ -17,6 +17,7 @@ npx skills add feng123321li/layered-delivery --skill layered-delivery --global -
 - 合法层级只有 `Task`、`Capability → Task`、`Delivery → Capability → Task`。
 - 使用满足聚合责任的最浅结构，Task 是唯一执行叶子。
 - 人只评审一份根级开发方案，并一次冻结整棵需求树。
+- 每个 requirement 都有独立 acceptance；跨需求 acceptance 只能追加集成验收。
 - 冻结后由 Graph 自动选择 Task、计算 Agent 数、执行门禁并处理重试与恢复。
 - `.layered-delivery/governance.sqlite3` 是唯一机器权威，Markdown 只是可重建投影。
 - Agent 不自动提交、推送、合并、迁移或发布；外部动作需要单独授权。

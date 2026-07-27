@@ -18,6 +18,7 @@ description: "治理或恢复分层软件交付。当工作区存在 `.layered-d
 - 只使用根 `Task`、`Capability → Task` 或 `Delivery → Capability → Task`，选择满足真实聚合责任的最浅结构；Task 是唯一执行叶子。
 - 一个需求只有一个 `work-items/<root-id>/` 顶层目录，子级递归放入 `children/`；`.layered-delivery/governance.sqlite3` 是唯一机器权威，Markdown 只是投影。
 - 人只评审一份根级方案并一次冻结整树。冻结后的 Task 集、Agent 数、顺序、门禁、重试和恢复由 Graph 决定，不逐节点请求人工启动。
+- 每个 requirement 都必须有独立 acceptance；跨需求 acceptance 只能追加集成验收，不能代替任一需求自己的可观察通过条件。
 - 同一冻结目标和验收契约内的 P0/P1、回归或审查修正回到原 Task；不得创建重复需求根或用自然语言扩大文件授权。
 - Task、聚合 gate、独立审查和用户确认都是显式图节点；只有最终用户确认后的 `COMPLETED` 表示完成。
 - Agent 不直接写 SQLite、baseline 或治理投影，也不自动提交、推送、合并、迁移或发布；外部动作需要单独授权。

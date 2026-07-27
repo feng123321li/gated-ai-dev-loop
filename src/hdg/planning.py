@@ -590,7 +590,7 @@ def freeze_hierarchy(
         if hierarchy_state["stage"] == "BASELINE_FROZEN":
             if (root_entry.get("developmentMode") or {}).get("mode") != development_mode:
                 fail("WORK_ITEM_DEVELOPMENT_MODE_LOCKED", "Development mode is fixed by the requirement freeze")
-            repository.write_registry(registry)
+            repository.write_registry(registry, changed_item_ids=set())
             handoff = _manual_requirement_handoff(root_entry, registry)
             handoff_command = render_requirement_handoff_command(root_id) if handoff is not None else None
             claude_auto_handoff = render_claude_code_auto_handoff(root_id) if handoff is not None else None
@@ -823,7 +823,7 @@ def refresh_work_item_projections(*, root: str, explicit_dogfood: bool = False) 
     repository = GovernanceRepository(root)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     with repository.transaction() as registry:
-        repository.write_registry(registry)
+        repository.write_registry(registry, changed_item_ids=set())
         by_id = {entry["id"]: entry for entry in registry["workItems"]}
 
         def hierarchy_root(entry: dict[str, Any]) -> dict[str, Any]:

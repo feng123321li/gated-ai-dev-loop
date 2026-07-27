@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable, TypeVar
 
 from .errors import GatedLoopError
+from .timing import timed_stage, timing_increment
 
 
 T = TypeVar("T")
@@ -68,17 +69,51 @@ def read_regular_file(root: str | os.PathLike[str], candidate: str | os.PathLike
     return data
 
 
-def atomic_write(path: str | os.PathLike[str], content: str | bytes) -> None:
+def _same_regular_file(target: Path, data: bytes) -> bool:
+    try:
+        before = target.lstat()
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISREG(before.st_mode):
+        return False
+    try:
+        existing = target.read_bytes()
+        after = target.lstat()
+    except FileNotFoundError:
+        return False
+    identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+    current = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+    return identity == current and existing == data
+
+
+def atomic_write(
+    path: str | os.PathLike[str],
+    content: str | bytes,
+    *,
+    durable: bool = True,
+) -> bool:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    temporary = target.with_name(f"{target.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
     data = content.encode("utf-8") if isinstance(content, str) else content
+    with timed_stage("filesystem.compare"):
+        unchanged = _same_regular_file(target, data)
+    if unchanged:
+        timing_increment("filesSkipped")
+        return False
+    temporary = target.with_name(f"{target.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
     try:
         with temporary.open("xb") as stream:
             stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, target)
+            if durable:
+                stream.flush()
+                with timed_stage("filesystem.fsync"):
+                    os.fsync(stream.fileno())
+        with timed_stage("filesystem.replace"):
+            os.replace(temporary, target)
+        timing_increment("filesWritten")
+        if durable:
+            timing_increment("fileFsyncs")
+        return True
     finally:
         try:
             temporary.unlink()

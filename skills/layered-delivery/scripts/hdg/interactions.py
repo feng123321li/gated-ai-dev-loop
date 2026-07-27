@@ -67,7 +67,18 @@ def record_interaction(
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     at = timestamp(now)
     with repository.transaction() as registry:
-        repository.item_by_id(registry, item_id)
+        entry = repository.item_by_id(registry, item_id)
+        by_id = {item["id"]: item for item in registry["workItems"]}
+        while entry["parentId"] is not None:
+            entry = by_id[entry["parentId"]]
+        registry["revision"] += 1
+        registry["updatedAt"] = at
+        repository.write_registry(
+            registry,
+            changed_item_ids=set(),
+            projection_mode="interaction",
+            projection_root_id=entry["id"],
+        )
         event = repository.append_interaction_event(
             work_item_id=item_id,
             session_id=value["sessionId"],
@@ -80,7 +91,6 @@ def record_interaction(
             registry_revision=registry["revision"],
             recorded_at=at,
         )
-        repository.refresh_interaction_logs(registry)
         return event
 
 

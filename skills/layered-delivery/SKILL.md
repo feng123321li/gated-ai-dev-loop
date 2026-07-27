@@ -11,7 +11,7 @@ description: "治理或恢复分层软件交付。当工作区存在 `.layered-d
 
 - 首次只读取本文件。不得预读全部 references、控制器源码、memory、整树报告或全部 evidence 模板。
 - 从当前 Skill 元数据解析 `<skill-root>`，不得固化用户目录、Skill 安装位置或操作系统路径。从项目根运行 `python -X utf8 <skill-root>/scripts/hdg.py --help`。
-- 以控制器 `--help` 和返回的 `responseContract`、`dispatchPlan`、`evidenceContractRef` 为准；查询直接消费 stdout，非零退出时保留 stderr 并停止解析。
+- 以控制器 `--help` 和返回的 `responseContract`、`dispatchPlan`、`evidenceContractRef` 为准；查询直接消费 stdout，非零退出时保留 stderr 并停止解析。性能排查时可添加全局 `--timing`；控制器只在 stderr 输出一行 `HDG_TIMING` JSON，stdout 契约保持不变。
 
 ## 核心契约
 
@@ -37,7 +37,7 @@ description: "治理或恢复分层软件交付。当工作区存在 `.layered-d
 2. 展示返回的开发方案和图入口，说明范围、契约、依赖、测试与失败路由。每次确认提示都必须同时展示 `active` 和 `manual` 两种开发方式；修改方案时重新准备同一整树。
 3. 用户明确同意方案并选择方式后，使用返回的 `hierarchyFingerprint` 一次调用 `freeze-hierarchy`。Claude Code 还须先满足 [claude-automation.md](references/claude-automation.md) 的权限前置条件。
 4. 冻结后每次迁移都重新查询 `graph-frontier`，完整消费 `dispatchPlan`，不自行挑选 Task、排序或确定 Agent 数。
-5. `DISPATCH_TASK`：完整消费调度计划并稳定排队，但只在 worker 真正取得执行容量时调用 `dispatch-task`，让 claim 按实际开工即时创建。执行适配器按 `nextWakeAt` 消费到期的 `HEARTBEAT_TASK`；结果写回前先按 `evidenceContractRefs.result` 查询当前 operation 的模板，再用 `task-result --evidence -` 提交。
+5. `DISPATCH_TASK`：完整消费调度计划并稳定排队，但只在 worker 真正取得执行容量时调用 `dispatch-task`，让 claim 按实际开工即时创建。执行适配器按 `nextWakeAt` 消费到期的 `HEARTBEAT_TASK`；心跳使用控制器的轻量增量投影，不应触发整工作区 Markdown 重建。结果写回前先按 `evidenceContractRefs.result` 查询当前 operation 的模板，再用 `task-result --evidence -` 提交。
 6. `RUN_GATE`、`REQUEST_REVIEW`、`REQUEST_USER_CONFIRMATION`：先执行 `evidenceContractRef` 指向的只读 `evidence-contract`，只获取当前工作项模板，再从 stdin 提交 evidence；不得读取控制器源码或 memory 文件反推格式。
 7. `RETRY_NODE` 或租约失败按 frontier 路由。Task gate 的 P0/P1 FAIL 必须回到 execution 修复、复测；预算耗尽后请求干预，不能无限重跑 gate。
 8. 原契约不变但漏列必要文件时，在原 Task 使用 `remediate-task`；契约、拓扑、数据或外部授权变化才回到人工评审。

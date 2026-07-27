@@ -8,7 +8,7 @@ from unittest.mock import patch
 from hdg.acceptance import record_work_item_gate
 from hdg.errors import GatedLoopError
 from hdg.execution import build_task_context, dispatch_task, list_ready_tasks, record_task_result
-from hdg import execution
+from hdg import repository
 from hdg.planning import freeze_hierarchy, prepare_hierarchy, refresh_work_item_projections
 from hdg.repository import GovernanceRepository
 
@@ -267,7 +267,7 @@ class HierarchyPackageTests(unittest.TestCase):
                 )
             self.assertEqual(raised.exception.code, "WORK_ITEM_DEVELOPMENT_MODE_LOCKED")
 
-    def test_dispatch_artifact_failure_does_not_leave_a_claimed_task(self) -> None:
+    def test_dispatch_projection_failure_preserves_committed_claim_for_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepared = prepare_hierarchy(
                 root=temporary,
@@ -281,27 +281,46 @@ class HierarchyPackageTests(unittest.TestCase):
                 development_mode="active",
                 confirmed=True,
             )
-            real_atomic_write = execution.atomic_write
+            real_atomic_write = repository.atomic_write
 
-            def fail_bound_context(target: Path, content: str) -> None:
+            def fail_bound_context(
+                target: Path,
+                content: str,
+                **kwargs: object,
+            ) -> None:
                 if target.name == "development-handoff.md" and "op-atomic" in content:
                     raise OSError("simulated context write failure")
-                real_atomic_write(target, content)
+                real_atomic_write(target, content, **kwargs)
 
-            with patch("hdg.execution.atomic_write", side_effect=fail_bound_context):
-                with self.assertRaises(OSError):
+            with patch("hdg.repository.atomic_write", side_effect=fail_bound_context):
+                with self.assertRaises(GatedLoopError) as raised:
                     dispatch_task(
                         root=temporary,
                         item_id=prepared["rootId"],
                         owner="developer",
                         operation_id="op-atomic",
                     )
+            self.assertEqual(
+                raised.exception.code,
+                "WORK_ITEM_PROJECTION_REFRESH_REQUIRED",
+            )
 
             registry = GovernanceRepository(temporary).read_registry()
             task = registry["workItems"][0]
-            self.assertEqual(task["status"], "FROZEN")
-            self.assertIsNone(task["claim"])
-            self.assertEqual(list_ready_tasks(root=temporary, work_item_id=prepared["rootId"]), [prepared["rootId"]])
+            self.assertEqual(task["status"], "CLAIMED")
+            self.assertEqual(task["claim"]["operationId"], "op-atomic")
+            self.assertEqual(
+                list_ready_tasks(root=temporary, work_item_id=prepared["rootId"]),
+                [],
+            )
+
+            refresh_work_item_projections(root=temporary)
+            self.assertIn(
+                "op-atomic",
+                Path(prepared["artifactDir"], "development-handoff.md").read_text(
+                    encoding="utf-8"
+                ),
+            )
 
     def test_development_mode_does_not_change_the_frozen_requirement_contract(self) -> None:
         results = {}

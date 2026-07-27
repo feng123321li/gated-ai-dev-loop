@@ -149,7 +149,10 @@ def record_work_item_gate(
             evidence_artifact=verified_artifact,
         )
         repository.write_acceptance_report(entry, definition, at)
-        repository.write_registry(registry)
+        repository.write_registry(
+            registry,
+            changed_item_ids=repository.lineage_item_ids(registry, item_id),
+        )
         return {
             "id": item_id,
             "status": entry["status"],
@@ -278,7 +281,10 @@ def record_acceptance(
             evidence_artifact=artifact,
         )
         repository.write_acceptance_report(entry, definition, at)
-        repository.write_registry(registry)
+        repository.write_registry(
+            registry,
+            changed_item_ids={item_id},
+        )
         return {
             "id": item_id,
             "action": action,

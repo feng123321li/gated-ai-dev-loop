@@ -50,6 +50,16 @@ npx skills add feng123321li/layered-delivery --skill layered-delivery --global -
 | `acceptance-report.md` | 查看门禁证据和验收结论 |
 | `run-timeline.md` | 查看 attempt、失败与恢复记录 |
 
+## 性能诊断
+
+控制器默认保持纯净的 stdout JSON 契约。需要定位本地 `hdg.py` 耗时时，在任一命令上添加全局 `--timing`：
+
+```text
+python -X utf8 <skill-root>/scripts/hdg.py --timing graph-frontier --project-root <project-root> --json
+```
+
+stderr 会额外输出一行 `HDG_TIMING` JSON，按阶段列出 SQLite 锁等待、提交、投影与文件写入耗时，并报告实际更新或跳过的 registry 行和文件。0.14.0 起，Markdown 投影在 SQLite 提交后执行；高频心跳只刷新 graph/timeline/frontier，相同内容的投影不再重复替换或 `fsync`。
+
 ## 仓库维护
 
 修改控制器后重新构建插件载荷：

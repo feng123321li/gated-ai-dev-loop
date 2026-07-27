@@ -11,7 +11,6 @@ from .evidence import (
     task_result_artifact_issues,
     task_result_evidence_contract,
 )
-from .fs_safe import atomic_write
 from .graph_model import (
     DEFAULT_CLAIM_GRACE_SECONDS,
     DEFAULT_CLAIM_LEASE_SECONDS,
@@ -233,7 +232,10 @@ def claim_task(
             payload=_claim_payload(entry["claim"], entry["status"]),
             at=at,
         )
-        repository.write_registry(registry)
+        repository.write_registry(
+            registry,
+            changed_item_ids=repository.lineage_item_ids(registry, item_id),
+        )
         return {
             "id": item_id,
             "status": entry["status"],
@@ -374,7 +376,10 @@ def record_task_result(
                     recorded_at=at,
                 )
         repository.write_development_review(entry, definition, at)
-        repository.write_registry(registry)
+        repository.write_registry(
+            registry,
+            changed_item_ids=repository.lineage_item_ids(registry, item_id),
+        )
         base = f".layered-delivery/{entry['packagePath']}"
         return {
             "id": item_id,
@@ -540,9 +545,8 @@ def dispatch_task(
         claim = _new_claim(owner=owner, operation_id=operation_id, at=at)
         entry["claim"] = claim
         entry["status"] = "CLAIMED"
-        context, handoff, target = _task_context(repository, registry, entry)
+        context, handoff, _ = _task_context(repository, registry, entry)
         repository.write_task_context(entry, context, handoff, at)
-        atomic_write(target / "development-handoff.md", handoff)
         entry["recordRevision"] += 1
         entry["updatedAt"] = at
         registry["currentFocus"] = {"workItemId": item_id, "purpose": "EXECUTION"}
@@ -557,7 +561,10 @@ def dispatch_task(
             payload=_claim_payload(claim, entry["status"]),
             at=at,
         )
-        repository.write_registry(registry)
+        repository.write_registry(
+            registry,
+            changed_item_ids=repository.lineage_item_ids(registry, item_id),
+        )
         return {
             "id": item_id,
             "status": entry["status"],
@@ -605,7 +612,13 @@ def heartbeat_task(
             },
             at=at,
         )
-        repository.write_registry(registry)
+        root_id = _hierarchy_root_entry(registry, entry)["id"]
+        repository.write_registry(
+            registry,
+            changed_item_ids={item_id},
+            projection_mode="heartbeat",
+            projection_root_id=root_id,
+        )
         return {
             "id": item_id,
             "status": entry["status"],
@@ -648,7 +661,10 @@ def pause_task(
         registry["currentFocus"] = {"workItemId": item_id, "purpose": "TASK_PAUSED"}
         registry["revision"] += 1
         registry["updatedAt"] = at
-        repository.write_registry(registry)
+        repository.write_registry(
+            registry,
+            changed_item_ids=repository.lineage_item_ids(registry, item_id),
+        )
         return {"id": item_id, "status": entry["status"], "nodeStatus": "PAUSED"}
 
 
@@ -692,5 +708,8 @@ def resume_task(
         registry["currentFocus"] = {"workItemId": item_id, "purpose": "TASK_RESUMED"}
         registry["revision"] += 1
         registry["updatedAt"] = at
-        repository.write_registry(registry)
+        repository.write_registry(
+            registry,
+            changed_item_ids=repository.lineage_item_ids(registry, item_id),
+        )
         return {"id": item_id, "status": entry["status"], "nodeStatus": "READY"}

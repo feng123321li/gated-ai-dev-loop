@@ -181,6 +181,7 @@ class InstallAndBundleTests(unittest.TestCase):
     def test_runtime_imports_only_standard_library_or_local_modules(self) -> None:
         allowed_roots = {
             "hdg", "__future__", "abc", "argparse", "ast", "base64", "collections", "contextlib",
+            "contextvars",
             "copy", "dataclasses", "datetime", "enum", "functools", "hashlib", "io", "json",
             "os", "pathlib", "posixpath", "re", "shutil", "sqlite3", "stat", "sys", "tempfile", "time",
             "typing", "unittest", "uuid",

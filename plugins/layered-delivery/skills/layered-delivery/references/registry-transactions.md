@@ -2,7 +2,7 @@
 
 ## 单写原则
 
-所有机器状态变更都通过项目级 `governance.sqlite3` 执行。写命令使用 SQLite `BEGIN IMMEDIATE`：等待当前短事务完成、在事务内重读 revision、校验预期指纹、提交一次状态变更，再重建 Markdown 投影。控制器不创建额外文件锁。
+所有机器状态变更都通过项目级 `governance.sqlite3` 执行。写命令使用 SQLite `BEGIN IMMEDIATE`：等待当前短事务完成、在事务内重读 revision、校验预期指纹并提交一次状态变更。Markdown 投影在提交并关闭写连接后重建，不占用 SQLite 写锁。控制器不创建额外文件锁。
 
 长时间的 Agent、测试或人工动作不能持有数据库事务，必须用持久化 claim/operation 表示所有权。claim 只在 worker 实际启动时创建，包含 30 分钟软租约与最近心跳；执行适配器按 5 分钟 `nextWakeAt` 调用 `heartbeat-task`。软租约后有 2 分钟竞争宽限，宽限内同一 operation 的心跳或结果可与失联回收在 SQLite 写事务中确定性竞争；硬到期后控制器用 `advance-graph` 把 claim 归类为 `WORKER_LOST` 并按尝试预算恢复。数据库连接设置有限等待；无法取得写锁时明确失败，不绕过事务另写文件。
 
@@ -12,12 +12,12 @@
 2. 开启 `BEGIN IMMEDIATE` 并重读 workspace、工作项和层级状态；
 3. 检查 revision、层级指纹、baseline 指纹和活动 claim；仅 evidence 引用过期且完整 artifact 仍在库内的历史节点进入只读隔离，其他结构错误阻断；
 4. 对执行证据，在事务内校验完整 artifact 与当前工作项、operationId、baseline 或动作，计算规范 JSON 的 SHA-256；
-5. 在同一事务写 definition/state、证据 artifact 与摘要、上下文、报告、交互事件和 registry 条目；
+5. 在同一事务写 definition/state、证据 artifact 与摘要、上下文、报告和交互事件；registry 只更新本次实际变化的工作项及其祖先，内容未变的行不执行 `UPDATE`；
 6. 更新 workspace revision 并提交；
-7. 从数据库重建 workspace、overview、progress 和阶段 Markdown；
+7. 关闭写连接后从已提交数据库重建投影；普通状态迁移执行完整投影，心跳只刷新 execution graph、timeline 和 frontier，交互记录只刷新对应需求根的 interaction log；
 8. 事务结束后再运行 Agent 或测试。
 
-写入失败必须回滚 SQLite，不留下可被恢复为成功的机器状态。Markdown 是可重建投影；投影写入失败时保持阻断，后续使用 `refresh-projections` 修复，不能把残缺 Markdown 当作权威。
+事务内写入失败必须回滚 SQLite，不留下可被恢复为成功的机器状态。Markdown 是可重建投影；提交后的投影失败会明确返回 `WORK_ITEM_PROJECTION_REFRESH_REQUIRED`，机器状态仍保持已提交，后续使用 `refresh-projections` 修复。投影刷新会检查 workspace revision；刷新期间若出现更新，会追赶最新 revision 后再完成，避免旧投影覆盖新状态。相同内容的文件不替换、不重复 `fsync`；这些可重建文件使用关闭临时文件后的原子替换，SQLite 仍保留完整持久化保证。不能把残缺 Markdown 当作权威。
 
 事务可以读取隔离节点的稳定层级与状态，以维持依赖、进度和 claim 判断，但不能把它作为当前命令目标，也不能更新、删除或规范化其 SQLite 行。提交前控制器再次确认隔离集合和每条隔离记录均未变化。这样一个历史 evidence 节点不会阻断无关新需求或有效兄弟 Task，也不会成为绕过当前数据契约的兼容入口。
 

@@ -1494,7 +1494,7 @@ def rebuild_graph_run(
         }
         registry["revision"] += 1
         registry["updatedAt"] = at
-        repository.write_registry(registry)
+        repository.write_registry(registry, changed_item_ids=set())
     return get_graph_replay(root=root, work_item_id=work_item_id)
 
 

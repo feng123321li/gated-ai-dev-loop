@@ -37,6 +37,7 @@ from .planning import (
     retry_work_item,
 )
 from .remediation import record_validation_remediation
+from .timing import timed_stage, timing_session
 
 
 COMMANDS = (
@@ -72,7 +73,7 @@ VALUE_OPTIONS = {
     "--status", "--evidence", "--expected-baseline",
     "--action", "--development-mode", "--expected-hierarchy", "--interaction", "--kind",
 }
-FLAG_OPTIONS = {"--json", "--help", "--confirmed", "--dogfood"}
+FLAG_OPTIONS = {"--json", "--help", "--confirmed", "--dogfood", "--timing"}
 COMMAND_OPTIONS = {
     "prepare-hierarchy": {"--json", "--help", "--definition", "--host-runtime", "--dogfood"},
     "freeze-hierarchy": {
@@ -138,6 +139,7 @@ Commands:
 
 Common options:
   --json  Render the command result or error as structured JSON.
+  --timing  Write structured phase timings to stderr without changing stdout.
 
 In the layered-delivery implementation repository, every command that writes control state also requires --dogfood.
 """
@@ -171,7 +173,7 @@ def _parse(argv: list[str]) -> dict[str, Any]:
         raise GatedLoopError("UNKNOWN_OPTION", f"Unexpected positional argument: {positionals[-1]}")
     if command in COMMAND_OPTIONS:
         for option in seen:
-            if option not in COMMAND_OPTIONS[command]:
+            if option != "--timing" and option not in COMMAND_OPTIONS[command]:
                 raise GatedLoopError("UNKNOWN_OPTION", f"Option is not valid for {command}: {option}")
     if "--host-runtime" in values and not is_agent_runtime(values["--host-runtime"]):
         raise GatedLoopError("OPTION_VALUE_INVALID", "--host-runtime must be a safe lowercase Agent identifier")
@@ -182,6 +184,7 @@ def _parse(argv: list[str]) -> dict[str, Any]:
         "json": "--json" in seen,
         "confirmed": "--confirmed" in seen,
         "dogfood": "--dogfood" in seen,
+        "timing": "--timing" in seen,
         "values": values,
     }
 
@@ -204,7 +207,8 @@ def _read_structured(
             f"{kind.lower()} JSON must be provided directly through stdin with '-'",
         )
     try:
-        text = stdin.read()
+        with timed_stage("input.read"):
+            text = stdin.read()
     except Exception:
         raise GatedLoopError(f"{kind}_READ", f"Unable to read {kind.lower()} JSON")
     try:
@@ -370,34 +374,60 @@ def run_cli(
     stderr = stderr or sys.stderr
     command = next((value for value in argv if not value.startswith("--")), None)
     json_output = "--json" in argv
-    if command is None or "--help" in argv:
-        stdout.write(USAGE)
-        return 0
-    if command not in COMMANDS:
-        error = GatedLoopError("UNKNOWN_COMMAND", f"Unknown hdg command: {command}")
-        if json_output:
-            stderr.write(rendered_json({"ok": False, "error": {"code": error.code, "message": error.message, "details": error.details}}))
-        else:
-            stderr.write(f"ERROR {error.code}: {error.message}\n")
-        return error.exit_code
-    try:
-        parsed = _parse(argv)
-        result = _run(parsed, cwd=cwd, stdin=stdin)
-        stdout.write(rendered_json({"ok": True, "result": result}) if parsed["json"] else rendered_json(result))
-        return 0
-    except GatedLoopError as error:
-        if json_output:
-            stderr.write(rendered_json({"ok": False, "error": {"code": error.code, "message": error.message, "details": error.details}}))
-        else:
-            stderr.write(f"ERROR {error.code}: {error.message}\n")
-        return error.exit_code
-    except Exception:
-        error = GatedLoopError("INTERNAL_ERROR", "Unexpected error")
-        if json_output:
-            stderr.write(rendered_json({"ok": False, "error": {"code": error.code, "message": error.message, "details": {}}}))
-        else:
-            stderr.write(f"ERROR {error.code}: {error.message}\n")
-        return 1
+    with timing_session(
+        command=command or "help",
+        enabled="--timing" in argv,
+    ) as timing:
+        ok = False
+        try:
+            if command is None or "--help" in argv:
+                with timed_stage("output.render"):
+                    stdout.write(USAGE)
+                ok = True
+                return 0
+            if command not in COMMANDS:
+                error = GatedLoopError("UNKNOWN_COMMAND", f"Unknown hdg command: {command}")
+                with timed_stage("output.render"):
+                    if json_output:
+                        stderr.write(rendered_json({"ok": False, "error": {"code": error.code, "message": error.message, "details": error.details}}))
+                    else:
+                        stderr.write(f"ERROR {error.code}: {error.message}\n")
+                return error.exit_code
+            with timed_stage("cli.parse"):
+                parsed = _parse(argv)
+            with timed_stage("command.execute"):
+                result = _run(parsed, cwd=cwd, stdin=stdin)
+            with timed_stage("output.render"):
+                stdout.write(rendered_json({"ok": True, "result": result}) if parsed["json"] else rendered_json(result))
+            ok = True
+            return 0
+        except GatedLoopError as error:
+            with timed_stage("output.render"):
+                if json_output:
+                    stderr.write(rendered_json({"ok": False, "error": {"code": error.code, "message": error.message, "details": error.details}}))
+                else:
+                    stderr.write(f"ERROR {error.code}: {error.message}\n")
+            return error.exit_code
+        except Exception:
+            error = GatedLoopError("INTERNAL_ERROR", "Unexpected error")
+            with timed_stage("output.render"):
+                if json_output:
+                    stderr.write(rendered_json({"ok": False, "error": {"code": error.code, "message": error.message, "details": {}}}))
+                else:
+                    stderr.write(f"ERROR {error.code}: {error.message}\n")
+            return 1
+        finally:
+            if timing is not None:
+                stderr.write(
+                    "HDG_TIMING "
+                    + json.dumps(
+                        timing.result(ok=ok),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
 
 
 def main(argv: list[str] | None = None) -> int:

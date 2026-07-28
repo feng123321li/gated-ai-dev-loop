@@ -14,7 +14,7 @@ from .evidence import (
 )
 from .graph_model import graph_summary, runtime_transition
 from .jsonio import fingerprint
-from .model import scope_patterns_overlap
+from .model import required_skill_policy, scope_patterns_overlap
 
 
 SUCCESS_STATES = {"SUCCEEDED", "COMPLETED"}
@@ -147,6 +147,10 @@ def _base_node_state(
     if kind == "ROOT_REVIEW":
         if acceptance.get("status") == "WAITING_FOR_INDEPENDENT_REVIEW":
             return "READY", []
+        if acceptance.get("status") == "REVIEW_BLOCKED":
+            return "BLOCKED", [
+                "required-final-review-skill-unavailable",
+            ]
         if acceptance.get("status") in {"WAITING_FOR_USER_CONFIRMATION", "COMPLETED"}:
             return "SUCCEEDED", []
         return "PENDING", ["root-gate-not-passed"]
@@ -585,16 +589,66 @@ def replay_graph_events(
         elif event_type in {"GATE_PASSED", "GATE_FAILED"}:
             if not node["kind"].endswith("_GATE") or node["status"] != "READY" or evidence_hash is None:
                 fail("DELIVERY_GRAPH_REPLAY_INVALID", "Gate transition is invalid")
-            _set_replay_node(
-                node,
-                status="SUCCEEDED" if event_type == "GATE_PASSED" else "BLOCKED",
-                finishedAt=event["recordedAt"],
-                latestEvidenceHash=evidence_hash,
-                failureClass=None if event_type == "GATE_PASSED" else "GATE_FAILURE",
-                lastTransition=event_type,
-                blockedBy=[] if event_type == "GATE_PASSED" else ["gate-failed"],
-                readyBecause=[],
-            )
+            gate_passed = event_type == "GATE_PASSED"
+            failure_class = None
+            blocked_skill_usage: list[dict[str, str]] = []
+            if not gate_passed:
+                failure_class = payload.get("failureClass")
+                raw_blocked_skill_usage = payload.get("blockedSkillUsage")
+                if failure_class not in {"GATE_FAILURE", "NON_RETRYABLE"}:
+                    fail(
+                        "DELIVERY_GRAPH_REPLAY_INVALID",
+                        "Gate failure classification is invalid",
+                    )
+                if failure_class == "NON_RETRYABLE":
+                    if (
+                        not isinstance(raw_blocked_skill_usage, list)
+                        or not raw_blocked_skill_usage
+                        or any(
+                            not isinstance(usage, dict)
+                            or set(usage)
+                            != {"name", "stage", "status", "evidence"}
+                            or usage.get("status") != "BLOCKED"
+                            or not all(
+                                isinstance(usage.get(field), str)
+                                and bool(usage[field].strip())
+                                for field in ("name", "stage", "evidence")
+                            )
+                            for usage in raw_blocked_skill_usage
+                        )
+                    ):
+                        fail(
+                            "DELIVERY_GRAPH_REPLAY_INVALID",
+                            "Non-retryable gate failure must preserve blocked Skill usage",
+                        )
+                    blocked_skill_usage = [
+                        dict(usage) for usage in raw_blocked_skill_usage
+                    ]
+                elif raw_blocked_skill_usage is not None:
+                    fail(
+                        "DELIVERY_GRAPH_REPLAY_INVALID",
+                        "Retryable gate failure cannot contain blocked Skill usage",
+                    )
+            changes: dict[str, Any] = {
+                "status": "SUCCEEDED" if gate_passed else "BLOCKED",
+                "finishedAt": event["recordedAt"],
+                "latestEvidenceHash": evidence_hash,
+                "failureClass": failure_class,
+                "lastTransition": event_type,
+                "blockedBy": (
+                    []
+                    if gate_passed
+                    else [
+                        f"required-skill-blocked:{usage['name']}"
+                        for usage in blocked_skill_usage
+                    ]
+                    or ["gate-failed"]
+                ),
+                "readyBecause": [],
+            }
+            if blocked_skill_usage:
+                changes["blockedSkillUsage"] = blocked_skill_usage
+            _set_replay_node(node, **changes)
         elif event_type == "REVIEW_PASSED":
             if node["kind"] != "ROOT_REVIEW" or node["status"] != "READY" or evidence_hash is None:
                 fail("DELIVERY_GRAPH_REPLAY_INVALID", "Review transition is invalid")
@@ -605,6 +659,28 @@ def replay_graph_events(
                 latestEvidenceHash=evidence_hash,
                 lastTransition=event_type,
                 blockedBy=[],
+                readyBecause=[],
+            )
+        elif event_type == "REVIEW_BLOCKED":
+            if (
+                node["kind"] != "ROOT_REVIEW"
+                or node["status"] != "READY"
+                or evidence_hash is None
+            ):
+                fail(
+                    "DELIVERY_GRAPH_REPLAY_INVALID",
+                    "Blocked review transition is invalid",
+                )
+            _set_replay_node(
+                node,
+                status="BLOCKED",
+                finishedAt=event["recordedAt"],
+                latestEvidenceHash=evidence_hash,
+                failureClass="EXTERNAL_AUTHORITY",
+                lastTransition=event_type,
+                blockedBy=[
+                    "required-final-review-skill-unavailable",
+                ],
                 readyBecause=[],
             )
         elif event_type == "USER_CONFIRMED":
@@ -836,6 +912,11 @@ def _result_contract(
         authorized_file_changes=repository.effective_task_file_changes(
             definition
         ),
+        required_skills=repository.effective_required_skills(
+            registry,
+            entry,
+            stage="DEVELOPMENT",
+        ),
     )
 
 
@@ -860,6 +941,11 @@ def _gate_contract(
         entry,
         definition,
         additional_planned_files=additional_planned_files,
+        required_skills=repository.effective_required_skills(
+            registry,
+            entry,
+            stage="GATE",
+        ),
     )
 
 
@@ -944,7 +1030,13 @@ def get_evidence_contract(
                 "Review and confirmation evidence contracts require a root work item",
             )
         contract = (
-            review_evidence_contract()
+            review_evidence_contract(
+                repository.effective_required_skills(
+                    registry,
+                    entry,
+                    stage="FINAL_REVIEW",
+                )
+            )
             if contract_kind == "review"
             else confirmation_evidence_contract()
         )
@@ -1164,6 +1256,12 @@ def build_graph_frontier(
                 "commandHint": f"dispatch-task --item {state['workItemId']} --owner <owner> --operation <id>",
                 "transition": "TASK_CLAIMED",
                 "routeCondition": "ON_DISPATCH",
+                "requiredSkills": repository.effective_required_skills(
+                    registry,
+                    entry,
+                    stage="DEVELOPMENT",
+                ),
+                "requiredSkillPolicy": required_skill_policy(),
                 **budget,
             })
         elif state["status"] == "READY":
@@ -1200,11 +1298,31 @@ def build_graph_frontier(
                 **budget,
             }
             if action == "RUN_GATE":
+                action_record["requiredSkills"] = (
+                    repository.effective_required_skills(
+                        registry,
+                        by_item[state["workItemId"]],
+                        stage="GATE",
+                    )
+                )
+                action_record["requiredSkillPolicy"] = (
+                    required_skill_policy()
+                )
                 action_record["evidenceContractRef"] = evidence_contract_ref(
                     state["workItemId"],
                     "gate",
                 )
             elif action == "REQUEST_REVIEW":
+                action_record["requiredSkills"] = (
+                    repository.effective_required_skills(
+                        registry,
+                        by_item[state["workItemId"]],
+                        stage="FINAL_REVIEW",
+                    )
+                )
+                action_record["requiredSkillPolicy"] = (
+                    required_skill_policy()
+                )
                 action_record["evidenceContractRef"] = evidence_contract_ref(
                     state["workItemId"],
                     "review",
@@ -1350,6 +1468,10 @@ def build_graph_frontier(
                 "recommendedAction": recommended,
                 "lastTransition": state.get("lastTransition"),
             }
+            if state.get("blockedSkillUsage"):
+                blocked_record["blockedSkillUsage"] = list(
+                    state["blockedSkillUsage"]
+                )
             if (
                 recommended == "SUBMIT_REMEDIATION"
                 and by_item[state["workItemId"]]["kind"] == "TASK"
@@ -1363,6 +1485,50 @@ def build_graph_frontier(
                     state["workItemId"],
                     "remediation",
                 )
+            if (
+                state["kind"] == "ROOT_REVIEW"
+                and state.get("lastTransition") == "REVIEW_BLOCKED"
+            ):
+                review_entry = by_item[state["workItemId"]]
+                review_artifact = (
+                    (
+                        (review_entry.get("acceptance") or {})
+                        .get("review") or {}
+                    ).get("artifact") or {}
+                )
+                blocked_record.update({
+                    "recoveryAction": (
+                        "RETRY_ITEM_AFTER_SKILL_AVAILABLE"
+                    ),
+                    "commandHint": (
+                        f"retry-item --item {state['workItemId']} "
+                        "--expected-baseline "
+                        f"{by_item[state['workItemId']]['baselineFingerprint']}"
+                    ),
+                    "evidenceContractRef": evidence_contract_ref(
+                        state["workItemId"],
+                        "review",
+                    ),
+                    "requiredSkills": (
+                        repository.effective_required_skills(
+                            registry,
+                            review_entry,
+                            stage="FINAL_REVIEW",
+                        )
+                    ),
+                    "requiredSkillPolicy": required_skill_policy(),
+                    "blockedSkillUsage": [
+                        dict(usage)
+                        for usage in review_artifact.get(
+                            "skillUsage",
+                            [],
+                        )
+                        if (
+                            isinstance(usage, dict)
+                            and usage.get("status") == "BLOCKED"
+                        )
+                    ],
+                })
             blocked.append(blocked_record)
     dispatch_actions = [
         action for action in actions if action["action"] == "DISPATCH_TASK"
@@ -1503,13 +1669,23 @@ def rebuild_graph_run(
     return get_graph_replay(root=root, work_item_id=work_item_id)
 
 
-def list_graph_events(*, root: str, work_item_id: str) -> list[dict[str, Any]]:
+def list_graph_events(
+    *,
+    root: str,
+    work_item_id: str,
+    after_event_id: int | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
     repository, registry, _, _, _ = _load_graph_view(root=root, work_item_id=work_item_id)
     root_entry = hierarchy_root_entry(
         registry,
         next(item for item in registry["workItems"] if item["id"] == work_item_id),
     )
-    return repository.read_graph_events(root_entry["id"])
+    return repository.read_graph_events(
+        root_entry["id"],
+        after_event_id=after_event_id,
+        limit=limit,
+    )
 
 
 def _runtime_time(value: str) -> datetime:

@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from pathlib import Path
 
 from hdg.acceptance import accept_work_item, record_acceptance
 from hdg.execution import dispatch_task, record_task_result
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.repository import GovernanceRepository
 
-from .fixtures import delivery_hierarchy
+from .fixtures import delivery_hierarchy, two_task_capability_hierarchy
 
 
 class HierarchyFlowTests(unittest.TestCase):
@@ -32,8 +33,17 @@ class HierarchyFlowTests(unittest.TestCase):
         }
         return accept_work_item(root=root, item_id=prepared["id"], evidence=evidence)
 
-    def _prepare_and_freeze(self, root: str) -> dict:
-        prepared = prepare_hierarchy(root=root, hierarchy=delivery_hierarchy(), host_runtime="claude-code")
+    def _prepare_and_freeze(
+        self,
+        root: str,
+        *,
+        hierarchy: dict | None = None,
+    ) -> dict:
+        prepared = prepare_hierarchy(
+            root=root,
+            hierarchy=hierarchy or delivery_hierarchy(),
+            host_runtime="claude-code",
+        )
         freeze_hierarchy(
             root=root,
             root_id=prepared["rootId"],
@@ -64,7 +74,16 @@ class HierarchyFlowTests(unittest.TestCase):
 
     def test_delivery_capability_task_full_completion_flow(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            prepared = self._prepare_and_freeze(temporary)
+            hierarchy = delivery_hierarchy()
+            hierarchy["root"]["definition"]["requiredSkills"] = [{
+                "name": "tdd-workflow",
+                "stages": ["DEVELOPMENT"],
+                "purpose": "Use the complete TDD workflow in every descendant Task.",
+            }]
+            prepared = self._prepare_and_freeze(
+                temporary,
+                hierarchy=hierarchy,
+            )
             delivery = self._prepared_item(prepared, "d-python-governance")
             capability = self._prepared_item(prepared, "c-python-runtime")
             task = self._prepared_item(prepared, "t-python-controller")
@@ -84,6 +103,15 @@ class HierarchyFlowTests(unittest.TestCase):
                 }],
                 "blockers": [],
                 "failure": None,
+                "skillUsage": [{
+                    "name": "tdd-workflow",
+                    "stage": "DEVELOPMENT",
+                    "status": "APPLIED",
+                    "evidence": (
+                        "Applied red-green-refactor to the nested controller "
+                        "and reran its frozen regression command."
+                    ),
+                }],
             }
             record_task_result(
                 root=temporary,
@@ -137,6 +165,176 @@ class HierarchyFlowTests(unittest.TestCase):
                 evidence=confirmation,
             )
             self.assertEqual(completed["acceptance"]["status"], "COMPLETED")
+            report = Path(
+                temporary,
+                completed["acceptanceReport"]["markdownPath"],
+            ).read_text(encoding="utf-8")
+            self.assertIn("## 实际开发 Skill 调用", report)
+            self.assertIn("t-python-controller", report)
+            self.assertIn("op-nested", report)
+            self.assertIn(
+                "Applied red-green-refactor to the nested controller",
+                report,
+            )
+            repository = GovernanceRepository(temporary)
+            registry = repository.read_operational_registry()
+            root_entry = repository.item_by_id(
+                registry,
+                delivery["id"],
+            )
+            usage = repository.actual_development_skill_usage(
+                registry,
+                root_entry,
+            )
+            self.assertEqual(len(usage), 1)
+            self.assertEqual(
+                {
+                    "taskId": usage[0]["taskId"],
+                    "taskTitle": usage[0]["taskTitle"],
+                    "operationId": usage[0]["operationId"],
+                    "resultStatus": usage[0]["resultStatus"],
+                },
+                {
+                    "taskId": "t-python-controller",
+                    "taskTitle": "Python controller",
+                    "operationId": "op-nested",
+                    "resultStatus": "IMPLEMENTED",
+                },
+            )
+            self.assertEqual(
+                usage[0]["resultEvidence"],
+                repository.item_by_id(
+                    registry,
+                    "t-python-controller",
+                )["latestResult"]["evidence"],
+            )
+
+    def test_capability_report_keeps_each_task_skill_call_separate(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            hierarchy = two_task_capability_hierarchy()
+            hierarchy["root"]["definition"]["requiredSkills"] = [{
+                "name": "tdd-workflow",
+                "stages": ["DEVELOPMENT"],
+                "purpose": "Use the complete TDD workflow in every Task.",
+            }]
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=hierarchy,
+                host_runtime="codex",
+            )
+            freeze_hierarchy(
+                root=temporary,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared[
+                    "hierarchyFingerprint"
+                ],
+                development_mode="active",
+                confirmed=True,
+            )
+            task_specs = [
+                (
+                    "t-python-controller",
+                    "op-controller",
+                    ["python", "-m", "unittest", "tests.test_controller"],
+                    ["src/controller.py", "tests/test_controller.py"],
+                ),
+                (
+                    "t-python-worker",
+                    "op-worker",
+                    ["python", "-m", "unittest", "tests.test_worker"],
+                    ["src/worker.py", "tests/test_worker.py"],
+                ),
+            ]
+            for task_id, operation_id, command, changed_files in task_specs:
+                dispatch_task(
+                    root=temporary,
+                    item_id=task_id,
+                    owner="developer",
+                    operation_id=operation_id,
+                )
+                record_task_result(
+                    root=temporary,
+                    item_id=task_id,
+                    operation_id=operation_id,
+                    status="IMPLEMENTED",
+                    evidence={
+                        "schemaVersion": 3,
+                        "kind": "TASK_RESULT",
+                        "taskId": task_id,
+                        "operationId": operation_id,
+                        "status": "IMPLEMENTED",
+                        "summary": f"Implemented {task_id}.",
+                        "changedFiles": changed_files,
+                        "tests": [{
+                            "argv": command,
+                            "exitCode": 0,
+                            "testsRun": 1,
+                        }],
+                        "blockers": [],
+                        "failure": None,
+                        "skillUsage": [{
+                            "name": "tdd-workflow",
+                            "stage": "DEVELOPMENT",
+                            "status": "APPLIED",
+                            "evidence": (
+                                f"Applied red-green-refactor in {task_id} "
+                                "and reran its frozen regression command."
+                            ),
+                        }],
+                    },
+                )
+                self._gate(
+                    temporary,
+                    self._prepared_item(prepared, task_id),
+                    command,
+                    changed_files,
+                )
+
+            capability = self._prepared_item(
+                prepared,
+                prepared["rootId"],
+            )
+            accepted = self._gate(
+                temporary,
+                capability,
+                ["python", "-m", "unittest", "discover"],
+                [],
+            )
+            report = Path(
+                temporary,
+                accepted["acceptanceReport"]["markdownPath"],
+            ).read_text(encoding="utf-8")
+            self.assertIn("`t-python-controller` Python controller", report)
+            self.assertIn("`op-controller`", report)
+            self.assertIn("`t-python-worker` Python worker", report)
+            self.assertIn("`op-worker`", report)
+            self.assertEqual(
+                report.count("| `tdd-workflow` | `DEVELOPMENT` |"),
+                2,
+            )
+
+            repository = GovernanceRepository(temporary)
+            registry = repository.read_operational_registry()
+            root_entry = repository.item_by_id(
+                registry,
+                prepared["rootId"],
+            )
+            usage = repository.actual_development_skill_usage(
+                registry,
+                root_entry,
+            )
+            self.assertEqual(
+                [
+                    (record["taskId"], record["operationId"])
+                    for record in usage
+                ],
+                [
+                    ("t-python-controller", "op-controller"),
+                    ("t-python-worker", "op-worker"),
+                ],
+            )
 
 
 if __name__ == "__main__":

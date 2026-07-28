@@ -270,7 +270,12 @@ def record_validation_remediation(
             if not affected.get("acceptanceReport"):
                 continue
             affected_definition = repository.read_package(registry, affected)[0]
-            repository.write_acceptance_report(affected, affected_definition, at)
+            repository.write_acceptance_report(
+                registry,
+                affected,
+                affected_definition,
+                at,
+            )
         repository.write_registry(registry)
         return {
             "id": item_id,

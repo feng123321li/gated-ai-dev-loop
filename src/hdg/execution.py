@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-from .constants import SCHEMA_VERSION
+from .constants import MAX_IDENTIFIER_LENGTH, SCHEMA_VERSION
 from .errors import fail
 from .evidence import (
     evidence_record,
@@ -24,12 +24,14 @@ from .graph_runtime import (
     get_graph_frontier,
     replay_graph_events,
 )
-from .model import work_item_child_contract_fingerprint
+from .model import required_skill_policy, work_item_child_contract_fingerprint
 from .projections import render_task_handoff
 from .repository import GovernanceRepository, timestamp, timestamp_after
 
 
-OPERATION_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+OPERATION_ID = re.compile(
+    rf"^[a-z0-9][a-z0-9._-]{{0,{MAX_IDENTIFIER_LENGTH - 1}}}$"
+)
 
 
 def _parse_timestamp(value: str) -> datetime:
@@ -250,6 +252,7 @@ def _validated_task_result_artifact(
     entry: dict[str, Any],
     definition: dict[str, Any],
     authorized_file_changes: list[dict[str, Any]],
+    required_skills: list[dict[str, Any]],
     status: str,
 ) -> tuple[dict[str, str], dict[str, Any]]:
     operation_id = entry["claim"]["operationId"]
@@ -258,6 +261,7 @@ def _validated_task_result_artifact(
         item_id=entry["id"],
         operation_id=operation_id,
         requested_status=status,
+        required_skills=required_skills,
     )
     if issues:
         fail(
@@ -268,6 +272,7 @@ def _validated_task_result_artifact(
                 entry,
                 definition,
                 authorized_file_changes=authorized_file_changes,
+                required_skills=required_skills,
             ),
         )
     return evidence_record(evidence), evidence
@@ -305,11 +310,17 @@ def record_task_result(
         authorized_file_changes = repository.effective_task_file_changes(
             definition
         )
+        required_skills = repository.effective_required_skills(
+            registry,
+            entry,
+            stage="DEVELOPMENT",
+        )
         reference, artifact = _validated_task_result_artifact(
             evidence,
             entry=entry,
             definition=definition,
             authorized_file_changes=authorized_file_changes,
+            required_skills=required_skills,
             status=status,
         )
         entry["status"] = status
@@ -457,6 +468,11 @@ def _task_context(
         "schemaVersion": SCHEMA_VERSION,
         "gateLevel": definition["gateLevel"],
         "developmentMode": root_entry["developmentMode"]["mode"],
+        "requiredSkills": repository.effective_required_skills(
+            registry,
+            entry,
+        ),
+        "requiredSkillPolicy": required_skill_policy(),
         "operation": {
             "owner": entry["claim"]["owner"],
             "operationId": entry["claim"]["operationId"],

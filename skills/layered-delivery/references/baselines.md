@@ -2,13 +2,15 @@
 
 ## 节点契约
 
-所有节点只使用当前完整 schema v3，并包含 `id`、`kind`、`gateLevel`、`title`、`goal`、`scope`、`nonGoals`、`requirements`、`acceptance`、`testCommands`、`risks`、`decisions` 和 `developmentPlan`。缺少当前字段或出现未知兼容字段时不恢复、不写入。
+所有节点只使用当前完整 schema v3，并包含 `id`、`kind`、`gateLevel`、`title`、`goal`、`scope`、`nonGoals`、`requirements`、`acceptance`、`testCommands`、`requiredSkills`、`risks`、`decisions` 和 `developmentPlan`。缺少当前字段或出现未知兼容字段时不恢复、不写入。
 
 - Delivery：额外包含 `decomposition.status`、Capability `children` 和协调层开发计划。
 - Capability：额外包含 `parentId`、`decomposition.status/dependsOn`、Task `children` 和协调层开发计划。
 - Task：额外包含 `parentId`、`execution {dependsOn, inputs, outputs}` 和精确文件/接口开发计划。
 
 `gateLevel` 只能是 `LIGHT|FULL`，且只有 Task 可以为 `LIGHT`。Task 冻结时的 `fileChanges` 必须是 scope 内精确相对路径；协调层 `childPlans`、依赖、波次、R/A 和测试映射必须覆盖全部直接子级。验证阶段发现原验收项所需文件漏列时，`remediate-task` 以追加审计方式形成补充授权，不改写 baseline 或冻结方案。
+
+`requiredSkills` 是可空数组；每项精确包含 `name/stages/purpose`。`name` 使用可移植 Skill catalog 名（允许插件命名空间中的 `:`），不含 `/skill`、`$skill` 等宿主调用前缀；`stages` 只能从 `DEVELOPMENT|GATE|FINAL_REVIEW` 选择，`FINAL_REVIEW` 只允许在需求根声明。祖先声明对子树只增不减，同一 Skill/阶段的多级目的会在运行上下文聚合；该字段进入 baseline、父契约、层级和图指纹，冻结后不能由重试或验证修正取消。
 
 ## 完整层级 definition
 
@@ -54,6 +56,7 @@
 - Delivery/Capability：`BASELINE_FROZEN / FROZEN`；
 - Task：`BASELINE_FROZEN / FROZEN`；
 - `developmentPlan` 进入 Task 独立上下文；
+- 当前节点及全部祖先的 `requiredSkills` 按阶段进入 frontier action、Task context 和 evidence contract；Skill 不可用时阻断相应阶段，不得省略后继续成功迁移；
 - 根级开发方式只记录在 SQLite，同一次冻结确认中的 active/manual 由全部 Task 继承；
 - active 的 Agent 数量、并发度、调度顺序和降级路径由 Graph frontier 的 `dispatchPlan` 自动计算；执行适配器只负责启动或稳定排队，不拥有任务选择权。这些瞬时计划不进入冻结方案或指纹；
 - 每次生成上下文、claim 和 gate 前重新校验整条父链。

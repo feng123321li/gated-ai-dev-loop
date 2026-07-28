@@ -14,6 +14,7 @@ from hdg.execution import dispatch_task, record_task_result
 from hdg.interactions import list_interactions, record_interaction
 from hdg.jsonio import fingerprint
 from hdg.planning import freeze_hierarchy, prepare_hierarchy, refresh_work_item_projections
+from hdg.repository import GovernanceRepository
 
 from .fixtures import task_hierarchy
 
@@ -62,6 +63,36 @@ class SQLiteStorageTests(unittest.TestCase):
             interaction_log = Path(prepared["artifactDir"], "interaction-log.md")
             self.assertTrue(interaction_log.is_file())
             self.assertIn("层级方案与方式确认", interaction_log.read_text(encoding="utf-8"))
+
+    def test_read_only_repository_queries_preserve_sqlite_journal_mode(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepare_hierarchy(
+                root=temporary,
+                hierarchy=task_hierarchy(),
+                host_runtime="codex",
+            )
+            database = (
+                self._governance_root(temporary)
+                / "governance.sqlite3"
+            )
+            with closing(sqlite3.connect(database)) as connection:
+                before = connection.execute(
+                    "PRAGMA journal_mode = WAL"
+                ).fetchone()[0]
+
+            GovernanceRepository(
+                temporary
+            ).read_operational_registry()
+
+            with closing(sqlite3.connect(database)) as connection:
+                after = connection.execute(
+                    "PRAGMA journal_mode"
+                ).fetchone()[0]
+
+            self.assertEqual(before.casefold(), "wal")
+            self.assertEqual(after.casefold(), "wal")
 
     def test_context_results_and_reports_are_stored_in_sqlite_without_json_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

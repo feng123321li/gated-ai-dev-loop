@@ -348,6 +348,95 @@ class RuntimeFsmTests(unittest.TestCase):
                 2,
             )
 
+    def test_blocked_required_gate_skill_routes_to_manual_intervention(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            hierarchy = task_hierarchy()
+            hierarchy["root"]["definition"]["requiredSkills"] = [{
+                "name": "tdd-workflow",
+                "stages": ["GATE"],
+                "purpose": "Apply the complete gate verification workflow.",
+            }]
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=hierarchy,
+                host_runtime="codex",
+                now=self.START,
+            )
+            task_id = prepared["rootId"]
+            freeze_hierarchy(
+                root=temporary,
+                root_id=task_id,
+                expected_hierarchy_fingerprint=prepared[
+                    "hierarchyFingerprint"
+                ],
+                development_mode="active",
+                confirmed=True,
+                now=self.START,
+            )
+            dispatch_task(
+                root=temporary,
+                item_id=task_id,
+                owner="developer",
+                operation_id="op-gate-skill-blocked",
+                now=self.START + timedelta(minutes=1),
+            )
+            record_task_result(
+                root=temporary,
+                item_id=task_id,
+                operation_id="op-gate-skill-blocked",
+                status="IMPLEMENTED",
+                evidence=self._implemented_result(
+                    task_id,
+                    "op-gate-skill-blocked",
+                ),
+                now=self.START + timedelta(minutes=2),
+            )
+            gate = self._failed_gate(
+                task_id,
+                prepared["baselineFingerprints"][task_id],
+                1,
+            )
+            blocked_reason = (
+                "The required Skill could not complete because its isolated "
+                "review runtime was unavailable."
+            )
+            gate["skillUsage"] = [{
+                "name": "tdd-workflow",
+                "stage": "GATE",
+                "status": "BLOCKED",
+                "evidence": blocked_reason,
+            }]
+
+            accept_work_item(
+                root=temporary,
+                item_id=task_id,
+                evidence=gate,
+                now=self.START + timedelta(minutes=3),
+            )
+
+            gate_block = next(
+                item
+                for item in get_graph_frontier(
+                    root=temporary,
+                    work_item_id=task_id,
+                )["blocked"]
+                if item["nodeId"] == gate_node_id(task_id)
+            )
+            self.assertEqual(gate_block["failureClass"], "NON_RETRYABLE")
+            self.assertEqual(
+                gate_block["recommendedAction"],
+                "REQUEST_INTERVENTION",
+            )
+            self.assertEqual(
+                gate_block["blockedSkillUsage"],
+                [{
+                    "name": "tdd-workflow",
+                    "stage": "GATE",
+                    "status": "BLOCKED",
+                    "evidence": blocked_reason,
+                }],
+            )
+
     def test_contract_change_is_classified_but_not_automatically_retried(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepared = self._prepare_and_freeze(temporary)

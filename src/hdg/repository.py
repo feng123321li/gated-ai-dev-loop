@@ -22,11 +22,29 @@ from .evidence import (
     valid_acceptance_report,
     valid_development_mode,
     valid_evidence_record,
+    valid_gate_artifact,
+    valid_review_artifact,
+    valid_task_result_artifact,
     valid_validation_remediation_artifact,
     valid_timestamp,
 )
-from .fs_safe import atomic_create_directory, atomic_replace_directory, atomic_write, read_regular_file, safe_path
-from .graph_model import compile_runtime_policy, graph_fingerprint, validate_delivery_graph
+from .fs_safe import (
+    atomic_create_directory,
+    atomic_replace_directory,
+    atomic_write,
+    exclusive_file_lock,
+    read_regular_file,
+    safe_path,
+)
+from .graph_model import (
+    compile_runtime_policy,
+    confirmation_node_id,
+    execution_node_id,
+    gate_node_id,
+    graph_fingerprint,
+    review_node_id,
+    validate_delivery_graph,
+)
 from .graph_projections import (
     render_delivery_graph,
     render_frontier_dashboard,
@@ -36,11 +54,12 @@ from .graph_projections import (
 )
 from .svg_graphs import render_delivery_graph_svg_assets, render_runtime_policy_svg_assets
 from .host_runtime import is_agent_runtime
-from .jsonio import canonical_json, sha256_bytes
+from .jsonio import canonical_json, sha256_bytes, strict_json_loads
 from .model import (
     WORK_ITEM_AUTHORITIES,
     WORK_ITEM_GATE_LEVELS,
     WORK_ITEM_KINDS,
+    WORK_ITEM_SKILL_STAGES,
     WORK_ITEM_SCHEMA_VERSION,
     render_development_plan,
     render_hierarchy_plan,
@@ -67,6 +86,7 @@ from .timing import timed_stage, timing_increment, timing_metric
 
 
 WORK_ITEM_DATABASE_FILE = "governance.sqlite3"
+PROJECTION_LOCK_FILE = "projection.lock"
 LEGACY_REGISTRY_FILE = "work-item-registry.json"
 WORK_ITEMS_DIRECTORY = "work-items"
 GOVERNANCE_DIRECTORY = ".layered-delivery"
@@ -85,8 +105,52 @@ DATABASE_TABLES = {
     "workspace", "work_items", "hierarchies", "task_contexts", "reports",
     "interaction_events", "graph_definitions", "graph_nodes", "graph_edges",
     "graph_runs", "node_runs", "graph_events", "graph_evidence",
+    "payload_uploads", "payload_chunks",
 }
 DATABASE_COLUMN_CONTRACTS = {
+    "workspace": (
+        "singleton", "schema_version", "coordination_root", "revision",
+        "current_focus_json", "updated_at",
+    ),
+    "work_items": (
+        "id", "entry_json", "definition_json", "state_json",
+    ),
+    "hierarchies": (
+        "root_id", "hierarchy_state_json",
+    ),
+    "task_contexts": (
+        "work_item_id", "context_json", "handoff_markdown", "updated_at",
+    ),
+    "reports": (
+        "work_item_id", "report_kind", "report_json", "generated_at",
+    ),
+    "interaction_events": (
+        "event_id", "event_uuid", "work_item_id", "session_id", "actor",
+        "event_type", "summary", "operation_id", "host_runtime",
+        "payload_json", "registry_revision", "recorded_at", "previous_hash",
+        "event_hash",
+    ),
+    "graph_definitions": (
+        "root_id", "hierarchy_fingerprint", "graph_fingerprint",
+        "definition_json", "created_at", "frozen_at",
+    ),
+    "graph_nodes": (
+        "graph_fingerprint", "node_id", "node_kind", "planes_json",
+        "work_item_id",
+    ),
+    "graph_edges": (
+        "graph_fingerprint", "edge_id", "source_node_id", "target_node_id",
+        "edge_kind", "plane", "join_group",
+    ),
+    "payload_uploads": (
+        "upload_id", "generation_id", "target_tool", "target_argument",
+        "total_chunks", "status", "received_bytes", "received_chunks",
+        "content_sha256", "created_at", "expires_at", "finalized_at",
+    ),
+    "payload_chunks": (
+        "upload_id", "generation_id", "chunk_index", "chunk_sha256",
+        "byte_size", "chunk_text",
+    ),
     "graph_runs": (
         "run_id", "root_id", "graph_fingerprint", "status", "started_at",
         "updated_at", "completed_at", "cancelled_at", "record_revision",
@@ -96,6 +160,16 @@ DATABASE_COLUMN_CONTRACTS = {
         "claimed_at", "finished_at", "latest_evidence_hash", "lease_expires_at",
         "last_heartbeat_at", "failure_class", "last_transition", "retry_exhausted",
         "record_revision",
+    ),
+    "graph_events": (
+        "event_id", "event_uuid", "run_id", "graph_fingerprint", "node_id",
+        "attempt", "event_type", "actor", "operation_id", "payload_json",
+        "recorded_at", "previous_hash", "event_hash",
+    ),
+    "graph_evidence": (
+        "evidence_id", "bound_evidence_sha256", "run_id",
+        "graph_fingerprint", "node_id", "attempt", "artifact_sha256",
+        "bound_artifact_json", "recorded_at",
     ),
 }
 
@@ -210,15 +284,42 @@ class GovernanceRepository:
 
     def assert_self_hosting_dogfood(self, explicit_dogfood: bool) -> None:
         project_name = None
-        pyproject = self.root / "pyproject.toml"
-        try:
-            text = read_regular_file(self.root, pyproject).decode("utf-8")
-            project_match = re.search(r"(?ms)^\[project\]\s*(.*?)(?=^\[|\Z)", text)
-            name_match = re.search(r'(?m)^name\s*=\s*["\']([^"\']+)["\']\s*$', project_match.group(1) if project_match else "")
-            if name_match:
-                project_name = name_match.group(1)
-        except (FileNotFoundError, UnicodeDecodeError):
-            pass
+        source_checkout_detected = False
+        for candidate in (self.root, *self.root.parents):
+            source_checkout_detected = source_checkout_detected or all(
+                path.is_file()
+                for path in (
+                    candidate / "scripts" / "build_skill.py",
+                    candidate / "src" / "hdg" / "repository.py",
+                    candidate / "skills" / "layered-delivery" / "SKILL.md",
+                )
+            )
+            pyproject = candidate / "pyproject.toml"
+            try:
+                text = read_regular_file(candidate, pyproject).decode("utf-8")
+            except FileNotFoundError:
+                text = None
+            except UnicodeDecodeError:
+                if source_checkout_detected:
+                    project_name = "layered-delivery"
+                    break
+                text = None
+            if text is not None:
+                project_match = re.search(
+                    r"(?ms)^\[project\]\s*(.*?)(?=^\[|\Z)",
+                    text,
+                )
+                name_match = re.search(
+                    r"(?m)^name\s*=\s*([\"'])([^\"']+)\1"
+                    r"\s*(?:#.*)?$",
+                    project_match.group(1) if project_match else "",
+                )
+                if name_match and name_match.group(2) == "layered-delivery":
+                    project_name = "layered-delivery"
+                    break
+            if source_checkout_detected:
+                project_name = "layered-delivery"
+                break
         policy = resolve_self_hosting_policy(project_name=project_name, explicit_dogfood=explicit_dogfood)
         if not policy["createsRuntimePackage"]:
             fail(
@@ -247,18 +348,60 @@ class GovernanceRepository:
         safe_path(self.root, f"{GOVERNANCE_DIRECTORY}/{WORK_ITEMS_DIRECTORY}")
 
     def _connect(self, *, create: bool) -> sqlite3.Connection:
-        if not create and not self.database_path.is_file():
-            fail("WORK_ITEM_DATABASE_MISSING", "Governance database does not exist")
-        connection = sqlite3.connect(
-            self.database_path,
-            timeout=30.0,
-            isolation_level=None,
+        database_path = safe_path(
+            self.root,
+            f"{GOVERNANCE_DIRECTORY}/{WORK_ITEM_DATABASE_FILE}",
         )
+        if database_path.exists():
+            database_stat = database_path.lstat()
+            if (
+                database_path.is_symlink()
+                or not database_path.is_file()
+            ):
+                fail(
+                    "WORK_ITEM_DATABASE_PATH_INVALID",
+                    "Governance database must be a regular in-root file",
+                )
+            if database_stat.st_nlink != 1:
+                fail(
+                    "PATH_HARDLINK",
+                    "Governance database hard links are not allowed",
+                )
+        if not create and not database_path.is_file():
+            fail("WORK_ITEM_DATABASE_MISSING", "Governance database does not exist")
+        if create:
+            connection = sqlite3.connect(
+                database_path,
+                timeout=30.0,
+                isolation_level=None,
+            )
+        else:
+            database_uri = (
+                database_path.absolute().as_uri()
+                + "?mode=ro"
+            )
+            connection = sqlite3.connect(
+                database_uri,
+                timeout=30.0,
+                isolation_level=None,
+                uri=True,
+            )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA busy_timeout = 30000")
         connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = DELETE")
-        connection.execute("PRAGMA synchronous = FULL")
+        if create:
+            connection.execute("PRAGMA journal_mode = DELETE")
+            connection.execute("PRAGMA synchronous = FULL")
+            connection.execute("PRAGMA secure_delete = ON")
+        else:
+            connection.execute("PRAGMA query_only = ON")
+        database_stat = database_path.lstat()
+        if database_path.is_symlink() or database_stat.st_nlink != 1:
+            connection.close()
+            fail(
+                "WORK_ITEM_DATABASE_PATH_INVALID",
+                "Governance database path changed while it was opened",
+            )
         return connection
 
     @staticmethod
@@ -304,6 +447,37 @@ class GovernanceRepository:
                 generated_at TEXT NOT NULL,
                 PRIMARY KEY (work_item_id, report_kind)
             )""",
+            """CREATE TABLE IF NOT EXISTS payload_uploads (
+                upload_id TEXT PRIMARY KEY,
+                generation_id TEXT NOT NULL,
+                target_tool TEXT NOT NULL,
+                target_argument TEXT NOT NULL,
+                total_chunks INTEGER NOT NULL CHECK (total_chunks > 0),
+                status TEXT NOT NULL CHECK (
+                    status IN ('UPLOADING', 'FINALIZING', 'READY', 'INVALID')
+                ),
+                received_bytes INTEGER NOT NULL CHECK (received_bytes >= 0),
+                received_chunks INTEGER NOT NULL CHECK (received_chunks >= 0),
+                content_sha256 TEXT,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                finalized_at TEXT,
+                UNIQUE (upload_id, generation_id)
+            )""",
+            """CREATE TABLE IF NOT EXISTS payload_chunks (
+                upload_id TEXT NOT NULL,
+                generation_id TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                chunk_sha256 TEXT NOT NULL,
+                byte_size INTEGER NOT NULL,
+                chunk_text TEXT NOT NULL,
+                PRIMARY KEY (upload_id, generation_id, chunk_index),
+                FOREIGN KEY (upload_id, generation_id)
+                    REFERENCES payload_uploads(upload_id, generation_id)
+                    ON DELETE CASCADE
+            )""",
+            """CREATE INDEX IF NOT EXISTS payload_uploads_expiry
+                ON payload_uploads(expires_at)""",
             """CREATE TABLE IF NOT EXISTS interaction_events (
                 event_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 event_uuid TEXT NOT NULL UNIQUE,
@@ -447,11 +621,113 @@ class GovernanceRepository:
                     expectedColumns=list(expected),
                     actualColumns=list(actual),
                 )
+        payload_schema_contracts = {
+            "payload_uploads": {
+                "positive total_chunks": "check(total_chunks>0)",
+                "closed status set": (
+                    "check(statusin('uploading','finalizing','ready','invalid'))"
+                ),
+                "non-negative received_bytes": "check(received_bytes>=0)",
+                "non-negative received_chunks": "check(received_chunks>=0)",
+                "generation identity": "unique(upload_id,generation_id)",
+            },
+            "payload_chunks": {
+                "generation-scoped primary key": (
+                    "primarykey(upload_id,generation_id,chunk_index)"
+                ),
+                "generation-scoped cascading foreign key": (
+                    "foreignkey(upload_id,generation_id)"
+                    "referencespayload_uploads(upload_id,generation_id)"
+                    "ondeletecascade"
+                ),
+            },
+        }
+        for table, contract in payload_schema_contracts.items():
+            row = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?",
+                (table,),
+            ).fetchone()
+            normalized_sql = (
+                re.sub(r"\s+", "", str(row["sql"])).casefold()
+                if row is not None and row["sql"] is not None
+                else ""
+            )
+            missing_constraints = [
+                name
+                for name, fragment in contract.items()
+                if fragment not in normalized_sql
+            ]
+            if missing_constraints:
+                fail(
+                    "WORK_ITEM_DATABASE_SCHEMA_UNSUPPORTED",
+                    "Governance database payload constraint contract is invalid",
+                    table=table,
+                    missingConstraints=missing_constraints,
+                )
+        payload_foreign_keys = {
+            (
+                row["table"],
+                row["from"],
+                row["to"],
+                row["on_delete"],
+            )
+            for row in connection.execute(
+                "PRAGMA foreign_key_list(payload_chunks)"
+            )
+        }
+        expected_payload_foreign_keys = {
+            ("payload_uploads", "upload_id", "upload_id", "CASCADE"),
+            (
+                "payload_uploads",
+                "generation_id",
+                "generation_id",
+                "CASCADE",
+            ),
+        }
+        if payload_foreign_keys != expected_payload_foreign_keys:
+            fail(
+                "WORK_ITEM_DATABASE_SCHEMA_UNSUPPORTED",
+                "Governance database payload foreign-key contract is invalid",
+            )
+        expiry_index = tuple(
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA index_info(payload_uploads_expiry)"
+            )
+        )
+        if expiry_index != ("expires_at",):
+            fail(
+                "WORK_ITEM_DATABASE_SCHEMA_UNSUPPORTED",
+                "Governance database payload expiry index is invalid",
+            )
 
     def _active_connection(self) -> sqlite3.Connection:
         if self._connection is None:
             fail("WORK_ITEM_TRANSACTION_REQUIRED", "This operation requires an active governance transaction")
         return self._connection
+
+    @contextmanager
+    def staging_transaction(self) -> Iterator[sqlite3.Connection]:
+        """Run a short auxiliary write without changing domain revision."""
+
+        self.ensure_runtime_root()
+        with timed_stage("sqlite.staging.connect"):
+            connection = self._connect(create=True)
+        committed = False
+        try:
+            with timed_stage("sqlite.staging.lockWait"):
+                connection.execute("BEGIN IMMEDIATE")
+            self._initialize_database(connection, create=True)
+            yield connection
+            with timed_stage("sqlite.staging.commit"):
+                connection.commit()
+            committed = True
+        except Exception:
+            if not committed:
+                connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     @contextmanager
     def _read_connection(self) -> Iterator[sqlite3.Connection]:
@@ -464,6 +740,71 @@ class GovernanceRepository:
             yield connection
         finally:
             connection.close()
+
+    def inspect_workspace_state(self) -> dict[str, Any]:
+        """Classify absent, staging-only, and active governance state."""
+
+        database_path = safe_path(
+            self.root,
+            f"{GOVERNANCE_DIRECTORY}/{WORK_ITEM_DATABASE_FILE}",
+        )
+        if self.governance_root.exists() and not self.governance_root.is_dir():
+            fail(
+                "WORK_ITEM_DATABASE_PATH_INVALID",
+                "Governance runtime path must be a directory",
+            )
+        if not database_path.exists():
+            return {
+                "state": "ABSENT",
+                "databaseExists": False,
+                "activePayloadUploads": 0,
+                "stagedPayloadBytes": 0,
+            }
+        with self._read_connection() as connection:
+            workspace_rows = connection.execute(
+                "SELECT schema_version, coordination_root FROM workspace"
+            ).fetchall()
+            payload_summary = connection.execute(
+                "SELECT COUNT(*), COALESCE(SUM(received_bytes), 0) "
+                "FROM payload_uploads WHERE expires_at > ?",
+                (timestamp(self.now),),
+            ).fetchone()
+            if not workspace_rows:
+                domain_tables = sorted(
+                    DATABASE_TABLES - {"workspace", "payload_uploads", "payload_chunks"}
+                )
+                populated = [
+                    table
+                    for table in domain_tables
+                    if connection.execute(
+                        f"SELECT 1 FROM {table} LIMIT 1"
+                    ).fetchone()
+                    is not None
+                ]
+                if populated:
+                    fail(
+                        "WORK_ITEM_REGISTRY_MISSING",
+                        "Governance database has domain rows without workspace state",
+                        populatedTables=populated,
+                    )
+                state = "STAGING_ONLY"
+            elif (
+                len(workspace_rows) == 1
+                and workspace_rows[0]["schema_version"] == SCHEMA_VERSION
+                and workspace_rows[0]["coordination_root"] == str(self.root)
+            ):
+                state = "ACTIVE"
+            else:
+                fail(
+                    "WORK_ITEM_REGISTRY_INVALID",
+                    "Governance workspace identity is invalid",
+                )
+            return {
+                "state": state,
+                "databaseExists": True,
+                "activePayloadUploads": payload_summary[0],
+                "stagedPayloadBytes": payload_summary[1],
+            }
 
     def empty_registry(self) -> dict[str, Any]:
         return {
@@ -507,6 +848,46 @@ class GovernanceRepository:
 
     def is_item_isolated(self, item_id: str) -> bool:
         return item_id in self._isolated_entry_ids
+
+    def assert_subtree_operational(
+        self,
+        registry: dict[str, Any],
+        entry: dict[str, Any],
+    ) -> None:
+        by_id = {
+            candidate["id"]: candidate
+            for candidate in registry["workItems"]
+        }
+        pending = [entry["id"]]
+        visited: set[str] = set()
+        isolated: list[str] = []
+        while pending:
+            item_id = pending.pop()
+            if item_id in visited:
+                fail(
+                    "WORK_ITEM_HIERARCHY_CYCLE",
+                    "Work item hierarchy contains a cycle",
+                )
+            visited.add(item_id)
+            current = by_id.get(item_id)
+            if current is None:
+                fail(
+                    "WORK_ITEM_HIERARCHY_INVALID",
+                    f"Work item hierarchy entry is missing: {item_id}",
+                )
+            if item_id in self._isolated_entry_ids:
+                isolated.append(item_id)
+            pending.extend(reversed(current["childIds"]))
+        if isolated:
+            fail(
+                "WORK_ITEM_HIERARCHY_ISOLATED",
+                (
+                    "A governance transition cannot advance while its "
+                    "work-item subtree contains read-only isolated evidence"
+                ),
+                itemId=entry["id"],
+                isolatedItemIds=sorted(isolated),
+            )
 
     @staticmethod
     def _validate_registry_entry(
@@ -758,10 +1139,12 @@ class GovernanceRepository:
             )
 
     def read_operational_registry(self, *, allow_missing: bool = False) -> dict[str, Any]:
-        return self.read_registry(
+        registry = self.read_registry(
             allow_missing=allow_missing,
             isolate_historical_evidence=True,
         )
+        self.validate_stored_evidence(registry)
+        return registry
 
     def validate_operational_registry(self, registry: dict[str, Any]) -> dict[str, Any]:
         self.validate_registry(registry, isolate_historical_evidence=True)
@@ -821,35 +1204,57 @@ class GovernanceRepository:
             timing_metric("projectionMode", mode)
             try:
                 with timed_stage(f"projection.{mode}"):
-                    projection_registry = projection_request["registry"]
-                    for attempt in range(3):
-                        if mode == "heartbeat":
-                            self.refresh_heartbeat_projections(
-                                projection_registry,
-                                projection_request["rootId"],
-                            )
-                        elif mode == "interaction":
-                            self.refresh_interaction_projection(
-                                projection_registry,
-                                projection_request["rootId"],
-                            )
-                        else:
-                            self.refresh_registry_projections(
-                                projection_registry,
-                            )
+                    projection_lock = safe_path(
+                        self.root,
+                        (
+                            f"{GOVERNANCE_DIRECTORY}/"
+                            f"{PROJECTION_LOCK_FILE}"
+                        ),
+                    )
+                    with exclusive_file_lock(projection_lock):
+                        projection_registry = projection_request["registry"]
                         if (
                             self.current_registry_revision()
-                            == projection_registry["revision"]
+                            != projection_registry["revision"]
                         ):
-                            break
-                        timing_increment("projectionRefreshRetries")
-                        projection_registry = self.read_operational_registry()
-                        mode = "full"
-                    else:
-                        fail(
-                            "WORK_ITEM_PROJECTION_BUSY",
-                            "Projection could not catch up with concurrent state changes",
-                        )
+                            timing_increment("projectionRefreshRetries")
+                            projection_registry = (
+                                self.read_operational_registry()
+                            )
+                            mode = "full"
+                        for attempt in range(3):
+                            if mode == "heartbeat":
+                                self.refresh_heartbeat_projections(
+                                    projection_registry,
+                                    projection_request["rootId"],
+                                )
+                            elif mode == "interaction":
+                                self.refresh_interaction_projection(
+                                    projection_registry,
+                                    projection_request["rootId"],
+                                )
+                            else:
+                                self.refresh_registry_projections(
+                                    projection_registry,
+                                )
+                            if (
+                                self.current_registry_revision()
+                                == projection_registry["revision"]
+                            ):
+                                break
+                            timing_increment("projectionRefreshRetries")
+                            projection_registry = (
+                                self.read_operational_registry()
+                            )
+                            mode = "full"
+                        else:
+                            fail(
+                                "WORK_ITEM_PROJECTION_BUSY",
+                                (
+                                    "Projection could not catch up with "
+                                    "concurrent state changes"
+                                ),
+                            )
             except Exception as error:
                 raise GatedLoopError(
                     "WORK_ITEM_PROJECTION_REFRESH_REQUIRED",
@@ -1415,68 +1820,108 @@ class GovernanceRepository:
             })
         return records
 
-    def read_graph_events(self, root_id: str) -> list[dict[str, Any]]:
+    def read_graph_events(
+        self,
+        root_id: str,
+        *,
+        after_event_id: int | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if (after_event_id is None) != (limit is None) or (
+            after_event_id is not None
+            and (
+                not _plain_int(after_event_id)
+                or not _plain_int(limit, minimum=1)
+            )
+        ):
+            fail(
+                "DELIVERY_GRAPH_EVENT_PAGE_INVALID",
+                "Graph event cursor and limit must be supplied together",
+            )
         run = self.read_graph_run(root_id, allow_missing=True)
         if run is None:
             return []
-        with self._read_connection() as connection:
-            rows = connection.execute(
-                "SELECT event_id, event_uuid, run_id, graph_fingerprint, node_id, attempt, event_type, actor, "
-                "operation_id, payload_json, recorded_at, previous_hash, event_hash "
-                "FROM graph_events WHERE run_id = ? ORDER BY event_id",
-                (run["runId"],),
-            ).fetchall()
         result = []
         previous_hash = None
         evidence_bindings = {
             record["boundEvidenceSha256"]: record["boundArtifact"]["binding"]
             for record in self.read_graph_evidence(root_id)
         }
-        for row in rows:
-            try:
-                payload = json.loads(row["payload_json"])
-            except (TypeError, json.JSONDecodeError):
-                fail("DELIVERY_GRAPH_EVENT_INVALID", "Stored graph event payload is invalid")
-            hash_payload = {
-                "eventUuid": row["event_uuid"],
-                "runId": row["run_id"],
-                "graphFingerprint": row["graph_fingerprint"],
-                "nodeId": row["node_id"],
-                "attempt": row["attempt"],
-                "eventType": row["event_type"],
-                "actor": row["actor"],
-                "operationId": row["operation_id"],
-                "payload": payload,
-                "recordedAt": row["recorded_at"],
-                "previousHash": row["previous_hash"],
-            }
-            expected_hash = sha256_bytes(canonical_json(hash_payload).encode("utf-8"))
-            binding = payload.get("evidenceBinding") if isinstance(payload, dict) else None
-            binding_valid = (
-                binding is None
-                or (
-                    isinstance(binding, dict)
-                    and binding.get("runId") == run["runId"]
-                    and binding.get("graphFingerprint") == run["graphFingerprint"]
-                    and binding.get("nodeId") == row["node_id"]
-                    and binding.get("attempt") == row["attempt"]
-                    and binding
-                    == evidence_bindings.get(binding.get("boundEvidenceSha256"))
-                )
+        with self._read_connection() as connection:
+            rows = connection.execute(
+                "SELECT event_id, event_uuid, run_id, graph_fingerprint, "
+                "node_id, attempt, event_type, actor, operation_id, "
+                "payload_json, recorded_at, previous_hash, event_hash "
+                "FROM graph_events WHERE run_id = ? ORDER BY event_id",
+                (run["runId"],),
             )
-            if (
-                row["graph_fingerprint"] != run["graphFingerprint"]
-                or row["previous_hash"] != previous_hash
-                or row["event_hash"] != expected_hash
-                or not binding_valid
-            ):
-                fail("DELIVERY_GRAPH_EVENT_INVALID", "Stored graph event chain is invalid")
-            previous_hash = row["event_hash"]
-            result.append({
-                "eventId": row["event_id"],
-                **hash_payload,
-                "eventHash": row["event_hash"],
-            })
+            for row in rows:
+                try:
+                    payload = json.loads(row["payload_json"])
+                except (TypeError, json.JSONDecodeError):
+                    fail(
+                        "DELIVERY_GRAPH_EVENT_INVALID",
+                        "Stored graph event payload is invalid",
+                    )
+                hash_payload = {
+                    "eventUuid": row["event_uuid"],
+                    "runId": row["run_id"],
+                    "graphFingerprint": row["graph_fingerprint"],
+                    "nodeId": row["node_id"],
+                    "attempt": row["attempt"],
+                    "eventType": row["event_type"],
+                    "actor": row["actor"],
+                    "operationId": row["operation_id"],
+                    "payload": payload,
+                    "recordedAt": row["recorded_at"],
+                    "previousHash": row["previous_hash"],
+                }
+                expected_hash = sha256_bytes(
+                    canonical_json(hash_payload).encode("utf-8")
+                )
+                binding = (
+                    payload.get("evidenceBinding")
+                    if isinstance(payload, dict)
+                    else None
+                )
+                binding_valid = (
+                    binding is None
+                    or (
+                        isinstance(binding, dict)
+                        and binding.get("runId") == run["runId"]
+                        and binding.get("graphFingerprint")
+                        == run["graphFingerprint"]
+                        and binding.get("nodeId") == row["node_id"]
+                        and binding.get("attempt") == row["attempt"]
+                        and binding
+                        == evidence_bindings.get(
+                            binding.get("boundEvidenceSha256")
+                        )
+                    )
+                )
+                if (
+                    row["graph_fingerprint"] != run["graphFingerprint"]
+                    or row["previous_hash"] != previous_hash
+                    or row["event_hash"] != expected_hash
+                    or not binding_valid
+                ):
+                    fail(
+                        "DELIVERY_GRAPH_EVENT_INVALID",
+                        "Stored graph event chain is invalid",
+                    )
+                previous_hash = row["event_hash"]
+                if (
+                    after_event_id is not None
+                    and row["event_id"] <= after_event_id
+                ):
+                    continue
+                result.append({
+                    "eventId": row["event_id"],
+                    **hash_payload,
+                    "eventHash": row["event_hash"],
+                })
+                if limit is not None and len(result) >= limit:
+                    break
         return result
 
     def sync_graph_runs(
@@ -1818,44 +2263,93 @@ class GovernanceRepository:
         )
         return {"eventId": cursor.lastrowid, **material, "eventHash": event_hash}
 
-    def read_interaction_events(self, item_ids: list[str] | None = None) -> list[dict[str, Any]]:
-        where = ""
-        parameters: tuple[Any, ...] = ()
-        if item_ids is not None:
-            if not item_ids:
-                return []
-            where = f" WHERE work_item_id IN ({','.join('?' for _ in item_ids)})"
-            parameters = tuple(item_ids)
+    def read_interaction_events(
+        self,
+        item_ids: list[str] | None = None,
+        *,
+        after_event_id: int | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        if (after_event_id is None) != (limit is None) or (
+            after_event_id is not None
+            and (
+                not _plain_int(after_event_id)
+                or not _plain_int(limit, minimum=1)
+            )
+        ):
+            fail(
+                "WORK_ITEM_INTERACTION_PAGE_INVALID",
+                "Interaction event cursor and limit must be supplied together",
+            )
+        selected_item_ids = set(item_ids) if item_ids is not None else None
+        if selected_item_ids is not None and not selected_item_ids:
+            return []
+        result = []
+        previous_hash = None
         with self._read_connection() as connection:
             rows = connection.execute(
-                "SELECT event_id, event_uuid, work_item_id, session_id, actor, event_type, summary, "
-                "operation_id, host_runtime, payload_json, registry_revision, recorded_at, "
-                "previous_hash, event_hash FROM interaction_events"
-                f"{where} ORDER BY event_id",
-                parameters,
-            ).fetchall()
-        result = []
-        for row in rows:
-            try:
-                payload = json.loads(row["payload_json"])
-            except (TypeError, json.JSONDecodeError):
-                fail("WORK_ITEM_INTERACTION_INVALID", "Stored interaction payload is invalid")
-            result.append({
-                "eventId": row["event_id"],
-                "eventUuid": row["event_uuid"],
-                "workItemId": row["work_item_id"],
-                "sessionId": row["session_id"],
-                "actor": row["actor"],
-                "eventType": row["event_type"],
-                "summary": row["summary"],
-                "operationId": row["operation_id"],
-                "hostRuntime": row["host_runtime"],
-                "payload": payload,
-                "registryRevision": row["registry_revision"],
-                "recordedAt": row["recorded_at"],
-                "previousHash": row["previous_hash"],
-                "eventHash": row["event_hash"],
-            })
+                "SELECT event_id, event_uuid, work_item_id, session_id, actor, "
+                "event_type, summary, operation_id, host_runtime, "
+                "payload_json, registry_revision, recorded_at, "
+                "previous_hash, event_hash "
+                "FROM interaction_events ORDER BY event_id"
+            )
+            for row in rows:
+                try:
+                    payload = strict_json_loads(row["payload_json"])
+                except (
+                    TypeError,
+                    ValueError,
+                    UnicodeError,
+                    RecursionError,
+                ):
+                    fail(
+                        "WORK_ITEM_INTERACTION_INVALID",
+                        "Stored interaction payload is invalid",
+                    )
+                material = {
+                    "eventUuid": row["event_uuid"],
+                    "workItemId": row["work_item_id"],
+                    "sessionId": row["session_id"],
+                    "actor": row["actor"],
+                    "eventType": row["event_type"],
+                    "summary": row["summary"],
+                    "operationId": row["operation_id"],
+                    "hostRuntime": row["host_runtime"],
+                    "payload": payload,
+                    "registryRevision": row["registry_revision"],
+                    "recordedAt": row["recorded_at"],
+                    "previousHash": row["previous_hash"],
+                }
+                expected_hash = sha256_bytes(
+                    canonical_json(material).encode("utf-8")
+                )
+                if (
+                    row["previous_hash"] != previous_hash
+                    or row["event_hash"] != expected_hash
+                ):
+                    fail(
+                        "WORK_ITEM_INTERACTION_INVALID",
+                        "Stored interaction event chain is invalid",
+                    )
+                previous_hash = row["event_hash"]
+                if (
+                    selected_item_ids is not None
+                    and row["work_item_id"] not in selected_item_ids
+                ):
+                    continue
+                if (
+                    after_event_id is not None
+                    and row["event_id"] <= after_event_id
+                ):
+                    continue
+                result.append({
+                    "eventId": row["event_id"],
+                    **material,
+                    "eventHash": row["event_hash"],
+                })
+                if limit is not None and len(result) >= limit:
+                    break
         return result
 
     def read_validation_remediations(
@@ -1904,6 +2398,395 @@ class GovernanceRepository:
         for record in self.read_validation_remediations(definition["id"], definition):
             changes.extend(deepcopy(record["artifact"]["fileChanges"]))
         return sorted(changes, key=lambda item: item["path"])
+
+    def effective_required_skills(
+        self,
+        registry: dict[str, Any],
+        entry: dict[str, Any],
+        *,
+        stage: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Resolve inherited Skill requirements for one node and optional stage."""
+
+        if stage is not None and stage not in WORK_ITEM_SKILL_STAGES:
+            fail(
+                "WORK_ITEM_REQUIRED_SKILL_INVALID",
+                f"Unsupported required Skill stage: {stage}",
+            )
+        by_id = {item["id"]: item for item in registry["workItems"]}
+        lineage: list[dict[str, Any]] = []
+        current: dict[str, Any] | None = entry
+        visited: set[str] = set()
+        while current is not None:
+            if current["id"] in visited:
+                fail(
+                    "WORK_ITEM_HIERARCHY_CYCLE",
+                    "Work item hierarchy contains a cycle",
+                )
+            visited.add(current["id"])
+            lineage.append(current)
+            parent_id = current["parentId"]
+            current = by_id.get(parent_id) if parent_id is not None else None
+        lineage.reverse()
+
+        aggregated: dict[tuple[str, str], dict[str, Any]] = {}
+        for lineage_entry in lineage:
+            definition = self.read_package(registry, lineage_entry)[0]
+            for requirement in definition["requiredSkills"]:
+                for requirement_stage in requirement["stages"]:
+                    if stage is not None and requirement_stage != stage:
+                        continue
+                    key = (requirement["name"], requirement_stage)
+                    effective = aggregated.setdefault(key, {
+                        "name": requirement["name"],
+                        "stage": requirement_stage,
+                        "declaredBy": [],
+                        "purposes": [],
+                    })
+                    if lineage_entry["id"] not in effective["declaredBy"]:
+                        effective["declaredBy"].append(lineage_entry["id"])
+                    if requirement["purpose"] not in effective["purposes"]:
+                        effective["purposes"].append(requirement["purpose"])
+        stage_order = {
+            value: index
+            for index, value in enumerate(WORK_ITEM_SKILL_STAGES)
+        }
+        return sorted(
+            aggregated.values(),
+            key=lambda item: (stage_order[item["stage"]], item["name"]),
+        )
+
+    def actual_development_skill_usage(
+        self,
+        registry: dict[str, Any],
+        entry: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Return Task result Skill usage for this work item subtree."""
+
+        by_id = {
+            candidate["id"]: candidate
+            for candidate in registry["workItems"]
+        }
+        records: list[dict[str, Any]] = []
+
+        def visit(current: dict[str, Any], path: set[str]) -> None:
+            if current["id"] in path:
+                fail(
+                    "WORK_ITEM_HIERARCHY_CYCLE",
+                    "Work item hierarchy contains a cycle",
+                )
+            next_path = path | {current["id"]}
+            if current["kind"] == "TASK":
+                result = current.get("latestResult")
+                artifact = (
+                    result.get("artifact")
+                    if isinstance(result, dict)
+                    else None
+                )
+                skill_usage = (
+                    artifact.get("skillUsage")
+                    if isinstance(artifact, dict)
+                    else None
+                )
+                if isinstance(skill_usage, list) and skill_usage:
+                    definition = self.read_package(
+                        registry,
+                        current,
+                    )[0]
+                    records.append({
+                        "taskId": current["id"],
+                        "taskTitle": definition["title"],
+                        "operationId": artifact["operationId"],
+                        "resultStatus": artifact["status"],
+                        "recordedAt": result["recordedAt"],
+                        "resultEvidence": deepcopy(result["evidence"]),
+                        "skillUsage": deepcopy(skill_usage),
+                    })
+            for child_id in current["childIds"]:
+                child = by_id.get(child_id)
+                if child is None:
+                    fail(
+                        "WORK_ITEM_HIERARCHY_INVALID",
+                        f"Work item child is missing: {child_id}",
+                    )
+                visit(child, next_path)
+
+        visit(entry, set())
+        return records
+
+    @staticmethod
+    def _stored_evidence_error(
+        entry: dict[str, Any],
+        record_kind: str,
+        reason: str,
+    ) -> None:
+        fail(
+            "WORK_ITEM_STORED_EVIDENCE_INVALID",
+            (
+                f"Stored {record_kind} evidence is invalid for "
+                f"{entry['id']}: {reason}"
+            ),
+            itemId=entry["id"],
+            recordKind=record_kind,
+            reason=reason,
+        )
+
+    def _validated_stored_artifact(
+        self,
+        entry: dict[str, Any],
+        record: object,
+        *,
+        record_kind: str,
+        expected_node_id: str,
+        bound_artifacts: dict[str, set[tuple[str, str, str]]],
+    ) -> dict[str, Any]:
+        if (
+            not isinstance(record, dict)
+            or not isinstance(record.get("artifact"), dict)
+            or not valid_evidence_record(record.get("evidence"))
+        ):
+            self._stored_evidence_error(
+                entry,
+                record_kind,
+                "the evidence record or artifact is missing",
+            )
+        artifact = record["artifact"]
+        actual_reference = evidence_record(artifact)
+        if record["evidence"] != actual_reference:
+            self._stored_evidence_error(
+                entry,
+                record_kind,
+                "the saved evidence hash does not match the artifact",
+            )
+        artifact_json = canonical_json(artifact)
+        matching_bindings = bound_artifacts.get(
+            actual_reference["sha256"],
+            set(),
+        )
+        if not any(
+            bound_json == artifact_json
+            and node_id == expected_node_id
+            and (
+                "recordedAt" not in record
+                or recorded_at == record["recordedAt"]
+            )
+            for bound_json, node_id, recorded_at in matching_bindings
+        ):
+            self._stored_evidence_error(
+                entry,
+                record_kind,
+                "the artifact is not bound to the current graph evidence",
+            )
+        return artifact
+
+    def validate_stored_evidence(
+        self,
+        registry: dict[str, Any],
+    ) -> None:
+        """Strictly revalidate current evidence artifacts during recovery."""
+
+        by_id = {
+            entry["id"]: entry
+            for entry in registry["workItems"]
+        }
+
+        def root_id(entry: dict[str, Any]) -> str:
+            current = entry
+            visited: set[str] = set()
+            while current["parentId"] is not None:
+                if (
+                    current["id"] in visited
+                    or current["parentId"] not in by_id
+                ):
+                    fail(
+                        "WORK_ITEM_HIERARCHY_INVALID",
+                        "Work item hierarchy is invalid",
+                    )
+                visited.add(current["id"])
+                current = by_id[current["parentId"]]
+            return current["id"]
+
+        bound_by_root: dict[
+            str,
+            dict[str, set[tuple[str, str, str]]],
+        ] = {}
+        for entry in registry["workItems"]:
+            if entry["parentId"] is not None:
+                continue
+            bound: dict[str, set[tuple[str, str, str]]] = {}
+            for record in self.read_graph_evidence(entry["id"]):
+                bound_artifact = record["boundArtifact"]
+                artifact = bound_artifact["artifact"]
+                artifact_sha256 = bound_artifact["binding"][
+                    "artifactSha256"
+                ]
+                bound.setdefault(artifact_sha256, set()).add((
+                    canonical_json(artifact),
+                    bound_artifact["binding"]["nodeId"],
+                    record["recordedAt"],
+                ))
+            bound_by_root[entry["id"]] = bound
+
+        for entry in registry["workItems"]:
+            if entry["id"] in self._isolated_entry_ids:
+                continue
+            definition = self.assert_current_lineage(registry, entry)[0]
+            bound_artifacts = bound_by_root[root_id(entry)]
+
+            latest_result = entry.get("latestResult")
+            if latest_result is not None:
+                artifact = self._validated_stored_artifact(
+                    entry,
+                    latest_result,
+                    record_kind="Task result",
+                    expected_node_id=execution_node_id(entry["id"]),
+                    bound_artifacts=bound_artifacts,
+                )
+                status = artifact.get("status")
+                if (
+                    entry["kind"] != "TASK"
+                    or status not in {"IMPLEMENTED", "BLOCKED"}
+                    or not valid_task_result_artifact(
+                        artifact,
+                        item_id=entry["id"],
+                        operation_id=artifact.get("operationId"),
+                        status=status,
+                        required_skills=self.effective_required_skills(
+                            registry,
+                            entry,
+                            stage="DEVELOPMENT",
+                        ),
+                    )
+                ):
+                    self._stored_evidence_error(
+                        entry,
+                        "Task result",
+                        (
+                            "the artifact does not match the frozen "
+                            "DEVELOPMENT Skill contract"
+                        ),
+                    )
+
+            gate = entry["gate"]
+            if gate["status"] in {"PASS", "FAIL"}:
+                artifact = self._validated_stored_artifact(
+                    entry,
+                    gate,
+                    record_kind="gate",
+                    expected_node_id=gate_node_id(entry["id"]),
+                    bound_artifacts=bound_artifacts,
+                )
+                additional_planned_files: set[str] = set()
+                if entry["kind"] == "TASK":
+                    frozen_files = {
+                        item["path"]
+                        for item in definition["developmentPlan"].get(
+                            "fileChanges",
+                            [],
+                        )
+                    }
+                    effective_files = {
+                        item["path"]
+                        for item in self.effective_task_file_changes(
+                            definition
+                        )
+                    }
+                    additional_planned_files = (
+                        effective_files - frozen_files
+                    )
+                if (
+                    artifact.get("verdict") != gate["status"]
+                    or not valid_gate_artifact(
+                        artifact,
+                        entry,
+                        definition,
+                        additional_planned_files=additional_planned_files,
+                        required_skills=self.effective_required_skills(
+                            registry,
+                            entry,
+                            stage="GATE",
+                        ),
+                    )
+                ):
+                    self._stored_evidence_error(
+                        entry,
+                        "gate",
+                        (
+                            "the artifact does not match the frozen GATE "
+                            "Skill contract"
+                        ),
+                    )
+
+            acceptance = entry.get("acceptance")
+            if not isinstance(acceptance, dict):
+                continue
+            required_review_skills = self.effective_required_skills(
+                registry,
+                entry,
+                stage="FINAL_REVIEW",
+            )
+            review = acceptance.get("review")
+            if review is not None:
+                artifact = self._validated_stored_artifact(
+                    entry,
+                    review,
+                    record_kind="review",
+                    expected_node_id=review_node_id(entry["id"]),
+                    bound_artifacts=bound_artifacts,
+                )
+                action = review.get("action")
+                if (
+                    action not in {
+                        "INDEPENDENT_REVIEW_PASS",
+                        "HUMAN_REVIEW_ACCEPTED",
+                        "REVIEW_BLOCKED",
+                    }
+                    or (
+                        action == "HUMAN_REVIEW_ACCEPTED"
+                        and required_review_skills
+                    )
+                    or not valid_review_artifact(
+                        action,
+                        artifact,
+                        required_skills=(
+                            required_review_skills
+                            if action in {
+                                "INDEPENDENT_REVIEW_PASS",
+                                "REVIEW_BLOCKED",
+                            }
+                            else None
+                        ),
+                    )
+                ):
+                    self._stored_evidence_error(
+                        entry,
+                        "review",
+                        (
+                            "the artifact does not match the frozen "
+                            "FINAL_REVIEW Skill contract"
+                        ),
+                    )
+            confirmation = acceptance.get("userConfirmation")
+            if confirmation is not None:
+                artifact = self._validated_stored_artifact(
+                    entry,
+                    confirmation,
+                    record_kind="user confirmation",
+                    expected_node_id=confirmation_node_id(entry["id"]),
+                    bound_artifacts=bound_artifacts,
+                )
+                if (
+                    confirmation.get("action") != "USER_CONFIRMED"
+                    or not valid_review_artifact(
+                        "USER_CONFIRMED",
+                        artifact,
+                    )
+                ):
+                    self._stored_evidence_error(
+                        entry,
+                        "user confirmation",
+                        "the artifact does not match the confirmation contract",
+                    )
 
     def _write_interaction_logs(self, registry: dict[str, Any]) -> None:
         by_id = {item["id"]: item for item in registry["workItems"]}
@@ -2405,6 +3288,7 @@ class GovernanceRepository:
 
     def write_acceptance_report(
         self,
+        registry: dict[str, Any],
         entry: dict[str, Any],
         definition: dict[str, Any],
         at: str,
@@ -2422,6 +3306,12 @@ class GovernanceRepository:
             },
             "status": report_status(entry),
             "development": entry.get("latestResult"),
+            "developmentSkillUsage": (
+                self.actual_development_skill_usage(
+                    registry,
+                    entry,
+                )
+            ),
             "gate": entry["gate"],
             "criteria": definition["acceptance"],
             "developmentPlan": definition["developmentPlan"],

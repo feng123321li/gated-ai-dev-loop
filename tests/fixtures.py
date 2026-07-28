@@ -27,6 +27,7 @@ def task_definition(**overrides: Any) -> dict[str, Any]:
         ],
         "execution": {"dependsOn": [], "inputs": [], "outputs": ["Verified Python controller"]},
         "testCommands": [["python", "-m", "unittest", "tests.test_controller"]],
+        "requiredSkills": [],
         "risks": ["Fingerprint behavior must remain deterministic."],
         "decisions": ["Use only the Python standard library at runtime."],
         "developmentPlan": {
@@ -131,6 +132,7 @@ def capability_definition(**overrides: Any) -> dict[str, Any]:
             },
         ],
         "testCommands": [["python", "-m", "unittest", "discover"]],
+        "requiredSkills": [],
         "risks": ["Child contracts must remain stable."],
         "decisions": ["Use a Capability because the work is aggregated."],
     }
@@ -162,6 +164,7 @@ def delivery_definition(**overrides: Any) -> dict[str, Any]:
             },
         ],
         "testCommands": [["python", "-m", "unittest", "discover"]],
+        "requiredSkills": [],
         "risks": ["Cross-capability contracts must remain stable."],
         "decisions": ["Use a Delivery because multiple capabilities are coordinated."],
     }

@@ -399,8 +399,8 @@ def render_frontier_dashboard(
     lines.extend([
         "## 可执行动作 / Actionable Actions",
         "",
-        "| 节点 / Node | 动作 / Action | 迁移 / Transition | 路由 / Route | 工作项 / Work item | 尝试预算 / Attempt budget | 并行组 / Parallel group | 关键 / Critical | 就绪原因 / Ready because | 命令提示 / Command hint | Evidence contract |",
-        "|---|---|---|---|---|---|---|---|---|---|---|",
+        "| 节点 / Node | 动作 / Action | 迁移 / Transition | 路由 / Route | 工作项 / Work item | 尝试预算 / Attempt budget | 并行组 / Parallel group | 关键 / Critical | 就绪原因 / Ready because | Required Skills | 命令提示 / Command hint | Evidence contract |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ])
     for action in frontier["actions"]:
         reasons = ", ".join(action["readyBecause"]).replace("|", "\\|")
@@ -414,6 +414,10 @@ def render_frontier_dashboard(
             if isinstance(reference, dict) and reference.get("commandHint")
         ]
         contract_hint = ("; ".join(contract_hints) or "-").replace("|", "\\|")
+        required_skills = ", ".join(
+            f"{item['name']}@{item['stage']}"
+            for item in action.get("requiredSkills", [])
+        ) or "-"
         lines.append(
             f"| `{action['nodeId']}` | `{action['action']}` | `{action.get('transition') or '-'}` | "
             f"`{action.get('routeCondition') or '-'}` | `{action['workItemId']}` | "
@@ -421,10 +425,10 @@ def render_frontier_dashboard(
             f"(剩余 / remaining {action.get('remainingAttempts', '-')}) | "
             f"`{action['parallelGroup'] or '-'}` | "
             f"{'是 / Yes' if action['critical'] else '否 / No'} | {reasons} | "
-            f"`{hint}` | `{contract_hint}` |"
+            f"`{required_skills}` | `{hint}` | `{contract_hint}` |"
         )
     if not frontier["actions"]:
-        lines.append("| - | - | - | - | - | - | - | - | 无 / None | - | - |")
+        lines.append("| - | - | - | - | - | - | - | - | 无 / None | - | - | - |")
 
     lines.extend([
         "",

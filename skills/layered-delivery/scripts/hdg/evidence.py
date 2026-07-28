@@ -4,17 +4,23 @@ import re
 from datetime import datetime
 from typing import Any
 
-from .constants import SCHEMA_VERSION
+from .constants import MAX_IDENTIFIER_LENGTH, SCHEMA_VERSION
 from .errors import GatedLoopError, fail
 from .jsonio import canonical_json, fingerprint
 from .graph_model import FAILURE_CLASSES
 
 
 FINGERPRINT = re.compile(r"^[a-f0-9]{64}$")
-SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+SAFE_ID = re.compile(
+    rf"^[a-z0-9][a-z0-9._-]{{0,{MAX_IDENTIFIER_LENGTH - 1}}}$"
+)
 FAILURE_CODE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 ACCEPTANCE_STATUSES = {
-    "NOT_READY", "WAITING_FOR_INDEPENDENT_REVIEW", "WAITING_FOR_USER_CONFIRMATION", "COMPLETED",
+    "NOT_READY",
+    "WAITING_FOR_INDEPENDENT_REVIEW",
+    "REVIEW_BLOCKED",
+    "WAITING_FOR_USER_CONFIRMATION",
+    "COMPLETED",
 }
 ACCEPTANCE_REPORT_STATUSES = ACCEPTANCE_STATUSES | {"WAITING_FOR_GATE", "BLOCKED", "VERIFIED"}
 VALIDATION_REMEDIATION_SOURCES = {
@@ -42,6 +48,21 @@ VALIDATION_REMEDIATION_ARTIFACT_FIELDS = {
     "schemaVersion", "kind", "taskId", "baselineFingerprint", "source", "summary",
     "acceptanceIds", "fileChanges", "assertions",
 }
+SKILL_USAGE_FIELDS = {
+    "name", "stage", "status", "evidence",
+}
+GENERIC_SKILL_EVIDENCE = {
+    "applied",
+    "used",
+    "done",
+    "已使用",
+    "已应用",
+    "完成",
+}
+SKILL_USAGE_STAGES = {
+    "DEVELOPMENT", "GATE", "FINAL_REVIEW",
+}
+TEMPLATE_PLACEHOLDER = re.compile(r"<[A-Z][A-Z0-9_]*>")
 
 
 def valid_timestamp(value: object) -> bool:
@@ -56,6 +77,17 @@ def valid_timestamp(value: object) -> bool:
 
 def non_empty_string(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def concrete_skill_evidence(value: object) -> bool:
+    if not non_empty_string(value):
+        return False
+    text = str(value).strip()
+    return (
+        len(text) >= 12
+        and text.casefold() not in GENERIC_SKILL_EVIDENCE
+        and TEMPLATE_PLACEHOLDER.search(text) is None
+    )
 
 
 def safe_work_item_id(value: object) -> bool:
@@ -98,21 +130,167 @@ def valid_development_mode(value: object, entry: dict[str, Any]) -> bool:
     )
 
 
-def valid_review_artifact(action: str, value: object) -> bool:
+def _skill_usage_template(
+    required_skills: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    return [
+        {
+            "name": item["name"],
+            "stage": item["stage"],
+            "status": "APPLIED",
+            "evidence": "<CONCRETE_APPLICATION_EVIDENCE>",
+        }
+        for item in required_skills
+    ]
+
+
+def _skill_usage_issues(
+    value: object,
+    required_skills: list[dict[str, Any]],
+    *,
+    require_applied: bool,
+) -> list[str]:
+    expected = [
+        (item["name"], item["stage"]) for item in required_skills
+    ]
+    if not isinstance(value, list):
+        return ["skillUsage must be an array"]
+    actual: list[tuple[object, object]] = []
+    issues: list[str] = []
+    for index, usage in enumerate(value):
+        field = f"skillUsage[{index}]"
+        if not isinstance(usage, dict):
+            issues.append(f"{field} must be a mapping")
+            continue
+        if set(usage) != SKILL_USAGE_FIELDS:
+            issues.append(
+                f"{field} must contain only name, stage, status, and evidence"
+            )
+        actual.append((usage.get("name"), usage.get("stage")))
+        if usage.get("status") not in {"APPLIED", "BLOCKED"}:
+            issues.append(f"{field}.status must be APPLIED or BLOCKED")
+        elif require_applied and usage.get("status") != "APPLIED":
+            issues.append(f"{field}.status must be APPLIED")
+        evidence = usage.get("evidence")
+        if not concrete_skill_evidence(evidence):
+            issues.append(
+                (
+                    f"{field}.evidence must concretely describe how the "
+                    "complete Skill workflow was applied and must not contain "
+                    "controller template placeholders"
+                )
+            )
+    if actual != expected:
+        issues.append(
+            "skillUsage name/stage pairs must exactly match the frozen required Skills: "
+            + ", ".join(f"{name}@{stage}" for name, stage in expected)
+        )
+    return issues
+
+
+def _stored_skill_usage_valid(
+    value: object,
+    *,
+    require_applied: bool,
+) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(
+            isinstance(usage, dict)
+            and set(usage) == SKILL_USAGE_FIELDS
+            and non_empty_string(usage.get("name"))
+            and usage.get("stage") in SKILL_USAGE_STAGES
+            and usage.get("status") in {"APPLIED", "BLOCKED"}
+            and (
+                not require_applied
+                or usage.get("status") == "APPLIED"
+            )
+            and concrete_skill_evidence(usage.get("evidence"))
+            for usage in value
+        )
+        and (
+            require_applied
+            or any(usage["status"] == "BLOCKED" for usage in value)
+        )
+    )
+
+
+def valid_review_artifact(
+    action: str,
+    value: object,
+    *,
+    required_skills: list[dict[str, Any]] | None = None,
+) -> bool:
     if not isinstance(value, dict) or value.get("schemaVersion") != SCHEMA_VERSION:
         return False
-    if action == "INDEPENDENT_REVIEW_PASS":
-        findings = value.get("findings")
-        return (
-            set(value) == {"schemaVersion", "kind", "reviewer", "isolation", "verdict", "findings"}
+    if action in {"INDEPENDENT_REVIEW_PASS", "REVIEW_BLOCKED"}:
+        strict_skills = required_skills is not None
+        skills = required_skills or []
+        blocked = action == "REVIEW_BLOCKED"
+        expected_keys = (
+            {
+                "schemaVersion", "kind", "reviewer", "isolation", "verdict",
+                "summary",
+            }
+            if blocked
+            else {
+                "schemaVersion", "kind", "reviewer", "isolation", "verdict",
+                "findings",
+            }
+        )
+        if skills or blocked or (not strict_skills and "skillUsage" in value):
+            expected_keys.add("skillUsage")
+        skill_usage_valid = (
+            not _skill_usage_issues(
+                value.get("skillUsage", []),
+                skills,
+                require_applied=not blocked,
+            )
+            and (
+                not blocked
+                or any(
+                    usage.get("status") == "BLOCKED"
+                    for usage in value.get("skillUsage", [])
+                    if isinstance(usage, dict)
+                )
+            )
+            if strict_skills
+            else (
+                (
+                    "skillUsage" not in value
+                    and not blocked
+                )
+                or _stored_skill_usage_valid(
+                    value.get("skillUsage"),
+                    require_applied=not blocked,
+                )
+            )
+        )
+        result = (
+            set(value) == expected_keys
             and value.get("kind") == "INDEPENDENT_REVIEW"
             and non_empty_string(value.get("reviewer"))
             and value.get("isolation") == "FRESH_READ_ONLY"
-            and value.get("verdict") == "PASS"
+            and value.get("verdict") == (
+                "BLOCKED" if blocked else "PASS"
+            )
+            and skill_usage_valid
+        )
+        if blocked:
+            return (
+                result
+                and bool(skills or not strict_skills)
+                and concrete_skill_evidence(value.get("summary"))
+            )
+        findings = value.get("findings")
+        return (
+            result
             and isinstance(findings, dict)
             and set(findings) == {"p0", "p1"}
             and findings.get("p0") == 0
             and findings.get("p1") == 0
+            and skill_usage_valid
         )
     if action == "HUMAN_REVIEW_ACCEPTED":
         return (
@@ -150,6 +328,14 @@ def valid_acceptance(value: object) -> bool:
         return False
     if value["status"] in {"NOT_READY", "WAITING_FOR_INDEPENDENT_REVIEW"}:
         return value.get("review") is None and value.get("userConfirmation") is None
+    if value["status"] == "REVIEW_BLOCKED":
+        return (
+            _valid_acceptance_evidence(
+                value.get("review"),
+                {"REVIEW_BLOCKED"},
+            )
+            and value.get("userConfirmation") is None
+        )
     review_valid = _valid_acceptance_evidence(
         value.get("review"), {"INDEPENDENT_REVIEW_PASS", "HUMAN_REVIEW_ACCEPTED"}
     )
@@ -172,12 +358,20 @@ def valid_acceptance_report(value: object, entry: dict[str, Any]) -> bool:
     )
 
 
-def valid_task_result_artifact(value: object, *, item_id: str, operation_id: str, status: str) -> bool:
+def valid_task_result_artifact(
+    value: object,
+    *,
+    item_id: str,
+    operation_id: str,
+    status: str,
+    required_skills: list[dict[str, Any]] | None = None,
+) -> bool:
     return not task_result_artifact_issues(
         value,
         item_id=item_id,
         operation_id=operation_id,
         requested_status=status,
+        required_skills=required_skills,
     )
 
 
@@ -240,6 +434,7 @@ def gate_evidence_contract(
     definition: dict[str, Any],
     *,
     additional_planned_files: set[str] | None = None,
+    required_skills: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return a deterministic, directly fillable contract for one gate artifact."""
     allowed_changed_files = {
@@ -250,43 +445,50 @@ def gate_evidence_contract(
     requirements_by_id = {
         item["id"]: item for item in definition["requirements"]
     }
+    skills = required_skills or []
+    artifact_template = {
+        "schemaVersion": SCHEMA_VERSION,
+        "kind": "WORK_ITEM_GATE",
+        "workItemId": entry["id"],
+        "baselineFingerprint": entry["baselineFingerprint"],
+        "verdict": "<PASS_OR_FAIL>",
+        "summary": "<REQUIRED_NON_EMPTY_STRING>",
+        "scope": {
+            "changedFiles": [],
+            "outOfScopeFiles": [],
+        },
+        "acceptance": [
+            {
+                "id": item["id"],
+                "requirementIds": list(item["requirementIds"]),
+                "status": "<PASS_OR_FAIL>",
+                "evidence": "<REQUIRED_NON_EMPTY_STRING>",
+            }
+            for item in definition["acceptance"]
+        ],
+        "tests": [
+            {
+                "argv": list(argv),
+                "exitCode": "<INTEGER>",
+                "summary": "<REQUIRED_NON_EMPTY_STRING>",
+            }
+            for argv in definition["testCommands"]
+        ],
+        "findings": {"p0": [], "p1": [], "p2": []},
+    }
+    exact_fields = set(GATE_ARTIFACT_FIELDS)
+    if skills:
+        exact_fields.add("skillUsage")
+        artifact_template["skillUsage"] = _skill_usage_template(skills)
     return {
         "schemaVersion": SCHEMA_VERSION,
         "artifactKind": "WORK_ITEM_GATE",
         "workItemId": entry["id"],
         "baselineFingerprint": entry["baselineFingerprint"],
-        "exactTopLevelKeys": sorted(GATE_ARTIFACT_FIELDS),
-        "artifactTemplate": {
-            "schemaVersion": SCHEMA_VERSION,
-            "kind": "WORK_ITEM_GATE",
-            "workItemId": entry["id"],
-            "baselineFingerprint": entry["baselineFingerprint"],
-            "verdict": "<PASS_OR_FAIL>",
-            "summary": "<REQUIRED_NON_EMPTY_STRING>",
-            "scope": {
-                "changedFiles": [],
-                "outOfScopeFiles": [],
-            },
-            "acceptance": [
-                {
-                    "id": item["id"],
-                    "requirementIds": list(item["requirementIds"]),
-                    "status": "<PASS_OR_FAIL>",
-                    "evidence": "<REQUIRED_NON_EMPTY_STRING>",
-                }
-                for item in definition["acceptance"]
-            ],
-            "tests": [
-                {
-                    "argv": list(argv),
-                    "exitCode": "<INTEGER>",
-                    "summary": "<REQUIRED_NON_EMPTY_STRING>",
-                }
-                for argv in definition["testCommands"]
-            ],
-            "findings": {"p0": [], "p1": [], "p2": []},
-        },
+        "exactTopLevelKeys": sorted(exact_fields),
+        "artifactTemplate": artifact_template,
         "constraints": {
+            "requiredSkills": skills,
             "acceptanceIds": [item["id"] for item in definition["acceptance"]],
             "acceptanceCriteria": [
                 {
@@ -313,6 +515,7 @@ def gate_evidence_contract(
                 "every acceptance status must be PASS",
                 "every test exitCode must be 0",
                 "findings.p0 and findings.p1 must be empty",
+                "every required Skill usage status must be APPLIED",
             ],
         },
     }
@@ -323,6 +526,7 @@ def task_result_evidence_contract(
     definition: dict[str, Any],
     *,
     authorized_file_changes: list[dict[str, Any]],
+    required_skills: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return directly fillable result templates bound to the active claim."""
     operation_id = entry["claim"]["operationId"]
@@ -334,6 +538,7 @@ def task_result_evidence_contract(
         }
         for argv in definition["testCommands"]
     ]
+    skills = required_skills or []
     shared = {
         "schemaVersion": SCHEMA_VERSION,
         "kind": "TASK_RESULT",
@@ -343,12 +548,16 @@ def task_result_evidence_contract(
         "changedFiles": [],
         "tests": test_templates,
     }
+    exact_fields = set(TASK_RESULT_ARTIFACT_FIELDS)
+    if skills:
+        exact_fields.add("skillUsage")
+        shared["skillUsage"] = _skill_usage_template(skills)
     return {
         "schemaVersion": SCHEMA_VERSION,
         "artifactKind": "TASK_RESULT",
         "taskId": entry["id"],
         "operationId": operation_id,
-        "exactTopLevelKeys": sorted(TASK_RESULT_ARTIFACT_FIELDS),
+        "exactTopLevelKeys": sorted(exact_fields),
         "artifactTemplates": {
             "IMPLEMENTED": {
                 **shared,
@@ -368,6 +577,7 @@ def task_result_evidence_contract(
             },
         },
         "constraints": {
+            "requiredSkills": skills,
             "statusValues": ["IMPLEMENTED", "BLOCKED"],
             "frozenTestArgv": [
                 list(argv) for argv in definition["testCommands"]
@@ -383,6 +593,7 @@ def task_result_evidence_contract(
             "implementedRequires": [
                 "blockers must be empty",
                 "failure must be null",
+                "every required Skill usage status must be APPLIED",
             ],
             "blockedRequires": [
                 "blockers must contain one or more non-empty strings",
@@ -436,25 +647,58 @@ def validation_remediation_evidence_contract(
     }
 
 
-def review_evidence_contract() -> dict[str, Any]:
+def review_evidence_contract(
+    required_skills: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    skills = required_skills or []
+    independent = {
+        "schemaVersion": SCHEMA_VERSION,
+        "kind": "INDEPENDENT_REVIEW",
+        "reviewer": "<REQUIRED_NON_EMPTY_STRING>",
+        "isolation": "FRESH_READ_ONLY",
+        "verdict": "PASS",
+        "findings": {"p0": 0, "p1": 0},
+    }
+    if skills:
+        independent["skillUsage"] = _skill_usage_template(skills)
+    action_options = {
+        "INDEPENDENT_REVIEW_PASS": independent,
+        "HUMAN_REVIEW_ACCEPTED": {
+            "schemaVersion": SCHEMA_VERSION,
+            "kind": "HUMAN_REVIEW",
+            "reviewer": "<REQUIRED_NON_EMPTY_STRING>",
+            "verdict": "ACCEPTED",
+        },
+    }
+    if skills:
+        action_options["REVIEW_BLOCKED"] = {
+            "schemaVersion": SCHEMA_VERSION,
+            "kind": "INDEPENDENT_REVIEW",
+            "reviewer": "<REQUIRED_NON_EMPTY_STRING>",
+            "isolation": "FRESH_READ_ONLY",
+            "verdict": "BLOCKED",
+            "summary": "<CONCRETE_UNAVAILABILITY_REASON>",
+            "skillUsage": [
+                {
+                    "name": item["name"],
+                    "stage": item["stage"],
+                    "status": "BLOCKED",
+                    "evidence": "<CONCRETE_UNAVAILABILITY_REASON>",
+                }
+                for item in skills
+            ],
+        }
     return {
         "schemaVersion": SCHEMA_VERSION,
         "artifactKind": "ROOT_REVIEW",
-        "actionOptions": {
-            "INDEPENDENT_REVIEW_PASS": {
-                "schemaVersion": SCHEMA_VERSION,
-                "kind": "INDEPENDENT_REVIEW",
-                "reviewer": "<REQUIRED_NON_EMPTY_STRING>",
-                "isolation": "FRESH_READ_ONLY",
-                "verdict": "PASS",
-                "findings": {"p0": 0, "p1": 0},
-            },
-            "HUMAN_REVIEW_ACCEPTED": {
-                "schemaVersion": SCHEMA_VERSION,
-                "kind": "HUMAN_REVIEW",
-                "reviewer": "<REQUIRED_NON_EMPTY_STRING>",
-                "verdict": "ACCEPTED",
-            },
+        "actionOptions": action_options,
+        "constraints": {
+            "requiredSkills": skills,
+            "humanReviewMayBypassRequiredSkills": False,
+            "reviewBlockedRequires": (
+                "At least one exact required Skill usage must be BLOCKED "
+                "with a concrete unavailability reason"
+            ),
         },
     }
 
@@ -491,9 +735,14 @@ def task_result_artifact_issues(
     item_id: str,
     operation_id: str,
     requested_status: str,
+    required_skills: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     """Return precise field-level issues for one Task result artifact."""
-    issues = _key_issues(value, TASK_RESULT_ARTIFACT_FIELDS)
+    skills = required_skills or []
+    expected_fields = set(TASK_RESULT_ARTIFACT_FIELDS)
+    if skills:
+        expected_fields.add("skillUsage")
+    issues = _key_issues(value, expected_fields)
     if not isinstance(value, dict):
         return issues
     if value.get("schemaVersion") != SCHEMA_VERSION:
@@ -508,6 +757,12 @@ def task_result_artifact_issues(
         issues.append(f"status must match requested status {requested_status}")
     if not non_empty_string(value.get("summary")):
         issues.append("summary must be a non-empty string")
+    if skills:
+        issues.extend(_skill_usage_issues(
+            value.get("skillUsage"),
+            skills,
+            require_applied=requested_status == "IMPLEMENTED",
+        ))
 
     changed_files = value.get("changedFiles")
     if not isinstance(changed_files, list):
@@ -621,8 +876,13 @@ def gate_artifact_issues(
     *,
     additional_planned_files: set[str] | None = None,
     requested_verdict: str | None = None,
+    required_skills: list[dict[str, Any]] | None = None,
 ) -> list[str]:
-    issues = _key_issues(value, GATE_ARTIFACT_FIELDS)
+    skills = required_skills or []
+    expected_fields = set(GATE_ARTIFACT_FIELDS)
+    if skills:
+        expected_fields.add("skillUsage")
+    issues = _key_issues(value, expected_fields)
     if not isinstance(value, dict):
         return issues
     if value.get("schemaVersion") != SCHEMA_VERSION:
@@ -635,6 +895,18 @@ def gate_artifact_issues(
         issues.append("baselineFingerprint must match the current frozen baseline")
     if requested_verdict is not None and value.get("verdict") != requested_verdict:
         issues.append(f"verdict must match requested status {requested_verdict}")
+    if skills:
+        issues.extend(_skill_usage_issues(
+            value.get("skillUsage"),
+            skills,
+            require_applied=(
+                requested_verdict == "PASS"
+                or (
+                    requested_verdict is None
+                    and value.get("verdict") == "PASS"
+                )
+            ),
+        ))
 
     expected_acceptance = [item["id"] for item in definition["acceptance"]]
     acceptance = value.get("acceptance")
@@ -743,13 +1015,18 @@ def valid_gate_artifact(
     definition: dict[str, Any],
     *,
     additional_planned_files: set[str] | None = None,
+    required_skills: list[dict[str, Any]] | None = None,
 ) -> bool:
     if not isinstance(value, dict):
         return False
     scope = value.get("scope")
     findings = value.get("findings")
+    skills = required_skills or []
+    expected_fields = set(GATE_ARTIFACT_FIELDS)
+    if skills:
+        expected_fields.add("skillUsage")
     if not (
-        set(value) == GATE_ARTIFACT_FIELDS
+        set(value) == expected_fields
         and value.get("schemaVersion") == SCHEMA_VERSION
         and value.get("kind") == "WORK_ITEM_GATE"
         and value.get("workItemId") == entry["id"]
@@ -782,6 +1059,11 @@ def valid_gate_artifact(
         and isinstance(findings, dict)
         and set(findings) == {"p0", "p1", "p2"}
         and all(isinstance(findings.get(level), list) for level in ("p0", "p1", "p2"))
+        and not _skill_usage_issues(
+            value.get("skillUsage", []),
+            skills,
+            require_applied=value.get("verdict") == "PASS",
+        )
     ):
         return False
     acceptance_by_id = {

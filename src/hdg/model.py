@@ -4,7 +4,7 @@ import re
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
-from .constants import SCHEMA_VERSION
+from .constants import MAX_IDENTIFIER_LENGTH, SCHEMA_VERSION
 from .errors import GatedLoopError, fail
 from .jsonio import canonical_json, fingerprint
 from .test_commands import normalize_test_argv
@@ -26,8 +26,16 @@ WORK_ITEM_AUTHORITIES = {
     "CAPABILITY": "COORDINATION",
     "TASK": "EXECUTION",
 }
+WORK_ITEM_SKILL_STAGES = (
+    "DEVELOPMENT",
+    "GATE",
+    "FINAL_REVIEW",
+)
 
-ITEM_ID = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+ITEM_ID = re.compile(
+    rf"^[a-z0-9][a-z0-9._-]{{0,{MAX_IDENTIFIER_LENGTH - 1}}}$"
+)
+SKILL_NAME = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,127}$")
 TRACE_ID = re.compile(r"^(?:R|A)-(?:00[1-9]|0[1-9]\d|[1-9]\d{2})$")
 PLACEHOLDER = re.compile(r"\b(?:TBD|TODO|FIXME|PLACEHOLDER)\b|<[^>\n]+>|\{\{[^}\n]+\}\}|\?\?\?", re.I)
 CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
@@ -47,7 +55,12 @@ def _text(value: object, field: str) -> str:
 def safe_id(value: object, field: str = "id") -> str:
     reserved = re.compile(r"^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)")
     if not isinstance(value, str) or not ITEM_ID.fullmatch(value) or value.endswith(".") or reserved.match(value):
-        fail("WORK_ITEM_ID_INVALID", f"{field} must be a safe lowercase identifier", field=field, value=value)
+        fail(
+            "WORK_ITEM_ID_INVALID",
+            f"{field} must be a safe lowercase identifier",
+            field=field,
+            maxLength=MAX_IDENTIFIER_LENGTH,
+        )
     return value
 
 
@@ -223,6 +236,69 @@ def _test_commands(values: object) -> list[list[str]]:
     if len(set(canonical)) != len(canonical):
         fail("WORK_ITEM_TEST_COMMAND_INVALID", "Duplicate test command")
     return normalized
+
+
+def _required_skills(values: object) -> list[dict[str, Any]]:
+    if not isinstance(values, list):
+        fail(
+            "WORK_ITEM_REQUIRED_SKILL_INVALID",
+            "requiredSkills must be an array",
+        )
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    stage_order = {
+        stage: index for index, stage in enumerate(WORK_ITEM_SKILL_STAGES)
+    }
+    for index, entry in enumerate(values):
+        field = f"requiredSkills[{index}]"
+        if not _exact_keys(entry, ["name", "stages", "purpose"]):
+            fail(
+                "WORK_ITEM_REQUIRED_SKILL_INVALID",
+                f"{field} must contain only name, stages, and purpose",
+                field=field,
+            )
+        name = entry["name"]
+        if (
+            not isinstance(name, str)
+            or not SKILL_NAME.fullmatch(name)
+            or name in seen
+        ):
+            fail(
+                "WORK_ITEM_REQUIRED_SKILL_INVALID",
+                f"{field}.name must be a unique portable Skill catalog name",
+                field=f"{field}.name",
+            )
+        stages = entry["stages"]
+        if (
+            not isinstance(stages, list)
+            or not stages
+            or any(stage not in WORK_ITEM_SKILL_STAGES for stage in stages)
+            or len(set(stages)) != len(stages)
+        ):
+            fail(
+                "WORK_ITEM_REQUIRED_SKILL_INVALID",
+                f"{field}.stages must contain unique supported stages",
+                field=f"{field}.stages",
+                allowed=list(WORK_ITEM_SKILL_STAGES),
+            )
+        seen.add(name)
+        result.append({
+            "name": name,
+            "stages": sorted(stages, key=stage_order.__getitem__),
+            "purpose": _text(entry["purpose"], f"{field}.purpose"),
+        })
+    return sorted(result, key=lambda item: item["name"])
+
+
+def required_skill_policy() -> dict[str, str]:
+    """Return the portable execution policy bound to required Skill records."""
+
+    return {
+        "activation": "LOAD_COMPLETE_SKILL_BEFORE_STAGE",
+        "identity": "CANONICAL_CATALOG_NAME_WITHOUT_HOST_COMMAND_PREFIX",
+        "compliance": "STRUCTURED_SKILL_USAGE_REQUIRED",
+        "unavailable": "BLOCK_STAGE_AND_REPORT",
+    }
 
 
 def _linked_trace_ids(values: object, allowed: set[str], field: str, *, allow_empty: bool = False) -> list[str]:
@@ -539,7 +615,8 @@ def validate_work_item_definition(
         fail("WORK_ITEM_EXECUTION_INVALID", "Only Task work items can contain execution metadata")
     common = [
         "schemaVersion", "id", "kind", "gateLevel", "title", "goal", "scope", "nonGoals",
-        "requirements", "acceptance", "testCommands", "risks", "decisions",
+        "requirements", "acceptance", "testCommands", "requiredSkills", "risks",
+        "decisions",
     ]
     plan_keys = ["developmentPlan"]
     expected = (
@@ -567,9 +644,18 @@ def validate_work_item_definition(
         "requirements": _trace_records(definition["requirements"], "R", "requirements"),
         "acceptance": _trace_records(definition["acceptance"], "A", "acceptance"),
         "testCommands": _test_commands(definition["testCommands"]),
+        "requiredSkills": _required_skills(definition["requiredSkills"]),
         "risks": _strings(definition["risks"], "risks"),
         "decisions": _strings(definition["decisions"], "decisions"),
     }
+    if parent is not None and any(
+        "FINAL_REVIEW" in requirement["stages"]
+        for requirement in normalized["requiredSkills"]
+    ):
+        fail(
+            "WORK_ITEM_REQUIRED_SKILL_INVALID",
+            "FINAL_REVIEW required Skills must be declared on the hierarchy root",
+        )
     _validate_trace(normalized["requirements"], normalized["acceptance"])
     if kind == "TASK":
         normalized["execution"] = _execution_record(definition["execution"], normalized["id"])
@@ -681,6 +767,7 @@ def _contract(definition: dict[str, Any]) -> dict[str, Any]:
         "requirements": sorted(definition["requirements"], key=lambda item: item["id"]),
         "acceptance": sorted(definition["acceptance"], key=lambda item: item["id"]),
         "testCommands": definition["testCommands"],
+        "requiredSkills": definition["requiredSkills"],
     }
     for key in ("children", "decomposition", "execution", "developmentPlan"):
         if key in definition:
@@ -783,6 +870,14 @@ def render_work_item_baseline(definition: dict[str, Any]) -> str:
 
     lines.extend(["", "## Test Commands"])
     lines.extend(f"- {json.dumps(argv, ensure_ascii=False, separators=(',', ':'))}" for argv in definition["testCommands"])
+    lines.extend(["", "## Required Skills"])
+    if definition["requiredSkills"]:
+        lines.extend(
+            f"- {item['name']} [{', '.join(item['stages'])}]: {item['purpose']}"
+            for item in definition["requiredSkills"]
+        )
+    else:
+        lines.append("- none")
     lines.extend([
         "",
         "## Development Plan Contract",
@@ -839,6 +934,23 @@ def render_development_plan(definition: dict[str, Any], state: dict[str, Any]) -
         f"| {item['id']} | {', '.join(item['requirementIds'])} | {_markdown_cell(item['expectedResult'])} |"
         for item in definition["acceptance"]
     )
+    lines.extend([
+        "",
+        "## 必须使用的 Skills",
+        "",
+        "> 名称是可移植的 Skill catalog 标识；`/skill`、`$skill` 等宿主调用语法不进入 baseline。",
+        "",
+        "| Skill | 适用阶段 | 使用目的 |",
+        "| --- | --- | --- |",
+    ])
+    if definition["requiredSkills"]:
+        lines.extend(
+            f"| `{item['name']}` | {', '.join(item['stages'])} | "
+            f"{_markdown_cell(item['purpose'])} |"
+            for item in definition["requiredSkills"]
+        )
+    else:
+        lines.append("| 无 | - | 本节点未追加 Skill 要求；仍须遵守祖先 baseline 继承的要求。 |")
     lines.append("")
 
     if definition["kind"] == "TASK":

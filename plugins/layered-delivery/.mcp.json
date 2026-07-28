@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "layered-delivery": {
+      "command": "python",
+      "args": [
+        "-X",
+        "utf8",
+        "${CLAUDE_PLUGIN_ROOT}/skills/layered-delivery/scripts/hdg_mcp.py"
+      ],
+      "env": {
+        "HDG_PROJECT_ROOT": "${CLAUDE_PROJECT_DIR}"
+      }
+    }
+  }
+}

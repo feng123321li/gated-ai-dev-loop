@@ -26,9 +26,9 @@ Python 控制器提供统一的 READY、`dispatchPlan`、claim、operationId 和
 
 Graph 执行循环必须按以下方式自动调度：
 
-1. 调用 `graph-frontier --item <root-id>` 获取当前结构化动作、`dispatchPlan`、并行组与阻断原因；
+1. 调用 MCP `graph_frontier` 获取当前结构化动作、`dispatchPlan`、并行组与阻断原因；仅 CLI fallback 使用 `graph-frontier --item <root-id>`；
 2. 读取 `dispatchPlan.dispatchTaskIds`、`desiredNewAgentCount` 与 `desiredTotalAgentCount`。这就是本轮完整且有序的自动调度结果，执行适配器不能选择其中一部分；
-3. 为计划中的每个 Task 按顺序预留稳定队列位置，但排队项保持未认领；平台确认某个 worker/Agent 真正取得执行容量后，才生成本 graph run 中从未使用过的 operationId 并执行 `dispatch-task`；
+3. 为计划中的每个 Task 按顺序预留稳定队列位置，但排队项保持未认领；平台确认某个 worker/Agent 真正取得执行容量后，才生成本 graph run 中从未使用过的 operationId 并执行 `dispatch_task`；
 4. 为已取得执行容量的 Task 启动相互隔离的全新开发 Agent；执行适配器独立按 frontier 的 `nextWakeAt` 唤醒并消费到期的 `HEARTBEAT_TASK`，没有独立适配器时由当前 Agent 承担续租，没有子 Agent 能力时由当前 Agent 顺序消费同一调度合同；
 5. 先按 `evidenceContractRefs.result` 查询当前模板，再分别写回结果并完成 Task 门禁；
 6. 每次认领、结果、门禁、失败或恢复迁移后重新查询 frontier，由 Graph 重算 Agent 目标数与队列；硬过期时消费 `ADVANCE_GRAPH`，再用新 operation 重新认领并提交已完成工作，不请求人工重置；继续 `RUN_GATE`、后继 `DISPATCH_TASK`、review 和 confirmation，直到发生真实阻断或图完成。
@@ -41,4 +41,4 @@ Agent 数量不是人工固定值。`desiredNewAgentCount` 是当前需要启动
 
 ## 聚合
 
-先逐 Task gate，再运行 Capability 集成 gate。Capability PASS 后才可向 Delivery 汇总。同一冻结文件集合内的实现或回归失败由 Agent 自动 retry、修复和复测；同一验收契约只缺少计划文件时，释放 claim 后由 Graph 执行循环按修正路由用 `remediate-task` 追加到原 Task，其他 Agent 不得自行扩大范围或另建需求。只有目标、契约、拓扑或外部权限必须变化时，才重新规划完整需求树并取得人工确认。
+先逐 Task gate，再运行 Capability 集成 gate。Capability PASS 后才可向 Delivery 汇总。同一冻结文件集合内的实现或回归失败由 Agent 自动 retry、修复和复测；同一验收契约只缺少计划文件时，释放 claim 后由 Graph 执行循环按修正路由用 `remediate_task` 追加到原 Task，其他 Agent 不得自行扩大范围或另建需求。只有目标、契约、拓扑或外部权限必须变化时，才重新规划完整需求树并取得人工确认。

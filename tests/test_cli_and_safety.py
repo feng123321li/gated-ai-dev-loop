@@ -28,6 +28,7 @@ class CliAndSafetyTests(unittest.TestCase):
         self.assertIn("python -X utf8 <skill-root>/scripts/hdg.py", help_text)
         self.assertIn("--json", help_text)
         self.assertIn("prepare-hierarchy", help_text)
+        self.assertIn("workspace-status", help_text)
         self.assertIn("prepare-hierarchy --definition - --host-runtime <agent>", help_text)
         self.assertIn("record-interaction --item <id> --interaction -", help_text)
         self.assertNotIn("<file|->", help_text)
@@ -55,6 +56,45 @@ class CliAndSafetyTests(unittest.TestCase):
         self.assertNotIn("upgrade-registry", help_text)
         self.assertNotIn("delivery-item", help_text)
         self.assertNotIn("hdg.mjs", help_text)
+
+    def test_workspace_status_cli_classifies_absent_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            stdout = io.StringIO()
+            self.assertEqual(
+                run_cli(
+                    ["workspace-status", "--json"],
+                    cwd=temporary,
+                    stdout=stdout,
+                ),
+                0,
+            )
+            result = json.loads(stdout.getvalue())["result"]
+            self.assertEqual(result["state"], "ABSENT")
+            self.assertIs(result["databaseExists"], False)
+
+    def test_cli_structured_stdin_rejects_duplicate_json_members(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            stderr = io.StringIO()
+            self.assertNotEqual(
+                run_cli(
+                    [
+                        "prepare-hierarchy",
+                        "--definition",
+                        "-",
+                        "--host-runtime",
+                        "codex",
+                        "--json",
+                    ],
+                    cwd=temporary,
+                    stdin=io.StringIO(
+                        '{"schemaVersion":3,"schemaVersion":3}'
+                    ),
+                    stderr=stderr,
+                ),
+                0,
+            )
+            error = json.loads(stderr.getvalue())["error"]
+            self.assertEqual(error["code"], "HIERARCHY_DEFINITION_PARSE")
 
     def test_definition_can_be_read_from_stdin(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

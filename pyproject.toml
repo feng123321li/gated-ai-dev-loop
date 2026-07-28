@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "layered-delivery"
-version = "0.14.1"
+version = "0.15.0"
 description = "Human-reviewable layered delivery governance for AI-assisted development"
 requires-python = ">=3.10"
 dependencies = []
 
 [project.scripts]
 hdg = "hdg.cli:main"
+hdg-mcp = "hdg.mcp_server:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

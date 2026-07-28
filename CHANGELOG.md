@@ -4,6 +4,18 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.16.0 — 2026-07-28
+
+发布提交：`65ac6bd`
+
+- 新增根 Task `compactLightTask` 快速输入，由控制器扩展并只保存完整 schema v3；模块级 Scope 与 ADD-only `generatedFileRoots` 在降低规划成本的同时继续保持精确修改/删除授权。
+- Graph frontier、Task context、handoff 与 MCP 响应默认使用紧凑模式；迁移结果携带 `nextFrontier`，等待轮询支持 revision 去重，详细 blocked 状态只在诊断时按需读取。
+- result、gate、review 与 confirmation 支持 `evidenceDelta`，由控制器从冻结契约补齐测试 argv、需求追踪和授权信息，再保存完整 canonical evidence。
+- SQLite 投影改为按实际变化节点及受影响需求树增量刷新；最终用户验收阶段的同契约修正继续回到原 Task，不再全量重建无关需求投影。
+- 压缩 MCP output schema 和调度上下文，减少工具注册、长任务恢复、Agent handoff 与多轮门禁的上下文占用，并新增上下文预算和增量投影性能回归。
+- Skill 入口与 references 从 23 个相关文件、1,636 行精简为 6 个文件、226 行；删除由工具 schema、Graph、SQLite 和 Plugin 权限机械保证的重复说明，只保留规划、执行、验收与异常传输核心边界。
+- schema v3 是唯一标准，不增加旧 schema 兼容入口；Plugin 继续保持双宿主、MCP-only、一次冻结确认和最终用户确认边界。Python 全量 227 项测试通过。
+
 ## 0.15.5 — 2026-07-28
 
 发布提交：`78d18f7`

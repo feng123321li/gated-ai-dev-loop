@@ -446,15 +446,10 @@ def render_requirement_handoff(
 def render_requirement_handoff_command(root_id: str) -> str:
     """Render the short prompt that a user can paste directly into a new session."""
     return (
-        f"继续执行治理需求 {root_id}。使用当前 layered-delivery Skill 和已连接的 Plugin MCP，"
-        "从当前项目的治理数据库恢复已冻结方案，按 Graph 自动调度计划接管整棵需求树并完成开发、测试和门禁；"
-        "以 MCP graph_frontier 为恢复入口并直接消费结构化 tool result，不固化用户目录、Skill 安装位置或操作系统路径，"
-        "只有 MCP 不可用时才从 Skill 元数据解析 CLI fallback；不使用临时 JSON 中转，也不要重新准备、冻结需求或逐 Task 请求人工启动；"
-        "面向人的状态报告须把控制器 UTC 时间转换为当前运行环境的本机时区并显式标注 UTC 偏移，机器字段保持不变；"
-        "若接收宿主是 Claude Code，必须在 dispatch_task 认领前由用户级设置、模式选择器或启动参数启用 auto；"
-        "MCP 控制器不再需要 hdg.py Process 授权，但 acceptEdits 仍不足以自动批准测试和构建命令；"
-        "逐项原生调用 frontier action 中冻结的 requiredSkills，记录 activation 与实际 conformance；Read/load 不算执行，并在 result、gate 和独立审查 evidence 中记录具体使用情况；"
-        "会话不得自行修改权限配置或启用 bypassPermissions。"
+        f"继续执行治理需求 {root_id}。用 layered-delivery Skill 从 MCP graph_frontier "
+        "恢复已冻结运行，完整执行 Graph 计划，自动完成开发、测试、门禁和审查；"
+        "勿重新准备、冻结或逐 Task 启动，停在最终确认。MCP 不可用时按 Skill 回退 CLI；"
+        "仅遇权限、契约或不可恢复阻断时返回用户。"
     )
 
 

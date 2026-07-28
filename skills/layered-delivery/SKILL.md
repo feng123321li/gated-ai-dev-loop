@@ -12,7 +12,7 @@ allowed-tools:
 ## 硬边界
 
 - 首次只读取本文件；不得预读全部 references、源码、memory 或整树模板。
-- 只调用 Plugin 注册的 MCP 工具；Server 固定项目根，业务工具不接收 `root`、`dogfood` 或通用 `confirmed`。
+- 只调用 Plugin 注册的 MCP 工具；Server 固定项目根，业务工具不接收项目根或通用确认参数。
 - MCP 未安装、未连接或工具未注册时报告 `PLUGIN_MCP_UNAVAILABLE` 并停止；不得编辑业务代码、启动 Shell/CLI 控制器、直接写 SQLite 或从源码/Markdown 猜状态。
 - SQLite/Graph 是机器权威，Markdown 只是投影。Agent 不直接改 SQLite、baseline、图或投影。
 - 只用完整 schema v3；具体输入以当前工具 schema 和结构化错误为准，不在上下文复制完整模板。

@@ -10,7 +10,9 @@ MCP 协议工具本名是 `graph_frontier` 等 snake_case 名称；`mcp__plugin_
 
 ## Claude required Skill 原生调用
 
-frontier 的 `requiredSkills` 不是“建议读取”的文档清单。每个名称都必须由实际执行该阶段的 Claude context 通过 Skill tool 明确调用；普通 Read、读取 `SKILL.md`、父 Agent 预读或只把名称写进 subagent prompt 都不合格。Skill tool 返回后，以该次 tool-use ID、Claude session ID、当前 executor 与 execution ID调用 `record_skill_activation`，`mechanism` 固定为 `CLAUDE_SKILL_TOOL`。一个 tool-use ID 只能绑定一个 required Skill；DEVELOPMENT 必须先完成此记录，才允许用相同 owner/operation `dispatch_task`。
+frontier 的 `requiredSkills` 不是“建议读取”的文档清单。用户批准整树并选择 active/manual 时已经一次授权这些 Skill；每个名称都必须由实际执行该阶段的 Claude context 通过 Skill tool 自动调用，不得要求用户再次确认或触发。普通 Read、读取 `SKILL.md`、父 Agent 预读或只把名称写进 subagent prompt 都不合格。Skill tool 返回后，以该次 tool-use ID、Claude session ID、当前 executor 与 execution ID调用 `record_skill_activation`，`mechanism` 固定为 `HOST_NATIVE_SKILL`。一个 tool-use ID 只能绑定一个 required Skill；DEVELOPMENT 必须先完成此记录，才允许用相同 owner/operation `dispatch_task`。
+
+Claude 可以执行由任意 Agent CLI 创建并冻结的需求。冻结状态中的 `hostRuntime` 只记录方案创建宿主和当时的自动化提示，不限制当前执行宿主；Plugin MCP 从当前 Claude client session 形成实际执行宿主凭证。遇到其他宿主创建的 frozen graph 时直接从 `graph_frontier` 接续并记录统一 `HOST_NATIVE_SKILL`，不得重新 prepare/freeze、要求用户重新确认或二次确认 required Skill。
 
 Claude subagent 是新的 context，父会话调用过 Skill 不会替代子 Agent 的调用。若真正执行阶段的是 subagent，它必须在自己的 context 明确调用并记录凭证。完整执行 Skill 后，执行者或独立 gate/reviewer 针对真实代码、diff、测试和产物形成命名检查，以 `record_skill_conformance` 绑定原激活凭证；成功迁移要求全部检查 `PASS`。如果 Skill 不存在，记录 `BLOCKED` 激活与符合性并按阶段 artifact 形成阻断，不能把 Read 或宽松匹配记为 PASS。
 
@@ -24,7 +26,7 @@ Claude subagent 是新的 context，父会话调用过 Skill 不会替代子 Age
 - `layered-delivery` 所需 MCP tools 已按 tool 级策略允许；
 - Claude 对冻结范围内的代码编辑、测试和构建命令已使用 Auto 或精确权限规则准备好。
 
-用户明确确认方案并选择 `active` 后，Graph 在当前冻结契约内自动调度、开发、测试、修复、逐级门禁、预算内重试和租约恢复，不再逐 Task、逐测试或逐恢复请求 layered-delivery 确认。最终 acceptance 必须进入 `WAITING_FOR_USER_CONFIRMATION`，frontier 停在 `REQUEST_USER_CONFIRMATION` 等待用户验收；Git 提交/推送/合并、迁移、发布、新增外部权限和真实不可恢复阻断仍返回用户。
+用户明确确认方案并选择 `active` 后，Graph 在当前冻结契约内自动调度、调用 required Skill、开发、测试、修复、逐级门禁、预算内重试和租约恢复，不再逐 Skill、逐 Task、逐测试或逐恢复请求确认。最终 acceptance 必须进入 `WAITING_FOR_USER_CONFIRMATION`，frontier 停在 `REQUEST_USER_CONFIRMATION` 等待用户验收；Git 提交/推送/合并、迁移、发布、新增外部权限和真实不可恢复阻断仍返回用户。
 
 `acceptEdits` 只自动接受文件编辑和有限文件系统操作，不等价于完整无人值守。项目级 `.claude/settings.json` 和 `.claude/settings.local.json` 不能设置会话默认 Auto；需要时可由用户自行在用户级 Claude settings 中配置：
 
@@ -42,10 +44,10 @@ Claude subagent 是新的 context，父会话调用过 Skill 不会替代子 Age
 
 ## manual 新窗口接续
 
-manual 在当前窗口完成方案确认和冻结，并生成一次性 `handoffCommand`。新 Claude 运行窗口在 MCP Server 已信任且 Auto/tool 权限就绪后启动该交接，即从 `graph-frontier` 恢复同一 graph run：
+manual 可由 Claude 或 Codex 完成方案确认和冻结，并生成一次性 `handoffCommand`。新 Claude 运行窗口在 MCP Server 已信任且 Auto/tool 权限就绪后启动该交接，即从 `graph-frontier` 恢复同一 graph run：
 
 - 不重新 `prepare_hierarchy` 或 `freeze_hierarchy`；
-- 不重新选择开发方式，不逐 Task 请求确认；
+- 不重新选择开发方式，不逐 Skill 或逐 Task 请求确认；
 - 自动调度、开发、测试、修复、逐级门禁和预算内恢复；
 - 根门禁与独立审查通过后停在 `REQUEST_USER_CONFIRMATION`；只有用户明确验收后才写入 `USER_CONFIRMED`。
 

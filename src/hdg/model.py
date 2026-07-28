@@ -294,8 +294,14 @@ def required_skill_policy() -> dict[str, str]:
     """Return the portable execution policy bound to required Skill records."""
 
     return {
-        "activation": "EXPLICIT_NATIVE_SKILL_INVOCATION_REQUIRED",
+        "authorization": "FROZEN_REQUIRED_SKILLS",
+        "activation": "CURRENT_EXECUTOR_NATIVE_SKILL_INVOCATION_REQUIRED",
+        "invocation": "EXECUTION_ADAPTER_AUTOMATIC",
+        "repeatUserPrompt": "FORBIDDEN_AFTER_FREEZE",
         "identity": "CANONICAL_CATALOG_NAME_WITHOUT_HOST_COMMAND_PREFIX",
+        "mechanism": "HOST_NATIVE_SKILL",
+        "hostBinding": "CURRENT_STAGE_EXECUTION_HOST",
+        "planningHost": "AUDIT_ONLY_NOT_EXECUTION_CONSTRAINT",
         "loadingOnly": "REJECTED",
         "compliance": "GRAPH_BOUND_CONFORMANCE_PASS_REQUIRED",
         "unavailable": "BLOCK_STAGE_AND_REPORT",

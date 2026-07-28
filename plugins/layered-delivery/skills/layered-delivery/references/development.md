@@ -17,7 +17,7 @@
 - 不改变 SQLite、baseline、进度投影或 `.git/**`；
 - 不提交、推送、发布或改变外部状态；
 - 持续运行相关回归、修复失败并复测，报告真实事实；
-- worker 取得执行容量后、`dispatch_task` 前，对 frontier 中每个 DEVELOPMENT required Skill 分别使用当前宿主原生 Skill 入口明确调用并立即写入 `record_skill_activation`；Claude 使用本次 Skill tool-use ID 与 `CLAUDE_SKILL_TOOL`，Codex 使用显式 `$<skill-name>` 触发的当前 task/session 调用 ID 与 `CODEX_EXPLICIT_SKILL`。Read、load、父会话调用或提示中出现名称都不能替代当前执行 context 的激活；
+- 用户冻结整树并选择 active/manual 时已经授权全部 `requiredSkills`。worker 取得执行容量后、`dispatch_task` 前，执行适配器对 frontier 中每个 DEVELOPMENT required Skill 分别使用当前宿主原生 Skill 入口自动调用并立即写入 `record_skill_activation`；统一记录 `HOST_NATIVE_SKILL`、实际执行宿主和当前 task/session 中互不复用的调用 ID。不得要求用户再次输入 `$skill` 或确认 Skill；Read、load、父会话调用或提示中出现名称都不能单独替代当前执行 context 的激活；
 - 完整执行 Skill 后、`task_result` 前，用 `record_skill_conformance` 把命名检查和实际代码/diff/测试证据绑定到激活凭证；成功结果要求当前 node attempt 的每项 Skill 都是 `INVOKED + PASS`，同一原生调用 ID 不能覆盖多个 Skill；
 - 返回 `IMPLEMENTED` 或 `BLOCKED`，不得报告 PASS。
 
@@ -25,8 +25,8 @@
 
 ## Active 与 Manual
 
-- `active`：冻结后由 Graph 自动推进。控制器计算 READY、安全并行集合、目标 Agent 数和稳定顺序；执行 Agent/适配器完整消费计划。运行能力变化只影响立即启动还是排队，不请求用户重新选择。开发持续循环到相关回归和复测通过，或形成真实阻断。当前宿主是 Claude Code 时，必须先满足 `hostAutomation` 的 Auto 权限前置条件，再冻结和认领 Task。
-- `manual`：当前规划会话不创建开发 Agent。`freeze_hierarchy` 在需求根生成一份 `requirement-handoff.md`，在 `handoffPrompt` 返回同样的完整内容，并通过 `handoffCommand` 返回可直接复制到新会话的简短指令。规划会话的首次最终回复必须按 `responseContract` 提供一个纯文本代码块，用户一次复制到任意全新 Agent 后即可接管需求。可以直接使用 `handoffCommand`，也可以生成覆盖 `requiredSemantics` 的语义等价文本，不要求逐字一致；完整交接与冻结方案链接放在代码块之后，不能只返回文件链接。交接目标是 Claude Code 时，同时展示 `claudeCodeAutoHandoff` 中适合界面的 Auto 启动方式。接收会话成为 Graph 执行入口，读取 `dispatchPlan`、为每个计划 Task 生成唯一 operationId 并执行 `dispatch_task`。平台可并行时启动隔离子 Agent，容量不足时稳定排队并串行消费；不得挑选子集，也不得要求用户逐 Task 再次回复或复制交接。
+- `active`：冻结后由 Graph 自动推进。控制器计算 READY、安全并行集合、目标 Agent 数和稳定顺序；执行 Agent/适配器完整消费计划并自动调用冻结 Skill。运行能力变化只影响立即启动还是排队，不请求用户重新选择或确认 Skill。开发持续循环到相关回归和复测通过，或形成真实阻断。当前宿主是 Claude Code 时，必须先满足 `hostAutomation` 的 Auto 权限前置条件，再冻结和认领 Task。
+- `manual`：当前规划会话不创建开发 Agent。`freeze_hierarchy` 在需求根生成一份 `requirement-handoff.md`，在 `handoffPrompt` 返回同样的完整内容，并通过 `handoffCommand` 返回可直接复制到新会话的简短指令。规划会话的首次最终回复必须按 `responseContract` 提供一个纯文本代码块，用户一次复制到任意全新 Agent 后即可接管需求。可以直接使用 `handoffCommand`，也可以生成覆盖 `requiredSemantics` 的语义等价文本，不要求逐字一致；完整交接与冻结方案链接放在代码块之后，不能只返回文件链接。方案创建宿主只作审计：Claude、Codex、Cursor 或其他 Agent CLI 可相互交接，接收会话不得因宿主变化重新 prepare/freeze。交接目标是 Claude Code 时，同时展示 `claudeCodeAutoHandoff` 中适合界面的 Auto 启动方式。接收会话成为 Graph 执行入口，读取 `dispatchPlan`、自动调用冻结 Skill、为每个计划 Task 生成唯一 operationId 并执行 `dispatch_task`。平台可并行时启动隔离子 Agent，容量不足时稳定排队并串行消费；不得挑选子集，也不得要求用户逐 Skill、逐 Task 再次回复或复制交接。
 
 用户在评审 `development-plan.md` 时选择一次根级方式；Agent 使用同一次确认调用：
 

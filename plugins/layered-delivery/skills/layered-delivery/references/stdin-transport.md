@@ -46,7 +46,7 @@ python -X utf8 <skill-root>/scripts/hdg.py <command> ... --json
 
 `workspace-status`、`graph-status`、`graph-frontier`、`graph-events`、`graph-replay`、`ready-tasks`、`task-context` 和其他只读查询把 JSON 写到 stdout。调用方必须直接消费 stdout，不得使用临时 JSON 中转只读查询结果。MCP 的 `graph_events` 与 `interaction_log` 必须提供 `after_event_id` 和 `limit`（1–200）：首屏 cursor 为 0，`hasMore=true` 时把 `nextCursor` 用于下一页；Server 只保留当前页。CLI fallback 的旧日志命令仍输出完整列表，诊断大型历史时优先使用 MCP 分页。
 
-manual receiving Agent 的恢复入口是 `graph-frontier`，不是 `task-context`。`task-context` 只提供未认领 Task 的诊断预览，不会 claim Task，也不授权开发。Graph 返回 `DISPATCH_TASK` 后，实际 worker 先逐项原生调用 required Skill，并通过 `record-skill-activation --activation -` 从 stdin 绑定当前 owner/operation；全部 activation 合格后才调用 `dispatch-task` 获取正式上下文。阶段结束前使用 `record-skill-conformance --conformance -` 绑定实际检查。
+manual receiving Agent 的恢复入口是 `graph-frontier`，不是 `task-context`。`task-context` 只提供未认领 Task 的诊断预览，不会 claim Task，也不授权开发。用户冻结整树并选择 manual 后已经一次授权 required Skill；Graph 返回 `DISPATCH_TASK` 后，执行适配器自动逐项原生调用，并通过 `record-skill-activation --host-runtime <current-agent> --activation -` 从 stdin 绑定当前执行宿主与 owner/operation，activation 的 `mechanism` 对所有 Agent CLI 统一为 `HOST_NATIVE_SKILL`，不得要求用户再次输入 `$skill` 或确认 Skill；全部 activation 合格后才调用 `dispatch-task` 获取正式上下文。阶段结束前由同一宿主使用 `record-skill-conformance --host-runtime <current-agent> --conformance -` 绑定实际检查。MCP 会从当前连接的 `clientInfo.name` 归一化宿主（Codex sandbox metadata 优先），不暴露该参数；CLI 的 `<current-agent>` 接受任意合法小写 Agent 标识。`clientInfo.name`、`--host-runtime` 和 `nativeInvocationId` 都是宿主上报凭证；没有可验证原生 Skill 入口的 Agent 必须记录 `BLOCKED`，不得用 Read/load 冒充。需要密码学防伪时必须由宿主适配器另行提供签名或可查询回调。
 
 控制器非零退出时，调用方必须保留 stderr、停止 JSON 解析并报告控制器错误。不得继续把空 stdout 或 stderr 文本交给下游 `json.load`；否则 `JSONDecodeError` 会遮蔽真正的控制器失败。若宿主需要二次解析，必须先确认生产者进程成功，再解析完整 stdout。
 

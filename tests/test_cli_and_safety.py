@@ -49,11 +49,11 @@ class CliAndSafetyTests(unittest.TestCase):
             help_text,
         )
         self.assertIn(
-            "record-skill-activation --item <id> --stage DEVELOPMENT|GATE|FINAL_REVIEW --skill <name> --activation -",
+            "record-skill-activation --item <id> --stage DEVELOPMENT|GATE|FINAL_REVIEW --skill <name> --host-runtime <agent> --activation -",
             help_text,
         )
         self.assertIn(
-            "record-skill-conformance --item <id> --receipt <activation-sha256> --conformance -",
+            "record-skill-conformance --item <id> --receipt <activation-sha256> --host-runtime <agent> --conformance -",
             help_text,
         )
         self.assertNotIn("retry-item --item <id> --expected-baseline <sha256> --confirmed", help_text)
@@ -117,6 +117,108 @@ class CliAndSafetyTests(unittest.TestCase):
             )
             self.assertEqual(code, 0, stderr.getvalue())
             self.assertTrue(json.loads(stdout.getvalue())["ok"])
+
+    def test_skill_lifecycle_cli_requires_the_current_host_runtime(self) -> None:
+        commands = (
+            [
+                "record-skill-activation",
+                "--item",
+                "t-example",
+                "--stage",
+                "DEVELOPMENT",
+                "--skill",
+                "tdd-workflow",
+                "--activation",
+                "-",
+                "--json",
+            ],
+            [
+                "record-skill-conformance",
+                "--item",
+                "t-example",
+                "--receipt",
+                "0" * 64,
+                "--conformance",
+                "-",
+                "--json",
+            ],
+        )
+        for command in commands:
+            with self.subTest(command=command[0]), tempfile.TemporaryDirectory() as root:
+                stderr = io.StringIO()
+                code = run_cli(
+                    command,
+                    cwd=root,
+                    stdin=io.StringIO("{}"),
+                    stderr=stderr,
+                )
+
+                self.assertEqual(code, 1)
+                self.assertEqual(
+                    json.loads(stderr.getvalue())["error"]["code"],
+                    "OPTION_REQUIRED",
+                )
+
+    def test_skill_activation_cli_accepts_any_agent_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(requiredSkills=[{
+                    "name": "tdd-workflow",
+                    "stages": ["DEVELOPMENT"],
+                    "purpose": (
+                        "Apply the complete test-driven development workflow."
+                    ),
+                }]),
+                host_runtime="codex",
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                development_mode="active",
+                confirmed=True,
+            )
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+            code = run_cli(
+                [
+                    "record-skill-activation",
+                    "--item",
+                    prepared["rootId"],
+                    "--stage",
+                    "DEVELOPMENT",
+                    "--skill",
+                    "tdd-workflow",
+                    "--host-runtime",
+                    "cursor",
+                    "--activation",
+                    "-",
+                    "--json",
+                ],
+                cwd=root,
+                stdin=io.StringIO(json.dumps({
+                    "sessionId": "cursor-session",
+                    "executorId": "developer",
+                    "executionId": "cursor-operation",
+                    "nativeInvocationId": "cursor-native-skill-call",
+                    "mechanism": "HOST_NATIVE_SKILL",
+                    "status": "INVOKED",
+                    "summary": (
+                        "Cursor explicitly invoked the complete required "
+                        "Skill through its native Agent entry."
+                    ),
+                })),
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+            self.assertEqual(code, 0, stderr.getvalue())
+            result = json.loads(stdout.getvalue())["result"]
+            self.assertEqual(result["hostRuntime"], "cursor")
+            self.assertEqual(result["mechanism"], "HOST_NATIVE_SKILL")
 
     def test_evidence_contract_is_read_on_demand_from_sqlite(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

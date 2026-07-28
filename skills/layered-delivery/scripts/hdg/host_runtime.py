@@ -23,7 +23,7 @@ def require_host_runtime(value: object) -> str:
     if not is_agent_runtime(value):
         raise GatedLoopError(
             "HOST_RUNTIME_REQUIRED" if value is None else "HOST_RUNTIME_INVALID",
-            "A writing workflow requires a --host-runtime Agent identifier"
+            "A writing workflow requires the current hostRuntime Agent identifier"
             if value is None
             else "hostRuntime must be a safe lowercase Agent identifier",
         )

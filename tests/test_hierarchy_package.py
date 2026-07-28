@@ -427,6 +427,19 @@ class HierarchyPackageTests(unittest.TestCase):
             self.assertIn("`dispatchPlan` 自动计算的完整安全 Task 顺序", handoff)
             self.assertIn("不得自行挑选 Task 子集", handoff)
             self.assertIn("不要要求用户逐 Task 回复启动", handoff)
+            self.assertIn(
+                "不得要求用户再次输入 `$skill` 或确认 Skill",
+                handoff,
+            )
+            self.assertIn(
+                "方案创建宿主只作审计，不限制接收执行宿主",
+                handoff,
+            )
+            self.assertIn(
+                "任意 Agent CLI 可接续同一 frozen graph",
+                handoff,
+            )
+            self.assertIn("`HOST_NATIVE_SKILL`", handoff)
             self.assertFalse((root / "children" / "t-python-controller" / "development-handoff.md").exists())
             self.assertFalse((root / "children" / "t-python-worker" / "development-handoff.md").exists())
 

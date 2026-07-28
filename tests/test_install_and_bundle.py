@@ -3,6 +3,10 @@ from __future__ import annotations
 import ast
 import io
 import json
+import os
+import subprocess
+import sys
+import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -20,12 +24,17 @@ from scripts.build_skill import (
 from hdg.mcp_tools import tool_definitions
 
 TARGET_MCP_ENTRY = TARGET_ENTRY.with_name("hdg_mcp.py")
-SENSITIVE_MCP_TOOLS = {
+EXPECTED_SENSITIVE_MCP_TOOLS = {
     "freeze_hierarchy",
     "rebuild_graph_run",
     "cancel_graph_run",
     "record_human_review_acceptance",
     "record_user_confirmation",
+}
+SENSITIVE_MCP_TOOLS = {
+    tool["name"]
+    for tool in tool_definitions()
+    if tool.get("_meta", {}).get("anthropic/requiresUserInteraction") is True
 }
 CLAUDE_PLUGIN_MCP_PREFIX = (
     "mcp__plugin_layered-delivery_layered-delivery__"
@@ -54,14 +63,11 @@ class InstallAndBundleTests(unittest.TestCase):
         self.assertIn("name: layered-delivery", skill)
         self.assertIn("当工作区存在 `.layered-delivery/` 时接管现有 SQLite/Graph 运行", skill)
         frontmatter = skill.split("---", 2)[1]
-        self.assertNotIn(f"{CLAUDE_PLUGIN_MCP_PREFIX}*", frontmatter)
+        self.assertIn(f"{CLAUDE_PLUGIN_MCP_PREFIX}*", frontmatter)
         for tool in tool_definitions():
             permission_name = f"{CLAUDE_PLUGIN_MCP_PREFIX}{tool['name']}"
             with self.subTest(tool=tool["name"]):
-                if tool["name"] in SENSITIVE_MCP_TOOLS:
-                    self.assertNotIn(permission_name, frontmatter)
-                else:
-                    self.assertIn(permission_name, frontmatter)
+                self.assertNotIn(permission_name, frontmatter)
         self.assertIn("$layered-delivery", agent_metadata)
         self.assertIn("allow_implicit_invocation: true", agent_metadata)
 
@@ -73,7 +79,10 @@ class InstallAndBundleTests(unittest.TestCase):
         self.assertIn("不得预读全部 references", skill)
         self.assertIn("按动作读取", skill)
         self.assertIn("evidenceContractRef", skill)
-        self.assertIn("不得读取控制器源码或 memory 文件反推格式", skill)
+        self.assertIn(
+            "不得读取控制器源码、memory 文件或治理文件反推格式",
+            skill,
+        )
         self.assertIn("`ADVANCE_GRAPH` 是租约硬过期后的确定性自动恢复动作", skill)
         self.assertIn("不得以“代码和测试已完成”代替 Graph 收尾", skill)
 
@@ -109,11 +118,14 @@ class InstallAndBundleTests(unittest.TestCase):
         self.assertIn("claude -p --permission-mode auto", claude_automation)
         self.assertIn("项目级 `.claude/settings.json`", claude_automation)
         self.assertIn("不默认使用 `bypassPermissions`", claude_automation)
-        self.assertIn("逐项预批准 32 个中段自治工具", claude_automation)
+        self.assertIn("Plugin 根目录的 `hooks/hooks.json`", claude_automation)
         self.assertIn("Claude Code 至少使用 2.1.199", claude_automation)
         self.assertIn("finalize 不执行业务动作", claude_automation)
-        self.assertIn("不使用 `__*` 通配符", claude_automation)
-        self.assertIn("优先通过已连接的 Plugin MCP 调用 `graph_frontier`", development)
+        self.assertIn("失败关闭并阻断调用", claude_automation)
+        self.assertIn(
+            "只通过已连接并完成工具注册的 Plugin MCP 调用 `graph_frontier`",
+            development,
+        )
         self.assertIn("以结构化参数调用 `evidence_contract`", acceptance)
         self.assertIn("实际开发 Skill 调用", acceptance)
         self.assertIn("全部后代 Task", acceptance)
@@ -132,22 +144,31 @@ class InstallAndBundleTests(unittest.TestCase):
     def test_skill_contract_keeps_controller_invocation_host_portable(self) -> None:
         skill_root = TARGET_PACKAGE.parent.parent
         skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
-        transport = (skill_root / "references" / "stdin-transport.md").read_text(encoding="utf-8")
-        self.assertIn("从当前 Skill 元数据解析 `<skill-root>`", skill)
-        self.assertIn("不得固化用户目录、Skill 安装位置或操作系统路径", skill)
-        self.assertIn("宿主无关调用契约", transport)
-        self.assertIn("必须直接消费 stdout", transport)
-        self.assertIn("必须保留 stderr", transport)
-        self.assertIn("不得使用临时 JSON 中转只读查询结果", transport)
-        self.assertIn("恢复入口是 `graph-frontier`，不是 `task-context`", transport)
+        transport = (skill_root / "references" / "mcp-transport.md").read_text(encoding="utf-8")
+        self.assertIn("MCP 未安装、未注册或未连接时立即阻断", skill)
+        self.assertNotIn("CLI fallback", skill)
+        self.assertIn("MCP-only", transport)
+        self.assertIn("不得启动 `hdg.py`", transport)
+        self.assertIn("恢复入口是 `graph_frontier`，不是 `task_context`", transport)
         self.assertIn("分块解决的是单条 MCP 消息上限", transport)
-        self.assertIn('"generationId":"..."', transport)
+        self.assertIn("begin 返回的 `generationId`", transport)
+        self.assertIn(
+            '{"payloadRef":{"uploadId":"...","generationId":"...","sha256":"...","sizeBytes":123}}',
+            transport,
+        )
+        self.assertFalse(
+            (skill_root / "references" / "stdin-transport.md").exists()
+        )
 
     def test_build_is_reproducible_and_bundle_matches_source(self) -> None:
         build_skill()
-        self.assertEqual(file_map(SOURCE_PACKAGE), file_map(TARGET_PACKAGE))
-        self.assertTrue(TARGET_ENTRY.is_file())
-        self.assertIn("from hdg.cli import main", TARGET_ENTRY.read_text(encoding="utf-8"))
+        expected_package = file_map(SOURCE_PACKAGE)
+        expected_package.pop("cli.py", None)
+        expected_package.pop("__main__.py", None)
+        self.assertEqual(expected_package, file_map(TARGET_PACKAGE))
+        self.assertFalse(TARGET_ENTRY.exists())
+        self.assertFalse((TARGET_PACKAGE / "cli.py").exists())
+        self.assertFalse((TARGET_PACKAGE / "__main__.py").exists())
         self.assertTrue(TARGET_MCP_ENTRY.is_file())
         self.assertIn(
             "from hdg.mcp_server import main",
@@ -155,11 +176,11 @@ class InstallAndBundleTests(unittest.TestCase):
         )
         self.assertEqual(file_map(TARGET_PACKAGE.parent.parent), file_map(PLUGIN_SKILL))
 
-    def test_build_cli_reports_success_and_failure(self) -> None:
+    def test_plugin_build_reports_success_and_failure(self) -> None:
         standard_output = io.StringIO()
         with redirect_stdout(standard_output):
             self.assertEqual(build_main(), 0)
-        self.assertIn("Built dual-host plugin Skill payload", standard_output.getvalue())
+        self.assertIn("Built dual-host Plugin payload", standard_output.getvalue())
 
         standard_error = io.StringIO()
         with patch("scripts.build_skill.build_skill", side_effect=RuntimeError("broken")):
@@ -217,6 +238,230 @@ class InstallAndBundleTests(unittest.TestCase):
             "${CLAUDE_PROJECT_DIR}",
         )
 
+    def test_claude_plugin_hooks_prompt_for_sensitive_tools_and_fail_closed(self) -> None:
+        plugin_root = PLUGIN_SKILL.parent.parent
+        hook_config_path = plugin_root / "hooks" / "hooks.json"
+        hook_script = plugin_root / "hooks" / "require_sensitive_tool_approval.py"
+        self.assertTrue(hook_config_path.is_file())
+        self.assertTrue(hook_script.is_file())
+        self.assertEqual(
+            SENSITIVE_MCP_TOOLS,
+            EXPECTED_SENSITIVE_MCP_TOOLS,
+        )
+
+        hook_config = json.loads(hook_config_path.read_text(encoding="utf-8"))
+        hook_groups = hook_config["hooks"]["PreToolUse"]
+        self.assertEqual(
+            {group["matcher"] for group in hook_groups},
+            {
+                f"{CLAUDE_PLUGIN_MCP_PREFIX}{tool_name}"
+                for tool_name in SENSITIVE_MCP_TOOLS
+            },
+        )
+        for group in hook_groups:
+            self.assertEqual(len(group["hooks"]), 1)
+            handler = group["hooks"][0]
+            self.assertEqual(handler["type"], "command")
+            self.assertEqual(handler["command"], "python")
+            self.assertEqual(handler["timeout"], 10)
+            self.assertEqual(
+                handler["args"],
+                [
+                    "-X",
+                    "utf8",
+                    "${CLAUDE_PLUGIN_ROOT}/hooks/require_sensitive_tool_approval.py",
+                ],
+            )
+
+        for tool_name in SENSITIVE_MCP_TOOLS:
+            with self.subTest(tool=tool_name):
+                completed = subprocess.run(
+                    [sys.executable, "-X", "utf8", str(hook_script)],
+                    input=json.dumps(
+                        {
+                            "hook_event_name": "PreToolUse",
+                            "tool_name": f"{CLAUDE_PLUGIN_MCP_PREFIX}{tool_name}",
+                            "tool_input": {},
+                        }
+                    ),
+                    text=True,
+                    encoding="utf-8",
+                    capture_output=True,
+                    check=False,
+                    timeout=5,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                output = json.loads(completed.stdout)
+                decision = output["hookSpecificOutput"]
+                self.assertEqual(decision["hookEventName"], "PreToolUse")
+                self.assertEqual(decision["permissionDecision"], "ask")
+                self.assertTrue(decision["permissionDecisionReason"])
+
+        for invalid_input in (
+            "not-json",
+            json.dumps(
+                {
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": f"{CLAUDE_PLUGIN_MCP_PREFIX}workspace_status",
+                }
+            ),
+            json.dumps(
+                {
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": [],
+                }
+            ),
+            json.dumps(
+                {
+                    "hook_event_name": [],
+                    "tool_name": (
+                        f"{CLAUDE_PLUGIN_MCP_PREFIX}freeze_hierarchy"
+                    ),
+                }
+            ),
+        ):
+            completed = subprocess.run(
+                [sys.executable, "-X", "utf8", str(hook_script)],
+                input=invalid_input,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+                timeout=5,
+            )
+            self.assertEqual(completed.returncode, 2)
+            self.assertEqual(completed.stdout, "")
+            self.assertIn("blocked", completed.stderr)
+
+    def test_bundled_mcp_entry_completes_real_dual_host_stdio_handshakes(self) -> None:
+        plugin_root = PLUGIN_SKILL.parent.parent
+        entry = plugin_root / "skills" / "layered-delivery" / "scripts" / "hdg_mcp.py"
+        self.assertTrue(entry.is_file())
+
+        def run_handshake(
+            *,
+            client_name: str,
+            client_version: str,
+            command_arguments: list[str],
+            environment: dict[str, str],
+            request_meta: dict[str, object] | None = None,
+        ) -> list[dict[str, object]]:
+            requests = [
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": client_name,
+                            "version": client_version,
+                        },
+                    },
+                },
+                {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/initialized",
+                    "params": {},
+                },
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/list",
+                    "params": {},
+                },
+                {
+                    "jsonrpc": "2.0",
+                    "id": 3,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "workspace_status",
+                        "arguments": {},
+                        **({"_meta": request_meta} if request_meta else {}),
+                    },
+                },
+            ]
+            completed = subprocess.run(
+                [sys.executable, "-X", "utf8", str(entry), *command_arguments],
+                cwd=plugin_root,
+                env=environment,
+                input="\n".join(
+                    json.dumps(request, separators=(",", ":"))
+                    for request in requests
+                )
+                + "\n",
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+                timeout=10,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.stderr, "")
+            return [
+                json.loads(line)
+                for line in completed.stdout.splitlines()
+                if line.strip()
+            ]
+
+        with tempfile.TemporaryDirectory() as project_root:
+            claude_environment = os.environ.copy()
+            claude_environment["HDG_PROJECT_ROOT"] = project_root
+            claude_responses = run_handshake(
+                client_name="Claude Code",
+                client_version="2.1.199",
+                command_arguments=[],
+                environment=claude_environment,
+            )
+
+            codex_environment = os.environ.copy()
+            codex_environment.pop("HDG_PROJECT_ROOT", None)
+            codex_responses = run_handshake(
+                client_name="codex-mcp-client",
+                client_version="1.0.0",
+                command_arguments=["--project-root-from-meta"],
+                environment=codex_environment,
+                request_meta={
+                    "codex/sandbox-state-meta": {
+                        "sandboxCwd": Path(project_root).resolve().as_uri(),
+                    }
+                },
+            )
+
+        for responses in (claude_responses, codex_responses):
+            with self.subTest(host=responses[0]["result"]["serverInfo"]):
+                self.assertEqual(len(responses), 3)
+                self.assertEqual(
+                    responses[0]["result"]["serverInfo"],
+                    {"name": "layered-delivery", "version": "0.15.4"},
+                )
+                tools = responses[1]["result"]["tools"]
+                self.assertEqual(len(tools), 37)
+                self.assertEqual(
+                    {
+                        tool["name"]
+                        for tool in tools
+                        if tool.get("_meta", {}).get(
+                            "anthropic/requiresUserInteraction"
+                        )
+                        is True
+                    },
+                    SENSITIVE_MCP_TOOLS,
+                )
+                self.assertEqual(
+                    responses[2]["result"]["structuredContent"],
+                    {
+                        "ok": True,
+                        "result": {
+                            "activePayloadUploads": 0,
+                            "databaseExists": False,
+                            "stagedPayloadBytes": 0,
+                            "state": "ABSENT",
+                        },
+                    },
+                )
+
     def test_codex_plugin_declares_an_inline_compatible_mcp_server_map(self) -> None:
         plugin_root = PLUGIN_SKILL.parent.parent
         manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
@@ -250,11 +495,15 @@ class InstallAndBundleTests(unittest.TestCase):
         )
         self.assertFalse((plugin_root / ".codex-mcp.json").exists())
 
-    def test_python_distribution_exposes_cli_and_mcp_entrypoints_without_dependencies(self) -> None:
+    def test_plugin_runtime_has_no_python_console_entrypoints_or_dependencies(self) -> None:
         pyproject = (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn('dependencies = []', pyproject)
-        self.assertIn('hdg = "hdg.cli:main"', pyproject)
-        self.assertIn('hdg-mcp = "hdg.mcp_server:main"', pyproject)
+        self.assertNotIn("[project.scripts]", pyproject)
+        self.assertNotIn('hdg-mcp = "hdg.mcp_server:main"', pyproject)
+        self.assertNotIn('hdg = "hdg.cli:main"', pyproject)
+        self.assertFalse((REPOSITORY_ROOT / "bin" / "hdg.py").exists())
+        self.assertFalse((SOURCE_PACKAGE / "cli.py").exists())
+        self.assertFalse((SOURCE_PACKAGE / "__main__.py").exists())
 
     def test_repository_is_plugin_source_not_a_marketplace(self) -> None:
         self.assertFalse(
@@ -269,24 +518,16 @@ class InstallAndBundleTests(unittest.TestCase):
             readme,
         )
 
-    def test_readme_documents_mcp_first_plugin_and_cli_fallback_installation(self) -> None:
+    def test_readme_documents_plugin_only_installation(self) -> None:
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
         self.assertLess(readme.index("## 安装"), readme.index("## 核心契约"))
-        skill_install = (
-            "npx skills add feng123321li/layered-delivery --skill layered-delivery "
-            "--global --agent codex --agent claude-code --yes"
-        )
-        self.assertIn("MCP-first", readme)
-        self.assertIn("CLI fallback", readme)
-        mcp_first = readme.index("MCP-first")
-        cli_fallback = readme.index("CLI fallback")
-        skill_install_location = readme.index(skill_install)
-        self.assertLess(mcp_first, cli_fallback)
-        self.assertLess(cli_fallback, skill_install_location)
-        mcp_installation = readme[mcp_first:cli_fallback]
-        self.assertIn("插件", mcp_installation)
-        self.assertIn("Codex", mcp_installation)
-        self.assertIn("Claude", mcp_installation)
+        self.assertIn("Plugin-only", readme)
+        self.assertIn("Codex", readme)
+        self.assertIn("Claude", readme)
+        self.assertNotIn("CLI fallback", readme)
+        self.assertNotIn("npx skills add", readme)
+        self.assertIn("MCP 未连接时禁止开始或恢复治理写入", readme)
+        self.assertIn("不需要另行执行 `claude mcp add`", readme)
         for retired in (
             "codex plugin marketplace add feng123321li/layered-delivery",
             "claude plugin marketplace add feng123321li/layered-delivery",
@@ -294,8 +535,47 @@ class InstallAndBundleTests(unittest.TestCase):
             "majorbio-skills",
             "git@git.i-sanger.com:ai/skill/layered-delivery.git",
             "https://git.i-sanger.com/ai/skill/layered-delivery.git",
+            "python -X utf8 <skill-root>/scripts/hdg.py",
         ):
             self.assertNotIn(retired, readme)
+
+    def test_plugin_payload_has_no_cli_escape_hatch(self) -> None:
+        skill_root = TARGET_PACKAGE.parent.parent
+        retired_cli_tokens = (
+            "dispatch-task",
+            "task-result",
+            "evidence-contract",
+            "accept-item",
+            "acceptance-item",
+            "heartbeat-task",
+            "advance-graph",
+            "resume-task",
+            "remediate-task",
+            "retry-item",
+        )
+        self.assertFalse((skill_root / "scripts" / "hdg.py").exists())
+        self.assertFalse((skill_root / "scripts" / "hdg" / "cli.py").exists())
+        self.assertFalse(
+            (skill_root / "scripts" / "hdg" / "__main__.py").exists()
+        )
+        for path in skill_root.rglob("*.md"):
+            with self.subTest(path=path):
+                text = path.read_text(encoding="utf-8")
+                self.assertNotIn("CLI fallback", text)
+                self.assertNotIn("scripts/hdg.py", text)
+                for token in retired_cli_tokens:
+                    self.assertNotIn(token, text)
+        for runtime_root in (
+            SOURCE_PACKAGE,
+            skill_root / "scripts" / "hdg",
+        ):
+            for path in runtime_root.rglob("*.py"):
+                with self.subTest(path=path):
+                    text = path.read_text(encoding="utf-8")
+                    self.assertNotIn("commandHint", text)
+                    self.assertNotIn("submitCommandHint", text)
+                    for token in retired_cli_tokens:
+                        self.assertNotIn(token, text)
 
     def test_repository_changelog_tracks_the_current_version(self) -> None:
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
@@ -327,8 +607,11 @@ class InstallAndBundleTests(unittest.TestCase):
         }
         repository_root = Path(__file__).resolve().parents[1]
         runtime_paths = [
-            *SOURCE_PACKAGE.glob("*.py"),
-            repository_root / "bin" / "hdg.py",
+            *(
+                path
+                for path in SOURCE_PACKAGE.glob("*.py")
+                if path.name not in {"cli.py", "__main__.py"}
+            ),
             repository_root / "scripts" / "build_skill.py",
             TARGET_MCP_ENTRY,
         ]

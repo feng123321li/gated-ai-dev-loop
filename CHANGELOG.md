@@ -4,14 +4,28 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
-## 0.15.3 — 待发布
+## 0.15.4 — 待发布
+
+- Claude Plugin 新增 `hooks/hooks.json` 与失败关闭的 `PreToolUse` Hook；Skill 可用一个 MCP Server 通配符预批准常规调用，同时对方案冻结、Graph 重建、Graph 取消、人工审查接受和最终用户确认继续逐次强制 `ask`。Codex 仍由自身 Plugin manifest 对同一组工具保持 `prompt`。
+- Claude Hook 对非对象事件、非字符串工具名、JSON 解码错误和内部输出异常统一以退出码 2 失败关闭，不会因异常退出码 1 被宿主当作非阻断故障继续执行。
+- 修复 Claude Code 已连接 MCP 后工具获取失败：所有工具的 `outputSchema` 根节点显式声明 `type: object`，兼容当前 MCP schema 和 Claude 工具注册校验；诊断文档区分“进程未启动”与 `Connected · tools fetch failed`。
+- 将交付形态收敛为 Plugin-only：单个 `layered-delivery` Plugin 同时携带一个 Skill 和一个 MCP Server；移除全部 Python console scripts、`bin/hdg.py`、Skill `scripts/hdg.py` 与 `python -m hdg` 入口，Plugin 运行包不再包含 `cli.py` 或 `__main__.py`。宿主直接运行 Plugin 内的 `hdg_mcp.py`，用户不需安装 Python package。
+- MCP 未安装、未注册、未连接或工具注册失败时立即返回 `PLUGIN_MCP_UNAVAILABLE` 并停止，不开始或恢复治理写入，不允许 Shell、直接 Python API 或 SQLite 降级绕过。
+- 开发中 stdio 连接意外终止时明确报告 `PLUGIN_MCP_DISCONNECTED`；响应未送达的写操作标记为提交状态未知，重连后从 `workspace_status`、`graph_frontier` 核对 SQLite 权威状态，再继续 claim 或按 `WORKER_LOST` 自动恢复。
+- Graph frontier、租约策略、evidence contract 和生成的 handoff 全部改为结构化 `mcpCall`/`submitMcpCalls`，不再返回已删除的 CLI `commandHint`；新增回归扫描，阻止旧 kebab-case CLI 提示重新进入源码、Plugin 载荷或交接文档。
+- Claude、Codex、Cursor 或其他 Agent 仍可跨宿主规划和接续同一 frozen graph，但接收宿主必须同时提供兼容 Plugin MCP 与真实原生 Skill 调用入口；`requiredSkills` 继续支持任意 catalog 名，也继续兼容省略或空数组。
+- 移除遗留 CLI harness 与 CLI 专属测试，将图查询、心跳性能和独立审查回归改为 MCP/应用服务路径；新增 Claude Hook 权限、双宿主真实 stdio 握手和 MCP-only 提示回归后全量 216 项测试通过。
+
+## 0.15.3 — 2026-07-28
+
+发布提交：`f3ebf4f`
 
 - 修复 active/manual 的 required Skill 二次确认缺陷：用户批准整树与开发方式时已完成一次授权，frontier action 改为执行适配器自动原生调用指令；策略与缺失激活错误明确 `userActionRequired=false`，禁止要求用户再次输入 `$skill`、确认 Skill 或复制触发文本，同时保留逐 attempt/operation 的激活、符合性和真实产物审计。
 - 分离方案创建宿主与当前阶段执行宿主：frozen `hostRuntime` 只保留规划审计和宿主自动化提示，不再限制 required Skill 的实际执行宿主；Claude、Codex、Cursor 或其他 Agent CLI 均可恢复同一 frozen graph，无需重新 prepare/freeze。
 - required Skill 新激活统一使用 `HOST_NATIVE_SKILL`，不再硬编码 Claude/Codex 机制分支。Plugin MCP 从当前连接的 sandbox metadata 或标准 `clientInfo.name` 生成安全的实际 Agent 标识；CLI fallback 的 Skill activation/conformance 显式要求任意合法 `--host-runtime`。既有 schema v3 的 Claude/Codex 激活事件仍可验证和投影。
 - MCP/CLI/直接 Python 生命周期入口均要求明确的当前执行宿主，不再回退到 frozen planning host。会话身份和 native invocation ID 属于宿主上报凭证；控制器验证绑定、唯一性与符合性，但不宣称在缺少宿主签名/回调时提供密码学调用证明。
 - `record_skill_conformance` 要求由原 activation 的同一执行宿主写入；门禁从当前 node attempt 的有效 Graph 事件判断，不再按方案创建宿主过滤真实凭证。既有 0.15.1/0.15.2 frozen delivery 可直接由另一宿主接续。
-- 增加 Claude/Codex/Cursor/其他 Agent 的规划开发组合、错误原生机制、跨宿主 conformance、防伪事件、MCP 客户端归一化、CLI fallback 和 manual 交接回归。
+- 增加 Claude/Codex/Cursor/其他 Agent 的规划开发组合、错误原生机制、跨宿主 conformance、防伪事件、MCP 客户端归一化、CLI fallback 和 manual 交接回归；全量 231 项测试通过。
 
 ## 0.15.2 — 2026-07-28
 

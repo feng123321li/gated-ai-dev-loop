@@ -18,22 +18,6 @@ TARGET_MCP_ENTRY = SKILL_SCRIPTS / "hdg_mcp.py"
 PLUGIN_ROOT = REPOSITORY_ROOT / "plugins" / "layered-delivery"
 PLUGIN_SKILL = PLUGIN_ROOT / "skills" / "layered-delivery"
 
-ENTRY = '''#!/usr/bin/env python3
-from __future__ import annotations
-
-import sys
-from pathlib import Path
-
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from hdg.cli import main  # noqa: E402
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-'''
-
 MCP_ENTRY = '''#!/usr/bin/env python3
 from __future__ import annotations
 
@@ -51,11 +35,22 @@ if __name__ == "__main__":
 '''
 
 
-def _copy_source(source: Path, destination: Path) -> None:
+def _copy_source(
+    source: Path,
+    destination: Path,
+    *,
+    excluded_names: frozenset[str] = frozenset(),
+) -> None:
     shutil.copytree(
         source,
         destination,
-        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+        ignore=lambda _directory, names: [
+            name
+            for name in names
+            if name in excluded_names
+            or name == "__pycache__"
+            or name.endswith((".pyc", ".pyo"))
+        ],
     )
 
 
@@ -99,7 +94,11 @@ def build_skill() -> tuple[Path, Path]:
     backup = SKILL_SCRIPTS / f".hdg.backup-{uuid.uuid4().hex}"
     moved = False
     try:
-        _copy_source(SOURCE_PACKAGE, staging)
+        _copy_source(
+            SOURCE_PACKAGE,
+            staging,
+            excluded_names=frozenset({"cli.py", "__main__.py"}),
+        )
         if TARGET_PACKAGE.exists():
             os.replace(TARGET_PACKAGE, backup)
             moved = True
@@ -111,16 +110,15 @@ def build_skill() -> tuple[Path, Path]:
             raise
         if moved:
             shutil.rmtree(backup)
-        temporary_entry = TARGET_ENTRY.with_name(f"{TARGET_ENTRY.name}.tmp-{uuid.uuid4().hex}")
-        temporary_entry.write_text(ENTRY, encoding="utf-8", newline="\n")
-        os.replace(temporary_entry, TARGET_ENTRY)
+        if TARGET_ENTRY.exists():
+            TARGET_ENTRY.unlink()
         temporary_mcp_entry = TARGET_MCP_ENTRY.with_name(
             f"{TARGET_MCP_ENTRY.name}.tmp-{uuid.uuid4().hex}"
         )
         temporary_mcp_entry.write_text(MCP_ENTRY, encoding="utf-8", newline="\n")
         os.replace(temporary_mcp_entry, TARGET_MCP_ENTRY)
         build_plugin_payload()
-        return TARGET_ENTRY, TARGET_PACKAGE
+        return TARGET_MCP_ENTRY, TARGET_PACKAGE
     finally:
         if staging.exists():
             shutil.rmtree(staging)
@@ -131,10 +129,9 @@ def build_skill() -> tuple[Path, Path]:
 def main() -> int:
     try:
         entry, package = build_skill()
-        print(f"Built Python Skill controller: {entry}")
-        print(f"Built MCP Skill controller: {TARGET_MCP_ENTRY}")
-        print(f"Bundled Python package: {package}")
-        print(f"Built dual-host plugin Skill payload: {PLUGIN_SKILL}")
+        print(f"Built Plugin MCP controller: {entry}")
+        print(f"Bundled Plugin runtime package: {package}")
+        print(f"Built dual-host Plugin payload: {PLUGIN_SKILL}")
         return 0
     except Exception as error:
         print(f"Build failed: {error}", file=sys.stderr)

@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import io
-import json
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from hdg import cli, mcp_tools, operations
+from hdg import mcp_tools, operations
 from hdg.acceptance import accept_work_item, record_acceptance
 from hdg.errors import GatedLoopError
 from hdg.execution import dispatch_task, record_task_result
@@ -224,7 +222,16 @@ class ReviewBlockedTests(unittest.TestCase):
                 review_blocker["blockedSkillUsage"],
                 blocked_artifact["skillUsage"],
             )
-            self.assertIn("retry-item", review_blocker["commandHint"])
+            self.assertEqual(
+                review_blocker["mcpCall"],
+                {
+                    "tool": "retry_item",
+                    "arguments": {
+                        "item_id": task_id,
+                        "expected_baseline_fingerprint": baseline,
+                    },
+                },
+            )
 
             retried = retry_work_item(
                 root=temporary,
@@ -354,7 +361,7 @@ class ReviewBlockedTests(unittest.TestCase):
                     "WORK_ITEM_ACCEPTANCE_EVIDENCE_INVALID",
                 )
 
-    def test_cli_and_mcp_route_review_blocked_through_shared_operation(
+    def test_mcp_routes_review_blocked_through_the_shared_operation(
         self,
     ) -> None:
         artifact = {
@@ -369,33 +376,6 @@ class ReviewBlockedTests(unittest.TestCase):
                 "Host Skill discovery did not return the frozen canonical Skill name.",
             ),
         }
-        with patch.object(
-            cli,
-            "execute_operation",
-            return_value={"action": "REVIEW_BLOCKED"},
-        ) as cli_execute:
-            parsed = cli._parse([
-                    "acceptance-item",
-                    "--item",
-                    "root-one",
-                    "--action",
-                    "REVIEW_BLOCKED",
-                    "--evidence",
-                    "-",
-                    "--json",
-                ])
-            cli_result = cli._run(
-                parsed,
-                cwd="C:/fixed-project",
-                stdin=io.StringIO(json.dumps(artifact)),
-            )
-        self.assertEqual(cli_result["action"], "REVIEW_BLOCKED")
-        self.assertEqual(cli_execute.call_args.args[0], "record_acceptance")
-        self.assertEqual(
-            cli_execute.call_args.args[1]["action"],
-            "REVIEW_BLOCKED",
-        )
-
         tool = next(
             item
             for item in mcp_tools.tool_definitions()

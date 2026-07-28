@@ -50,7 +50,7 @@ from .skill_execution import (
 
 @dataclass(frozen=True)
 class OperationContext:
-    """Trusted invocation context shared by CLI and MCP adapters."""
+    """Trusted invocation context for the MCP adapter and internal service tests."""
 
     root: str
     explicit_dogfood: bool = False

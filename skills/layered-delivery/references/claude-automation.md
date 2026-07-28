@@ -2,25 +2,25 @@
 
 ## MCP 改变的是授权粒度
 
-完整 Plugin 通过 `.mcp.json` 启动一个本地 stdio MCP Server，并把 37 个 `layered-delivery` 工具交给 Claude。控制器调用不再表现为任意 Bash/Python 进程，因此不得为 `Bash(python *hdg.py *)`、`Bash(python *)` 或类似通配命令添加 allow 规则。
+完整 Plugin 通过 `.mcp.json` 启动一个本地 stdio MCP Server，并把 37 个 `layered-delivery` 工具交给 Claude。控制器调用不再表现为任意 Bash/Python 进程，因此不得为任意 Python/Bash 通配命令添加 allow 规则。
 
 Claude Code 的权限模式仍属于执行宿主安全边界，不能由聊天提示、Skill 或仓库内容自行切换，MCP Server 也不能越过这条边界。首次安装/启用 Plugin 时，用户或组织策略可能需要信任 Server；随后应在 `/permissions` 或托管策略中按 MCP Server/tool 配置权限。项目根由 `${CLAUDE_PROJECT_DIR}` 在 Server 启动时绑定，工具调用不能传入 `root`、`dogfood` 或通用 `confirmed` 参数来扩大范围。
 
-MCP 协议工具本名是 `graph_frontier` 等 snake_case 名称；`mcp__plugin_layered-delivery_layered-delivery__graph_frontier` 只是 Claude 的权限规则名，其中插件名与 Server 名用于宿主隔离。Plugin Skill 的 `allowed-tools` 逐项预批准 32 个中段自治工具，其中包含 `record_skill_activation` 与 `record_skill_conformance`；不使用 `__*` 通配符，也不批准任意 Shell。`freeze_hierarchy`、`rebuild_graph_run`、`cancel_graph_run`、`record_human_review_acceptance` 和最终 `record_user_confirmation` 不在预批准清单内，且 Server 将它们标记为 `anthropic/requiresUserInteraction`。五个 payload 暂存工具只运输目标绑定的输入，finalize 不执行业务动作；敏感目标仍必须调用原工具并触发原 prompt。方案冻结只能紧邻用户对当前指纹方案和方式的确认调用，不能从旧对话或自然语言关键词推断。
+MCP 协议工具本名是 `graph_frontier` 等 snake_case 名称；`mcp__plugin_layered-delivery_layered-delivery__graph_frontier` 只是 Claude 的权限规则名，其中插件名与 Server 名用于宿主隔离。Plugin Skill 的 `allowed-tools` 使用 `mcp__plugin_layered-delivery_layered-delivery__*` 预批准当前 Server 的工具，但不批准任意 Shell；Plugin 根目录的 `hooks/hooks.json` 通过 `PreToolUse` 对 `freeze_hierarchy`、`rebuild_graph_run`、`cancel_graph_run`、`record_human_review_acceptance` 和最终 `record_user_confirmation` 强制返回 `ask`。Claude 合并权限决策时 `ask` 比通配符 `allow` 更严格，因此这 5 个工具仍必须到达人；Hook 输入异常、事件或工具名漂移时失败关闭并阻断调用。Server 同时将它们标记为 `anthropic/requiresUserInteraction`，形成纵深防护。五个 payload 暂存工具只运输目标绑定的输入，finalize 不执行业务动作；敏感目标仍必须调用原工具并触发原 prompt。方案冻结只能紧邻用户对当前指纹方案和方式的确认调用，不能从旧对话或自然语言关键词推断。
 
 ## Claude required Skill 原生调用
 
 frontier 的 `requiredSkills` 不是“建议读取”的文档清单。用户批准整树并选择 active/manual 时已经一次授权这些 Skill；每个名称都必须由实际执行该阶段的 Claude context 通过 Skill tool 自动调用，不得要求用户再次确认或触发。普通 Read、读取 `SKILL.md`、父 Agent 预读或只把名称写进 subagent prompt 都不合格。Skill tool 返回后，以该次 tool-use ID、Claude session ID、当前 executor 与 execution ID调用 `record_skill_activation`，`mechanism` 固定为 `HOST_NATIVE_SKILL`。一个 tool-use ID 只能绑定一个 required Skill；DEVELOPMENT 必须先完成此记录，才允许用相同 owner/operation `dispatch_task`。
 
-Claude 可以执行由任意 Agent CLI 创建并冻结的需求。冻结状态中的 `hostRuntime` 只记录方案创建宿主和当时的自动化提示，不限制当前执行宿主；Plugin MCP 从当前 Claude client session 形成实际执行宿主凭证。遇到其他宿主创建的 frozen graph 时直接从 `graph_frontier` 接续并记录统一 `HOST_NATIVE_SKILL`，不得重新 prepare/freeze、要求用户重新确认或二次确认 required Skill。
+Claude 可以执行由任意已接入 Plugin MCP 的 Agent 宿主创建并冻结的需求。冻结状态中的 `hostRuntime` 只记录方案创建宿主和当时的自动化提示，不限制当前执行宿主；Plugin MCP 从当前 Claude client session 形成实际执行宿主凭证。遇到其他宿主创建的 frozen graph 时直接从 `graph_frontier` 接续并记录统一 `HOST_NATIVE_SKILL`，不得重新 prepare/freeze、要求用户重新确认或二次确认 required Skill。
 
 Claude subagent 是新的 context，父会话调用过 Skill 不会替代子 Agent 的调用。若真正执行阶段的是 subagent，它必须在自己的 context 明确调用并记录凭证。完整执行 Skill 后，执行者或独立 gate/reviewer 针对真实代码、diff、测试和产物形成命名检查，以 `record_skill_conformance` 绑定原激活凭证；成功迁移要求全部检查 `PASS`。如果 Skill 不存在，记录 `BLOCKED` 激活与符合性并按阶段 artifact 形成阻断，不能把 Read 或宽松匹配记为 PASS。
 
-`anthropic/requiresUserInteraction` 是 Claude Code 的宿主扩展，不是 MCP Server 自己弹窗；MCP 标准 annotations 也只是宿主提示，不能替代权限策略。Claude Code 至少使用 2.1.199：更早版本会忽略该扩展，因此 Server 在识别到旧版 Claude Code 时直接以 `MCP_CLIENT_UPGRADE_REQUIRED` 拒绝上述五个敏感工具。版本满足要求后，是否允许仍由 Claude Code 的权限模式、tool 规则和组织策略决定。
+`hooks/hooks.json` 是 Claude Plugin 的宿主权限适配，不是 MCP 协议能力；Codex 继续使用自己的 Plugin manifest，其他 Agent 也必须提供等价的敏感工具 prompt/ask 策略。`anthropic/requiresUserInteraction` 是 Claude Code 的宿主扩展，不是 MCP Server 自己弹窗；MCP 标准 annotations 也只是宿主提示，不能替代权限策略。Claude Code 至少使用 2.1.199：更早版本会忽略该扩展，因此 Server 在识别到旧版 Claude Code 时直接以 `MCP_CLIENT_UPGRADE_REQUIRED` 拒绝上述五个敏感工具。版本满足要求后，是否允许仍由 Claude Code 的 Hook、权限模式、tool 规则和组织策略共同决定。
 
 ## 一次配置后的 active 自治
 
-希望长任务在用户确认方案后连续执行时，应在首次 `dispatch-task` 前同时满足：
+希望长任务在用户确认方案后连续执行时，应在首次 `dispatch_task` 前同时满足：
 
 - Plugin MCP Server 已被宿主信任并正常连接；
 - `layered-delivery` 所需 MCP tools 已按 tool 级策略允许；
@@ -44,7 +44,7 @@ Claude subagent 是新的 context，父会话调用过 Skill 不会替代子 Age
 
 ## manual 新窗口接续
 
-manual 可由 Claude 或 Codex 完成方案确认和冻结，并生成一次性 `handoffCommand`。新 Claude 运行窗口在 MCP Server 已信任且 Auto/tool 权限就绪后启动该交接，即从 `graph-frontier` 恢复同一 graph run：
+manual 可由 Claude 或 Codex 完成方案确认和冻结，并生成一次性 `handoffCommand`。新 Claude 运行窗口在 MCP Server 已信任且 Auto/tool 权限就绪后启动该交接，即从 `graph_frontier` 恢复同一 graph run：
 
 - 不重新 `prepare_hierarchy` 或 `freeze_hierarchy`；
 - 不重新选择开发方式，不逐 Skill 或逐 Task 请求确认；
@@ -53,9 +53,9 @@ manual 可由 Claude 或 Codex 完成方案确认和冻结，并生成一次性 
 
 `claudeCodeAutoHandoff` 仍可提供 Desktop/IDE Auto 模式说明、`claude --permission-mode auto` 交互入口、`claude -p --permission-mode auto` 无人值守入口及对应 argv。CLI 启动参数在聊天之外选择权限模式，不依赖 Claude 自己批准自己的权限。
 
-## CLI fallback 权限
+## Plugin MCP 启动门禁
 
-只有 Plugin/MCP 未安装、未连接或不可用时才回退到 `hdg.py`。CLI fallback 仍可能触发 Process 授权：用户可以启用 Auto，或在认领 Task 前通过 `/permissions` 精确预批准本次需要的完整控制器、Python、测试与构建命令集合。无法满足时保持未认领并报告外部授权阻断；不要为了省事批准任意 Python/Bash 通配命令。MCP 正常连接时不要因为 frontier 的 `commandHint` 是 CLI fallback 文本而启动 Shell，应按 action 调用对应 snake_case MCP tool。
+Claude Code 至少为 2.1.199，Plugin 必须已安装、启用并更新到当前版本，Python 3.10+ 必须可从 PATH 启动。安装或更新后新建会话，再用 `claude plugin list --json` 核对版本，用 `claude mcp list` 核对连接和工具获取。`Connected · tools fetch failed` 表示 Server 已连接但工具 schema 注册失败；此时必须保留具体错误并停止治理写入。MCP 未安装、未注册、未连接或工具获取失败时不得启动 Shell/CLI 控制器、直接调用 Python 应用服务或写 SQLite。
 
 交接提示不能自行改变权限模式，也不能启用 bypass、重新准备需求或要求用户逐 Task 启动。
 
@@ -67,4 +67,5 @@ Auto 和 MCP tool allow 只减少冻结范围内的重复授权，不会批准�
 
 - [Permission modes](https://code.claude.com/docs/en/permission-modes)
 - [Permission rules](https://code.claude.com/docs/en/permissions)
+- [Hooks reference](https://code.claude.com/docs/en/hooks)
 - [Require approval for a specific MCP tool](https://code.claude.com/docs/en/mcp#require-approval-for-a-specific-tool)

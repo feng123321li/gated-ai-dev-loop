@@ -701,6 +701,7 @@ class PermissionAndStorageHardeningTests(unittest.TestCase):
         }
         self.assertEqual(len(schemas), 1)
         schema = tool_definitions()[0]["outputSchema"]
+        self.assertEqual(schema["type"], "object")
         self.assertEqual(len(schema["oneOf"]), 2)
         success, failure = schema["oneOf"]
         self.assertEqual(success["properties"]["ok"]["const"], True)

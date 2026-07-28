@@ -1100,7 +1100,23 @@ class McpServerProtocolTests(unittest.TestCase):
             "PROJECT_ROOT_UNAVAILABLE",
         )
 
-    def test_tool_results_preserve_cli_sensitive_field_redaction(self) -> None:
+    def test_main_reports_an_explicit_transport_disconnect(self) -> None:
+        stderr = io.StringIO()
+        with (
+            patch.object(mcp_server, "_configure_utf8_stdio"),
+            patch.object(
+                mcp_server,
+                "serve",
+                side_effect=BrokenPipeError("client closed"),
+            ),
+            patch("sys.stderr", stderr),
+        ):
+            self.assertEqual(mcp_server.main([]), 1)
+
+        self.assertIn("ERROR PLUGIN_MCP_DISCONNECTED:", stderr.getvalue())
+        self.assertNotIn("INTERNAL_ERROR", stderr.getvalue())
+
+    def test_tool_results_preserve_sensitive_field_redaction(self) -> None:
         raw_result = {
             "safe": "visible",
             "apiToken": "secret-token",

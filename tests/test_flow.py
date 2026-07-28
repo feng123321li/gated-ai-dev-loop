@@ -43,12 +43,25 @@ class WorkItemFlowTests(unittest.TestCase):
             )
             self.assertIn("一次接管整棵需求树", frozen["handoffPrompt"])
             self.assertIn("不要要求用户逐 Task 回复启动", frozen["handoffPrompt"])
-            self.assertIn("优先使用已连接的 Plugin MCP", frozen["handoffPrompt"])
+            self.assertIn(
+                "在开始开发、认领 Task 或恢复 frozen graph 前",
+                frozen["handoffPrompt"],
+            )
             self.assertIn("恢复入口是 `graph_frontier`，不是 `task_context`", frozen["handoffPrompt"])
             self.assertIn("直接消费结构化 tool result", frozen["handoffPrompt"])
-            self.assertIn("只有 MCP 不可用时", frozen["handoffPrompt"])
-            self.assertIn("保留控制器 stderr", frozen["handoffPrompt"])
-            self.assertIn("不得固化用户目录、Skill 安装位置或操作系统路径", frozen["handoffPrompt"])
+            self.assertIn(
+                "MCP 未安装、未注册或未连接时立即阻断",
+                frozen["handoffPrompt"],
+            )
+            self.assertIn(
+                "`PLUGIN_MCP_DISCONNECTED`",
+                frozen["handoffPrompt"],
+            )
+            self.assertNotIn("CLI fallback", frozen["handoffPrompt"])
+            self.assertIn(
+                "不得固化用户目录、Plugin 安装位置或操作系统路径",
+                frozen["handoffPrompt"],
+            )
             self.assertIn("不得创建临时 JSON", frozen["handoffPrompt"])
             self.assertIn(
                 "硬过期时消费 frontier 的 `ADVANCE_GRAPH`",
@@ -65,7 +78,7 @@ class WorkItemFlowTests(unittest.TestCase):
             )
             self.assertIn("显式标注 UTC 偏移", frozen["handoffPrompt"])
             self.assertIn("Claude Code 无人值守前置条件", frozen["handoffPrompt"])
-            self.assertIn("MCP 控制器不再触发 `hdg.py` Process 授权", frozen["handoffPrompt"])
+            self.assertIn("不得启动 CLI 控制器", frozen["handoffPrompt"])
             self.assertIn("`acceptEdits` 仍不足以自动批准测试和构建命令", frozen["handoffPrompt"])
             machine_paths = (
                 "C:\\Users\\", "/Users/", "/home/", "/tmp/", ".claude/skills", ".codex/skills",
@@ -77,7 +90,7 @@ class WorkItemFlowTests(unittest.TestCase):
                 frozen["handoffCommand"],
                 "继续执行治理需求 t-python-controller。用 layered-delivery Skill 从 MCP graph_frontier "
                 "恢复已冻结运行，完整执行 Graph 计划，自动完成开发、测试、门禁和审查；"
-                "勿重新准备、冻结或逐 Task 启动，停在最终确认。MCP 不可用时按 Skill 回退 CLI；"
+                "勿重新准备、冻结或逐 Task 启动，停在最终确认。MCP 不可用时立即停止且不写治理状态；"
                 "仅遇权限、契约或不可恢复阻断时返回用户。",
             )
             self.assertLess(

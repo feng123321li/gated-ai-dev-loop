@@ -41,14 +41,14 @@ Task 子级计数为零。不写主观百分比。协调节点声明的全部 ch
 
 ## 写回时机
 
-- `prepare-hierarchy`：一次写入完整嵌套目录、根计划、树形总览和待确认的整树进度明细。
-- `freeze-hierarchy`：用同一次确认记录根级开发方式，并更新全部节点确认记录和状态；manual 同时生成根级 `requirement-handoff.md`。
-- `dispatch-task`：更新单个 Task 的 claim、上下文与 handoff。
-- `task-result`：结构化结果写入 SQLite，生成 `development-review.md`，明确 IMPLEMENTED 不是完成。
-- `remediate-task`：把同一验收契约的文件遗漏追加到原 Task，失效相关 gate，并在开发复核、验收报告和交互日志中展示修正明细；不生成新需求根。
-- `accept-item`：结构化报告写入 SQLite，生成或更新 `acceptance-report.md`。
+- `prepare_hierarchy`：一次写入完整嵌套目录、根计划、树形总览和待确认的整树进度明细。
+- `freeze_hierarchy`：用同一次确认记录根级开发方式，并更新全部节点确认记录和状态；manual 同时生成根级 `requirement-handoff.md`。
+- `dispatch_task`：更新单个 Task 的 claim、上下文与 handoff。
+- `task_result`：结构化结果写入 SQLite，生成 `development-review.md`，明确 IMPLEMENTED 不是完成。
+- `remediate_task`：把同一验收契约的文件遗漏追加到原 Task，失效相关 gate，并在开发复核、验收报告和交互日志中展示修正明细；不生成新需求根。
+- `accept_item`：结构化报告写入 SQLite，生成或更新 `acceptance-report.md`。
 - `record-interaction`：追加指令、决策或状态摘要，刷新需求根 `interaction-log.md`。
-- `heartbeat-task`：只更新当前 Task、claim 与 graph run 的必要数据库行，并刷新需求根的 `execution-graph.md`、`run-timeline.md` 和 `frontier.md`。
+- `heartbeat_task`：只更新当前 Task、claim 与 graph run 的必要数据库行，并刷新需求根的 `execution-graph.md`、`run-timeline.md` 和 `frontier.md`。
 - retry、聚合 gate、独立审查和用户确认：立即更新数据库和投影。
 
 普通状态写回增加 workspace/record revision，并在 SQLite 提交后重建 `workspace-overview.md`、全部 `workspace-overview/YYYY-MM.md` 和 `workspace-overview/YYYY-MM/<root-id>.md`、需求根整树 `progress.md`、根节点 `node-progress.md`，以及每个已物化子节点的 `overview.md/progress.md`。不再存在的月份文件与需求明细会随月度投影目录的原子重建一并清理。因此 Task 被认领、写回实现或阻断、重试、门禁验证，以及父级聚合和最终验收后，索引与月度明细都反映新状态。高频心跳和交互记录使用上述窄投影；任一投影若内容与磁盘一致则跳过替换和 `fsync`。

@@ -73,10 +73,10 @@ class WorkItemFlowTests(unittest.TestCase):
                 frozen["handoffPrompt"],
             )
             self.assertIn(
-                "面向人的状态报告必须把控制器 UTC 时间转换为当前运行环境的本机时区",
+                "面向人的状态报告默认使用简体中文",
                 frozen["handoffPrompt"],
             )
-            self.assertIn("显式标注 UTC 偏移", frozen["handoffPrompt"])
+            self.assertIn("UTC+08:00", frozen["handoffPrompt"])
             self.assertIn("Claude Code 无人值守前置条件", frozen["handoffPrompt"])
             self.assertIn("不得启动 CLI 控制器", frozen["handoffPrompt"])
             self.assertIn("`acceptEdits` 仍不足以自动批准测试和构建命令", frozen["handoffPrompt"])
@@ -143,7 +143,7 @@ class WorkItemFlowTests(unittest.TestCase):
                 {"schemaVersion", "coordinationRoot", "revision", "currentFocus", "workItems", "updatedAt"},
             )
             progress = (package / "progress.md").read_text(encoding="utf-8")
-            self.assertIn("开发建议：manual", progress)
+            self.assertIn("开发建议：手动", progress)
             self.assertIn("需求级交接：[requirement-handoff.md](requirement-handoff.md)", progress)
             self.assertIn("一次性交接整棵需求树", progress)
             self.assertNotIn("按需生成可复制的独立开发 handoff", progress)

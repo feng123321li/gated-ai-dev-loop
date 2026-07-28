@@ -201,7 +201,7 @@ class HierarchyFlowTests(unittest.TestCase):
                 temporary,
                 completed["acceptanceReport"]["markdownPath"],
             ).read_text(encoding="utf-8")
-            self.assertIn("## 实际开发 Skill 调用", report)
+            self.assertIn("## 实际开发技能调用", report)
             self.assertIn("t-python-controller", report)
             self.assertIn("op-nested", report)
             self.assertIn(
@@ -360,7 +360,7 @@ class HierarchyFlowTests(unittest.TestCase):
             self.assertIn("`op-worker`", report)
             self.assertEqual(
                 report.count(
-                    "| `tdd-workflow` | `DEVELOPMENT` | `APPLIED` |"
+                    "| `tdd-workflow` | 开发 | 已应用 |"
                 ),
                 2,
             )

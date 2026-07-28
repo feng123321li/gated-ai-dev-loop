@@ -633,7 +633,7 @@ class SkillExecutionContractTests(unittest.TestCase):
                 root,
                 accepted["acceptanceReport"]["markdownPath"],
             ).read_text(encoding="utf-8")
-            self.assertIn("## 实际 Skill 原生调用与符合性", report)
+            self.assertIn("## 实际技能原生调用与符合性", report)
             self.assertIn(NATIVE_MECHANISM, report)
             self.assertIn("agent-turn-1", report)
             self.assertIn("agent-gate-turn-1", report)

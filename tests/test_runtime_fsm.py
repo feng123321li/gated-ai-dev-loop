@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from hdg.acceptance import accept_work_item
+from hdg.display import format_display_timestamp
 from hdg.errors import GatedLoopError
 from hdg.execution import (
     dispatch_task,
@@ -134,7 +135,7 @@ class RuntimeFsmTests(unittest.TestCase):
             },
         }
 
-    def test_runtime_policy_and_bilingual_transition_flow_are_frozen(self) -> None:
+    def test_runtime_policy_and_chinese_transition_flow_are_frozen(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepared = self._prepare_and_freeze(temporary)
             artifact_dir = Path(prepared["artifactDir"])
@@ -149,17 +150,17 @@ class RuntimeFsmTests(unittest.TestCase):
             ).read_text(
                 encoding="utf-8"
             )
-            self.assertIn("# 状态迁移图 / State Transition Graph", transition_graph)
-            self.assertIn("## 开发执行流程 / Development Execution Flow", transition_graph)
-            self.assertIn("失败分类 / Failure Classification", transition_graph)
-            self.assertIn("尝试耗尽 / Retry Exhausted", transition_graph)
-            self.assertIn("暂停 / Paused", transition_graph)
-            self.assertIn("取消 / Cancelled", transition_graph)
+            self.assertIn("# 状态迁移图", transition_graph)
+            self.assertIn("## 开发执行流程", transition_graph)
+            self.assertIn("失败分类", transition_graph)
+            self.assertIn("尝试耗尽", transition_graph)
+            self.assertIn("暂停", transition_graph)
+            self.assertIn("取消", transition_graph)
             self.assertIn("```mermaid", transition_graph)
 
             plan = (artifact_dir / "development-plan.md").read_text(encoding="utf-8")
-            self.assertIn("## 运行时策略 / Runtime Policy", plan)
-            self.assertIn("最大尝试次数 / Max attempts", plan)
+            self.assertIn("## 运行时策略", plan)
+            self.assertIn("最大尝试次数", plan)
             status = get_graph_status(root=temporary, work_item_id=prepared["rootId"])
             self.assertEqual(status["runtime"]["retryPolicy"]["maxAttempts"], 3)
             self.assertGreater(len(status["runtime"]["transitions"]), 8)
@@ -689,11 +690,13 @@ class RuntimeFsmTests(unittest.TestCase):
                 dashboard,
             )
             self.assertIn(
-                "## 执行中与心跳计划 / In Flight and Heartbeat Schedule",
+                "## 执行中与心跳计划",
                 dashboard,
             )
             self.assertIn(
-                self._at(self.START + timedelta(minutes=5)),
+                format_display_timestamp(
+                    self._at(self.START + timedelta(minutes=5))
+                ),
                 dashboard,
             )
             waiting = get_graph_frontier(

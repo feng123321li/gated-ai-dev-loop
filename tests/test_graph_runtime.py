@@ -159,7 +159,7 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
             "confirmation": confirmation,
         }
 
-    def test_prepare_persists_compiled_graph_and_projects_bilingual_views(self) -> None:
+    def test_prepare_persists_compiled_graph_and_projects_chinese_views(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepared = prepare_hierarchy(
                 root=temporary,
@@ -170,12 +170,13 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
             self.assertEqual(prepared["graphSummary"]["taskExecutions"], 1)
             package = Path(prepared["artifactDir"])
             graph_markdown = (package / "execution-graph.md").read_text(encoding="utf-8")
-            self.assertIn("# 交付图 / Delivery Graph", graph_markdown)
-            self.assertIn("## 执行图 / Execution Graph", graph_markdown)
-            self.assertIn("## 治理图 / Governance Graph", graph_markdown)
-            self.assertIn("![执行图 / Execution Graph](assets/execution-graph.svg)", graph_markdown)
-            self.assertIn("![治理图 / Governance Graph](assets/governance-graph.svg)", graph_markdown)
-            self.assertIn("<summary>查看 Mermaid 源图 / Show Mermaid source</summary>", graph_markdown)
+            self.assertIn("# 交付图", graph_markdown)
+            self.assertIn("## 执行图", graph_markdown)
+            self.assertIn("## 治理图", graph_markdown)
+            self.assertIn("![执行图](assets/execution-graph.svg)", graph_markdown)
+            self.assertIn("![治理图](assets/governance-graph.svg)", graph_markdown)
+            self.assertIn("<summary>查看 Mermaid 源图</summary>", graph_markdown)
+            self.assertNotIn(" / Delivery Graph", graph_markdown)
             governance = Path(temporary, ".layered-delivery")
             self.assertEqual(
                 prepared["humanArtifacts"]["stateTransitionGraph"],
@@ -185,15 +186,15 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
             state_markdown = (governance / "state-transition-graph.md").read_text(encoding="utf-8")
             workspace_overview = (governance / "workspace-overview.md").read_text(encoding="utf-8")
             self.assertIn(
-                "[状态迁移图 / State Transition Graph](state-transition-graph.md)",
+                "[状态迁移图](state-transition-graph.md)",
                 workspace_overview,
             )
             self.assertIn(
-                "![开发执行流程 / Development Execution Flow](assets/development-flow.svg)",
+                "![开发执行流程](assets/development-flow.svg)",
                 state_markdown,
             )
             self.assertIn(
-                "![节点有限状态机 / Node FSM](assets/node-state-machine.svg)",
+                "![节点有限状态机](assets/node-state-machine.svg)",
                 state_markdown,
             )
             for relative_path in (
@@ -707,9 +708,20 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                     "USER_CONFIRMED",
                 ],
             )
+            events = list_graph_events(root=temporary, work_item_id=task_id)
+            self.assertTrue(
+                all(event["recordedAt"].endswith("Z") for event in events),
+                "机器事件时间必须继续使用 UTC",
+            )
             timeline = Path(prepared["artifactDir"], "run-timeline.md").read_text(encoding="utf-8")
-            self.assertIn("# 运行时间线 / Run Timeline", timeline)
+            self.assertIn("# 运行时间线", timeline)
             self.assertIn("USER_CONFIRMED", timeline)
+            self.assertRegex(
+                timeline,
+                r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}",
+            )
+            self.assertIn("时间（东八区）", timeline)
+            self.assertNotIn(events[-1]["recordedAt"], timeline)
 
     def test_frontier_computes_the_complete_automatic_agent_dispatch_plan(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -777,7 +789,7 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                 prepared["artifactDir"], "frontier.md"
             ).read_text(encoding="utf-8")
             self.assertIn(
-                "## 自动 Agent 调度计划 / Automatic Agent Dispatch Plan",
+                "## 自动智能体调度计划",
                 dashboard,
             )
             self.assertIn("Graph 已确定全部本轮安全任务及稳定顺序", dashboard)
@@ -876,7 +888,7 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                 [(1, "BLOCKED"), (2, "READY")],
             )
 
-    def test_frontier_projects_a_bilingual_critical_path_dashboard(self) -> None:
+    def test_frontier_projects_a_chinese_critical_path_dashboard(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepared = self._prepare_and_freeze(temporary)
             task_id = prepared["rootId"]
@@ -893,12 +905,13 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
             self.assertEqual(frontier["criticalPath"]["remainingNodes"], 4)
             self.assertIsNone(frontier["criticalPath"]["nextJoinNodeId"])
             dashboard = Path(prepared["artifactDir"], "frontier.md").read_text(encoding="utf-8")
-            self.assertIn("# 图前沿 / Graph Frontier", dashboard)
-            self.assertIn("## 关键路径 / Critical Path", dashboard)
-            self.assertIn("## 可执行动作 / Actionable Actions", dashboard)
-            self.assertIn("## 阻断节点 / Blocked Nodes", dashboard)
+            self.assertIn("# 图前沿", dashboard)
+            self.assertIn("## 关键路径", dashboard)
+            self.assertIn("## 可执行动作", dashboard)
+            self.assertIn("## 阻断节点", dashboard)
             self.assertIn("```mermaid", dashboard)
-            self.assertIn("任务执行 / Task Execution", dashboard)
+            self.assertIn("任务执行", dashboard)
+            self.assertNotIn(" / Graph Frontier", dashboard)
 
     def test_graph_evidence_is_bound_to_run_node_attempt_and_graph(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

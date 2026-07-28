@@ -48,6 +48,14 @@ class CliAndSafetyTests(unittest.TestCase):
             "evidence-contract --item <id> --kind result|gate|remediation|review|confirmation",
             help_text,
         )
+        self.assertIn(
+            "record-skill-activation --item <id> --stage DEVELOPMENT|GATE|FINAL_REVIEW --skill <name> --activation -",
+            help_text,
+        )
+        self.assertIn(
+            "record-skill-conformance --item <id> --receipt <activation-sha256> --conformance -",
+            help_text,
+        )
         self.assertNotIn("retry-item --item <id> --expected-baseline <sha256> --confirmed", help_text)
         self.assertNotIn("prepare-item", help_text)
         self.assertNotIn("freeze-item", help_text)

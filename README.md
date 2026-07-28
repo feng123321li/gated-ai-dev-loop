@@ -20,14 +20,14 @@ npx skills add feng123321li/layered-delivery --skill layered-delivery --global -
 
 ## MCP 架构
 
-- 一个项目会话只启动一个 Python stdio MCP Server，由它提供 35 个窄接口工具；不为每个命令创建独立 Server。
+- 一个项目会话只启动一个 Python stdio MCP Server，由它提供 37 个窄接口工具；不为每个命令创建独立 Server。
 - MCP、CLI 共用同一应用服务、Graph 规则和 SQLite repository；MCP 是首选宿主适配器，`hdg.py` 只在 MCP 不可用时回退。
 - 被治理项目根在 Server 生命周期内只绑定一次，不能由普通工具参数改写。Claude 使用 `${CLAUDE_PROJECT_DIR}`；Codex 从宿主注入的 `codex/sandbox-state-meta.sandboxCwd` 绑定当前任务工作区，随后若根不一致会拒绝调用。`root`、维护专用 `dogfood` 和确认布尔值 `confirmed` 均不暴露为工具参数。
 - 首次调用用 MCP `workspace_status`（fallback 为 CLI `workspace-status`）区分 `ABSENT`、只有暂存 payload 的 `STAGING_ONLY` 与可从 `graph_frontier` 恢复的 `ACTIVE`，不再把“SQLite 文件存在”误判为已有交付运行。
 - MCP 工具使用结构化输入、输出和 tool annotations，宿主可以按工具而不是按任意 Shell 命令配置权限。
 - 普通 hierarchy/evidence 直接结构化传输；真实超过 8 MiB 时，可按 1 MiB 以内的文本块无损暂存到 SQLite。Server 自动计算并校验每块和整包的 UTF-8 字节数与 SHA-256，并用 Server 生成的 generation ID 阻止删除/重建后的旧引用复用；随后仍调用原业务工具，继续执行原来的指纹、claim、evidence 和人工确认门禁。Server 不在结果中回显原文，但宿主可能保留工具参数，因此分块不是上下文压缩保证。
 - MCP 协议中的工具名是 `graph_frontier` 这类 snake_case 名称。`mcp__plugin_layered-delivery_layered-delivery__graph_frontier` 只是 Claude 的宿主权限名：前两段分别隔离插件和 Server，不进入业务 schema、SQLite 或代码 API。
-- Claude Skill 只逐项预批准 30 个中段自治工具，不使用 Server 级通配符；Codex manifest 对常规工具使用 `approve`，并把方案冻结、重建、取消、人工审查接受和最终用户确认这 5 个敏感工具固定为 `prompt`。Claude Code 低于 2.1.199 时 Server 会拒绝这 5 个工具，避免旧宿主忽略强制交互元数据。payload finalize 只完成校验，不是通用提交入口。用户或组织策略可以进一步收紧。
+- Claude Skill 只逐项预批准 32 个中段自治工具（包含 Skill 激活与符合性记录），不使用 Server 级通配符；Codex manifest 对常规工具使用 `approve`，并把方案冻结、重建、取消、人工审查接受和最终用户确认这 5 个敏感工具固定为 `prompt`。Claude Code 低于 2.1.199 时 Server 会拒绝这 5 个工具，避免旧宿主忽略强制交互元数据。payload finalize 只完成校验，不是通用提交入口。用户或组织策略可以进一步收紧。
 
 Server 是随项目会话存在的本地 stdio 进程，不监听端口、不启动后台 worker，也不需要常驻数据库连接。空闲资源主要是一个 Python 进程；请求期间才打开 SQLite。超限暂存限制为单包 64 MiB、每项目 16 个未过期 upload 和 256 MiB 未过期内容；finalize 的内存峰值会随 JSON 大小增长，达到资源边界时明确失败而不提交业务状态。过期内容采用逻辑过期和后续 begin 惰性清理，也可主动 abort。
 
@@ -37,7 +37,7 @@ Server 是随项目会话存在的本地 stdio 进程，不监听端口、不启
 - 使用满足聚合责任的最浅结构，Task 是唯一执行叶子。
 - 人只评审一份根级开发方案，并一次冻结整棵需求树。
 - 每个 requirement 都有独立 acceptance；跨需求 acceptance 只能追加集成验收。
-- baseline 可用 `requiredSkills` 指定 `DEVELOPMENT`、`GATE`、`FINAL_REVIEW` 阶段必须完整加载的 Skill；根级声明向后代继承。成功的开发结果、内部门禁和独立审查必须逐项提交具体 `skillUsage`。最终验收报告按 Task 汇总实际开发写回的 Skill、operation、状态和具体使用证据，并另列门禁与独立审查使用情况。
+- baseline 可用 `requiredSkills` 指定任意合法 Skill catalog 名及其 `DEVELOPMENT`、`GATE`、`FINAL_REVIEW` 阶段；控制器没有硬编码 Skill。根级声明向后代继承。每项 Skill 必须先经 Claude/Codex 原生入口明确调用并写入 Graph 激活凭证，再对实际产物记录结构化符合性检查；Read、load、提示提名和 `skillUsage` 自述都不能替代。成功的开发结果、内部门禁和独立审查要求逐项通过，并在最终验收报告展示真实调用 ID、宿主机制、attempt 和检查结果。
 - 冻结后由 Graph 自动选择 Task、计算 Agent 数、执行门禁并处理重试与恢复。
 - 用户确认方案并选择 `active` 后，当前冻结契约内的开发、测试、门禁、预算内重试和租约恢复自动推进，不再逐 Task 或逐步骤请求治理确认。
 - `.layered-delivery/governance.sqlite3` 是唯一机器权威，Markdown 只是可重建投影。
@@ -64,7 +64,13 @@ Server 是随项目会话存在的本地 stdio 进程，不监听端口、不启
 }
 ```
 
-`name` 是 Skill catalog 名，不带 `/` 或 `$`。`FINAL_REVIEW` 只在需求根声明；根级 `DEVELOPMENT/GATE` 要求作用于整棵子树。控制器把要求带入 frontier、Task context 和 evidence contract；`IMPLEMENTED`、gate `PASS`、独立审查 `PASS` 缺少匹配的 `skillUsage` 时会被拒绝。`acceptance-report.md` 的“实际开发 Skill 调用”直接聚合每个后代 Task 已校验 result 中的调用记录，而不是重复 baseline 中的预期清单。MCP 能机械保证冻结、传播和审计记录一致，但不能读取模型内部状态；更强的“真实激活证明”需要宿主提供可信 Skill activation receipt。
+`requiredSkills` 可以省略或显式写为 `[]`，两者都会规范化为空数组且不触发 Skill 门禁。非空时，`name` 是需求指定的任意合法 Skill catalog 名，不带 `/` 或 `$`；控制器只做精确集合匹配，不维护 `tdd-workflow`、`erp-dubbo-api-generator` 等白名单。`FINAL_REVIEW` 只在需求根声明；根级 `DEVELOPMENT/GATE` 要求作用于整棵子树。控制器把要求带入 frontier、Task context 和 evidence contract：
+
+1. Claude 必须通过 Skill tool 明确调用每个名称，并以 `CLAUDE_SKILL_TOOL`、tool-use ID、session/executor/execution ID 调用 `record_skill_activation`；Codex 必须通过显式 `$<skill-name>` 原生触发，并以 `CODEX_EXPLICIT_SKILL` 和当前 task/session 调用 ID 记录。同一原生调用 ID 不能覆盖两个 Skill，Read 或加载文件会被拒绝。
+2. 完整执行 Skill 后，以 `record_skill_conformance` 绑定非空的实际检查及证据。`IMPLEMENTED`、gate `PASS`、独立审查 `PASS` 要求当前 node attempt 的所有 required Skill 都是 `INVOKED + PASS`。
+3. artifact 仍必须提交精确 `skillUsage`，但它只作结果审计，不能替代前两步。`acceptance-report.md` 的“实际 Skill 原生调用与符合性”直接来自 append-only Graph 事件；“实际开发 Skill 调用”和“Skill 使用审计”继续展示 artifact 自述，二者不会混为一谈。
+
+MCP 能机械保证名称、阶段、host 机制、node attempt、operation/owner 绑定、凭证唯一性和结构化检查完整性；任意 Skill 的语义是否真的满足，仍取决于宿主提供真实原生调用身份，以及执行者/审查者对实际代码、diff、测试和产物形成具体检查证据。
 
 ## 使用流程
 

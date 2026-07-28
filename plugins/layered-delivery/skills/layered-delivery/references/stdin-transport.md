@@ -2,7 +2,7 @@
 
 ## MCP-first 调用契约
 
-完整 Plugin 为 Codex/Claude 启动一个本地 Python stdio MCP Server，并提供 35 个结构化工具。Agent 调用宿主已经发现的工具，不自行启动第二个 Server，不手写 JSON-RPC 行，也不经 Shell 包装 MCP 调用。
+完整 Plugin 为 Codex/Claude 启动一个本地 Python stdio MCP Server，并提供 37 个结构化工具。Agent 调用宿主已经发现的工具，不自行启动第二个 Server，不手写 JSON-RPC 行，也不经 Shell 包装 MCP 调用。
 
 - MCP 与 CLI 进入同一应用服务、Graph 规则和 SQLite repository；MCP Server 不派生 `hdg.py` 子进程。
 - 宿主在启动 Server 时解析被治理项目根，Server 在整个进程生命周期内固定该路径。工具 schema 不提供 `root` 或 `project_root`，单次调用不能跨项目。
@@ -46,13 +46,13 @@ python -X utf8 <skill-root>/scripts/hdg.py <command> ... --json
 
 `workspace-status`、`graph-status`、`graph-frontier`、`graph-events`、`graph-replay`、`ready-tasks`、`task-context` 和其他只读查询把 JSON 写到 stdout。调用方必须直接消费 stdout，不得使用临时 JSON 中转只读查询结果。MCP 的 `graph_events` 与 `interaction_log` 必须提供 `after_event_id` 和 `limit`（1–200）：首屏 cursor 为 0，`hasMore=true` 时把 `nextCursor` 用于下一页；Server 只保留当前页。CLI fallback 的旧日志命令仍输出完整列表，诊断大型历史时优先使用 MCP 分页。
 
-manual receiving Agent 的恢复入口是 `graph-frontier`，不是 `task-context`。`task-context` 只提供未认领 Task 的诊断预览，不会 claim Task，也不授权开发；Graph 返回 `DISPATCH_TASK` 后应调用 `dispatch-task` 获取正式上下文。
+manual receiving Agent 的恢复入口是 `graph-frontier`，不是 `task-context`。`task-context` 只提供未认领 Task 的诊断预览，不会 claim Task，也不授权开发。Graph 返回 `DISPATCH_TASK` 后，实际 worker 先逐项原生调用 required Skill，并通过 `record-skill-activation --activation -` 从 stdin 绑定当前 owner/operation；全部 activation 合格后才调用 `dispatch-task` 获取正式上下文。阶段结束前使用 `record-skill-conformance --conformance -` 绑定实际检查。
 
 控制器非零退出时，调用方必须保留 stderr、停止 JSON 解析并报告控制器错误。不得继续把空 stdout 或 stderr 文本交给下游 `json.load`；否则 `JSONDecodeError` 会遮蔽真正的控制器失败。若宿主需要二次解析，必须先确认生产者进程成功，再解析完整 stdout。
 
 ## CLI fallback 的结构化 stdin
 
-`prepare-hierarchy --definition -`、`record-interaction --interaction -` 和所有 `--evidence -` 命令只从标准输入读取 JSON。控制器拒绝文件路径，因此 Agent 不得创建 `_hdg_definition.json`、`.hdg-tmp/**`、系统临时 JSON 或其他中间文件。
+`prepare-hierarchy --definition -`、`record-interaction --interaction -`、`record-skill-activation --activation -`、`record-skill-conformance --conformance -` 和所有 `--evidence -` 命令只从标准输入读取 JSON。控制器拒绝文件路径，因此 Agent 不得创建 `_hdg_definition.json`、`.hdg-tmp/**`、系统临时 JSON 或其他中间文件。
 
 JSON 必须直接进入控制器进程。不要使用 `echo`、命令替换或把 JSON 拼进多层 shell 引号；这些方式会改变反斜杠、换行、美元符号或引号，并可能在控制器启动前失败。
 

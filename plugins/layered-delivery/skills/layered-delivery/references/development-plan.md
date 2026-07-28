@@ -4,7 +4,7 @@
 
 ## 完整 definition 外壳
 
-控制器使用严格字段集合，缺字段和未知字段都会拒绝。最外层固定为 `{"schemaVersion":3,"root":{"definition":{...},"children":[...]}}`；每个 child 继续使用相同的 `definition + children` 节点结构。三个层级的节点 definition 都必须先具备以下共同字段，再加入本层专有字段：
+控制器使用严格字段集合；未知字段和必填字段缺失都会拒绝，只有 `requiredSkills` 可省略并规范化为 `[]`。最外层固定为 `{"schemaVersion":3,"root":{"definition":{...},"children":[...]}}`；每个 child 继续使用相同的 `definition + children` 节点结构。三个层级的节点 definition 都必须先具备以下共同字段，再加入本层专有字段：
 
 ```json
 {
@@ -54,7 +54,7 @@
 - `schemaVersion` 固定为 `3`；`kind` 只能为 `DELIVERY|CAPABILITY|TASK`；协调层 `gateLevel` 固定 `FULL`，Task 为 `LIGHT|FULL`；
 - `id` 为安全小写 ID；`title/goal` 和所有说明字符串必须非空且不能含 TBD/TODO/FIXME 等占位符；
 - `scope/nonGoals/requirements/acceptance/testCommands/risks/decisions` 都是非空数组；测试命令是 argv 数组，不是 shell 字符串；
-- `requiredSkills` 必须存在但可以为空；每项只含 `name/stages/purpose`。名称保存 catalog 标识而不是 `/skill` 命令，阶段只允许 `DEVELOPMENT|GATE|FINAL_REVIEW`，其中 `FINAL_REVIEW` 只在需求根声明；根级声明自动约束后代，不能由子项覆盖或取消；
+- `requiredSkills` 可省略或为空，两者都规范化为 `[]`；非空时每项只含 `name/stages/purpose`。名称保存 catalog 标识而不是 `/skill` 命令，阶段只允许 `DEVELOPMENT|GATE|FINAL_REVIEW`，其中 `FINAL_REVIEW` 只在需求根声明；根级声明自动约束后代，不能由子项覆盖或取消；
 - requirement ID 使用 `R-001` 形式，acceptance ID 使用 `A-001` 形式；每个 requirement 必须至少有一个 `requirementIds` 只包含自身的独立 acceptance，不能只用一个跨需求 acceptance 同时覆盖多个 requirement；跨需求 acceptance 仅用于追加集成行为验收；
 - 每个独立 acceptance 的 `expectedResult` 必须写成可单独观察和取证的通过条件，不能使用“功能正常”“按预期工作”或对 requirement 的笼统复述；有关键失败、边界或兼容条件时一并写入；
 - `scope` 只能是精确相对路径或尾部 `/**` 前缀，不能进入 `.layered-delivery`；

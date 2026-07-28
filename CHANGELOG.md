@@ -4,6 +4,14 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.15.1 — 待发布
+
+- required Skill 不设控制器白名单：需求冻结的任意合法 catalog 名都逐项执行。Claude 必须以 Skill tool-use、Codex 必须以显式 `$skill` 原生触发形成 `SKILL_ACTIVATED` Graph 凭证；Read/load 不算激活，同一原生调用 ID 不得复用。
+- MCP 工具由 35 个增至 37 个，新增 `record_skill_activation` 与 `record_skill_conformance`。result、gate 和 review 成功前须提交绑定当前 node attempt 的非空检查并全部 PASS，artifact 中的 `skillUsage` 自述不能替代原生激活与实际符合性。
+- 开发复核与验收报告新增“实际 Skill 原生调用与符合性”，直接投影 Graph 中的 host/mechanism、attempt、native invocation ID、调用/符合性状态、命名检查和凭证 hash，不从 baseline 或文件读取记录推断；恢复时重新校验已存 artifact 对应的 activation/conformance。
+- schema v3 的 `requiredSkills` 可省略或显式传 `[]`，两者都规范化为空数组并保持无门禁兼容；不新增旧 schema 迁移入口。
+- 增加任意 Skill 名、Claude/Codex 原生调用、load 拒绝、凭证唯一性、符合性门禁、报告真实性和恢复校验回归；Python 3.12 全量 219 项测试通过。
+
 ## 0.15.0 — 2026-07-28
 
 发布提交：`64879e4`

@@ -10,6 +10,10 @@ from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.repository import GovernanceRepository
 
 from .fixtures import delivery_hierarchy, two_task_capability_hierarchy
+from .skill_helpers import (
+    activate_required_skills,
+    conform_required_skills,
+)
 
 
 class HierarchyFlowTests(unittest.TestCase):
@@ -87,6 +91,13 @@ class HierarchyFlowTests(unittest.TestCase):
             delivery = self._prepared_item(prepared, "d-python-governance")
             capability = self._prepared_item(prepared, "c-python-runtime")
             task = self._prepared_item(prepared, "t-python-controller")
+            development_receipts = activate_required_skills(
+                temporary,
+                task["id"],
+                "DEVELOPMENT",
+                execution_id="op-nested",
+                executor_id="developer",
+            )
             dispatch_task(root=temporary, item_id=task["id"], owner="developer", operation_id="op-nested")
             result = {
                 "schemaVersion": 3,
@@ -113,6 +124,11 @@ class HierarchyFlowTests(unittest.TestCase):
                     ),
                 }],
             }
+            conform_required_skills(
+                temporary,
+                task["id"],
+                development_receipts,
+            )
             record_task_result(
                 root=temporary,
                 item_id=task["id"],
@@ -248,11 +264,23 @@ class HierarchyFlowTests(unittest.TestCase):
                 ),
             ]
             for task_id, operation_id, command, changed_files in task_specs:
+                development_receipts = activate_required_skills(
+                    temporary,
+                    task_id,
+                    "DEVELOPMENT",
+                    execution_id=operation_id,
+                    executor_id="developer",
+                )
                 dispatch_task(
                     root=temporary,
                     item_id=task_id,
                     owner="developer",
                     operation_id=operation_id,
+                )
+                conform_required_skills(
+                    temporary,
+                    task_id,
+                    development_receipts,
                 )
                 record_task_result(
                     root=temporary,
@@ -311,7 +339,9 @@ class HierarchyFlowTests(unittest.TestCase):
             self.assertIn("`t-python-worker` Python worker", report)
             self.assertIn("`op-worker`", report)
             self.assertEqual(
-                report.count("| `tdd-workflow` | `DEVELOPMENT` |"),
+                report.count(
+                    "| `tdd-workflow` | `DEVELOPMENT` | `APPLIED` |"
+                ),
                 2,
             )
 

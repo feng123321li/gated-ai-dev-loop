@@ -2585,6 +2585,8 @@ class GovernanceRepository:
     ) -> None:
         """Strictly revalidate current evidence artifacts during recovery."""
 
+        from .skill_execution import assert_required_skill_conformance
+
         by_id = {
             entry["id"]: entry
             for entry in registry["workItems"]
@@ -2666,6 +2668,25 @@ class GovernanceRepository:
                             "DEVELOPMENT Skill contract"
                         ),
                     )
+                try:
+                    assert_required_skill_conformance(
+                        self,
+                        registry,
+                        entry,
+                        stage="DEVELOPMENT",
+                        skill_usage=artifact.get("skillUsage", []),
+                        operation_id=artifact.get("operationId"),
+                        require_pass=status == "IMPLEMENTED",
+                    )
+                except GatedLoopError as error:
+                    self._stored_evidence_error(
+                        entry,
+                        "Task result",
+                        (
+                            "the native Skill activation or conformance "
+                            f"evidence is invalid: {error.code}"
+                        ),
+                    )
 
             gate = entry["gate"]
             if gate["status"] in {"PASS", "FAIL"}:
@@ -2714,6 +2735,24 @@ class GovernanceRepository:
                         (
                             "the artifact does not match the frozen GATE "
                             "Skill contract"
+                        ),
+                    )
+                try:
+                    assert_required_skill_conformance(
+                        self,
+                        registry,
+                        entry,
+                        stage="GATE",
+                        skill_usage=artifact.get("skillUsage", []),
+                        require_pass=gate["status"] == "PASS",
+                    )
+                except GatedLoopError as error:
+                    self._stored_evidence_error(
+                        entry,
+                        "gate",
+                        (
+                            "the native Skill activation or conformance "
+                            f"evidence is invalid: {error.code}"
                         ),
                     )
 
@@ -2766,6 +2805,30 @@ class GovernanceRepository:
                             "FINAL_REVIEW Skill contract"
                         ),
                     )
+                if action in {
+                    "INDEPENDENT_REVIEW_PASS",
+                    "REVIEW_BLOCKED",
+                }:
+                    try:
+                        assert_required_skill_conformance(
+                            self,
+                            registry,
+                            entry,
+                            stage="FINAL_REVIEW",
+                            skill_usage=artifact.get("skillUsage", []),
+                            require_pass=(
+                                action == "INDEPENDENT_REVIEW_PASS"
+                            ),
+                        )
+                    except GatedLoopError as error:
+                        self._stored_evidence_error(
+                            entry,
+                            "review",
+                            (
+                                "the native Skill activation or conformance "
+                                f"evidence is invalid: {error.code}"
+                            ),
+                        )
             confirmation = acceptance.get("userConfirmation")
             if confirmation is not None:
                 artifact = self._validated_stored_artifact(
@@ -3293,6 +3356,8 @@ class GovernanceRepository:
         definition: dict[str, Any],
         at: str,
     ) -> dict[str, Any]:
+        from .skill_execution import skill_execution_audit
+
         acceptance = entry.get("acceptance") if entry["parentId"] is None else None
         report = {
             "schemaVersion": SCHEMA_VERSION,
@@ -3311,6 +3376,11 @@ class GovernanceRepository:
                     registry,
                     entry,
                 )
+            ),
+            "skillExecutionAudit": skill_execution_audit(
+                self,
+                registry,
+                entry,
             ),
             "gate": entry["gate"],
             "criteria": definition["acceptance"],
@@ -3339,10 +3409,13 @@ class GovernanceRepository:
 
     def write_development_review(
         self,
+        registry: dict[str, Any],
         entry: dict[str, Any],
         definition: dict[str, Any],
         at: str,
     ) -> dict[str, Any]:
+        from .skill_execution import skill_execution_audit
+
         report = {
             "schemaVersion": SCHEMA_VERSION,
             "workItem": {
@@ -3357,6 +3430,11 @@ class GovernanceRepository:
             "developmentPlan": definition["developmentPlan"],
             "validationRemediations": self.read_validation_remediations(entry["id"], definition),
             "result": entry.get("latestResult"),
+            "skillExecutionAudit": skill_execution_audit(
+                self,
+                registry,
+                entry,
+            ),
             "generatedAt": at,
         }
         self._active_connection().execute(

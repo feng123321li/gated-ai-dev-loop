@@ -30,6 +30,8 @@ COMMANDS = (
     "cancel-graph-run",
     "task-context",
     "evidence-contract",
+    "record-skill-activation",
+    "record-skill-conformance",
     "dispatch-task",
     "heartbeat-task",
     "pause-task",
@@ -49,6 +51,7 @@ VALUE_OPTIONS = {
     "--definition", "--host-runtime", "--item", "--owner", "--operation",
     "--status", "--evidence", "--expected-baseline",
     "--action", "--development-mode", "--expected-hierarchy", "--interaction", "--kind",
+    "--stage", "--skill", "--activation", "--receipt", "--conformance",
 }
 FLAG_OPTIONS = {"--json", "--help", "--confirmed", "--dogfood", "--timing"}
 COMMAND_OPTIONS = {
@@ -67,6 +70,12 @@ COMMAND_OPTIONS = {
     "cancel-graph-run": {"--json", "--help", "--item", "--confirmed", "--dogfood"},
     "task-context": {"--json", "--help", "--item", "--dogfood"},
     "evidence-contract": {"--json", "--help", "--item", "--kind"},
+    "record-skill-activation": {
+        "--json", "--help", "--item", "--stage", "--skill", "--activation", "--dogfood",
+    },
+    "record-skill-conformance": {
+        "--json", "--help", "--item", "--receipt", "--conformance", "--dogfood",
+    },
     "claim-task": {"--json", "--help", "--item", "--owner", "--operation", "--dogfood"},
     "dispatch-task": {"--json", "--help", "--item", "--owner", "--operation", "--dogfood"},
     "heartbeat-task": {"--json", "--help", "--item", "--operation", "--dogfood"},
@@ -101,6 +110,8 @@ Commands:
   cancel-graph-run --item <root-or-subtree-id> --confirmed
   task-context --item <task-id>
   evidence-contract --item <id> --kind result|gate|remediation|review|confirmation
+  record-skill-activation --item <id> --stage DEVELOPMENT|GATE|FINAL_REVIEW --skill <name> --activation -
+  record-skill-conformance --item <id> --receipt <activation-sha256> --conformance -
   dispatch-task --item <task-id> --owner <owner> --operation <id>
   heartbeat-task --item <task-id> --operation <id>
   pause-task --item <task-id> --operation <id>
@@ -314,6 +325,40 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
             {
                 "item_id": _required(parsed, "--item"),
                 "contract_kind": _required(parsed, "--kind"),
+            },
+            context=context,
+        )
+    if command == "record-skill-activation":
+        activation = _read_structured(
+            _required(parsed, "--activation"),
+            "SKILL_ACTIVATION",
+            stdin=stdin,
+        )
+        return execute_operation(
+            "record_skill_activation",
+            {
+                "item_id": _required(parsed, "--item"),
+                "stage": _required(parsed, "--stage"),
+                "skill_name": _required(parsed, "--skill"),
+                "activation": activation,
+            },
+            context=context,
+        )
+    if command == "record-skill-conformance":
+        conformance = _read_structured(
+            _required(parsed, "--conformance"),
+            "SKILL_CONFORMANCE",
+            stdin=stdin,
+        )
+        return execute_operation(
+            "record_skill_conformance",
+            {
+                "item_id": _required(parsed, "--item"),
+                "activation_receipt_id": _required(
+                    parsed,
+                    "--receipt",
+                ),
+                "conformance": conformance,
             },
             context=context,
         )

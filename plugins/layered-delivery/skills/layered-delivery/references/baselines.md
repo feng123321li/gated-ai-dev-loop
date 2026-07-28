@@ -10,7 +10,7 @@
 
 `gateLevel` 只能是 `LIGHT|FULL`，且只有 Task 可以为 `LIGHT`。Task 冻结时的 `fileChanges` 必须是 scope 内精确相对路径；协调层 `childPlans`、依赖、波次、R/A 和测试映射必须覆盖全部直接子级。验证阶段发现原验收项所需文件漏列时，`remediate-task` 以追加审计方式形成补充授权，不改写 baseline 或冻结方案。
 
-`requiredSkills` 是可空数组；每项精确包含 `name/stages/purpose`。`name` 使用可移植 Skill catalog 名（允许插件命名空间中的 `:`），不含 `/skill`、`$skill` 等宿主调用前缀；`stages` 只能从 `DEVELOPMENT|GATE|FINAL_REVIEW` 选择，`FINAL_REVIEW` 只允许在需求根声明。祖先声明对子树只增不减，同一 Skill/阶段的多级目的会在运行上下文聚合；该字段进入 baseline、父契约、层级和图指纹，冻结后不能由重试或验证修正取消。
+`requiredSkills` 可省略或使用空数组，两者都规范化为 `[]` 且不触发 Skill 门禁；非空时每项精确包含 `name/stages/purpose`。`name` 可使用需求指定的任意可移植 Skill catalog 名（允许插件命名空间中的 `:`），控制器没有 Skill 白名单；不含 `/skill`、`$skill` 等宿主调用前缀。`stages` 只能从 `DEVELOPMENT|GATE|FINAL_REVIEW` 选择，`FINAL_REVIEW` 只允许在需求根声明。祖先声明对子树只增不减，同一 Skill/阶段的多级目的会在运行上下文聚合；规范化后的数组进入 baseline、父契约、层级和图指纹，冻结后不能由重试或验证修正取消。
 
 ## 完整层级 definition
 

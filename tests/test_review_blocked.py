@@ -18,6 +18,10 @@ from hdg.graph_runtime import (
 from hdg.planning import freeze_hierarchy, prepare_hierarchy, retry_work_item
 
 from .fixtures import task_hierarchy
+from .skill_helpers import (
+    activate_required_skills,
+    conform_required_skills,
+)
 
 
 FINAL_REVIEW_SKILL = {
@@ -155,6 +159,20 @@ class ReviewBlockedTests(unittest.TestCase):
                     "Host Skill discovery returned no canonical source-command-python-review entry.",
                 ),
             }
+            blocked_receipts = activate_required_skills(
+                temporary,
+                task_id,
+                "FINAL_REVIEW",
+                execution_id="review-blocked-attempt-1",
+                executor_id="fresh-reviewer",
+                blocked=True,
+            )
+            conform_required_skills(
+                temporary,
+                task_id,
+                blocked_receipts,
+                blocked=True,
+            )
             blocked = record_acceptance(
                 root=temporary,
                 item_id=task_id,
@@ -240,6 +258,18 @@ class ReviewBlockedTests(unittest.TestCase):
                     "Applied the complete fresh read-only review and found no P0 or P1 issues.",
                 ),
             }
+            passed_receipts = activate_required_skills(
+                temporary,
+                task_id,
+                "FINAL_REVIEW",
+                execution_id="review-pass-attempt-2",
+                executor_id="fresh-reviewer",
+            )
+            conform_required_skills(
+                temporary,
+                task_id,
+                passed_receipts,
+            )
             passed = record_acceptance(
                 root=temporary,
                 item_id=task_id,

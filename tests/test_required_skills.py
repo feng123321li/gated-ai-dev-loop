@@ -12,12 +12,17 @@ from hdg.graph_runtime import get_evidence_contract, get_graph_frontier
 from hdg.model import (
     render_development_plan,
     render_work_item_baseline,
+    validate_hierarchy_definition,
     validate_work_item_definition,
     work_item_baseline_fingerprint,
 )
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
 
 from .fixtures import capability_hierarchy, task_definition, task_hierarchy
+from .skill_helpers import (
+    activate_required_skills,
+    conform_required_skills,
+)
 
 
 REQUIRED_SKILLS = [
@@ -126,11 +131,11 @@ class RequiredSkillContractTests(unittest.TestCase):
     def test_required_skill_names_and_stages_are_portable_and_strict(self) -> None:
         missing = task_definition()
         del missing["requiredSkills"]
-        with self.assertRaises(GatedLoopError) as raised:
-            validate_work_item_definition(missing)
+        normalized = validate_work_item_definition(missing)
+        self.assertEqual(normalized["requiredSkills"], [])
         self.assertEqual(
-            raised.exception.code,
-            "WORK_ITEM_DEFINITION_INVALID",
+            normalized,
+            validate_work_item_definition(task_definition(requiredSkills=[])),
         )
 
         invalid_name = task_definition(requiredSkills=[{
@@ -176,6 +181,19 @@ class RequiredSkillContractTests(unittest.TestCase):
             "WORK_ITEM_REQUIRED_SKILL_INVALID",
         )
 
+    def test_hierarchy_without_required_skills_normalizes_every_node_to_empty(self) -> None:
+        hierarchy = capability_hierarchy()
+        del hierarchy["root"]["definition"]["requiredSkills"]
+        del hierarchy["root"]["children"][0]["definition"]["requiredSkills"]
+
+        normalized = validate_hierarchy_definition(hierarchy)
+
+        self.assertEqual(normalized["root"]["definition"]["requiredSkills"], [])
+        self.assertEqual(
+            normalized["root"]["children"][0]["definition"]["requiredSkills"],
+            [],
+        )
+
     def test_required_skills_flow_through_execution_gate_and_review(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepared = prepare_hierarchy(
@@ -212,6 +230,13 @@ class RequiredSkillContractTests(unittest.TestCase):
                 [task_id],
             )
 
+            development_receipts = activate_required_skills(
+                temporary,
+                task_id,
+                "DEVELOPMENT",
+                execution_id="op-required-skills",
+                executor_id="developer",
+            )
             context = dispatch_task(
                 root=temporary,
                 item_id=task_id,
@@ -224,7 +249,7 @@ class RequiredSkillContractTests(unittest.TestCase):
             )
             self.assertEqual(
                 context["requiredSkillPolicy"]["activation"],
-                "LOAD_COMPLETE_SKILL_BEFORE_STAGE",
+                "EXPLICIT_NATIVE_SKILL_INVOCATION_REQUIRED",
             )
 
             result_contract = get_evidence_contract(
@@ -267,6 +292,11 @@ class RequiredSkillContractTests(unittest.TestCase):
                 "DEVELOPMENT",
                 "Applied red-green-refactor and used the frozen unittest as the regression checkpoint.",
             )]
+            conform_required_skills(
+                temporary,
+                task_id,
+                development_receipts,
+            )
             record_task_result(
                 root=temporary,
                 item_id=task_id,
@@ -302,6 +332,18 @@ class RequiredSkillContractTests(unittest.TestCase):
             missing_gate_usage = _gate(
                 task_id,
                 prepared["baselineFingerprints"][task_id],
+            )
+            gate_receipts = activate_required_skills(
+                temporary,
+                task_id,
+                "GATE",
+                execution_id="gate-required-skills",
+                executor_id="gate-reviewer",
+            )
+            conform_required_skills(
+                temporary,
+                task_id,
+                gate_receipts,
             )
             with self.assertRaises(GatedLoopError) as raised:
                 accept_work_item(
@@ -373,6 +415,18 @@ class RequiredSkillContractTests(unittest.TestCase):
                 "verdict": "PASS",
                 "findings": {"p0": 0, "p1": 0},
             }
+            review_receipts = activate_required_skills(
+                temporary,
+                task_id,
+                "FINAL_REVIEW",
+                execution_id="review-required-skills",
+                executor_id="fresh-reviewer",
+            )
+            conform_required_skills(
+                temporary,
+                task_id,
+                review_receipts,
+            )
             with self.assertRaises(GatedLoopError) as raised:
                 record_acceptance(
                     root=temporary,
@@ -426,6 +480,13 @@ class RequiredSkillContractTests(unittest.TestCase):
                     confirmed=True,
                 )
                 operation_id = f"op-placeholder-{stage.casefold()}"
+                development_receipts = activate_required_skills(
+                    temporary,
+                    task_id,
+                    "DEVELOPMENT",
+                    execution_id=operation_id,
+                    executor_id="developer",
+                )
                 dispatch_task(
                     root=temporary,
                     item_id=task_id,
@@ -457,6 +518,11 @@ class RequiredSkillContractTests(unittest.TestCase):
                         )
                     self.assertEqual(raised.exception.code, expected_code)
                     continue
+                conform_required_skills(
+                    temporary,
+                    task_id,
+                    development_receipts,
+                )
                 record_task_result(
                     root=temporary,
                     item_id=task_id,
@@ -481,6 +547,18 @@ class RequiredSkillContractTests(unittest.TestCase):
                         )
                     ),
                 )]
+                gate_receipts = activate_required_skills(
+                    temporary,
+                    task_id,
+                    "GATE",
+                    execution_id=f"gate-placeholder-{stage.casefold()}",
+                    executor_id="gate-reviewer",
+                )
+                conform_required_skills(
+                    temporary,
+                    task_id,
+                    gate_receipts,
+                )
                 if stage == "GATE":
                     with self.assertRaises(GatedLoopError) as raised:
                         accept_work_item(
@@ -496,6 +574,18 @@ class RequiredSkillContractTests(unittest.TestCase):
                     evidence=gate,
                 )
 
+                review_receipts = activate_required_skills(
+                    temporary,
+                    task_id,
+                    "FINAL_REVIEW",
+                    execution_id="review-placeholder-final",
+                    executor_id="fresh-reviewer",
+                )
+                conform_required_skills(
+                    temporary,
+                    task_id,
+                    review_receipts,
+                )
                 review = {
                     "schemaVersion": 3,
                     "kind": "INDEPENDENT_REVIEW",
@@ -603,6 +693,13 @@ class RequiredSkillContractTests(unittest.TestCase):
                 development_mode="active",
                 confirmed=True,
             )
+            development_receipts = activate_required_skills(
+                temporary,
+                task_id,
+                "DEVELOPMENT",
+                execution_id="op-human-bypass",
+                executor_id="developer",
+            )
             dispatch_task(
                 root=temporary,
                 item_id=task_id,
@@ -615,6 +712,11 @@ class RequiredSkillContractTests(unittest.TestCase):
                 "DEVELOPMENT",
                 "Applied the complete TDD workflow and recorded the regression checkpoint.",
             )]
+            conform_required_skills(
+                temporary,
+                task_id,
+                development_receipts,
+            )
             record_task_result(
                 root=temporary,
                 item_id=task_id,
@@ -631,6 +733,18 @@ class RequiredSkillContractTests(unittest.TestCase):
                 "GATE",
                 "Applied the complete gate checklist to the frozen scope, tests, and acceptance evidence.",
             )]
+            gate_receipts = activate_required_skills(
+                temporary,
+                task_id,
+                "GATE",
+                execution_id="gate-human-bypass",
+                executor_id="gate-reviewer",
+            )
+            conform_required_skills(
+                temporary,
+                task_id,
+                gate_receipts,
+            )
             accept_work_item(
                 root=temporary,
                 item_id=task_id,

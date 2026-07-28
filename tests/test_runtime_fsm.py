@@ -26,6 +26,10 @@ from hdg.graph_runtime import (
 from hdg.planning import freeze_hierarchy, prepare_hierarchy, retry_work_item
 
 from .fixtures import task_hierarchy
+from .skill_helpers import (
+    activate_required_skills,
+    conform_required_skills,
+)
 
 
 class RuntimeFsmTests(unittest.TestCase):
@@ -406,6 +410,22 @@ class RuntimeFsmTests(unittest.TestCase):
                 "status": "BLOCKED",
                 "evidence": blocked_reason,
             }]
+            blocked_receipts = activate_required_skills(
+                temporary,
+                task_id,
+                "GATE",
+                execution_id="gate-skill-blocked",
+                executor_id="gate-reviewer",
+                blocked=True,
+                now=self.START + timedelta(minutes=2, seconds=30),
+            )
+            conform_required_skills(
+                temporary,
+                task_id,
+                blocked_receipts,
+                blocked=True,
+                now=self.START + timedelta(minutes=2, seconds=45),
+            )
 
             accept_work_item(
                 root=temporary,

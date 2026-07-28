@@ -15,6 +15,10 @@ from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.repository import GovernanceRepository
 
 from .fixtures import capability_hierarchy, task_hierarchy
+from .skill_helpers import (
+    activate_required_skills,
+    conform_required_skills,
+)
 from .test_required_skills import (
     REQUIRED_SKILLS,
     _gate,
@@ -40,6 +44,13 @@ def _complete_through(
         development_mode="active",
         confirmed=True,
     )
+    development_receipts = activate_required_skills(
+        root,
+        item_id,
+        "DEVELOPMENT",
+        execution_id="op-required-skill-recovery",
+        executor_id="developer",
+    )
     dispatch_task(
         root=root,
         item_id=item_id,
@@ -52,6 +63,7 @@ def _complete_through(
         "DEVELOPMENT",
         "Applied the complete red-green-refactor workflow to the frozen regression command.",
     )]
+    conform_required_skills(root, item_id, development_receipts)
     record_task_result(
         root=root,
         item_id=item_id,
@@ -68,6 +80,14 @@ def _complete_through(
         "GATE",
         "Applied the complete gate workflow to scope, tests, acceptance trace, and findings.",
     )]
+    gate_receipts = activate_required_skills(
+        root,
+        item_id,
+        "GATE",
+        execution_id="gate-required-skill-recovery",
+        executor_id="gate-reviewer",
+    )
+    conform_required_skills(root, item_id, gate_receipts)
     accept_work_item(
         root=root,
         item_id=item_id,
@@ -89,6 +109,14 @@ def _complete_through(
             "Applied the complete fresh read-only Python review and found no P0 or P1 issues.",
         )],
     }
+    review_receipts = activate_required_skills(
+        root,
+        item_id,
+        "FINAL_REVIEW",
+        execution_id="review-required-skill-recovery",
+        executor_id="fresh-reviewer",
+    )
+    conform_required_skills(root, item_id, review_receipts)
     record_acceptance(
         root=root,
         item_id=item_id,
@@ -145,6 +173,13 @@ def _ready_capability_for_isolation_transition(
         development_mode="active",
         confirmed=True,
     )
+    development_receipts = activate_required_skills(
+        root,
+        task_id,
+        "DEVELOPMENT",
+        execution_id="op-isolated-required-skill",
+        executor_id="developer",
+    )
     dispatch_task(
         root=root,
         item_id=task_id,
@@ -157,6 +192,7 @@ def _ready_capability_for_isolation_transition(
         "DEVELOPMENT",
         "Applied the complete workflow to the frozen controller regression.",
     )]
+    conform_required_skills(root, task_id, development_receipts)
     record_task_result(
         root=root,
         item_id=task_id,
@@ -355,6 +391,13 @@ class RequiredSkillRecoveryTests(unittest.TestCase):
                 development_mode="active",
                 confirmed=True,
             )
+            development_receipts = activate_required_skills(
+                root,
+                task_id,
+                "DEVELOPMENT",
+                execution_id="op-inherited-skill-recovery",
+                executor_id="developer",
+            )
             dispatch_task(
                 root=root,
                 item_id=task_id,
@@ -370,6 +413,11 @@ class RequiredSkillRecoveryTests(unittest.TestCase):
                 "DEVELOPMENT",
                 "Applied the inherited complete TDD workflow to the descendant Task.",
             )]
+            conform_required_skills(
+                root,
+                task_id,
+                development_receipts,
+            )
             record_task_result(
                 root=root,
                 item_id=task_id,

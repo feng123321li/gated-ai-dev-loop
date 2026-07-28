@@ -27,6 +27,10 @@ from .graph_runtime import (
 from .model import required_skill_policy, work_item_child_contract_fingerprint
 from .projections import render_task_handoff
 from .repository import GovernanceRepository, timestamp, timestamp_after
+from .skill_execution import (
+    assert_required_skill_activations,
+    assert_required_skill_conformance,
+)
 
 
 OPERATION_ID = re.compile(
@@ -323,6 +327,16 @@ def record_task_result(
             required_skills=required_skills,
             status=status,
         )
+        assert_required_skill_conformance(
+            repository,
+            registry,
+            entry,
+            stage="DEVELOPMENT",
+            skill_usage=artifact.get("skillUsage", []),
+            operation_id=operation_id,
+            executor_id=entry["claim"]["owner"],
+            require_pass=status == "IMPLEMENTED",
+        )
         entry["status"] = status
         entry["claim"] = None
         entry["latestEvidence"] = reference
@@ -386,7 +400,12 @@ def record_task_result(
                     },
                     recorded_at=at,
                 )
-        repository.write_development_review(entry, definition, at)
+        repository.write_development_review(
+            registry,
+            entry,
+            definition,
+            at,
+        )
         repository.write_registry(
             registry,
             changed_item_ids=repository.lineage_item_ids(registry, item_id),
@@ -557,6 +576,14 @@ def dispatch_task(
             registry,
             entry,
             operation_id,
+        )
+        assert_required_skill_activations(
+            repository,
+            registry,
+            entry,
+            stage="DEVELOPMENT",
+            operation_id=operation_id,
+            executor_id=owner,
         )
         claim = _new_claim(owner=owner, operation_id=operation_id, at=at)
         entry["claim"] = claim

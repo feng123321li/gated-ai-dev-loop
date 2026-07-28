@@ -17,7 +17,8 @@
 - 不改变 SQLite、baseline、进度投影或 `.git/**`；
 - 不提交、推送、发布或改变外部状态；
 - 持续运行相关回归、修复失败并复测，报告真实事实；
-- 进入 DEVELOPMENT 前按 context 中的 canonical 名加载每个 required Skill 的完整说明和直接引用资源，遵循完整流程；不能用提示中出现过 Skill 名称代替实际应用；
+- worker 取得执行容量后、`dispatch_task` 前，对 frontier 中每个 DEVELOPMENT required Skill 分别使用当前宿主原生 Skill 入口明确调用并立即写入 `record_skill_activation`；Claude 使用本次 Skill tool-use ID 与 `CLAUDE_SKILL_TOOL`，Codex 使用显式 `$<skill-name>` 触发的当前 task/session 调用 ID 与 `CODEX_EXPLICIT_SKILL`。Read、load、父会话调用或提示中出现名称都不能替代当前执行 context 的激活；
+- 完整执行 Skill 后、`task_result` 前，用 `record_skill_conformance` 把命名检查和实际代码/diff/测试证据绑定到激活凭证；成功结果要求当前 node attempt 的每项 Skill 都是 `INVOKED + PASS`，同一原生调用 ID 不能覆盖多个 Skill；
 - 返回 `IMPLEMENTED` 或 `BLOCKED`，不得报告 PASS。
 
 输入、依赖或工作区不可访问时，在任何写入前 BLOCKED。
@@ -50,6 +51,6 @@ python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --e
 
 ## 结果接收
 
-Graph 执行循环先调用 `evidence_contract` 取得绑定当前 claim/operationId 的两份 result 模板和冻结测试、有效授权、失败分类、required Skills 约束，再以结构化 evidence 调用 `task_result`。控制器在同一 SQLite 写事务内核对当前 claim、operationId、尚未硬过期的租约和 artifact；不匹配时返回逐字段 `issues` 与当前 contract，匹配时计算规范 JSON 摘要，记录 `IMPLEMENTED/BLOCKED`、artifact 与摘要并清除 claim。`IMPLEMENTED` 的 blockers 必须为空、`failure=null`，且 `skillUsage` 必须精确覆盖全部 DEVELOPMENT 要求并具体说明应用情况；`BLOCKED` 必须提供非空 blockers 与 `failure.class/code/summary`，Skill 不可用时在对应 usage 中记录 `BLOCKED`。控制器随即生成 `development-review.md`，对照冻结计划展示实际改动、接口、Skill 使用、回归测试、复测和偏差；`IMPLEMENTED` 只表示等待门禁。Agent 应先修复回归失败并完成复测，再以相同方式提交严格 gate artifact、执行 `accept_item` 并生成验收报告。只有 CLI fallback 使用 `--evidence -` 和 stdin。根工作项通过聚合门禁后向用户提交交付，由用户人工验收和最终确认；开发会话的 IMPLEMENTED 不能当作完成。
+Graph 执行循环先完成每项原生激活，在 `dispatch_task` 得到绑定 claim 后完整执行 Skill；结束时先用 `record_skill_conformance` 写入真实检查，再调用 `evidence_contract` 取得绑定当前 claim/operationId 的两份 result 模板和冻结测试、有效授权、失败分类、required Skills 约束，最后以结构化 evidence 调用 `task_result`。控制器在同一 SQLite 写事务内同时核对 claim/operationId、租约、artifact，以及当前 attempt 中每个 required Skill 的 host 机制、executor/execution 绑定、独立原生调用凭证和符合性结果。`IMPLEMENTED` 要求全部 `INVOKED + PASS`，并且 `skillUsage` 精确覆盖 DEVELOPMENT 要求；`BLOCKED` 必须提供 failure，Skill 不可用时激活、符合性和 usage 都如实记录 `BLOCKED`。`development-review.md` 的“实际 Skill 原生调用与符合性”来自 Graph 事件，原有 Skill usage 表只展示 artifact 自述。Agent 完成 Task 结果后继续以相同流程执行 gate。只有 CLI fallback 使用 stdin。
 
 验证阶段若发现原验收项所需文件漏列，当前 claim 必须先正常写回并释放，再由 Graph 执行循环按修正路由执行 `remediate_task`。控制器把补充文件加入下一次 context 的 `authorizedFileChanges`，原 Task 重新 READY 后再认领；开发 Agent 不自行编辑 baseline、计划或 SQLite，也不另起需求根。

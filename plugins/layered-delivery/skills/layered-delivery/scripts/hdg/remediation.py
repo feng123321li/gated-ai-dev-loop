@@ -265,7 +265,12 @@ def record_validation_remediation(
         registry["revision"] += 1
         registry["updatedAt"] = at
 
-        repository.write_development_review(entry, definition, at)
+        repository.write_development_review(
+            registry,
+            entry,
+            definition,
+            at,
+        )
         for affected in affected_entries:
             if not affected.get("acceptanceReport"):
                 continue

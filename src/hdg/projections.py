@@ -432,7 +432,7 @@ def render_requirement_handoff(
         "4. MCP 返回 `isError` 时保留结构化错误并停止当前迁移；只有 MCP 不可用时才运行 CLI fallback、保留控制器 stderr 并停止解析。`task_context` 只用于未认领 Task 的只读诊断，不能授权开工。",
         "5. 对 `dispatchPlan.dispatchTaskIds` 中的 Task 保持完整稳定队列；只有 worker 真正取得执行容量时才生成本 graph run 中唯一的 operationId 并调用 `dispatch_task`，排队项保持未认领。平台有容量时启动隔离子 Agent，无子 Agent 时由当前 Agent 串行消费。",
         "6. 执行适配器独立按 `nextWakeAt` 重新查询 frontier 并消费到期的 `HEARTBEAT_TASK`；没有独立适配器时当前会话承担续租。每个 Task 严格使用自己的 context、scope、结果和证据，循环实现、回归测试、修复和复测；写回前用 `evidence_contract` 查询绑定当前 operation 的 result 模板，通过 `task_result` 提交 `IMPLEMENTED` 或 `BLOCKED` 后完成该 Task 门禁。",
-        "7. 每个 frontier action 和 Task context 中的 `requiredSkills` 都来自冻结 baseline。进入相应阶段前按 canonical `name` 加载完整 Skill 并遵循其完整流程；result、gate 和独立审查 evidence 必须逐项回显 Skill 使用情况，不能只在提示中提到名称。",
+        "7. 每个 frontier action 和 Task context 中的 `requiredSkills` 都来自冻结 baseline。每个名称必须在实际阶段 executor context 通过 Claude/Codex 原生 Skill 入口分别明确调用，先用 `record_skill_activation` 绑定当前 attempt 和原生调用 ID；Read 或 load 不算激活。完整执行后用 `record_skill_conformance` 记录针对实际产物的检查，成功迁移要求逐项 PASS；artifact 还必须回显精确 `skillUsage`。",
         "8. 每次状态写回后重新查询 frontier，由 Graph 重算目标 Agent 数与后续波次；全部子级 VERIFIED 后运行 Capability/Delivery 聚合门禁。",
         "9. 面向人的状态报告必须把控制器 UTC 时间转换为当前运行环境的本机时区，并显式标注 UTC 偏移（例如 `UTC+08:00`）；SQLite、事件链和控制器 JSON 的机器时间字段保持不变。",
         "10. 不要要求用户逐 Task 回复启动，也不要在正常 Task 切换、并发降级或自动重试时请求人工确认。",
@@ -453,7 +453,7 @@ def render_requirement_handoff_command(root_id: str) -> str:
         "面向人的状态报告须把控制器 UTC 时间转换为当前运行环境的本机时区并显式标注 UTC 偏移，机器字段保持不变；"
         "若接收宿主是 Claude Code，必须在 dispatch_task 认领前由用户级设置、模式选择器或启动参数启用 auto；"
         "MCP 控制器不再需要 hdg.py Process 授权，但 acceptEdits 仍不足以自动批准测试和构建命令；"
-        "逐项执行 frontier action 中冻结的 requiredSkills，并在 result、gate 和独立审查 evidence 中记录具体使用情况；"
+        "逐项原生调用 frontier action 中冻结的 requiredSkills，记录 activation 与实际 conformance；Read/load 不算执行，并在 result、gate 和独立审查 evidence 中记录具体使用情况；"
         "会话不得自行修改权限配置或启用 bypassPermissions。"
     )
 
@@ -720,6 +720,48 @@ def _append_actual_development_skill_usage(
             )
 
 
+def _append_skill_execution_audit(
+    lines: list[str],
+    records: list[dict[str, Any]],
+) -> None:
+    lines.extend(["", "## 实际 Skill 原生调用与符合性", ""])
+    if not records:
+        lines.append(
+            "- 尚无 Graph 绑定的原生 Skill 调用凭证；Read/加载记录不计为执行。"
+        )
+        return
+    lines.extend([
+        "| 工作项 | 轮次 | Skill | 阶段 | Host / 原生机制 | 调用状态 | 原生调用 ID | 符合性 | 实际检查 | 调用凭证 |",
+        "| --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ])
+    for record in records:
+        rendered_checks = []
+        for check in record["conformanceChecks"]:
+            evidence = str(check["evidence"]).replace(
+                "|", "\\|"
+            ).replace("\n", "<br>")
+            rendered_checks.append(
+                f"`{check['name']}`={check['status']}：{evidence}"
+            )
+        checks = "<br>".join(rendered_checks) or "未记录"
+        conformance = {
+            "PASS": "符合性通过",
+            "BLOCKED": "符合性阻断",
+            "NOT_RECORDED": "未记录符合性",
+        }.get(
+            record["conformanceStatus"],
+            record["conformanceStatus"],
+        )
+        lines.append(
+            f"| `{record['workItemId']}` | {record['attempt']} | "
+            f"`{record['skillName']}` | `{record['stage']}` | "
+            f"`{record['hostRuntime']}` / `{record['mechanism']}` | "
+            f"`{record['activationStatus']}` | "
+            f"`{record['nativeInvocationId']}` | {conformance} | "
+            f"{checks} | `{record['activationReceiptId']}` |"
+        )
+
+
 def render_development_review(report: dict[str, Any]) -> str:
     plan = report["developmentPlan"]
     result = (report.get("result") or {}).get("artifact") or {}
@@ -771,6 +813,10 @@ def render_development_review(report: dict[str, Any]) -> str:
         lines,
         result.get("skillUsage", []),
         heading="开发阶段 Skill 使用审计",
+    )
+    _append_skill_execution_audit(
+        lines,
+        report.get("skillExecutionAudit", []),
     )
     lines.extend(["", "## 测试事实", ""])
     if tests:
@@ -851,6 +897,10 @@ def render_acceptance_report(report: dict[str, Any]) -> str:
         lines,
         report.get("developmentSkillUsage", []),
     )
+    _append_skill_execution_audit(
+        lines,
+        report.get("skillExecutionAudit", []),
+    )
     skill_usages = list((gate_artifact or {}).get("skillUsage", []))
     review_artifact = (
         (report.get("review") or {}).get("artifact") or {}
@@ -924,7 +974,8 @@ def render_task_handoff(context: dict[str, Any]) -> str:
         "- 只实现这个冻结的叶子 Task，并且只写入 task.authorizedFileChanges；验证修正文件是原 Task 的追加授权，不是新需求。",
         "- 不修改 SQLite、baseline、进度投影、`.git/**` 或外部状态。",
         "- 运行列出的测试命令，只报告真实存在的证据。",
-        "- 进入 DEVELOPMENT 前逐项加载 context.requiredSkills 中该阶段的完整 Skill；不能只提到名称或使用零散片段。Skill 不可用时按 requiredSkillPolicy 阻断并如实报告。",
+        "- 当前 worker 必须已在 dispatch-task 前对每个 DEVELOPMENT required Skill 分别完成宿主原生调用，并用 record-skill-activation 绑定当前 owner/operation 与原生调用 ID；Read、load、父会话调用或只提名称都不合格。",
+        "- 完整应用 Skill 后、提交 task-result 前，用 record-skill-conformance 逐项记录针对实际代码、diff 和测试的命名检查；成功结果要求全部 INVOKED + PASS。Skill 不可用时激活、符合性和 result 如实 BLOCKED。",
         "- 面向人的状态报告必须把控制器 UTC 时间转换为当前运行环境的本机时区，并显式标注 UTC 偏移；机器时间字段保持不变。",
         "- 不提交、推送、发布，也不得自行报告 PASS。",
         "- 最终只返回 IMPLEMENTED 或 BLOCKED，并携带当前 Operation ID、变更文件和测试事实。",

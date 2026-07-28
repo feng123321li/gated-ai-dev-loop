@@ -15,6 +15,7 @@ from .evidence import (
 from .graph_model import confirmation_node_id, gate_node_id, review_node_id
 from .graph_runtime import hierarchy_root_entry
 from .repository import GovernanceRepository, timestamp
+from .skill_execution import assert_required_skill_conformance
 
 
 def _remediation_files(
@@ -113,6 +114,14 @@ def record_work_item_gate(
             status=status,
             additional_planned_files=remediation_files,
             required_skills=required_skills,
+        )
+        assert_required_skill_conformance(
+            repository,
+            registry,
+            entry,
+            stage="GATE",
+            skill_usage=verified_artifact.get("skillUsage", []),
+            require_pass=status == "PASS",
         )
         if entry["status"] == "BLOCKED":
             fail("WORK_ITEM_RETRY_REQUIRED", f"{item_id} must be explicitly retried before its gate can run again")
@@ -296,6 +305,18 @@ def record_acceptance(
                 ),
             )
         reference = evidence_record(artifact)
+        if action in {
+            "INDEPENDENT_REVIEW_PASS",
+            "REVIEW_BLOCKED",
+        }:
+            assert_required_skill_conformance(
+                repository,
+                registry,
+                entry,
+                stage="FINAL_REVIEW",
+                skill_usage=artifact.get("skillUsage", []),
+                require_pass=action == "INDEPENDENT_REVIEW_PASS",
+            )
         if action == "USER_CONFIRMED":
             if acceptance["status"] != "WAITING_FOR_USER_CONFIRMATION":
                 fail("WORK_ITEM_ACCEPTANCE_STAGE_INVALID", "User confirmation requires a passed independent or accepted human review")

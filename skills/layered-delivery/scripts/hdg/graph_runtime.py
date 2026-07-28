@@ -459,6 +459,18 @@ def replay_graph_events(
         node = current[node_id]
         if event["attempt"] != node["attempt"]:
             fail("DELIVERY_GRAPH_REPLAY_INVALID", "Graph event attempt is not current")
+        if event_type in {
+            "SKILL_ACTIVATED",
+            "SKILL_CONFORMANCE_RECORDED",
+        }:
+            from .skill_execution import is_skill_lifecycle_event_valid
+
+            if not is_skill_lifecycle_event_valid(event):
+                fail(
+                    "DELIVERY_GRAPH_REPLAY_INVALID",
+                    "Required Skill lifecycle event is invalid",
+                )
+            continue
         binding = payload.get("evidenceBinding")
         evidence_hash = (
             binding.get("boundEvidenceSha256")

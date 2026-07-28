@@ -23,6 +23,7 @@ SAFE_IDENTIFIER_PATTERN = (
 )
 HOST_RUNTIME_PATTERN = r"^[a-z][a-z0-9._-]{0,63}$"
 FINGERPRINT_PATTERN = r"^[a-f0-9]{64}$"
+SKILL_NAME_PATTERN = r"^[a-z0-9][a-z0-9._:-]{0,127}$"
 
 
 def _string(
@@ -470,6 +471,55 @@ _TOOLS = (
         },
         read_only=True,
         idempotent=True,
+    ),
+    _tool(
+        "record_skill_activation",
+        "Record native Skill activation",
+        (
+            "After explicitly invoking a frozen requiredSkills entry through "
+            "the current Claude or Codex native Skill mechanism, bind its "
+            "native invocation identity to the current graph node attempt. "
+            "Reading or loading SKILL.md is not a valid activation."
+        ),
+        {
+            "item_id": ITEM_ID,
+            "stage": _string(
+                "Frozen lifecycle stage for this invocation.",
+                enum=["DEVELOPMENT", "GATE", "FINAL_REVIEW"],
+            ),
+            "skill_name": _string(
+                "Exact arbitrary Skill catalog name frozen in requiredSkills.",
+                pattern=SKILL_NAME_PATTERN,
+                max_length=128,
+            ),
+            "activation": _object(
+                "Strict host-native activation credential with sessionId, "
+                "executorId, executionId, nativeInvocationId, mechanism, "
+                "status, and concrete summary."
+            ),
+        },
+    ),
+    _tool(
+        "record_skill_conformance",
+        "Record Skill conformance",
+        (
+            "Bind structured completion checks to one native Skill "
+            "activation receipt. A successful stage requires PASS for every "
+            "frozen required Skill."
+        ),
+        {
+            "item_id": ITEM_ID,
+            "activation_receipt_id": _string(
+                "Graph event hash returned by record_skill_activation.",
+                pattern=FINGERPRINT_PATTERN,
+                min_length=64,
+                max_length=64,
+            ),
+            "conformance": _object(
+                "Strict conformance result containing status, concrete "
+                "summary, and nonempty named checks with evidence."
+            ),
+        },
     ),
     _tool(
         "dispatch_task",

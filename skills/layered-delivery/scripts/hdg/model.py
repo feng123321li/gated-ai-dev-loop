@@ -294,9 +294,10 @@ def required_skill_policy() -> dict[str, str]:
     """Return the portable execution policy bound to required Skill records."""
 
     return {
-        "activation": "LOAD_COMPLETE_SKILL_BEFORE_STAGE",
+        "activation": "EXPLICIT_NATIVE_SKILL_INVOCATION_REQUIRED",
         "identity": "CANONICAL_CATALOG_NAME_WITHOUT_HOST_COMMAND_PREFIX",
-        "compliance": "STRUCTURED_SKILL_USAGE_REQUIRED",
+        "loadingOnly": "REJECTED",
+        "compliance": "GRAPH_BOUND_CONFORMANCE_PASS_REQUIRED",
         "unavailable": "BLOCK_STAGE_AND_REPORT",
     }
 
@@ -624,7 +625,10 @@ def validate_work_item_definition(
         if kind == "DELIVERY"
         else common + plan_keys + ["parentId"] + (["execution"] if kind == "TASK" else ["decomposition", "children"])
     )
-    if not _exact_keys(definition, expected):
+    expected_keys = set(expected)
+    actual_keys = set(definition)
+    required_keys = expected_keys - {"requiredSkills"}
+    if not required_keys.issubset(actual_keys) or not actual_keys.issubset(expected_keys):
         fail(
             "WORK_ITEM_DEFINITION_INVALID",
             "Work item definition contains missing or unknown fields",
@@ -644,7 +648,7 @@ def validate_work_item_definition(
         "requirements": _trace_records(definition["requirements"], "R", "requirements"),
         "acceptance": _trace_records(definition["acceptance"], "A", "acceptance"),
         "testCommands": _test_commands(definition["testCommands"]),
-        "requiredSkills": _required_skills(definition["requiredSkills"]),
+        "requiredSkills": _required_skills(definition.get("requiredSkills", [])),
         "risks": _strings(definition["risks"], "risks"),
         "decisions": _strings(definition["decisions"], "decisions"),
     }

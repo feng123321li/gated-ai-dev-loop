@@ -2,11 +2,17 @@
 
 ## MCP 改变的是授权粒度
 
-完整 Plugin 通过 `.mcp.json` 启动一个本地 stdio MCP Server，并把 35 个 `layered-delivery` 工具交给 Claude。控制器调用不再表现为任意 Bash/Python 进程，因此不得为 `Bash(python *hdg.py *)`、`Bash(python *)` 或类似通配命令添加 allow 规则。
+完整 Plugin 通过 `.mcp.json` 启动一个本地 stdio MCP Server，并把 37 个 `layered-delivery` 工具交给 Claude。控制器调用不再表现为任意 Bash/Python 进程，因此不得为 `Bash(python *hdg.py *)`、`Bash(python *)` 或类似通配命令添加 allow 规则。
 
 Claude Code 的权限模式仍属于执行宿主安全边界，不能由聊天提示、Skill 或仓库内容自行切换，MCP Server 也不能越过这条边界。首次安装/启用 Plugin 时，用户或组织策略可能需要信任 Server；随后应在 `/permissions` 或托管策略中按 MCP Server/tool 配置权限。项目根由 `${CLAUDE_PROJECT_DIR}` 在 Server 启动时绑定，工具调用不能传入 `root`、`dogfood` 或通用 `confirmed` 参数来扩大范围。
 
-MCP 协议工具本名是 `graph_frontier` 等 snake_case 名称；`mcp__plugin_layered-delivery_layered-delivery__graph_frontier` 只是 Claude 的权限规则名，其中插件名与 Server 名用于宿主隔离。Plugin Skill 的 `allowed-tools` 逐项预批准 30 个中段自治工具，不使用 `__*` 通配符，也不批准任意 Shell。`freeze_hierarchy`、`rebuild_graph_run`、`cancel_graph_run`、`record_human_review_acceptance` 和最终 `record_user_confirmation` 不在预批准清单内，且 Server 将它们标记为 `anthropic/requiresUserInteraction`。五个 payload 暂存工具只运输目标绑定的输入，finalize 不执行业务动作；敏感目标仍必须调用原工具并触发原 prompt。方案冻结只能紧邻用户对当前指纹方案和方式的确认调用，不能从旧对话或自然语言关键词推断。
+MCP 协议工具本名是 `graph_frontier` 等 snake_case 名称；`mcp__plugin_layered-delivery_layered-delivery__graph_frontier` 只是 Claude 的权限规则名，其中插件名与 Server 名用于宿主隔离。Plugin Skill 的 `allowed-tools` 逐项预批准 32 个中段自治工具，其中包含 `record_skill_activation` 与 `record_skill_conformance`；不使用 `__*` 通配符，也不批准任意 Shell。`freeze_hierarchy`、`rebuild_graph_run`、`cancel_graph_run`、`record_human_review_acceptance` 和最终 `record_user_confirmation` 不在预批准清单内，且 Server 将它们标记为 `anthropic/requiresUserInteraction`。五个 payload 暂存工具只运输目标绑定的输入，finalize 不执行业务动作；敏感目标仍必须调用原工具并触发原 prompt。方案冻结只能紧邻用户对当前指纹方案和方式的确认调用，不能从旧对话或自然语言关键词推断。
+
+## Claude required Skill 原生调用
+
+frontier 的 `requiredSkills` 不是“建议读取”的文档清单。每个名称都必须由实际执行该阶段的 Claude context 通过 Skill tool 明确调用；普通 Read、读取 `SKILL.md`、父 Agent 预读或只把名称写进 subagent prompt 都不合格。Skill tool 返回后，以该次 tool-use ID、Claude session ID、当前 executor 与 execution ID调用 `record_skill_activation`，`mechanism` 固定为 `CLAUDE_SKILL_TOOL`。一个 tool-use ID 只能绑定一个 required Skill；DEVELOPMENT 必须先完成此记录，才允许用相同 owner/operation `dispatch_task`。
+
+Claude subagent 是新的 context，父会话调用过 Skill 不会替代子 Agent 的调用。若真正执行阶段的是 subagent，它必须在自己的 context 明确调用并记录凭证。完整执行 Skill 后，执行者或独立 gate/reviewer 针对真实代码、diff、测试和产物形成命名检查，以 `record_skill_conformance` 绑定原激活凭证；成功迁移要求全部检查 `PASS`。如果 Skill 不存在，记录 `BLOCKED` 激活与符合性并按阶段 artifact 形成阻断，不能把 Read 或宽松匹配记为 PASS。
 
 `anthropic/requiresUserInteraction` 是 Claude Code 的宿主扩展，不是 MCP Server 自己弹窗；MCP 标准 annotations 也只是宿主提示，不能替代权限策略。Claude Code 至少使用 2.1.199：更早版本会忽略该扩展，因此 Server 在识别到旧版 Claude Code 时直接以 `MCP_CLIENT_UPGRADE_REQUIRED` 拒绝上述五个敏感工具。版本满足要求后，是否允许仍由 Claude Code 的权限模式、tool 规则和组织策略决定。
 

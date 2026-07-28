@@ -45,6 +45,17 @@ EXPECTED_TOOL_PROPERTIES = {
     "cancel_graph_run": {"item_id"},
     "task_context": {"item_id"},
     "evidence_contract": {"item_id", "contract_kind"},
+    "record_skill_activation": {
+        "item_id",
+        "stage",
+        "skill_name",
+        "activation",
+    },
+    "record_skill_conformance": {
+        "item_id",
+        "activation_receipt_id",
+        "conformance",
+    },
     "dispatch_task": {"item_id", "owner", "operation_id"},
     "heartbeat_task": {"item_id", "operation_id"},
     "pause_task": {"item_id", "operation_id"},
@@ -252,7 +263,7 @@ class McpServerProtocolTests(unittest.TestCase):
         self.assertIsNone(response)
         self.assertIs(session.initialized, True)
 
-    def test_tools_list_exposes_35_strict_snake_case_tools(self) -> None:
+    def test_tools_list_exposes_37_strict_snake_case_tools(self) -> None:
         response = mcp_server.handle_message(
             rpc_request("tools/list"),
             session=ready_session(),
@@ -262,7 +273,9 @@ class McpServerProtocolTests(unittest.TestCase):
         tools = response["result"]["tools"]
         by_name = {tool["name"]: tool for tool in tools}
 
-        self.assertEqual(len(tools), 35)
+        self.assertEqual(len(tools), 37)
+        self.assertIn("record_skill_activation", by_name)
+        self.assertIn("record_skill_conformance", by_name)
         self.assertEqual(set(by_name), set(EXPECTED_TOOL_PROPERTIES))
         self.assertEqual(tools, tool_definitions())
 

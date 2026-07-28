@@ -42,6 +42,10 @@ from .planning import (
 )
 from .remediation import record_validation_remediation
 from .repository import GovernanceRepository
+from .skill_execution import (
+    record_skill_activation,
+    record_skill_conformance,
+)
 
 
 @dataclass(frozen=True)
@@ -220,6 +224,23 @@ def execute_operation(
             root=root,
             work_item_id=arguments["item_id"],
             contract_kind=arguments["contract_kind"],
+        )
+    if name == "record_skill_activation":
+        return record_skill_activation(
+            root=root,
+            item_id=arguments["item_id"],
+            stage=arguments["stage"],
+            skill_name=arguments["skill_name"],
+            activation=arguments["activation"],
+            explicit_dogfood=dogfood,
+        )
+    if name == "record_skill_conformance":
+        return record_skill_conformance(
+            root=root,
+            item_id=arguments["item_id"],
+            activation_receipt_id=arguments["activation_receipt_id"],
+            conformance=arguments["conformance"],
+            explicit_dogfood=dogfood,
         )
     if name == "dispatch_task":
         return dispatch_task(

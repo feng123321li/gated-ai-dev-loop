@@ -12,11 +12,12 @@ Task 只有在状态为 IMPLEMENTED 时可运行 gate。`task_result` 写回后�
 - `evidence_contract` 为每个验收项同时展示 requirement 文本、R/A 映射和 expectedResult；提交的每项 gate evidence 必须回显与冻结 baseline 完全一致的 `requirementIds` 并按独立 acceptance 逐项取证，不能用一个跨需求结论替代任一 requirement 的独立证据；
 - MCP 结构化参数中的完整 evidence artifact 覆盖当前工作项和当前 baseline；控制器在当前 SQLite 写事务内完成校验与摘要计算。CLI fallback 才从 stdin 接收；
 - 当前工作项及祖先 baseline 对 `GATE` 指定的每个 required Skill 都必须在 gate artifact 的 `skillUsage` 中逐项出现，字段为 `name/stage/status/evidence`。PASS 要求名称和顺序精确匹配、状态全部为 `APPLIED`，且 evidence 具体说明完整 Skill 流程如何用于范围、测试、R/A 追踪或 findings；只写“已使用”或原样回传 `<CONCRETE_APPLICATION_EVIDENCE>` 等控制器模板占位符不能 PASS；
+- Gate executor 必须在当前 gate attempt 对每个名称分别经宿主原生 Skill 入口明确调用并执行完整流程，随后用 `record_skill_activation` 和 `record_skill_conformance` 绑定原生调用 ID及针对真实范围、diff、测试、R/A 和 findings 的命名检查。Read、load、baseline 声明和 `skillUsage` 自述均不能替代；PASS 要求全部 `INVOKED + PASS`；
 - PASS evidence 中 Scope 外变更为空、全部测试退出码为 0、全部验收项为 PASS、P0/P1 为空。
 
 PASS 后 Task 为 VERIFIED；FAIL 后为 BLOCKED，并把范围、测试、验收项和 findings 写入用户报告。若 frontier 在当前 gate attempt 预算内给出 `RETRY_NODE`，执行循环先使用当前 baseline 指纹调用 `retry_item`；控制器同时为 Task execution 与 Task gate 创建新 attempt，使 frontier 回到 `DISPATCH_TASK`。Agent 重新认领后修复 P0/P1、回归、复测、写回结果，再重新执行 gate。第三次 gate 仍失败时 frontier 改为 `REQUEST_INTERVENTION`，`retry_item` 机械拒绝继续重试，不能形成无限审查循环。只有冻结需求或授权需要变化时才回到人工评审。开发 Agent 的结论不能替代 gate，正常 PASS 路径使用 `accept_item`。
 
-`development-review.md` 展示单个 Task 的 DEVELOPMENT Skill 使用；`acceptance-report.md` 的“实际开发 Skill 调用”按当前工作项子树中的 Task、operation 和 result 状态，汇总已校验 Task result 实际写回的 Skill、阶段、状态和具体证据。协调根报告因此覆盖全部后代 Task，而不是重复 baseline 中的预期 Skill 清单。“Skill 使用审计”表另行展示内部门禁及独立审查的使用情况。存在 `FINAL_REVIEW` required Skill 时，独立审查 PASS 也必须提交完全匹配的 `skillUsage`，不得用 `HUMAN_REVIEW_ACCEPTED` 静默绕过；最终 `USER_CONFIRMED` 仍是用户决定，不属于 Skill 阶段。
+`development-review.md` 与 `acceptance-report.md` 的“实际 Skill 原生调用与符合性”只汇总 append-only Graph 中的 activation/conformance 事件；协调根报告覆盖全部后代 Task。表格展示工作项、attempt、Skill、host/mechanism、原生调用 ID、调用状态、实际检查和凭证 hash，不从 baseline、Read 或 artifact 推断。原有“实际开发 Skill 调用”按 Task/operation/result 展示 `skillUsage` 自述，“Skill 使用审计”展示 gate/review artifact 自述，三者明确分离。存在 `FINAL_REVIEW` required Skill 时，独立审查也必须由实际 reviewer context 逐项原生调用、记录激活与符合性，再提交匹配 `skillUsage`；不得用父会话调用或 `HUMAN_REVIEW_ACCEPTED` 绕过。最终 `USER_CONFIRMED` 仍是用户决定。
 
 如果失败只是暴露原验收项所需文件被开发方案漏列，且目标、需求、验收、接口行为、数据、拓扑和外部权限不变，Agent 不创建新的根 Task。它以结构化 evidence 调用 `remediate_task`，在原 Task 下记录修正原因、验收项和补充文件；控制器保持 baseline 与图定义不变，沿显式图边失效必要后继、依赖消费者和聚合 gate，修正后从新 attempt 重新执行完整门禁。具体证据见 [validation-remediation.md](validation-remediation.md)。
 
@@ -52,7 +53,9 @@ decomposition 为 SEALED 且所有计划 Capability VERIFIED 后，运行跨能�
 2. 没有其他产品时使用全新、无开发上下文的只读子 Agent；
 3. 两者都不可用时生成清晰人工验收包，结论为 `NEED_HUMAN_REVIEW`。
 
-审查者只读取 baseline、context、真实 diff、测试和 evidence，不继承开发对话。隔离审查 PASS 时调用 `record_independent_review_pass`。若冻结的 `FINAL_REVIEW` Skill 在宿主中不可用，必须调用 `record_independent_review_blocked` 写入 `REVIEW_BLOCKED`：artifact 逐项列出精确 `skillUsage`，至少一项状态为 `BLOCKED`，并给出具体不可用原因；`summary` 和 usage evidence 都不得原样回传 `<CONCRETE_UNAVAILABILITY_REASON>` 等模板占位符，不得伪造 `APPLIED` 或改记 PASS。Graph 随即进入需要用户权限或人工干预的阻断状态；问题消除后使用 frontier 给出的 `retry-item` 创建新的 review attempt，再重新加载完整 Skill 并提交 PASS evidence。只有 baseline 没有 `FINAL_REVIEW` required Skill 且无法隔离时，最终验收阶段才可由人触发 `record_human_review_acceptance`。随后只有用户明确确认完整根验收报告，宿主才可调用 `record_user_confirmation` 写入 `USER_CONFIRMED` 并使治理根进入 `COMPLETED`。三类 evidence 是相互独立的完整 artifact，通过 MCP 结构化参数提交；只有 CLI fallback 使用 `--evidence -` 和 stdin。控制器在各自 SQLite 写事务内校验内容、计算规范 JSON 的 SHA-256，并把 artifact 与摘要一起写入 SQLite；CLI 拒绝文件路径和调用方提供的摘要。恢复只依赖 SQLite 快照，不依赖外部 JSON。不能只提交 action 标签，也不能复用同一内容。
+审查者只读取 baseline、context、真实 diff、测试和 evidence，不继承开发对话。它在自己的隔离 context 明确调用 FINAL_REVIEW Skill，记录原生 activation，再以实际审查项记录 conformance；PASS 时才调用 `record_independent_review_pass`。若 Skill 在宿主中不可用，必须记录 `BLOCKED` activation 与 conformance，再调用 `record_independent_review_blocked` 写入 `REVIEW_BLOCKED`；artifact 逐项列出精确 BLOCKED `skillUsage` 和具体不可用原因，不能伪造 `APPLIED`。问题消除后用 `retry-item` 创建新的 review attempt，并在新 reviewer context 重新原生调用、重新记录凭证和检查。只有 baseline 没有 FINAL_REVIEW required Skill 且无法隔离时，才可由人触发 `record_human_review_acceptance`。最终仍只有用户能写入 `USER_CONFIRMED`。
+
+只有 baseline 没有 `FINAL_REVIEW` required Skill 且无法隔离时，最终验收阶段才可由人触发 `record_human_review_acceptance`。随后只有用户明确确认完整根验收报告，宿主才可调用 `record_user_confirmation` 写入 `USER_CONFIRMED`。
 
 最终验收 evidence 使用当前 schemaVersion 3 JSON：独立审查必须包含 `kind=INDEPENDENT_REVIEW`、非空 reviewer、`isolation=FRESH_READ_ONLY`、`verdict=PASS` 和 `findings.p0/p1=0`；人工审查必须包含 `kind=HUMAN_REVIEW`、非空 reviewer 与 `verdict=ACCEPTED`；用户确认必须包含 `kind=USER_CONFIRMATION`、非空 confirmedBy 与 `decision=CONFIRMED`。
 

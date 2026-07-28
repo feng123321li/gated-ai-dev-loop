@@ -82,7 +82,7 @@ class WorkItemFlowTests(unittest.TestCase):
                 "面向人的状态报告须把控制器 UTC 时间转换为当前运行环境的本机时区并显式标注 UTC 偏移，机器字段保持不变；"
                 "若接收宿主是 Claude Code，必须在 dispatch_task 认领前由用户级设置、模式选择器或启动参数启用 auto；"
                 "MCP 控制器不再需要 hdg.py Process 授权，但 acceptEdits 仍不足以自动批准测试和构建命令；"
-                "逐项执行 frontier action 中冻结的 requiredSkills，并在 result、gate 和独立审查 evidence 中记录具体使用情况；"
+                "逐项原生调用 frontier action 中冻结的 requiredSkills，记录 activation 与实际 conformance；Read/load 不算执行，并在 result、gate 和独立审查 evidence 中记录具体使用情况；"
                 "会话不得自行修改权限配置或启用 bypassPermissions。",
             )
             claude_handoff = frozen["claudeCodeAutoHandoff"]

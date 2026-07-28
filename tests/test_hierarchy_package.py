@@ -118,7 +118,10 @@ class HierarchyPackageTests(unittest.TestCase):
             )
 
             self.assertEqual(frozen["hostAutomation"], prepared["hostAutomation"])
-            self.assertIn("首次 dispatch-task 之前", frozen["hostAutomation"]["claimPrecondition"])
+            self.assertIn(
+                "首次 MCP dispatch_task 调用之前",
+                frozen["hostAutomation"]["claimPrecondition"],
+            )
             self.assertIn("hostAutomation", frozen["nextAction"])
             self.assertIsNone(frozen["claudeCodeAutoHandoff"])
             self.assertEqual(
@@ -201,16 +204,23 @@ class HierarchyPackageTests(unittest.TestCase):
                 {
                     "gate": {
                         "artifactKind": "WORK_ITEM_GATE",
-                        "commandHint": (
-                            "evidence-contract --item t-python-controller --kind gate"
-                        ),
+                        "mcpCall": {
+                            "tool": "evidence_contract",
+                            "arguments": {
+                                "item_id": "t-python-controller",
+                                "contract_kind": "gate",
+                            },
+                        },
                     },
                     "remediation": {
                         "artifactKind": "VALIDATION_REMEDIATION",
-                        "commandHint": (
-                            "evidence-contract --item t-python-controller "
-                            "--kind remediation"
-                        ),
+                        "mcpCall": {
+                            "tool": "evidence_contract",
+                            "arguments": {
+                                "item_id": "t-python-controller",
+                                "contract_kind": "remediation",
+                            },
+                        },
                     },
                 },
             )
@@ -436,7 +446,7 @@ class HierarchyPackageTests(unittest.TestCase):
                 handoff,
             )
             self.assertIn(
-                "任意 Agent CLI 可接续同一 frozen graph",
+                "任意已接入 Plugin MCP 的 Agent 宿主可接续同一 frozen graph",
                 handoff,
             )
             self.assertIn("`HOST_NATIVE_SKILL`", handoff)

@@ -6,7 +6,7 @@
 
 `requirement-handoff.md` 是 manual 根级需求的一次性交接提示词，冻结与投影刷新都会从 SQLite 重建；它列出完整树并要求接收会话消费 Graph 自动计算的调度计划，完成 dispatch、结果写回和逐级门禁。`development-handoff.md` 仍是 `dispatch_task` 后生成的单 Task 执行上下文，只在执行循环内部交给对应开发 Agent，不再要求人逐 Task 复制。`task_context` 只返回不得用于开工的未认领诊断预览。开发 Agent 不接收 Delivery 分析对话、Capability 讨论、其他 Task 对话或执行入口隐式记忆。
 
-接收会话优先通过已连接的 Plugin MCP 调用 `graph_frontier` 恢复 graph run，并直接消费结构化 tool result；不得固化用户目录、Skill 安装位置或操作系统路径，也不得用临时 JSON 中转只读查询结果。只有 MCP 不可用时才从当前 Skill 元数据解析控制器入口、运行 `graph-frontier --json` 并处理 stdout/stderr。`task_context` 只用于诊断，正式开工上下文必须来自 Graph 计划后的 `dispatch_task`。
+接收会话只通过已连接并完成工具注册的 Plugin MCP 调用 `graph_frontier` 恢复 graph run，并直接消费结构化 tool result；不得固化用户目录、Plugin 安装位置或操作系统路径，也不得用临时 JSON 中转只读查询结果。MCP 不可用时立即停止，不得编辑业务代码、启动 CLI 或写治理状态。`task_context` 只用于诊断，正式开工上下文必须来自 Graph 计划后的 `dispatch_task`。
 
 ## 开发 Agent 契约
 
@@ -26,13 +26,11 @@
 ## Active 与 Manual
 
 - `active`：冻结后由 Graph 自动推进。控制器计算 READY、安全并行集合、目标 Agent 数和稳定顺序；执行 Agent/适配器完整消费计划并自动调用冻结 Skill。运行能力变化只影响立即启动还是排队，不请求用户重新选择或确认 Skill。开发持续循环到相关回归和复测通过，或形成真实阻断。当前宿主是 Claude Code 时，必须先满足 `hostAutomation` 的 Auto 权限前置条件，再冻结和认领 Task。
-- `manual`：当前规划会话不创建开发 Agent。`freeze_hierarchy` 在需求根生成一份 `requirement-handoff.md`，在 `handoffPrompt` 返回同样的完整内容，并通过 `handoffCommand` 返回可直接复制到新会话的简短指令。规划会话的首次最终回复必须按 `responseContract` 提供一个纯文本代码块，用户一次复制到任意全新 Agent 后即可接管需求。可以直接使用 `handoffCommand`，也可以生成覆盖 `requiredSemantics` 的语义等价文本，不要求逐字一致；完整交接与冻结方案链接放在代码块之后，不能只返回文件链接。方案创建宿主只作审计：Claude、Codex、Cursor 或其他 Agent CLI 可相互交接，接收会话不得因宿主变化重新 prepare/freeze。交接目标是 Claude Code 时，同时展示 `claudeCodeAutoHandoff` 中适合界面的 Auto 启动方式。接收会话成为 Graph 执行入口，读取 `dispatchPlan`、自动调用冻结 Skill、为每个计划 Task 生成唯一 operationId 并执行 `dispatch_task`。平台可并行时启动隔离子 Agent，容量不足时稳定排队并串行消费；不得挑选子集，也不得要求用户逐 Skill、逐 Task 再次回复或复制交接。
+- `manual`：当前规划会话不创建开发 Agent。`freeze_hierarchy` 在需求根生成一份 `requirement-handoff.md`，在 `handoffPrompt` 返回同样的完整内容，并通过 `handoffCommand` 返回可直接复制到新会话的简短指令。规划会话的首次最终回复必须按 `responseContract` 提供一个纯文本代码块，用户一次复制到任意全新 Agent 后即可接管需求。可以直接使用 `handoffCommand`，也可以生成覆盖 `requiredSemantics` 的语义等价文本，不要求逐字一致；完整交接与冻结方案链接放在代码块之后，不能只返回文件链接。方案创建宿主只作审计：Claude、Codex、Cursor 或其他已接入 Plugin MCP 的 Agent 宿主可相互交接，接收会话不得因宿主变化重新 prepare/freeze。交接目标是 Claude Code 时，同时展示 `claudeCodeAutoHandoff` 中适合界面的 Auto 启动方式。接收会话成为 Graph 执行入口，读取 `dispatchPlan`、自动调用冻结 Skill、为每个计划 Task 生成唯一 operationId 并执行 `dispatch_task`。平台可并行时启动隔离子 Agent，容量不足时稳定排队并串行消费；不得挑选子集，也不得要求用户逐 Skill、逐 Task 再次回复或复制交接。
 
 用户在评审 `development-plan.md` 时选择一次根级方式；Agent 使用同一次确认调用：
 
-```text
-python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --expected-hierarchy <sha256> --development-mode active|manual --confirmed
-```
+冻结只调用 MCP `freeze_hierarchy`，参数为根 ID、准备结果的 hierarchy fingerprint 和 `active|manual`；工具本身表达用户已确认，不接收通用 `confirmed` 布尔值。
 
 冻结成功后只在 SQLite 的需求根记录中保存开发方式：
 
@@ -51,6 +49,6 @@ python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --e
 
 ## 结果接收
 
-Graph 执行循环先完成每项原生激活，在 `dispatch_task` 得到绑定 claim 后完整执行 Skill；结束时先用 `record_skill_conformance` 写入真实检查，再调用 `evidence_contract` 取得绑定当前 claim/operationId 的两份 result 模板和冻结测试、有效授权、失败分类、required Skills 约束，最后以结构化 evidence 调用 `task_result`。控制器在同一 SQLite 写事务内同时核对 claim/operationId、租约、artifact，以及当前 attempt 中每个 required Skill 的 host 机制、executor/execution 绑定、独立原生调用凭证和符合性结果。`IMPLEMENTED` 要求全部 `INVOKED + PASS`，并且 `skillUsage` 精确覆盖 DEVELOPMENT 要求；`BLOCKED` 必须提供 failure，Skill 不可用时激活、符合性和 usage 都如实记录 `BLOCKED`。`development-review.md` 的“实际 Skill 原生调用与符合性”来自 Graph 事件，原有 Skill usage 表只展示 artifact 自述。Agent 完成 Task 结果后继续以相同流程执行 gate。只有 CLI fallback 使用 stdin。
+Graph 执行循环先完成每项原生激活，在 `dispatch_task` 得到绑定 claim 后完整执行 Skill；结束时先用 `record_skill_conformance` 写入真实检查，再调用 `evidence_contract` 取得绑定当前 claim/operationId 的两份 result 模板和冻结测试、有效授权、失败分类、required Skills 约束，最后以结构化 evidence 调用 `task_result`。控制器在同一 SQLite 写事务内同时核对 claim/operationId、租约、artifact，以及当前 attempt 中每个 required Skill 的 host 机制、executor/execution 绑定、独立原生调用凭证和符合性结果。`IMPLEMENTED` 要求全部 `INVOKED + PASS`，并且 `skillUsage` 精确覆盖 DEVELOPMENT 要求；`BLOCKED` 必须提供 failure，Skill 不可用时激活、符合性和 usage 都如实记录 `BLOCKED`。`development-review.md` 的“实际 Skill 原生调用与符合性”来自 Graph 事件，原有 Skill usage 表只展示 artifact 自述。Agent 完成 Task 结果后继续以相同流程执行 gate。
 
 验证阶段若发现原验收项所需文件漏列，当前 claim 必须先正常写回并释放，再由 Graph 执行循环按修正路由执行 `remediate_task`。控制器把补充文件加入下一次 context 的 `authorizedFileChanges`，原 Task 重新 READY 后再认领；开发 Agent 不自行编辑 baseline、计划或 SQLite，也不另起需求根。

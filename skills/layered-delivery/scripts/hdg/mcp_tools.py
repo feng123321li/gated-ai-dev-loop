@@ -181,6 +181,7 @@ ERROR_OUTPUT = {
     "additionalProperties": False,
 }
 OUTPUT_SCHEMA = {
+    "type": "object",
     "oneOf": [
         {
             "type": "object",

@@ -48,7 +48,7 @@ Markdown 缺失时可执行 `refresh-projections`；隔离不是迁移或兼容�
 
 ## 焦点、交互与命令
 
-`currentFocus` 只帮助恢复，不授予冻结或开发权限。`record-interaction` 只追加简短可审计摘要，`interaction-log` 查询结构化事件；不得保存隐藏思考过程、密钥或不必要的原始对话。MCP/CLI 返回自由文本前会递归遮蔽敏感字段、常见环境变量凭据与 token 形态，以及 Windows、UNC 和常见 POSIX 容器绝对路径；脱敏是输出防护，不能代替调用方避免提交秘密。
+`currentFocus` 只帮助恢复，不授予冻结或开发权限。`record_interaction` 只追加简短可审计摘要，`interaction_log` 查询结构化事件；不得保存隐藏思考过程、密钥或不必要的原始对话。MCP 返回自由文本前会递归遮蔽敏感字段、常见环境变量凭据与 token 形态，以及 Windows、UNC 和常见 POSIX 容器绝对路径；脱敏是输出防护，不能代替调用方避免提交秘密。
 
 交互输入优先作为 MCP `record_interaction` 的结构化 `interaction` 参数提交，严格字段为：
 
@@ -56,24 +56,19 @@ Markdown 缺失时可执行 `refresh-projections`；隔离不是迁移或兼容�
 {"schemaVersion":3,"sessionId":"session-id","actor":"USER|AGENT|SUBAGENT","eventType":"USER_INSTRUCTION|AGENT_UPDATE|DECISION","summary":"简短可审计事实","operationId":null,"hostRuntime":"codex"}
 ```
 
-```text
-python -X utf8 <skill-root>/scripts/hdg.py record-interaction --item <id> --interaction - --json
-python -X utf8 <skill-root>/scripts/hdg.py interaction-log --item <id> --json
-```
-
-上述命令仅为 MCP 不可用时的 CLI fallback；正常读取使用带 `after_event_id` 与 `limit` 的分页 `interaction_log`。
+交互写入使用 MCP `record_interaction`；读取使用带 `after_event_id` 与 `limit` 的分页 `interaction_log`。
 
 正常闭环是：
 
 ```text
-prepare-hierarchy
+prepare_hierarchy
 → 人工查看 development-plan.md
-→ 选择开发方式并执行一次 freeze-hierarchy
+→ 选择开发方式并执行一次 freeze_hierarchy
 → dispatch_task
 → task_result / development-review.md
 → 验证发现同契约文件遗漏时 remediate_task / 回到原 Task
 → accept_item / acceptance-report.md
-→ acceptance-item
+→ record_user_confirmation
 ```
 
-`remediate_task` 只为未完成需求的同契约验证修正追加精确文件授权。artifact、摘要和修正前状态快照存入现有 `interaction_events`，图失效与新 attempt 存入 graph run/event，不新增 JSON 文件、不修改 baseline，也不创建第二个需求根。图事件是运行事实权威，graph/node run 是可回放重建的查询快照；artifact 由控制器绑定精确 `runId/nodeId/attempt/graphFingerprint`。MCP 诊断、恢复与执行工具还包括 `graph_status`、`graph_frontier`、`graph_events`、`graph_replay`、按需从 SQLite 读取单项模板的 `evidence_contract`、`advance_graph`、经确认的 `rebuild_graph_run` 与 `cancel_graph_run`、`task_context`、`claim_task`、`heartbeat_task`、`pause_task`、`resume_task`、`gate_item`、`retry_item`、`ready_tasks` 和 `refresh_projections`；CLI fallback 使用对应 kebab-case 命令。
+`remediate_task` 只为未完成需求的同契约验证修正追加精确文件授权。artifact、摘要和修正前状态快照存入现有 `interaction_events`，图失效与新 attempt 存入 graph run/event，不新增 JSON 文件、不修改 baseline，也不创建第二个需求根。图事件是运行事实权威，graph/node run 是可回放重建的查询快照；artifact 由控制器绑定精确 `runId/nodeId/attempt/graphFingerprint`。MCP 诊断、恢复与执行工具还包括 `graph_status`、`graph_frontier`、`graph_events`、`graph_replay`、按需从 SQLite 读取单项模板的 `evidence_contract`、`advance_graph`、经确认的 `rebuild_graph_run` 与 `cancel_graph_run`、`task_context`、`claim_task`、`heartbeat_task`、`pause_task`、`resume_task`、`gate_item`、`retry_item`、`ready_tasks` 和 `refresh_projections`。

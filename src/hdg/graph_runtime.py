@@ -872,7 +872,15 @@ def _task_write_scope(repository: Any, definition: dict[str, Any]) -> list[str]:
     return sorted(set(scope))
 
 
-def evidence_contract_ref(work_item_id: str, contract_kind: str) -> dict[str, str]:
+def mcp_call(tool: str, **arguments: Any) -> dict[str, Any]:
+    """Describe one host MCP invocation without exposing a shell command."""
+    return {
+        "tool": tool,
+        "arguments": arguments,
+    }
+
+
+def evidence_contract_ref(work_item_id: str, contract_kind: str) -> dict[str, Any]:
     artifact_kinds = {
         "result": "TASK_RESULT",
         "gate": "WORK_ITEM_GATE",
@@ -882,8 +890,10 @@ def evidence_contract_ref(work_item_id: str, contract_kind: str) -> dict[str, st
     }
     return {
         "artifactKind": artifact_kinds[contract_kind],
-        "commandHint": (
-            f"evidence-contract --item {work_item_id} --kind {contract_kind}"
+        "mcpCall": mcp_call(
+            "evidence_contract",
+            item_id=work_item_id,
+            contract_kind=contract_kind,
         ),
     }
 
@@ -915,7 +925,12 @@ def _result_contract(
         fail(
             "WORK_ITEM_RESULT_CONTRACT_NOT_READY",
             "Task result evidence contracts require an active claim",
-            commandHint=f"dispatch-task --item {entry['id']} --owner <owner> --operation <id>",
+            mcpCall=mcp_call(
+                "dispatch_task",
+                item_id=entry["id"],
+                owner="<owner>",
+                operation_id="<operation-id>",
+            ),
         )
     definition = repository.assert_current_lineage(registry, entry)[0]
     return task_result_evidence_contract(
@@ -1016,14 +1031,24 @@ def get_evidence_contract(
     if contract_kind == "result":
         contract = _result_contract(repository, registry, entry)
         operation_id = entry["claim"]["operationId"]
-        submit_command = (
-            f"task-result --item {work_item_id} "
-            f"--operation {operation_id} "
-            "--status <IMPLEMENTED_OR_BLOCKED> --evidence -"
-        )
+        submit_mcp_calls = [
+            mcp_call(
+                "task_result",
+                item_id=work_item_id,
+                operation_id=operation_id,
+                status="<IMPLEMENTED_OR_BLOCKED>",
+                evidence="<evidence>",
+            )
+        ]
     elif contract_kind == "gate":
         contract = _gate_contract(repository, registry, entry)
-        submit_command = f"accept-item --item {work_item_id} --evidence -"
+        submit_mcp_calls = [
+            mcp_call(
+                "accept_item",
+                item_id=work_item_id,
+                evidence="<evidence>",
+            )
+        ]
     elif contract_kind == "remediation":
         if entry["kind"] != "TASK":
             fail(
@@ -1031,39 +1056,56 @@ def get_evidence_contract(
                 "Validation remediation evidence contracts require a frozen Task",
             )
         contract = _remediation_contract(repository, registry, entry)
-        submit_command = (
-            f"remediate-task --item {work_item_id} "
-            f"--expected-baseline {entry['baselineFingerprint']} --evidence -"
-        )
+        submit_mcp_calls = [
+            mcp_call(
+                "remediate_task",
+                item_id=work_item_id,
+                expected_baseline_fingerprint=entry["baselineFingerprint"],
+                evidence="<evidence>",
+            )
+        ]
     else:
         if entry["parentId"] is not None:
             fail(
                 "WORK_ITEM_ACCEPTANCE_ROOT_REQUIRED",
                 "Review and confirmation evidence contracts require a root work item",
             )
-        contract = (
-            review_evidence_contract(
+        if contract_kind == "review":
+            contract = review_evidence_contract(
                 repository.effective_required_skills(
                     registry,
                     entry,
                     stage="FINAL_REVIEW",
                 )
             )
-            if contract_kind == "review"
-            else confirmation_evidence_contract()
-        )
-        submit_command = (
-            f"acceptance-item --item {work_item_id} --action <action> --evidence -"
-            if contract_kind == "review"
-            else f"acceptance-item --item {work_item_id} "
-            "--action USER_CONFIRMED --evidence -"
-        )
+            review_tools = {
+                "INDEPENDENT_REVIEW_PASS": "record_independent_review_pass",
+                "REVIEW_BLOCKED": "record_independent_review_blocked",
+                "HUMAN_REVIEW_ACCEPTED": "record_human_review_acceptance",
+            }
+            submit_mcp_calls = [
+                mcp_call(
+                    review_tools[action],
+                    item_id=work_item_id,
+                    evidence=f"<{action.lower()}-evidence>",
+                )
+                for action in contract["actionOptions"]
+            ]
+        else:
+            contract = confirmation_evidence_contract()
+            submit_mcp_calls = [
+                mcp_call(
+                    "record_user_confirmation",
+                    item_id=work_item_id,
+                    evidence="<evidence>",
+                )
+            ]
     return {
         "schemaVersion": SCHEMA_VERSION,
         "source": "governance.sqlite3",
         "itemId": work_item_id,
         "contractKind": contract_kind,
-        "submitCommandHint": submit_command,
+        "submitMcpCalls": submit_mcp_calls,
         "evidenceContract": contract,
     }
 
@@ -1265,7 +1307,12 @@ def build_graph_frontier(
                 "dispatchOrdinal": len(selected_scopes),
                 "readyBecause": state["readyBecause"] + ["scope-available"],
                 "critical": state["id"] in critical_nodes,
-                "commandHint": f"dispatch-task --item {state['workItemId']} --owner <owner> --operation <id>",
+                "mcpCall": mcp_call(
+                    "dispatch_task",
+                    item_id=state["workItemId"],
+                    owner="<owner>",
+                    operation_id="<operation-id>",
+                ),
                 "transition": "TASK_CLAIMED",
                 "routeCondition": "ON_DISPATCH",
                 "requiredSkills": repository.effective_required_skills(
@@ -1294,11 +1341,6 @@ def build_graph_frontier(
                 "parallelGroup": None,
                 "readyBecause": state["readyBecause"],
                 "critical": state["id"] in critical_nodes,
-                "commandHint": (
-                    f"accept-item --item {state['workItemId']} --evidence -"
-                    if action == "RUN_GATE"
-                    else f"acceptance-item --item {state['workItemId']} --action <action> --evidence -"
-                ),
                 "transition": (
                     "GATE_PASSED"
                     if action == "RUN_GATE"
@@ -1310,6 +1352,11 @@ def build_graph_frontier(
                 **budget,
             }
             if action == "RUN_GATE":
+                action_record["mcpCall"] = mcp_call(
+                    "accept_item",
+                    item_id=state["workItemId"],
+                    evidence="<evidence>",
+                )
                 action_record["requiredSkills"] = (
                     repository.effective_required_skills(
                         registry,
@@ -1325,13 +1372,35 @@ def build_graph_frontier(
                     "gate",
                 )
             elif action == "REQUEST_REVIEW":
-                action_record["requiredSkills"] = (
-                    repository.effective_required_skills(
-                        registry,
-                        by_item[state["workItemId"]],
-                        stage="FINAL_REVIEW",
-                    )
+                required_skills = repository.effective_required_skills(
+                    registry,
+                    by_item[state["workItemId"]],
+                    stage="FINAL_REVIEW",
                 )
+                action_record["requiredSkills"] = required_skills
+                action_record["mcpCallOptions"] = [
+                    mcp_call(
+                        "record_independent_review_pass",
+                        item_id=state["workItemId"],
+                        evidence="<independent-review-evidence>",
+                    ),
+                    *(
+                        [
+                            mcp_call(
+                                "record_independent_review_blocked",
+                                item_id=state["workItemId"],
+                                evidence="<blocked-review-evidence>",
+                            )
+                        ]
+                        if required_skills
+                        else []
+                    ),
+                    mcp_call(
+                        "record_human_review_acceptance",
+                        item_id=state["workItemId"],
+                        evidence="<human-review-evidence>",
+                    ),
+                ]
                 action_record["requiredSkillPolicy"] = (
                     required_skill_policy()
                 )
@@ -1341,12 +1410,18 @@ def build_graph_frontier(
                 )
                 action_record["remediationContractRef"] = {
                     "artifactKind": "VALIDATION_REMEDIATION",
-                    "commandHint": (
-                        "evidence-contract --item <original-task-id> "
-                        "--kind remediation"
+                    "mcpCall": mcp_call(
+                        "evidence_contract",
+                        item_id="<original-task-id>",
+                        contract_kind="remediation",
                     ),
                 }
             else:
+                action_record["mcpCall"] = mcp_call(
+                    "record_user_confirmation",
+                    item_id=state["workItemId"],
+                    evidence="<evidence>",
+                )
                 action_record["evidenceContractRef"] = evidence_contract_ref(
                     state["workItemId"],
                     "confirmation",
@@ -1370,9 +1445,10 @@ def build_graph_frontier(
                 "parallelGroup": None,
                 "readyBecause": [f"claimed:{state.get('operationId') or 'unknown'}"],
                 "critical": state["id"] in critical_nodes,
-                "commandHint": (
-                    f"heartbeat-task --item {state['workItemId']} "
-                    f"--operation {state.get('operationId') or '<id>'}"
+                "mcpCall": mcp_call(
+                    "heartbeat_task",
+                    item_id=state["workItemId"],
+                    operation_id=state.get("operationId") or "<operation-id>",
                 ),
                 "transition": "TASK_HEARTBEAT",
                 "routeCondition": "ON_HEARTBEAT",
@@ -1392,8 +1468,9 @@ def build_graph_frontier(
                     "parallelGroup": None,
                     "readyBecause": ["claim-hard-expired"],
                     "critical": state["id"] in critical_nodes,
-                    "commandHint": (
-                        f"advance-graph --item {state['workItemId']}"
+                    "mcpCall": mcp_call(
+                        "advance_graph",
+                        item_id=state["workItemId"],
                     ),
                     "transition": "CLAIM_LEASE_EXPIRED",
                     "routeCondition": "ON_WORKER_LOST",
@@ -1437,7 +1514,10 @@ def build_graph_frontier(
                 "parallelGroup": None,
                 "readyBecause": ["explicitly-paused"],
                 "critical": state["id"] in critical_nodes,
-                "commandHint": f"resume-task --item {state['workItemId']}",
+                "mcpCall": mcp_call(
+                    "resume_task",
+                    item_id=state["workItemId"],
+                ),
                 "transition": "NODE_RESUMED",
                 "routeCondition": "ON_RESUME",
                 **budget,
@@ -1488,10 +1568,13 @@ def build_graph_frontier(
                 recommended == "SUBMIT_REMEDIATION"
                 and by_item[state["workItemId"]]["kind"] == "TASK"
             ):
-                blocked_record["commandHint"] = (
-                    f"remediate-task --item {state['workItemId']} "
-                    f"--expected-baseline {by_item[state['workItemId']]['baselineFingerprint']} "
-                    "--evidence -"
+                blocked_record["mcpCall"] = mcp_call(
+                    "remediate_task",
+                    item_id=state["workItemId"],
+                    expected_baseline_fingerprint=(
+                        by_item[state["workItemId"]]["baselineFingerprint"]
+                    ),
+                    evidence="<evidence>",
                 )
                 blocked_record["evidenceContractRef"] = evidence_contract_ref(
                     state["workItemId"],
@@ -1512,10 +1595,12 @@ def build_graph_frontier(
                     "recoveryAction": (
                         "RETRY_ITEM_AFTER_SKILL_AVAILABLE"
                     ),
-                    "commandHint": (
-                        f"retry-item --item {state['workItemId']} "
-                        "--expected-baseline "
-                        f"{by_item[state['workItemId']]['baselineFingerprint']}"
+                    "mcpCall": mcp_call(
+                        "retry_item",
+                        item_id=state["workItemId"],
+                        expected_baseline_fingerprint=(
+                            by_item[state["workItemId"]]["baselineFingerprint"]
+                        ),
                     ),
                     "evidenceContractRef": evidence_contract_ref(
                         state["workItemId"],

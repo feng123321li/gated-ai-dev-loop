@@ -4,9 +4,9 @@
 
 ## 当前契约内修复
 
-如果反馈只是指出当前冻结需求尚未满足，且所有所需文件已经位于冻结 `developmentPlan.fileChanges`，则保留原 baseline：Agent 记录真实阻断，自动执行 `retry-item`，继续实现、回归、修复和复测，再重新提交 gate 与验收。
+如果反馈只是指出当前冻结需求尚未满足，且所有所需文件已经位于冻结 `developmentPlan.fileChanges`，则保留原 baseline：Agent 记录真实阻断，自动执行 `retry_item`，继续实现、回归、修复和复测，再重新提交 gate 与验收。
 
-如果目标、需求、验收、接口行为、数据契约、子级结构、测试命令和外部权限均不变，只是验证发现完成原验收项所需的精确文件在方案中漏列，则使用 `remediate-task` 在原 Task 下追加验证修正。原 baseline、graph definition 和 `development-plan.md` 保持不变，补充文件、原因和证据进入 SQLite 审计链以及开发复核/验收报告；控制器沿显式图边失效必要后继、依赖消费者和聚合 gate，再从新 attempt 重新执行。此类反馈仍是原需求，不新建根 Task，也不重新请求开发方式。
+如果目标、需求、验收、接口行为、数据契约、子级结构、测试命令和外部权限均不变，只是验证发现完成原验收项所需的精确文件在方案中漏列，则使用 `remediate_task` 在原 Task 下追加验证修正。原 baseline、graph definition 和 `development-plan.md` 保持不变，补充文件、原因和证据进入 SQLite 审计链以及开发复核/验收报告；控制器沿显式图边失效必要后继、依赖消费者和聚合 gate，再从新 attempt 重新执行。此类反馈仍是原需求，不新建根 Task，也不重新请求开发方式。
 
 ## 契约变化或新目标
 
@@ -21,4 +21,4 @@ Agent 为变化后的完整需求重新起草一个可评审的 `development-pla
 
 ## 已完成需求
 
-已 `COMPLETED` 的需求保持终态和证据不变。后续改动使用新的需求根；可以在说明中引用原需求，但不能原地重写原记录。`remediate-task` 会机械拒绝已完成需求，不能用验证修正绕过终态。
+已 `COMPLETED` 的需求保持终态和证据不变。后续改动使用新的需求根；可以在说明中引用原需求，但不能原地重写原记录。`remediate_task` 会机械拒绝已完成需求，不能用验证修正绕过终态。

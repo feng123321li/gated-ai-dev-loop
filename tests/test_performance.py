@@ -1,20 +1,17 @@
 from __future__ import annotations
 
-import json
 import multiprocessing
 import tempfile
 import threading
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from io import StringIO
 from pathlib import Path
 from queue import Empty
 from unittest.mock import patch
 
-from hdg.cli import run_cli
 from hdg.errors import GatedLoopError
-from hdg.execution import dispatch_task
+from hdg.execution import dispatch_task, heartbeat_task
 from hdg.fs_safe import atomic_write, exclusive_file_lock
 from hdg.interactions import record_interaction
 from hdg.planning import (
@@ -23,6 +20,7 @@ from hdg.planning import (
     refresh_work_item_projections,
 )
 from hdg.repository import GovernanceRepository, timestamp
+from hdg.timing import timed_stage, timing_session
 
 from .fixtures import hierarchy_definition, task_definition, task_hierarchy
 
@@ -97,36 +95,24 @@ class RuntimePerformanceTests(unittest.TestCase):
         self.assertEqual(fsync.call_count, 1)
         self.assertEqual(second_identity, first_identity)
 
-    def test_heartbeat_uses_incremental_projection_and_reports_timing_to_stderr(self) -> None:
+    def test_heartbeat_uses_incremental_projection_and_collects_mcp_timing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             prepared = self._prepare_claimed(temporary)
-            stdout = StringIO()
-            stderr = StringIO()
+            with timing_session(
+                command="heartbeat_task",
+                enabled=True,
+            ) as collector:
+                with timed_stage("mcp.tool_call"):
+                    result = heartbeat_task(
+                        root=temporary,
+                        item_id=str(prepared["rootId"]),
+                        operation_id="op-performance",
+                    )
 
-            exit_code = run_cli(
-                [
-                    "heartbeat-task",
-                    "--item",
-                    str(prepared["rootId"]),
-                    "--operation",
-                    "op-performance",
-                    "--timing",
-                ],
-                cwd=temporary,
-                stdout=stdout,
-                stderr=stderr,
-            )
-
-            self.assertEqual(exit_code, 0)
-            self.assertEqual(json.loads(stdout.getvalue())["id"], prepared["rootId"])
-            timing_lines = [
-                line.removeprefix("HDG_TIMING ")
-                for line in stderr.getvalue().splitlines()
-                if line.startswith("HDG_TIMING ")
-            ]
-            self.assertEqual(len(timing_lines), 1)
-            timing = json.loads(timing_lines[0])
-            self.assertEqual(timing["command"], "heartbeat-task")
+            self.assertEqual(result["id"], prepared["rootId"])
+            assert collector is not None
+            timing = collector.result(ok=True)
+            self.assertEqual(timing["command"], "heartbeat_task")
             self.assertTrue(timing["ok"])
             self.assertEqual(timing["metrics"]["projectionMode"], "heartbeat")
             self.assertEqual(timing["metrics"]["registryRowsUpdated"], 1)
@@ -134,7 +120,7 @@ class RuntimePerformanceTests(unittest.TestCase):
             self.assertIn("sqlite.lockWait", stage_names)
             self.assertIn("sqlite.commit", stage_names)
             self.assertIn("projection.heartbeat", stage_names)
-            self.assertIn("command.execute", stage_names)
+            self.assertIn("mcp.tool_call", stage_names)
             self.assertGreaterEqual(timing["totalMs"], 0)
 
     def test_projection_retries_with_the_latest_revision_after_a_concurrent_commit(self) -> None:

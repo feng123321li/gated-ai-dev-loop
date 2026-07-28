@@ -2,7 +2,7 @@
 
 > 面向项目使用者、技术负责人和贡献者的公开说明。
 
-`layered-delivery` 是一个面向 AI Agent 软件开发的分层交付治理 Skill。它把自然语言需求变成可评审的交付层级，再由 Python 控制器编译成可执行、可恢复、可审计的交付图。
+`layered-delivery` 是一个面向 AI Agent 软件开发的分层交付治理 Plugin，内含一个 Skill 和一个本地 stdio MCP Server。它把自然语言需求变成可评审的交付层级，再由 Python 控制器编译成可执行、可恢复、可审计的交付图。
 
 它不是通用工作流平台，也不是让用户手工画图的 Agent 编排器。用户评审的是需求层级和开发方案；控制器负责生成图、计算下一步、验证门禁并记录运行事实。
 
@@ -132,14 +132,14 @@ Task 内部仍然运行原有 Loop：理解冻结上下文 → 实现 → 测试
 
 ## 6. 图是怎样生成的
 
-用户通过 schema v3 提交完整嵌套层级。`prepare-hierarchy` 完成四件事：
+用户通过 schema v3 提交完整嵌套层级。MCP `prepare_hierarchy` 完成四件事：
 
 1. 校验层级、合同、依赖、波次、scope 和精确文件计划；
 2. 生成可供人评审的 `development-plan.md`；
 3. 确定性编译 Delivery Graph；
 4. 分别计算层级指纹和图指纹。
 
-`freeze-hierarchy` 用同一次用户确认冻结整棵层级和编译结果。冻结后，Graph 会在每次状态迁移后重新计算目标 Agent 数、并行组和稳定派发顺序，但不能新增节点、改写依赖或跳过门禁。这些瞬时调度计划不进入图指纹。
+`freeze_hierarchy` 用同一次用户确认冻结整棵层级和编译结果。冻结后，Graph 会在每次状态迁移后重新计算目标 Agent 数、并行组和稳定派发顺序，但不能新增节点、改写依赖或跳过门禁。这些瞬时调度计划不进入图指纹。
 
 这就是“层级由用户评审，图由控制器编译”。
 
@@ -149,7 +149,7 @@ Task 内部仍然运行原有 Loop：理解冻结上下文 → 实现 → 测试
 
 frontier 不只是“下一批 Task”。它同时返回 `dispatchPlan`、当前关键路径、下一个汇聚点、可执行动作、并行组和结构化阻断原因。`dispatchPlan` 给出完整安全 Task 顺序、目标新增/活动/总 Agent 数，并明确禁止执行平台选择子集；平台容量不足时只按原顺序排队。控制器把这些内容生成双语 `frontier.md` 看板。关键路径按冻结 DAG 中距离完成最远的未完成路径计算，随着事件推进自动变化，不修改图定义。
 
-`graph-frontier` 可能返回以下结构化动作：
+`graph_frontier` 可能返回以下结构化动作：
 
 | 动作 | 含义 |
 |---|---|
@@ -161,7 +161,7 @@ frontier 不只是“下一批 Task”。它同时返回 `dispatchPlan`、当前
 | `ADVANCE_GRAPH` | Task claim 已硬过期，确定性回收并按预算进入新 attempt |
 | `RESUME_TASK` | Task 已显式暂停，可以恢复同一 attempt |
 
-`ready-tasks` 仍然保留，但它现在是 graph frontier 中 `DISPATCH_TASK` 动作的兼容投影，不再是另一套调度算法。
+`ready_tasks` 仍然保留，但它现在是 graph frontier 中 `DISPATCH_TASK` 动作的兼容投影，不再是另一套调度算法。
 
 ### 7.1 自动 Agent 调度
 
@@ -227,10 +227,10 @@ stateDiagram-v2
 图定义是冻结合同，attempt 是运行事实。
 
 - `RETRYABLE` Task 失败在 3 次总尝试预算内自动创建新的 attempt；第三次仍失败写入 `RETRY_EXHAUSTED`；
-- claim 使用 30 分钟租约和心跳；硬过期后 frontier 返回 `ADVANCE_GRAPH`，执行循环调用 `advance-graph` 把过期执行判为 `WORKER_LOST`，再按相同预算和全新 operation 自动恢复，不要求人工重置；
+- claim 使用 30 分钟租约和心跳；硬过期后 frontier 返回 `ADVANCE_GRAPH`，执行循环调用 `advance_graph` 把过期执行判为 `WORKER_LOST`，再按相同预算和全新 operation 自动恢复，不要求人工重置；
 - `CONTRACT_CHANGE`、`EXTERNAL_AUTHORITY`、`NON_RETRYABLE` 与 `REMEDIATION_REQUIRED` 不自动重跑，而是进入评审、授权、干预或修正路由；
-- `retry-item` 保留给符合条件的门禁或显式人工恢复，不修改冻结图，并受当前节点的 3 次 attempt 预算约束；Task gate 失败时同时重开 execution 与 gate attempt，协调节点 gate 只重开自身；
-- `remediate-task` 只允许在原目标和验收合同不变时，为原 Task 追加遗漏的精确文件；
+- `retry_item` 保留给符合条件的门禁或显式人工恢复，不修改冻结图，并受当前节点的 3 次 attempt 预算约束；Task gate 失败时同时重开 execution 与 gate attempt，协调节点 gate 只重开自身；
+- `remediate_task` 只允许在原目标和验收合同不变时，为原 Task 追加遗漏的精确文件；
 - remediation 从被修正 Task 的 execution 节点沿显式边计算下游闭包；
 - 已完成的依赖消费者、聚合 gate、根审查和确认会失效并重新运行；
 - 若失效范围内存在活动 claim，控制器拒绝传播，避免并发双写；
@@ -259,7 +259,7 @@ stateDiagram-v2
 
 每条事件保存 `graphFingerprint` 和前序哈希，读取时重新校验事件链。凡是由 Task 结果、gate、review、confirmation 或 remediation artifact 驱动的事件，控制器都会保存一份 bound evidence，将原 artifact 直接绑定到 `runId/nodeId/attempt/graphFingerprint`，并对绑定整体再次计算 SHA-256。证据因此不能被静默挪用到另一次运行、另一个节点或另一个 attempt。
 
-`graph-replay` 从 `GRAPH_RUN_STARTED` 开始顺序应用完整事件，重建每一次 node attempt、READY/PENDING 推导、claim、结果、失效传播和最终图状态，并输出 `replayFingerprint`。正常查询发现回放结果与快照不一致时会阻断；确认只是快照损坏后，可用 `rebuild-graph-run --confirmed` 从事件链重建快照，而不是猜测或改写历史事件。
+`graph_replay` 从 `GRAPH_RUN_STARTED` 开始顺序应用完整事件，重建每一次 node attempt、READY/PENDING 推导、claim、结果、失效传播和最终图状态，并输出 `replayFingerprint`。正常查询发现回放结果与快照不一致时会阻断；用户确认只是快照损坏后，调用需要宿主人工批准的 MCP `rebuild_graph_run` 从事件链重建快照，而不是猜测或改写历史事件。
 
 ## 10. SQLite 与可读文件
 
@@ -312,66 +312,52 @@ Markdown 只是可由 SQLite 与控制器当前 schema v3 runtime 策略重建�
 - 工作区级与需求级 `assets/*.svg` 都使用 Python 标准库确定性生成，不依赖查看器支持 Mermaid，并可随 Markdown 一起重建；
 - `frontier.md` 展示中文 / English 的自动 Agent 调度计划与流程图、关键路径图、下一个汇聚点、迁移、尝试预算、建议动作和阻断表；
 - `run-timeline.md` 展示当前节点 attempt、状态、owner、租约、失败分类和事件；
-- 删除 Markdown 不会删除机器状态，`refresh-projections` 可以从 SQLite 与共享 runtime 策略重建。
+- 删除 Markdown 不会删除机器状态，MCP `refresh_projections` 可以从 SQLite 与共享 runtime 策略重建。
 
 ## 11. 怎么使用
 
-所有命令中的 `<skill-root>` 都是宿主无关的逻辑占位符，由执行适配器从当前已加载 Skill 的元数据解析。不得根据用户名、用户主目录、`.claude`、`.codex` 或操作系统猜测安装位置，也不得把解析后的本机绝对路径写进 handoff、冻结方案或治理状态。控制器从项目根目录运行；具体 shell 只负责把 stdin/stdout/stderr 可靠连接到进程，不改变治理协议。
+所有治理交互都通过 Plugin MCP 的 snake_case 工具完成。任意 Agent 在开发、认领 Task 或恢复 frozen graph 前，必须先完成 MCP 初始化握手和工具注册；失败时停止且不写治理状态。工具直接接收结构化参数并返回结构化结果，不依赖 Skill 安装路径、Shell 或临时文件。
 
 ### 11.1 新需求
 
 ```text
-prepare-hierarchy
+prepare_hierarchy
 → 评审需求级 development-plan.md、execution-graph.md 与工作区级 state-transition-graph.md
 → 选择 active 或 manual
-→ freeze-hierarchy
-→ graph-frontier / 读取 dispatchPlan / 自动 dispatch-task
-→ task-result
-→ accept-item
-→ acceptance-item
+→ freeze_hierarchy
+→ graph_frontier / 读取 dispatchPlan / 自动 dispatch_task
+→ task_result
+→ accept_item
+→ record_user_confirmation
 → USER_CONFIRMED / COMPLETED
 ```
 
 ### 11.2 查看当前图
 
-```text
-python -X utf8 <skill-root>/scripts/hdg.py graph-status --item <root-or-subtree-id> --json
-python -X utf8 <skill-root>/scripts/hdg.py graph-frontier --item <root-or-subtree-id> --json
-python -X utf8 <skill-root>/scripts/hdg.py graph-events --item <root-or-subtree-id> --json
-python -X utf8 <skill-root>/scripts/hdg.py graph-replay --item <root-or-subtree-id> --json
-python -X utf8 <skill-root>/scripts/hdg.py advance-graph --item <root-or-subtree-id> --json
-```
+通过 Plugin MCP 调用 `graph_status`、`graph_frontier`、`graph_events`、`graph_replay` 和 `advance_graph`。直接消费结构化 tool result，不通过临时文件中转。MCP 错误时保留结构化错误并停止；manual 接收会话从 `graph_frontier` 恢复，`task_context` 只是未认领 Task 的诊断预览，不会授权执行。
 
-这些只读查询的 JSON 应直接从 stdout 消费，不通过临时文件中转。生产者非零退出时先保留 stderr 并停止解析，不能继续对空 stdout 调用 JSON 解析器。manual 接收会话从 `graph-frontier` 恢复；`task-context` 只是未认领 Task 的诊断预览，不会授权执行。
+`graph_frontier` 和 Task context 只携带紧凑的 `evidenceContractRef`。需要提交 gate、remediation、review 或 confirmation evidence 时，调用 MCP `evidence_contract`，由控制器从 `governance.sqlite3` 按需返回一个当前模板及精确 acceptance IDs、test argv 和有效授权文件。这样不需要读取控制器源码或 memory 文件，也不会把整棵树的 schema 模板重复塞入上下文。
 
-`graph-frontier` 和 Task context 只携带紧凑的 `evidenceContractRef`。需要提交 gate、remediation、review 或 confirmation evidence 时，执行 `evidence-contract --item <id> --kind <kind> --json`，由控制器从 `governance.sqlite3` 按需返回一个当前模板及精确 acceptance IDs、test argv 和有效授权文件。这样不需要读取控制器源码或 memory 文件，也不会把整棵树的 schema 模板重复塞入上下文。
+- `graph_status`：查看全部节点、边、attempt 和运行状态；
+- `graph_frontier`：查看当前允许的动作、自动 Agent 调度计划及阻断原因；
+- `graph_events`：查看可校验的运行事件链和 evidence binding；
+- `graph_replay`：从事件重算完整状态并检查 graph/node run 快照一致性。
+- `advance_graph`：执行可机械判定的自动路由，当前包括 claim 过期后的失联恢复。
 
-- `graph-status`：查看全部节点、边、attempt 和运行状态；
-- `graph-frontier`：查看当前允许的动作、自动 Agent 调度计划及阻断原因；
-- `graph-events`：查看可校验的运行事件链和 evidence binding；
-- `graph-replay`：从事件重算完整状态并检查 graph/node run 快照一致性。
-- `advance-graph`：执行可机械判定的自动路由，当前包括 claim 过期后的失联恢复。
-
-活动 Task 的运行控制命令为：
+活动 Task 的 MCP 运行控制工具为：
 
 ```text
-heartbeat-task --item <task-id> --operation <id>
-pause-task --item <task-id> --operation <id>
-resume-task --item <task-id>
-cancel-graph-run --item <root-id> --confirmed
+heartbeat_task
+pause_task
+resume_task
+cancel_graph_run
 ```
 
 ### 11.3 恢复中断工作
 
-从 SQLite 读取当前需求，先查询 `graph-replay` 验证事件链与快照，再查询 `graph-frontier` 继续返回的结构化动作。不要重新准备、重新冻结，也不要通过 Markdown 猜测状态。
+从 SQLite 读取当前需求，先查询 `graph_replay` 验证事件链与快照，再查询 `graph_frontier` 继续返回的结构化动作。不要重新准备、重新冻结，也不要通过 Markdown 猜测状态。
 
-只有 `graph-replay` 报告事件回放有效但快照不一致，并且操作者已经确认恢复目标时，才运行：
-
-```text
-python -X utf8 <skill-root>/scripts/hdg.py rebuild-graph-run --item <root-id> --confirmed --json
-```
-
-该命令只重建 `graph_runs/node_runs`，不改写冻结图、事件链或 evidence，并记录一次恢复审计事件。
+只有 `graph_replay` 报告事件回放有效但快照不一致，并且操作者已经确认恢复目标时，才调用 MCP `rebuild_graph_run`。该工具只重建 `graph_runs/node_runs`，不改写冻结图、事件链或 evidence，并记录一次恢复审计事件。
 
 ## 12. active 与 manual
 
@@ -405,10 +391,12 @@ src/hdg/
 ├── execution.py             # Task 派发、上下文和结果写回
 ├── acceptance.py            # gate、review 与 confirmation
 ├── remediation.py           # 同合同修正与图失效传播
-└── cli.py                   # Python CLI
+├── operations.py            # MCP 工具共享的应用服务入口
+├── mcp_tools.py             # MCP 工具 schema 与参数门禁
+└── mcp_server.py            # Plugin stdio MCP Server
 ```
 
-`scripts/build_skill.py` 会把 `src/hdg` 重建到 `skills/layered-delivery/scripts/hdg`，保证安装后的 Skill 自包含。
+`scripts/build_skill.py` 会把 MCP 运行时从 `src/hdg` 重建到 `skills/layered-delivery/scripts/hdg`，再生成 Claude/Codex Plugin 载荷。产物不包含 CLI 模块或入口。
 
 ## 15. 项目边界
 

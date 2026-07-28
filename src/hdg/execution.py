@@ -84,10 +84,13 @@ def _lease_policy(item_id: str, claim: dict[str, str]) -> dict[str, Any]:
             DEFAULT_CLAIM_GRACE_SECONDS,
         ),
         "responsibleParty": "EXECUTION_ADAPTER",
-        "commandHint": (
-            f"heartbeat-task --item {item_id} "
-            f"--operation {claim['operationId']}"
-        ),
+        "mcpCall": {
+            "tool": "heartbeat_task",
+            "arguments": {
+                "item_id": item_id,
+                "operation_id": claim["operationId"],
+            },
+        },
     }
 
 

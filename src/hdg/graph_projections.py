@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .jsonio import fingerprint
@@ -28,6 +29,35 @@ STATE_LABELS = {
     "CANCELLED": "取消 / Cancelled",
     "COMPLETED": "完成 / Completed",
 }
+
+
+def _render_mcp_call(value: object) -> str:
+    if not isinstance(value, dict):
+        return "-"
+    tool = value.get("tool")
+    arguments = value.get("arguments")
+    if not isinstance(tool, str) or not isinstance(arguments, dict):
+        return "-"
+    serialized = json.dumps(
+        arguments,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"{tool}({serialized})"
+
+
+def _render_mcp_calls(record: object) -> str:
+    if not isinstance(record, dict):
+        return "-"
+    calls: list[object] = []
+    if "mcpCall" in record:
+        calls.append(record["mcpCall"])
+    options = record.get("mcpCallOptions")
+    if isinstance(options, list):
+        calls.extend(options)
+    rendered = [_render_mcp_call(call) for call in calls]
+    return "; ".join(item for item in rendered if item != "-") or "-"
 
 
 def _mermaid(graph: dict[str, Any], plane: str) -> list[str]:
@@ -357,10 +387,11 @@ def render_frontier_dashboard(
         "",
         "## 执行中与心跳计划 / In Flight and Heartbeat Schedule",
         "",
-        "| 节点 / Node | 工作项 / Work item | Operation | 状态 / Status | 心跳到期 / Heartbeat due | 租约到期 / Lease expires | 硬到期 / Hard expires | 计划动作 / Scheduled action | 命令提示 / Command hint |",
+        "| 节点 / Node | 工作项 / Work item | Operation | 状态 / Status | 心跳到期 / Heartbeat due | 租约到期 / Lease expires | 硬到期 / Hard expires | 计划动作 / Scheduled action | MCP 调用 / MCP call |",
         "|---|---|---|---|---|---|---|---|---|",
     ])
     for active in frontier.get("inFlight", []):
+        active_mcp_calls = _render_mcp_calls(active).replace("|", "\\|")
         lines.append(
             f"| `{active['nodeId']}` | `{active['workItemId']}` | "
             f"`{active.get('operationId') or '-'}` | "
@@ -369,7 +400,7 @@ def render_frontier_dashboard(
             f"{active.get('leaseExpiresAt') or '-'} | "
             f"{active.get('hardExpiresAt') or '-'} | "
             f"`{active.get('scheduledAction') or '-'}` | "
-            f"`{active.get('commandHint') or '-'}` |"
+            f"`{active_mcp_calls}` |"
         )
     if not frontier.get("inFlight"):
         lines.append("| - | - | - | - | - | - | - | - | - |")
@@ -399,21 +430,23 @@ def render_frontier_dashboard(
     lines.extend([
         "## 可执行动作 / Actionable Actions",
         "",
-        "| 节点 / Node | 动作 / Action | 迁移 / Transition | 路由 / Route | 工作项 / Work item | 尝试预算 / Attempt budget | 并行组 / Parallel group | 关键 / Critical | 就绪原因 / Ready because | Required Skills | 命令提示 / Command hint | Evidence contract |",
+        "| 节点 / Node | 动作 / Action | 迁移 / Transition | 路由 / Route | 工作项 / Work item | 尝试预算 / Attempt budget | 并行组 / Parallel group | 关键 / Critical | 就绪原因 / Ready because | Required Skills | MCP 调用 / MCP call | Evidence contract |",
         "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ])
     for action in frontier["actions"]:
         reasons = ", ".join(action["readyBecause"]).replace("|", "\\|")
-        hint = action["commandHint"].replace("|", "\\|")
+        mcp_calls = _render_mcp_calls(action).replace("|", "\\|")
         contract_hints = [
-            reference["commandHint"]
+            _render_mcp_calls(reference)
             for reference in (
                 action.get("evidenceContractRef"),
                 action.get("remediationContractRef"),
             )
-            if isinstance(reference, dict) and reference.get("commandHint")
+            if isinstance(reference, dict)
         ]
-        contract_hint = ("; ".join(contract_hints) or "-").replace("|", "\\|")
+        contract_hint = (
+            "; ".join(item for item in contract_hints if item != "-") or "-"
+        ).replace("|", "\\|")
         required_skills = ", ".join(
             f"{item['name']}@{item['stage']}"
             for item in action.get("requiredSkills", [])
@@ -425,7 +458,7 @@ def render_frontier_dashboard(
             f"(剩余 / remaining {action.get('remainingAttempts', '-')}) | "
             f"`{action['parallelGroup'] or '-'}` | "
             f"{'是 / Yes' if action['critical'] else '否 / No'} | {reasons} | "
-            f"`{required_skills}` | `{hint}` | `{contract_hint}` |"
+            f"`{required_skills}` | `{mcp_calls}` | `{contract_hint}` |"
         )
     if not frontier["actions"]:
         lines.append("| - | - | - | - | - | - | - | - | 无 / None | - | - | - |")
@@ -434,15 +467,15 @@ def render_frontier_dashboard(
         "",
         "## 阻断节点 / Blocked Nodes",
         "",
-        "| 节点 / Node | 类型 / Kind | 工作项 / Work item | 状态 / Status | 尝试 / Attempt | 失败分类 / Failure class | 剩余尝试 / Remaining | 建议动作 / Recommended | 最近迁移 / Last transition | 阻断原因 / Blocked by | Evidence contract |",
-        "|---|---|---|---|---:|---|---:|---|---|---|---|",
+        "| 节点 / Node | 类型 / Kind | 工作项 / Work item | 状态 / Status | 尝试 / Attempt | 失败分类 / Failure class | 剩余尝试 / Remaining | 建议动作 / Recommended | MCP 调用 / MCP call | 最近迁移 / Last transition | 阻断原因 / Blocked by | Evidence contract |",
+        "|---|---|---|---|---:|---|---:|---|---|---|---|---|",
     ])
     for blocked in frontier["blocked"]:
         reasons = ", ".join(blocked["blockedBy"]).replace("|", "\\|")
         kind = NODE_LABELS.get(blocked["nodeKind"], "-")
-        contract_hint = (
-            (blocked.get("evidenceContractRef") or {}).get("commandHint")
-            or "-"
+        mcp_calls = _render_mcp_calls(blocked).replace("|", "\\|")
+        contract_hint = _render_mcp_calls(
+            blocked.get("evidenceContractRef")
         ).replace("|", "\\|")
         lines.append(
             f"| `{blocked['nodeId'] or '-'}` | {kind} | `{blocked['workItemId']}` | "
@@ -450,9 +483,10 @@ def render_frontier_dashboard(
             f"`{blocked.get('failureClass') or '-'}` | "
             f"{blocked.get('remainingAttempts') if blocked.get('remainingAttempts') is not None else '-'} | "
             f"`{blocked.get('recommendedAction') or '-'}` | "
+            f"`{mcp_calls}` | "
             f"`{blocked.get('lastTransition') or '-'}` | {reasons} | "
             f"`{contract_hint}` |"
         )
     if not frontier["blocked"]:
-        lines.append("| - | - | - | - | - | - | - | - | - | 无 / None | - |")
+        lines.append("| - | - | - | - | - | - | - | - | - | - | 无 / None | - |")
     return "\n".join(lines) + "\n"

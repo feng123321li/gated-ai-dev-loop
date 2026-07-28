@@ -8,7 +8,7 @@
 - Capability：额外包含 `parentId`、`decomposition.status/dependsOn`、Task `children` 和协调层开发计划。
 - Task：额外包含 `parentId`、`execution {dependsOn, inputs, outputs}` 和精确文件/接口开发计划。
 
-`gateLevel` 只能是 `LIGHT|FULL`，且只有 Task 可以为 `LIGHT`。Task 冻结时的 `fileChanges` 必须是 scope 内精确相对路径；协调层 `childPlans`、依赖、波次、R/A 和测试映射必须覆盖全部直接子级。验证阶段发现原验收项所需文件漏列时，`remediate-task` 以追加审计方式形成补充授权，不改写 baseline 或冻结方案。
+`gateLevel` 只能是 `LIGHT|FULL`，且只有 Task 可以为 `LIGHT`。Task 冻结时的 `fileChanges` 必须是 scope 内精确相对路径；协调层 `childPlans`、依赖、波次、R/A 和测试映射必须覆盖全部直接子级。验证阶段发现原验收项所需文件漏列时，`remediate_task` 以追加审计方式形成补充授权，不改写 baseline 或冻结方案。
 
 `requiredSkills` 可省略或使用空数组，两者都规范化为 `[]` 且不触发 Skill 门禁；非空时每项精确包含 `name/stages/purpose`。`name` 可使用需求指定的任意可移植 Skill catalog 名（允许插件命名空间中的 `:`），控制器没有 Skill 白名单；不含 `/skill`、`$skill` 等宿主调用前缀。`stages` 只能从 `DEVELOPMENT|GATE|FINAL_REVIEW` 选择，`FINAL_REVIEW` 只允许在需求根声明。祖先声明对子树只增不减，同一 Skill/阶段的多级目的会在运行上下文聚合；规范化后的数组进入 baseline、父契约、层级和图指纹，冻结后不能由重试或验证修正取消。
 
@@ -43,11 +43,11 @@
 
 ## 准备与统一冻结
 
-1. `prepare-hierarchy` 校验完整 definition，计算各节点 baseline 指纹和一个绑定整树结构的 `hierarchyFingerprint`。
+1. MCP `prepare_hierarchy` 校验完整 definition，计算各节点 baseline 指纹和一个绑定整树结构的 `hierarchyFingerprint`。
 2. 完整 definition、层级和节点状态写入项目级 SQLite；一个需求只生成 `work-items/<root-id>/` 一个 Markdown 顶层目录，后代按 `children/<id>/` 递归嵌套。
 3. 每个节点目录都写入自己的 `development-plan.md`；根级同名文件额外聚合整棵树，是唯一人工冻结评审入口。
-4. 用户评审当前文件并选择 active/manual，不抄写 SHA256。Agent 使用准备结果里的层级指纹和所选方式调用 `freeze-hierarchy`。
-5. `freeze-hierarchy` 重新验证层级、所有节点包和根计划文件，然后用同一次确认记录根级方式并冻结全部节点。
+4. 用户评审当前文件并选择 active/manual，不抄写 SHA256。Agent 使用准备结果里的层级指纹和所选方式调用 MCP `freeze_hierarchy`。
+5. `freeze_hierarchy` 重新验证层级、所有节点包和根计划文件，然后用同一次确认记录根级方式并冻结全部节点。
 
 等待评审时可以用同一根 ID 重新准备整棵树；新层级指纹使旧确认自动失效。冻结后的拓扑不可用单节点命令改写。
 
@@ -69,7 +69,7 @@
 - `development-review.md`：开发结果写回后；对照计划与实际，不代表门禁 PASS。
 - `acceptance-report.md`：门禁及最终验收阶段；记录证据、结论和用户确认。
 
-以上文件都是 SQLite 结构化状态的人类投影，不再生成对应 JSON 文件。开发结果、门禁和最终验收的完整证据 artifact 只通过 stdin 进入控制器，由控制器在当前写事务内校验、计算规范 JSON 摘要，并将 artifact 与摘要一起存入 SQLite。
+以上文件都是 SQLite 结构化状态的人类投影，不再生成对应 JSON 文件。开发结果、门禁和最终验收的完整证据 artifact 只通过 MCP 结构化参数进入控制器，由控制器在当前写事务内校验、计算规范 JSON 摘要，并将 artifact 与摘要一起存入 SQLite。
 
 ## 当前数据契约
 

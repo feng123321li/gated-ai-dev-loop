@@ -27,7 +27,7 @@ Capability 可以是根，也可以从 Delivery 子契约派生。每个 Capabil
 - 有 Delivery 父级时可以声明同 Delivery Capability 的 `dependsOn`，并保证无环；
 - 用 `OPEN` 表示仍在拆分，用 `SEALED` 明确当前子项集合已封口；
 - 在开发评审中逐项展示 Task 目的/交付物、跨 Task 接口或共享契约、集成流程、波次和测试映射；
-- 全部 Task 必须与 Capability 在同一次 `prepare-hierarchy` 中物化和评审。
+- 全部 Task 必须与 Capability 在同一次 `prepare_hierarchy` 中物化和评审。
 
 ## Task 拆分
 

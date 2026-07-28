@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import io
 import json
 import sqlite3
 import tempfile
@@ -11,7 +10,6 @@ from copy import deepcopy
 from pathlib import Path
 
 from hdg.acceptance import accept_work_item, record_acceptance
-from hdg.cli import run_cli
 from hdg.errors import GatedLoopError
 from hdg.evidence import evidence_record, valid_gate_artifact
 from hdg.execution import dispatch_task, record_task_result
@@ -368,24 +366,42 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                 dispatched["evidenceContractRefs"]["result"],
                 {
                     "artifactKind": "TASK_RESULT",
-                    "commandHint": (
-                        f"evidence-contract --item {task_id} --kind result"
-                    ),
+                    "mcpCall": {
+                        "tool": "evidence_contract",
+                        "arguments": {
+                            "item_id": task_id,
+                            "contract_kind": "result",
+                        },
+                    },
                 },
             )
             self.assertNotIn(
                 '"kind": "TASK_RESULT"',
                 dispatched["handoffPrompt"],
             )
+            self.assertNotIn("evidence-contract --item", dispatched["handoffPrompt"])
             self.assertIn(
-                f"evidence-contract --item {task_id} --kind result",
+                '"tool": "evidence_contract"',
                 dispatched["handoffPrompt"],
             )
-            result_contract = get_evidence_contract(
+            result_contract_response = get_evidence_contract(
                 root=temporary,
                 work_item_id=task_id,
                 contract_kind="result",
-            )["evidenceContract"]
+            )
+            self.assertEqual(
+                result_contract_response["submitMcpCalls"],
+                [{
+                    "tool": "task_result",
+                    "arguments": {
+                        "item_id": task_id,
+                        "operation_id": "op-graph",
+                        "status": "<IMPLEMENTED_OR_BLOCKED>",
+                        "evidence": "<evidence>",
+                    },
+                }],
+            )
+            result_contract = result_contract_response["evidenceContract"]
             self.assertEqual(result_contract["artifactKind"], "TASK_RESULT")
             self.assertEqual(result_contract["operationId"], "op-graph")
             self.assertEqual(len(result_contract["exactTopLevelKeys"]), 10)
@@ -454,14 +470,31 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                 gate_action["evidenceContractRef"],
                 {
                     "artifactKind": "WORK_ITEM_GATE",
-                    "commandHint": f"evidence-contract --item {task_id} --kind gate",
+                    "mcpCall": {
+                        "tool": "evidence_contract",
+                        "arguments": {
+                            "item_id": task_id,
+                            "contract_kind": "gate",
+                        },
+                    },
                 },
             )
-            gate_contract = get_evidence_contract(
+            gate_contract_response = get_evidence_contract(
                 root=temporary,
                 work_item_id=task_id,
                 contract_kind="gate",
-            )["evidenceContract"]
+            )
+            self.assertEqual(
+                gate_contract_response["submitMcpCalls"],
+                [{
+                    "tool": "accept_item",
+                    "arguments": {
+                        "item_id": task_id,
+                        "evidence": "<evidence>",
+                    },
+                }],
+            )
+            gate_contract = gate_contract_response["evidenceContract"]
             self.assertEqual(gate_contract["artifactKind"], "WORK_ITEM_GATE")
             self.assertEqual(len(gate_contract["exactTopLevelKeys"]), 10)
             self.assertEqual(
@@ -527,33 +560,58 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
             )["actions"][0]
             self.assertEqual(review_action["action"], "REQUEST_REVIEW")
             self.assertEqual(
-                review_action["evidenceContractRef"]["commandHint"],
-                f"evidence-contract --item {task_id} --kind review",
+                review_action["evidenceContractRef"]["mcpCall"],
+                {
+                    "tool": "evidence_contract",
+                    "arguments": {
+                        "item_id": task_id,
+                        "contract_kind": "review",
+                    },
+                },
             )
             self.assertEqual(
                 review_action["remediationContractRef"],
                 {
                     "artifactKind": "VALIDATION_REMEDIATION",
-                    "commandHint": (
-                        "evidence-contract --item <original-task-id> "
-                        "--kind remediation"
-                    ),
+                    "mcpCall": {
+                        "tool": "evidence_contract",
+                        "arguments": {
+                            "item_id": "<original-task-id>",
+                            "contract_kind": "remediation",
+                        },
+                    },
                 },
             )
-            review_contract = get_evidence_contract(
+            review_contract_response = get_evidence_contract(
                 root=temporary,
                 work_item_id=task_id,
                 contract_kind="review",
-            )["evidenceContract"]
+            )
+            self.assertEqual(
+                {
+                    call["tool"]
+                    for call in review_contract_response["submitMcpCalls"]
+                },
+                {
+                    "record_independent_review_pass",
+                    "record_human_review_acceptance",
+                },
+            )
+            review_contract = review_contract_response["evidenceContract"]
             self.assertEqual(
                 set(review_contract["actionOptions"]),
                 {"INDEPENDENT_REVIEW_PASS", "HUMAN_REVIEW_ACCEPTED"},
             )
-            remediation_contract = get_evidence_contract(
+            remediation_contract_response = get_evidence_contract(
                 root=temporary,
                 work_item_id=task_id,
                 contract_kind="remediation",
-            )["evidenceContract"]
+            )
+            self.assertEqual(
+                remediation_contract_response["submitMcpCalls"][0]["tool"],
+                "remediate_task",
+            )
+            remediation_contract = remediation_contract_response["evidenceContract"]
             self.assertEqual(
                 remediation_contract["constraints"]["acceptanceIds"],
                 ["A-001"],
@@ -583,12 +641,23 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                 confirmation_action["action"],
                 "REQUEST_USER_CONFIRMATION",
             )
+            confirmation_contract = get_evidence_contract(
+                root=temporary,
+                work_item_id=task_id,
+                contract_kind="confirmation",
+            )
             self.assertEqual(
-                get_evidence_contract(
-                    root=temporary,
-                    work_item_id=task_id,
-                    contract_kind="confirmation",
-                )["evidenceContract"]["artifactTemplate"],
+                confirmation_contract["submitMcpCalls"],
+                [{
+                    "tool": "record_user_confirmation",
+                    "arguments": {
+                        "item_id": task_id,
+                        "evidence": "<evidence>",
+                    },
+                }],
+            )
+            self.assertEqual(
+                confirmation_contract["evidenceContract"]["artifactTemplate"],
                 {
                     "schemaVersion": 3,
                     "kind": "USER_CONFIRMATION",
@@ -925,33 +994,6 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                 get_graph_status(root=temporary, work_item_id=root_id)["run"]["status"],
                 "COMPLETED",
             )
-
-    def test_graph_commands_are_available_through_the_cli(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            prepared = self._prepare_and_freeze(temporary)
-            for command in ("graph-status", "graph-frontier", "graph-events", "graph-replay"):
-                stdout = io.StringIO()
-                stderr = io.StringIO()
-                code = run_cli(
-                    [command, "--item", prepared["rootId"], "--json"],
-                    cwd=temporary,
-                    stdout=stdout,
-                    stderr=stderr,
-                )
-                self.assertEqual(code, 0, stderr.getvalue())
-                self.assertTrue(json.loads(stdout.getvalue())["ok"])
-
-            stdout = io.StringIO()
-            stderr = io.StringIO()
-            code = run_cli(
-                ["rebuild-graph-run", "--item", prepared["rootId"], "--confirmed", "--json"],
-                cwd=temporary,
-                stdout=stdout,
-                stderr=stderr,
-            )
-            self.assertEqual(code, 0, stderr.getvalue())
-            self.assertTrue(json.loads(stdout.getvalue())["ok"])
-
 
 if __name__ == "__main__":
     unittest.main()

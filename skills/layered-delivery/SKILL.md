@@ -2,38 +2,7 @@
 name: layered-delivery
 description: "治理或恢复分层软件交付。当工作区存在 `.layered-delivery/` 时接管现有 SQLite/Graph 运行；无治理状态时，按最浅合法层级规划并推进开发、门禁、审查和验收。"
 allowed-tools:
-  - mcp__plugin_layered-delivery_layered-delivery__workspace_status
-  - mcp__plugin_layered-delivery_layered-delivery__begin_payload_upload
-  - mcp__plugin_layered-delivery_layered-delivery__append_payload_chunk
-  - mcp__plugin_layered-delivery_layered-delivery__finalize_payload_upload
-  - mcp__plugin_layered-delivery_layered-delivery__payload_upload_status
-  - mcp__plugin_layered-delivery_layered-delivery__abort_payload_upload
-  - mcp__plugin_layered-delivery_layered-delivery__prepare_hierarchy
-  - mcp__plugin_layered-delivery_layered-delivery__ready_tasks
-  - mcp__plugin_layered-delivery_layered-delivery__graph_status
-  - mcp__plugin_layered-delivery_layered-delivery__graph_frontier
-  - mcp__plugin_layered-delivery_layered-delivery__graph_events
-  - mcp__plugin_layered-delivery_layered-delivery__graph_replay
-  - mcp__plugin_layered-delivery_layered-delivery__advance_graph
-  - mcp__plugin_layered-delivery_layered-delivery__task_context
-  - mcp__plugin_layered-delivery_layered-delivery__evidence_contract
-  - mcp__plugin_layered-delivery_layered-delivery__record_skill_activation
-  - mcp__plugin_layered-delivery_layered-delivery__record_skill_conformance
-  - mcp__plugin_layered-delivery_layered-delivery__dispatch_task
-  - mcp__plugin_layered-delivery_layered-delivery__heartbeat_task
-  - mcp__plugin_layered-delivery_layered-delivery__pause_task
-  - mcp__plugin_layered-delivery_layered-delivery__resume_task
-  - mcp__plugin_layered-delivery_layered-delivery__claim_task
-  - mcp__plugin_layered-delivery_layered-delivery__task_result
-  - mcp__plugin_layered-delivery_layered-delivery__remediate_task
-  - mcp__plugin_layered-delivery_layered-delivery__retry_item
-  - mcp__plugin_layered-delivery_layered-delivery__gate_item
-  - mcp__plugin_layered-delivery_layered-delivery__accept_item
-  - mcp__plugin_layered-delivery_layered-delivery__record_independent_review_pass
-  - mcp__plugin_layered-delivery_layered-delivery__record_independent_review_blocked
-  - mcp__plugin_layered-delivery_layered-delivery__refresh_projections
-  - mcp__plugin_layered-delivery_layered-delivery__record_interaction
-  - mcp__plugin_layered-delivery_layered-delivery__interaction_log
+  - mcp__plugin_layered-delivery_layered-delivery__*
 ---
 
 # Layered Delivery
@@ -43,10 +12,10 @@ allowed-tools:
 ## 读取原则
 
 - 首次只读取本文件；不得预读全部 references、源码、memory 或整树模板。
-- 首选 Plugin 的单一 stdio MCP Server，不用 Shell 包装。
+- 只使用 Plugin 启动的单一 stdio MCP Server，不用 Shell 包装。
 - Server 固定项目根；工具不接受 `root`、`dogfood` 或 `confirmed`。
-- 仅 MCP 不可用时，从当前 Skill 元数据解析 `<skill-root>`，在项目根运行 `python -X utf8 <skill-root>/scripts/hdg.py --help`；不得固化用户目录、Skill 安装位置或操作系统路径。
-- 以工具 schema 为准；仅真实超限时按 [stdin-transport.md](references/stdin-transport.md) 暂存 payloadRef，再调用原业务工具。CLI 非零退出时停止解析。
+- 任意 Agent 在开发、认领 Task 或恢复 frozen graph 前，必须完成 Plugin MCP 启动、初始化握手和工具注册验证。MCP 未安装、未注册或未连接时立即阻断，报告 `PLUGIN_MCP_UNAVAILABLE`，不得编辑业务代码、启动 Shell/CLI 控制器，也不得开始或恢复治理写入。
+- 以工具 schema 为准；仅真实超限时按 [mcp-transport.md](references/mcp-transport.md) 暂存 payloadRef，再调用原业务工具。
 
 ## 核心契约
 
@@ -63,15 +32,15 @@ allowed-tools:
 
 ## 选择入口
 
-1. MCP 先调用 `workspace_status`，不按文件推断。`ACTIVE`：读取 [workflow.md](references/workflow.md) 和 [stdin-transport.md](references/stdin-transport.md)，再以 `graph_frontier` 恢复。`ABSENT/STAGING_ONLY`：没有可恢复交付。状态错误时阻断。
-2. MCP 不可用才调用 CLI `workspace-status`；不得读取控制器源码或 memory 文件反推格式。
+1. 先确认 Plugin MCP 工具已经注册并可调用，再调用 `workspace_status`，不按文件推断。`ACTIVE`：读取 [workflow.md](references/workflow.md) 和 [mcp-transport.md](references/mcp-transport.md)，再以 `graph_frontier` 恢复。`ABSENT/STAGING_ONLY`：没有可恢复交付。状态错误时阻断。
+2. MCP 缺失、断连或工具注册失败时停止，不得读取控制器源码、memory 文件或治理文件反推格式，也不得切换到 CLI。
 3. 没有可恢复交付时，仅开发新需求才进入流程；只读分析、审查或问答不创建运行包。
 
 恢复优先使用精确 ID、数据库焦点或唯一候选；多个候选才请求选择。Markdown 缺失时使用 `refresh_projections`。
 
 ## 推进流程
 
-1. 新需求读取规划类 references，选择最浅层级并形成完整 schema v3 树；通过 MCP 结构化参数调用 `prepare_hierarchy`，仅 CLI fallback 使用 stdin。
+1. 新需求读取规划类 references，选择最浅层级并形成完整 schema v3 树；通过 MCP 结构化参数调用 `prepare_hierarchy`。
 2. 展示返回的开发方案和图入口，说明范围、契约、依赖、测试与失败路由。每次确认提示都必须同时展示 `active` 和 `manual` 两种开发方式；修改方案时重新准备同一整树。
 3. 用户明确同意方案并选择方式后，使用返回的 `hierarchyFingerprint` 一次调用 `freeze_hierarchy`；MCP 不传 `confirmed` 布尔参数。Claude Code 还须先满足 [claude-automation.md](references/claude-automation.md) 的 tool 级权限前置条件。
 4. 冻结后每次迁移都重新查询 `graph_frontier`，完整消费 `actions` 与 `dispatchPlan`，不自行挑选 Task、排序或确定 Agent 数；`ADVANCE_GRAPH` 是租约硬过期后的确定性自动恢复动作，不请求人工重置。
@@ -87,7 +56,7 @@ allowed-tools:
 - 规划、拆树和冻结方案：[routing-profiles.md](references/routing-profiles.md)、[delivery-planning.md](references/delivery-planning.md)、[development-plan.md](references/development-plan.md)、[baselines.md](references/baselines.md)
 - 执行与恢复：[workflow.md](references/workflow.md)、[graph-engineering.md](references/graph-engineering.md)、[development.md](references/development.md)、[parallel-development.md](references/parallel-development.md)、[registry-lifecycle.md](references/registry-lifecycle.md)
 - gate、审查、最终确认和同契约补充文件：[acceptance.md](references/acceptance.md)、[validation-remediation.md](references/validation-remediation.md)
-- 存储与传输：[task-registry.md](references/task-registry.md)、[registry-transactions.md](references/registry-transactions.md)、[tracking.md](references/tracking.md)、[stdin-transport.md](references/stdin-transport.md)
+- 存储与传输：[task-registry.md](references/task-registry.md)、[registry-transactions.md](references/registry-transactions.md)、[tracking.md](references/tracking.md)、[mcp-transport.md](references/mcp-transport.md)
 - 宿主：[claude-automation.md](references/claude-automation.md)、[codex-automation.md](references/codex-automation.md)；其他：[multi-workspace.md](references/multi-workspace.md)、[post-acceptance-feedback.md](references/post-acceptance-feedback.md)
 
 只读取当前动作需要的一组及其中直接相关文件。

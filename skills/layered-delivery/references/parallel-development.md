@@ -26,7 +26,7 @@ Python 控制器提供统一的 READY、`dispatchPlan`、claim、operationId 和
 
 Graph 执行循环必须按以下方式自动调度：
 
-1. 调用 MCP `graph_frontier` 获取当前结构化动作、`dispatchPlan`、并行组与阻断原因；仅 CLI fallback 使用 `graph-frontier --item <root-id>`；
+1. 调用 MCP `graph_frontier` 获取当前结构化动作、`dispatchPlan`、并行组与阻断原因；
 2. 读取 `dispatchPlan.dispatchTaskIds`、`desiredNewAgentCount` 与 `desiredTotalAgentCount`。这就是本轮完整且有序的自动调度结果，执行适配器不能选择其中一部分；
 3. 为计划中的每个 Task 按顺序预留稳定队列位置，但排队项保持未认领；平台确认某个 worker/Agent 真正取得执行容量后，才生成本 graph run 中从未使用过的 operationId 并执行 `dispatch_task`；
 4. 为已取得执行容量的 Task 启动相互隔离的全新开发 Agent；执行适配器独立按 frontier 的 `nextWakeAt` 唤醒并消费到期的 `HEARTBEAT_TASK`，没有独立适配器时由当前 Agent 承担续租，没有子 Agent 能力时由当前 Agent 顺序消费同一调度合同；

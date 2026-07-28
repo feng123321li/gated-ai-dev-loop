@@ -741,6 +741,12 @@ def main(argv: list[str] | None = None) -> int:
             explicit_dogfood=args.dogfood,
         )
         return 0
+    except (BrokenPipeError, ConnectionResetError):
+        sys.stderr.write(
+            "ERROR PLUGIN_MCP_DISCONNECTED: "
+            "MCP transport closed before response delivery\n"
+        )
+        return 1
     except GatedLoopError as error:
         sys.stderr.write(f"ERROR {error.code}: {error.message}\n")
         return error.exit_code

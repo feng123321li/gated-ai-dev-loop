@@ -41,7 +41,7 @@
 | 节点 | Delivery、Capability、Task | 只有固定工作项节点，执行阶段没有显式节点 |
 | 层级关系 | Delivery → Capability → Task | 主要作为树形聚合关系 |
 | 依赖关系 | Capability 和 Task 的 `dependsOn` | 依赖范围受层级限制，边没有显式类型 |
-| 就绪计算 | `ready-tasks` | 只返回 Task ID，不能说明完整 frontier 和阻断原因 |
+| 就绪计算 | `ready_tasks` | 只返回 Task ID，不能说明完整 frontier 和阻断原因 |
 | 并行 | 无依赖、无路径冲突的 Task 可并行 | 调度循环主要由宿主说明驱动 |
 | 汇聚 | 子级全部 VERIFIED 后运行父级 gate | fan-in 逻辑隐含在验收代码中 |
 | 状态 | SQLite 唯一机器权威 | 工作项状态同时承载合同和执行含义 |
@@ -63,12 +63,12 @@
 
 ### 3.2 图由控制器编译，不由用户手写
 
-用户输入仍是完整层级 definition。控制器在 `prepare-hierarchy` 时把它确定性编译为 Graph IR，并同时计算：
+用户输入仍是完整层级 definition。控制器在 `prepare_hierarchy` 时把它确定性编译为 Graph IR，并同时计算：
 
 - `hierarchyFingerprint`：绑定人工看到的完整交付层级与方案；
 - `graphFingerprint`：绑定可执行节点、边、条件和汇聚规则。
 
-两者都必须在 `freeze-hierarchy` 中重新校验。层级或图发生变化后，旧确认失效。
+两者都必须在 `freeze_hierarchy` 中重新校验。层级或图发生变化后，旧确认失效。
 
 ### 3.3 合同图冻结，运行策略可变
 
@@ -359,7 +359,7 @@ flowchart TD
 
 如果 `t-api` 已通过，但最终审查发现同一验收项遗漏一个精确文件：
 
-1. `remediate-task` 校验合同、拓扑和外部授权不变；
+1. `remediate_task` 校验合同、拓扑和外部授权不变；
 2. 原 `t-api` execution/gate 进入 `INVALIDATED`；
 3. 依赖其输出的后继节点，以及已通过的 Capability/Delivery gate 和根审查状态失效；
 4. 为 `t-api` 创建下一次 attempt；
@@ -464,7 +464,7 @@ flowchart TD
 
 ## 8. Frontier Scheduler
 
-`ready-tasks` 只回答“哪些 Task 可以开始”。升级后的 scheduler 由 `graph-frontier` 与 `dispatchPlan` 回答：
+`ready_tasks` 只回答“哪些 Task 可以开始”。升级后的 scheduler 由 `graph_frontier` 与 `dispatchPlan` 回答：
 
 - 当前有哪些可执行动作；
 - 每个动作为什么 READY；
@@ -475,12 +475,12 @@ flowchart TD
 建议增加：
 
 ```text
-graph-status --item <root-id>
-graph-frontier --item <root-id>
-graph-events --item <root-id>
+graph_status({"item_id":"<root-id>"})
+graph_frontier({"item_id":"<root-id>"})
+graph_events({"item_id":"<root-id>","after_event_id":0,"limit":100})
 ```
 
-`graph-frontier --json` 示例：
+`graph_frontier` 结构化结果示例：
 
 ```json
 {
@@ -520,9 +520,9 @@ Frontier 动作至少包括：
 
 | action | Graph 执行循环动作 |
 |---|---|
-| `DISPATCH_TASK` | 按 `dispatchPlan` 完整顺序调用 `dispatch-task`，再启动隔离 Agent 或稳定排队 |
-| `RUN_GATE` | 形成对应层级 gate evidence 并调用 `accept-item` |
-| `RETRY_NODE` | 校验当前 baseline/attempt 后调用 `retry-item` |
+| `DISPATCH_TASK` | 按 `dispatchPlan` 完整顺序调用 `dispatch_task`，再启动隔离 Agent 或稳定排队 |
+| `RUN_GATE` | 形成对应层级 gate evidence 并调用 `accept_item` |
+| `RETRY_NODE` | 校验当前 baseline/attempt 后调用 `retry_item` |
 | `REQUEST_REVIEW` | 启动全新只读审查或准备人工审查包 |
 | `REQUEST_USER_CONFIRMATION` | 向用户展示交付并等待明确确认 |
 | `BLOCKED` | 展示事实、责任方和解除条件，不自动越过 |
@@ -565,12 +565,12 @@ Frontier 动作至少包括：
 现有命令保持主要语义：
 
 ```text
-prepare-hierarchy
+prepare_hierarchy
 → 人工评审 development-plan.md
-→ freeze-hierarchy
+→ freeze_hierarchy
 ```
 
-`prepare-hierarchy` 新增返回：
+`prepare_hierarchy` 新增返回：
 
 ```json
 {
@@ -585,20 +585,20 @@ prepare-hierarchy
 }
 ```
 
-`freeze-hierarchy` 同时校验两个 fingerprint，并创建 graph run。
+`freeze_hierarchy` 同时校验两个 fingerprint，并创建 graph run。
 
 ### 9.3 active 模式
 
 Graph 执行循环：
 
 ```text
-graph-frontier
+graph_frontier
 → 读取 dispatchPlan 的完整 Task 顺序与目标 Agent 数
 → 自动执行本轮 DISPATCH_TASK / RUN_GATE 动作
 → 容量不足的 Task 按原顺序排队
-→ 写回 task-result / accept-item
+→ 写回 task_result / accept_item
 → 控制器自动 advance_graph
-→ 再次读取 graph-frontier
+→ 再次读取 graph_frontier
 → 直到 REQUEST_REVIEW、REQUEST_USER_CONFIRMATION 或真实 BLOCKED
 ```
 
@@ -610,11 +610,7 @@ Graph 会消费同一 `parallelGroup` 中全部范围互斥 Task。执行平台�
 
 ### 9.5 运行中查看状态
 
-```text
-python -X utf8 <skill-root>/scripts/hdg.py graph-status --item c-user-export --json
-python -X utf8 <skill-root>/scripts/hdg.py graph-frontier --item c-user-export --json
-python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --json
-```
+通过 Plugin MCP 调用 `graph_status`、`graph_frontier` 和分页 `graph_events`，传入 `c-user-export`。
 
 新增人类投影：
 
@@ -659,7 +655,7 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 | `src/hdg/execution.py` | `_task_ready` 改为 graph frontier 的 Task 视图；dispatch/result 驱动 node event |
 | `src/hdg/acceptance.py` | Task/Capability/Delivery gate 统一映射到 gate node |
 | `src/hdg/remediation.py` | 根据显式边计算失效闭包并创建下一 attempt |
-| `src/hdg/cli.py` | 提供 status/frontier/events/replay、advance、heartbeat、pause/resume、cancel 与 rebuild 命令 |
+| `src/hdg/mcp_tools.py` 与 `src/hdg/mcp_server.py` | 通过 Plugin stdio MCP 提供 status/frontier/events/replay、advance、heartbeat、pause/resume、cancel 与 rebuild 工具 |
 | `README.md` | 从“分层树调度”更新为“分层合同 + 图运行 + 节点循环” |
 | `skills/layered-delivery/SKILL.md` | 用 graph frontier 描述 active/manual 自动推进流程 |
 | `skills/layered-delivery/references/*.md` | 更新 baseline、执行、并发、事务、恢复、验收和跟踪契约 |
@@ -689,7 +685,7 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 - hierarchy → graph 的确定性编译；
 - graph fingerprint；
 - `execution-graph.md`；
-- `graph-status` 只读命令。
+- `graph_status` 只读 MCP 工具。
 
 此阶段不改变现有 READY、dispatch、gate 和 remediation 行为。目标是先证明“当前语义能够被完整编译成图”。
 
@@ -707,8 +703,8 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-events --item c-user-export --j
 
 - graph_runs、node_runs、graph_events；
 - graph frontier 计算；
-- `graph-frontier` 和 `graph-events`；
-- `ready-tasks` 改为 frontier 的 Task-only 投影；
+- `graph_frontier` 和 `graph_events`；
+- `ready_tasks` 改为 frontier 的 Task-only 投影；
 - dispatch/result 写入 node event。
 
 验收条件：
@@ -773,7 +769,7 @@ d-graph-engineering
 │   ├── t-frontier-scheduler
 │   └── t-transition-and-remediation
 └── c-graph-experience
-    ├── t-graph-cli
+    ├── t-graph-mcp
     ├── t-graph-projections
     └── t-skill-docs-and-verification
 ```
@@ -794,7 +790,7 @@ c-graph-experience
 
 | 场景 | 当前 | 升级后 |
 |---|---|---|
-| 下一步是什么 | 宿主组合 READY、状态和 Skill 说明判断 | `graph-frontier` 返回结构化动作 |
+| 下一步是什么 | 宿主组合 READY、状态和 Skill 说明判断 | `graph_frontier` 返回结构化动作 |
 | 为什么不能执行 | 通常需要检查依赖、claim 和范围 | 节点直接展示 `blockedBy` 和原因 |
 | 并行 | READY Task 列表 + 宿主决策 | `dispatchPlan` 自动计算 Agent 数、完整顺序、parallelGroup 与范围互斥 |
 | 父级 gate | 验收模块中的固定判断 | 显式 ALL_OF join 和 gate node |
@@ -822,7 +818,7 @@ c-graph-experience
 
 ### 风险四：自动重试造成双写
 
-控制：claim 租约过期由 `advance-graph` 确定性写入 `CLAIM_LEASE_EXPIRED`，释放旧 claim，归类为 `WORKER_LOST`，再在尝试预算内创建下一 attempt；operationId 不得复用。
+控制：claim 租约过期由 `advance_graph` 确定性写入 `CLAIM_LEASE_EXPIRED`，释放旧 claim，归类为 `WORKER_LOST`，再在尝试预算内创建下一 attempt；operationId 不得复用。
 
 ### 风险五：事件和投影导致 SQLite 写事务过重
 
@@ -872,16 +868,16 @@ Graph engineering 升级完成必须同时满足：
 
 ### 17.1 开发过程变化
 
-升级前，宿主看到 BLOCKED 后通常自行判断是否调用 `retry-item`；执行者失联也可能长期停留在 CLAIMED。升级后：
+升级前，宿主看到 BLOCKED 后通常自行判断是否调用 `retry_item`；执行者失联也可能长期停留在 CLAIMED。升级后：
 
-1. `dispatch-task` 创建带 30 分钟租约的 claim；
-2. 长任务使用 `heartbeat-task` 续租；
-3. `task-result: BLOCKED` 必须提交 `failure.class/code/summary`；
+1. `dispatch_task` 创建带 30 分钟租约的 claim；
+2. 长任务使用 `heartbeat_task` 续租；
+3. `task_result: BLOCKED` 必须提交 `failure.class/code/summary`；
 4. `RETRYABLE` 在 attempt 1、2 失败时由控制器直接创建下一 attempt；
 5. attempt 3 仍失败时写入 `RETRY_EXHAUSTED`，frontier 建议人工干预；
-6. `advance-graph` 把过期 claim 归类为 `WORKER_LOST` 并按相同预算恢复；
+6. `advance_graph` 把过期 claim 归类为 `WORKER_LOST` 并按相同预算恢复；
 7. `CONTRACT_CHANGE`、`EXTERNAL_AUTHORITY`、`NON_RETRYABLE`、`REMEDIATION_REQUIRED` 分别路由，不会被笼统重试；
-8. `pause-task`、`resume-task` 和经确认的 `cancel-graph-run` 提供显式运行控制。
+8. `pause_task`、`resume_task` 和经确认的 `cancel_graph_run` 提供显式运行控制。
 
 ### 17.2 生成文件变化
 
@@ -894,14 +890,14 @@ Graph engineering 升级完成必须同时满足：
 ### 17.3 使用方式变化
 
 ```text
-prepare-hierarchy
+prepare_hierarchy
 → 评审需求级 development-plan.md + execution-graph.md + 工作区级 state-transition-graph.md
-→ freeze-hierarchy
-→ graph-frontier / 读取 dispatchPlan / 自动 dispatch-task
-→ heartbeat-task（长任务）
-→ task-result（BLOCKED 时必须分类）
-→ advance-graph（周期性处理可机械恢复条件）
+→ freeze_hierarchy
+→ graph_frontier / 读取 dispatchPlan / 自动 dispatch_task
+→ heartbeat_task（长任务）
+→ task_result（BLOCKED 时必须分类）
+→ advance_graph（周期性处理可机械恢复条件）
 → gate / review / confirmation
 ```
 
-这仍然是 `layered-delivery` Skill：Skill 提供触发入口和工程规则，Python 控制器执行图语义，SQLite 保存事实，Markdown 面向人类解释整个工程。
+这仍然是 `layered-delivery` Plugin：Skill 提供触发入口和工程规则，Plugin MCP 暴露控制器能力，Python 控制器执行图语义，SQLite 保存事实，Markdown 面向人类解释整个工程。

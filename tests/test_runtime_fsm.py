@@ -530,18 +530,29 @@ class RuntimeFsmTests(unittest.TestCase):
             )
             self.assertEqual(blocked["recommendedAction"], "SUBMIT_REMEDIATION")
             self.assertEqual(
-                blocked["commandHint"],
-                f"remediate-task --item {task_id} "
-                f"--expected-baseline {prepared['baselineFingerprints'][task_id]} "
-                "--evidence -",
+                blocked["mcpCall"],
+                {
+                    "tool": "remediate_task",
+                    "arguments": {
+                        "item_id": task_id,
+                        "expected_baseline_fingerprint": (
+                            prepared["baselineFingerprints"][task_id]
+                        ),
+                        "evidence": "<evidence>",
+                    },
+                },
             )
             self.assertEqual(
                 blocked["evidenceContractRef"],
                 {
                     "artifactKind": "VALIDATION_REMEDIATION",
-                    "commandHint": (
-                        f"evidence-contract --item {task_id} --kind remediation"
-                    ),
+                    "mcpCall": {
+                        "tool": "evidence_contract",
+                        "arguments": {
+                            "item_id": task_id,
+                            "contract_kind": "remediation",
+                        },
+                    },
                 },
             )
             contract = get_evidence_contract(
@@ -656,9 +667,13 @@ class RuntimeFsmTests(unittest.TestCase):
                         self.START + timedelta(minutes=32)
                     ),
                     "responsibleParty": "EXECUTION_ADAPTER",
-                    "commandHint": (
-                        f"heartbeat-task --item {task_id} --operation op-lease"
-                    ),
+                    "mcpCall": {
+                        "tool": "heartbeat_task",
+                        "arguments": {
+                            "item_id": task_id,
+                            "operation_id": "op-lease",
+                        },
+                    },
                 },
             )
             dashboard = Path(
@@ -786,7 +801,10 @@ class RuntimeFsmTests(unittest.TestCase):
                     "parallelGroup": None,
                     "readyBecause": ["claim-hard-expired"],
                     "critical": True,
-                    "commandHint": f"advance-graph --item {task_id}",
+                    "mcpCall": {
+                        "tool": "advance_graph",
+                        "arguments": {"item_id": task_id},
+                    },
                     "transition": "CLAIM_LEASE_EXPIRED",
                     "routeCondition": "ON_WORKER_LOST",
                     "failureClass": "WORKER_LOST",

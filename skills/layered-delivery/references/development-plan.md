@@ -1,6 +1,6 @@
 # 冻结前整树开发方案
 
-`developmentPlan` 是每个节点存入 SQLite baseline 的机器契约，不是开发完成后的总结。宿主先结合只读代码检索起草完整层级 definition，再执行 `prepare-hierarchy`：每个节点目录生成自己的 `development-plan.md`，根级文件还会聚合整棵树。人工查看根级真实文件、选择开发方式并同意后，Agent 使用准备结果中的层级指纹和所选方式执行一次 `freeze-hierarchy`。
+`developmentPlan` 是每个节点存入 SQLite baseline 的机器契约，不是开发完成后的总结。宿主先结合只读代码检索起草完整层级 definition，再调用 MCP `prepare_hierarchy`：每个节点目录生成自己的 `development-plan.md`，根级文件还会聚合整棵树。人工查看根级真实文件、选择开发方式并同意后，Agent 使用准备结果中的层级指纹和所选方式调用一次 MCP `freeze_hierarchy`。
 
 ## 完整 definition 外壳
 
@@ -78,7 +78,7 @@
 }
 ```
 
-Delivery 的 child 使用相同五个字段，但 `kind` 必须为 `CAPABILITY`。Capability 的 `developmentPlan.childPlans` 必须覆盖其全部 Task children；Delivery 的 `childPlans` 必须覆盖其全部 Capability children，且 R/A 映射与 child 完全一致。全部父子节点必须在同一次 `prepare-hierarchy` 中完整物化、一起评审并一次冻结。
+Delivery 的 child 使用相同五个字段，但 `kind` 必须为 `CAPABILITY`。Capability 的 `developmentPlan.childPlans` 必须覆盖其全部 Task children；Delivery 的 `childPlans` 必须覆盖其全部 Capability children，且 R/A 映射与 child 完全一致。全部父子节点必须在同一次 `prepare_hierarchy` 中完整物化、一起评审并一次冻结。
 
 ## 场景选择
 
@@ -232,7 +232,7 @@ Delivery 下 Capability 的 `decomposition.dependsOn` 必须与 Delivery `childP
 
 ## 人工展示规则
 
-`prepare-hierarchy --json` 成功后，宿主必须：
+MCP `prepare_hierarchy` 成功后，宿主必须：
 
 1. 提供返回的 `humanArtifacts.developmentPlan` 可点击入口；
 2. 同时简述根 ID、完整树、开发目的、文件、接口、依赖波次、测试映射和 `nextAction`；

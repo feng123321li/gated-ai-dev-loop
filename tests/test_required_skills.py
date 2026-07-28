@@ -424,25 +424,15 @@ class RequiredSkillContractTests(unittest.TestCase):
                 operation_id="op-required-skills",
             )
             self.assertEqual(
-                [item["stage"] for item in context["requiredSkills"]],
-                ["DEVELOPMENT", "GATE", "FINAL_REVIEW"],
+                [
+                    item["stage"]
+                    for item in context["context"][
+                        "developmentRequiredSkills"
+                    ]
+                ],
+                ["DEVELOPMENT"],
             )
-            self.assertEqual(
-                context["requiredSkillPolicy"]["activation"],
-                "CURRENT_EXECUTOR_NATIVE_SKILL_INVOCATION_REQUIRED",
-            )
-            self.assertEqual(
-                context["requiredSkillPolicy"]["authorization"],
-                "FROZEN_REQUIRED_SKILLS",
-            )
-            self.assertEqual(
-                context["requiredSkillPolicy"]["invocation"],
-                "EXECUTION_ADAPTER_AUTOMATIC",
-            )
-            self.assertEqual(
-                context["requiredSkillPolicy"]["repeatUserPrompt"],
-                "FORBIDDEN_AFTER_FREEZE",
-            )
+            self.assertNotIn("requiredSkillPolicy", context)
 
             result_contract = get_evidence_contract(
                 root=temporary,
@@ -450,7 +440,7 @@ class RequiredSkillContractTests(unittest.TestCase):
                 contract_kind="result",
             )["evidenceContract"]
             self.assertEqual(
-                result_contract["artifactTemplates"]["IMPLEMENTED"][
+                result_contract["evidenceDeltaTemplate"][
                     "skillUsage"
                 ],
                 [{
@@ -517,7 +507,7 @@ class RequiredSkillContractTests(unittest.TestCase):
                 contract_kind="gate",
             )["evidenceContract"]
             self.assertEqual(
-                gate_contract["artifactTemplate"]["skillUsage"][0]["stage"],
+                gate_contract["evidenceDeltaTemplate"]["skillUsage"][0]["stage"],
                 "GATE",
             )
 

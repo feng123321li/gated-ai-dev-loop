@@ -1233,6 +1233,12 @@ class GovernanceRepository:
                                     projection_registry,
                                     projection_request["rootId"],
                                 )
+                            elif mode == "incremental":
+                                self.refresh_incremental_projections(
+                                    projection_registry,
+                                    projection_request["rootIds"],
+                                    projection_request["changedItemIds"],
+                                )
                             else:
                                 self.refresh_registry_projections(
                                     projection_registry,
@@ -1281,30 +1287,44 @@ class GovernanceRepository:
         *,
         mode: str,
         root_id: str | None = None,
+        root_ids: set[str] | None = None,
+        changed_item_ids: set[str] | None = None,
     ) -> None:
-        if mode not in {"full", "heartbeat", "interaction"}:
+        if mode not in {"full", "incremental", "heartbeat", "interaction"}:
             fail("WORK_ITEM_PROJECTION_MODE_INVALID", "Projection mode is invalid")
         if self._connection is None:
             fail("WORK_ITEM_TRANSACTION_REQUIRED", "Projection scheduling requires an active transaction")
+        if mode == "incremental" and (not root_ids or not changed_item_ids):
+            fail(
+                "WORK_ITEM_PROJECTION_MODE_INVALID",
+                "Incremental projection requires affected roots and items",
+            )
         request = {
             "mode": mode,
             "registry": registry,
             "rootId": root_id,
+            "rootIds": set(root_ids or ()),
+            "changedItemIds": set(changed_item_ids or ()),
         }
         current = self._pending_projection
         if current is None or mode == "full":
             self._pending_projection = request
+        elif current["mode"] == "full":
+            return
+        elif current["mode"] == mode == "incremental":
+            current["registry"] = registry
+            current["rootIds"].update(request["rootIds"])
+            current["changedItemIds"].update(request["changedItemIds"])
         elif (
-            current["mode"] in {"heartbeat", "interaction"}
-            and (
-                current["mode"] != mode
-                or current["rootId"] != root_id
-            )
+            current["mode"] != mode
+            or current["rootId"] != root_id
         ):
             self._pending_projection = {
                 "mode": "full",
                 "registry": registry,
                 "rootId": None,
+                "rootIds": set(),
+                "changedItemIds": set(),
             }
 
     @staticmethod
@@ -2658,6 +2678,9 @@ class GovernanceRepository:
                             entry,
                             stage="DEVELOPMENT",
                         ),
+                        generated_file_roots=definition[
+                            "developmentPlan"
+                        ].get("generatedFileRoots", []),
                     )
                 ):
                     self._stored_evidence_error(
@@ -2851,7 +2874,11 @@ class GovernanceRepository:
                         "the artifact does not match the confirmation contract",
                     )
 
-    def _write_interaction_logs(self, registry: dict[str, Any]) -> None:
+    def _write_interaction_logs(
+        self,
+        registry: dict[str, Any],
+        root_ids: set[str] | None = None,
+    ) -> None:
         by_id = {item["id"]: item for item in registry["workItems"]}
 
         def tree_ids(entry: dict[str, Any]) -> list[str]:
@@ -2860,7 +2887,12 @@ class GovernanceRepository:
                 result.extend(tree_ids(by_id[child_id]))
             return result
 
-        for root in (item for item in registry["workItems"] if item["parentId"] is None):
+        for root in (
+            item
+            for item in registry["workItems"]
+            if item["parentId"] is None
+            and (root_ids is None or item["id"] in root_ids)
+        ):
             events = self.read_interaction_events(tree_ids(root))
             atomic_write(
                 self.item_path(root) / "interaction-log.md",
@@ -2923,31 +2955,16 @@ class GovernanceRepository:
             build_graph_frontier,
             critical_path,
             derive_node_states,
-            replay_graph_events,
-            replay_mismatches,
+            materialized_graph_states,
         )
 
         graph_events = self.read_graph_events(root["id"])
-        replay = (
-            replay_graph_events(stored_graph["graph"], graph_run, graph_events)
-            if graph_run is not None
-            else None
-        )
-        if replay is not None:
-            mismatches = replay_mismatches(replay, graph_run)
-            if mismatches:
-                fail(
-                    "DELIVERY_GRAPH_REPLAY_MISMATCH",
-                    "Cannot project graph snapshots that differ from event replay",
-                    mismatches=mismatches,
-                )
-            graph_nodes = [
-                {
-                    "id": node["nodeId"],
-                    **{key: value for key, value in node.items() if key != "nodeId"},
-                }
-                for node in replay["nodes"]
-            ]
+        if graph_run is not None:
+            graph_nodes = materialized_graph_states(
+                stored_graph["graph"],
+                graph_run,
+                registry,
+            )
         else:
             graph_nodes = [
                 {
@@ -2982,29 +2999,66 @@ class GovernanceRepository:
             graph_run,
             graph_nodes,
         )
+        frontier["frontierSource"] = (
+            "SNAPSHOT" if graph_run is not None else "DERIVED"
+        )
         return graph_events, graph_status, frontier
 
-    def refresh_markdown_projections(self, registry: dict[str, Any]) -> None:
-        """Rebuild every human artifact that has a complete SQLite source."""
-        runtime_policy = compile_runtime_policy()
-        atomic_write(
-            self.governance_root / "state-transition-graph.md",
-            render_state_transition_graph(runtime_policy),
-            durable=False,
-        )
-        for relative_path, contents in render_runtime_policy_svg_assets(
-            runtime_policy
-        ).items():
+    def refresh_markdown_projections(
+        self,
+        registry: dict[str, Any],
+        *,
+        root_ids: set[str] | None = None,
+        include_shared: bool = True,
+    ) -> None:
+        """Rebuild human artifacts for all or selected requirement roots."""
+        rendered_files = 0
+        if include_shared:
+            runtime_policy = compile_runtime_policy()
             atomic_write(
-                self.governance_root / relative_path,
-                contents,
+                self.governance_root / "state-transition-graph.md",
+                render_state_transition_graph(runtime_policy),
                 durable=False,
             )
+            rendered_files += 1
+            for relative_path, contents in render_runtime_policy_svg_assets(
+                runtime_policy
+            ).items():
+                atomic_write(
+                    self.governance_root / relative_path,
+                    contents,
+                    durable=False,
+                )
+                rendered_files += 1
 
         by_id = {item["id"]: item for item in registry["workItems"]}
+        roots = [
+            item
+            for item in registry["workItems"]
+            if item["parentId"] is None
+            and (root_ids is None or item["id"] in root_ids)
+        ]
+        if root_ids is not None and {item["id"] for item in roots} != root_ids:
+            fail(
+                "WORK_ITEM_HIERARCHY_INVALID",
+                "Projection contains an unknown requirement root",
+            )
+
+        selected_item_ids: set[str] = set()
+
+        def select_tree(entry: dict[str, Any]) -> None:
+            selected_item_ids.add(entry["id"])
+            for child_id in entry["childIds"]:
+                select_tree(by_id[child_id])
+
+        for root in roots:
+            select_tree(root)
+
         definitions: dict[str, dict[str, Any]] = {}
         states: dict[str, dict[str, Any]] = {}
         for entry in registry["workItems"]:
+            if entry["id"] not in selected_item_ids:
+                continue
             definition, state, _ = self.read_package(registry, entry)
             definitions[entry["id"]] = definition
             states[entry["id"]] = state
@@ -3015,7 +3069,7 @@ class GovernanceRepository:
                 "children": [build(by_id[child_id]) for child_id in entry["childIds"]],
             }
 
-        for root in (item for item in registry["workItems"] if item["parentId"] is None):
+        for root in roots:
             hierarchy = validate_hierarchy_definition({
                 "schemaVersion": SCHEMA_VERSION,
                 "root": build(root),
@@ -3035,11 +3089,14 @@ class GovernanceRepository:
                     render_work_item_baseline(definitions[entry["id"]]),
                     durable=False,
                 )
+                nonlocal rendered_files
+                rendered_files += 1
                 atomic_write(
                     target / "development-plan.md",
                     root_plan if is_root else render_development_plan(definitions[entry["id"]], states[entry["id"]]),
                     durable=False,
                 )
+                rendered_files += 1
                 for child_id in entry["childIds"]:
                     project(by_id[child_id], is_root=False)
 
@@ -3054,6 +3111,7 @@ class GovernanceRepository:
                 ),
                 durable=False,
             )
+            rendered_files += 1
             for relative_path, contents in render_delivery_graph_svg_assets(
                 stored_graph["graph"]
             ).items():
@@ -3062,6 +3120,7 @@ class GovernanceRepository:
                     contents,
                     durable=False,
                 )
+                rendered_files += 1
             for relative_path in (
                 "state-transition-graph.md",
                 "assets/development-flow.svg",
@@ -3084,11 +3143,13 @@ class GovernanceRepository:
                 render_run_timeline(graph_status, graph_events),
                 durable=False,
             )
+            rendered_files += 1
             atomic_write(
                 self.item_path(root) / "frontier.md",
                 render_frontier_dashboard(graph_status, frontier),
                 durable=False,
             )
+            rendered_files += 1
 
         with self._read_connection() as connection:
             context_rows = connection.execute(
@@ -3099,15 +3160,16 @@ class GovernanceRepository:
             ).fetchall()
         for row in context_rows:
             entry = by_id.get(row["work_item_id"])
-            if entry is not None:
+            if entry is not None and entry["id"] in selected_item_ids:
                 atomic_write(
                     self.item_path(entry) / "development-handoff.md",
                     row["handoff_markdown"],
                     durable=False,
                 )
+                rendered_files += 1
         for row in report_rows:
             entry = by_id.get(row["work_item_id"])
-            if entry is None:
+            if entry is None or entry["id"] not in selected_item_ids:
                 continue
             try:
                 report = json.loads(row["report_json"])
@@ -3119,14 +3181,19 @@ class GovernanceRepository:
                     render_development_review(report),
                     durable=False,
                 )
+                rendered_files += 1
             elif row["report_kind"] == "ACCEPTANCE":
                 atomic_write(
                     self.item_path(entry) / "acceptance-report.md",
                     render_acceptance_report(report),
                     durable=False,
                 )
+                rendered_files += 1
             else:
                 fail("WORK_ITEM_REPORT_INVALID", f"Unknown stored report kind: {row['report_kind']}")
+        timing_metric("projectionRootCount", len(roots))
+        timing_metric("projectionItemCount", len(selected_item_ids))
+        timing_metric("projectionFilesRendered", rendered_files)
 
     def refresh_heartbeat_projections(
         self,
@@ -3270,17 +3337,34 @@ class GovernanceRepository:
                 registry_revision=registry["revision"],
                 recorded_at=registry["updatedAt"],
             )
-        if projection_mode == "heartbeat" and projection_root_id is not None:
+        effective_projection_mode = projection_mode
+        incremental_root_ids: set[str] = set()
+        if (
+            projection_mode == "full"
+            and changed_item_ids is not None
+            and changed_item_ids
+        ):
+            effective_projection_mode = "incremental"
+            for item_id in changed_item_ids:
+                current = by_id[item_id]
+                while current["parentId"] is not None:
+                    current = by_id[current["parentId"]]
+                incremental_root_ids.add(current["id"])
+        if effective_projection_mode == "heartbeat" and projection_root_id is not None:
             graph_root_ids: set[str] | None = {projection_root_id}
-        elif projection_mode == "interaction":
+        elif effective_projection_mode == "interaction":
             graph_root_ids = set()
+        elif effective_projection_mode == "incremental":
+            graph_root_ids = incremental_root_ids
         else:
             graph_root_ids = None
         self.sync_graph_runs(registry, root_ids=graph_root_ids)
         self.schedule_projection(
             registry,
-            mode=projection_mode,
+            mode=effective_projection_mode,
             root_id=projection_root_id,
+            root_ids=incremental_root_ids,
+            changed_item_ids=changed_item_ids,
         )
 
     def refresh_registry_projections(self, registry: dict[str, Any]) -> None:
@@ -3348,6 +3432,115 @@ class GovernanceRepository:
                     durable=False,
                 )
         self._write_interaction_logs(registry)
+
+    def refresh_incremental_projections(
+        self,
+        registry: dict[str, Any],
+        root_ids: set[str],
+        changed_item_ids: set[str],
+    ) -> None:
+        """Refresh only projections whose source belongs to affected roots."""
+        self.refresh_markdown_projections(
+            registry,
+            root_ids=root_ids,
+            include_shared=False,
+        )
+        by_id = {item["id"]: item for item in registry["workItems"]}
+        atomic_write(
+            self.governance_root / "workspace-overview.md",
+            render_workspace_overview(
+                registry,
+                isolated_item_ids=self._isolated_entry_ids,
+            ),
+            durable=False,
+        )
+        monthly_overviews = render_workspace_month_overviews(registry)
+        affected_months = {
+            next(
+                key.split("/", 1)[0]
+                for key in monthly_overviews
+                if key.endswith(f"/{root_id}.md")
+            )
+            for root_id in root_ids
+        }
+        monthly_root = self.governance_root / "workspace-overview"
+        if monthly_root.exists() and (
+            not monthly_root.is_dir() or monthly_root.is_symlink()
+        ):
+            fail(
+                "WORKSPACE_OVERVIEW_DIRECTORY_INVALID",
+                "Monthly workspace overview path must be a regular directory",
+            )
+        monthly_root.mkdir(parents=True, exist_ok=True)
+        for relative_path, content in monthly_overviews.items():
+            if (
+                relative_path in {f"{month}.md" for month in affected_months}
+                or any(
+                    relative_path == f"{month}/{root_id}.md"
+                    for month in affected_months
+                    for root_id in root_ids
+                )
+            ):
+                atomic_write(
+                    monthly_root / relative_path,
+                    content,
+                    durable=False,
+                )
+
+        selected_item_ids: set[str] = set()
+
+        def select_tree(entry: dict[str, Any]) -> None:
+            selected_item_ids.add(entry["id"])
+            for child_id in entry["childIds"]:
+                select_tree(by_id[child_id])
+
+        for root_id in root_ids:
+            select_tree(by_id[root_id])
+
+        for item_id in selected_item_ids:
+            entry = by_id[item_id]
+            target = self.item_path(entry)
+            atomic_write(
+                target / "overview.md",
+                render_item_overview(entry, by_id),
+                durable=False,
+            )
+            if entry["parentId"] is None:
+                atomic_write(
+                    target / "node-progress.md",
+                    render_item_progress(entry, by_id),
+                    durable=False,
+                )
+                atomic_write(
+                    target / "progress.md",
+                    render_item_progress(
+                        entry,
+                        by_id,
+                        include_hierarchy=True,
+                    ),
+                    durable=False,
+                )
+                if (
+                    entry["stage"] == "BASELINE_FROZEN"
+                    and (entry.get("developmentMode") or {}).get("mode")
+                    == "manual"
+                ):
+                    atomic_write(
+                        target / "requirement-handoff.md",
+                        render_requirement_handoff(entry, by_id),
+                        durable=False,
+                    )
+            else:
+                atomic_write(
+                    target / "progress.md",
+                    render_item_progress(entry, by_id),
+                    durable=False,
+                )
+        self._write_interaction_logs(registry, root_ids=root_ids)
+        timing_metric(
+            "projectionChangedItemCount",
+            len(changed_item_ids),
+        )
 
     def write_acceptance_report(
         self,

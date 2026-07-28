@@ -871,7 +871,7 @@ class RuntimeFsmTests(unittest.TestCase):
                 contract_kind="result",
             )["evidenceContract"]
             self.assertEqual(
-                result_contract["artifactTemplates"]["IMPLEMENTED"]["operationId"],
+                result_contract["operationId"],
                 "op-recovered",
             )
             recorded = record_task_result(

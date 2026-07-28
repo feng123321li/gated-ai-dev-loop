@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from hdg.errors import GatedLoopError
 from hdg.execution import dispatch_task, heartbeat_task
+from hdg.graph_runtime import get_graph_frontier
 from hdg.fs_safe import atomic_write, exclusive_file_lock
 from hdg.interactions import record_interaction
 from hdg.planning import (
@@ -122,6 +123,82 @@ class RuntimePerformanceTests(unittest.TestCase):
             self.assertIn("projection.heartbeat", stage_names)
             self.assertIn("mcp.tool_call", stage_names)
             self.assertGreaterEqual(timing["totalMs"], 0)
+
+    def test_normal_transition_projects_only_the_affected_requirement(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=task_hierarchy(),
+                host_runtime="codex",
+            )
+            freeze_hierarchy(
+                root=temporary,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared[
+                    "hierarchyFingerprint"
+                ],
+                development_mode="active",
+                confirmed=True,
+            )
+            with (
+                patch.object(
+                    GovernanceRepository,
+                    "refresh_incremental_projections",
+                    autospec=True,
+                ) as incremental,
+                patch.object(
+                    GovernanceRepository,
+                    "refresh_registry_projections",
+                    autospec=True,
+                ) as full,
+            ):
+                dispatch_task(
+                    root=temporary,
+                    item_id=prepared["rootId"],
+                    owner="developer",
+                    operation_id="op-incremental-projection",
+                )
+
+            full.assert_not_called()
+            incremental.assert_called_once()
+            self.assertEqual(
+                incremental.call_args.args[2],
+                {prepared["rootId"]},
+            )
+            self.assertEqual(
+                incremental.call_args.args[3],
+                {prepared["rootId"]},
+            )
+
+    def test_frontier_uses_materialized_node_snapshots(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=task_hierarchy(),
+                host_runtime="codex",
+            )
+            freeze_hierarchy(
+                root=temporary,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared[
+                    "hierarchyFingerprint"
+                ],
+                development_mode="active",
+                confirmed=True,
+            )
+
+            with patch(
+                "hdg.graph_runtime.replay_graph_events",
+                side_effect=AssertionError("frontier must not replay all events"),
+            ):
+                frontier = get_graph_frontier(
+                    root=temporary,
+                    work_item_id=prepared["rootId"],
+                    response_mode="compact",
+                )
+
+            self.assertEqual(frontier["responseMode"], "COMPACT")
+            self.assertEqual(frontier["frontierSource"], "SNAPSHOT")
 
     def test_projection_retries_with_the_latest_revision_after_a_concurrent_commit(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

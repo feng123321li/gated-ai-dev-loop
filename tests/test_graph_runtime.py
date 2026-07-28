@@ -11,7 +11,11 @@ from pathlib import Path
 
 from hdg.acceptance import accept_work_item, record_acceptance
 from hdg.errors import GatedLoopError
-from hdg.evidence import evidence_record, valid_gate_artifact
+from hdg.evidence import (
+    evidence_record,
+    hydrate_gate_evidence,
+    valid_gate_artifact,
+)
 from hdg.execution import dispatch_task, record_task_result
 from hdg.graph_model import (
     confirmation_node_id,
@@ -363,7 +367,7 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                 operation_id="op-graph",
             )
             self.assertEqual(
-                dispatched["evidenceContractRefs"]["result"],
+                dispatched["context"]["resultEvidenceContractRef"],
                 {
                     "artifactKind": "TASK_RESULT",
                     "mcpCall": {
@@ -375,14 +379,18 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                     },
                 },
             )
+            handoff = (
+                Path(temporary)
+                / dispatched["humanArtifacts"]["developmentHandoff"]
+            ).read_text(encoding="utf-8")
             self.assertNotIn(
                 '"kind": "TASK_RESULT"',
-                dispatched["handoffPrompt"],
+                handoff,
             )
-            self.assertNotIn("evidence-contract --item", dispatched["handoffPrompt"])
+            self.assertNotIn("evidence-contract --item", handoff)
             self.assertIn(
                 '"tool": "evidence_contract"',
-                dispatched["handoffPrompt"],
+                handoff,
             )
             result_contract_response = get_evidence_contract(
                 root=temporary,
@@ -404,14 +412,11 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
             result_contract = result_contract_response["evidenceContract"]
             self.assertEqual(result_contract["artifactKind"], "TASK_RESULT")
             self.assertEqual(result_contract["operationId"], "op-graph")
-            self.assertEqual(len(result_contract["exactTopLevelKeys"]), 10)
+            self.assertEqual(result_contract["submissionMode"], "DELTA")
+            self.assertNotIn("artifactTemplates", result_contract)
             self.assertEqual(
-                set(result_contract["artifactTemplates"]),
-                {"IMPLEMENTED", "BLOCKED"},
-            )
-            self.assertEqual(
-                result_contract["constraints"]["frozenTestArgv"],
-                [["python", "-m", "unittest", "tests.test_controller"]],
+                result_contract["constraints"]["testCommandIndexes"],
+                [0],
             )
             self.assertEqual(
                 result_contract["constraints"]["authorizedChangedFiles"],
@@ -422,9 +427,7 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
             self.assertEqual(execute["status"], "CLAIMED")
             self.assertEqual(execute["operationId"], "op-graph")
 
-            invalid_result = deepcopy(
-                result_contract["artifactTemplates"]["IMPLEMENTED"]
-            )
+            invalid_result = self._task_result(task_id, "op-graph")
             invalid_result.pop("failure")
             invalid_result["tests"][0]["exitCode"] = "0"
             with self.assertRaises(GatedLoopError) as raised:
@@ -496,40 +499,50 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
             )
             gate_contract = gate_contract_response["evidenceContract"]
             self.assertEqual(gate_contract["artifactKind"], "WORK_ITEM_GATE")
-            self.assertEqual(len(gate_contract["exactTopLevelKeys"]), 10)
+            self.assertEqual(gate_contract["submissionMode"], "DELTA")
+            self.assertNotIn("artifactTemplate", gate_contract)
             self.assertEqual(
                 gate_contract["constraints"]["acceptanceIds"],
                 ["A-001"],
             )
             self.assertEqual(
-                gate_contract["constraints"]["testArgv"],
-                [["python", "-m", "unittest", "tests.test_controller"]],
+                gate_contract["constraints"]["testCommandIndexes"],
+                [0],
             )
             self.assertEqual(
                 gate_contract["constraints"]["allowedChangedFiles"],
                 ["src/controller.py", "tests/test_controller.py"],
             )
-            fillable_gate = deepcopy(gate_contract["artifactTemplate"])
-            fillable_gate["verdict"] = "PASS"
-            fillable_gate["summary"] = "The emitted gate evidence contract was filled directly."
-            fillable_gate["scope"]["changedFiles"] = [
+            fillable_delta = deepcopy(
+                gate_contract["evidenceDeltaTemplate"]
+            )
+            fillable_delta["verdict"] = "PASS"
+            fillable_delta["summary"] = (
+                "The emitted gate evidence contract was filled directly."
+            )
+            fillable_delta["changedFiles"] = [
                 "src/controller.py",
                 "tests/test_controller.py",
             ]
-            fillable_gate["acceptance"][0].update({
+            fillable_delta["acceptance"][0].update({
                 "status": "PASS",
                 "evidence": "The frozen acceptance criterion passed.",
             })
-            fillable_gate["tests"][0].update({
+            fillable_delta["tests"][0].update({
                 "exitCode": 0,
                 "summary": "The frozen test command passed.",
             })
             registry = GovernanceRepository(temporary).read_registry()
             entry = next(item for item in registry["workItems"] if item["id"] == task_id)
             definition = GovernanceRepository(temporary).read_package(registry, entry)[0]
+            fillable_gate = hydrate_gate_evidence(
+                {"evidenceDelta": fillable_delta},
+                entry=entry,
+                definition=definition,
+            )
             self.assertTrue(valid_gate_artifact(fillable_gate, entry, definition))
-            invalid_gate = deepcopy(fillable_gate)
-            invalid_gate.pop("tests")
+            invalid_gate = {"evidenceDelta": deepcopy(fillable_delta)}
+            invalid_gate["evidenceDelta"].pop("tests")
             with self.assertRaises(GatedLoopError) as raised:
                 accept_work_item(
                     root=temporary,
@@ -541,7 +554,10 @@ class DeliveryGraphRuntimeTests(unittest.TestCase):
                 "WORK_ITEM_GATE_EVIDENCE_INVALID",
             )
             self.assertIn(
-                "missing top-level keys: tests",
+                (
+                    "tests argv must contain one exact match for every "
+                    "frozen testCommand"
+                ),
                 raised.exception.details["issues"],
             )
             self.assertEqual(

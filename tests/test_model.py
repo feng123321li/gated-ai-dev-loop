@@ -7,6 +7,7 @@ from hdg.errors import GatedLoopError
 from hdg.evidence import (
     evidence_record,
     gate_evidence_contract,
+    hydrate_gate_evidence,
     valid_evidence_record,
     valid_gate_artifact,
 )
@@ -125,17 +126,34 @@ class WorkItemModelTests(unittest.TestCase):
 
         contract = gate_evidence_contract(entry, definition)
 
-        self.assertEqual(contract["constraints"]["acceptanceCriteria"], [{
-            "id": "A-001",
-            "requirementIds": ["R-001"],
-            "requirements": [{
-                "id": "R-001",
-                "text": "The controller must run without Node or third-party Python packages.",
-            }],
-            "expectedResult": "The frozen Python command completes successfully.",
-        }])
         self.assertEqual(
-            contract["artifactTemplate"]["acceptance"][0]["requirementIds"],
+            contract["constraints"]["acceptanceExpectedResults"],
+            {
+                "A-001": (
+                    "The frozen Python command completes successfully."
+                ),
+            },
+        )
+        self.assertEqual(
+            contract["evidenceDeltaTemplate"]["acceptance"][0],
+            {
+                "id": "A-001",
+                "status": "<PASS_OR_FAIL>",
+                "evidence": "<REQUIRED_NON_EMPTY_STRING>",
+            },
+        )
+        hydrated = hydrate_gate_evidence(
+            {
+                "evidenceDelta": {
+                    **contract["evidenceDeltaTemplate"],
+                    "verdict": "PASS",
+                },
+            },
+            entry=entry,
+            definition=definition,
+        )
+        self.assertEqual(
+            hydrated["acceptance"][0]["requirementIds"],
             ["R-001"],
         )
 

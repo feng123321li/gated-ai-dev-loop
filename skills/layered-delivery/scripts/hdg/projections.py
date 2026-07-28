@@ -761,9 +761,18 @@ def render_development_review(report: dict[str, Any]) -> str:
     plan = report["developmentPlan"]
     result = (report.get("result") or {}).get("artifact") or {}
     planned_files = [item["path"] for item in plan.get("fileChanges", [])]
+    generated_roots = [
+        item["path"]
+        for item in plan.get("generatedFileRoots", [])
+    ]
+    generated_files = [
+        item.replace("\\", "/")
+        for item in result.get("generatedFiles", [])
+    ]
     remediation_files = [item["path"] for item in _validation_remediation_changes(report)]
     authorized_files = planned_files + [item for item in remediation_files if item not in planned_files]
     actual_files = [item.replace("\\", "/") for item in result.get("changedFiles", [])]
+    authorized_actual = set(authorized_files) | set(generated_files)
     tests = result.get("tests", [])
     lines = [
         f"# 开发复核：{report['workItem']['title']}",
@@ -777,9 +786,11 @@ def render_development_review(report: dict[str, Any]) -> str:
         "",
         f"- 开发目的：{plan['purpose']}",
         f"- 冻结计划文件：{'、'.join(planned_files) or '无'}",
+        f"- ADD-only 生成目录：{'、'.join(generated_roots) or '无'}",
+        f"- 实际新增生成文件：{'、'.join(generated_files) or '无'}",
         f"- 验证修正补充文件：{'、'.join(remediation_files) or '无'}",
         f"- 实际文件：{'、'.join(actual_files) or '无'}",
-        f"- 未授权文件：{'、'.join(item for item in actual_files if item not in authorized_files) or '无'}",
+        f"- 未授权文件：{'、'.join(item for item in actual_files if item not in authorized_actual) or '无'}",
         f"- 尚未观察到的授权文件：{'、'.join(item for item in authorized_files if item not in actual_files) or '无'}",
         "",
         "## 接口与功能复核",
@@ -951,7 +962,8 @@ def render_acceptance_report(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _compact_task_handoff_context(context: dict[str, Any]) -> dict[str, Any]:
+def compact_task_context(context: dict[str, Any]) -> dict[str, Any]:
+    """Return the minimum worker-facing view of a stored Task context."""
     operation = context.get("operation")
     task = context["task"]
     remediations = []
@@ -1006,6 +1018,7 @@ def _compact_task_handoff_context(context: dict[str, Any]) -> dict[str, Any]:
         "gateLevel": context["gateLevel"],
         "developmentMode": context["developmentMode"],
         "authorizedFileChanges": task["authorizedFileChanges"],
+        "generatedFileRoots": task.get("generatedFileRoots", []),
         "validationRemediations": remediations,
         "requirements": context["requirements"],
         "acceptance": context["acceptance"],
@@ -1045,7 +1058,7 @@ def render_task_handoff(context: dict[str, Any]) -> str:
         if context.get("operation")
         else "尚未认领；不得开始开发"
     )
-    compact = _compact_task_handoff_context(context)
+    compact = compact_task_context(context)
     return "\n".join([
         "请在全新开发会话中实现这个已冻结 Task；不要重新分析原始需求。",
         "",
@@ -1054,7 +1067,7 @@ def render_task_handoff(context: dict[str, Any]) -> str:
         f"开发方案：[development-plan.md](development-plan.md)",
         "",
         "最小执行规则：",
-        "- 先读取同目录开发方案，只写 authorizedFileChanges；不要修改治理文件、`.git/**` 或外部状态。",
+        "- 先读取同目录开发方案；只写 authorizedFileChanges，或在 generatedFileRoots 下新增生成文件；不要修改治理文件、`.git/**` 或外部状态。",
         "- 按 testCommands 运行定向测试并修复失败，只报告真实结果。",
         "- 对 developmentRequiredSkills 使用当前宿主原生入口；每项保持独立 activation/conformance，内部 Skill 不递归升级为新的 required Skill 或 GATE。",
         "- 结束前按 resultEvidenceContractRef 调用 `evidence_contract`，再提交 `task_result`；只返回 IMPLEMENTED 或 BLOCKED，不自行报告 PASS。",

@@ -41,13 +41,18 @@ EXPECTED_TOOL_PROPERTIES = {
     },
     "ready_tasks": {"item_id"},
     "graph_status": {"item_id"},
-    "graph_frontier": {"item_id"},
+    "graph_frontier": {
+        "item_id",
+        "response_mode",
+        "since_revision",
+        "include_blocked_details",
+    },
     "graph_events": {"item_id", "after_event_id", "limit"},
     "graph_replay": {"item_id"},
     "rebuild_graph_run": {"item_id"},
     "advance_graph": {"item_id"},
     "cancel_graph_run": {"item_id"},
-    "task_context": {"item_id"},
+    "task_context": {"item_id", "response_mode"},
     "evidence_contract": {"item_id", "contract_kind"},
     "record_skill_activation": {
         "item_id",
@@ -300,9 +305,11 @@ class McpServerProtocolTests(unittest.TestCase):
             hierarchy_description,
         )
         self.assertIn(
-            "keep developmentPlan.fileChanges exact",
+            "keep modifications/removals exact in fileChanges",
             hierarchy_description,
         )
+        self.assertIn("compactLightTask v3 shorthand", hierarchy_description)
+        self.assertIn("ADD-only generatedFileRoots", hierarchy_description)
         self.assertEqual(available_skills_schema["type"], "object")
         self.assertEqual(
             set(available_skills_schema["properties"]),
@@ -355,7 +362,21 @@ class McpServerProtocolTests(unittest.TestCase):
                     set(schema["properties"]),
                     expected_properties,
                 )
-                self.assertEqual(set(schema["required"]), expected_properties)
+                optional = (
+                    {
+                        "response_mode",
+                        "since_revision",
+                        "include_blocked_details",
+                    }
+                    if name == "graph_frontier"
+                    else {"response_mode"}
+                    if name == "task_context"
+                    else set()
+                )
+                self.assertEqual(
+                    set(schema["required"]),
+                    expected_properties - optional,
+                )
                 self.assertTrue(
                     all(
                         isinstance(property_schema, dict)
@@ -1254,11 +1275,18 @@ class McpServerProtocolTests(unittest.TestCase):
         }
         for operation_name, expected_action in cases.items():
             with self.subTest(operation=operation_name):
-                with patch.object(
-                    operations,
-                    "record_acceptance",
-                    return_value={"action": expected_action},
-                ) as mocked_record:
+                with (
+                    patch.object(
+                        operations,
+                        "record_acceptance",
+                        return_value={"action": expected_action},
+                    ) as mocked_record,
+                    patch.object(
+                        operations,
+                        "get_graph_frontier",
+                        return_value={"responseMode": "COMPACT"},
+                    ),
+                ):
                     result = operations.execute_operation(
                         operation_name,
                         {
@@ -1270,7 +1298,13 @@ class McpServerProtocolTests(unittest.TestCase):
                         ),
                     )
 
-                self.assertEqual(result, {"action": expected_action})
+                self.assertEqual(
+                    result,
+                    {
+                        "action": expected_action,
+                        "nextFrontier": {"responseMode": "COMPACT"},
+                    },
+                )
                 self.assertEqual(
                     mocked_record.call_args.kwargs["action"],
                     expected_action,

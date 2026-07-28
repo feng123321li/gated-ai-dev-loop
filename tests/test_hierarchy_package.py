@@ -79,7 +79,10 @@ class HierarchyPackageTests(unittest.TestCase):
                 owner="developer",
                 operation_id="op-compact-handoff",
             )
-            handoff = dispatched["handoffPrompt"]
+            handoff = (
+                Path(temporary)
+                / dispatched["humanArtifacts"]["developmentHandoff"]
+            ).read_text(encoding="utf-8")
 
             self.assertLess(len(handoff.encode("utf-8")), 6000)
             self.assertIn(
@@ -95,8 +98,9 @@ class HierarchyPackageTests(unittest.TestCase):
             self.assertNotIn('"parentContracts"', handoff)
             self.assertNotIn('"requiredSkillPolicy"', handoff)
             self.assertNotIn('"leasePolicy"', handoff)
-            self.assertIn("parentContracts", dispatched)
-            self.assertIn("requiredSkillPolicy", dispatched)
+            self.assertNotIn("parentContracts", dispatched)
+            self.assertNotIn("requiredSkillPolicy", dispatched)
+            self.assertEqual(dispatched["contextMode"], "COMPACT")
 
     def test_all_legal_depths_use_exactly_one_requirement_root_directory(self) -> None:
         cases = (

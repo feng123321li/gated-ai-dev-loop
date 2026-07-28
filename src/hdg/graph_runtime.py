@@ -21,6 +21,62 @@ SUCCESS_STATES = {"SUCCEEDED", "COMPLETED"}
 TERMINAL_STATES = SUCCESS_STATES | {"BLOCKED", "CANCELLED"}
 
 
+def materialized_graph_states(
+    graph: dict[str, Any],
+    run: dict[str, Any],
+    registry: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return the validated latest node snapshots maintained by SQLite."""
+    expected = {node["id"] for node in graph["nodes"]}
+    snapshots = {
+        node["nodeId"]: node
+        for node in run["nodes"]
+    }
+    if set(snapshots) != expected:
+        fail(
+            "DELIVERY_GRAPH_RUN_INVALID",
+            "Materialized graph snapshots do not match the frozen graph",
+            missingNodes=sorted(expected - set(snapshots)),
+            unknownNodes=sorted(set(snapshots) - expected),
+        )
+    graph_nodes = {node["id"]: node for node in graph["nodes"]}
+    derived = {
+        node["id"]: node
+        for node in derive_node_states(graph, registry)
+    }
+    by_item = {item["id"]: item for item in registry["workItems"]}
+    states = [
+        {
+            **derived[node_id],
+            **graph_nodes[node_id],
+            **{
+                key: value
+                for key, value in snapshots[node_id].items()
+                if key != "nodeId"
+            },
+        }
+        for node_id in sorted(expected)
+    ]
+    for state in states:
+        entry = by_item[state["workItemId"]]
+        if state["kind"].endswith("_GATE"):
+            artifact = entry.get("gate", {}).get("artifact") or {}
+        elif state["kind"] == "ROOT_REVIEW":
+            artifact = (
+                (entry.get("acceptance") or {}).get("review") or {}
+            ).get("artifact") or {}
+        else:
+            artifact = {}
+        blocked_skill_usage = [
+            dict(usage)
+            for usage in artifact.get("skillUsage", [])
+            if usage.get("status") == "BLOCKED"
+        ]
+        if blocked_skill_usage:
+            state["blockedSkillUsage"] = blocked_skill_usage
+    return states
+
+
 def retry_budget(graph: dict[str, Any], attempt: int) -> dict[str, int | bool]:
     maximum = graph["runtime"]["retryPolicy"]["maxAttempts"]
     remaining = max(0, maximum - attempt)
@@ -1199,6 +1255,7 @@ def build_graph_frontier(
             "rootId": graph["rootId"],
             "requestedItemId": requested["id"],
             "runId": None,
+            "frontierRevision": 0,
             "graphFingerprint": stored["graphFingerprint"],
             "dispatchPlan": {
                 "authority": "GRAPH_CONTROLLER",
@@ -1640,6 +1697,7 @@ def build_graph_frontier(
         "rootId": graph["rootId"],
         "requestedItemId": requested["id"],
         "runId": run["runId"],
+        "frontierRevision": run["recordRevision"],
         "graphFingerprint": stored["graphFingerprint"],
         "dispatchPlan": {
             "authority": "GRAPH_CONTROLLER",
@@ -1673,11 +1731,119 @@ def build_graph_frontier(
     }
 
 
+def compact_graph_frontier(
+    frontier: dict[str, Any],
+    *,
+    include_blocked_details: bool = False,
+    since_revision: int | None = None,
+) -> dict[str, Any]:
+    """Return the action-bearing subset needed by an execution adapter."""
+    revision = frontier["frontierRevision"]
+    time_sensitive_actions = {
+        "HEARTBEAT_TASK",
+        "ADVANCE_GRAPH",
+    }
+    if (
+        since_revision is not None
+        and since_revision == revision
+        and not any(
+            action["action"] in time_sensitive_actions
+            for action in frontier["actions"]
+        )
+    ):
+        return {
+            "schemaVersion": frontier["schemaVersion"],
+            "rootId": frontier["rootId"],
+            "requestedItemId": frontier["requestedItemId"],
+            "runId": frontier["runId"],
+            "frontierRevision": revision,
+            "frontierSource": frontier.get("frontierSource", "DERIVED"),
+            "responseMode": "COMPACT",
+            "unchanged": True,
+            "nextWakeAt": frontier["nextWakeAt"],
+            "summary": frontier["summary"],
+        }
+
+    action_fields = {
+        "nodeId",
+        "nodeKind",
+        "action",
+        "workItemId",
+        "attempt",
+        "operationId",
+        "parallelGroup",
+        "mcpCall",
+        "mcpCallOptions",
+        "evidenceContractRef",
+        "remediationContractRef",
+        "requiredSkills",
+        "heartbeatDueAt",
+        "leaseExpiresAt",
+        "hardExpiresAt",
+        "failureClass",
+        "remainingAttempts",
+        "retryExhausted",
+        "blockedSkillUsage",
+    }
+    in_flight_fields = {
+        "nodeId",
+        "nodeKind",
+        "workItemId",
+        "attempt",
+        "operationId",
+        "owner",
+        "leaseExpiresAt",
+        "heartbeatDueAt",
+        "hardExpiresAt",
+    }
+    result = {
+        "schemaVersion": frontier["schemaVersion"],
+        "rootId": frontier["rootId"],
+        "requestedItemId": frontier["requestedItemId"],
+        "runId": frontier["runId"],
+        "frontierRevision": revision,
+        "frontierSource": frontier.get("frontierSource", "DERIVED"),
+        "responseMode": "COMPACT",
+        "unchanged": False,
+        "dispatchPlan": frontier["dispatchPlan"],
+        "actions": [
+            {
+                key: value
+                for key, value in action.items()
+                if key in action_fields
+            }
+            for action in frontier["actions"]
+        ],
+        "inFlight": [
+            {
+                key: value
+                for key, value in record.items()
+                if key in in_flight_fields
+            }
+            for record in frontier["inFlight"]
+        ],
+        "nextWakeAt": frontier["nextWakeAt"],
+        "summary": frontier["summary"],
+        "detailRef": mcp_call(
+            "graph_frontier",
+            item_id=frontier["requestedItemId"],
+            response_mode="full",
+            include_blocked_details=True,
+        ),
+    }
+    if include_blocked_details:
+        result["blocked"] = frontier["blocked"]
+    return result
+
+
 def get_graph_frontier(
     *,
     root: str,
     work_item_id: str,
     now: object = None,
+    response_mode: str = "full",
+    since_revision: int | None = None,
+    include_blocked_details: bool = True,
 ) -> dict[str, Any]:
     repository, registry, requested, stored, run = _load_graph_view(
         root=root,
@@ -1689,26 +1855,13 @@ def get_graph_frontier(
             {**state, "attempt": None, "owner": None, "operationId": None}
             for state in derive_node_states(stored["graph"], registry)
         ]
+        frontier_source = "DERIVED"
     else:
-        replay = replay_graph_events(
-            stored["graph"],
-            run,
-            repository.read_graph_events(stored["graph"]["rootId"]),
-        )
-        mismatches = replay_mismatches(replay, run)
-        if mismatches:
-            fail(
-                "DELIVERY_GRAPH_REPLAY_MISMATCH",
-                "Persisted graph snapshots do not match the immutable event replay",
-                mismatches=mismatches,
-            )
-        states = [
-            {"id": node["nodeId"], **{key: value for key, value in node.items() if key != "nodeId"}}
-            for node in replay["nodes"]
-        ]
+        states = materialized_graph_states(stored["graph"], run, registry)
+        frontier_source = "SNAPSHOT"
     from .repository import timestamp
 
-    return build_graph_frontier(
+    frontier = build_graph_frontier(
         repository,
         registry,
         requested,
@@ -1716,6 +1869,19 @@ def get_graph_frontier(
         run,
         states,
         at=timestamp(now),
+    )
+    frontier["frontierSource"] = frontier_source
+    if response_mode == "full":
+        return frontier
+    if response_mode != "compact":
+        fail(
+            "DELIVERY_GRAPH_FRONTIER_MODE_INVALID",
+            "Graph frontier response mode must be full or compact",
+        )
+    return compact_graph_frontier(
+        frontier,
+        include_blocked_details=include_blocked_details,
+        since_revision=since_revision,
     )
 
 

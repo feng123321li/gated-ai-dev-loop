@@ -73,151 +73,98 @@ class InstallAndBundleTests(unittest.TestCase):
     def test_skill_entry_stays_lean_and_routes_details_on_demand(self) -> None:
         skill_root = TARGET_PACKAGE.parent.parent
         skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
-        self.assertLess(len(skill), 7000)
+        self.assertLess(len(skill), 4000)
         self.assertIn("首次只读取本文件", skill)
         self.assertIn("不得预读全部 references", skill)
-        self.assertIn("按动作读取", skill)
-        self.assertIn("evidenceContractRef", skill)
+        self.assertIn("按需读取", skill)
+        self.assertIn("execution-quickstart.md", skill)
+        self.assertIn("planning-quickstart.md", skill)
         self.assertIn(
-            "不得读取控制器源码、memory 文件或治理文件反推格式",
+            "不得编辑业务代码、启动 Shell/CLI 控制器、直接写 SQLite 或从源码/Markdown 猜状态",
             skill,
         )
-        self.assertIn("`ADVANCE_GRAPH` 是租约硬过期后的确定性自动恢复动作", skill)
-        self.assertIn("不得以“代码和测试已完成”代替 Graph 收尾", skill)
+        markdown_references = sorted(
+            path.name
+            for path in (skill_root / "references").glob("*.md")
+        )
+        self.assertEqual(
+            markdown_references,
+            [
+                "acceptance.md",
+                "execution-quickstart.md",
+                "mcp-transport.md",
+                "planning-quickstart.md",
+            ],
+        )
+        execution_quickstart = (
+            skill_root / "references" / "execution-quickstart.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("`ADVANCE_GRAPH`", execution_quickstart)
+        self.assertIn(
+            "不得用聊天总结代替 Graph 收尾",
+            skill,
+        )
 
     def test_manual_contract_details_live_in_routed_references(self) -> None:
         skill_root = TARGET_PACKAGE.parent.parent
         skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
-        workflow = (skill_root / "references" / "workflow.md").read_text(encoding="utf-8")
-        development_plan = (skill_root / "references" / "development-plan.md").read_text(encoding="utf-8")
-        baselines = (skill_root / "references" / "baselines.md").read_text(encoding="utf-8")
-        routing_profiles = (skill_root / "references" / "routing-profiles.md").read_text(encoding="utf-8")
         acceptance = (skill_root / "references" / "acceptance.md").read_text(encoding="utf-8")
-        tracking = (skill_root / "references" / "tracking.md").read_text(encoding="utf-8")
-        claude_automation = (skill_root / "references" / "claude-automation.md").read_text(encoding="utf-8")
-        development = (skill_root / "references" / "development.md").read_text(encoding="utf-8")
-        self.assertIn("必须同时展示 `active` 和 `manual` 两种开发方式", skill)
-        self.assertIn("每个 requirement 都必须有独立 acceptance", skill)
-        self.assertIn("`requiredSkills` 可省略/空", skill)
+        planning_quickstart = (
+            skill_root / "references" / "planning-quickstart.md"
+        ).read_text(encoding="utf-8")
+        execution_quickstart = (
+            skill_root / "references" / "execution-quickstart.md"
+        ).read_text(encoding="utf-8")
         self.assertIn(
-            "不得要求用户再次输入 `$skill` 或确认 Skill",
+            "同时展示 `active` / `manual` 两个选项",
+            planning_quickstart,
+        )
+        self.assertIn("每个 requirement 都有独立、可观察的 acceptance", skill)
+        self.assertIn(
+            "不预读、不递归展开、不自动加入 `GATE`",
             skill,
         )
+        self.assertIn("不存在或疑似拼错", skill)
+        self.assertIn("宿主级 `root` 与项目级 `project` catalog", skill)
+        self.assertIn("优先展示人类友好的 `userPrompt`", skill)
         self.assertIn(
-            "用户明确指定仅在开发过程中使用的 Skill",
-            skill,
+            '登记 `requiredSkills=[{"name":"...","stages":["DEVELOPMENT"],"purpose":"..."}]`',
+            planning_quickstart,
         )
         self.assertIn(
-            "不预分析、不递归展开、不自动加入 `GATE`",
-            skill,
+            "不预读或分析 Skill 内容，不递归其内部 Skill",
+            planning_quickstart,
         )
         self.assertIn(
-            "名称不存在或疑似拼错",
-            skill,
+            'available_skills={"root":[...],"project":[...]}',
+            planning_quickstart,
         )
         self.assertIn(
-            "同时检查宿主级 `root` 与项目级 `project` catalog",
-            skill,
+            "按最小可用模块适当放宽",
+            planning_quickstart,
         )
         self.assertIn(
-            "返回候选名称和来源供宿主提示用户选择",
-            skill,
+            "`developmentPlan.fileChanges`",
+            planning_quickstart,
         )
+        self.assertIn("compactLightTask", planning_quickstart)
+        self.assertIn("generatedFileRoots", planning_quickstart)
+        self.assertIn("evidenceDelta", execution_quickstart)
+        self.assertIn("nextFrontier", execution_quickstart)
         self.assertIn(
-            "宿主必须优先直接展示 `userPrompt`",
-            skill,
+            "`task_context` 只作诊断预览，不能授权开工",
+            execution_quickstart,
         )
+        self.assertIn("同一回复就是冻结确认", planning_quickstart)
         self.assertIn(
-            "直接登记为仅含 `DEVELOPMENT` 的 required Skill",
-            development_plan,
+            "当前宿主原生入口分别调用",
+            execution_quickstart,
         )
+        self.assertIn("`INVOKED + PASS`", acceptance)
+        self.assertIn("USER_ACCEPTANCE", acceptance)
+        self.assertIn("按此增量处理，只刷新受影响需求树", acceptance)
         self.assertIn(
-            "不得为此预读该 Skill、递归展开其内部 Skill",
-            development_plan,
-        )
-        self.assertIn(
-            "`prepare_hierarchy.available_skills`",
-            development_plan,
-        )
-        self.assertIn(
-            "`WORK_ITEM_REQUIRED_SKILL_UNAVAILABLE`",
-            development_plan,
-        )
-        self.assertIn(
-            "`skillOptions`",
-            development_plan,
-        )
-        self.assertIn(
-            "`userPrompt` 是可直接面向用户展示的中文提示",
-            development_plan,
-        )
-        self.assertIn(
-            "`title/message/questions`",
-            development_plan,
-        )
-        self.assertIn(
-            "按最小可用模块边界适当放宽",
-            development_plan,
-        )
-        self.assertIn(
-            "`developmentPlan.fileChanges` 仍逐项列出精确文件",
-            development_plan,
-        )
-        self.assertIn(
-            "宿主级 `root` 和项目级 `project`",
-            baselines,
-        )
-        self.assertIn(
-            "`development-handoff.md` 只投影 worker 开工所需的最小上下文",
-            development,
-        )
-        self.assertIn(
-            "不得复制完整父级 developmentPlan、完整 requiredSkillPolicy",
-            development,
-        )
-        self.assertIn(
-            "低风险单目标需求优先使用根 Task + LIGHT",
-            routing_profiles,
-        )
-        self.assertIn(
-            "允许说明简洁、定向测试优先和按需读取",
-            routing_profiles,
-        )
-        self.assertIn("不能只用一个跨需求 acceptance", development_plan)
-        self.assertIn("同时展示 requirement 文本、R/A 映射和 expectedResult", acceptance)
-        self.assertIn("可以使用 `handoffCommand`", workflow)
-        self.assertIn("不要求逐字一致", workflow)
-        self.assertIn("不能只给文件链接", workflow)
-        self.assertIn(
-            "所有面向人的状态报告同样必须把 SQLite 和控制器 JSON 中的 UTC 时间转换为当前运行环境的本机时区",
-            tracking,
-        )
-        self.assertIn("claude-automation.md", skill)
-        self.assertIn("不能由聊天提示、Skill 或仓库内容自行切换", claude_automation)
-        self.assertIn("`acceptEdits` 只自动接受文件编辑", claude_automation)
-        self.assertIn("claudeCodeAutoHandoff", claude_automation)
-        self.assertIn("claude -p --permission-mode auto", claude_automation)
-        self.assertIn("项目级 `.claude/settings.json`", claude_automation)
-        self.assertIn("不默认使用 `bypassPermissions`", claude_automation)
-        self.assertIn("Plugin 根目录的 `hooks/hooks.json`", claude_automation)
-        self.assertIn("Claude Code 至少使用 2.1.199", claude_automation)
-        self.assertIn("finalize 不执行业务动作", claude_automation)
-        self.assertIn("失败关闭并阻断调用", claude_automation)
-        self.assertIn(
-            "只通过已连接并完成工具注册的 Plugin MCP 调用 `graph_frontier`",
-            development,
-        )
-        self.assertIn("以结构化参数调用 `evidence_contract`", acceptance)
-        self.assertIn("实际开发 Skill 调用", acceptance)
-        self.assertIn("全部后代 Task", acceptance)
-        self.assertIn("Skill 使用审计", acceptance)
-        self.assertIn("skillUsage", acceptance)
-        self.assertIn(
-            "只有 baseline 没有 `FINAL_REVIEW` required Skill",
-            acceptance,
-        )
-        self.assertIn(
-            "最终验收阶段才可由人触发 `record_human_review_acceptance`",
+            "只有没有 FINAL_REVIEW Skill 且无法隔离时",
             acceptance,
         )
         self.assertIn("宿主才可调用 `record_user_confirmation`", acceptance)
@@ -226,13 +173,11 @@ class InstallAndBundleTests(unittest.TestCase):
         skill_root = TARGET_PACKAGE.parent.parent
         skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
         transport = (skill_root / "references" / "mcp-transport.md").read_text(encoding="utf-8")
-        self.assertIn("MCP 未安装、未注册或未连接时立即阻断", skill)
+        self.assertIn("MCP 未安装、未连接或工具未注册时", skill)
         self.assertNotIn("CLI fallback", skill)
-        self.assertIn("MCP-only", transport)
         self.assertIn("不得启动 `hdg.py`", transport)
-        self.assertIn("恢复入口是 `graph_frontier`，不是 `task_context`", transport)
-        self.assertIn("分块解决的是单条 MCP 消息上限", transport)
-        self.assertIn("begin 返回的 `generationId`", transport)
+        self.assertIn("暂存解决消息上限，不解决上下文成本", transport)
+        self.assertIn("保存返回的 `generationId`", transport)
         self.assertIn(
             '{"payloadRef":{"uploadId":"...","generationId":"...","sha256":"...","sizeBytes":123}}',
             transport,

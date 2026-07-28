@@ -109,8 +109,7 @@ Claude Code 的 Auto 权限或代码编辑、测试命令权限属于宿主启�
 
 - [版本更新记录](CHANGELOG.md)
 - [Skill 使用规则](skills/layered-delivery/SKILL.md)
-- [完整工作流](skills/layered-delivery/references/workflow.md)
-- [开发方案字段](skills/layered-delivery/references/development-plan.md)
-- [required Skill 与执行门禁](skills/layered-delivery/references/development.md)
+- [规划与一次冻结](skills/layered-delivery/references/planning-quickstart.md)
+- [Graph 执行与修正](skills/layered-delivery/references/execution-quickstart.md)
 - [验收与最终确认](skills/layered-delivery/references/acceptance.md)
-- [SQLite 状态与恢复](skills/layered-delivery/references/task-registry.md)
+- [超限传输与断连恢复](skills/layered-delivery/references/mcp-transport.md)

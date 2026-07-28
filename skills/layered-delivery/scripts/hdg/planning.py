@@ -411,6 +411,13 @@ def prepare_hierarchy(
     """Prepare one complete requirement tree and its single human plan."""
     from .host_runtime import require_host_runtime
 
+    input_mode = "FULL_HIERARCHY"
+    if (
+        isinstance(hierarchy, dict)
+        and set(hierarchy) == {"schemaVersion", "compactLightTask"}
+    ):
+        hierarchy = _hydrate_compact_light_task(hierarchy)
+        input_mode = "COMPACT_LIGHT_TASK"
     normalized = validate_hierarchy_definition(hierarchy)
     runtime = require_host_runtime(host_runtime)
     required_skills = sorted({
@@ -509,6 +516,7 @@ def prepare_hierarchy(
                     "created": False,
                     "revised": False,
                     "idempotent": True,
+                    "inputMode": input_mode,
                     "rootId": root_id,
                     "itemIds": [record["definition"]["id"] for record in records],
                     "stage": old_state["stage"],
@@ -580,6 +588,7 @@ def prepare_hierarchy(
             "created": not replace,
             "revised": replace,
             "idempotent": False,
+            "inputMode": input_mode,
             "rootId": root_id,
             "itemIds": [record["definition"]["id"] for record in records],
             "stage": hierarchy_state["stage"],
@@ -602,6 +611,147 @@ def prepare_hierarchy(
             "nextAction": _prepared_next_action(runtime),
             "responseContract": _prepared_response_contract(runtime),
         }
+
+
+def _hydrate_compact_light_task(
+    envelope: dict[str, Any],
+) -> dict[str, Any]:
+    """Expand the v3 LIGHT shorthand into the sole canonical v3 hierarchy."""
+    if envelope.get("schemaVersion") != SCHEMA_VERSION:
+        fail(
+            "WORK_ITEM_SCHEMA_INVALID",
+            f"Compact LIGHT input schemaVersion must be {SCHEMA_VERSION}",
+        )
+    compact = envelope.get("compactLightTask")
+    required = {
+        "id",
+        "title",
+        "goal",
+        "scope",
+        "requirements",
+        "acceptance",
+        "testCommands",
+        "fileChanges",
+        "logic",
+    }
+    optional = {
+        "nonGoals",
+        "requiredSkills",
+        "risks",
+        "decisions",
+        "scenarios",
+        "interfaces",
+        "dataAndTransactions",
+        "compatibility",
+        "reviewPoints",
+        "inputs",
+        "outputs",
+        "generatedFileRoots",
+    }
+    if not isinstance(compact, dict):
+        fail(
+            "WORK_ITEM_COMPACT_LIGHT_INVALID",
+            "compactLightTask must be an object",
+        )
+    missing = sorted(required - set(compact))
+    unknown = sorted(set(compact) - required - optional)
+    if missing or unknown:
+        fail(
+            "WORK_ITEM_COMPACT_LIGHT_INVALID",
+            "Compact LIGHT task contains missing or unknown fields",
+            missingFields=missing,
+            unknownFields=unknown,
+        )
+
+    requirements = compact["requirements"]
+    acceptance = compact["acceptance"]
+    test_commands = compact["testCommands"]
+    requirement_ids = [
+        item.get("id")
+        for item in requirements
+        if isinstance(item, dict)
+    ] if isinstance(requirements, list) else []
+    acceptance_ids = [
+        item.get("id")
+        for item in acceptance
+        if isinstance(item, dict)
+    ] if isinstance(acceptance, list) else []
+    command_indexes = (
+        list(range(len(test_commands)))
+        if isinstance(test_commands, list)
+        else []
+    )
+    goal = compact["goal"]
+    scenarios = compact.get("scenarios") or [{
+        "kind": "OTHER",
+        "title": "LIGHT task implementation",
+        "description": goal,
+        "requirementIds": requirement_ids,
+    }]
+    development_plan = {
+        "purpose": goal,
+        "scenarios": scenarios,
+        "fileChanges": compact["fileChanges"],
+        "generatedFileRoots": compact.get("generatedFileRoots", []),
+        "interfaces": compact.get("interfaces", []),
+        "logic": compact["logic"],
+        "dataAndTransactions": compact.get("dataAndTransactions", []),
+        "compatibility": compact.get(
+            "compatibility",
+            ["Preserve behavior outside the frozen Task scope."],
+        ),
+        "testPlan": [{
+            "acceptanceIds": acceptance_ids,
+            "approach": "Run every frozen test command for the LIGHT task.",
+            "commandIndexes": command_indexes,
+        }],
+        "reviewPoints": compact.get(
+            "reviewPoints",
+            ["Confirm scope, authorization, and acceptance evidence."],
+        ),
+    }
+    definition = {
+        "schemaVersion": SCHEMA_VERSION,
+        "id": compact["id"],
+        "kind": "TASK",
+        "gateLevel": "LIGHT",
+        "parentId": None,
+        "title": compact["title"],
+        "goal": goal,
+        "scope": compact["scope"],
+        "nonGoals": compact.get(
+            "nonGoals",
+            ["Do not change files outside the frozen Task scope."],
+        ),
+        "requirements": requirements,
+        "acceptance": acceptance,
+        "execution": {
+            "dependsOn": [],
+            "inputs": compact.get("inputs", []),
+            "outputs": compact.get(
+                "outputs",
+                ["Verified output for the compact LIGHT task."],
+            ),
+        },
+        "testCommands": test_commands,
+        "requiredSkills": compact.get("requiredSkills", []),
+        "risks": compact.get(
+            "risks",
+            ["No unresolved coordination-level risk was declared."],
+        ),
+        "decisions": compact.get(
+            "decisions",
+            ["Use one LIGHT Task because no decomposition is required."],
+        ),
+        "developmentPlan": development_plan,
+    }
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "root": {
+            "definition": definition,
+            "children": [],
+        },
+    }
 
 
 def _prepared_response_contract(host_runtime: str) -> dict[str, Any]:

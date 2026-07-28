@@ -399,7 +399,11 @@ def _task_development_plan(value: object, normalized: dict[str, Any]) -> dict[st
         "purpose", "scenarios", "fileChanges", "interfaces", "logic", "dataAndTransactions",
         "compatibility", "testPlan", "reviewPoints",
     ]
-    if not _exact_keys(value, keys):
+    if (
+        not isinstance(value, dict)
+        or not set(keys).issubset(value)
+        or not set(value).issubset(set(keys) | {"generatedFileRoots"})
+    ):
         fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "Task developmentPlan contains missing or unknown fields")
     requirement_ids = {item["id"] for item in normalized["requirements"]}
     covered: set[str] = set()
@@ -421,8 +425,63 @@ def _task_development_plan(value: object, normalized: dict[str, Any]) -> dict[st
     if any(item["id"] not in covered for item in normalized["requirements"]):
         fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "Every requirement must be covered by a development scenario")
 
-    if not isinstance(value["fileChanges"], list) or not value["fileChanges"]:
-        fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "Task developmentPlan.fileChanges must be nonempty")
+    generated_roots_value = value.get("generatedFileRoots", [])
+    if not isinstance(generated_roots_value, list):
+        fail(
+            "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+            "developmentPlan.generatedFileRoots must be an array",
+        )
+    generated_file_roots: list[dict[str, str]] = []
+    seen_generated_roots: set[str] = set()
+    for index, entry in enumerate(generated_roots_value):
+        field = f"developmentPlan.generatedFileRoots[{index}]"
+        if not _exact_keys(entry, ["path", "purpose"]):
+            fail(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{field} is invalid",
+                field=field,
+            )
+        generated_path = normalize_scope_pattern(entry["path"])
+        if (
+            generated_path == "**"
+            or not generated_path.endswith("/**")
+            or generated_path in seen_generated_roots
+            or not scope_contains(normalized["scope"], [generated_path])
+            or any(
+                _scope_covers(existing, generated_path)
+                or _scope_covers(generated_path, existing)
+                for existing in seen_generated_roots
+            )
+        ):
+            fail(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                (
+                    f"{field}.path must be a unique, non-overlapping /** "
+                    "subtree inside Task scope"
+                ),
+                field=field,
+            )
+        seen_generated_roots.add(generated_path)
+        generated_file_roots.append({
+            "path": generated_path,
+            "purpose": _text(entry["purpose"], f"{field}.purpose"),
+        })
+    generated_file_roots.sort(key=lambda item: item["path"])
+
+    if (
+        not isinstance(value["fileChanges"], list)
+        or (
+            not value["fileChanges"]
+            and not generated_file_roots
+        )
+    ):
+        fail(
+            "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+            (
+                "Task developmentPlan requires exact fileChanges or "
+                "ADD-only generatedFileRoots"
+            ),
+        )
     seen_paths: set[str] = set()
     file_changes = []
     for index, entry in enumerate(value["fileChanges"]):
@@ -430,7 +489,15 @@ def _task_development_plan(value: object, normalized: dict[str, Any]) -> dict[st
         if not _exact_keys(entry, ["path", "action", "purpose"]) or entry["action"] not in {"ADD", "MODIFY", "REMOVE"}:
             fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", f"{field} is invalid", field=field)
         planned_path = normalize_scope_pattern(entry["path"])
-        if WILDCARD.search(planned_path) or planned_path in seen_paths or not scope_contains(normalized["scope"], [planned_path]):
+        if (
+            WILDCARD.search(planned_path)
+            or planned_path in seen_paths
+            or not scope_contains(normalized["scope"], [planned_path])
+            or any(
+                _scope_covers(root["path"], planned_path)
+                for root in generated_file_roots
+            )
+        ):
             fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", f"{field}.path must be a unique exact path inside Task scope", field=field)
         seen_paths.add(planned_path)
         file_changes.append({
@@ -465,6 +532,7 @@ def _task_development_plan(value: object, normalized: dict[str, Any]) -> dict[st
         "purpose": _text(value["purpose"], "developmentPlan.purpose"),
         "scenarios": scenarios,
         "fileChanges": file_changes,
+        "generatedFileRoots": generated_file_roots,
         "interfaces": interfaces,
         "logic": _strings(value["logic"], "developmentPlan.logic"),
         "dataAndTransactions": _strings(value["dataAndTransactions"], "developmentPlan.dataAndTransactions", allow_empty=True),
@@ -1032,6 +1100,20 @@ def render_development_plan(definition: dict[str, Any], state: dict[str, Any]) -
             f"| {item['action']} | `{item['path']}` | {_markdown_cell(item['purpose'])} |"
             for item in plan["fileChanges"]
         )
+        if plan["generatedFileRoots"]:
+            lines.extend([
+                "",
+                "### ADD-only 生成目录",
+                "",
+                "> 这些目录只授权新增生成文件；修改或删除既有文件仍须逐文件登记。",
+                "",
+                "| 目录 | 目的 |",
+                "| --- | --- |",
+            ])
+            lines.extend(
+                f"| `{item['path']}` | {_markdown_cell(item['purpose'])} |"
+                for item in plan["generatedFileRoots"]
+            )
         lines.extend(["", "## 接口与功能契约", ""])
         if not plan["interfaces"]:
             lines.append("- 本 Task 不新增、修改或删除外部/内部接口。")

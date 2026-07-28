@@ -73,6 +73,13 @@ def _integer(
     return schema
 
 
+def _boolean(description: str) -> dict[str, Any]:
+    return {
+        "type": "boolean",
+        "description": description,
+    }
+
+
 def _string_array(
     description: str,
     *,
@@ -203,47 +210,25 @@ EVIDENCE = _payload_capable_object(
 )
 
 
-def _input_schema(properties: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _input_schema(
+    properties: dict[str, dict[str, Any]],
+    optional_properties: set[str] | None = None,
+) -> dict[str, Any]:
+    optional = optional_properties or set()
     return {
         "type": "object",
         "properties": properties,
-        "required": list(properties),
+        "required": [
+            key for key in properties if key not in optional
+        ],
         "additionalProperties": False,
     }
 
 
-ERROR_OUTPUT = {
-    "type": "object",
-    "properties": {
-        "code": {"type": "string"},
-        "message": {"type": "string"},
-        "details": {"type": "object"},
-    },
-    "required": ["code", "message", "details"],
-    "additionalProperties": False,
-}
 OUTPUT_SCHEMA = {
     "type": "object",
-    "oneOf": [
-        {
-            "type": "object",
-            "properties": {
-                "ok": {"const": True},
-                "result": {},
-            },
-            "required": ["ok", "result"],
-            "additionalProperties": False,
-        },
-        {
-            "type": "object",
-            "properties": {
-                "ok": {"const": False},
-                "error": ERROR_OUTPUT,
-            },
-            "required": ["ok", "error"],
-            "additionalProperties": False,
-        },
-    ],
+    "properties": {"ok": {"type": "boolean"}},
+    "required": ["ok"],
 }
 
 
@@ -257,12 +242,16 @@ def _tool(
     destructive: bool | None = None,
     idempotent: bool = False,
     requires_user_interaction: bool = False,
+    optional_properties: set[str] | None = None,
 ) -> dict[str, Any]:
     definition = {
         "name": name,
         "title": title,
         "description": description,
-        "inputSchema": _input_schema(properties),
+        "inputSchema": _input_schema(
+            properties,
+            optional_properties,
+        ),
         "outputSchema": OUTPUT_SCHEMA,
         "annotations": {
             "title": title,
@@ -394,7 +383,10 @@ _TOOLS = (
                 "explicitly names a development-only Skill, register it as "
                 "DEVELOPMENT only without preloading, recursively expanding, or adding GATE; "
                 "use the narrowest practical module-level scope such as module/** "
-                "and keep developmentPlan.fileChanges exact; "
+                "and keep modifications/removals exact in fileChanges; "
+                "a root LIGHT Task may use the compactLightTask v3 shorthand, "
+                "and ADD-only generatedFileRoots may authorize unpredictable "
+                "generated filenames; "
                 "for a genuinely oversized hierarchy, pass an exact READY "
                 "payloadRef bound to this tool."
             ),
@@ -452,8 +444,30 @@ _TOOLS = (
     _tool(
         "graph_frontier",
         "Read graph frontier",
-        "Read the authoritative next actions, dispatch plan, wake time, and blockers.",
-        {"item_id": ITEM_ID},
+        (
+            "Read compact authoritative next actions by default, with "
+            "revision-aware unchanged responses; request full blocker and "
+            "critical-path diagnostics only when needed."
+        ),
+        {
+            "item_id": ITEM_ID,
+            "response_mode": _string(
+                "Return compact execution data or the full diagnostic frontier.",
+                enum=["compact", "full"],
+            ),
+            "since_revision": _integer(
+                "Last frontierRevision already consumed by this host.",
+                minimum=0,
+            ),
+            "include_blocked_details": _boolean(
+                "Include full blocker records in a compact response.",
+            ),
+        },
+        optional_properties={
+            "response_mode",
+            "since_revision",
+            "include_blocked_details",
+        },
         read_only=True,
         idempotent=True,
     ),
@@ -509,15 +523,22 @@ _TOOLS = (
     _tool(
         "task_context",
         "Read task context",
-        "Read a non-claiming diagnostic Task context; use dispatch_task to start work.",
-        {"item_id": ITEM_ID},
+        "Read compact non-claiming Task context by default; request full only for diagnostics, and use dispatch_task to start work.",
+        {
+            "item_id": ITEM_ID,
+            "response_mode": _string(
+                "Context detail level.",
+                enum=["compact", "full"],
+            ),
+        },
+        optional_properties={"response_mode"},
         read_only=True,
         idempotent=True,
     ),
     _tool(
         "evidence_contract",
         "Read evidence contract",
-        "Read the exact current evidence template and constraints for one work item.",
+        "Read the compact v3 evidence-delta template and immutable bindings for one work item.",
         {
             "item_id": ITEM_ID,
             "contract_kind": _string(
@@ -899,6 +920,8 @@ def validate_tool_arguments(name: str, arguments: object) -> dict[str, Any]:
         )
 
     for key, property_schema in properties.items():
+        if key not in arguments:
+            continue
         value = arguments[key]
         expected_type = property_schema["type"]
         if expected_type == "string" and not isinstance(value, str):
@@ -925,6 +948,12 @@ def validate_tool_arguments(name: str, arguments: object) -> dict[str, Any]:
             raise GatedLoopError(
                 "MCP_ARGUMENT_INVALID",
                 f"{key} must be an integer",
+                details={"field": key},
+            )
+        if expected_type == "boolean" and not isinstance(value, bool):
+            raise GatedLoopError(
+                "MCP_ARGUMENT_INVALID",
+                f"{key} must be a boolean",
                 details={"field": key},
             )
         if expected_type == "array":

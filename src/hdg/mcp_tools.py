@@ -73,6 +73,55 @@ def _integer(
     return schema
 
 
+def _boolean(description: str) -> dict[str, Any]:
+    return {
+        "type": "boolean",
+        "description": description,
+    }
+
+
+def _string_array(
+    description: str,
+    *,
+    item_pattern: str,
+    item_max_length: int,
+) -> dict[str, Any]:
+    return {
+        "type": "array",
+        "description": description,
+        "items": _string(
+            "Exact catalog name.",
+            pattern=item_pattern,
+            max_length=item_max_length,
+        ),
+        "uniqueItems": True,
+    }
+
+
+def _skill_catalog(description: str) -> dict[str, Any]:
+    scope_description = (
+        "Exact unique Skill names registered in this catalog scope."
+    )
+    return {
+        "type": "object",
+        "description": description,
+        "properties": {
+            "root": _string_array(
+                scope_description,
+                item_pattern=SKILL_NAME_PATTERN,
+                item_max_length=128,
+            ),
+            "project": _string_array(
+                scope_description,
+                item_pattern=SKILL_NAME_PATTERN,
+                item_max_length=128,
+            ),
+        },
+        "required": ["root", "project"],
+        "additionalProperties": False,
+    }
+
+
 ITEM_ID = _string(
     "Frozen work-item identifier in the bound project.",
     pattern=SAFE_IDENTIFIER_PATTERN,
@@ -161,47 +210,25 @@ EVIDENCE = _payload_capable_object(
 )
 
 
-def _input_schema(properties: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _input_schema(
+    properties: dict[str, dict[str, Any]],
+    optional_properties: set[str] | None = None,
+) -> dict[str, Any]:
+    optional = optional_properties or set()
     return {
         "type": "object",
         "properties": properties,
-        "required": list(properties),
+        "required": [
+            key for key in properties if key not in optional
+        ],
         "additionalProperties": False,
     }
 
 
-ERROR_OUTPUT = {
-    "type": "object",
-    "properties": {
-        "code": {"type": "string"},
-        "message": {"type": "string"},
-        "details": {"type": "object"},
-    },
-    "required": ["code", "message", "details"],
-    "additionalProperties": False,
-}
 OUTPUT_SCHEMA = {
     "type": "object",
-    "oneOf": [
-        {
-            "type": "object",
-            "properties": {
-                "ok": {"const": True},
-                "result": {},
-            },
-            "required": ["ok", "result"],
-            "additionalProperties": False,
-        },
-        {
-            "type": "object",
-            "properties": {
-                "ok": {"const": False},
-                "error": ERROR_OUTPUT,
-            },
-            "required": ["ok", "error"],
-            "additionalProperties": False,
-        },
-    ],
+    "properties": {"ok": {"type": "boolean"}},
+    "required": ["ok"],
 }
 
 
@@ -215,12 +242,16 @@ def _tool(
     destructive: bool | None = None,
     idempotent: bool = False,
     requires_user_interaction: bool = False,
+    optional_properties: set[str] | None = None,
 ) -> dict[str, Any]:
     definition = {
         "name": name,
         "title": title,
         "description": description,
-        "inputSchema": _input_schema(properties),
+        "inputSchema": _input_schema(
+            properties,
+            optional_properties,
+        ),
         "outputSchema": OUTPUT_SCHEMA,
         "annotations": {
             "title": title,
@@ -348,13 +379,31 @@ _TOOLS = (
             "hierarchy": _payload_capable_object(
                 "Complete schema-v3 Task, Capability, or Delivery hierarchy, "
                 "where each definition may omit requiredSkills or use an "
-                "empty array when no Skill gate is required; "
+                "empty array when no Skill gate is required; when the user "
+                "explicitly names a development-only Skill, register it as "
+                "DEVELOPMENT only without preloading, recursively expanding, or adding GATE; "
+                "use the narrowest practical module-level scope such as module/** "
+                "and keep modifications/removals exact in fileChanges; "
+                "a root LIGHT Task may use the compactLightTask v3 shorthand, "
+                "and ADD-only generatedFileRoots may authorize unpredictable "
+                "generated filenames; "
                 "for a genuinely oversized hierarchy, pass an exact READY "
                 "payloadRef bound to this tool."
             ),
             "host_runtime": _string(
                 "Lowercase host Agent runtime identifier.",
                 pattern=HOST_RUNTIME_PATTERN,
+            ),
+            "available_skills": _skill_catalog(
+                (
+                    "Exact names from both the host-level root Skill catalog "
+                    "and the current project Skill catalog. Preparation "
+                    "rejects every absent requiredSkills name and returns "
+                    "source-labelled close-match options plus a "
+                    "human-readable userPrompt so the host can prompt for "
+                    "selection, installation, or name correction before "
+                    "writing state."
+                ),
             ),
         },
     ),
@@ -395,8 +444,30 @@ _TOOLS = (
     _tool(
         "graph_frontier",
         "Read graph frontier",
-        "Read the authoritative next actions, dispatch plan, wake time, and blockers.",
-        {"item_id": ITEM_ID},
+        (
+            "Read compact authoritative next actions by default, with "
+            "revision-aware unchanged responses; request full blocker and "
+            "critical-path diagnostics only when needed."
+        ),
+        {
+            "item_id": ITEM_ID,
+            "response_mode": _string(
+                "Return compact execution data or the full diagnostic frontier.",
+                enum=["compact", "full"],
+            ),
+            "since_revision": _integer(
+                "Last frontierRevision already consumed by this host.",
+                minimum=0,
+            ),
+            "include_blocked_details": _boolean(
+                "Include full blocker records in a compact response.",
+            ),
+        },
+        optional_properties={
+            "response_mode",
+            "since_revision",
+            "include_blocked_details",
+        },
         read_only=True,
         idempotent=True,
     ),
@@ -452,15 +523,22 @@ _TOOLS = (
     _tool(
         "task_context",
         "Read task context",
-        "Read a non-claiming diagnostic Task context; use dispatch_task to start work.",
-        {"item_id": ITEM_ID},
+        "Read compact non-claiming Task context by default; request full only for diagnostics, and use dispatch_task to start work.",
+        {
+            "item_id": ITEM_ID,
+            "response_mode": _string(
+                "Context detail level.",
+                enum=["compact", "full"],
+            ),
+        },
+        optional_properties={"response_mode"},
         read_only=True,
         idempotent=True,
     ),
     _tool(
         "evidence_contract",
         "Read evidence contract",
-        "Read the exact current evidence template and constraints for one work item.",
+        "Read the compact v3 evidence-delta template and immutable bindings for one work item.",
         {
             "item_id": ITEM_ID,
             "contract_kind": _string(
@@ -725,6 +803,93 @@ def tool_definitions() -> list[dict[str, Any]]:
     return copy.deepcopy(list(_TOOLS))
 
 
+def _validate_array_argument(
+    field: str,
+    value: object,
+    schema: dict[str, Any],
+) -> None:
+    if not isinstance(value, list):
+        raise GatedLoopError(
+            "MCP_ARGUMENT_INVALID",
+            f"{field} must be an array",
+            details={"field": field},
+        )
+    item_schema = schema.get("items", {})
+    for index, item in enumerate(value):
+        item_field = f"{field}[{index}]"
+        if (
+            item_schema.get("type") == "string"
+            and not isinstance(item, str)
+        ):
+            raise GatedLoopError(
+                "MCP_ARGUMENT_INVALID",
+                f"{item_field} must be a string",
+                details={"field": item_field},
+            )
+        item_pattern = item_schema.get("pattern")
+        if item_pattern is not None and (
+            not isinstance(item, str)
+            or re.fullmatch(item_pattern, item) is None
+        ):
+            raise GatedLoopError(
+                "MCP_ARGUMENT_INVALID",
+                f"{item_field} has an invalid identifier format",
+                details={"field": item_field},
+            )
+        item_max_length = item_schema.get("maxLength")
+        if item_max_length is not None and len(item) > item_max_length:
+            raise GatedLoopError(
+                "MCP_ARGUMENT_INVALID",
+                f"{item_field} exceeds the allowed string length",
+                details={
+                    "field": item_field,
+                    "maxLength": item_max_length,
+                },
+            )
+    if schema.get("uniqueItems") and len(value) != len(set(value)):
+        raise GatedLoopError(
+            "MCP_ARGUMENT_INVALID",
+            f"{field} must contain unique values",
+            details={"field": field},
+        )
+
+
+def _validate_nested_object_argument(
+    field: str,
+    value: dict[str, Any],
+    schema: dict[str, Any],
+) -> None:
+    properties = schema.get("properties")
+    if properties is None:
+        return
+    missing = sorted(set(schema.get("required", [])) - set(value))
+    unexpected = sorted(set(value) - set(properties))
+    if missing or (
+        schema.get("additionalProperties") is False
+        and unexpected
+    ):
+        raise GatedLoopError(
+            "MCP_ARGUMENT_INVALID",
+            f"{field} does not match the declared object schema",
+            details={
+                "field": field,
+                "missing": missing,
+                "unexpected": unexpected,
+            },
+        )
+    for nested_key, nested_schema in properties.items():
+        if nested_key not in value:
+            continue
+        nested_field = f"{field}.{nested_key}"
+        nested_value = value[nested_key]
+        if nested_schema.get("type") == "array":
+            _validate_array_argument(
+                nested_field,
+                nested_value,
+                nested_schema,
+            )
+
+
 def validate_tool_arguments(name: str, arguments: object) -> dict[str, Any]:
     """Validate the strict top-level schema used by one MCP tool."""
 
@@ -755,6 +920,8 @@ def validate_tool_arguments(name: str, arguments: object) -> dict[str, Any]:
         )
 
     for key, property_schema in properties.items():
+        if key not in arguments:
+            continue
         value = arguments[key]
         expected_type = property_schema["type"]
         if expected_type == "string" and not isinstance(value, str):
@@ -769,6 +936,12 @@ def validate_tool_arguments(name: str, arguments: object) -> dict[str, Any]:
                 f"{key} must be a JSON object",
                 details={"field": key},
             )
+        if expected_type == "object" and isinstance(value, dict):
+            _validate_nested_object_argument(
+                key,
+                value,
+                property_schema,
+            )
         if expected_type == "integer" and (
             not isinstance(value, int) or isinstance(value, bool)
         ):
@@ -777,6 +950,14 @@ def validate_tool_arguments(name: str, arguments: object) -> dict[str, Any]:
                 f"{key} must be an integer",
                 details={"field": key},
             )
+        if expected_type == "boolean" and not isinstance(value, bool):
+            raise GatedLoopError(
+                "MCP_ARGUMENT_INVALID",
+                f"{key} must be a boolean",
+                details={"field": key},
+            )
+        if expected_type == "array":
+            _validate_array_argument(key, value, property_schema)
         if "enum" in property_schema and value not in property_schema["enum"]:
             raise GatedLoopError(
                 "MCP_ARGUMENT_INVALID",

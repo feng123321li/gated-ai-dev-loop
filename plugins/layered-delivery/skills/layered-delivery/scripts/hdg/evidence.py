@@ -65,6 +65,264 @@ SKILL_USAGE_STAGES = {
 TEMPLATE_PLACEHOLDER = re.compile(r"<[A-Z][A-Z0-9_]*>")
 
 
+def _generated_file_roots(
+    definition: dict[str, Any],
+) -> list[dict[str, str]]:
+    return list(
+        definition.get("developmentPlan", {}).get(
+            "generatedFileRoots",
+            [],
+        )
+    )
+
+
+def _path_in_generated_roots(
+    path: str,
+    generated_file_roots: list[dict[str, str]],
+) -> bool:
+    normalized = path.replace("\\", "/")
+    return any(
+        normalized.startswith(root["path"][:-2])
+        and normalized != root["path"][:-3]
+        for root in generated_file_roots
+    )
+
+
+def _generated_file_issues(
+    *,
+    changed_files: object,
+    generated_files: object,
+    generated_file_roots: list[dict[str, str]],
+    field: str,
+) -> list[str]:
+    if not generated_file_roots:
+        return []
+    if not isinstance(generated_files, list):
+        return [f"{field} must be an array for ADD-only generated roots"]
+    issues: list[str] = []
+    normalized_generated: list[str] = []
+    for index, path in enumerate(generated_files):
+        if not non_empty_string(path):
+            issues.append(f"{field}[{index}] must be a non-empty string")
+            continue
+        normalized = str(path).replace("\\", "/")
+        normalized_generated.append(normalized)
+        if not _path_in_generated_roots(
+            normalized,
+            generated_file_roots,
+        ):
+            issues.append(
+                f"{field}[{index}] is outside authorized generated roots"
+            )
+    if len(set(normalized_generated)) != len(normalized_generated):
+        issues.append(f"{field} must not contain duplicate paths")
+    if isinstance(changed_files, list):
+        changed = {
+            str(path).replace("\\", "/")
+            for path in changed_files
+            if isinstance(path, str)
+        }
+        missing = sorted(set(normalized_generated) - changed)
+        if missing:
+            issues.append(
+                f"{field} must be a subset of changedFiles: "
+                + ", ".join(missing)
+            )
+    return issues
+
+
+def hydrate_task_result_evidence(
+    value: object,
+    *,
+    entry: dict[str, Any],
+    definition: dict[str, Any],
+    status: str,
+) -> object:
+    """Hydrate a compact v3 submission into the canonical v3 artifact."""
+    if not (
+        isinstance(value, dict)
+        and set(value) == {"evidenceDelta"}
+    ):
+        return value
+    delta = value["evidenceDelta"]
+    if not isinstance(delta, dict):
+        return value
+    generated_roots = _generated_file_roots(definition)
+    allowed = {
+        "summary",
+        "changedFiles",
+        "tests",
+        "blockers",
+        "failure",
+        "skillUsage",
+    }
+    if generated_roots:
+        allowed.add("generatedFiles")
+    if not set(delta).issubset(allowed):
+        return value
+    if not isinstance(delta.get("tests", []), list) or any(
+        not isinstance(test, dict)
+        or not set(test).issubset(
+            {"commandIndex", "exitCode", "testsRun"}
+        )
+        for test in delta.get("tests", [])
+    ):
+        return value
+    tests = []
+    for test in delta.get("tests", []):
+        if not isinstance(test, dict):
+            tests.append(test)
+            continue
+        command_index = test.get("commandIndex")
+        hydrated = {
+            "argv": (
+                list(definition["testCommands"][command_index])
+                if isinstance(command_index, int)
+                and not isinstance(command_index, bool)
+                and 0 <= command_index < len(definition["testCommands"])
+                else None
+            ),
+            "exitCode": test.get("exitCode"),
+        }
+        if "testsRun" in test:
+            hydrated["testsRun"] = test["testsRun"]
+        tests.append(hydrated)
+    artifact = {
+        "schemaVersion": SCHEMA_VERSION,
+        "kind": "TASK_RESULT",
+        "taskId": entry["id"],
+        "operationId": entry["claim"]["operationId"],
+        "status": status,
+        "summary": delta.get("summary"),
+        "changedFiles": delta.get("changedFiles"),
+        "tests": tests,
+        "blockers": (
+            delta.get("blockers", [])
+            if status == "IMPLEMENTED"
+            else delta.get("blockers")
+        ),
+        "failure": delta.get("failure"),
+    }
+    if generated_roots:
+        artifact["generatedFiles"] = delta.get("generatedFiles")
+    if "skillUsage" in delta:
+        artifact["skillUsage"] = delta["skillUsage"]
+    return artifact
+
+
+def hydrate_gate_evidence(
+    value: object,
+    *,
+    entry: dict[str, Any],
+    definition: dict[str, Any],
+) -> object:
+    """Hydrate a compact v3 gate delta into the canonical v3 artifact."""
+    if not (
+        isinstance(value, dict)
+        and set(value) == {"evidenceDelta"}
+    ):
+        return value
+    delta = value["evidenceDelta"]
+    if not isinstance(delta, dict):
+        return value
+    generated_roots = _generated_file_roots(definition)
+    allowed = {
+        "verdict",
+        "summary",
+        "changedFiles",
+        "outOfScopeFiles",
+        "acceptance",
+        "tests",
+        "findings",
+        "skillUsage",
+    }
+    if generated_roots:
+        allowed.add("generatedFiles")
+    if not set(delta).issubset(allowed):
+        return value
+    if (
+        not isinstance(delta.get("acceptance", []), list)
+        or not isinstance(delta.get("tests", []), list)
+        or any(
+            not isinstance(result, dict)
+            or not set(result).issubset(
+                {"id", "status", "evidence"}
+            )
+            for result in delta.get("acceptance", [])
+        )
+        or any(
+            not isinstance(test, dict)
+            or not set(test).issubset(
+                {
+                    "commandIndex",
+                    "exitCode",
+                    "testsRun",
+                    "summary",
+                }
+            )
+            for test in delta.get("tests", [])
+        )
+    ):
+        return value
+    criteria = {
+        criterion["id"]: criterion
+        for criterion in definition["acceptance"]
+    }
+    acceptance = []
+    for result in delta.get("acceptance", []):
+        if not isinstance(result, dict):
+            acceptance.append(result)
+            continue
+        criterion = criteria.get(result.get("id"), {})
+        acceptance.append({
+            "id": result.get("id"),
+            "requirementIds": criterion.get("requirementIds"),
+            "status": result.get("status"),
+            "evidence": result.get("evidence"),
+        })
+    tests = []
+    for test in delta.get("tests", []):
+        if not isinstance(test, dict):
+            tests.append(test)
+            continue
+        command_index = test.get("commandIndex")
+        hydrated = {
+            "argv": (
+                list(definition["testCommands"][command_index])
+                if isinstance(command_index, int)
+                and not isinstance(command_index, bool)
+                and 0 <= command_index < len(definition["testCommands"])
+                else None
+            ),
+            "exitCode": test.get("exitCode"),
+            "summary": test.get("summary"),
+        }
+        if "testsRun" in test:
+            hydrated["testsRun"] = test["testsRun"]
+        tests.append(hydrated)
+    scope = {
+        "changedFiles": delta.get("changedFiles"),
+        "outOfScopeFiles": delta.get("outOfScopeFiles"),
+    }
+    if generated_roots:
+        scope["generatedFiles"] = delta.get("generatedFiles")
+    artifact = {
+        "schemaVersion": SCHEMA_VERSION,
+        "kind": "WORK_ITEM_GATE",
+        "workItemId": entry["id"],
+        "baselineFingerprint": entry["baselineFingerprint"],
+        "verdict": delta.get("verdict"),
+        "summary": delta.get("summary"),
+        "scope": scope,
+        "acceptance": acceptance,
+        "tests": tests,
+        "findings": delta.get("findings"),
+    }
+    if "skillUsage" in delta:
+        artifact["skillUsage"] = delta["skillUsage"]
+    return artifact
+
+
 def valid_timestamp(value: object) -> bool:
     if not isinstance(value, str):
         return False
@@ -365,6 +623,7 @@ def valid_task_result_artifact(
     operation_id: str,
     status: str,
     required_skills: list[dict[str, Any]] | None = None,
+    generated_file_roots: list[dict[str, str]] | None = None,
 ) -> bool:
     return not task_result_artifact_issues(
         value,
@@ -372,6 +631,7 @@ def valid_task_result_artifact(
         operation_id=operation_id,
         requested_status=status,
         required_skills=required_skills,
+        generated_file_roots=generated_file_roots,
     )
 
 
@@ -436,31 +696,22 @@ def gate_evidence_contract(
     additional_planned_files: set[str] | None = None,
     required_skills: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Return a deterministic, directly fillable contract for one gate artifact."""
+    """Return the compact v3 delta contract for one gate artifact."""
     allowed_changed_files = {
         item["path"]
         for item in definition["developmentPlan"].get("fileChanges", [])
     }
     allowed_changed_files.update(additional_planned_files or set())
-    requirements_by_id = {
-        item["id"]: item for item in definition["requirements"]
-    }
     skills = required_skills or []
-    artifact_template = {
-        "schemaVersion": SCHEMA_VERSION,
-        "kind": "WORK_ITEM_GATE",
-        "workItemId": entry["id"],
-        "baselineFingerprint": entry["baselineFingerprint"],
+    generated_roots = _generated_file_roots(definition)
+    delta_template = {
         "verdict": "<PASS_OR_FAIL>",
         "summary": "<REQUIRED_NON_EMPTY_STRING>",
-        "scope": {
-            "changedFiles": [],
-            "outOfScopeFiles": [],
-        },
+        "changedFiles": [],
+        "outOfScopeFiles": [],
         "acceptance": [
             {
                 "id": item["id"],
-                "requirementIds": list(item["requirementIds"]),
                 "status": "<PASS_OR_FAIL>",
                 "evidence": "<REQUIRED_NON_EMPTY_STRING>",
             }
@@ -468,47 +719,47 @@ def gate_evidence_contract(
         ],
         "tests": [
             {
-                "argv": list(argv),
+                "commandIndex": index,
                 "exitCode": "<INTEGER>",
                 "summary": "<REQUIRED_NON_EMPTY_STRING>",
             }
-            for argv in definition["testCommands"]
+            for index, _ in enumerate(definition["testCommands"])
         ],
         "findings": {"p0": [], "p1": [], "p2": []},
     }
-    exact_fields = set(GATE_ARTIFACT_FIELDS)
+    if generated_roots:
+        delta_template["generatedFiles"] = []
     if skills:
-        exact_fields.add("skillUsage")
-        artifact_template["skillUsage"] = _skill_usage_template(skills)
+        delta_template["skillUsage"] = _skill_usage_template(skills)
     return {
         "schemaVersion": SCHEMA_VERSION,
         "artifactKind": "WORK_ITEM_GATE",
+        "submissionMode": "DELTA",
         "workItemId": entry["id"],
         "baselineFingerprint": entry["baselineFingerprint"],
-        "exactTopLevelKeys": sorted(exact_fields),
-        "artifactTemplate": artifact_template,
+        "immutableBindings": [
+            "schemaVersion",
+            "kind",
+            "workItemId",
+            "baselineFingerprint",
+            "acceptance.requirementIds",
+            "tests.argv",
+        ],
+        "evidenceDeltaTemplate": delta_template,
         "constraints": {
             "requiredSkills": skills,
             "acceptanceIds": [item["id"] for item in definition["acceptance"]],
-            "acceptanceCriteria": [
-                {
-                    "id": item["id"],
-                    "requirementIds": list(item["requirementIds"]),
-                    "requirements": [
-                        requirements_by_id[requirement_id]
-                        for requirement_id in item["requirementIds"]
-                    ],
-                    "expectedResult": item["expectedResult"],
-                }
+            "acceptanceExpectedResults": {
+                item["id"]: item["expectedResult"]
                 for item in definition["acceptance"]
-            ],
-            "testArgv": [list(argv) for argv in definition["testCommands"]],
-            "testArgvMatching": "ONE_EXACT_ARGV_ARRAY_PER_FROZEN_COMMAND",
+            },
+            "testCommandIndexes": list(range(len(definition["testCommands"]))),
             "allowedChangedFiles": (
                 sorted(allowed_changed_files)
                 if definition["kind"] == "TASK"
                 else None
             ),
+            "addOnlyGeneratedRoots": generated_roots,
             "testsRun": "OPTIONAL_NON_NEGATIVE_INTEGER",
             "passRequires": [
                 "outOfScopeFiles must be empty",
@@ -528,63 +779,51 @@ def task_result_evidence_contract(
     authorized_file_changes: list[dict[str, Any]],
     required_skills: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Return directly fillable result templates bound to the active claim."""
+    """Return the compact v3 delta contract bound to the active claim."""
     operation_id = entry["claim"]["operationId"]
     test_templates = [
         {
-            "argv": list(argv),
+            "commandIndex": index,
             "exitCode": "<INTEGER>",
-            "testsRun": "<OPTIONAL_NON_NEGATIVE_INTEGER>",
         }
-        for argv in definition["testCommands"]
+        for index, _ in enumerate(definition["testCommands"])
     ]
     skills = required_skills or []
-    shared = {
-        "schemaVersion": SCHEMA_VERSION,
-        "kind": "TASK_RESULT",
-        "taskId": entry["id"],
-        "operationId": operation_id,
+    generated_roots = _generated_file_roots(definition)
+    delta_template = {
         "summary": "<REQUIRED_NON_EMPTY_STRING>",
         "changedFiles": [],
         "tests": test_templates,
+        "blockers": [],
+        "failure": None,
     }
-    exact_fields = set(TASK_RESULT_ARTIFACT_FIELDS)
+    if generated_roots:
+        delta_template["generatedFiles"] = []
     if skills:
-        exact_fields.add("skillUsage")
-        shared["skillUsage"] = _skill_usage_template(skills)
+        delta_template["skillUsage"] = _skill_usage_template(skills)
     return {
         "schemaVersion": SCHEMA_VERSION,
         "artifactKind": "TASK_RESULT",
+        "submissionMode": "DELTA",
         "taskId": entry["id"],
         "operationId": operation_id,
-        "exactTopLevelKeys": sorted(exact_fields),
-        "artifactTemplates": {
-            "IMPLEMENTED": {
-                **shared,
-                "status": "IMPLEMENTED",
-                "blockers": [],
-                "failure": None,
-            },
-            "BLOCKED": {
-                **shared,
-                "status": "BLOCKED",
-                "blockers": ["<ONE_OR_MORE_REQUIRED_NON_EMPTY_STRINGS>"],
-                "failure": {
-                    "class": "<FAILURE_CLASS>",
-                    "code": "<UPPER_SNAKE_CASE_CODE>",
-                    "summary": "<REQUIRED_NON_EMPTY_STRING>",
-                },
-            },
-        },
+        "immutableBindings": [
+            "schemaVersion",
+            "kind",
+            "taskId",
+            "operationId",
+            "status",
+            "tests.argv",
+        ],
+        "evidenceDeltaTemplate": delta_template,
         "constraints": {
             "requiredSkills": skills,
             "statusValues": ["IMPLEMENTED", "BLOCKED"],
-            "frozenTestArgv": [
-                list(argv) for argv in definition["testCommands"]
-            ],
+            "testCommandIndexes": list(range(len(definition["testCommands"]))),
             "authorizedChangedFiles": sorted(
                 item["path"] for item in authorized_file_changes
             ),
+            "addOnlyGeneratedRoots": generated_roots,
             "changedFilesPolicy": (
                 "REPORT_FACTUAL_FILES; AUTHORIZATION_IS_ENFORCED_BY_GATE"
             ),
@@ -736,10 +975,14 @@ def task_result_artifact_issues(
     operation_id: str,
     requested_status: str,
     required_skills: list[dict[str, Any]] | None = None,
+    generated_file_roots: list[dict[str, str]] | None = None,
 ) -> list[str]:
     """Return precise field-level issues for one Task result artifact."""
     skills = required_skills or []
     expected_fields = set(TASK_RESULT_ARTIFACT_FIELDS)
+    generated_roots = generated_file_roots or []
+    if generated_roots:
+        expected_fields.add("generatedFiles")
     if skills:
         expected_fields.add("skillUsage")
     issues = _key_issues(value, expected_fields)
@@ -772,6 +1015,38 @@ def task_result_artifact_issues(
             if not non_empty_string(path):
                 issues.append(
                     f"changedFiles[{index}] must be a non-empty string"
+                )
+    if generated_roots:
+        generated_files = value.get("generatedFiles")
+        issues.extend(_generated_file_issues(
+            changed_files=changed_files,
+            generated_files=generated_files,
+            generated_file_roots=generated_roots,
+            field="generatedFiles",
+        ))
+        if isinstance(changed_files, list) and isinstance(
+            generated_files,
+            list,
+        ):
+            declared = {
+                str(path).replace("\\", "/")
+                for path in generated_files
+                if isinstance(path, str)
+            }
+            undeclared = sorted(
+                str(path).replace("\\", "/")
+                for path in changed_files
+                if isinstance(path, str)
+                and _path_in_generated_roots(path, generated_roots)
+                and str(path).replace("\\", "/") not in declared
+            )
+            if undeclared:
+                issues.append(
+                    (
+                        "changedFiles under ADD-only generated roots must "
+                        "also appear in generatedFiles: "
+                    )
+                    + ", ".join(undeclared)
                 )
 
     tests = value.get("tests")
@@ -953,6 +1228,19 @@ def gate_artifact_issues(
 
     scope = value.get("scope")
     if definition["kind"] == "TASK" and isinstance(scope, dict):
+        generated_roots = _generated_file_roots(definition)
+        generated_files = scope.get("generatedFiles", [])
+        issues.extend(_generated_file_issues(
+            changed_files=scope.get("changedFiles"),
+            generated_files=generated_files,
+            generated_file_roots=generated_roots,
+            field="scope.generatedFiles",
+        ))
+        declared_generated = {
+            str(path).replace("\\", "/")
+            for path in generated_files
+            if isinstance(path, str)
+        }
         allowed = {
             item["path"]
             for item in definition["developmentPlan"].get("fileChanges", [])
@@ -961,7 +1249,11 @@ def gate_artifact_issues(
         unauthorized = sorted(
             path.replace("\\", "/")
             for path in scope.get("changedFiles", [])
-            if isinstance(path, str) and path.replace("\\", "/") not in allowed
+            if (
+                isinstance(path, str)
+                and path.replace("\\", "/") not in allowed
+                and path.replace("\\", "/") not in declared_generated
+            )
         )
         if unauthorized:
             issues.append(
@@ -1025,6 +1317,10 @@ def valid_gate_artifact(
     expected_fields = set(GATE_ARTIFACT_FIELDS)
     if skills:
         expected_fields.add("skillUsage")
+    generated_roots = _generated_file_roots(definition)
+    expected_scope_fields = {"changedFiles", "outOfScopeFiles"}
+    if generated_roots:
+        expected_scope_fields.add("generatedFiles")
     if not (
         set(value) == expected_fields
         and value.get("schemaVersion") == SCHEMA_VERSION
@@ -1034,11 +1330,17 @@ def valid_gate_artifact(
         and value.get("verdict") in {"PASS", "FAIL"}
         and non_empty_string(value.get("summary"))
         and isinstance(scope, dict)
-        and set(scope) == {"changedFiles", "outOfScopeFiles"}
+        and set(scope) == expected_scope_fields
         and isinstance(scope.get("changedFiles"), list)
         and all(non_empty_string(item) for item in scope["changedFiles"])
         and isinstance(scope.get("outOfScopeFiles"), list)
         and all(non_empty_string(item) for item in scope["outOfScopeFiles"])
+        and not _generated_file_issues(
+            changed_files=scope.get("changedFiles"),
+            generated_files=scope.get("generatedFiles", []),
+            generated_file_roots=generated_roots,
+            field="scope.generatedFiles",
+        )
         and isinstance(value.get("acceptance"), list)
         and len(value["acceptance"]) == len(definition["acceptance"])
         and all(
@@ -1095,8 +1397,14 @@ def valid_gate_artifact(
             return False
     planned_files = {item["path"] for item in definition["developmentPlan"].get("fileChanges", [])}
     planned_files.update(additional_planned_files or set())
+    generated_files = {
+        item.replace("\\", "/")
+        for item in scope.get("generatedFiles", [])
+    }
     if definition["kind"] == "TASK" and any(
-        item.replace("\\", "/") not in planned_files for item in scope["changedFiles"]
+        item.replace("\\", "/") not in planned_files
+        and item.replace("\\", "/") not in generated_files
+        for item in scope["changedFiles"]
     ):
         return False
     if value["verdict"] == "PASS":

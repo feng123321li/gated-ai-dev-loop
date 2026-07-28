@@ -91,6 +91,10 @@ class ReviewBlockedTests(unittest.TestCase):
             root=root,
             hierarchy=task_hierarchy(requiredSkills=[FINAL_REVIEW_SKILL]),
             host_runtime="codex",
+            available_skills={
+                "root": [FINAL_REVIEW_SKILL["name"]],
+                "project": [],
+            },
         )
         task_id = prepared["rootId"]
         freeze_hierarchy(
@@ -385,17 +389,28 @@ class ReviewBlockedTests(unittest.TestCase):
             set(tool["inputSchema"]["properties"]),
             {"item_id", "evidence"},
         )
-        with patch.object(
-            operations,
-            "record_acceptance",
-            return_value={"action": "REVIEW_BLOCKED"},
-        ) as record:
+        with (
+            patch.object(
+                operations,
+                "record_acceptance",
+                return_value={"action": "REVIEW_BLOCKED"},
+            ) as record,
+            patch.object(
+                operations,
+                "get_graph_frontier",
+                return_value={"responseMode": "COMPACT"},
+            ),
+        ):
             operation_result = operations.execute_operation(
                 "record_independent_review_blocked",
                 {"item_id": "root-one", "evidence": artifact},
                 context=operations.OperationContext(root="C:/fixed-project"),
             )
         self.assertEqual(operation_result["action"], "REVIEW_BLOCKED")
+        self.assertEqual(
+            operation_result["nextFrontier"],
+            {"responseMode": "COMPACT"},
+        )
         self.assertEqual(record.call_args.kwargs["action"], "REVIEW_BLOCKED")
 
 

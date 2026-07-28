@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from hdg.acceptance import accept_work_item, record_acceptance
 from hdg.errors import GatedLoopError
@@ -183,10 +184,18 @@ class ValidationRemediationTests(unittest.TestCase):
                 operation_id="op-remediation",
             )
             self.assertEqual(
-                [item["path"] for item in dispatched["task"]["authorizedFileChanges"]],
+                [
+                    item["path"]
+                    for item in dispatched["context"][
+                        "authorizedFileChanges"
+                    ]
+                ],
                 ["src/controller.py", "src/controller_docs.py", "tests/test_controller.py"],
             )
-            self.assertEqual(len(dispatched["task"]["validationRemediations"]), 1)
+            self.assertEqual(
+                len(dispatched["context"]["validationRemediations"]),
+                1,
+            )
             record_task_result(
                 root=temporary,
                 item_id=task_id,
@@ -241,6 +250,75 @@ class ValidationRemediationTests(unittest.TestCase):
                 self.assertIn("src/controller_docs.py", rendered)
                 self.assertIn("未授权文件：无", rendered)
             self.assertIn("VALIDATION_REMEDIATION", interaction_log)
+
+    def test_user_acceptance_adjustment_uses_incremental_projection(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            prepared, task_id, baseline = self._prepare_implemented_task(
+                temporary,
+            )
+            self._gate(
+                temporary,
+                task_id,
+                baseline,
+                ["src/controller.py", "tests/test_controller.py"],
+            )
+            record_acceptance(
+                root=temporary,
+                item_id=task_id,
+                action="INDEPENDENT_REVIEW_PASS",
+                evidence={
+                    "schemaVersion": 3,
+                    "kind": "INDEPENDENT_REVIEW",
+                    "reviewer": "independent-reviewer",
+                    "isolation": "FRESH_READ_ONLY",
+                    "verdict": "PASS",
+                    "findings": {"p0": 0, "p1": 0},
+                },
+            )
+            remediation = self._remediation(task_id, baseline)
+            remediation["source"] = "USER_ACCEPTANCE"
+            remediation["summary"] = (
+                "Apply the user's final acceptance adjustment within the "
+                "unchanged requirement contract."
+            )
+
+            with (
+                patch.object(
+                    GovernanceRepository,
+                    "refresh_incremental_projections",
+                    autospec=True,
+                ) as incremental,
+                patch.object(
+                    GovernanceRepository,
+                    "refresh_registry_projections",
+                    autospec=True,
+                ) as full,
+            ):
+                result = record_validation_remediation(
+                    root=temporary,
+                    item_id=task_id,
+                    expected_baseline_fingerprint=prepared[
+                        "baselineFingerprints"
+                    ][task_id],
+                    evidence=remediation,
+                )
+
+            self.assertEqual(
+                result["remediation"]["artifact"]["source"],
+                "USER_ACCEPTANCE",
+            )
+            full.assert_not_called()
+            incremental.assert_called_once()
+            self.assertEqual(
+                incremental.call_args.args[2],
+                {task_id},
+            )
+            self.assertEqual(
+                incremental.call_args.args[3],
+                {task_id},
+            )
 
     def test_completed_requirement_cannot_be_remediated_in_place(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

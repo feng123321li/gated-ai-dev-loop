@@ -364,6 +364,10 @@ class RuntimeFsmTests(unittest.TestCase):
                 root=temporary,
                 hierarchy=hierarchy,
                 host_runtime="codex",
+                available_skills={
+                    "root": ["tdd-workflow"],
+                    "project": [],
+                },
                 now=self.START,
             )
             task_id = prepared["rootId"]
@@ -867,7 +871,7 @@ class RuntimeFsmTests(unittest.TestCase):
                 contract_kind="result",
             )["evidenceContract"]
             self.assertEqual(
-                result_contract["artifactTemplates"]["IMPLEMENTED"]["operationId"],
+                result_contract["operationId"],
                 "op-recovered",
             )
             recorded = record_task_result(

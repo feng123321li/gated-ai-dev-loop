@@ -761,9 +761,18 @@ def render_development_review(report: dict[str, Any]) -> str:
     plan = report["developmentPlan"]
     result = (report.get("result") or {}).get("artifact") or {}
     planned_files = [item["path"] for item in plan.get("fileChanges", [])]
+    generated_roots = [
+        item["path"]
+        for item in plan.get("generatedFileRoots", [])
+    ]
+    generated_files = [
+        item.replace("\\", "/")
+        for item in result.get("generatedFiles", [])
+    ]
     remediation_files = [item["path"] for item in _validation_remediation_changes(report)]
     authorized_files = planned_files + [item for item in remediation_files if item not in planned_files]
     actual_files = [item.replace("\\", "/") for item in result.get("changedFiles", [])]
+    authorized_actual = set(authorized_files) | set(generated_files)
     tests = result.get("tests", [])
     lines = [
         f"# 开发复核：{report['workItem']['title']}",
@@ -777,9 +786,11 @@ def render_development_review(report: dict[str, Any]) -> str:
         "",
         f"- 开发目的：{plan['purpose']}",
         f"- 冻结计划文件：{'、'.join(planned_files) or '无'}",
+        f"- ADD-only 生成目录：{'、'.join(generated_roots) or '无'}",
+        f"- 实际新增生成文件：{'、'.join(generated_files) or '无'}",
         f"- 验证修正补充文件：{'、'.join(remediation_files) or '无'}",
         f"- 实际文件：{'、'.join(actual_files) or '无'}",
-        f"- 未授权文件：{'、'.join(item for item in actual_files if item not in authorized_files) or '无'}",
+        f"- 未授权文件：{'、'.join(item for item in actual_files if item not in authorized_actual) or '无'}",
         f"- 尚未观察到的授权文件：{'、'.join(item for item in authorized_files if item not in actual_files) or '无'}",
         "",
         "## 接口与功能复核",
@@ -951,38 +962,125 @@ def render_acceptance_report(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def compact_task_context(context: dict[str, Any]) -> dict[str, Any]:
+    """Return the minimum worker-facing view of a stored Task context."""
+    operation = context.get("operation")
+    task = context["task"]
+    remediations = []
+    for record in task.get("validationRemediations", []):
+        artifact = record.get("artifact", {})
+        remediations.append({
+            "source": artifact.get("source"),
+            "summary": artifact.get("summary"),
+            "acceptanceIds": artifact.get("acceptanceIds", []),
+            "fileChanges": artifact.get("fileChanges", []),
+            "recordedAt": record.get("recordedAt"),
+        })
+
+    relevant_shared_contracts = []
+    for parent in context.get("parentContracts", []):
+        child_id = parent["childContract"]["id"]
+        for contract in parent["developmentPlan"].get("sharedContracts", []):
+            provider_ids = contract.get("providerChildIds", [])
+            consumer_ids = contract.get("consumerChildIds", [])
+            if child_id not in provider_ids and child_id not in consumer_ids:
+                continue
+            relevant_shared_contracts.append({
+                "parentId": parent["id"],
+                "name": contract["name"],
+                "kind": contract["kind"],
+                "description": contract["description"],
+                "role": (
+                    "PROVIDER"
+                    if child_id in provider_ids
+                    else "CONSUMER"
+                ),
+                "requirementIds": contract["requirementIds"],
+            })
+
+    return {
+        "schemaVersion": context["schemaVersion"],
+        "task": {
+            "id": task["id"],
+            "title": task["title"],
+            "goal": task["goal"],
+            "baselineFingerprint": task["baselineFingerprint"],
+        },
+        "operation": (
+            {
+                "owner": operation["owner"],
+                "operationId": operation["operationId"],
+                "leaseExpiresAt": operation["leaseExpiresAt"],
+            }
+            if operation
+            else None
+        ),
+        "gateLevel": context["gateLevel"],
+        "developmentMode": context["developmentMode"],
+        "authorizedFileChanges": task["authorizedFileChanges"],
+        "generatedFileRoots": task.get("generatedFileRoots", []),
+        "validationRemediations": remediations,
+        "requirements": context["requirements"],
+        "acceptance": context["acceptance"],
+        "execution": context["execution"],
+        "testCommands": context["testCommands"],
+        "developmentRequiredSkills": [
+            item
+            for item in context["requiredSkills"]
+            if item["stage"] == "DEVELOPMENT"
+        ],
+        "relevantSharedContracts": relevant_shared_contracts,
+        "dependencies": [
+            {
+                "id": item["id"],
+                "status": item["status"],
+                "outputs": item["outputs"],
+            }
+            for item in context["dependencies"]
+        ],
+        "capabilityDependencies": [
+            {
+                "id": item["id"],
+                "status": item["status"],
+                "contractFingerprint": item["contractFingerprint"],
+            }
+            for item in context["capabilityDependencies"]
+        ],
+        "resultEvidenceContractRef": context["evidenceContractRefs"].get(
+            "result"
+        ),
+    }
+
+
 def render_task_handoff(context: dict[str, Any]) -> str:
-    display_operation = context["operation"]["operationId"] if context.get("operation") else "尚未认领；不得开始开发"
-    pretty = lambda value: json.dumps(value, ensure_ascii=False, indent=2, separators=(",", ": "))
+    display_operation = (
+        context["operation"]["operationId"]
+        if context.get("operation")
+        else "尚未认领；不得开始开发"
+    )
+    compact = compact_task_context(context)
     return "\n".join([
-        "请在一个全新的开发会话中实现以下已冻结 Task。",
+        "请在全新开发会话中实现这个已冻结 Task；不要重新分析原始需求。",
         "",
         f"Task：{context['task']['id']}",
-        f"Baseline fingerprint：{context['task']['baselineFingerprint']}",
-        f"Gate level：{context['gateLevel']}",
-        f"开发建议：{context['developmentMode']}",
         f"Operation ID：{display_operation}",
+        f"开发方案：[development-plan.md](development-plan.md)",
         "",
-        "以下冻结上下文是完整权威。不要重新分析原始需求、改变验收标准或继承其他会话的隐含假设。",
+        "最小执行规则：",
+        "- 先读取同目录开发方案；只写 authorizedFileChanges，或在 generatedFileRoots 下新增生成文件；不要修改治理文件、`.git/**` 或外部状态。",
+        "- 按 testCommands 运行定向测试并修复失败，只报告真实结果。",
+        "- 对 developmentRequiredSkills 使用当前宿主原生入口；每项保持独立 activation/conformance，内部 Skill 不递归升级为新的 required Skill 或 GATE。",
+        "- 结束前按 resultEvidenceContractRef 调用 `evidence_contract`，再提交 `task_result`；只返回 IMPLEMENTED 或 BLOCKED，不自行报告 PASS。",
+        "- 不提交、推送或发布；契约、拓扑或外部权限需要变化时 BLOCKED。",
         "",
-        "执行规则：",
-        "- 只实现这个冻结的叶子 Task，并且只写入 task.authorizedFileChanges；验证修正文件是原 Task 的追加授权，不是新需求。",
-        "- 不修改 SQLite、baseline、进度投影、`.git/**` 或外部状态。",
-        "- 运行列出的测试命令，只报告真实存在的证据。",
-        "- 冻结 requiredSkills 已授权当前 worker 自动执行；worker 必须在 MCP `dispatch_task` 前对每个 DEVELOPMENT required Skill 分别完成宿主原生调用，并用 MCP `record_skill_activation` 绑定当前 owner/operation 与独立原生调用 ID。不得要求用户再次输入 `$skill` 或确认 Skill；Read、load、父会话调用或只提名称都不合格。",
-        "- 完整应用 Skill 后、提交 MCP `task_result` 前，用 MCP `record_skill_conformance` 逐项记录针对实际代码、diff 和测试的命名检查；成功结果要求全部 INVOKED + PASS。Skill 不可用时激活、符合性和 result 如实 BLOCKED。",
-        "- 面向人的状态报告必须把控制器 UTC 时间转换为当前运行环境的本机时区，并显式标注 UTC 偏移；机器时间字段保持不变。",
-        "- 不提交、推送、发布，也不得自行报告 PASS。",
-        "- 最终只返回 IMPLEMENTED 或 BLOCKED，并携带当前 Operation ID、变更文件和测试事实。",
-        "- IMPLEMENTED 时 failure 必须为 null；BLOCKED 时必须改为 class/code/summary，并使用 RETRYABLE、REMEDIATION_REQUIRED、CONTRACT_CHANGE、EXTERNAL_AUTHORITY 或 NON_RETRYABLE 分类。",
-        "- 宿主必须先按 evidenceContractRefs.result 调用只读 MCP `evidence_contract`，取得绑定当前 operation 的 IMPLEMENTED/BLOCKED 模板，再用 MCP `task_result` 回收结果；IMPLEMENTED 不是完成状态。",
-        "- Result、Gate 或验证修正需要 evidence 时，宿主只按 evidenceContractRefs 从 SQLite 单项取得模板；不得读取控制器源码或 memory 文件反推 schema。",
-        "- Result evidence 的 skillUsage 必须与冻结 DEVELOPMENT Skill 精确一致，并具体说明完整流程如何用于本 Task；缺失时 IMPLEMENTED 会被机械拒绝。",
-        "- 门禁通过后仍需独立验收、生成用户验收报告并取得用户确认。",
-        "",
-        "冻结上下文：",
+        "最小开工上下文：",
         "```json",
-        pretty(context),
+        json.dumps(
+            compact,
+            ensure_ascii=False,
+            indent=2,
+            separators=(",", ": "),
+        ),
         "```",
         "",
     ])

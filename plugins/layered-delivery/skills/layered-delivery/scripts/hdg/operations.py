@@ -42,6 +42,7 @@ from .planning import (
 )
 from .remediation import record_validation_remediation
 from .repository import GovernanceRepository
+from .projections import compact_task_context
 from .skill_execution import (
     record_skill_activation,
     record_skill_conformance,
@@ -86,6 +87,23 @@ def _bounded_event_page(
         "items": items,
         "hasMore": has_more,
         "nextCursor": items[-1]["eventId"] if has_more and items else None,
+    }
+
+
+def _with_next_frontier(
+    result: dict[str, Any],
+    *,
+    root: str,
+    work_item_id: str,
+) -> dict[str, Any]:
+    return {
+        **result,
+        "nextFrontier": get_graph_frontier(
+            root=root,
+            work_item_id=work_item_id,
+            response_mode="compact",
+            include_blocked_details=False,
+        ),
     }
 
 
@@ -144,18 +162,23 @@ def execute_operation(
             root=root,
             hierarchy=arguments["hierarchy"],
             host_runtime=arguments["host_runtime"],
+            available_skills=arguments["available_skills"],
             explicit_dogfood=dogfood,
         )
     if name == "freeze_hierarchy":
-        return freeze_hierarchy(
+        return _with_next_frontier(
+            freeze_hierarchy(
+                root=root,
+                root_id=arguments["item_id"],
+                expected_hierarchy_fingerprint=arguments[
+                    "expected_hierarchy_fingerprint"
+                ],
+                development_mode=arguments["development_mode"],
+                confirmed=arguments["confirmed"],
+                explicit_dogfood=dogfood,
+            ),
             root=root,
-            root_id=arguments["item_id"],
-            expected_hierarchy_fingerprint=arguments[
-                "expected_hierarchy_fingerprint"
-            ],
-            development_mode=arguments["development_mode"],
-            confirmed=arguments["confirmed"],
-            explicit_dogfood=dogfood,
+            work_item_id=arguments["item_id"],
         )
     if name == "ready_tasks":
         return list_ready_tasks(
@@ -171,6 +194,12 @@ def execute_operation(
         return get_graph_frontier(
             root=root,
             work_item_id=arguments["item_id"],
+            response_mode=arguments.get("response_mode", "compact"),
+            since_revision=arguments.get("since_revision"),
+            include_blocked_details=arguments.get(
+                "include_blocked_details",
+                arguments.get("response_mode") == "full",
+            ),
         )
     if name == "graph_events":
         if "after_event_id" not in arguments and "limit" not in arguments:
@@ -202,10 +231,14 @@ def execute_operation(
             explicit_dogfood=dogfood,
         )
     if name == "advance_graph":
-        return advance_graph(
+        return _with_next_frontier(
+            advance_graph(
+                root=root,
+                work_item_id=arguments["item_id"],
+                explicit_dogfood=dogfood,
+            ),
             root=root,
             work_item_id=arguments["item_id"],
-            explicit_dogfood=dogfood,
         )
     if name == "cancel_graph_run":
         return cancel_graph_run(
@@ -215,11 +248,24 @@ def execute_operation(
             explicit_dogfood=dogfood,
         )
     if name == "task_context":
-        return build_task_context(
+        context = build_task_context(
             root=root,
             item_id=arguments["item_id"],
             explicit_dogfood=dogfood,
         )
+        if arguments.get("response_mode", "compact") == "full":
+            return context
+        return {
+            "contextMode": "COMPACT",
+            "context": compact_task_context(context),
+            "detailRef": {
+                "tool": "task_context",
+                "arguments": {
+                    "item_id": arguments["item_id"],
+                    "response_mode": "full",
+                },
+            },
+        }
     if name == "evidence_contract":
         return get_evidence_contract(
             root=root,
@@ -246,12 +292,16 @@ def execute_operation(
             explicit_dogfood=dogfood,
         )
     if name == "dispatch_task":
-        return dispatch_task(
+        return _with_next_frontier(
+            dispatch_task(
+                root=root,
+                item_id=arguments["item_id"],
+                owner=arguments["owner"],
+                operation_id=arguments["operation_id"],
+                explicit_dogfood=dogfood,
+            ),
             root=root,
-            item_id=arguments["item_id"],
-            owner=arguments["owner"],
-            operation_id=arguments["operation_id"],
-            explicit_dogfood=dogfood,
+            work_item_id=arguments["item_id"],
         )
     if name == "heartbeat_task":
         return heartbeat_task(
@@ -261,108 +311,160 @@ def execute_operation(
             explicit_dogfood=dogfood,
         )
     if name == "pause_task":
-        return pause_task(
+        return _with_next_frontier(
+            pause_task(
+                root=root,
+                item_id=arguments["item_id"],
+                operation_id=arguments["operation_id"],
+                explicit_dogfood=dogfood,
+            ),
             root=root,
-            item_id=arguments["item_id"],
-            operation_id=arguments["operation_id"],
-            explicit_dogfood=dogfood,
+            work_item_id=arguments["item_id"],
         )
     if name == "resume_task":
-        return resume_task(
+        return _with_next_frontier(
+            resume_task(
+                root=root,
+                item_id=arguments["item_id"],
+                explicit_dogfood=dogfood,
+            ),
             root=root,
-            item_id=arguments["item_id"],
-            explicit_dogfood=dogfood,
+            work_item_id=arguments["item_id"],
         )
     if name == "claim_task":
-        return claim_task(
+        return _with_next_frontier(
+            claim_task(
+                root=root,
+                item_id=arguments["item_id"],
+                owner=arguments["owner"],
+                operation_id=arguments["operation_id"],
+                explicit_dogfood=dogfood,
+            ),
             root=root,
-            item_id=arguments["item_id"],
-            owner=arguments["owner"],
-            operation_id=arguments["operation_id"],
-            explicit_dogfood=dogfood,
+            work_item_id=arguments["item_id"],
         )
     if name == "task_result":
-        return record_task_result(
+        return _with_next_frontier(
+            record_task_result(
+                root=root,
+                item_id=arguments["item_id"],
+                operation_id=arguments["operation_id"],
+                status=arguments["status"],
+                evidence=arguments["evidence"],
+                explicit_dogfood=dogfood,
+            ),
             root=root,
-            item_id=arguments["item_id"],
-            operation_id=arguments["operation_id"],
-            status=arguments["status"],
-            evidence=arguments["evidence"],
-            explicit_dogfood=dogfood,
+            work_item_id=arguments["item_id"],
         )
     if name == "remediate_task":
-        return record_validation_remediation(
+        return _with_next_frontier(
+            record_validation_remediation(
+                root=root,
+                item_id=arguments["item_id"],
+                expected_baseline_fingerprint=arguments[
+                    "expected_baseline_fingerprint"
+                ],
+                evidence=arguments["evidence"],
+                explicit_dogfood=dogfood,
+            ),
             root=root,
-            item_id=arguments["item_id"],
-            expected_baseline_fingerprint=arguments[
-                "expected_baseline_fingerprint"
-            ],
-            evidence=arguments["evidence"],
-            explicit_dogfood=dogfood,
+            work_item_id=arguments["item_id"],
         )
     if name == "retry_item":
-        return retry_work_item(
+        return _with_next_frontier(
+            retry_work_item(
+                root=root,
+                item_id=arguments["item_id"],
+                expected_baseline_fingerprint=arguments[
+                    "expected_baseline_fingerprint"
+                ],
+                explicit_dogfood=dogfood,
+            ),
             root=root,
-            item_id=arguments["item_id"],
-            expected_baseline_fingerprint=arguments[
-                "expected_baseline_fingerprint"
-            ],
-            explicit_dogfood=dogfood,
+            work_item_id=arguments["item_id"],
         )
     if name == "gate_item":
-        return record_work_item_gate(
+        return _with_next_frontier(
+            record_work_item_gate(
+                root=root,
+                item_id=arguments["item_id"],
+                status=arguments["status"],
+                evidence=arguments["evidence"],
+                explicit_dogfood=dogfood,
+            ),
             root=root,
-            item_id=arguments["item_id"],
-            status=arguments["status"],
-            evidence=arguments["evidence"],
-            explicit_dogfood=dogfood,
+            work_item_id=arguments["item_id"],
         )
     if name == "accept_item":
-        return accept_work_item(
+        return _with_next_frontier(
+            accept_work_item(
+                root=root,
+                item_id=arguments["item_id"],
+                evidence=arguments["evidence"],
+                explicit_dogfood=dogfood,
+            ),
             root=root,
-            item_id=arguments["item_id"],
-            evidence=arguments["evidence"],
-            explicit_dogfood=dogfood,
+            work_item_id=arguments["item_id"],
         )
     if name == "record_acceptance":
-        return record_acceptance(
+        return _with_next_frontier(
+            record_acceptance(
+                root=root,
+                item_id=arguments["item_id"],
+                action=arguments["action"],
+                evidence=arguments["evidence"],
+                explicit_dogfood=dogfood,
+            ),
             root=root,
-            item_id=arguments["item_id"],
-            action=arguments["action"],
-            evidence=arguments["evidence"],
-            explicit_dogfood=dogfood,
+            work_item_id=arguments["item_id"],
         )
     if name == "record_independent_review_pass":
-        return record_acceptance(
+        return _with_next_frontier(
+            record_acceptance(
+                root=root,
+                item_id=arguments["item_id"],
+                action="INDEPENDENT_REVIEW_PASS",
+                evidence=arguments["evidence"],
+                explicit_dogfood=dogfood,
+            ),
             root=root,
-            item_id=arguments["item_id"],
-            action="INDEPENDENT_REVIEW_PASS",
-            evidence=arguments["evidence"],
-            explicit_dogfood=dogfood,
+            work_item_id=arguments["item_id"],
         )
     if name == "record_independent_review_blocked":
-        return record_acceptance(
+        return _with_next_frontier(
+            record_acceptance(
+                root=root,
+                item_id=arguments["item_id"],
+                action="REVIEW_BLOCKED",
+                evidence=arguments["evidence"],
+                explicit_dogfood=dogfood,
+            ),
             root=root,
-            item_id=arguments["item_id"],
-            action="REVIEW_BLOCKED",
-            evidence=arguments["evidence"],
-            explicit_dogfood=dogfood,
+            work_item_id=arguments["item_id"],
         )
     if name == "record_human_review_acceptance":
-        return record_acceptance(
+        return _with_next_frontier(
+            record_acceptance(
+                root=root,
+                item_id=arguments["item_id"],
+                action="HUMAN_REVIEW_ACCEPTED",
+                evidence=arguments["evidence"],
+                explicit_dogfood=dogfood,
+            ),
             root=root,
-            item_id=arguments["item_id"],
-            action="HUMAN_REVIEW_ACCEPTED",
-            evidence=arguments["evidence"],
-            explicit_dogfood=dogfood,
+            work_item_id=arguments["item_id"],
         )
     if name == "record_user_confirmation":
-        return record_acceptance(
+        return _with_next_frontier(
+            record_acceptance(
+                root=root,
+                item_id=arguments["item_id"],
+                action="USER_CONFIRMED",
+                evidence=arguments["evidence"],
+                explicit_dogfood=dogfood,
+            ),
             root=root,
-            item_id=arguments["item_id"],
-            action="USER_CONFIRMED",
-            evidence=arguments["evidence"],
-            explicit_dogfood=dogfood,
+            work_item_id=arguments["item_id"],
         )
     if name == "refresh_projections":
         return refresh_work_item_projections(

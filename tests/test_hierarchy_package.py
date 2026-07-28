@@ -56,6 +56,52 @@ class HierarchyPackageTests(unittest.TestCase):
                 "work-items/c-python-runtime/children/t-python-controller",
             )
 
+    def test_development_handoff_keeps_only_minimum_worker_context(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            hierarchy = self._capability_hierarchy()
+            task_id = hierarchy["root"]["children"][0]["definition"]["id"]
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=hierarchy,
+                host_runtime="codex",
+            )
+            freeze_hierarchy(
+                root=temporary,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+                development_mode="active",
+                confirmed=True,
+            )
+
+            dispatched = dispatch_task(
+                root=temporary,
+                item_id=task_id,
+                owner="developer",
+                operation_id="op-compact-handoff",
+            )
+            handoff = (
+                Path(temporary)
+                / dispatched["humanArtifacts"]["developmentHandoff"]
+            ).read_text(encoding="utf-8")
+
+            self.assertLess(len(handoff.encode("utf-8")), 6000)
+            self.assertIn(
+                "开发方案：[development-plan.md](development-plan.md)",
+                handoff,
+            )
+            self.assertIn('"authorizedFileChanges"', handoff)
+            self.assertIn('"requirements"', handoff)
+            self.assertIn('"acceptance"', handoff)
+            self.assertIn('"testCommands"', handoff)
+            self.assertIn('"resultEvidenceContractRef"', handoff)
+            self.assertNotIn('"developmentPlan"', handoff)
+            self.assertNotIn('"parentContracts"', handoff)
+            self.assertNotIn('"requiredSkillPolicy"', handoff)
+            self.assertNotIn('"leasePolicy"', handoff)
+            self.assertNotIn("parentContracts", dispatched)
+            self.assertNotIn("requiredSkillPolicy", dispatched)
+            self.assertEqual(dispatched["contextMode"], "COMPACT")
+
     def test_all_legal_depths_use_exactly_one_requirement_root_directory(self) -> None:
         cases = (
             (task_hierarchy(), "t-python-controller", "work-items/t-python-controller"),

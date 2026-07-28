@@ -37,6 +37,10 @@ REQUIRED_SKILLS = [
         "purpose": "Run the complete independent Python review workflow before user confirmation.",
     },
 ]
+AVAILABLE_SKILLS = {
+    "root": sorted(item["name"] for item in REQUIRED_SKILLS),
+    "project": [],
+}
 
 
 def _skill_usage(name: str, stage: str, evidence: str) -> dict[str, str]:
@@ -96,6 +100,169 @@ def _gate(task_id: str, baseline: str) -> dict:
 
 
 class RequiredSkillContractTests(unittest.TestCase):
+    def test_prepare_rejects_an_unavailable_custom_skill_before_writing(self) -> None:
+        misspelled_skills = [{
+            "name": "erp-dubbo-api-generatr",
+            "stages": ["DEVELOPMENT"],
+            "purpose": "Generate the requested Dubbo API during development.",
+        }]
+        misspelled_hierarchy = task_hierarchy(
+            requiredSkills=misspelled_skills
+        )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(GatedLoopError) as raised:
+                prepare_hierarchy(
+                    root=temporary,
+                    hierarchy=misspelled_hierarchy,
+                    host_runtime="codex",
+                )
+
+            self.assertEqual(
+                raised.exception.code,
+                "WORK_ITEM_SKILL_CATALOG_REQUIRED",
+            )
+            self.assertEqual(
+                raised.exception.details["hostAction"],
+                "DISCOVER_REGISTERED_SKILL_CATALOG",
+            )
+            self.assertFalse(Path(temporary, ".layered-delivery").exists())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(GatedLoopError) as raised:
+                prepare_hierarchy(
+                    root=temporary,
+                    hierarchy=misspelled_hierarchy,
+                    host_runtime="codex",
+                    available_skills={
+                        "root": ["tdd-workflow"],
+                        "project": ["erp-dubbo-api-generator"],
+                    },
+                )
+
+            self.assertEqual(
+                raised.exception.code,
+                "WORK_ITEM_REQUIRED_SKILL_UNAVAILABLE",
+            )
+            self.assertEqual(
+                raised.exception.details["missingSkills"],
+                ["erp-dubbo-api-generatr"],
+            )
+            self.assertEqual(
+                raised.exception.details["hostAction"],
+                "PROMPT_SKILL_SELECTION_OR_INSTALL",
+            )
+            self.assertEqual(
+                raised.exception.details["skillOptions"],
+                [{
+                    "requested": "erp-dubbo-api-generatr",
+                    "candidates": [{
+                        "name": "erp-dubbo-api-generator",
+                        "sources": ["PROJECT"],
+                    }],
+                }],
+            )
+            self.assertEqual(
+                raised.exception.message,
+                "未找到指定的 Skill，可能是名称输入有误或尚未安装。",
+            )
+            self.assertEqual(
+                raised.exception.details["userPrompt"],
+                {
+                    "title": "未找到指定的 Skill",
+                    "message": (
+                        "未找到 Skill `erp-dubbo-api-generatr`，"
+                        "可能是名称输入有误或尚未安装。"
+                    ),
+                    "questions": [{
+                        "requested": "erp-dubbo-api-generatr",
+                        "prompt": "你想使用下面哪个 Skill？",
+                        "options": [{
+                            "label": "erp-dubbo-api-generator（项目级）",
+                            "value": "erp-dubbo-api-generator",
+                            "description": "该 Skill 已在当前项目中登记。",
+                        }],
+                        "fallback": (
+                            "如果以上选项都不正确，请修正 Skill 名称"
+                            "或先安装后重试。"
+                        ),
+                    }],
+                },
+            )
+            self.assertFalse(Path(temporary, ".layered-delivery").exists())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(GatedLoopError) as raised:
+                prepare_hierarchy(
+                    root=temporary,
+                    hierarchy=task_hierarchy(requiredSkills=[{
+                        **misspelled_skills[0],
+                        "name": "totally-unknown-skill",
+                    }]),
+                    host_runtime="codex",
+                    available_skills={
+                        "root": ["tdd-workflow"],
+                        "project": [],
+                    },
+                )
+
+            self.assertEqual(
+                raised.exception.details["userPrompt"]["questions"],
+                [{
+                    "requested": "totally-unknown-skill",
+                    "prompt": "没有找到相近的 Skill。",
+                    "options": [],
+                    "fallback": (
+                        "请检查 Skill 名称，或先安装该 Skill 后重试。"
+                    ),
+                }],
+            )
+            self.assertFalse(Path(temporary, ".layered-delivery").exists())
+
+        with tempfile.TemporaryDirectory() as temporary:
+            hierarchy = task_hierarchy(requiredSkills=[
+                {
+                    **misspelled_skills[0],
+                    "name": "erp-dubbo-api-generator",
+                },
+                {
+                    "name": "tdd-workflow",
+                    "stages": ["DEVELOPMENT"],
+                    "purpose": "Apply red-green-refactor during development.",
+                },
+            ])
+            prepared = prepare_hierarchy(
+                root=temporary,
+                hierarchy=hierarchy,
+                host_runtime="codex",
+                available_skills={
+                    "root": ["tdd-workflow"],
+                    "project": ["erp-dubbo-api-generator"],
+                },
+            )
+
+            self.assertEqual(
+                prepared["skillCatalogValidation"],
+                {
+                    "status": "PASS",
+                    "hostRuntime": "codex",
+                    "requiredSkills": [
+                        "erp-dubbo-api-generator",
+                        "tdd-workflow",
+                    ],
+                    "resolvedSkills": [
+                        {
+                            "name": "erp-dubbo-api-generator",
+                            "sources": ["PROJECT"],
+                        },
+                        {
+                            "name": "tdd-workflow",
+                            "sources": ["ROOT"],
+                        },
+                    ],
+                },
+            )
+
     def test_required_skills_are_strict_frozen_baseline_fields(self) -> None:
         source = task_definition(requiredSkills=REQUIRED_SKILLS)
         definition = validate_work_item_definition(source)
@@ -116,6 +283,18 @@ class RequiredSkillContractTests(unittest.TestCase):
         self.assertIn("tdd-workflow", baseline)
         self.assertIn("必须使用的 Skills", plan)
         self.assertIn("FINAL_REVIEW", plan)
+        self.assertIn(
+            "required Skill 是执行指令，不是业务需求分析输入",
+            plan,
+        )
+        self.assertIn(
+            "不预分析、不递归展开，也不自动加入 GATE",
+            plan,
+        )
+        self.assertIn(
+            "宿主级 root 与项目级 project catalog 联合验证存在",
+            plan,
+        )
 
         changed = deepcopy(source)
         changed["requiredSkills"][0]["purpose"] = (
@@ -200,6 +379,7 @@ class RequiredSkillContractTests(unittest.TestCase):
                 root=temporary,
                 hierarchy=task_hierarchy(requiredSkills=REQUIRED_SKILLS),
                 host_runtime="codex",
+                available_skills=AVAILABLE_SKILLS,
             )
             task_id = prepared["rootId"]
             freeze_hierarchy(
@@ -244,25 +424,15 @@ class RequiredSkillContractTests(unittest.TestCase):
                 operation_id="op-required-skills",
             )
             self.assertEqual(
-                [item["stage"] for item in context["requiredSkills"]],
-                ["DEVELOPMENT", "GATE", "FINAL_REVIEW"],
+                [
+                    item["stage"]
+                    for item in context["context"][
+                        "developmentRequiredSkills"
+                    ]
+                ],
+                ["DEVELOPMENT"],
             )
-            self.assertEqual(
-                context["requiredSkillPolicy"]["activation"],
-                "CURRENT_EXECUTOR_NATIVE_SKILL_INVOCATION_REQUIRED",
-            )
-            self.assertEqual(
-                context["requiredSkillPolicy"]["authorization"],
-                "FROZEN_REQUIRED_SKILLS",
-            )
-            self.assertEqual(
-                context["requiredSkillPolicy"]["invocation"],
-                "EXECUTION_ADAPTER_AUTOMATIC",
-            )
-            self.assertEqual(
-                context["requiredSkillPolicy"]["repeatUserPrompt"],
-                "FORBIDDEN_AFTER_FREEZE",
-            )
+            self.assertNotIn("requiredSkillPolicy", context)
 
             result_contract = get_evidence_contract(
                 root=temporary,
@@ -270,7 +440,7 @@ class RequiredSkillContractTests(unittest.TestCase):
                 contract_kind="result",
             )["evidenceContract"]
             self.assertEqual(
-                result_contract["artifactTemplates"]["IMPLEMENTED"][
+                result_contract["evidenceDeltaTemplate"][
                     "skillUsage"
                 ],
                 [{
@@ -337,7 +507,7 @@ class RequiredSkillContractTests(unittest.TestCase):
                 contract_kind="gate",
             )["evidenceContract"]
             self.assertEqual(
-                gate_contract["artifactTemplate"]["skillUsage"][0]["stage"],
+                gate_contract["evidenceDeltaTemplate"]["skillUsage"][0]["stage"],
                 "GATE",
             )
 
@@ -481,6 +651,7 @@ class RequiredSkillContractTests(unittest.TestCase):
                         requiredSkills=REQUIRED_SKILLS,
                     ),
                     host_runtime="codex",
+                    available_skills=AVAILABLE_SKILLS,
                 )
                 freeze_hierarchy(
                     root=temporary,
@@ -530,6 +701,7 @@ class RequiredSkillContractTests(unittest.TestCase):
                     root=temporary,
                     hierarchy=task_hierarchy(requiredSkills=REQUIRED_SKILLS),
                     host_runtime="codex",
+                    available_skills=AVAILABLE_SKILLS,
                 )
                 task_id = prepared["rootId"]
                 freeze_hierarchy(
@@ -682,6 +854,10 @@ class RequiredSkillContractTests(unittest.TestCase):
                 root=temporary,
                 hierarchy=hierarchy,
                 host_runtime="codex",
+                available_skills={
+                    "root": ["tdd-workflow"],
+                    "project": [],
+                },
             )
             freeze_hierarchy(
                 root=temporary,
@@ -744,6 +920,7 @@ class RequiredSkillContractTests(unittest.TestCase):
                 root=temporary,
                 hierarchy=task_hierarchy(requiredSkills=REQUIRED_SKILLS),
                 host_runtime="codex",
+                available_skills=AVAILABLE_SKILLS,
             )
             task_id = prepared["rootId"]
             freeze_hierarchy(

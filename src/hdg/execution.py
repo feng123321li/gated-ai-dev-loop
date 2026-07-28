@@ -8,6 +8,7 @@ from .constants import MAX_IDENTIFIER_LENGTH, SCHEMA_VERSION
 from .errors import fail
 from .evidence import (
     evidence_record,
+    hydrate_task_result_evidence,
     task_result_artifact_issues,
     task_result_evidence_contract,
 )
@@ -25,8 +26,13 @@ from .graph_runtime import (
     replay_graph_events,
 )
 from .model import required_skill_policy, work_item_child_contract_fingerprint
-from .projections import render_task_handoff
-from .repository import GovernanceRepository, timestamp, timestamp_after
+from .projections import compact_task_context, render_task_handoff
+from .repository import (
+    GOVERNANCE_DIRECTORY,
+    GovernanceRepository,
+    timestamp,
+    timestamp_after,
+)
 from .skill_execution import (
     assert_required_skill_activations,
     assert_required_skill_conformance,
@@ -263,12 +269,23 @@ def _validated_task_result_artifact(
     status: str,
 ) -> tuple[dict[str, str], dict[str, Any]]:
     operation_id = entry["claim"]["operationId"]
+    evidence = hydrate_task_result_evidence(
+        evidence,
+        entry=entry,
+        definition=definition,
+        status=status,
+    )
+    generated_file_roots = definition["developmentPlan"].get(
+        "generatedFileRoots",
+        [],
+    )
     issues = task_result_artifact_issues(
         evidence,
         item_id=entry["id"],
         operation_id=operation_id,
         requested_status=status,
         required_skills=required_skills,
+        generated_file_roots=generated_file_roots,
     )
     if issues:
         fail(
@@ -516,6 +533,10 @@ def _task_context(
             "developmentPlan": definition["developmentPlan"],
             "validationRemediations": validation_remediations,
             "authorizedFileChanges": authorized_file_changes,
+            "generatedFileRoots": definition["developmentPlan"].get(
+                "generatedFileRoots",
+                [],
+            ),
         },
         "parentContracts": parents,
         "capabilityDependencies": capability_dependencies,
@@ -611,13 +632,20 @@ def dispatch_task(
             registry,
             changed_item_ids=repository.lineage_item_ids(registry, item_id),
         )
+        base = (
+            f"{GOVERNANCE_DIRECTORY}/{entry['packagePath']}"
+        )
         return {
             "id": item_id,
             "status": entry["status"],
             "claim": claim,
             "leasePolicy": _lease_policy(item_id, claim),
-            **context,
-            "handoffPrompt": handoff,
+            "contextMode": "COMPACT",
+            "context": compact_task_context(context),
+            "humanArtifacts": {
+                "developmentPlan": f"{base}/development-plan.md",
+                "developmentHandoff": f"{base}/development-handoff.md",
+            },
         }
 
 

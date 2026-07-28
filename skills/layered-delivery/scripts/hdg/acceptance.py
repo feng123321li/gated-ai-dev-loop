@@ -8,6 +8,7 @@ from .evidence import (
     evidence_record,
     gate_artifact_issues,
     gate_evidence_contract,
+    hydrate_gate_evidence,
     review_evidence_contract,
     valid_gate_artifact,
     valid_review_artifact,
@@ -43,6 +44,11 @@ def _validated_gate_artifact(
     additional_planned_files: set[str] | None = None,
     required_skills: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, str], dict[str, Any]]:
+    evidence = hydrate_gate_evidence(
+        evidence,
+        entry=entry,
+        definition=definition,
+    )
     if not valid_gate_artifact(
         evidence,
         entry,

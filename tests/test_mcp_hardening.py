@@ -705,7 +705,9 @@ class PermissionAndStorageHardeningTests(unittest.TestCase):
                     True,
                 )
 
-    def test_tool_output_schema_requires_success_or_error_payload(self) -> None:
+    def test_tool_output_schema_keeps_only_the_shared_envelope_discriminator(
+        self,
+    ) -> None:
         schemas = {
             json.dumps(tool["outputSchema"], sort_keys=True)
             for tool in tool_definitions()
@@ -713,12 +715,21 @@ class PermissionAndStorageHardeningTests(unittest.TestCase):
         self.assertEqual(len(schemas), 1)
         schema = tool_definitions()[0]["outputSchema"]
         self.assertEqual(schema["type"], "object")
-        self.assertEqual(len(schema["oneOf"]), 2)
-        success, failure = schema["oneOf"]
-        self.assertEqual(success["properties"]["ok"]["const"], True)
-        self.assertEqual(success["required"], ["ok", "result"])
-        self.assertEqual(failure["properties"]["ok"]["const"], False)
-        self.assertEqual(failure["required"], ["ok", "error"])
+        self.assertEqual(
+            schema,
+            {
+                "type": "object",
+                "properties": {"ok": {"type": "boolean"}},
+                "required": ["ok"],
+            },
+        )
+        self.assertLess(
+            sum(
+                len(json.dumps(tool["outputSchema"]))
+                for tool in tool_definitions()
+            ),
+            4000,
+        )
 
 
 class BoundedQueryTests(unittest.TestCase):

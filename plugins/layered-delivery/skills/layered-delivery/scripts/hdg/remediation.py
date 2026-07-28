@@ -281,7 +281,18 @@ def record_validation_remediation(
                 affected_definition,
                 at,
             )
-        repository.write_registry(registry)
+        changed_item_ids: set[str] = set()
+        for affected in affected_entries:
+            changed_item_ids.update(
+                repository.lineage_item_ids(
+                    registry,
+                    affected["id"],
+                )
+            )
+        repository.write_registry(
+            registry,
+            changed_item_ids=changed_item_ids,
+        )
         return {
             "id": item_id,
             "status": entry["status"],

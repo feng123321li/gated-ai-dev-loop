@@ -2,7 +2,7 @@
 
 `layered-delivery` 用于治理 AI Agent 的软件开发过程。它先把需求整理成一份可人工评审的开发方案，再将方案冻结为可恢复的执行图，驱动 Agent 完成开发、测试、门禁、审查和最终验收。
 
-当前版本：**0.15.5**
+当前版本：**0.16.0**
 
 ## 能做什么
 
@@ -68,7 +68,11 @@ Agent 会按以下流程处理：
 
 `manual` 交接后不会重新准备需求、重新冻结、重新选择方式或逐 Task 请求确认。
 
-如果需求必须使用某个 Skill，直接在对话中说明即可。Agent 会把要求写入内部方案并在对应阶段实际调用，用户不需要填写 `requiredSkills` 字段。
+如果需求必须使用某个 Skill，直接在对话中说明即可，用户不需要填写 `requiredSkills` 字段。用户明确指定仅在开发过程中使用的 Skill 时，Agent 不预分析、不递归展开，也不自动加入 `GATE`；但会先同时检查宿主级 root 和当前项目级 project 的 Skill catalog。存在时才登记为 `DEVELOPMENT` 执行约束并在开发时调用；不存在或疑似打错字时，准备阶段会给出带来源的近似 Skill 选项，并显示人类友好的中文标题、说明、“宿主级/项目级”来源和安装兜底指引，让用户选择正确名称或安装，不会静默改名。
+
+Scope 按最小可用模块边界适当放宽，通常使用 `module/**`，以容纳同模块内必要的新文件；实际写授权仍由开发方案中的精确 `fileChanges` 冻结。不要使用全仓库 `**`，因为重叠 Scope 会减少 Task 并行度。
+
+低风险单目标需求优先采用根 Task + LIGHT：方案文字保持简洁、优先运行定向测试、开发 handoff 只携带最小开工上下文。独立验收、精确文件授权、真实测试、P0/P1 和最终用户确认仍保留。
 
 ## 哪些操作会要求确认
 
@@ -105,8 +109,7 @@ Claude Code 的 Auto 权限或代码编辑、测试命令权限属于宿主启�
 
 - [版本更新记录](CHANGELOG.md)
 - [Skill 使用规则](skills/layered-delivery/SKILL.md)
-- [完整工作流](skills/layered-delivery/references/workflow.md)
-- [开发方案字段](skills/layered-delivery/references/development-plan.md)
-- [required Skill 与执行门禁](skills/layered-delivery/references/development.md)
+- [规划与一次冻结](skills/layered-delivery/references/planning-quickstart.md)
+- [Graph 执行与修正](skills/layered-delivery/references/execution-quickstart.md)
 - [验收与最终确认](skills/layered-delivery/references/acceptance.md)
-- [SQLite 状态与恢复](skills/layered-delivery/references/task-registry.md)
+- [超限传输与断连恢复](skills/layered-delivery/references/mcp-transport.md)

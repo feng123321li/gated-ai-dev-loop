@@ -33,12 +33,17 @@ def _prepare(
     host_runtime: str,
     required_skills: list[dict] | None = None,
 ) -> tuple[str, str]:
+    selected_skills = required_skills or REQUIRED_SKILLS
     prepared = prepare_hierarchy(
         root=root,
         hierarchy=task_hierarchy(
-            requiredSkills=required_skills or REQUIRED_SKILLS
+            requiredSkills=selected_skills
         ),
         host_runtime=host_runtime,
+        available_skills={
+            "root": sorted(item["name"] for item in selected_skills),
+            "project": [],
+        },
     )
     item_id = prepared["rootId"]
     freeze_hierarchy(
@@ -123,17 +128,15 @@ class SkillExecutionContractTests(unittest.TestCase):
                 )
                 self.assertEqual(dispatched["status"], "CLAIMED")
                 self.assertEqual(
-                    dispatched["requiredSkillPolicy"]["hostBinding"],
-                    "CURRENT_STAGE_EXECUTION_HOST",
+                    [
+                        item["name"]
+                        for item in dispatched["context"][
+                            "developmentRequiredSkills"
+                        ]
+                    ],
+                    ["tdd-workflow"],
                 )
-                self.assertEqual(
-                    dispatched["requiredSkillPolicy"]["planningHost"],
-                    "AUDIT_ONLY_NOT_EXECUTION_CONSTRAINT",
-                )
-                self.assertEqual(
-                    dispatched["requiredSkillPolicy"]["mechanism"],
-                    NATIVE_MECHANISM,
-                )
+                self.assertNotIn("requiredSkillPolicy", dispatched)
 
     def test_new_activation_rejects_a_host_specific_legacy_mechanism(
         self,
@@ -467,25 +470,10 @@ class SkillExecutionContractTests(unittest.TestCase):
             )
             self.assertEqual(context["status"], "CLAIMED")
             self.assertEqual(
-                context["requiredSkillPolicy"]["activation"],
-                "CURRENT_EXECUTOR_NATIVE_SKILL_INVOCATION_REQUIRED",
+                context["context"]["developmentRequiredSkills"][0]["name"],
+                "tdd-workflow",
             )
-            self.assertEqual(
-                context["requiredSkillPolicy"]["authorization"],
-                "FROZEN_REQUIRED_SKILLS",
-            )
-            self.assertEqual(
-                context["requiredSkillPolicy"]["invocation"],
-                "EXECUTION_ADAPTER_AUTOMATIC",
-            )
-            self.assertEqual(
-                context["requiredSkillPolicy"]["repeatUserPrompt"],
-                "FORBIDDEN_AFTER_FREEZE",
-            )
-            self.assertEqual(
-                context["requiredSkillPolicy"]["loadingOnly"],
-                "REJECTED",
-            )
+            self.assertNotIn("requiredSkillPolicy", context)
 
     def test_host_specific_legacy_mechanisms_cannot_create_new_receipts(
         self,

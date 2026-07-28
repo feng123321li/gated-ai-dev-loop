@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ from .model import (
     iter_hierarchy_nodes,
     raw_definition,
     render_hierarchy_plan,
+    validate_skill_catalog,
     validate_hierarchy_definition,
     work_item_baseline_fingerprint,
     work_item_contract_fingerprint,
@@ -341,19 +343,152 @@ def _hierarchy_from_registry(
     return hierarchy, states, hierarchy_state, root_target
 
 
+def _human_skill_source(sources: list[str]) -> tuple[str, str]:
+    labels = {
+        "ROOT": "宿主级",
+        "PROJECT": "项目级",
+    }
+    source_label = "、".join(labels[source] for source in sources)
+    if sources == ["ROOT", "PROJECT"]:
+        description = "该 Skill 同时在宿主级和当前项目中登记。"
+    elif sources == ["ROOT"]:
+        description = "该 Skill 已在宿主级 catalog 中登记。"
+    else:
+        description = "该 Skill 已在当前项目中登记。"
+    return source_label, description
+
+
+def _skill_user_prompt(
+    missing_skills: list[str],
+    skill_options: list[dict[str, Any]],
+) -> dict[str, Any]:
+    questions = []
+    for skill_option in skill_options:
+        options = []
+        for candidate in skill_option["candidates"]:
+            source_label, description = _human_skill_source(
+                candidate["sources"]
+            )
+            options.append({
+                "label": f"{candidate['name']}（{source_label}）",
+                "value": candidate["name"],
+                "description": description,
+            })
+        has_candidates = bool(options)
+        questions.append({
+            "requested": skill_option["requested"],
+            "prompt": (
+                "你想使用下面哪个 Skill？"
+                if has_candidates
+                else "没有找到相近的 Skill。"
+            ),
+            "options": options,
+            "fallback": (
+                "如果以上选项都不正确，请修正 Skill 名称或先安装后重试。"
+                if has_candidates
+                else "请检查 Skill 名称，或先安装该 Skill 后重试。"
+            ),
+        })
+    requested = "、".join(f"`{name}`" for name in missing_skills)
+    return {
+        "title": "未找到指定的 Skill",
+        "message": (
+            f"未找到 Skill {requested}，可能是名称输入有误或尚未安装。"
+        ),
+        "questions": questions,
+    }
+
+
 def prepare_hierarchy(
     *,
     root: str,
     hierarchy: dict[str, Any],
     host_runtime: str,
+    available_skills: dict[str, list[str]] | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
     """Prepare one complete requirement tree and its single human plan."""
     from .host_runtime import require_host_runtime
 
+    input_mode = "FULL_HIERARCHY"
+    if (
+        isinstance(hierarchy, dict)
+        and set(hierarchy) == {"schemaVersion", "compactLightTask"}
+    ):
+        hierarchy = _hydrate_compact_light_task(hierarchy)
+        input_mode = "COMPACT_LIGHT_TASK"
     normalized = validate_hierarchy_definition(hierarchy)
     runtime = require_host_runtime(host_runtime)
+    required_skills = sorted({
+        requirement["name"]
+        for node in iter_hierarchy_nodes(normalized)
+        for requirement in node["definition"]["requiredSkills"]
+    })
+    if available_skills is None:
+        if required_skills:
+            fail(
+                "WORK_ITEM_SKILL_CATALOG_REQUIRED",
+                (
+                    "The current host Skill catalog is required before "
+                    "registering requiredSkills"
+                ),
+                requiredSkills=required_skills,
+                hostAction="DISCOVER_REGISTERED_SKILL_CATALOG",
+            )
+        catalog = {"root": [], "project": []}
+    else:
+        catalog = validate_skill_catalog(available_skills)
+    catalog_names = sorted(set(catalog["root"]) | set(catalog["project"]))
+    sources_by_name = {
+        name: [
+            scope.upper()
+            for scope in ("root", "project")
+            if name in catalog[scope]
+        ]
+        for name in catalog_names
+    }
+    missing_skills = sorted(set(required_skills) - set(catalog_names))
+    if missing_skills:
+        skill_options = []
+        for missing in missing_skills:
+            candidates = get_close_matches(
+                missing,
+                catalog_names,
+                n=5,
+                cutoff=0.6,
+            )
+            skill_options.append({
+                "requested": missing,
+                "candidates": [
+                    {
+                        "name": candidate,
+                        "sources": sources_by_name[candidate],
+                    }
+                    for candidate in candidates
+                ],
+            })
+        fail(
+            "WORK_ITEM_REQUIRED_SKILL_UNAVAILABLE",
+            "未找到指定的 Skill，可能是名称输入有误或尚未安装。",
+            missingSkills=missing_skills,
+            skillOptions=skill_options,
+            userPrompt=_skill_user_prompt(missing_skills, skill_options),
+            hostRuntime=runtime,
+            hostAction="PROMPT_SKILL_SELECTION_OR_INSTALL",
+        )
+    skill_catalog_validation = {
+        "status": "PASS",
+        "hostRuntime": runtime,
+        "requiredSkills": required_skills,
+        "resolvedSkills": [
+            {
+                "name": name,
+                "sources": sources_by_name[name],
+            }
+            for name in required_skills
+        ],
+    }
     repository = GovernanceRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     at = timestamp(now)
@@ -381,6 +516,7 @@ def prepare_hierarchy(
                     "created": False,
                     "revised": False,
                     "idempotent": True,
+                    "inputMode": input_mode,
                     "rootId": root_id,
                     "itemIds": [record["definition"]["id"] for record in records],
                     "stage": old_state["stage"],
@@ -399,6 +535,7 @@ def prepare_hierarchy(
                         "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
                     },
                     "hostAutomation": render_host_automation(old_states[root_id]["hostRuntime"]),
+                    "skillCatalogValidation": skill_catalog_validation,
                     "nextAction": _prepared_next_action(old_states[root_id]["hostRuntime"]),
                     "responseContract": _prepared_response_contract(
                         old_states[root_id]["hostRuntime"]
@@ -451,6 +588,7 @@ def prepare_hierarchy(
             "created": not replace,
             "revised": replace,
             "idempotent": False,
+            "inputMode": input_mode,
             "rootId": root_id,
             "itemIds": [record["definition"]["id"] for record in records],
             "stage": hierarchy_state["stage"],
@@ -469,9 +607,151 @@ def prepare_hierarchy(
                 "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
             },
             "hostAutomation": render_host_automation(runtime),
+            "skillCatalogValidation": skill_catalog_validation,
             "nextAction": _prepared_next_action(runtime),
             "responseContract": _prepared_response_contract(runtime),
         }
+
+
+def _hydrate_compact_light_task(
+    envelope: dict[str, Any],
+) -> dict[str, Any]:
+    """Expand the v3 LIGHT shorthand into the sole canonical v3 hierarchy."""
+    if envelope.get("schemaVersion") != SCHEMA_VERSION:
+        fail(
+            "WORK_ITEM_SCHEMA_INVALID",
+            f"Compact LIGHT input schemaVersion must be {SCHEMA_VERSION}",
+        )
+    compact = envelope.get("compactLightTask")
+    required = {
+        "id",
+        "title",
+        "goal",
+        "scope",
+        "requirements",
+        "acceptance",
+        "testCommands",
+        "fileChanges",
+        "logic",
+    }
+    optional = {
+        "nonGoals",
+        "requiredSkills",
+        "risks",
+        "decisions",
+        "scenarios",
+        "interfaces",
+        "dataAndTransactions",
+        "compatibility",
+        "reviewPoints",
+        "inputs",
+        "outputs",
+        "generatedFileRoots",
+    }
+    if not isinstance(compact, dict):
+        fail(
+            "WORK_ITEM_COMPACT_LIGHT_INVALID",
+            "compactLightTask must be an object",
+        )
+    missing = sorted(required - set(compact))
+    unknown = sorted(set(compact) - required - optional)
+    if missing or unknown:
+        fail(
+            "WORK_ITEM_COMPACT_LIGHT_INVALID",
+            "Compact LIGHT task contains missing or unknown fields",
+            missingFields=missing,
+            unknownFields=unknown,
+        )
+
+    requirements = compact["requirements"]
+    acceptance = compact["acceptance"]
+    test_commands = compact["testCommands"]
+    requirement_ids = [
+        item.get("id")
+        for item in requirements
+        if isinstance(item, dict)
+    ] if isinstance(requirements, list) else []
+    acceptance_ids = [
+        item.get("id")
+        for item in acceptance
+        if isinstance(item, dict)
+    ] if isinstance(acceptance, list) else []
+    command_indexes = (
+        list(range(len(test_commands)))
+        if isinstance(test_commands, list)
+        else []
+    )
+    goal = compact["goal"]
+    scenarios = compact.get("scenarios") or [{
+        "kind": "OTHER",
+        "title": "LIGHT task implementation",
+        "description": goal,
+        "requirementIds": requirement_ids,
+    }]
+    development_plan = {
+        "purpose": goal,
+        "scenarios": scenarios,
+        "fileChanges": compact["fileChanges"],
+        "generatedFileRoots": compact.get("generatedFileRoots", []),
+        "interfaces": compact.get("interfaces", []),
+        "logic": compact["logic"],
+        "dataAndTransactions": compact.get("dataAndTransactions", []),
+        "compatibility": compact.get(
+            "compatibility",
+            ["Preserve behavior outside the frozen Task scope."],
+        ),
+        "testPlan": [{
+            "acceptanceIds": acceptance_ids,
+            "approach": "Run every frozen test command for the LIGHT task.",
+            "commandIndexes": command_indexes,
+        }],
+        "reviewPoints": compact.get(
+            "reviewPoints",
+            ["Confirm scope, authorization, and acceptance evidence."],
+        ),
+    }
+    definition = {
+        "schemaVersion": SCHEMA_VERSION,
+        "id": compact["id"],
+        "kind": "TASK",
+        "gateLevel": "LIGHT",
+        "parentId": None,
+        "title": compact["title"],
+        "goal": goal,
+        "scope": compact["scope"],
+        "nonGoals": compact.get(
+            "nonGoals",
+            ["Do not change files outside the frozen Task scope."],
+        ),
+        "requirements": requirements,
+        "acceptance": acceptance,
+        "execution": {
+            "dependsOn": [],
+            "inputs": compact.get("inputs", []),
+            "outputs": compact.get(
+                "outputs",
+                ["Verified output for the compact LIGHT task."],
+            ),
+        },
+        "testCommands": test_commands,
+        "requiredSkills": compact.get("requiredSkills", []),
+        "risks": compact.get(
+            "risks",
+            ["No unresolved coordination-level risk was declared."],
+        ),
+        "decisions": compact.get(
+            "decisions",
+            ["Use one LIGHT Task because no decomposition is required."],
+        ),
+        "developmentPlan": development_plan,
+    }
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "root": {
+            "definition": definition,
+            "children": [],
+        },
+    }
 
 
 def _prepared_response_contract(host_runtime: str) -> dict[str, Any]:

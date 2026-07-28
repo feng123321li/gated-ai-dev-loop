@@ -1,6 +1,6 @@
 {
   "name": "layered-delivery",
-  "version": "0.15.4",
+  "version": "0.15.5",
   "description": "面向 AI 辅助开发、可人工评审的分层交付治理插件",
   "author": {
     "name": "layered-delivery contributors",
@@ -28,9 +28,6 @@
       "supports_parallel_tool_calls": false,
       "default_tools_approval_mode": "approve",
       "tools": {
-        "freeze_hierarchy": {
-          "approval_mode": "prompt"
-        },
         "rebuild_graph_run": {
           "approval_mode": "prompt"
         },

@@ -100,7 +100,6 @@ CONFIRMATION_TOOLS = {
 }
 
 REQUIRES_USER_INTERACTION = {
-    "freeze_hierarchy",
     "rebuild_graph_run",
     "cancel_graph_run",
     "record_human_review_acceptance",
@@ -1178,6 +1177,18 @@ class McpServerProtocolTests(unittest.TestCase):
         self.assertEqual(context.root, "C:/fixed-project")
         self.assertIs(context.explicit_dogfood, True)
         self.assertNotIn("confirmed", arguments)
+        freeze_definition = next(
+            tool
+            for tool in tool_definitions()
+            if tool["name"] == "freeze_hierarchy"
+        )
+        self.assertNotIn("_meta", freeze_definition)
+        self.assertIn(
+            "one-time authorization to freeze",
+            freeze_definition["inputSchema"]["properties"][
+                "development_mode"
+            ]["description"],
+        )
 
     def test_split_acceptance_operations_fix_their_domain_actions(self) -> None:
         cases = {

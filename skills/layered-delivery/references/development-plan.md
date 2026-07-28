@@ -1,6 +1,6 @@
 # 冻结前整树开发方案
 
-`developmentPlan` 是每个节点存入 SQLite baseline 的机器契约，不是开发完成后的总结。宿主先结合只读代码检索起草完整层级 definition，再调用 MCP `prepare_hierarchy`：每个节点目录生成自己的 `development-plan.md`，根级文件还会聚合整棵树。人工查看根级真实文件、选择开发方式并同意后，Agent 使用准备结果中的层级指纹和所选方式调用一次 MCP `freeze_hierarchy`。
+`developmentPlan` 是每个节点存入 SQLite baseline 的机器契约，不是开发完成后的总结。宿主先结合只读代码检索起草完整层级 definition，再调用 MCP `prepare_hierarchy`：每个节点目录生成自己的 `development-plan.md`，根级文件还会聚合整棵树。人工查看根级真实文件、同意当前方案并选择开发方式的同一回复就是冻结确认；Agent 紧邻该回复使用准备结果中的层级指纹和所选方式调用一次 MCP `freeze_hierarchy`，不得再次询问或等待单独工具批准。
 
 ## 完整 definition 外壳
 

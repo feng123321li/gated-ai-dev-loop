@@ -42,7 +42,7 @@ allowed-tools:
 
 1. 新需求读取规划类 references，选择最浅层级并形成完整 schema v3 树；通过 MCP 结构化参数调用 `prepare_hierarchy`。
 2. 展示返回的开发方案和图入口，说明范围、契约、依赖、测试与失败路由。每次确认提示都必须同时展示 `active` 和 `manual` 两种开发方式；修改方案时重新准备同一整树。
-3. 用户明确同意方案并选择方式后，使用返回的 `hierarchyFingerprint` 一次调用 `freeze_hierarchy`；MCP 不传 `confirmed` 布尔参数。Claude Code 还须先满足 [claude-automation.md](references/claude-automation.md) 的 tool 级权限前置条件。
+3. 用户明确同意方案并选择方式的回复，就是当前指纹方案的一次冻结确认。紧邻该回复使用返回的 `hierarchyFingerprint` 一次调用 `freeze_hierarchy`；不得再次询问、等待单独的工具批准或重放旧选择，MCP 也不传 `confirmed` 布尔参数。
 4. 冻结后每次迁移都重新查询 `graph_frontier`，完整消费 `actions` 与 `dispatchPlan`，不自行挑选 Task、排序或确定 Agent 数；`ADVANCE_GRAPH` 是租约硬过期后的确定性自动恢复动作，不请求人工重置。
 5. `DISPATCH_TASK`：完整消费调度计划并稳定排队，但只在 worker 真正取得执行容量时调用 `dispatch_task`，让 claim 按实际开工即时创建。当前会话就是没有独立宿主适配器时的执行适配器，必须以 `nextWakeAt` 为最长等待时间消费到期的 `HEARTBEAT_TASK`，不能在长实现、长测试或等待子 Agent 时漏掉续租；心跳使用控制器的轻量增量投影，不应触发整工作区 Markdown 重建。
 6. `DISPATCH_TASK`、`RUN_GATE`、`REQUEST_REVIEW`：冻结 action 已授权；适配器对每个 required Skill 自动执行“原生调用 → `record_skill_activation` → 完整流程 → `record_skill_conformance`”，不得索取用户触发。DEVELOPMENT 在 `dispatch_task` 前绑定同一 owner/operation；成功迁移要求全部 PASS。再按 `evidenceContractRef` 获取模板并提交精确 `skillUsage`。Read/load/usage 自述不能替代；`REQUEST_USER_CONFIRMATION` 不由 Skill 代替。

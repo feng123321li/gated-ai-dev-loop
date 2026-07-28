@@ -22,7 +22,7 @@
 - MCP 工具使用结构化输入、输出和 tool annotations，宿主可以按工具而不是按任意 Shell 命令配置权限。
 - 普通 hierarchy/evidence 直接结构化传输；真实超过 8 MiB 时，可按 1 MiB 以内的文本块无损暂存到 SQLite。Server 自动计算并校验每块和整包的 UTF-8 字节数与 SHA-256，并用 Server 生成的 generation ID 阻止删除/重建后的旧引用复用；随后仍调用原业务工具，继续执行原来的指纹、claim、evidence 和人工确认门禁。Server 不在结果中回显原文，但宿主可能保留工具参数，因此分块不是上下文压缩保证。
 - MCP 协议中的工具名是 `graph_frontier` 这类 snake_case 名称。`mcp__plugin_layered-delivery_layered-delivery__graph_frontier` 只是 Claude 的宿主权限名：前两段分别隔离插件和 Server，不进入业务 schema、SQLite 或代码 API。
-- Claude Skill 使用当前 MCP Server 的 `allowed-tools` 通配符，Plugin `PreToolUse` Hook 将方案冻结、重建、取消、人工审查接受和最终用户确认这 5 个敏感工具强制降级为 `ask`；Codex manifest 对常规工具使用 `approve`，并把同一组工具固定为 `prompt`。Claude Code 低于 2.1.199 时 Server 仍会拒绝这 5 个工具，避免旧宿主忽略强制交互元数据。payload finalize 只完成校验，不是通用提交入口。用户或组织策略可以进一步收紧。
+- Claude Skill 使用当前 MCP Server 的 `allowed-tools` 通配符。用户评审方案并选择 `active` 或 `manual` 的回复，就是该指纹方案的一次冻结确认；Agent 必须紧邻这次选择调用 `freeze_hierarchy`，不得再触发第二个工具批准弹窗。Plugin `PreToolUse` Hook 仅将 Graph 重建、Graph 取消、人工审查接受和最终用户确认这 4 个独立敏感动作强制降级为 `ask`；Codex manifest 对常规工具使用 `approve`，并把同一组 4 个工具固定为 `prompt`。Claude Code 低于 2.1.199 时 Server 仍会拒绝这 4 个工具，避免旧宿主忽略强制交互元数据。payload finalize 只完成校验，不是通用提交入口。用户或组织策略可以进一步收紧。
 
 Server 是随项目会话存在的本地 stdio 进程，不监听端口、不启动后台 worker，也不需要常驻数据库连接。空闲资源主要是一个 Python 进程；请求期间才打开 SQLite。超限暂存限制为单包 64 MiB、每项目 16 个未过期 upload 和 256 MiB 未过期内容；finalize 的内存峰值会随 JSON 大小增长，达到资源边界时明确失败而不提交业务状态。过期内容采用逻辑过期和后续 begin 惰性清理，也可主动 abort。
 

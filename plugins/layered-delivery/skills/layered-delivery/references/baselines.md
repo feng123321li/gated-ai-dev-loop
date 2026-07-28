@@ -46,7 +46,7 @@
 1. MCP `prepare_hierarchy` 校验完整 definition，计算各节点 baseline 指纹和一个绑定整树结构的 `hierarchyFingerprint`。
 2. 完整 definition、层级和节点状态写入项目级 SQLite；一个需求只生成 `work-items/<root-id>/` 一个 Markdown 顶层目录，后代按 `children/<id>/` 递归嵌套。
 3. 每个节点目录都写入自己的 `development-plan.md`；根级同名文件额外聚合整棵树，是唯一人工冻结评审入口。
-4. 用户评审当前文件并选择 active/manual，不抄写 SHA256。Agent 使用准备结果里的层级指纹和所选方式调用 MCP `freeze_hierarchy`。
+4. 用户评审当前文件并选择 active/manual，不抄写 SHA256；这一次回复就是冻结确认。Agent 紧邻该回复使用准备结果里的层级指纹和所选方式调用 MCP `freeze_hierarchy`，不再询问或等待第二个工具批准。
 5. `freeze_hierarchy` 重新验证层级、所有节点包和根计划文件，然后用同一次确认记录根级方式并冻结全部节点。
 
 等待评审时可以用同一根 ID 重新准备整棵树；新层级指纹使旧确认自动失效。冻结后的拓扑不可用单节点命令改写。

@@ -88,7 +88,11 @@ class InstallAndBundleTests(unittest.TestCase):
         development = (skill_root / "references" / "development.md").read_text(encoding="utf-8")
         self.assertIn("必须同时展示 `active` 和 `manual` 两种开发方式", skill)
         self.assertIn("每个 requirement 都必须有独立 acceptance", skill)
-        self.assertIn("可省略 `requiredSkills` 或传空数组", skill)
+        self.assertIn("`requiredSkills` 可省略/空", skill)
+        self.assertIn(
+            "不得要求用户再次输入 `$skill` 或确认 Skill",
+            skill,
+        )
         self.assertIn("不能只用一个跨需求 acceptance", development_plan)
         self.assertIn("同时展示 requirement 文本、R/A 映射和 expectedResult", acceptance)
         self.assertIn("可以使用 `handoffCommand`", workflow)
@@ -318,7 +322,8 @@ class InstallAndBundleTests(unittest.TestCase):
             "contextvars",
             "copy", "dataclasses", "datetime", "enum", "errno", "fcntl", "functools", "hashlib",
             "io", "json", "math", "msvcrt", "os", "pathlib", "posixpath", "re", "secrets", "shutil", "sqlite3",
-            "stat", "sys", "tempfile", "threading", "time", "typing", "unittest", "urllib", "uuid",
+            "stat", "sys", "tempfile", "threading", "time", "typing", "unicodedata", "unittest",
+            "urllib", "uuid",
         }
         repository_root = Path(__file__).resolve().parents[1]
         runtime_paths = [

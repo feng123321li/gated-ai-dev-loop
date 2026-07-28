@@ -249,7 +249,19 @@ class RequiredSkillContractTests(unittest.TestCase):
             )
             self.assertEqual(
                 context["requiredSkillPolicy"]["activation"],
-                "EXPLICIT_NATIVE_SKILL_INVOCATION_REQUIRED",
+                "CURRENT_EXECUTOR_NATIVE_SKILL_INVOCATION_REQUIRED",
+            )
+            self.assertEqual(
+                context["requiredSkillPolicy"]["authorization"],
+                "FROZEN_REQUIRED_SKILLS",
+            )
+            self.assertEqual(
+                context["requiredSkillPolicy"]["invocation"],
+                "EXECUTION_ADAPTER_AUTOMATIC",
+            )
+            self.assertEqual(
+                context["requiredSkillPolicy"]["repeatUserPrompt"],
+                "FORBIDDEN_AFTER_FREEZE",
             )
 
             result_contract = get_evidence_contract(
@@ -455,6 +467,56 @@ class RequiredSkillContractTests(unittest.TestCase):
                 reviewed["acceptance"]["status"],
                 "WAITING_FOR_USER_CONFIRMATION",
             )
+
+    def test_frozen_skill_authorization_never_prompts_again_in_either_mode(
+        self,
+    ) -> None:
+        for development_mode in ("active", "manual"):
+            with self.subTest(
+                development_mode=development_mode,
+            ), tempfile.TemporaryDirectory() as temporary:
+                prepared = prepare_hierarchy(
+                    root=temporary,
+                    hierarchy=task_hierarchy(
+                        requiredSkills=REQUIRED_SKILLS,
+                    ),
+                    host_runtime="codex",
+                )
+                freeze_hierarchy(
+                    root=temporary,
+                    root_id=prepared["rootId"],
+                    expected_hierarchy_fingerprint=prepared[
+                        "hierarchyFingerprint"
+                    ],
+                    development_mode=development_mode,
+                    confirmed=True,
+                )
+
+                frontier = get_graph_frontier(
+                    root=temporary,
+                    work_item_id=prepared["rootId"],
+                )
+                dispatch_action = next(
+                    action
+                    for action in frontier["actions"]
+                    if action["action"] == "DISPATCH_TASK"
+                )
+                self.assertEqual(
+                    dispatch_action["requiredSkillPolicy"][
+                        "authorization"
+                    ],
+                    "FROZEN_REQUIRED_SKILLS",
+                )
+                self.assertEqual(
+                    dispatch_action["requiredSkillPolicy"]["invocation"],
+                    "EXECUTION_ADAPTER_AUTOMATIC",
+                )
+                self.assertEqual(
+                    dispatch_action["requiredSkillPolicy"][
+                        "repeatUserPrompt"
+                    ],
+                    "FORBIDDEN_AFTER_FREEZE",
+                )
 
     def test_controller_skill_evidence_placeholders_are_rejected(self) -> None:
         placeholder = "<CONCRETE_APPLICATION_EVIDENCE>"

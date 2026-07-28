@@ -54,6 +54,7 @@ class OperationContext:
 
     root: str
     explicit_dogfood: bool = False
+    execution_host_runtime: str | None = None
 
 
 def _bounded_event_page(
@@ -232,6 +233,7 @@ def execute_operation(
             stage=arguments["stage"],
             skill_name=arguments["skill_name"],
             activation=arguments["activation"],
+            execution_host_runtime=context.execution_host_runtime,
             explicit_dogfood=dogfood,
         )
     if name == "record_skill_conformance":
@@ -240,6 +242,7 @@ def execute_operation(
             item_id=arguments["item_id"],
             activation_receipt_id=arguments["activation_receipt_id"],
             conformance=arguments["conformance"],
+            execution_host_runtime=context.execution_host_runtime,
             explicit_dogfood=dogfood,
         )
     if name == "dispatch_task":

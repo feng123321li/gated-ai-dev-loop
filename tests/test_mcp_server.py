@@ -276,6 +276,11 @@ class McpServerProtocolTests(unittest.TestCase):
         self.assertEqual(len(tools), 37)
         self.assertIn("record_skill_activation", by_name)
         self.assertIn("record_skill_conformance", by_name)
+        hierarchy_description = by_name["prepare_hierarchy"][
+            "inputSchema"
+        ]["properties"]["hierarchy"]["description"]
+        self.assertIn("may omit requiredSkills", hierarchy_description)
+        self.assertIn("empty array", hierarchy_description)
         self.assertEqual(set(by_name), set(EXPECTED_TOOL_PROPERTIES))
         self.assertEqual(tools, tool_definitions())
 
@@ -953,6 +958,128 @@ class McpServerProtocolTests(unittest.TestCase):
                 "PROJECT_ROOT_MISMATCH",
             )
             mocked_call.assert_called_once()
+
+    def test_tool_calls_propagate_the_current_execution_host(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            codex_meta = {
+                "codex/sandbox-state-meta": {
+                    "sandboxCwd": Path(root).resolve().as_uri(),
+                },
+            }
+            sessions = (
+                (
+                    mcp_server.ServerSession(
+                        project_root=(
+                            mcp_server.ProjectRootBinding.from_startup(
+                                None,
+                                from_sandbox_meta=True,
+                            )
+                        ),
+                        initialize_requested=True,
+                        initialized=True,
+                        client_name="test-client",
+                    ),
+                    codex_meta,
+                    "codex",
+                ),
+                (
+                    mcp_server.ServerSession(
+                        project_root=(
+                            mcp_server.ProjectRootBinding.from_startup(root)
+                        ),
+                        initialize_requested=True,
+                        initialized=True,
+                        client_name="Claude Code",
+                    ),
+                    None,
+                    "claude-code",
+                ),
+                (
+                    mcp_server.ServerSession(
+                        project_root=(
+                            mcp_server.ProjectRootBinding.from_startup(root)
+                        ),
+                        initialize_requested=True,
+                        initialized=True,
+                        client_name="Cursor",
+                    ),
+                    None,
+                    "cursor",
+                ),
+            )
+            for session, meta, expected_runtime in sessions:
+                with self.subTest(
+                    expected_runtime=expected_runtime,
+                ), patch.object(
+                    mcp_server,
+                    "call_tool",
+                    return_value={"status": "READY"},
+                ) as mocked_call:
+                    response = mcp_server.handle_message(
+                        tool_call(
+                            "graph_status",
+                            {"item_id": "t-one"},
+                            meta=meta,
+                        ),
+                        session=session,
+                    )
+
+                    self.assertIs(response["result"]["isError"], False)
+                    self.assertEqual(
+                        mocked_call.call_args.kwargs[
+                            "execution_host_runtime"
+                        ],
+                        expected_runtime,
+                    )
+
+    def test_skill_lifecycle_accepts_any_named_mcp_agent(self) -> None:
+        session = ready_session()
+        session.client_name = "Generic MCP Client"
+        with patch.object(
+            mcp_server,
+            "call_tool",
+            return_value={"status": "RECORDED"},
+        ) as mocked_call:
+            response = mcp_server.handle_message(
+                tool_call(
+                    "record_skill_activation",
+                    {
+                        "item_id": "t-one",
+                        "stage": "DEVELOPMENT",
+                        "skill_name": "tdd-workflow",
+                        "activation": {},
+                    },
+                ),
+                session=session,
+            )
+
+        self.assertIs(response["result"]["isError"], False)
+        self.assertEqual(
+            mocked_call.call_args.kwargs["execution_host_runtime"],
+            "generic-mcp-client",
+        )
+
+    def test_skill_lifecycle_requires_a_session_client_identity(self) -> None:
+        with patch.object(mcp_server, "call_tool") as mocked_call:
+            response = mcp_server.handle_message(
+                tool_call(
+                    "record_skill_activation",
+                    {
+                        "item_id": "t-one",
+                        "stage": "DEVELOPMENT",
+                        "skill_name": "tdd-workflow",
+                        "activation": {},
+                    },
+                ),
+                session=ready_session(),
+            )
+
+        self.assertIs(response["result"]["isError"], True)
+        self.assertEqual(
+            response["result"]["structuredContent"]["error"]["code"],
+            "MCP_SKILL_EXECUTION_HOST_REQUIRED",
+        )
+        mocked_call.assert_not_called()
 
     def test_deferred_project_root_requires_codex_sandbox_metadata(self) -> None:
         session = mcp_server.ServerSession(

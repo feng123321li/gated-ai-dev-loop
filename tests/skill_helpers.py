@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from hdg.host_runtime import is_claude_runtime
 from hdg.repository import GovernanceRepository
 from hdg.skill_execution import (
     record_skill_activation,
@@ -17,6 +16,7 @@ def activate_required_skills(
     *,
     execution_id: str,
     executor_id: str,
+    execution_host_runtime: str | None = None,
     blocked: bool = False,
     now: object = None,
 ) -> list[dict[str, Any]]:
@@ -26,14 +26,12 @@ def activate_required_skills(
     current = entry
     while current["parentId"] is not None:
         current = repository.item_by_id(registry, current["parentId"])
-    host_runtime = repository.read_package(registry, current)[1][
-        "hostRuntime"
-    ]
-    mechanism = (
-        "CLAUDE_SKILL_TOOL"
-        if is_claude_runtime(host_runtime)
-        else "CODEX_EXPLICIT_SKILL"
-    )
+    planning_host_runtime = repository.read_package(
+        registry,
+        current,
+    )[1]["hostRuntime"]
+    host_runtime = execution_host_runtime or planning_host_runtime
+    mechanism = "HOST_NATIVE_SKILL"
     requirements = repository.effective_required_skills(
         registry,
         entry,
@@ -59,11 +57,12 @@ def activate_required_skills(
                     "by a concrete catalog availability failure."
                     if blocked
                     else (
-                        "The exact frozen required Skill was explicitly "
-                        "invoked through the current host-native mechanism."
+                        "The execution adapter automatically invoked the "
+                        "exact frozen Skill through the host-native mechanism."
                     )
                 ),
             },
+            execution_host_runtime=host_runtime,
             now=now,
         )
         for index, requirement in enumerate(requirements, start=1)
@@ -108,5 +107,6 @@ def conform_required_skills(
                     ),
                 }],
             },
+            execution_host_runtime=receipt["hostRuntime"],
             now=now,
         )

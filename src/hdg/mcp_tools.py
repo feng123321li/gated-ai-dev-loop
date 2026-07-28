@@ -346,7 +346,8 @@ _TOOLS = (
         {
             "hierarchy": _payload_capable_object(
                 "Complete schema-v3 Task, Capability, or Delivery hierarchy, "
-                "including the requiredSkills array on every definition; "
+                "where each definition may omit requiredSkills or use an "
+                "empty array when no Skill gate is required; "
                 "for a genuinely oversized hierarchy, pass an exact READY "
                 "payloadRef bound to this tool."
             ),
@@ -476,10 +477,14 @@ _TOOLS = (
         "record_skill_activation",
         "Record native Skill activation",
         (
-            "After explicitly invoking a frozen requiredSkills entry through "
-            "the current Claude or Codex native Skill mechanism, bind its "
-            "native invocation identity to the current graph node attempt. "
-            "Reading or loading SKILL.md is not a valid activation."
+            "The frozen requiredSkills contract already authorizes execution. "
+            "The execution adapter automatically invokes each entry through "
+            "the current Agent's native Skill mechanism, then binds "
+            "its actual execution host and native invocation identity to the "
+            "current graph node attempt as HOST_NATIVE_SKILL without another "
+            "user prompt. The planning host is audit-only. Reading or loading "
+            "SKILL.md without "
+            "the automatic invocation is not a valid activation."
         ),
         {
             "item_id": ITEM_ID,
@@ -504,8 +509,8 @@ _TOOLS = (
         "Record Skill conformance",
         (
             "Bind structured completion checks to one native Skill "
-            "activation receipt. A successful stage requires PASS for every "
-            "frozen required Skill."
+            "activation receipt from the same execution host. A successful "
+            "stage requires PASS for every frozen required Skill."
         ),
         {
             "item_id": ITEM_ID,
@@ -830,6 +835,7 @@ def call_tool(
     arguments: object,
     *,
     root: str,
+    execution_host_runtime: str | None = None,
     explicit_dogfood: bool = False,
 ) -> Any:
     """Invoke one validated tool against the server's fixed project root."""
@@ -853,5 +859,6 @@ def call_tool(
         context=OperationContext(
             root=root,
             explicit_dogfood=explicit_dogfood,
+            execution_host_runtime=execution_host_runtime,
         ),
     )

@@ -54,11 +54,11 @@ allowed-tools:
 - 一个需求只有一个 `work-items/<root-id>/` 顶层目录；SQLite 是机器权威，Markdown 只是投影。
 - 人只评审并冻结一次整树；Task、Agent 数、顺序、门禁和恢复由 Graph 决定。
 - 每个 requirement 都必须有独立 acceptance；跨需求 acceptance 只能追加集成验收，不能代替任一需求自己的可观察通过条件。
-- 可省略 `requiredSkills` 或传空数组，两者都不启用 Skill 门禁；非空时需求可指定任意合法 catalog 名，控制器无 Skill 白名单，根级要求向后代继承。每项必须经宿主原生入口明确调用并用 `record_skill_activation` 绑定当前 attempt；Read/load/提示提名不算激活。Claude 记录 `CLAUDE_SKILL_TOOL` 与 tool-use ID，Codex 以显式 `$skill` 触发并记录 `CODEX_EXPLICIT_SKILL` 与 task/session 调用 ID；一个调用 ID 不能覆盖多个 Skill。
-- 完整执行后用 `record_skill_conformance` 记录实际检查。成功 result/gate/review 要求逐项 `INVOKED + PASS`；`skillUsage` 只作 artifact 审计，不能替代 Graph 事件。验收报告只从事件投影真实调用与符合性。细节按阶段读取 [development.md](references/development.md)、[acceptance.md](references/acceptance.md) 和 Claude 宿主说明。
+- `requiredSkills` 可省略/空；非空 catalog 名向后代继承。冻结整树并选 active/manual 即授权；适配器自动原生调用，以 `HOST_NATIVE_SKILL`、实际宿主和独立调用 ID 用 `record_skill_activation` 绑定 attempt，不得要求用户再次输入 `$skill` 或确认 Skill。方案宿主仅审计；跨 Agent 不重新 prepare/freeze。Read/load/提名不算激活，调用 ID 不得复用。
+- 完整执行后由同一执行宿主用 `record_skill_conformance` 记录实际检查。成功 result/gate/review 要求逐项 `INVOKED + PASS`；`skillUsage` 不能替代 Graph 事件。验收报告只投影真实调用与符合性。细节按阶段读取 [development.md](references/development.md)、[acceptance.md](references/acceptance.md) 和宿主说明。
 - 同一契约内的修正回到原 Task；不创建重复根或扩大文件授权。
 - Task、聚合 gate、独立审查和用户确认都是显式图节点；只有最终用户确认后的 `COMPLETED` 表示完成。
-- `active` 在冻结契约内自动推进，不逐 Task 确认。
+- `active` 在冻结契约内自动推进；manual 接收会话也在一次交接后自动推进。两者都不逐 Task 确认或二次确认 Skill。
 - Agent 不直接写 SQLite、baseline 或投影；最终确认和外部动作仍需用户授权。
 
 ## 选择入口
@@ -76,10 +76,10 @@ allowed-tools:
 3. 用户明确同意方案并选择方式后，使用返回的 `hierarchyFingerprint` 一次调用 `freeze_hierarchy`；MCP 不传 `confirmed` 布尔参数。Claude Code 还须先满足 [claude-automation.md](references/claude-automation.md) 的 tool 级权限前置条件。
 4. 冻结后每次迁移都重新查询 `graph_frontier`，完整消费 `actions` 与 `dispatchPlan`，不自行挑选 Task、排序或确定 Agent 数；`ADVANCE_GRAPH` 是租约硬过期后的确定性自动恢复动作，不请求人工重置。
 5. `DISPATCH_TASK`：完整消费调度计划并稳定排队，但只在 worker 真正取得执行容量时调用 `dispatch_task`，让 claim 按实际开工即时创建。当前会话就是没有独立宿主适配器时的执行适配器，必须以 `nextWakeAt` 为最长等待时间消费到期的 `HEARTBEAT_TASK`，不能在长实现、长测试或等待子 Agent 时漏掉续租；心跳使用控制器的轻量增量投影，不应触发整工作区 Markdown 重建。
-6. `DISPATCH_TASK`、`RUN_GATE`、`REQUEST_REVIEW`：对 action 的每个 required Skill 分别执行“宿主原生明确调用 → `record_skill_activation` → 完整流程 → `record_skill_conformance`”。DEVELOPMENT 在 `dispatch_task` 前绑定同一 owner/operation；成功迁移要求全部 PASS。再按 `evidenceContractRef` 获取模板并提交精确 `skillUsage`。Read/load/baseline/usage 自述不能替代；报告只显示 Graph 事件。`REQUEST_USER_CONFIRMATION` 不由 Skill 代替。
+6. `DISPATCH_TASK`、`RUN_GATE`、`REQUEST_REVIEW`：冻结 action 已授权；适配器对每个 required Skill 自动执行“原生调用 → `record_skill_activation` → 完整流程 → `record_skill_conformance`”，不得索取用户触发。DEVELOPMENT 在 `dispatch_task` 前绑定同一 owner/operation；成功迁移要求全部 PASS。再按 `evidenceContractRef` 获取模板并提交精确 `skillUsage`。Read/load/usage 自述不能替代；`REQUEST_USER_CONFIRMATION` 不由 Skill 代替。
 7. Task 工作完成后，最终总结前必须先按 `evidenceContractRefs.result` 查询当前 operation 的模板并提交 `task_result`，再继续消费 gate/review 动作；不得以“代码和测试已完成”代替 Graph 收尾。`ADVANCE_GRAPH`、`RETRY_NODE` 或其他租约失败按 frontier 自动路由；硬过期时先推进、重新查询、用新 operation 重新认领并提交既有工作结果，只有 `RETRY_EXHAUSTED`、契约变化或真实外部权限阻断才请求人工干预。Task gate 的 P0/P1 FAIL 必须回到 execution 修复、复测，不能无限重跑 gate。
 8. 原契约漏列必要文件时用 `remediate_task`；契约或权限变化才回到人工评审。
-9. manual 在当前窗口确认、冻结并输出一次交接；新窗口从 `graph_frontier` 恢复同一 graph run，不重新准备/冻结、选择方式或逐 Task 确认，自动开发、测试、修复、逐级门禁和恢复至 `WAITING_FOR_USER_CONFIRMATION`，停在 `REQUEST_USER_CONFIRMATION`。
+9. manual 在当前窗口确认、冻结并输出一次交接；新窗口从 `graph_frontier` 恢复同一 graph run，不重新准备/冻结、选择方式、逐 Task 确认或再次确认 required Skill，自动开发、测试、修复、逐级门禁和恢复至 `WAITING_FOR_USER_CONFIRMATION`，停在 `REQUEST_USER_CONFIRMATION`。
 10. 根 gate 和独立审查通过后请求最终用户确认；未确认时保持等待。
 
 ## 按动作读取

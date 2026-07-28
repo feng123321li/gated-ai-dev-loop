@@ -71,10 +71,10 @@ COMMAND_OPTIONS = {
     "task-context": {"--json", "--help", "--item", "--dogfood"},
     "evidence-contract": {"--json", "--help", "--item", "--kind"},
     "record-skill-activation": {
-        "--json", "--help", "--item", "--stage", "--skill", "--activation", "--dogfood",
+        "--json", "--help", "--item", "--stage", "--skill", "--host-runtime", "--activation", "--dogfood",
     },
     "record-skill-conformance": {
-        "--json", "--help", "--item", "--receipt", "--conformance", "--dogfood",
+        "--json", "--help", "--item", "--receipt", "--host-runtime", "--conformance", "--dogfood",
     },
     "claim-task": {"--json", "--help", "--item", "--owner", "--operation", "--dogfood"},
     "dispatch-task": {"--json", "--help", "--item", "--owner", "--operation", "--dogfood"},
@@ -110,8 +110,8 @@ Commands:
   cancel-graph-run --item <root-or-subtree-id> --confirmed
   task-context --item <task-id>
   evidence-contract --item <id> --kind result|gate|remediation|review|confirmation
-  record-skill-activation --item <id> --stage DEVELOPMENT|GATE|FINAL_REVIEW --skill <name> --activation -
-  record-skill-conformance --item <id> --receipt <activation-sha256> --conformance -
+  record-skill-activation --item <id> --stage DEVELOPMENT|GATE|FINAL_REVIEW --skill <name> --host-runtime <agent> --activation -
+  record-skill-conformance --item <id> --receipt <activation-sha256> --host-runtime <agent> --conformance -
   dispatch-task --item <task-id> --owner <owner> --operation <id>
   heartbeat-task --item <task-id> --operation <id>
   pause-task --item <task-id> --operation <id>
@@ -224,6 +224,7 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
     context = OperationContext(
         root=cwd,
         explicit_dogfood=parsed["dogfood"],
+        execution_host_runtime=parsed["values"].get("--host-runtime"),
     )
     command = parsed["command"]
     if command == "workspace-status":
@@ -329,6 +330,7 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
             context=context,
         )
     if command == "record-skill-activation":
+        _required(parsed, "--host-runtime")
         activation = _read_structured(
             _required(parsed, "--activation"),
             "SKILL_ACTIVATION",
@@ -345,6 +347,7 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
             context=context,
         )
     if command == "record-skill-conformance":
+        _required(parsed, "--host-runtime")
         conformance = _read_structured(
             _required(parsed, "--conformance"),
             "SKILL_CONFORMANCE",

@@ -8,7 +8,11 @@ from .constants import SCHEMA_VERSION
 from .errors import fail
 from .evidence import FINGERPRINT, concrete_skill_evidence
 from .graph_model import execution_node_id, gate_node_id, review_node_id
-from .host_runtime import is_claude_runtime
+from .host_runtime import (
+    is_agent_runtime,
+    is_claude_runtime,
+    require_host_runtime,
+)
 from .jsonio import canonical_json, sha256_bytes
 from .repository import GovernanceRepository, timestamp
 
@@ -29,6 +33,7 @@ CONFORMANCE_FIELDS = {"status", "summary", "checks"}
 CONFORMANCE_CHECK_FIELDS = {"name", "status", "evidence"}
 ACTIVATION_EVENT = "SKILL_ACTIVATED"
 CONFORMANCE_EVENT = "SKILL_CONFORMANCE_RECORDED"
+NATIVE_SKILL_MECHANISM = "HOST_NATIVE_SKILL"
 
 
 def _root_entry(
@@ -89,35 +94,37 @@ def _current_node(
     return run, node
 
 
-def _host_runtime(
-    repository: GovernanceRepository,
-    registry: dict[str, Any],
-    root_entry: dict[str, Any],
-) -> str:
-    state = repository.read_package(registry, root_entry)[1]
-    runtime = state.get("hostRuntime")
-    if not isinstance(runtime, str):
-        fail(
-            "WORK_ITEM_SKILL_ACTIVATION_INVALID",
-            "The frozen requirement does not identify its execution host",
+def _is_codex_runtime(host_runtime: object) -> bool:
+    return bool(
+        isinstance(host_runtime, str)
+        and (
+            host_runtime == "codex"
+            or host_runtime.startswith("codex-")
+            or host_runtime.startswith("codex.")
         )
-    return runtime
+    )
 
 
 def _expected_mechanism(host_runtime: str) -> str:
-    if is_claude_runtime(host_runtime):
-        return "CLAUDE_SKILL_TOOL"
+    require_host_runtime(host_runtime)
+    return NATIVE_SKILL_MECHANISM
+
+
+def _mechanism_matches_runtime(
+    host_runtime: object,
+    mechanism: object,
+) -> bool:
     if (
-        host_runtime == "codex"
-        or host_runtime.startswith("codex-")
-        or host_runtime.startswith("codex.")
+        is_agent_runtime(host_runtime)
+        and mechanism == NATIVE_SKILL_MECHANISM
     ):
-        return "CODEX_EXPLICIT_SKILL"
-    fail(
-        "WORK_ITEM_SKILL_ACTIVATION_UNSUPPORTED",
-        "Strict required Skill activation currently supports Claude and Codex hosts",
-        hostRuntime=host_runtime,
-    )
+        return True
+    # Preserve already-recorded schema-v3 receipts from pre-0.15.3 runs.
+    if is_claude_runtime(host_runtime):
+        return mechanism == "CLAUDE_SKILL_TOOL"
+    if _is_codex_runtime(host_runtime):
+        return mechanism == "CODEX_EXPLICIT_SKILL"
+    return False
 
 
 def _identifier(value: object) -> bool:
@@ -149,11 +156,14 @@ def _validated_activation(
         fail(
             "WORK_ITEM_SKILL_ACTIVATION_INVALID",
             (
-                "Required Skills must be explicitly invoked through the "
-                "current host's native Skill mechanism; reading or loading "
-                "SKILL.md alone is not an activation"
+                "The execution adapter must automatically invoke required "
+                "Skills through the current host's native Skill mechanism; "
+                "reading or loading SKILL.md alone is not an activation"
             ),
             expectedMechanism=expected_mechanism,
+            authorizationSource="FROZEN_REQUIRED_SKILLS",
+            userActionRequired=False,
+            recoveryAction="EXECUTION_ADAPTER_AUTO_INVOKE",
         )
     return {
         field: value[field].strip() if isinstance(value[field], str) else value[field]
@@ -268,8 +278,10 @@ def _activation_payload_valid(payload: object) -> bool:
                 "nativeInvocationId",
             )
         )
-        and payload.get("mechanism")
-        in {"CLAUDE_SKILL_TOOL", "CODEX_EXPLICIT_SKILL"}
+        and _mechanism_matches_runtime(
+            payload.get("hostRuntime"),
+            payload.get("mechanism"),
+        )
         and payload.get("status") in {"INVOKED", "BLOCKED"}
         and concrete_skill_evidence(payload.get("summary"))
     )
@@ -333,10 +345,11 @@ def record_skill_activation(
     stage: str,
     skill_name: str,
     activation: object,
+    execution_host_runtime: str | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
-    """Record an explicit host-native invocation for one required Skill."""
+    """Record an execution-adapter native invocation for one required Skill."""
 
     if stage not in STAGES or not isinstance(skill_name, str) or not SKILL_NAME.fullmatch(skill_name):
         fail(
@@ -365,11 +378,7 @@ def record_skill_activation(
                 nodeId=node_id,
                 nodeStatus=node["status"],
             )
-        host_runtime = _host_runtime(
-            repository,
-            registry,
-            root_entry,
-        )
+        host_runtime = require_host_runtime(execution_host_runtime)
         value = _validated_activation(
             activation,
             expected_mechanism=_expected_mechanism(host_runtime),
@@ -487,6 +496,7 @@ def record_skill_conformance(
     item_id: str,
     activation_receipt_id: str,
     conformance: object,
+    execution_host_runtime: str | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
@@ -504,6 +514,19 @@ def record_skill_conformance(
             activation_receipt_id,
         )
         activation_payload = activation_event["payload"]
+        current_host_runtime = require_host_runtime(
+            execution_host_runtime
+        )
+        if current_host_runtime != activation_payload["hostRuntime"]:
+            fail(
+                "WORK_ITEM_SKILL_CONFORMANCE_HOST_MISMATCH",
+                (
+                    "Skill conformance must be recorded by the same "
+                    "execution host as its native activation"
+                ),
+                activationHostRuntime=activation_payload["hostRuntime"],
+                executionHostRuntime=current_host_runtime,
+            )
         if activation_payload["workItemId"] != item_id:
             fail(
                 "WORK_ITEM_SKILL_ACTIVATION_RECEIPT_INVALID",
@@ -621,12 +644,6 @@ def _skill_execution_records(
     node_id = _node_id_for_stage(entry, root_entry, stage)
     _, node = _current_node(repository, root_entry, node_id)
     events = repository.read_graph_events(root_entry["id"])
-    host_runtime = _host_runtime(
-        repository,
-        registry,
-        root_entry,
-    )
-    expected_mechanism = _expected_mechanism(host_runtime)
     activations = [
         event
         for event in events
@@ -637,8 +654,6 @@ def _skill_execution_records(
             and is_skill_lifecycle_event_valid(event)
             and event["payload"]["workItemId"] == entry["id"]
             and event["payload"]["stage"] == stage
-            and event["payload"]["hostRuntime"] == host_runtime
-            and event["payload"]["mechanism"] == expected_mechanism
             and (
                 operation_id is None
                 or event["payload"]["executionId"] == operation_id
@@ -701,18 +716,17 @@ def assert_required_skill_activations(
             fail(
                 "WORK_ITEM_REQUIRED_SKILL_ACTIVATION_MISSING",
                 (
-                    "A required Skill has no graph-bound native invocation "
-                    "receipt; loading or reading the Skill is insufficient"
+                    "A frozen required Skill has no graph-bound native "
+                    "invocation receipt; the execution adapter must invoke "
+                    "it automatically and record activation without asking "
+                    "the user to authorize or trigger the Skill again"
                 ),
                 skillName=requirement["name"],
                 stage=stage,
-                requiredMechanism=_expected_mechanism(
-                    _host_runtime(
-                        repository,
-                        registry,
-                        _root_entry(registry, entry),
-                    )
-                ),
+                requiredMechanism=NATIVE_SKILL_MECHANISM,
+                authorizationSource="FROZEN_REQUIRED_SKILLS",
+                userActionRequired=False,
+                recoveryAction="EXECUTION_ADAPTER_AUTO_INVOKE",
             )
         records.append(matches[-1])
     return records

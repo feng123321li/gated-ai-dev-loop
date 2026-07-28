@@ -4,7 +4,9 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
-## 0.15.2 — 待发布
+## 0.15.2 — 2026-07-28
+
+发布提交：`4ff9304`
 
 - 精简 manual 冻结返回的 `handoffCommand`，只保留需求 ID、`graph_frontier` 恢复、完整 Graph 执行、开发测试门禁、禁止重复冻结和最终确认边界，降低人工复制与理解成本。
 - Claude Auto、MCP/CLI fallback、required Skill 激活与符合性、时区展示和权限约束继续由结构化返回、`requirement-handoff.md` 与 Skill 契约承载，不削弱现有治理门禁。

@@ -29,7 +29,11 @@ EXPECTED_TOOL_PROPERTIES = {
     "finalize_payload_upload": {"upload_id", "generation_id"},
     "payload_upload_status": {"upload_id", "generation_id"},
     "abort_payload_upload": {"upload_id", "generation_id"},
-    "prepare_hierarchy": {"hierarchy", "host_runtime"},
+    "prepare_hierarchy": {
+        "hierarchy",
+        "host_runtime",
+        "available_skills",
+    },
     "freeze_hierarchy": {
         "item_id",
         "expected_hierarchy_fingerprint",
@@ -278,8 +282,59 @@ class McpServerProtocolTests(unittest.TestCase):
         hierarchy_description = by_name["prepare_hierarchy"][
             "inputSchema"
         ]["properties"]["hierarchy"]["description"]
+        available_skills_schema = by_name["prepare_hierarchy"][
+            "inputSchema"
+        ]["properties"]["available_skills"]
         self.assertIn("may omit requiredSkills", hierarchy_description)
         self.assertIn("empty array", hierarchy_description)
+        self.assertIn(
+            "user explicitly names a development-only Skill",
+            hierarchy_description,
+        )
+        self.assertIn(
+            "DEVELOPMENT only without preloading, recursively expanding, or adding GATE",
+            hierarchy_description,
+        )
+        self.assertIn(
+            "use the narrowest practical module-level scope",
+            hierarchy_description,
+        )
+        self.assertIn(
+            "keep developmentPlan.fileChanges exact",
+            hierarchy_description,
+        )
+        self.assertEqual(available_skills_schema["type"], "object")
+        self.assertEqual(
+            set(available_skills_schema["properties"]),
+            {"root", "project"},
+        )
+        self.assertEqual(
+            set(available_skills_schema["required"]),
+            {"root", "project"},
+        )
+        self.assertFalse(available_skills_schema["additionalProperties"])
+        self.assertTrue(
+            available_skills_schema["properties"]["root"]["uniqueItems"]
+        )
+        self.assertTrue(
+            available_skills_schema["properties"]["project"]["uniqueItems"]
+        )
+        self.assertIn(
+            "host-level root Skill catalog",
+            available_skills_schema["description"],
+        )
+        self.assertIn(
+            "current project Skill catalog",
+            available_skills_schema["description"],
+        )
+        self.assertIn(
+            "source-labelled close-match options",
+            available_skills_schema["description"],
+        )
+        self.assertIn(
+            "human-readable userPrompt",
+            available_skills_schema["description"],
+        )
         self.assertEqual(set(by_name), set(EXPECTED_TOOL_PROPERTIES))
         self.assertEqual(tools, tool_definitions())
 
@@ -1271,6 +1326,48 @@ class McpServerProtocolTests(unittest.TestCase):
                     raised.exception.code,
                     "MCP_ARGUMENT_INVALID",
                 )
+
+    def test_prepare_skill_catalog_argument_is_strict(self) -> None:
+        base = {
+            "hierarchy": {},
+            "host_runtime": "codex",
+        }
+        for value in (
+            "tdd-workflow",
+            {"root": ["tdd-workflow"]},
+            {"root": [], "project": [], "other": []},
+            {"root": ["TDD-workflow"], "project": []},
+            {"root": ["tdd-workflow", "tdd-workflow"], "project": []},
+            {"root": [1], "project": []},
+        ):
+            with self.subTest(value=value):
+                with self.assertRaises(GatedLoopError) as raised:
+                    mcp_tools.validate_tool_arguments(
+                        "prepare_hierarchy",
+                        {**base, "available_skills": value},
+                    )
+                self.assertEqual(
+                    raised.exception.code,
+                    "MCP_ARGUMENT_INVALID",
+                )
+
+        validated = mcp_tools.validate_tool_arguments(
+            "prepare_hierarchy",
+            {
+                **base,
+                "available_skills": {
+                    "root": ["layered-delivery:layered-delivery"],
+                    "project": ["erp-dubbo-api-generator"],
+                },
+            },
+        )
+        self.assertEqual(
+            validated["available_skills"],
+            {
+                "root": ["layered-delivery:layered-delivery"],
+                "project": ["erp-dubbo-api-generator"],
+            },
+        )
 
     def test_unexpected_tool_exception_is_sanitized(self) -> None:
         with patch.object(

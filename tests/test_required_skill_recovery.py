@@ -20,6 +20,7 @@ from .skill_helpers import (
     conform_required_skills,
 )
 from .test_required_skills import (
+    AVAILABLE_SKILLS,
     REQUIRED_SKILLS,
     _gate,
     _skill_usage,
@@ -35,6 +36,7 @@ def _complete_through(
         root=root,
         hierarchy=task_hierarchy(requiredSkills=REQUIRED_SKILLS),
         host_runtime="codex",
+        available_skills=AVAILABLE_SKILLS,
     )
     item_id = prepared["rootId"]
     freeze_hierarchy(
@@ -163,6 +165,10 @@ def _ready_capability_for_isolation_transition(
         root=root,
         hierarchy=hierarchy,
         host_runtime="codex",
+        available_skills={
+            "root": ["tdd-workflow"],
+            "project": [],
+        },
     )
     root_id = prepared["rootId"]
     task_id = "t-python-controller"
@@ -380,6 +386,10 @@ class RequiredSkillRecoveryTests(unittest.TestCase):
                 root=root,
                 hierarchy=hierarchy,
                 host_runtime="codex",
+                available_skills={
+                    "root": ["tdd-workflow"],
+                    "project": [],
+                },
             )
             task_id = hierarchy["root"]["children"][0]["definition"]["id"]
             freeze_hierarchy(

@@ -15,8 +15,7 @@
   "title": "蛋白制备提交字段可选性",
   "goal": "允许指定电泳字段为空并保持其他校验不变。",
   "scope": [
-    "erp-protein-core/src/main/java/com/majorbio/service/erp/protein/core/service/preparation/impl/PreparationTaskSubmitServiceImpl.java",
-    "erp-protein-core/src/test/java/com/majorbio/service/erp/protein/core/service/preparation/PreparationTaskSubmitServiceTest.java"
+    "erp-protein-core/**"
   ],
   "nonGoals": ["不修改其他制备字段的必填规则。"],
   "requirements": [
@@ -33,8 +32,8 @@
   "requiredSkills": [
     {
       "name": "tdd-workflow",
-      "stages": ["DEVELOPMENT", "GATE"],
-      "purpose": "完整执行测试先行、最小实现、重构和复测，并在内部门禁逐项说明应用情况。"
+      "stages": ["DEVELOPMENT"],
+      "purpose": "用户明确要求在开发过程中完整执行测试先行、最小实现、重构和复测。"
     }
   ],
   "risks": ["数据库或下游契约可能仍要求非空。"],
@@ -55,9 +54,10 @@
 - `id` 为安全小写 ID；`title/goal` 和所有说明字符串必须非空且不能含 TBD/TODO/FIXME 等占位符；
 - `scope/nonGoals/requirements/acceptance/testCommands/risks/decisions` 都是非空数组；测试命令是 argv 数组，不是 shell 字符串；
 - `requiredSkills` 可省略或为空，两者都规范化为 `[]`；非空时每项只含 `name/stages/purpose`。名称保存 catalog 标识而不是 `/skill` 命令，阶段只允许 `DEVELOPMENT|GATE|FINAL_REVIEW`，其中 `FINAL_REVIEW` 只在需求根声明；根级声明自动约束后代，不能由子项覆盖或取消；
+- 用户明确指定“开发过程中使用”的 Skill 时，分别取得宿主级 `root` 与当前项目级 `project` 已注册 Skill catalog，并通过 `prepare_hierarchy.available_skills` 以 `{"root":[...],"project":[...]}` 提交。控制器只做名称存在性和近似匹配，不预读正文；名称缺失时在任何治理状态写入前返回 `WORK_ITEM_REQUIRED_SKILL_UNAVAILABLE`、`PROMPT_SKILL_SELECTION_OR_INSTALL`、`skillOptions` 和 `userPrompt`。`skillOptions` 保留正确 catalog 名与 `ROOT|PROJECT` 来源，供程序处理；`userPrompt` 是可直接面向用户展示的中文提示，包含 `title/message/questions`，每个候选都有带“宿主级/项目级”来源的 `label`、可提交的 `value`、中文 `description`，并为无候选或候选均不正确提供修正名称、安装后重试的 `fallback`。宿主必须优先展示 `userPrompt`，不得把技术错误当作用户提示，也不得静默自动替换。验证存在后，直接登记为仅含 `DEVELOPMENT` 的 required Skill，`purpose` 只需忠实记录该执行要求。不得为此预读该 Skill、递归展开其内部 Skill、从 Skill 内容派生业务 requirement/acceptance/Task，或自动追加 `GATE`；只有用户另行明确要求某个 Skill 用于 GATE/FINAL_REVIEW 时，才登记对应阶段；
 - requirement ID 使用 `R-001` 形式，acceptance ID 使用 `A-001` 形式；每个 requirement 必须至少有一个 `requirementIds` 只包含自身的独立 acceptance，不能只用一个跨需求 acceptance 同时覆盖多个 requirement；跨需求 acceptance 仅用于追加集成行为验收；
 - 每个独立 acceptance 的 `expectedResult` 必须写成可单独观察和取证的通过条件，不能使用“功能正常”“按预期工作”或对 requirement 的笼统复述；有关键失败、边界或兼容条件时一并写入；
-- `scope` 只能是精确相对路径或尾部 `/**` 前缀，不能进入 `.layered-delivery`；
+- `scope` 只能是精确相对路径或尾部 `/**` 前缀，不能进入 `.layered-delivery`。规划时按最小可用模块边界适当放宽，通常使用 `module/**` 覆盖该 Task 可能新增或调整的同模块文件；不得使用全仓库 `**`，也不得把无关模块纳入。Graph 会把重叠 Scope 视为潜在写冲突，因此兄弟 Task 应尽量按互不重叠的模块或子模块划分；
 - 下列“允许空数组”的字段除外：根/无依赖的 `dependsOn`、Task `interfaces`、Task `dataAndTransactions`、协调层 `sharedContracts`。其他在示例中出现的数组均应按机器校验提供非空内容。
 
 三个 kind 的专有字段集合固定为：
@@ -99,7 +99,7 @@ Task 的 `scenarios[].kind` 从以下值选择，可组合多个：
 
 ## Task developmentPlan
 
-Task 方案必须精确到文件和目标契约。`fileChanges.path` 只能是 scope 内的精确相对路径，不能使用 `/**` 或其他 glob。规划时必须沿每个接口/方法契约检查实现、公开说明和对应测试的所有者文件，避免把同一验收项的 Javadoc、注解、映射或测试遗漏到验证阶段。若冻结后仍发现这种同契约文件遗漏，使用原 Task 的追加验证修正，不创建新的需求根。
+Task 的外层 Scope 可以按模块适当放宽，但 `developmentPlan.fileChanges` 仍逐项列出精确文件和目标契约。`fileChanges.path` 只能是 scope 内的精确相对路径，不能使用 `/**` 或其他 glob；它才是冻结后的实际文件授权。规划时必须沿每个接口/方法契约检查实现、公开说明和对应测试的所有者文件，避免把同一验收项的 Javadoc、注解、映射或测试遗漏到验证阶段。若冻结后仍发现这种同契约文件遗漏，使用原 Task 的追加验证修正，不创建新的需求根。
 
 ```json
 {

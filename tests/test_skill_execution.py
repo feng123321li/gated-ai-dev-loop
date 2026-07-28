@@ -33,12 +33,17 @@ def _prepare(
     host_runtime: str,
     required_skills: list[dict] | None = None,
 ) -> tuple[str, str]:
+    selected_skills = required_skills or REQUIRED_SKILLS
     prepared = prepare_hierarchy(
         root=root,
         hierarchy=task_hierarchy(
-            requiredSkills=required_skills or REQUIRED_SKILLS
+            requiredSkills=selected_skills
         ),
         host_runtime=host_runtime,
+        available_skills={
+            "root": sorted(item["name"] for item in selected_skills),
+            "project": [],
+        },
     )
     item_id = prepared["rootId"]
     freeze_hierarchy(

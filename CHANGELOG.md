@@ -8,6 +8,11 @@
 
 发布提交：`78d18f7`
 
+- 收敛用户显式开发 Skill 的规划语义：不在需求分析阶段预读或递归展开 Skill，不从 Skill 内容派生业务需求、Task 或门禁；直接按用户给出的 catalog 名登记为仅含 `DEVELOPMENT` 的执行约束，并在实际 worker 开发时原生调用。只有用户另行明确指定其他阶段时才进入 GATE/FINAL_REVIEW。
+- `prepare_hierarchy` 新增宿主级 root 与项目级 project 双来源 `available_skills` 预检；自定义 required Skill 不存在或疑似拼错时在写入治理状态前阻断，同时返回机器可处理的 `skillOptions` 和可直接展示的中文 `userPrompt`，其中包含带来源的近似候选与修正、安装兜底指引。
+- 调整 Scope 规划粒度：按最小可用模块边界使用 `module/**`，为同模块必要文件生成保留空间，同时继续由 `developmentPlan.fileChanges` 冻结精确写授权；禁止全仓库 `**`，并明确重叠 Scope 会限制 Graph 并行。
+- 瘦身 Task 开发交接：`development-handoff.md` 不再复制完整 `dispatch_task` 上下文、父级开发计划、完整 Skill policy、lease policy 和后续 evidence 模板，只保留开发方案链接与 worker 开工所需字段；完整机器上下文继续由 SQLite/MCP 权威保存。
+- 明确速度优先的 LIGHT 策略：低风险单目标需求默认使用根 Task，允许简洁说明、定向测试和按需读取，同时保留独立验收、精确文件授权、真实测试、P0/P1 与最终用户确认。
 - 将方案确认、`active|manual` 方式选择与 `freeze_hierarchy` 合并为一次用户授权：用户选择方式后 Agent 必须紧邻调用冻结工具，不再出现第二个工具批准弹窗，也不得从旧对话推断或重放选择。
 - Claude `PreToolUse` Hook、Codex manifest prompt 和 `anthropic/requiresUserInteraction` 仅保留 Graph 重建、Graph 取消、人工审查接受和最终用户确认这 4 个独立敏感动作；旧版 Claude Code 的服务端拒绝范围同步收敛到这 4 个工具。
 - 冻结仍由专用 MCP 操作注入领域确认并以层级指纹 compare-and-swap，工具参数继续不暴露通用 `confirmed` 布尔值；单次确认减少重复交互，不放宽方案指纹、最终验收或外部权限边界。

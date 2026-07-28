@@ -364,6 +364,10 @@ class RuntimeFsmTests(unittest.TestCase):
                 root=temporary,
                 hierarchy=hierarchy,
                 host_runtime="codex",
+                available_skills={
+                    "root": ["tdd-workflow"],
+                    "project": [],
+                },
                 now=self.START,
             )
             task_id = prepared["rootId"]

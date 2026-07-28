@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from difflib import get_close_matches
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,7 @@ from .model import (
     iter_hierarchy_nodes,
     raw_definition,
     render_hierarchy_plan,
+    validate_skill_catalog,
     validate_hierarchy_definition,
     work_item_baseline_fingerprint,
     work_item_contract_fingerprint,
@@ -341,11 +343,68 @@ def _hierarchy_from_registry(
     return hierarchy, states, hierarchy_state, root_target
 
 
+def _human_skill_source(sources: list[str]) -> tuple[str, str]:
+    labels = {
+        "ROOT": "宿主级",
+        "PROJECT": "项目级",
+    }
+    source_label = "、".join(labels[source] for source in sources)
+    if sources == ["ROOT", "PROJECT"]:
+        description = "该 Skill 同时在宿主级和当前项目中登记。"
+    elif sources == ["ROOT"]:
+        description = "该 Skill 已在宿主级 catalog 中登记。"
+    else:
+        description = "该 Skill 已在当前项目中登记。"
+    return source_label, description
+
+
+def _skill_user_prompt(
+    missing_skills: list[str],
+    skill_options: list[dict[str, Any]],
+) -> dict[str, Any]:
+    questions = []
+    for skill_option in skill_options:
+        options = []
+        for candidate in skill_option["candidates"]:
+            source_label, description = _human_skill_source(
+                candidate["sources"]
+            )
+            options.append({
+                "label": f"{candidate['name']}（{source_label}）",
+                "value": candidate["name"],
+                "description": description,
+            })
+        has_candidates = bool(options)
+        questions.append({
+            "requested": skill_option["requested"],
+            "prompt": (
+                "你想使用下面哪个 Skill？"
+                if has_candidates
+                else "没有找到相近的 Skill。"
+            ),
+            "options": options,
+            "fallback": (
+                "如果以上选项都不正确，请修正 Skill 名称或先安装后重试。"
+                if has_candidates
+                else "请检查 Skill 名称，或先安装该 Skill 后重试。"
+            ),
+        })
+    requested = "、".join(f"`{name}`" for name in missing_skills)
+    return {
+        "title": "未找到指定的 Skill",
+        "message": (
+            f"未找到 Skill {requested}，可能是名称输入有误或尚未安装。"
+        ),
+        "questions": questions,
+    }
+
+
 def prepare_hierarchy(
     *,
     root: str,
     hierarchy: dict[str, Any],
     host_runtime: str,
+    available_skills: dict[str, list[str]] | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
@@ -354,6 +413,75 @@ def prepare_hierarchy(
 
     normalized = validate_hierarchy_definition(hierarchy)
     runtime = require_host_runtime(host_runtime)
+    required_skills = sorted({
+        requirement["name"]
+        for node in iter_hierarchy_nodes(normalized)
+        for requirement in node["definition"]["requiredSkills"]
+    })
+    if available_skills is None:
+        if required_skills:
+            fail(
+                "WORK_ITEM_SKILL_CATALOG_REQUIRED",
+                (
+                    "The current host Skill catalog is required before "
+                    "registering requiredSkills"
+                ),
+                requiredSkills=required_skills,
+                hostAction="DISCOVER_REGISTERED_SKILL_CATALOG",
+            )
+        catalog = {"root": [], "project": []}
+    else:
+        catalog = validate_skill_catalog(available_skills)
+    catalog_names = sorted(set(catalog["root"]) | set(catalog["project"]))
+    sources_by_name = {
+        name: [
+            scope.upper()
+            for scope in ("root", "project")
+            if name in catalog[scope]
+        ]
+        for name in catalog_names
+    }
+    missing_skills = sorted(set(required_skills) - set(catalog_names))
+    if missing_skills:
+        skill_options = []
+        for missing in missing_skills:
+            candidates = get_close_matches(
+                missing,
+                catalog_names,
+                n=5,
+                cutoff=0.6,
+            )
+            skill_options.append({
+                "requested": missing,
+                "candidates": [
+                    {
+                        "name": candidate,
+                        "sources": sources_by_name[candidate],
+                    }
+                    for candidate in candidates
+                ],
+            })
+        fail(
+            "WORK_ITEM_REQUIRED_SKILL_UNAVAILABLE",
+            "未找到指定的 Skill，可能是名称输入有误或尚未安装。",
+            missingSkills=missing_skills,
+            skillOptions=skill_options,
+            userPrompt=_skill_user_prompt(missing_skills, skill_options),
+            hostRuntime=runtime,
+            hostAction="PROMPT_SKILL_SELECTION_OR_INSTALL",
+        )
+    skill_catalog_validation = {
+        "status": "PASS",
+        "hostRuntime": runtime,
+        "requiredSkills": required_skills,
+        "resolvedSkills": [
+            {
+                "name": name,
+                "sources": sources_by_name[name],
+            }
+            for name in required_skills
+        ],
+    }
     repository = GovernanceRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     at = timestamp(now)
@@ -399,6 +527,7 @@ def prepare_hierarchy(
                         "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
                     },
                     "hostAutomation": render_host_automation(old_states[root_id]["hostRuntime"]),
+                    "skillCatalogValidation": skill_catalog_validation,
                     "nextAction": _prepared_next_action(old_states[root_id]["hostRuntime"]),
                     "responseContract": _prepared_response_contract(
                         old_states[root_id]["hostRuntime"]
@@ -469,6 +598,7 @@ def prepare_hierarchy(
                 "workspaceOverview": f"{GOVERNANCE_DIRECTORY}/workspace-overview.md",
             },
             "hostAutomation": render_host_automation(runtime),
+            "skillCatalogValidation": skill_catalog_validation,
             "nextAction": _prepared_next_action(runtime),
             "responseContract": _prepared_response_contract(runtime),
         }

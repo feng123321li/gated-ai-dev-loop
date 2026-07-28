@@ -290,6 +290,51 @@ def _required_skills(values: object) -> list[dict[str, Any]]:
     return sorted(result, key=lambda item: item["name"])
 
 
+def validate_skill_catalog(values: object) -> dict[str, list[str]]:
+    """Validate root- and project-scoped Skill names from the current host."""
+
+    if not _exact_keys(values, ["root", "project"]):
+        fail(
+            "WORK_ITEM_SKILL_CATALOG_INVALID",
+            (
+                "available_skills must contain only root and project Skill "
+                "catalog arrays"
+            ),
+        )
+    result: dict[str, list[str]] = {}
+    for scope in ("root", "project"):
+        entries = values[scope]
+        if not isinstance(entries, list):
+            fail(
+                "WORK_ITEM_SKILL_CATALOG_INVALID",
+                (
+                    f"available_skills.{scope} must be an array of exact "
+                    "Skill catalog names"
+                ),
+                field=f"available_skills.{scope}",
+            )
+        names: list[str] = []
+        seen: set[str] = set()
+        for index, value in enumerate(entries):
+            if (
+                not isinstance(value, str)
+                or not SKILL_NAME.fullmatch(value)
+                or value in seen
+            ):
+                fail(
+                    "WORK_ITEM_SKILL_CATALOG_INVALID",
+                    (
+                        f"available_skills.{scope} must contain unique "
+                        "portable Skill catalog names"
+                    ),
+                    field=f"available_skills.{scope}[{index}]",
+                )
+            seen.add(value)
+            names.append(value)
+        result[scope] = sorted(names)
+    return result
+
+
 def required_skill_policy() -> dict[str, str]:
     """Return the portable execution policy bound to required Skill records."""
 
@@ -949,6 +994,8 @@ def render_development_plan(definition: dict[str, Any], state: dict[str, Any]) -
         "## 必须使用的 Skills",
         "",
         "> 名称是可移植的 Skill catalog 标识；`/skill`、`$skill` 等宿主调用语法不进入 baseline。",
+        "> required Skill 是执行指令，不是业务需求分析输入；用户仅指定开发使用时，不预分析、不递归展开，也不自动加入 GATE。",
+        "> 本方案中的 required Skill 已在 prepare 前由宿主级 root 与项目级 project catalog 联合验证存在；执行阶段仍须由实际 worker 原生调用。",
         "",
         "| Skill | 适用阶段 | 使用目的 |",
         "| --- | --- | --- |",

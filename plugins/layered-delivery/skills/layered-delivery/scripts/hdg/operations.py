@@ -144,6 +144,7 @@ def execute_operation(
             root=root,
             hierarchy=arguments["hierarchy"],
             host_runtime=arguments["host_runtime"],
+            available_skills=arguments["available_skills"],
             explicit_dogfood=dogfood,
         )
     if name == "freeze_hierarchy":

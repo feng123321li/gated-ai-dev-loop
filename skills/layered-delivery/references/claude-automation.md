@@ -12,7 +12,7 @@ Plugin 根目录的 `hooks/hooks.json` 通过 `PreToolUse` 仅对 `rebuild_graph
 
 ## Claude required Skill 原生调用
 
-frontier 的 `requiredSkills` 不是“建议读取”的文档清单。用户批准整树并选择 active/manual 时已经一次授权这些 Skill；每个名称都必须由实际执行该阶段的 Claude context 通过 Skill tool 自动调用，不得要求用户再次确认或触发。普通 Read、读取 `SKILL.md`、父 Agent 预读或只把名称写进 subagent prompt 都不合格。Skill tool 返回后，以该次 tool-use ID、Claude session ID、当前 executor 与 execution ID调用 `record_skill_activation`，`mechanism` 固定为 `HOST_NATIVE_SKILL`。一个 tool-use ID 只能绑定一个 required Skill；DEVELOPMENT 必须先完成此记录，才允许用相同 owner/operation `dispatch_task`。
+frontier 的 `requiredSkills` 不是“建议读取”的文档清单。prepare 前 Claude 必须分别提交宿主级 root 与项目级 project 的实际登记名称；缺失或疑似拼错时，控制器会在写状态前同时返回机器字段 `skillOptions` 和可直接展示的中文 `userPrompt`。Claude 必须优先展示 `userPrompt` 的标题、说明、带来源选项和兜底指引，让用户确认候选或安装，不能把技术结构直接展示给用户，也不能静默纠正。用户批准整树并选择 active/manual 时已经一次授权这些 Skill；每个名称都必须由实际执行该阶段的 Claude context 通过 Skill tool 自动调用，不得要求用户再次确认或触发。普通 Read、读取 `SKILL.md`、父 Agent 预读或只把名称写进 subagent prompt 都不合格。Skill tool 返回后，以该次 tool-use ID、Claude session ID、当前 executor 与 execution ID调用 `record_skill_activation`，`mechanism` 固定为 `HOST_NATIVE_SKILL`。一个 tool-use ID 只能绑定一个 required Skill；DEVELOPMENT 必须先完成此记录，才允许用相同 owner/operation `dispatch_task`。
 
 Claude 可以执行由任意已接入 Plugin MCP 的 Agent 宿主创建并冻结的需求。冻结状态中的 `hostRuntime` 只记录方案创建宿主和当时的自动化提示，不限制当前执行宿主；Plugin MCP 从当前 Claude client session 形成实际执行宿主凭证。遇到其他宿主创建的 frozen graph 时直接从 `graph_frontier` 接续并记录统一 `HOST_NATIVE_SKILL`，不得重新 prepare/freeze、要求用户重新确认或二次确认 required Skill。
 

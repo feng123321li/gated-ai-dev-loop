@@ -20,10 +20,13 @@ allowed-tools:
 ## 核心契约
 
 - 只使用根 `Task`、`Capability → Task` 或 `Delivery → Capability → Task` 的最浅合法结构；Task 是执行叶子。
+- 低风险单目标需求优先使用根 Task + LIGHT；允许简洁方案、定向测试和按需上下文，不复制通用说明或完整模板，但不省略独立 acceptance、精确文件授权、真实测试、P0/P1 和最终确认。
 - 一个需求只有一个 `work-items/<root-id>/` 顶层目录；SQLite 是机器权威，Markdown 只是投影。
 - 人只评审并冻结一次整树；Task、Agent 数、顺序、门禁和恢复由 Graph 决定。
 - 每个 requirement 都必须有独立 acceptance；跨需求 acceptance 只能追加集成验收，不能代替任一需求自己的可观察通过条件。
+- `scope` 按最小可用模块边界适当放宽，优先使用 `module/**`，不逐个复制计划文件，也不退化为全仓库 `**`；`developmentPlan.fileChanges` 仍冻结精确文件。Scope 重叠会约束并行，兄弟 Task 应尽量使用互不重叠的模块边界。
 - `requiredSkills` 可省略/空；非空 catalog 名向后代继承。冻结整树并选 active/manual 即授权；适配器自动原生调用，以 `HOST_NATIVE_SKILL`、实际宿主和独立调用 ID 用 `record_skill_activation` 绑定 attempt，不得要求用户再次输入 `$skill` 或确认 Skill。方案宿主仅审计；跨 Agent 不重新 prepare/freeze。Read/load/提名不算激活，调用 ID 不得复用。
+- 用户明确指定仅在开发过程中使用的 Skill，不作为需求分析输入：不预分析、不递归展开、不自动加入 `GATE`。登记前同时检查宿主级 `root` 与项目级 `project` catalog，并把两个来源的精确名称传给 `prepare_hierarchy.available_skills`；名称不存在或疑似拼错时停止准备，返回候选名称和来源供宿主提示用户选择，也可提示安装 Skill。宿主必须优先直接展示 `userPrompt` 的中文标题、说明、选项和兜底指引；`skillOptions` 仅用于机器处理，不得把原始技术字段直接甩给用户。存在时直接登记为仅含 `DEVELOPMENT` 的 required Skill，等实际 worker 开发时再原生调用。只有用户另行明确指定其他阶段时才进入对应阶段。
 - 完整执行后由同一执行宿主用 `record_skill_conformance` 记录实际检查。成功 result/gate/review 要求逐项 `INVOKED + PASS`；`skillUsage` 不能替代 Graph 事件。验收报告只投影真实调用与符合性。细节按阶段读取 [development.md](references/development.md)、[acceptance.md](references/acceptance.md) 和宿主说明。
 - 同一契约内的修正回到原 Task；不创建重复根或扩大文件授权。
 - Task、聚合 gate、独立审查和用户确认都是显式图节点；只有最终用户确认后的 `COMPLETED` 表示完成。
@@ -40,7 +43,7 @@ allowed-tools:
 
 ## 推进流程
 
-1. 新需求读取规划类 references，选择最浅层级并形成完整 schema v3 树；通过 MCP 结构化参数调用 `prepare_hierarchy`。
+1. 新需求读取规划类 references，选择最浅层级并形成完整 schema v3 树；分别取得宿主级 root 和当前 project 已注册 Skill catalog 的精确名称列表，通过 MCP 结构化参数以 `available_skills={"root":[...],"project":[...]}` 调用 `prepare_hierarchy`。缺失的 required Skill 必须优先展示 `userPrompt`，让用户按带“宿主级/项目级”来源的中文候选选择正确名称，或按兜底指引修正、安装；`skillOptions` 保留给宿主程序处理，不得自动改名、生成或冻结方案。
 2. 展示返回的开发方案和图入口，说明范围、契约、依赖、测试与失败路由。每次确认提示都必须同时展示 `active` 和 `manual` 两种开发方式；修改方案时重新准备同一整树。
 3. 用户明确同意方案并选择方式的回复，就是当前指纹方案的一次冻结确认。紧邻该回复使用返回的 `hierarchyFingerprint` 一次调用 `freeze_hierarchy`；不得再次询问、等待单独的工具批准或重放旧选择，MCP 也不传 `confirmed` 布尔参数。
 4. 冻结后每次迁移都重新查询 `graph_frontier`，完整消费 `actions` 与 `dispatchPlan`，不自行挑选 Task、排序或确定 Agent 数；`ADVANCE_GRAPH` 是租约硬过期后的确定性自动恢复动作，不请求人工重置。

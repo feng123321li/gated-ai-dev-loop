@@ -8,7 +8,7 @@ Codex 可以执行由任意已接入 Plugin MCP 的 Agent 宿主创建并冻结�
 
 ## 每个 required Skill 都由执行适配器自动调用
 
-frontier 中的 `requiredSkills` 是需求冻结的任意 catalog 名，控制器没有 Skill 白名单。用户批准整树并选择 active/manual 时已经一次授权这些 Skill；frontier action 是当前 Codex task/context 的自动调用指令，不是新的授权请求。执行适配器必须通过 Codex 原生 Skill 路径逐项激活、完整应用并记录凭证，不得暂停并要求用户再次输入 `$<skill-name>`、确认 Skill 或复制触发文本。隐式相关性、只读取 `SKILL.md`、文件 load、父 task 调用或只把名称写进提示都不能单独作为该执行 context 的激活。
+frontier 中的 `requiredSkills` 是需求冻结的任意合法 catalog 名；控制器没有硬编码白名单，但 prepare 前已要求 Codex 分别提交宿主级 root 与项目级 project 的实际登记名称。缺失或疑似拼错时，控制器同时返回机器字段 `skillOptions` 和可直接展示的中文 `userPrompt`；Codex 必须优先展示 `userPrompt` 的标题、说明、带来源选项和兜底指引，让用户确认正确 Skill 或安装，不得直接输出技术结构或自动替换。用户批准整树并选择 active/manual 时已经一次授权这些 Skill；frontier action 是当前 Codex task/context 的自动调用指令，不是新的授权请求。执行适配器必须通过 Codex 原生 Skill 路径逐项激活、完整应用并记录凭证，不得暂停并要求用户再次输入 `$<skill-name>`、确认 Skill 或复制触发文本。隐式相关性、只读取 `SKILL.md`、文件 load、父 task 调用或只把名称写进提示都不能单独作为该执行 context 的激活。
 
 每次由执行适配器自动完成原生激活后立即调用 `record_skill_activation`：
 

@@ -93,6 +93,7 @@ class PayloadStagingTests(unittest.TestCase):
                 {
                     "hierarchy": reference,
                     "host_runtime": "codex",
+                    "available_skills": {"root": [], "project": []},
                 },
                 root=temporary,
             )
@@ -286,6 +287,7 @@ class PayloadStagingTests(unittest.TestCase):
                             "payloadRef": finalized["payloadRef"],
                         },
                         "host_runtime": "codex",
+                        "available_skills": {"root": [], "project": []},
                     },
                     root=temporary,
                 )
@@ -331,6 +333,7 @@ class PayloadStagingTests(unittest.TestCase):
                             "payloadRef": finalized["payloadRef"],
                         },
                         "host_runtime": "codex",
+                        "available_skills": {"root": [], "project": []},
                     },
                     root=temporary,
                 )

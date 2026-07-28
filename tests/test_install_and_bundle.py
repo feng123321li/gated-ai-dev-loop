@@ -90,6 +90,8 @@ class InstallAndBundleTests(unittest.TestCase):
         skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
         workflow = (skill_root / "references" / "workflow.md").read_text(encoding="utf-8")
         development_plan = (skill_root / "references" / "development-plan.md").read_text(encoding="utf-8")
+        baselines = (skill_root / "references" / "baselines.md").read_text(encoding="utf-8")
+        routing_profiles = (skill_root / "references" / "routing-profiles.md").read_text(encoding="utf-8")
         acceptance = (skill_root / "references" / "acceptance.md").read_text(encoding="utf-8")
         tracking = (skill_root / "references" / "tracking.md").read_text(encoding="utf-8")
         claude_automation = (skill_root / "references" / "claude-automation.md").read_text(encoding="utf-8")
@@ -100,6 +102,86 @@ class InstallAndBundleTests(unittest.TestCase):
         self.assertIn(
             "不得要求用户再次输入 `$skill` 或确认 Skill",
             skill,
+        )
+        self.assertIn(
+            "用户明确指定仅在开发过程中使用的 Skill",
+            skill,
+        )
+        self.assertIn(
+            "不预分析、不递归展开、不自动加入 `GATE`",
+            skill,
+        )
+        self.assertIn(
+            "名称不存在或疑似拼错",
+            skill,
+        )
+        self.assertIn(
+            "同时检查宿主级 `root` 与项目级 `project` catalog",
+            skill,
+        )
+        self.assertIn(
+            "返回候选名称和来源供宿主提示用户选择",
+            skill,
+        )
+        self.assertIn(
+            "宿主必须优先直接展示 `userPrompt`",
+            skill,
+        )
+        self.assertIn(
+            "直接登记为仅含 `DEVELOPMENT` 的 required Skill",
+            development_plan,
+        )
+        self.assertIn(
+            "不得为此预读该 Skill、递归展开其内部 Skill",
+            development_plan,
+        )
+        self.assertIn(
+            "`prepare_hierarchy.available_skills`",
+            development_plan,
+        )
+        self.assertIn(
+            "`WORK_ITEM_REQUIRED_SKILL_UNAVAILABLE`",
+            development_plan,
+        )
+        self.assertIn(
+            "`skillOptions`",
+            development_plan,
+        )
+        self.assertIn(
+            "`userPrompt` 是可直接面向用户展示的中文提示",
+            development_plan,
+        )
+        self.assertIn(
+            "`title/message/questions`",
+            development_plan,
+        )
+        self.assertIn(
+            "按最小可用模块边界适当放宽",
+            development_plan,
+        )
+        self.assertIn(
+            "`developmentPlan.fileChanges` 仍逐项列出精确文件",
+            development_plan,
+        )
+        self.assertIn(
+            "宿主级 `root` 和项目级 `project`",
+            baselines,
+        )
+        self.assertIn(
+            "`development-handoff.md` 只投影 worker 开工所需的最小上下文",
+            development,
+        )
+        self.assertIn(
+            "不得复制完整父级 developmentPlan、完整 requiredSkillPolicy",
+            development,
+        )
+        self.assertIn(
+            "低风险单目标需求优先使用根 Task + LIGHT",
+            routing_profiles,
+        )
+        self.assertIn(
+            "允许说明简洁、定向测试优先和按需读取",
+            routing_profiles,
         )
         self.assertIn("不能只用一个跨需求 acceptance", development_plan)
         self.assertIn("同时展示 requirement 文本、R/A 映射和 expectedResult", acceptance)
@@ -523,6 +605,18 @@ class InstallAndBundleTests(unittest.TestCase):
         self.assertIn("选择 `active` 或 `manual`", readme)
         self.assertIn("直接在对话中说明即可", readme)
         self.assertIn("用户不需要填写 `requiredSkills` 字段", readme)
+        self.assertIn(
+            "不预分析、不递归展开，也不自动加入 `GATE`",
+            readme,
+        )
+        self.assertIn(
+            "给出带来源的近似 Skill 选项",
+            readme,
+        )
+        self.assertIn(
+            "Scope 按最小可用模块边界适当放宽",
+            readme,
+        )
         self.assertIn("Codex", readme)
         self.assertIn("Claude Code", readme)
         self.assertNotIn("Plugin-only", readme)
@@ -602,7 +696,7 @@ class InstallAndBundleTests(unittest.TestCase):
         allowed_roots = {
             "hdg", "__future__", "abc", "argparse", "ast", "base64", "collections", "contextlib",
             "contextvars",
-            "copy", "dataclasses", "datetime", "enum", "errno", "fcntl", "functools", "hashlib",
+            "copy", "dataclasses", "datetime", "difflib", "enum", "errno", "fcntl", "functools", "hashlib",
             "io", "json", "math", "msvcrt", "os", "pathlib", "posixpath", "re", "secrets", "shutil", "sqlite3",
             "stat", "sys", "tempfile", "threading", "time", "typing", "unicodedata", "unittest",
             "urllib", "uuid",

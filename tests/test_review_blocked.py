@@ -91,6 +91,10 @@ class ReviewBlockedTests(unittest.TestCase):
             root=root,
             hierarchy=task_hierarchy(requiredSkills=[FINAL_REVIEW_SKILL]),
             host_runtime="codex",
+            available_skills={
+                "root": [FINAL_REVIEW_SKILL["name"]],
+                "project": [],
+            },
         )
         task_id = prepared["rootId"]
         freeze_hierarchy(

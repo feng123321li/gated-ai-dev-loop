@@ -31,7 +31,9 @@ Capability 可以是根，也可以从 Delivery 子契约派生。每个 Capabil
 
 ## Task 拆分
 
-Task 是唯一可执行叶子，也可以直接作为根。合格 Task 必须有单一目标、精确写入范围、输入输出、安全测试 argv、完整 R/A 和可观察完成结果，并在评审文件中明确变更场景、精确文件动作、接口/函数当前与目标契约、实现逻辑、数据事务、兼容性和测试映射，能由全新 Agent 在独立上下文中完成。根 Task 的 `dependsOn` 必须为空；Capability 下的 Task 只引用同 Capability 已计划兄弟。
+Task 是唯一可执行叶子，也可以直接作为根。合格 Task 必须有单一目标、按最小实际模块划分的外层 Scope、输入输出、安全测试 argv、完整 R/A 和可观察完成结果，并在评审文件中明确变更场景、精确文件动作、接口/函数当前与目标契约、实现逻辑、数据事务、兼容性和测试映射，能由全新 Agent 在独立上下文中完成。Scope 通常使用 `module/**` 并允许同模块内必要文件生成，但精确写授权仍由 `developmentPlan.fileChanges` 给出；不得使用全仓库 `**`。根 Task 的 `dependsOn` 必须为空；Capability 下的 Task 只引用同 Capability 已计划兄弟。
+
+用户明确指定仅供开发使用的 Skill 不参与层级事实卡、需求推导或 Task 拆分，也不触发更深治理层级。规划者不预读或递归展开该 Skill，但必须先合并宿主级 root 与项目级 project catalog 精确核对名称；不存在或疑似拼错时，把控制器返回的带来源候选交给宿主提示用户选择或安装，不得继续 prepare 或静默纠正。验证存在后，只把用户确认的 catalog 名作为 `DEVELOPMENT` required Skill 绑定到实际执行它的 Task；Skill 内部依赖留到 worker 执行完整流程时处理，不自动形成新的 required Skill 或 GATE。
 
 ## 完整物化与重新规划
 

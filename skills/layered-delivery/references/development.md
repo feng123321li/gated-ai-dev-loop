@@ -4,7 +4,7 @@
 
 只有根级开发方案已经通过一次整树冻结、开发方式已在同一次确认中写入 SQLite、实际父链有效且 Task/Capability 依赖都 VERIFIED 的 Task 才能生成上下文。正常流程只在 worker 真正取得执行容量时使用 `dispatch_task`，在同一 SQLite 短事务中校验 READY、保存绑定唯一 operationId 的结构化上下文和 handoff，并在 Markdown handoff 写入成功后提交 claim。`task_context` 只返回调度前诊断或恢复预览，不写入开工工件。正式上下文继承需求根开发方式，并包含 `gateLevel`、operation、`leasePolicy`、Task 的完整 `developmentPlan`、祖先与本节点聚合后的 `requiredSkills`、`requiredSkillPolicy`、验证修正记录、`authorizedFileChanges`、实际存在父级的协调开发计划与子契约、依赖证据、R/A、输入输出、测试 argv、禁止事项和紧凑 `evidenceContractRefs`；完整 result/gate/remediation 模板由 `evidence_contract` 在真正需要时从 SQLite 单项读取，不复制进每个 Task 上下文或 handoff。根 Task 的父契约和聚合依赖数组为空，`inheritConversation` 固定为 false。
 
-`requirement-handoff.md` 是 manual 根级需求的一次性交接提示词，冻结与投影刷新都会从 SQLite 重建；它列出完整树并要求接收会话消费 Graph 自动计算的调度计划，完成 dispatch、结果写回和逐级门禁。`development-handoff.md` 仍是 `dispatch_task` 后生成的单 Task 执行上下文，只在执行循环内部交给对应开发 Agent，不再要求人逐 Task 复制。`task_context` 只返回不得用于开工的未认领诊断预览。开发 Agent 不接收 Delivery 分析对话、Capability 讨论、其他 Task 对话或执行入口隐式记忆。
+`requirement-handoff.md` 是 manual 根级需求的一次性交接提示词，冻结与投影刷新都会从 SQLite 重建；它列出完整树并要求接收会话消费 Graph 自动计算的调度计划，完成 dispatch、结果写回和逐级门禁。`development-handoff.md` 只投影 worker 开工所需的最小上下文：Task/operation、同目录 `development-plan.md` 链接、精确授权文件、R/A、输入输出、定向测试、DEVELOPMENT Skills、相关依赖/共享契约摘要和 result evidence 引用。不得复制完整父级 developmentPlan、完整 requiredSkillPolicy、leasePolicy、Gate/remediation 模板或完整 `dispatch_task` JSON；这些结构继续由 SQLite 和 MCP 返回保存，在真正需要时按引用读取。`task_context` 只返回不得用于开工的未认领诊断预览。开发 Agent 不接收 Delivery 分析对话、Capability 讨论、其他 Task 对话或执行入口隐式记忆。
 
 接收会话只通过已连接并完成工具注册的 Plugin MCP 调用 `graph_frontier` 恢复 graph run，并直接消费结构化 tool result；不得固化用户目录、Plugin 安装位置或操作系统路径，也不得用临时 JSON 中转只读查询结果。MCP 不可用时立即停止，不得编辑业务代码、启动 CLI 或写治理状态。`task_context` 只用于诊断，正式开工上下文必须来自 Graph 计划后的 `dispatch_task`。
 
@@ -18,6 +18,7 @@
 - 不提交、推送、发布或改变外部状态；
 - 持续运行相关回归、修复失败并复测，报告真实事实；
 - 用户冻结整树并选择 active/manual 时已经授权全部 `requiredSkills`。worker 取得执行容量后、`dispatch_task` 前，执行适配器对 frontier 中每个 DEVELOPMENT required Skill 分别使用当前宿主原生 Skill 入口自动调用并立即写入 `record_skill_activation`；统一记录 `HOST_NATIVE_SKILL`、实际执行宿主和当前 task/session 中互不复用的调用 ID。不得要求用户再次输入 `$skill` 或确认 Skill；Read、load、父会话调用或提示中出现名称都不能单独替代当前执行 context 的激活；
+- 用户在规划前明确指定的开发 Skill 到此阶段才首次原生调用；规划阶段不预读或分析其正文。worker 按该 Skill 的完整流程处理其内部依赖，但未被用户独立指定的内部 Skill 不递归追加为新的 required Skill，也不产生额外 GATE 要求；若用户分别指定多个 Skill，则每个名称仍须有独立调用 ID、激活和符合性记录；
 - 完整执行 Skill 后、`task_result` 前，用 `record_skill_conformance` 把命名检查和实际代码/diff/测试证据绑定到激活凭证；成功结果要求当前 node attempt 的每项 Skill 都是 `INVOKED + PASS`，同一原生调用 ID 不能覆盖多个 Skill；
 - 返回 `IMPLEMENTED` 或 `BLOCKED`，不得报告 PASS。
 

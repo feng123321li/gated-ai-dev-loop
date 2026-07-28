@@ -43,10 +43,26 @@ class HierarchyFlowTests(unittest.TestCase):
         *,
         hierarchy: dict | None = None,
     ) -> dict:
+        selected_hierarchy = hierarchy or delivery_hierarchy()
+        available_skills: set[str] = set()
+
+        def collect(node: dict) -> None:
+            available_skills.update(
+                item["name"]
+                for item in node["definition"].get("requiredSkills", [])
+            )
+            for child in node["children"]:
+                collect(child)
+
+        collect(selected_hierarchy["root"])
         prepared = prepare_hierarchy(
             root=root,
-            hierarchy=hierarchy or delivery_hierarchy(),
+            hierarchy=selected_hierarchy,
             host_runtime="claude-code",
+            available_skills={
+                "root": sorted(available_skills),
+                "project": [],
+            },
         )
         freeze_hierarchy(
             root=root,
@@ -239,6 +255,10 @@ class HierarchyFlowTests(unittest.TestCase):
                 root=temporary,
                 hierarchy=hierarchy,
                 host_runtime="codex",
+                available_skills={
+                    "root": ["tdd-workflow"],
+                    "project": [],
+                },
             )
             freeze_hierarchy(
                 root=temporary,

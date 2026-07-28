@@ -4,7 +4,9 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
-## 0.15.1 — 待发布
+## 0.15.1 — 2026-07-28
+
+发布提交：`01af219`
 
 - required Skill 不设控制器白名单：需求冻结的任意合法 catalog 名都逐项执行。Claude 必须以 Skill tool-use、Codex 必须以显式 `$skill` 原生触发形成 `SKILL_ACTIVATED` Graph 凭证；Read/load 不算激活，同一原生调用 ID 不得复用。
 - MCP 工具由 35 个增至 37 个，新增 `record_skill_activation` 与 `record_skill_conformance`。result、gate 和 review 成功前须提交绑定当前 node attempt 的非空检查并全部 PASS，artifact 中的 `skillUsage` 自述不能替代原生激活与实际符合性。

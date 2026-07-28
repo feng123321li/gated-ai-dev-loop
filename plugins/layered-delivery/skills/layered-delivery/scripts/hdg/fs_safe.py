@@ -1,17 +1,127 @@
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 import stat
+import threading
+import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, TypeVar
+from typing import BinaryIO, Callable, Iterator, TypeVar
 
 from .errors import GatedLoopError
 from .timing import timed_stage, timing_increment
 
 
 T = TypeVar("T")
+_LOCKS_GUARD = threading.Lock()
+_PROCESS_LOCKS: dict[str, threading.RLock] = {}
+_THREAD_LOCK_STATE = threading.local()
+
+
+def _lock_key(path: Path) -> str:
+    return os.path.normcase(str(path.absolute()))
+
+
+def _process_lock(path: Path) -> threading.RLock:
+    key = _lock_key(path)
+    with _LOCKS_GUARD:
+        return _PROCESS_LOCKS.setdefault(key, threading.RLock())
+
+
+def _try_lock_file(stream: BinaryIO) -> bool:
+    stream.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        try:
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as error:
+            if error.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}:
+                return False
+            raise
+        return True
+
+    import fcntl
+
+    try:
+        fcntl.flock(
+            stream.fileno(),
+            fcntl.LOCK_EX | fcntl.LOCK_NB,
+        )
+    except BlockingIOError:
+        return False
+    return True
+
+
+def _unlock_file(stream: BinaryIO) -> None:
+    stream.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def exclusive_file_lock(
+    path: str | os.PathLike[str],
+    *,
+    timeout_seconds: float = 30.0,
+) -> Iterator[None]:
+    """Serialize one filesystem operation across threads and processes."""
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout_seconds
+    process_lock = _process_lock(target)
+    remaining = max(0.0, deadline - time.monotonic())
+    if not process_lock.acquire(timeout=remaining):
+        raise GatedLoopError(
+            "FILESYSTEM_LOCK_TIMEOUT",
+            f"Timed out waiting for filesystem lock: {target}",
+        )
+    try:
+        key = _lock_key(target)
+        depths = getattr(_THREAD_LOCK_STATE, "depths", None)
+        if depths is None:
+            depths = {}
+            _THREAD_LOCK_STATE.depths = depths
+        if depths.get(key, 0) > 0:
+            depths[key] += 1
+            try:
+                yield
+            finally:
+                depths[key] -= 1
+            return
+        with target.open("a+b") as stream:
+            stream.seek(0, os.SEEK_END)
+            if stream.tell() == 0:
+                stream.write(b"\0")
+                stream.flush()
+            while not _try_lock_file(stream):
+                if time.monotonic() >= deadline:
+                    raise GatedLoopError(
+                        "FILESYSTEM_LOCK_TIMEOUT",
+                        f"Timed out waiting for filesystem lock: {target}",
+                    )
+                time.sleep(0.05)
+            try:
+                depths[key] = 1
+                yield
+            finally:
+                try:
+                    _unlock_file(stream)
+                finally:
+                    depths.pop(key, None)
+    finally:
+        process_lock.release()
 
 
 def _contained(root: Path, target: Path) -> bool:

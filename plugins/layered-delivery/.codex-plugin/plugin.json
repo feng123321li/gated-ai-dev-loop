@@ -1,6 +1,6 @@
 {
   "name": "layered-delivery",
-  "version": "0.14.1",
+  "version": "0.15.0",
   "description": "面向 AI 辅助开发、可人工评审的分层交付治理插件",
   "author": {
     "name": "layered-delivery contributors",
@@ -15,6 +15,37 @@
     "workflow"
   ],
   "skills": "./skills/",
+  "mcpServers": {
+    "layered-delivery": {
+      "command": "python",
+      "args": [
+        "-X",
+        "utf8",
+        "skills/layered-delivery/scripts/hdg_mcp.py",
+        "--project-root-from-meta"
+      ],
+      "cwd": ".",
+      "supports_parallel_tool_calls": false,
+      "default_tools_approval_mode": "approve",
+      "tools": {
+        "freeze_hierarchy": {
+          "approval_mode": "prompt"
+        },
+        "rebuild_graph_run": {
+          "approval_mode": "prompt"
+        },
+        "cancel_graph_run": {
+          "approval_mode": "prompt"
+        },
+        "record_human_review_acceptance": {
+          "approval_mode": "prompt"
+        },
+        "record_user_confirmation": {
+          "approval_mode": "prompt"
+        }
+      }
+    }
+  },
   "interface": {
     "displayName": "分层交付",
     "shortDescription": "治理可评审、可恢复的 AI 辅助软件交付",

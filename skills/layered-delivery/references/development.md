@@ -2,11 +2,11 @@
 
 ## 上下文生成
 
-只有根级开发方案已经通过一次整树冻结、开发方式已在同一次确认中写入 SQLite、实际父链有效且 Task/Capability 依赖都 VERIFIED 的 Task 才能生成上下文。正常流程只在 worker 真正取得执行容量时使用 `dispatch-task`，在同一 SQLite 短事务中校验 READY、保存绑定唯一 operationId 的结构化上下文和 handoff，并在 Markdown handoff 写入成功后提交 claim。`task-context` 只返回调度前诊断或恢复预览，不写入开工工件。正式上下文继承需求根开发方式，并包含 `gateLevel`、operation、`leasePolicy`、Task 的完整 `developmentPlan`、验证修正记录、`authorizedFileChanges`、实际存在父级的协调开发计划与子契约、依赖证据、R/A、输入输出、测试 argv、禁止事项和紧凑 `evidenceContractRefs`；完整 result/gate/remediation 模板由 `evidence-contract` 在真正需要时从 SQLite 单项读取，不复制进每个 Task 上下文或 handoff。根 Task 的父契约和聚合依赖数组为空，`inheritConversation` 固定为 false。
+只有根级开发方案已经通过一次整树冻结、开发方式已在同一次确认中写入 SQLite、实际父链有效且 Task/Capability 依赖都 VERIFIED 的 Task 才能生成上下文。正常流程只在 worker 真正取得执行容量时使用 `dispatch_task`，在同一 SQLite 短事务中校验 READY、保存绑定唯一 operationId 的结构化上下文和 handoff，并在 Markdown handoff 写入成功后提交 claim。`task_context` 只返回调度前诊断或恢复预览，不写入开工工件。正式上下文继承需求根开发方式，并包含 `gateLevel`、operation、`leasePolicy`、Task 的完整 `developmentPlan`、祖先与本节点聚合后的 `requiredSkills`、`requiredSkillPolicy`、验证修正记录、`authorizedFileChanges`、实际存在父级的协调开发计划与子契约、依赖证据、R/A、输入输出、测试 argv、禁止事项和紧凑 `evidenceContractRefs`；完整 result/gate/remediation 模板由 `evidence_contract` 在真正需要时从 SQLite 单项读取，不复制进每个 Task 上下文或 handoff。根 Task 的父契约和聚合依赖数组为空，`inheritConversation` 固定为 false。
 
-`requirement-handoff.md` 是 manual 根级需求的一次性交接提示词，冻结与投影刷新都会从 SQLite 重建；它列出完整树并要求接收会话消费 Graph 自动计算的调度计划，完成 dispatch、结果写回和逐级门禁。`development-handoff.md` 仍是 `dispatch-task` 后生成的单 Task 执行上下文，只在执行循环内部交给对应开发 Agent，不再要求人逐 Task 复制。`task-context --json` 只返回不得用于开工的未认领诊断预览。开发 Agent 不接收 Delivery 分析对话、Capability 讨论、其他 Task 对话或执行入口隐式记忆。
+`requirement-handoff.md` 是 manual 根级需求的一次性交接提示词，冻结与投影刷新都会从 SQLite 重建；它列出完整树并要求接收会话消费 Graph 自动计算的调度计划，完成 dispatch、结果写回和逐级门禁。`development-handoff.md` 仍是 `dispatch_task` 后生成的单 Task 执行上下文，只在执行循环内部交给对应开发 Agent，不再要求人逐 Task 复制。`task_context` 只返回不得用于开工的未认领诊断预览。开发 Agent 不接收 Delivery 分析对话、Capability 讨论、其他 Task 对话或执行入口隐式记忆。
 
-接收会话必须从当前 Skill 元数据解析控制器入口，以 `graph-frontier --json` 恢复 graph run 并直接消费 stdout；不得固化用户目录、Skill 安装位置或操作系统路径，也不得用临时 JSON 中转只读查询结果。控制器非零退出时保留 stderr 并停止解析，不能让空 stdout 导致的二次 JSON 错误遮蔽原始失败。`task-context` 只用于诊断，正式开工上下文必须来自 Graph 计划后的 `dispatch-task`。
+接收会话优先通过已连接的 Plugin MCP 调用 `graph_frontier` 恢复 graph run，并直接消费结构化 tool result；不得固化用户目录、Skill 安装位置或操作系统路径，也不得用临时 JSON 中转只读查询结果。只有 MCP 不可用时才从当前 Skill 元数据解析控制器入口、运行 `graph-frontier --json` 并处理 stdout/stderr。`task_context` 只用于诊断，正式开工上下文必须来自 Graph 计划后的 `dispatch_task`。
 
 ## 开发 Agent 契约
 
@@ -17,6 +17,7 @@
 - 不改变 SQLite、baseline、进度投影或 `.git/**`；
 - 不提交、推送、发布或改变外部状态；
 - 持续运行相关回归、修复失败并复测，报告真实事实；
+- 进入 DEVELOPMENT 前按 context 中的 canonical 名加载每个 required Skill 的完整说明和直接引用资源，遵循完整流程；不能用提示中出现过 Skill 名称代替实际应用；
 - 返回 `IMPLEMENTED` 或 `BLOCKED`，不得报告 PASS。
 
 输入、依赖或工作区不可访问时，在任何写入前 BLOCKED。
@@ -24,7 +25,7 @@
 ## Active 与 Manual
 
 - `active`：冻结后由 Graph 自动推进。控制器计算 READY、安全并行集合、目标 Agent 数和稳定顺序；执行 Agent/适配器完整消费计划。运行能力变化只影响立即启动还是排队，不请求用户重新选择。开发持续循环到相关回归和复测通过，或形成真实阻断。当前宿主是 Claude Code 时，必须先满足 `hostAutomation` 的 Auto 权限前置条件，再冻结和认领 Task。
-- `manual`：当前规划会话不创建开发 Agent。`freeze-hierarchy` 在需求根生成一份 `requirement-handoff.md`，在 `handoffPrompt` 返回同样的完整内容，并通过 `handoffCommand` 返回可直接复制到新会话的简短指令。规划会话的首次最终回复必须按 `responseContract` 提供一个纯文本代码块，用户一次复制到任意全新 Agent 后即可接管需求。可以直接使用 `handoffCommand`，也可以生成覆盖 `requiredSemantics` 的语义等价文本，不要求逐字一致；完整交接与冻结方案链接放在代码块之后，不能只返回文件链接。交接目标是 Claude Code 时，同时展示 `claudeCodeAutoHandoff` 中适合界面的 Auto 启动方式。接收会话成为 Graph 执行入口，读取 `dispatchPlan`、为每个计划 Task 生成唯一 operationId 并执行 `dispatch-task`。平台可并行时启动隔离子 Agent，容量不足时稳定排队并串行消费；不得挑选子集，也不得要求用户逐 Task 再次回复或复制交接。
+- `manual`：当前规划会话不创建开发 Agent。`freeze_hierarchy` 在需求根生成一份 `requirement-handoff.md`，在 `handoffPrompt` 返回同样的完整内容，并通过 `handoffCommand` 返回可直接复制到新会话的简短指令。规划会话的首次最终回复必须按 `responseContract` 提供一个纯文本代码块，用户一次复制到任意全新 Agent 后即可接管需求。可以直接使用 `handoffCommand`，也可以生成覆盖 `requiredSemantics` 的语义等价文本，不要求逐字一致；完整交接与冻结方案链接放在代码块之后，不能只返回文件链接。交接目标是 Claude Code 时，同时展示 `claudeCodeAutoHandoff` 中适合界面的 Auto 启动方式。接收会话成为 Graph 执行入口，读取 `dispatchPlan`、为每个计划 Task 生成唯一 operationId 并执行 `dispatch_task`。平台可并行时启动隔离子 Agent，容量不足时稳定排队并串行消费；不得挑选子集，也不得要求用户逐 Task 再次回复或复制交接。
 
 用户在评审 `development-plan.md` 时选择一次根级方式；Agent 使用同一次确认调用：
 
@@ -45,10 +46,10 @@ python -X utf8 <skill-root>/scripts/hdg.py freeze-hierarchy --item <root-id> --e
 }
 ```
 
-全部后代 Task 继承同一方式，但仍各自使用独立 baseline、gateLevel、scope、operationId、结果和 gate。manual 的一次交接只移交整树执行责任，不会提前 claim 全部 Task；`dispatch-task` 仍在 Graph 判定 Task READY 并把它列入 `dispatchPlan` 时执行。冻结命令缺少明确方式时必须拒绝，不能默认选择；根级计划被改动或数据库中的层级/baseline 不一致也必须拒绝。方式一旦随当前需求树冻结就不能原地切换。目标 Agent 数、并发组、调度顺序和容量回退由 Graph 运行时计算，不进入开发方式记录、开发方案、baseline 或层级指纹。
+全部后代 Task 继承同一方式，但仍各自使用独立 baseline、gateLevel、scope、operationId、结果和 gate。manual 的一次交接只移交整树执行责任，不会提前 claim 全部 Task；`dispatch_task` 仍在 Graph 判定 Task READY 并把它列入 `dispatchPlan` 时执行。冻结工具缺少明确方式时必须拒绝，不能默认选择；根级计划被改动或数据库中的层级/baseline 不一致也必须拒绝。方式一旦随当前需求树冻结就不能原地切换。目标 Agent 数、并发组、调度顺序和容量回退由 Graph 运行时计算，不进入开发方式记录、开发方案、baseline 或层级指纹。
 
 ## 结果接收
 
-Graph 执行循环先调用 `evidence-contract --item <task-id> --kind result --json`，取得绑定当前 claim/operationId 的两份可填写模板和冻结测试、有效授权、失败分类约束，再以 `--evidence -` 从 stdin 执行 `task-result`。控制器在同一 SQLite 写事务内核对当前 claim、operationId、尚未硬过期的租约和 artifact；不匹配时返回逐字段 `issues` 与当前 contract，匹配时计算规范 JSON 摘要，记录 `IMPLEMENTED/BLOCKED`、artifact 与摘要并清除 claim。`IMPLEMENTED` 的 blockers 必须为空且 `failure=null`；`BLOCKED` 必须提供非空 blockers 与 `failure.class/code/summary`。控制器随即生成 `development-review.md`，对照冻结计划展示实际改动、接口、回归测试、复测和偏差；`IMPLEMENTED` 只表示等待门禁。Agent 应先修复回归失败并完成复测，再以相同方式提交严格 gate artifact、执行 `accept-item` 并生成验收报告。根工作项通过聚合门禁后向用户提交交付，由用户人工验收和最终确认；开发会话的 IMPLEMENTED 不能当作完成。
+Graph 执行循环先调用 `evidence_contract` 取得绑定当前 claim/operationId 的两份 result 模板和冻结测试、有效授权、失败分类、required Skills 约束，再以结构化 evidence 调用 `task_result`。控制器在同一 SQLite 写事务内核对当前 claim、operationId、尚未硬过期的租约和 artifact；不匹配时返回逐字段 `issues` 与当前 contract，匹配时计算规范 JSON 摘要，记录 `IMPLEMENTED/BLOCKED`、artifact 与摘要并清除 claim。`IMPLEMENTED` 的 blockers 必须为空、`failure=null`，且 `skillUsage` 必须精确覆盖全部 DEVELOPMENT 要求并具体说明应用情况；`BLOCKED` 必须提供非空 blockers 与 `failure.class/code/summary`，Skill 不可用时在对应 usage 中记录 `BLOCKED`。控制器随即生成 `development-review.md`，对照冻结计划展示实际改动、接口、Skill 使用、回归测试、复测和偏差；`IMPLEMENTED` 只表示等待门禁。Agent 应先修复回归失败并完成复测，再以相同方式提交严格 gate artifact、执行 `accept_item` 并生成验收报告。只有 CLI fallback 使用 `--evidence -` 和 stdin。根工作项通过聚合门禁后向用户提交交付，由用户人工验收和最终确认；开发会话的 IMPLEMENTED 不能当作完成。
 
-验证阶段若发现原验收项所需文件漏列，当前 claim 必须先正常写回并释放，再由 Graph 执行循环按修正路由执行 `remediate-task`。控制器把补充文件加入下一次 context 的 `authorizedFileChanges`，原 Task 重新 READY 后再认领；开发 Agent 不自行编辑 baseline、计划或 SQLite，也不另起需求根。
+验证阶段若发现原验收项所需文件漏列，当前 claim 必须先正常写回并释放，再由 Graph 执行循环按修正路由执行 `remediate_task`。控制器把补充文件加入下一次 context 的 `authorizedFileChanges`，原 Task 重新 READY 后再认领；开发 Agent 不自行编辑 baseline、计划或 SQLite，也不另起需求根。

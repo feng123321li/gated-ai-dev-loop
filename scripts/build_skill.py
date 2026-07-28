@@ -14,6 +14,7 @@ CANONICAL_SKILL = REPOSITORY_ROOT / "skills" / "layered-delivery"
 SKILL_SCRIPTS = CANONICAL_SKILL / "scripts"
 TARGET_PACKAGE = SKILL_SCRIPTS / "hdg"
 TARGET_ENTRY = SKILL_SCRIPTS / "hdg.py"
+TARGET_MCP_ENTRY = SKILL_SCRIPTS / "hdg_mcp.py"
 PLUGIN_ROOT = REPOSITORY_ROOT / "plugins" / "layered-delivery"
 PLUGIN_SKILL = PLUGIN_ROOT / "skills" / "layered-delivery"
 
@@ -27,6 +28,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from hdg.cli import main  # noqa: E402
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+
+MCP_ENTRY = '''#!/usr/bin/env python3
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from hdg.mcp_server import main  # noqa: E402
 
 
 if __name__ == "__main__":
@@ -97,6 +114,11 @@ def build_skill() -> tuple[Path, Path]:
         temporary_entry = TARGET_ENTRY.with_name(f"{TARGET_ENTRY.name}.tmp-{uuid.uuid4().hex}")
         temporary_entry.write_text(ENTRY, encoding="utf-8", newline="\n")
         os.replace(temporary_entry, TARGET_ENTRY)
+        temporary_mcp_entry = TARGET_MCP_ENTRY.with_name(
+            f"{TARGET_MCP_ENTRY.name}.tmp-{uuid.uuid4().hex}"
+        )
+        temporary_mcp_entry.write_text(MCP_ENTRY, encoding="utf-8", newline="\n")
+        os.replace(temporary_mcp_entry, TARGET_MCP_ENTRY)
         build_plugin_payload()
         return TARGET_ENTRY, TARGET_PACKAGE
     finally:
@@ -110,6 +132,7 @@ def main() -> int:
     try:
         entry, package = build_skill()
         print(f"Built Python Skill controller: {entry}")
+        print(f"Built MCP Skill controller: {TARGET_MCP_ENTRY}")
         print(f"Bundled Python package: {package}")
         print(f"Built dual-host plugin Skill payload: {PLUGIN_SKILL}")
         return 0

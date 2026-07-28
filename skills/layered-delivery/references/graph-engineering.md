@@ -119,7 +119,7 @@ python -X utf8 <skill-root>/scripts/hdg.py graph-replay --item <root-or-subtree-
 
 `graph-status` 返回图指纹、冻结的运行时策略、graph run、有类型的节点和边，以及节点当前状态、attempt、owner、operationId、claim 租约、最近迁移、失败分类、尝试耗尽状态和阻断原因。
 
-`graph-events` 返回按顺序排列、绑定图指纹且带前序哈希的事件链。正常生命周期事件包括图启动、Task 认领/心跳/结果、租约过期、暂停/恢复、门禁结果、重试/耗尽、审查、最终确认、同合同修正失效传播和取消。
+CLI fallback 的 `graph-events` 返回按顺序排列、绑定图指纹且带前序哈希的完整事件链；MCP `graph_events` 使用 `after_event_id` 与 1–200 的 `limit` 分页，`hasMore=true` 时继续提交 `nextCursor`。Server 验证从链首到当前页的哈希连续性，但内存只保留当前页。正常生命周期事件包括图启动、Task 认领/心跳/结果、租约过期、暂停/恢复、门禁结果、重试/耗尽、审查、最终确认、同合同修正失效传播和取消。
 
 对于由 artifact 驱动的事件，控制器会保存一份 bound evidence，其中包含原始 artifact，以及对 `runId`、`nodeId`、`attempt`、`graphFingerprint` 和 artifact 哈希的绑定；绑定整体还会计算独立的规范 SHA-256。Graph 执行循环只提交原始 artifact，不得自行构造绑定字段，也不得将 bound artifact 复用到其他图坐标。
 

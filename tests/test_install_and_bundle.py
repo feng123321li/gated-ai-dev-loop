@@ -17,6 +17,19 @@ from scripts.build_skill import (
     build_skill,
     main as build_main,
 )
+from hdg.mcp_tools import tool_definitions
+
+TARGET_MCP_ENTRY = TARGET_ENTRY.with_name("hdg_mcp.py")
+SENSITIVE_MCP_TOOLS = {
+    "freeze_hierarchy",
+    "rebuild_graph_run",
+    "cancel_graph_run",
+    "record_human_review_acceptance",
+    "record_user_confirmation",
+}
+CLAUDE_PLUGIN_MCP_PREFIX = (
+    "mcp__plugin_layered-delivery_layered-delivery__"
+)
 
 
 def file_map(root: Path) -> dict[str, bytes]:
@@ -40,13 +53,22 @@ class InstallAndBundleTests(unittest.TestCase):
         agent_metadata = (skill_root / "agents" / "openai.yaml").read_text(encoding="utf-8")
         self.assertIn("name: layered-delivery", skill)
         self.assertIn("当工作区存在 `.layered-delivery/` 时接管现有 SQLite/Graph 运行", skill)
+        frontmatter = skill.split("---", 2)[1]
+        self.assertNotIn(f"{CLAUDE_PLUGIN_MCP_PREFIX}*", frontmatter)
+        for tool in tool_definitions():
+            permission_name = f"{CLAUDE_PLUGIN_MCP_PREFIX}{tool['name']}"
+            with self.subTest(tool=tool["name"]):
+                if tool["name"] in SENSITIVE_MCP_TOOLS:
+                    self.assertNotIn(permission_name, frontmatter)
+                else:
+                    self.assertIn(permission_name, frontmatter)
         self.assertIn("$layered-delivery", agent_metadata)
         self.assertIn("allow_implicit_invocation: true", agent_metadata)
 
     def test_skill_entry_stays_lean_and_routes_details_on_demand(self) -> None:
         skill_root = TARGET_PACKAGE.parent.parent
         skill = (skill_root / "SKILL.md").read_text(encoding="utf-8")
-        self.assertLess(len(skill), 4500)
+        self.assertLess(len(skill), 7000)
         self.assertIn("首次只读取本文件", skill)
         self.assertIn("不得预读全部 references", skill)
         self.assertIn("按动作读取", skill)
@@ -63,8 +85,10 @@ class InstallAndBundleTests(unittest.TestCase):
         acceptance = (skill_root / "references" / "acceptance.md").read_text(encoding="utf-8")
         tracking = (skill_root / "references" / "tracking.md").read_text(encoding="utf-8")
         claude_automation = (skill_root / "references" / "claude-automation.md").read_text(encoding="utf-8")
+        development = (skill_root / "references" / "development.md").read_text(encoding="utf-8")
         self.assertIn("必须同时展示 `active` 和 `manual` 两种开发方式", skill)
         self.assertIn("每个 requirement 都必须有独立 acceptance", skill)
+        self.assertIn("`requiredSkills`（可空）", skill)
         self.assertIn("不能只用一个跨需求 acceptance", development_plan)
         self.assertIn("同时展示 requirement 文本、R/A 映射和 expectedResult", acceptance)
         self.assertIn("可以使用 `handoffCommand`", workflow)
@@ -81,6 +105,25 @@ class InstallAndBundleTests(unittest.TestCase):
         self.assertIn("claude -p --permission-mode auto", claude_automation)
         self.assertIn("项目级 `.claude/settings.json`", claude_automation)
         self.assertIn("不默认使用 `bypassPermissions`", claude_automation)
+        self.assertIn("逐项预批准 30 个中段自治工具", claude_automation)
+        self.assertIn("Claude Code 至少使用 2.1.199", claude_automation)
+        self.assertIn("finalize 不执行业务动作", claude_automation)
+        self.assertIn("不使用 `__*` 通配符", claude_automation)
+        self.assertIn("优先通过已连接的 Plugin MCP 调用 `graph_frontier`", development)
+        self.assertIn("以结构化参数调用 `evidence_contract`", acceptance)
+        self.assertIn("实际开发 Skill 调用", acceptance)
+        self.assertIn("全部后代 Task", acceptance)
+        self.assertIn("Skill 使用审计", acceptance)
+        self.assertIn("skillUsage", acceptance)
+        self.assertIn(
+            "只有 baseline 没有 `FINAL_REVIEW` required Skill",
+            acceptance,
+        )
+        self.assertIn(
+            "最终验收阶段才可由人触发 `record_human_review_acceptance`",
+            acceptance,
+        )
+        self.assertIn("宿主才可调用 `record_user_confirmation`", acceptance)
 
     def test_skill_contract_keeps_controller_invocation_host_portable(self) -> None:
         skill_root = TARGET_PACKAGE.parent.parent
@@ -93,12 +136,19 @@ class InstallAndBundleTests(unittest.TestCase):
         self.assertIn("必须保留 stderr", transport)
         self.assertIn("不得使用临时 JSON 中转只读查询结果", transport)
         self.assertIn("恢复入口是 `graph-frontier`，不是 `task-context`", transport)
+        self.assertIn("分块解决的是单条 MCP 消息上限", transport)
+        self.assertIn('"generationId":"..."', transport)
 
     def test_build_is_reproducible_and_bundle_matches_source(self) -> None:
         build_skill()
         self.assertEqual(file_map(SOURCE_PACKAGE), file_map(TARGET_PACKAGE))
         self.assertTrue(TARGET_ENTRY.is_file())
         self.assertIn("from hdg.cli import main", TARGET_ENTRY.read_text(encoding="utf-8"))
+        self.assertTrue(TARGET_MCP_ENTRY.is_file())
+        self.assertIn(
+            "from hdg.mcp_server import main",
+            TARGET_MCP_ENTRY.read_text(encoding="utf-8"),
+        )
         self.assertEqual(file_map(TARGET_PACKAGE.parent.parent), file_map(PLUGIN_SKILL))
 
     def test_build_cli_reports_success_and_failure(self) -> None:
@@ -141,6 +191,66 @@ class InstallAndBundleTests(unittest.TestCase):
             "治理可评审、可恢复的 AI 辅助软件交付",
         )
         self.assertEqual(codex_manifest["skills"], "./skills/")
+        self.assertIsInstance(codex_manifest.get("mcpServers"), dict)
+
+    def test_claude_plugin_auto_discovers_portable_mcp_server(self) -> None:
+        plugin_root = PLUGIN_SKILL.parent.parent
+        mcp_path = plugin_root / ".mcp.json"
+        self.assertTrue(mcp_path.is_file(), f"missing Claude MCP config: {mcp_path}")
+        mcp_config = json.loads(mcp_path.read_text(encoding="utf-8"))
+        self.assertEqual(set(mcp_config), {"mcpServers"})
+        servers = mcp_config["mcpServers"]
+        self.assertIsInstance(servers, dict)
+        self.assertEqual(len(servers), 1)
+        server = next(iter(servers.values()))
+        self.assertEqual(server["command"], "python")
+        self.assertIn(
+            "${CLAUDE_PLUGIN_ROOT}/skills/layered-delivery/scripts/hdg_mcp.py",
+            server["args"],
+        )
+        self.assertEqual(
+            server["env"]["HDG_PROJECT_ROOT"],
+            "${CLAUDE_PROJECT_DIR}",
+        )
+
+    def test_codex_plugin_declares_an_inline_compatible_mcp_server_map(self) -> None:
+        plugin_root = PLUGIN_SKILL.parent.parent
+        manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        servers = manifest["mcpServers"]
+        self.assertIsInstance(servers, dict)
+        self.assertEqual(len(servers), 1)
+        server = next(iter(servers.values()))
+        self.assertEqual(server["command"], "python")
+        self.assertEqual(
+            server["args"],
+            [
+                "-X",
+                "utf8",
+                "skills/layered-delivery/scripts/hdg_mcp.py",
+                "--project-root-from-meta",
+            ],
+        )
+        self.assertEqual(server["cwd"], ".")
+        self.assertEqual(server["default_tools_approval_mode"], "approve")
+        self.assertIs(server["supports_parallel_tool_calls"], False)
+        self.assertEqual(
+            set(server["tools"]),
+            SENSITIVE_MCP_TOOLS,
+        )
+        for tool_config in server["tools"].values():
+            self.assertEqual(tool_config, {"approval_mode": "prompt"})
+        self.assertNotIn(
+            "${CLAUDE_",
+            json.dumps(servers, ensure_ascii=False),
+        )
+        self.assertFalse((plugin_root / ".codex-mcp.json").exists())
+
+    def test_python_distribution_exposes_cli_and_mcp_entrypoints_without_dependencies(self) -> None:
+        pyproject = (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn('dependencies = []', pyproject)
+        self.assertIn('hdg = "hdg.cli:main"', pyproject)
+        self.assertIn('hdg-mcp = "hdg.mcp_server:main"', pyproject)
 
     def test_repository_is_plugin_source_not_a_marketplace(self) -> None:
         self.assertFalse(
@@ -155,16 +265,24 @@ class InstallAndBundleTests(unittest.TestCase):
             readme,
         )
 
-    def test_readme_documents_public_skill_installation(self) -> None:
+    def test_readme_documents_mcp_first_plugin_and_cli_fallback_installation(self) -> None:
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
         self.assertLess(readme.index("## 安装"), readme.index("## 核心契约"))
-        self.assertIn(
-            (
-                "npx skills add feng123321li/layered-delivery --skill layered-delivery "
-                "--global --agent codex --agent claude-code --yes"
-            ),
-            readme,
+        skill_install = (
+            "npx skills add feng123321li/layered-delivery --skill layered-delivery "
+            "--global --agent codex --agent claude-code --yes"
         )
+        self.assertIn("MCP-first", readme)
+        self.assertIn("CLI fallback", readme)
+        mcp_first = readme.index("MCP-first")
+        cli_fallback = readme.index("CLI fallback")
+        skill_install_location = readme.index(skill_install)
+        self.assertLess(mcp_first, cli_fallback)
+        self.assertLess(cli_fallback, skill_install_location)
+        mcp_installation = readme[mcp_first:cli_fallback]
+        self.assertIn("插件", mcp_installation)
+        self.assertIn("Codex", mcp_installation)
+        self.assertIn("Claude", mcp_installation)
         for retired in (
             "codex plugin marketplace add feng123321li/layered-delivery",
             "claude plugin marketplace add feng123321li/layered-delivery",
@@ -198,17 +316,19 @@ class InstallAndBundleTests(unittest.TestCase):
         allowed_roots = {
             "hdg", "__future__", "abc", "argparse", "ast", "base64", "collections", "contextlib",
             "contextvars",
-            "copy", "dataclasses", "datetime", "enum", "functools", "hashlib", "io", "json",
-            "os", "pathlib", "posixpath", "re", "shutil", "sqlite3", "stat", "sys", "tempfile", "time",
-            "typing", "unittest", "uuid",
+            "copy", "dataclasses", "datetime", "enum", "errno", "fcntl", "functools", "hashlib",
+            "io", "json", "math", "msvcrt", "os", "pathlib", "posixpath", "re", "secrets", "shutil", "sqlite3",
+            "stat", "sys", "tempfile", "threading", "time", "typing", "unittest", "urllib", "uuid",
         }
         repository_root = Path(__file__).resolve().parents[1]
         runtime_paths = [
             *SOURCE_PACKAGE.glob("*.py"),
             repository_root / "bin" / "hdg.py",
             repository_root / "scripts" / "build_skill.py",
+            TARGET_MCP_ENTRY,
         ]
         for path in runtime_paths:
+            self.assertTrue(path.is_file(), f"missing runtime path: {path}")
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):

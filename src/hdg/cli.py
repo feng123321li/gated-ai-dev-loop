@@ -5,42 +5,19 @@ import os
 import sys
 from typing import Any, Callable, TextIO
 
-from .acceptance import accept_work_item, record_acceptance, record_work_item_gate
 from .errors import GatedLoopError
-from .execution import (
-    build_task_context,
-    claim_task,
-    dispatch_task,
-    heartbeat_task,
-    list_ready_tasks,
-    pause_task,
-    record_task_result,
-    resume_task,
-)
 from .host_runtime import is_agent_runtime
-from .graph_runtime import (
-    advance_graph,
-    cancel_graph_run,
-    get_evidence_contract,
-    get_graph_frontier,
-    get_graph_replay,
-    get_graph_status,
-    list_graph_events,
-    rebuild_graph_run,
+from .jsonio import (
+    json_structure_within_limits,
+    rendered_json,
+    strict_json_loads,
 )
-from .interactions import list_interactions, record_interaction
-from .jsonio import rendered_json
-from .planning import (
-    freeze_hierarchy,
-    prepare_hierarchy,
-    refresh_work_item_projections,
-    retry_work_item,
-)
-from .remediation import record_validation_remediation
+from .operations import OperationContext, execute_operation
 from .timing import timed_stage, timing_session
 
 
 COMMANDS = (
+    "workspace-status",
     "prepare-hierarchy",
     "freeze-hierarchy",
     "ready-tasks",
@@ -75,6 +52,7 @@ VALUE_OPTIONS = {
 }
 FLAG_OPTIONS = {"--json", "--help", "--confirmed", "--dogfood", "--timing"}
 COMMAND_OPTIONS = {
+    "workspace-status": {"--json", "--help"},
     "prepare-hierarchy": {"--json", "--help", "--definition", "--host-runtime", "--dogfood"},
     "freeze-hierarchy": {
         "--json", "--help", "--item", "--expected-hierarchy", "--development-mode", "--confirmed", "--dogfood",
@@ -110,6 +88,7 @@ USAGE = f"""Usage: python -X utf8 <skill-root>/scripts/hdg.py <command> [options
 Commands:
 {chr(10).join(f'  {command}' for command in COMMANDS)}
 
+  workspace-status
   prepare-hierarchy --definition - --host-runtime <agent>  # reads one complete requirement tree from stdin
   freeze-hierarchy --item <root-id> --expected-hierarchy <sha256> --development-mode active|manual --confirmed
   ready-tasks --item <root-or-subtree-id>
@@ -132,7 +111,7 @@ Commands:
   retry-item --item <id> --expected-baseline <sha256>
   gate-item --item <id> --status PASS|FAIL --evidence -
   accept-item --item <id> --evidence -
-  acceptance-item --item <root-id> --action INDEPENDENT_REVIEW_PASS|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence -
+  acceptance-item --item <root-id> --action INDEPENDENT_REVIEW_PASS|REVIEW_BLOCKED|HUMAN_REVIEW_ACCEPTED|USER_CONFIRMED --evidence -
   record-interaction --item <id> --interaction -
   interaction-log --item <id>
   refresh-projections
@@ -211,9 +190,19 @@ def _read_structured(
             text = stdin.read()
     except Exception:
         raise GatedLoopError(f"{kind}_READ", f"Unable to read {kind.lower()} JSON")
+    if not json_structure_within_limits(text):
+        raise GatedLoopError(
+            f"{kind}_PARSE",
+            f"{kind.lower()} JSON exceeds the structure limit",
+        )
     try:
-        value = json.loads(text)
-    except json.JSONDecodeError:
+        value = strict_json_loads(text)
+    except (
+        TypeError,
+        ValueError,
+        UnicodeError,
+        RecursionError,
+    ):
         raise GatedLoopError(f"{kind}_PARSE", f"{kind.lower()} JSON must be a mapping")
     if not isinstance(value, dict):
         raise GatedLoopError(f"{kind}_PARSE", f"{kind.lower()} JSON must be a mapping")
@@ -221,106 +210,192 @@ def _read_structured(
 
 
 def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
-    common = {"root": cwd, "explicit_dogfood": parsed["dogfood"]}
+    context = OperationContext(
+        root=cwd,
+        explicit_dogfood=parsed["dogfood"],
+    )
     command = parsed["command"]
+    if command == "workspace-status":
+        return execute_operation(
+            "workspace_status",
+            {},
+            context=context,
+        )
     if command == "prepare-hierarchy":
         definition = _read_structured(
             _required(parsed, "--definition"),
             "HIERARCHY_DEFINITION",
             stdin=stdin,
         )
-        return prepare_hierarchy(
-            **common,
-            hierarchy=definition,
-            host_runtime=_required(parsed, "--host-runtime"),
+        return execute_operation(
+            "prepare_hierarchy",
+            {
+                "hierarchy": definition,
+                "host_runtime": _required(parsed, "--host-runtime"),
+            },
+            context=context,
         )
     if command == "freeze-hierarchy":
-        return freeze_hierarchy(
-            **common,
-            root_id=_required(parsed, "--item"),
-            expected_hierarchy_fingerprint=_required(parsed, "--expected-hierarchy"),
-            development_mode=_required(parsed, "--development-mode"),
-            confirmed=parsed["confirmed"],
+        return execute_operation(
+            "freeze_hierarchy",
+            {
+                "item_id": _required(parsed, "--item"),
+                "expected_hierarchy_fingerprint": _required(
+                    parsed, "--expected-hierarchy"
+                ),
+                "development_mode": _required(parsed, "--development-mode"),
+                "confirmed": parsed["confirmed"],
+            },
+            context=context,
         )
     if command == "ready-tasks":
-        return list_ready_tasks(root=cwd, work_item_id=_required(parsed, "--item"))
+        return execute_operation(
+            "ready_tasks",
+            {"item_id": _required(parsed, "--item")},
+            context=context,
+        )
     if command == "graph-status":
-        return get_graph_status(root=cwd, work_item_id=_required(parsed, "--item"))
+        return execute_operation(
+            "graph_status",
+            {"item_id": _required(parsed, "--item")},
+            context=context,
+        )
     if command == "graph-frontier":
-        return get_graph_frontier(root=cwd, work_item_id=_required(parsed, "--item"))
+        return execute_operation(
+            "graph_frontier",
+            {"item_id": _required(parsed, "--item")},
+            context=context,
+        )
     if command == "graph-events":
-        return list_graph_events(root=cwd, work_item_id=_required(parsed, "--item"))
+        return execute_operation(
+            "graph_events",
+            {"item_id": _required(parsed, "--item")},
+            context=context,
+        )
     if command == "graph-replay":
-        return get_graph_replay(root=cwd, work_item_id=_required(parsed, "--item"))
+        return execute_operation(
+            "graph_replay",
+            {"item_id": _required(parsed, "--item")},
+            context=context,
+        )
     if command == "rebuild-graph-run":
-        return rebuild_graph_run(
-            **common,
-            work_item_id=_required(parsed, "--item"),
-            confirmed=parsed["confirmed"],
+        return execute_operation(
+            "rebuild_graph_run",
+            {
+                "item_id": _required(parsed, "--item"),
+                "confirmed": parsed["confirmed"],
+            },
+            context=context,
         )
     if command == "advance-graph":
-        return advance_graph(**common, work_item_id=_required(parsed, "--item"))
+        return execute_operation(
+            "advance_graph",
+            {"item_id": _required(parsed, "--item")},
+            context=context,
+        )
     if command == "cancel-graph-run":
-        return cancel_graph_run(
-            **common,
-            work_item_id=_required(parsed, "--item"),
-            confirmed=parsed["confirmed"],
+        return execute_operation(
+            "cancel_graph_run",
+            {
+                "item_id": _required(parsed, "--item"),
+                "confirmed": parsed["confirmed"],
+            },
+            context=context,
         )
     if command == "task-context":
-        return build_task_context(**common, item_id=_required(parsed, "--item"))
+        return execute_operation(
+            "task_context",
+            {"item_id": _required(parsed, "--item")},
+            context=context,
+        )
     if command == "evidence-contract":
-        return get_evidence_contract(
-            root=cwd,
-            work_item_id=_required(parsed, "--item"),
-            contract_kind=_required(parsed, "--kind"),
+        return execute_operation(
+            "evidence_contract",
+            {
+                "item_id": _required(parsed, "--item"),
+                "contract_kind": _required(parsed, "--kind"),
+            },
+            context=context,
         )
     if command == "claim-task":
-        return claim_task(
-            **common,
-            item_id=_required(parsed, "--item"),
-            owner=_required(parsed, "--owner"),
-            operation_id=_required(parsed, "--operation"),
+        return execute_operation(
+            "claim_task",
+            {
+                "item_id": _required(parsed, "--item"),
+                "owner": _required(parsed, "--owner"),
+                "operation_id": _required(parsed, "--operation"),
+            },
+            context=context,
         )
     if command == "dispatch-task":
-        return dispatch_task(
-            **common,
-            item_id=_required(parsed, "--item"),
-            owner=_required(parsed, "--owner"),
-            operation_id=_required(parsed, "--operation"),
+        return execute_operation(
+            "dispatch_task",
+            {
+                "item_id": _required(parsed, "--item"),
+                "owner": _required(parsed, "--owner"),
+                "operation_id": _required(parsed, "--operation"),
+            },
+            context=context,
         )
     if command == "heartbeat-task":
-        return heartbeat_task(
-            **common,
-            item_id=_required(parsed, "--item"),
-            operation_id=_required(parsed, "--operation"),
+        return execute_operation(
+            "heartbeat_task",
+            {
+                "item_id": _required(parsed, "--item"),
+                "operation_id": _required(parsed, "--operation"),
+            },
+            context=context,
         )
     if command == "pause-task":
-        return pause_task(
-            **common,
-            item_id=_required(parsed, "--item"),
-            operation_id=_required(parsed, "--operation"),
+        return execute_operation(
+            "pause_task",
+            {
+                "item_id": _required(parsed, "--item"),
+                "operation_id": _required(parsed, "--operation"),
+            },
+            context=context,
         )
     if command == "resume-task":
-        return resume_task(**common, item_id=_required(parsed, "--item"))
+        return execute_operation(
+            "resume_task",
+            {"item_id": _required(parsed, "--item")},
+            context=context,
+        )
     if command == "retry-item":
-        return retry_work_item(
-            **common,
-            item_id=_required(parsed, "--item"),
-            expected_baseline_fingerprint=_required(parsed, "--expected-baseline"),
+        return execute_operation(
+            "retry_item",
+            {
+                "item_id": _required(parsed, "--item"),
+                "expected_baseline_fingerprint": _required(
+                    parsed, "--expected-baseline"
+                ),
+            },
+            context=context,
         )
     if command == "refresh-projections":
-        return refresh_work_item_projections(**common)
+        return execute_operation(
+            "refresh_projections",
+            {},
+            context=context,
+        )
     if command == "record-interaction":
         interaction = _read_structured(
             _required(parsed, "--interaction"), "WORK_ITEM_INTERACTION", stdin=stdin
         )
-        return record_interaction(
-            **common,
-            item_id=_required(parsed, "--item"),
-            interaction=interaction,
+        return execute_operation(
+            "record_interaction",
+            {
+                "item_id": _required(parsed, "--item"),
+                "interaction": interaction,
+            },
+            context=context,
         )
     if command == "interaction-log":
-        return list_interactions(root=cwd, item_id=_required(parsed, "--item"))
+        return execute_operation(
+            "interaction_log",
+            {"item_id": _required(parsed, "--item")},
+            context=context,
+        )
     evidence_source = _required(parsed, "--evidence")
     if evidence_source != "-":
         raise GatedLoopError(
@@ -329,34 +404,60 @@ def _run(parsed: dict[str, Any], *, cwd: str, stdin: TextIO) -> Any:
         )
     evidence = _read_structured(evidence_source, "WORK_ITEM_EVIDENCE", stdin=stdin)
     if command == "remediate-task":
-        return record_validation_remediation(
-            **common,
-            item_id=_required(parsed, "--item"),
-            expected_baseline_fingerprint=_required(parsed, "--expected-baseline"),
-            evidence=evidence,
+        return execute_operation(
+            "remediate_task",
+            {
+                "item_id": _required(parsed, "--item"),
+                "expected_baseline_fingerprint": _required(
+                    parsed, "--expected-baseline"
+                ),
+                "evidence": evidence,
+            },
+            context=context,
         )
     if command == "task-result":
-        return record_task_result(
-            **common,
-            item_id=_required(parsed, "--item"),
-            operation_id=_required(parsed, "--operation"),
-            status=_required(parsed, "--status"),
-            evidence=evidence,
+        return execute_operation(
+            "task_result",
+            {
+                "item_id": _required(parsed, "--item"),
+                "operation_id": _required(parsed, "--operation"),
+                "status": _required(parsed, "--status"),
+                "evidence": evidence,
+            },
+            context=context,
         )
     if command == "acceptance-item":
-        return record_acceptance(
-            **common,
-            item_id=_required(parsed, "--item"),
-            action=_required(parsed, "--action"),
-            evidence=evidence,
+        return execute_operation(
+            "record_acceptance",
+            {
+                "item_id": _required(parsed, "--item"),
+                "action": _required(parsed, "--action"),
+                "evidence": evidence,
+            },
+            context=context,
         )
     if command == "accept-item":
-        return accept_work_item(**common, item_id=_required(parsed, "--item"), evidence=evidence)
-    return record_work_item_gate(
-        **common,
-        item_id=_required(parsed, "--item"),
-        status=_required(parsed, "--status"),
-        evidence=evidence,
+        return execute_operation(
+            "accept_item",
+            {
+                "item_id": _required(parsed, "--item"),
+                "evidence": evidence,
+            },
+            context=context,
+        )
+    if command == "gate-item":
+        return execute_operation(
+            "gate_item",
+            {
+                "item_id": _required(parsed, "--item"),
+                "status": _required(parsed, "--status"),
+                "evidence": evidence,
+            },
+            context=context,
+        )
+    raise GatedLoopError(
+        "UNKNOWN_COMMAND",
+        f"Unknown hdg command: {command}",
     )
 
 

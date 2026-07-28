@@ -13,6 +13,7 @@ from .graph_model import (
     gate_node_id,
     graph_fingerprint,
     graph_summary,
+    review_node_id,
 )
 from .graph_projections import (
     render_delivery_graph,
@@ -526,8 +527,8 @@ def _frozen_human_artifacts(root_id: str, handoff: str | None) -> dict[str, str 
 def _frozen_next_action(development_mode: str, host_runtime: str) -> str:
     if development_mode == "active":
         if render_host_automation(host_runtime) is not None:
-            return "确认 hostAutomation 已满足，再查询 graph-frontier 并在首次 dispatch-task 前保持 Auto；随后完整消费自动调度计划。"
-        return "查询 graph-frontier 并完整消费 Graph 自动计算的 Agent 调度计划；容量不足时按原顺序排队。"
+            return "确认 hostAutomation 已满足，再调用 MCP graph_frontier 并在首次 dispatch_task 前保持 Auto；随后完整消费自动调度计划。"
+        return "调用 MCP graph_frontier 并完整消费 Graph 自动计算的 Agent 调度计划；容量不足时按原顺序排队。"
     return "把 handoffCommand 一次复制到新会话；交接到 Claude Code 时使用 claudeCodeAutoHandoff，随后按 Graph 自动推进整棵需求树。"
 
 
@@ -735,7 +736,19 @@ def retry_work_item(
     at = timestamp(now)
     with repository.transaction() as registry:
         entry = repository.item_by_id(registry, item_id)
-        if entry["status"] != "BLOCKED" or entry.get("claim"):
+        acceptance = entry.get("acceptance") or {}
+        review_blocked = (
+            entry["parentId"] is None
+            and entry["status"] == "VERIFIED"
+            and acceptance.get("status") == "REVIEW_BLOCKED"
+        )
+        if (
+            (
+                entry["status"] != "BLOCKED"
+                and not review_blocked
+            )
+            or entry.get("claim")
+        ):
             fail("WORK_ITEM_RETRY_INVALID", "Only an unclaimed BLOCKED work item can be retried")
         if entry["baselineFingerprint"] != expected_baseline_fingerprint:
             fail("WORK_ITEM_REVISION_CONFLICT", "The retry baseline fingerprint is not current")
@@ -743,7 +756,9 @@ def retry_work_item(
         root_id = hierarchy_root_entry(registry, entry)["id"]
         gate_failed = entry["gate"]["status"] == "FAIL"
         retry_node_id = (
-            gate_node_id(item_id)
+            review_node_id(item_id)
+            if review_blocked
+            else gate_node_id(item_id)
             if entry["kind"] != "TASK" or gate_failed
             else execution_node_id(item_id)
         )
@@ -772,16 +787,29 @@ def retry_work_item(
             retry_node_ids,
             at=at,
         )
-        entry["status"] = "FROZEN"
-        entry["gate"] = {"status": "NOT_RUN", "evidence": None}
-        if entry["parentId"] is None:
-            entry["acceptance"] = {"status": "NOT_READY", "review": None, "userConfirmation": None}
+        if review_blocked:
+            entry["acceptance"] = {
+                "status": "WAITING_FOR_INDEPENDENT_REVIEW",
+                "review": None,
+                "userConfirmation": None,
+            }
+        else:
+            entry["status"] = "FROZEN"
+            entry["gate"] = {"status": "NOT_RUN", "evidence": None}
+            if entry["parentId"] is None:
+                entry["acceptance"] = {
+                    "status": "NOT_READY",
+                    "review": None,
+                    "userConfirmation": None,
+                }
         entry["recordRevision"] += 1
         entry["updatedAt"] = at
         registry["currentFocus"] = {
             "workItemId": item_id,
             "purpose": (
-                "GATE_REMEDIATION_RETRY"
+                "INDEPENDENT_REVIEW_RETRY"
+                if review_blocked
+                else "GATE_REMEDIATION_RETRY"
                 if task_gate_remediation
                 else "EXECUTION_RETRY"
                 if entry["kind"] == "TASK"
@@ -809,13 +837,19 @@ def retry_work_item(
             evidence_artifact=failed_gate_artifact,
         )
         if entry.get("acceptanceReport"):
-            repository.write_acceptance_report(entry, definition, at)
+            repository.write_acceptance_report(
+                registry,
+                entry,
+                definition,
+                at,
+            )
         repository.write_registry(registry)
         return {
             "id": item_id,
             "status": entry["status"],
             "baselineFingerprint": entry["baselineFingerprint"],
             "graphAttempts": graph_attempts,
+            "acceptance": entry.get("acceptance"),
         }
 
 

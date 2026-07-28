@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import tempfile
+import threading
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from io import StringIO
 from pathlib import Path
+from queue import Empty
 from unittest.mock import patch
 
 from hdg.cli import run_cli
+from hdg.errors import GatedLoopError
 from hdg.execution import dispatch_task
-from hdg.fs_safe import atomic_write
+from hdg.fs_safe import atomic_write, exclusive_file_lock
 from hdg.interactions import record_interaction
 from hdg.planning import (
     freeze_hierarchy,
@@ -18,7 +24,16 @@ from hdg.planning import (
 )
 from hdg.repository import GovernanceRepository, timestamp
 
-from .fixtures import task_hierarchy
+from .fixtures import hierarchy_definition, task_definition, task_hierarchy
+
+
+def _acquire_projection_lock_in_child(
+    lock_path: str,
+    events: multiprocessing.Queue,
+) -> None:
+    events.put("waiting")
+    with exclusive_file_lock(lock_path, timeout_seconds=5.0):
+        events.put("acquired")
 
 
 class RuntimePerformanceTests(unittest.TestCase):
@@ -160,6 +175,140 @@ class RuntimePerformanceTests(unittest.TestCase):
             ).read_operational_registry()["revision"]
             self.assertEqual(observed_revisions[-1], current_revision)
             self.assertGreaterEqual(observed_revisions.count(current_revision), 2)
+
+    def test_concurrent_projection_refreshes_are_serialized(self) -> None:
+        active_refreshes = 0
+        maximum_active_refreshes = 0
+        counter_lock = threading.Lock()
+
+        def observe_refresh(
+            repository: GovernanceRepository,
+            registry: dict[str, object],
+        ) -> None:
+            nonlocal active_refreshes, maximum_active_refreshes
+            with counter_lock:
+                active_refreshes += 1
+                maximum_active_refreshes = max(
+                    maximum_active_refreshes,
+                    active_refreshes,
+                )
+            try:
+                time.sleep(0.1)
+            finally:
+                with counter_lock:
+                    active_refreshes -= 1
+
+        with tempfile.TemporaryDirectory() as temporary:
+            definitions = []
+            for index in range(2):
+                definition = task_definition(
+                    id=f"t-projection-lock-{index}",
+                    title=f"Projection lock {index}",
+                    scope=[
+                        f"src/projection-lock-{index}.py",
+                        f"tests/test_projection_lock_{index}.py",
+                    ],
+                    testCommands=[[
+                        "python",
+                        "-m",
+                        "unittest",
+                        f"tests.test_projection_lock_{index}",
+                    ]],
+                )
+                definition["developmentPlan"]["fileChanges"] = [
+                    {
+                        "path": f"src/projection-lock-{index}.py",
+                        "action": "ADD",
+                        "purpose": f"Projection lock source {index}.",
+                    },
+                    {
+                        "path": f"tests/test_projection_lock_{index}.py",
+                        "action": "ADD",
+                        "purpose": f"Projection lock test {index}.",
+                    },
+                ]
+                definition["developmentPlan"]["interfaces"][0][
+                    "location"
+                ] = f"src/projection-lock-{index}.py"
+                definitions.append(hierarchy_definition(definition))
+
+            with (
+                patch.object(
+                    GovernanceRepository,
+                    "refresh_registry_projections",
+                    new=observe_refresh,
+                ),
+                ThreadPoolExecutor(max_workers=2) as executor,
+            ):
+                results = list(executor.map(
+                    lambda hierarchy: prepare_hierarchy(
+                        root=temporary,
+                        hierarchy=hierarchy,
+                        host_runtime="codex",
+                    ),
+                    definitions,
+                ))
+
+        self.assertEqual(len(results), 2)
+        self.assertEqual(maximum_active_refreshes, 1)
+
+    def test_projection_lock_serializes_separate_processes(self) -> None:
+        context = multiprocessing.get_context("spawn")
+        events = context.Queue()
+        process: multiprocessing.Process | None = None
+        try:
+            with tempfile.TemporaryDirectory() as temporary:
+                lock_path = str(Path(temporary, "projection.lock"))
+                with exclusive_file_lock(lock_path):
+                    process = context.Process(
+                        target=_acquire_projection_lock_in_child,
+                        args=(lock_path, events),
+                    )
+                    process.start()
+                    self.assertEqual(events.get(timeout=5), "waiting")
+                    with self.assertRaises(Empty):
+                        events.get(timeout=0.2)
+                self.assertEqual(events.get(timeout=5), "acquired")
+                process.join(timeout=5)
+                self.assertEqual(process.exitcode, 0)
+        finally:
+            if process is not None and process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+            events.close()
+            events.join_thread()
+
+    def test_projection_lock_timeout_includes_local_thread_wait(
+        self,
+    ) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+
+        def hold_lock(lock_path: Path) -> None:
+            with exclusive_file_lock(lock_path):
+                entered.set()
+                release.wait(timeout=1.0)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            lock_path = Path(temporary, "projection.lock")
+            holder = threading.Thread(target=hold_lock, args=(lock_path,))
+            holder.start()
+            self.assertTrue(entered.wait(timeout=1.0))
+            try:
+                with self.assertRaises(GatedLoopError) as raised:
+                    with exclusive_file_lock(
+                        lock_path,
+                        timeout_seconds=0.05,
+                    ):
+                        self.fail("contended lock should not be acquired")
+                self.assertEqual(
+                    raised.exception.code,
+                    "FILESYSTEM_LOCK_TIMEOUT",
+                )
+            finally:
+                release.set()
+                holder.join(timeout=1.0)
+            self.assertFalse(holder.is_alive())
 
     def test_interaction_projection_gets_a_unique_registry_revision(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

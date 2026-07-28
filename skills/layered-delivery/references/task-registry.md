@@ -12,8 +12,11 @@
 - `task_contexts`：绑定 operationId 的 Task 上下文和交接内容；
 - `reports`：开发复核与验收报告的结构化内容；
 - `interaction_events`：追加式人机指令、决策、状态摘要和验证修正审计链。
+- `payload_uploads` / `payload_chunks`：有时限、带目标绑定和哈希的超限 JSON 暂存；只作为原 MCP 工具的无损输入传输，不是业务状态。
 
 复杂契约和完整证据 artifact 可作为规范 JSON 文本存入 SQLite 列；证据引用只保留控制器按规范 JSON 计算的 SHA-256。两者在同一写事务中保存，仍是单一数据库权威，不产生临时或持久化 JSON 文件。控制器不迁移、不兼容旧 JSON 工作区、路径式 evidence 引用或非当前数据库 schema。
+
+暂存 payload 不进入 MCP 结果回传、Markdown 投影、交互日志或 evidence 表。Server 自动计算每块及整包的 UTF-8 字节数和 SHA-256，READY 引用精确包含 upload ID、Server 生成的 generation ID、整包 SHA-256 和字节数；原业务工具解析时再次逐块校验，并要求 manifest 代际、工具、参数、摘要和长度完全一致。未 finalize、已过期、INVALID、被篡改、旧代际或绑定不符的 payload 都不能写业务状态。宿主仍可能保存工具调用参数，因此“结果不回显 payload”不等于上下文压缩。
 
 ## 单根嵌套 Markdown
 
@@ -34,7 +37,7 @@ Markdown 不是机器权威。手工删除 `<root-id>` 目录不会删除数据�
 恢复时检查：
 
 - coordination root 与当前工作区一致；
-- 数据库 `user_version` 为当前 schema v3；除明确只读隔离的历史 evidence 节点外，所有结构化记录均满足当前完整契约；
+- 数据库 `user_version` 为当前 schema v3，文件是项目治理目录内的非链接、单硬链接普通文件，payload 表的 `CHECK`、复合键、级联外键和过期索引完整；除明确只读隔离的历史 evidence 节点外，所有结构化记录均满足当前完整契约；
 - ID 唯一，父子种类合法，无环，全部 child 已物化；
 - packagePath 满足单根递归路径；
 - hierarchy、baseline、state、contract 和父契约指纹一致；
@@ -45,9 +48,9 @@ Markdown 缺失时可执行 `refresh-projections`；隔离不是迁移或兼容�
 
 ## 焦点、交互与命令
 
-`currentFocus` 只帮助恢复，不授予冻结或开发权限。`record-interaction` 只追加简短可审计摘要，`interaction-log` 查询结构化事件；不得保存隐藏思考过程、密钥或不必要的原始对话。
+`currentFocus` 只帮助恢复，不授予冻结或开发权限。`record-interaction` 只追加简短可审计摘要，`interaction-log` 查询结构化事件；不得保存隐藏思考过程、密钥或不必要的原始对话。MCP/CLI 返回自由文本前会递归遮蔽敏感字段、常见环境变量凭据与 token 形态，以及 Windows、UNC 和常见 POSIX 容器绝对路径；脱敏是输出防护，不能代替调用方避免提交秘密。
 
-交互输入通过 stdin 提交，严格字段为：
+交互输入优先作为 MCP `record_interaction` 的结构化 `interaction` 参数提交，严格字段为：
 
 ```json
 {"schemaVersion":3,"sessionId":"session-id","actor":"USER|AGENT|SUBAGENT","eventType":"USER_INSTRUCTION|AGENT_UPDATE|DECISION","summary":"简短可审计事实","operationId":null,"hostRuntime":"codex"}
@@ -58,17 +61,19 @@ python -X utf8 <skill-root>/scripts/hdg.py record-interaction --item <id> --inte
 python -X utf8 <skill-root>/scripts/hdg.py interaction-log --item <id> --json
 ```
 
+上述命令仅为 MCP 不可用时的 CLI fallback；正常读取使用带 `after_event_id` 与 `limit` 的分页 `interaction_log`。
+
 正常闭环是：
 
 ```text
 prepare-hierarchy
 → 人工查看 development-plan.md
 → 选择开发方式并执行一次 freeze-hierarchy
-→ dispatch-task
-→ task-result / development-review.md
-→ 验证发现同契约文件遗漏时 remediate-task / 回到原 Task
-→ accept-item / acceptance-report.md
+→ dispatch_task
+→ task_result / development-review.md
+→ 验证发现同契约文件遗漏时 remediate_task / 回到原 Task
+→ accept_item / acceptance-report.md
 → acceptance-item
 ```
 
-`remediate-task` 只为未完成需求的同契约验证修正追加精确文件授权。artifact、摘要和修正前状态快照存入现有 `interaction_events`，图失效与新 attempt 存入 graph run/event，不新增 JSON 文件、不修改 baseline，也不创建第二个需求根。图事件是运行事实权威，graph/node run 是可回放重建的查询快照；artifact 由控制器绑定精确 `runId/nodeId/attempt/graphFingerprint`。诊断、恢复与执行命令还包括 `graph-status`、`graph-frontier`、`graph-events`、`graph-replay`、按需从 SQLite 读取单项模板的 `evidence-contract`、`advance-graph`、经确认的 `rebuild-graph-run` 与 `cancel-graph-run`、`task-context`、`claim-task`、`heartbeat-task`、`pause-task`、`resume-task`、`gate-item`、`retry-item`、`ready-tasks` 和 `refresh-projections`。
+`remediate_task` 只为未完成需求的同契约验证修正追加精确文件授权。artifact、摘要和修正前状态快照存入现有 `interaction_events`，图失效与新 attempt 存入 graph run/event，不新增 JSON 文件、不修改 baseline，也不创建第二个需求根。图事件是运行事实权威，graph/node run 是可回放重建的查询快照；artifact 由控制器绑定精确 `runId/nodeId/attempt/graphFingerprint`。MCP 诊断、恢复与执行工具还包括 `graph_status`、`graph_frontier`、`graph_events`、`graph_replay`、按需从 SQLite 读取单项模板的 `evidence_contract`、`advance_graph`、经确认的 `rebuild_graph_run` 与 `cancel_graph_run`、`task_context`、`claim_task`、`heartbeat_task`、`pause_task`、`resume_task`、`gate_item`、`retry_item`、`ready_tasks` 和 `refresh_projections`；CLI fallback 使用对应 kebab-case 命令。

@@ -132,7 +132,7 @@ def compile_runtime_policy() -> dict[str, Any]:
     """Return the controller-owned FSM and router policy frozen into every graph."""
     all_kinds = list(GRAPH_NODE_KINDS)
     gate_kinds = [kind for kind in GRAPH_NODE_KINDS if kind.endswith("_GATE")]
-    retry_kinds = ["TASK_EXECUTION", *gate_kinds]
+    retry_kinds = ["TASK_EXECUTION", *gate_kinds, "ROOT_REVIEW"]
     transitions = [
         _transition(
             "GRAPH_RUN_STARTED", ["PENDING"], ["PENDING", "READY"], "ON_START", all_kinds,
@@ -177,6 +177,10 @@ def compile_runtime_policy() -> dict[str, Any]:
         _transition(
             "REVIEW_PASSED", ["READY"], "SUCCEEDED", "ON_PASS", ["ROOT_REVIEW"],
             automatic=False,
+        ),
+        _transition(
+            "REVIEW_BLOCKED", ["READY"], "BLOCKED", "ON_FAILURE",
+            ["ROOT_REVIEW"], automatic=False,
         ),
         _transition(
             "USER_CONFIRMED", ["READY"], "COMPLETED", "ON_CONFIRMATION",

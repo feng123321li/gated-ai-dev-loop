@@ -63,6 +63,7 @@ def human_status(value: object) -> str:
         "VERIFIED": "门禁已通过",
         "NOT_READY": "尚未就绪",
         "WAITING_FOR_INDEPENDENT_REVIEW": "等待独立验收",
+        "REVIEW_BLOCKED": "独立验收已阻断",
         "WAITING_FOR_USER_CONFIRMATION": "等待用户确认",
         "COMPLETED": "已完成",
         "NOT_RUN": "未运行",
@@ -163,6 +164,11 @@ def next_action(
         acceptance = entry.get("acceptance")
         if acceptance and acceptance["status"] == "WAITING_FOR_INDEPENDENT_REVIEW":
             return "执行独立验收或记录人工验收接受。"
+        if acceptance and acceptance["status"] == "REVIEW_BLOCKED":
+            return (
+                "所需 FINAL_REVIEW Skill 不可用；完成人工干预后执行 "
+                "retry-item 创建受控复核 attempt，再重新提交完整 Skill evidence。"
+            )
         if acceptance and acceptance["status"] == "WAITING_FOR_USER_CONFIRMATION":
             return "等待用户最终确认。"
     return "等待父级聚合门禁。" if entry["status"] == "VERIFIED" else "查看当前状态与门禁证据。"
@@ -401,7 +407,7 @@ def render_requirement_handoff(
         "## Claude Code 无人值守前置条件",
         "",
         "- 仅当接收宿主是 Claude Code 时适用：权限模式不能由本交接提示切换，必须由用户级设置、模式选择器或启动参数在认领 Task 前启用 `auto`。",
-        "- `acceptEdits` 仍会为测试和控制器进程请求授权，不是无人值守模式；不得先调用 `dispatch-task` 持有租约再等待 Process 弹窗。",
+        "- MCP 控制器不再触发 `hdg.py` Process 授权；`acceptEdits` 仍不足以自动批准测试和构建命令。不得先调用 `dispatch_task` 持有租约再等待权限弹窗。",
         "- 会话不得自行修改 Claude 权限配置，也不得自行启用 `bypassPermissions`；后者只适用于用户明确配置的隔离容器或虚拟机。",
         "",
         "## 冻结需求树",
@@ -420,17 +426,18 @@ def render_requirement_handoff(
         "",
         "## 接收会话执行规则",
         "",
-        "1. 在项目根目录使用当前 `layered-delivery` Skill，从当前 Skill 元数据解析控制器入口；不得固化用户目录、Skill 安装位置或操作系统路径，也不得把解析后的本机绝对路径写入交接、方案或治理状态。",
-        "2. 先读取 SQLite 治理状态、完整冻结方案和实时进度；恢复入口是 `graph-frontier`，不是 `task-context`，不要重新准备或重新冻结需求。",
-        f"3. 以根工作项 `{root['id']}` 调用 `graph-frontier --json`，直接消费控制器的 JSON stdout，读取 `dispatchPlan` 自动计算的完整安全 Task 顺序、并行组和目标 Agent 数，并以 `nextWakeAt` 为最长等待时间；不得创建临时 JSON，也不得自行挑选 Task 子集。",
-        "4. 控制器非零退出时保留控制器的 stderr 并停止解析，不要把空 stdout 或错误文本继续交给 JSON 解析器；`task-context` 只用于未认领 Task 的只读诊断，不能授权开工。",
-        "5. 对 `dispatchPlan.dispatchTaskIds` 中的 Task 保持完整稳定队列；只有 worker 真正取得执行容量时才生成本 graph run 中唯一的 operationId 并调用 `dispatch-task`，排队项保持未认领。平台有容量时启动隔离子 Agent，无子 Agent 时由当前 Agent 串行消费。",
-        "6. 执行适配器独立按 `nextWakeAt` 重新查询 frontier 并消费到期的 `HEARTBEAT_TASK`；没有独立适配器时当前会话承担续租。每个 Task 严格使用自己的 context、scope、结果和证据，循环实现、回归测试、修复和复测；写回前按 `evidenceContractRefs.result` 查询绑定当前 operation 的模板，提交 `IMPLEMENTED` 或 `BLOCKED` 后完成该 Task 门禁。",
-        "7. 每次状态写回后重新查询 frontier，由 Graph 重算目标 Agent 数与后续波次；全部子级 VERIFIED 后运行 Capability/Delivery 聚合门禁。",
-        "8. 面向人的状态报告必须把控制器 UTC 时间转换为当前运行环境的本机时区，并显式标注 UTC 偏移（例如 `UTC+08:00`）；SQLite、事件链和控制器 JSON 的机器时间字段保持不变。",
-        "9. 不要要求用户逐 Task 回复启动，也不要在正常 Task 切换、并发降级或自动重试时请求人工确认。",
-        "10. 硬过期时消费 frontier 的 `ADVANCE_GRAPH`，重新查询并用新 operation 重新认领；这是自动恢复，不请求人工重置。只有冻结目标、范围、接口、授权必须改变、`RETRY_EXHAUSTED` 或出现无法自动消除的真实阻断时才返回用户；代码和测试完成后必须先提交 Task 结果并继续消费 gate/review，根门禁通过后才提交最终交付，由用户人工验收。",
-        "11. 不修改 SQLite、baseline、治理投影或 `.git/**`；未获得单独授权时不提交、推送、合并、发布或改变外部状态。",
+        "1. 在项目根目录使用当前 `layered-delivery` Skill，优先使用已连接的 Plugin MCP；只有 MCP 不可用时才从 Skill 元数据解析 CLI 控制器入口。不得固化用户目录、Skill 安装位置或操作系统路径，也不得把解析后的本机绝对路径写入交接、方案或治理状态。",
+        "2. 先读取 SQLite 治理状态、完整冻结方案和实时进度；恢复入口是 `graph_frontier`，不是 `task_context`，不要重新准备或重新冻结需求。",
+        f"3. 以根工作项 `{root['id']}` 调用 MCP `graph_frontier`，直接消费结构化 tool result，读取 `dispatchPlan` 自动计算的完整安全 Task 顺序、并行组和目标 Agent 数，并以 `nextWakeAt` 为最长等待时间；不得创建临时 JSON，也不得自行挑选 Task 子集。",
+        "4. MCP 返回 `isError` 时保留结构化错误并停止当前迁移；只有 MCP 不可用时才运行 CLI fallback、保留控制器 stderr 并停止解析。`task_context` 只用于未认领 Task 的只读诊断，不能授权开工。",
+        "5. 对 `dispatchPlan.dispatchTaskIds` 中的 Task 保持完整稳定队列；只有 worker 真正取得执行容量时才生成本 graph run 中唯一的 operationId 并调用 `dispatch_task`，排队项保持未认领。平台有容量时启动隔离子 Agent，无子 Agent 时由当前 Agent 串行消费。",
+        "6. 执行适配器独立按 `nextWakeAt` 重新查询 frontier 并消费到期的 `HEARTBEAT_TASK`；没有独立适配器时当前会话承担续租。每个 Task 严格使用自己的 context、scope、结果和证据，循环实现、回归测试、修复和复测；写回前用 `evidence_contract` 查询绑定当前 operation 的 result 模板，通过 `task_result` 提交 `IMPLEMENTED` 或 `BLOCKED` 后完成该 Task 门禁。",
+        "7. 每个 frontier action 和 Task context 中的 `requiredSkills` 都来自冻结 baseline。进入相应阶段前按 canonical `name` 加载完整 Skill 并遵循其完整流程；result、gate 和独立审查 evidence 必须逐项回显 Skill 使用情况，不能只在提示中提到名称。",
+        "8. 每次状态写回后重新查询 frontier，由 Graph 重算目标 Agent 数与后续波次；全部子级 VERIFIED 后运行 Capability/Delivery 聚合门禁。",
+        "9. 面向人的状态报告必须把控制器 UTC 时间转换为当前运行环境的本机时区，并显式标注 UTC 偏移（例如 `UTC+08:00`）；SQLite、事件链和控制器 JSON 的机器时间字段保持不变。",
+        "10. 不要要求用户逐 Task 回复启动，也不要在正常 Task 切换、并发降级或自动重试时请求人工确认。",
+        "11. 硬过期时消费 frontier 的 `ADVANCE_GRAPH`，重新查询并用新 operation 重新认领；这是自动恢复，不请求人工重置。只有冻结目标、范围、接口、授权必须改变、`RETRY_EXHAUSTED` 或出现无法自动消除的真实阻断时才返回用户；代码和测试完成后必须先提交 Task 结果并继续消费 gate/review，根门禁与独立审查通过后停在最终验收阶段，由用户人工确认。",
+        "12. 不修改 SQLite、baseline、治理投影或 `.git/**`；未获得单独授权时不提交、推送、合并、发布或改变外部状态。",
         "",
     ])
     return "\n".join(lines)
@@ -439,13 +446,15 @@ def render_requirement_handoff(
 def render_requirement_handoff_command(root_id: str) -> str:
     """Render the short prompt that a user can paste directly into a new session."""
     return (
-        f"继续执行治理需求 {root_id}。使用当前 layered-delivery Skill 从当前 Skill 元数据解析控制器入口，"
+        f"继续执行治理需求 {root_id}。使用当前 layered-delivery Skill 和已连接的 Plugin MCP，"
         "从当前项目的治理数据库恢复已冻结方案，按 Graph 自动调度计划接管整棵需求树并完成开发、测试和门禁；"
-        "以 graph-frontier 为恢复入口并直接消费控制器 JSON 输出，不固化用户目录、Skill 安装位置或操作系统路径，"
-        "不使用临时 JSON 中转，也不要重新准备、冻结需求或逐 Task 请求人工启动；"
+        "以 MCP graph_frontier 为恢复入口并直接消费结构化 tool result，不固化用户目录、Skill 安装位置或操作系统路径，"
+        "只有 MCP 不可用时才从 Skill 元数据解析 CLI fallback；不使用临时 JSON 中转，也不要重新准备、冻结需求或逐 Task 请求人工启动；"
         "面向人的状态报告须把控制器 UTC 时间转换为当前运行环境的本机时区并显式标注 UTC 偏移，机器字段保持不变；"
-        "若接收宿主是 Claude Code，必须在 dispatch-task 认领前由用户级设置、模式选择器或启动参数启用 auto；"
-        "acceptEdits 不足以避免 Process 授权，且会话不得自行修改权限配置或启用 bypassPermissions。"
+        "若接收宿主是 Claude Code，必须在 dispatch_task 认领前由用户级设置、模式选择器或启动参数启用 auto；"
+        "MCP 控制器不再需要 hdg.py Process 授权，但 acceptEdits 仍不足以自动批准测试和构建命令；"
+        "逐项执行 frontier action 中冻结的 requiredSkills，并在 result、gate 和独立审查 evidence 中记录具体使用情况；"
+        "会话不得自行修改权限配置或启用 bypassPermissions。"
     )
 
 
@@ -659,6 +668,58 @@ def _append_validation_remediations(
         )
 
 
+def _append_skill_usage(
+    lines: list[str],
+    usages: list[dict[str, Any]],
+    *,
+    heading: str,
+) -> None:
+    lines.extend(["", f"## {heading}", ""])
+    if not usages:
+        lines.append("- 当前 artifact 未要求或尚未记录 Skill 使用。")
+        return
+    lines.extend([
+        "| Skill | 阶段 | 状态 | 具体使用情况 |",
+        "| --- | --- | --- | --- |",
+    ])
+    for usage in usages:
+        evidence = str(usage["evidence"]).replace("|", "\\|").replace(
+            "\n", "<br>"
+        )
+        lines.append(
+            f"| `{usage['name']}` | `{usage['stage']}` | "
+            f"`{usage['status']}` | {evidence} |"
+        )
+
+
+def _append_actual_development_skill_usage(
+    lines: list[str],
+    records: list[dict[str, Any]],
+) -> None:
+    lines.extend(["", "## 实际开发 Skill 调用", ""])
+    if not records:
+        lines.append("- Task result 未记录开发阶段 Skill 调用。")
+        return
+    lines.extend([
+        "| Task | Operation | Result | Skill | 阶段 | 状态 | 具体使用情况 |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ])
+    for record in records:
+        task_title = str(record["taskTitle"]).replace(
+            "|", "\\|"
+        ).replace("\n", "<br>")
+        for usage in record["skillUsage"]:
+            evidence = str(usage["evidence"]).replace(
+                "|", "\\|"
+            ).replace("\n", "<br>")
+            lines.append(
+                f"| `{record['taskId']}` {task_title} | "
+                f"`{record['operationId']}` | "
+                f"`{record['resultStatus']}` | `{usage['name']}` | "
+                f"`{usage['stage']}` | `{usage['status']}` | {evidence} |"
+            )
+
+
 def render_development_review(report: dict[str, Any]) -> str:
     plan = report["developmentPlan"]
     result = (report.get("result") or {}).get("artifact") or {}
@@ -706,6 +767,11 @@ def render_development_review(report: dict[str, Any]) -> str:
             f"- 失败代码：`{failure['code']}`",
             f"- 失败说明：{failure['summary']}",
         ])
+    _append_skill_usage(
+        lines,
+        result.get("skillUsage", []),
+        heading="开发阶段 Skill 使用审计",
+    )
     lines.extend(["", "## 测试事实", ""])
     if tests:
         for test in tests:
@@ -733,6 +799,7 @@ def render_acceptance_report(report: dict[str, Any]) -> str:
         "BLOCKED": "已阻断",
         "VERIFIED": "门禁已通过",
         "WAITING_FOR_INDEPENDENT_REVIEW": "等待独立验收",
+        "REVIEW_BLOCKED": "独立验收已阻断",
         "WAITING_FOR_USER_CONFIRMATION": "等待用户确认",
         "COMPLETED": "已完成",
     }
@@ -780,6 +847,20 @@ def render_acceptance_report(report: dict[str, Any]) -> str:
         argv = json.dumps(result["argv"], ensure_ascii=False, separators=(",", ":"))
         summary = result.get("summary", f"Tests run: {result.get('testsRun', '未记录')}")
         lines.append(f"- `{argv}`：退出码 {result['exitCode']}；{summary}")
+    _append_actual_development_skill_usage(
+        lines,
+        report.get("developmentSkillUsage", []),
+    )
+    skill_usages = list((gate_artifact or {}).get("skillUsage", []))
+    review_artifact = (
+        (report.get("review") or {}).get("artifact") or {}
+    )
+    skill_usages.extend(review_artifact.get("skillUsage", []))
+    _append_skill_usage(
+        lines,
+        skill_usages,
+        heading="Skill 使用审计",
+    )
     scope = (gate_artifact or {}).get("scope", {})
     lines.extend(["", "## 变更范围", ""])
     if "fileChanges" in plan:
@@ -843,12 +924,14 @@ def render_task_handoff(context: dict[str, Any]) -> str:
         "- 只实现这个冻结的叶子 Task，并且只写入 task.authorizedFileChanges；验证修正文件是原 Task 的追加授权，不是新需求。",
         "- 不修改 SQLite、baseline、进度投影、`.git/**` 或外部状态。",
         "- 运行列出的测试命令，只报告真实存在的证据。",
+        "- 进入 DEVELOPMENT 前逐项加载 context.requiredSkills 中该阶段的完整 Skill；不能只提到名称或使用零散片段。Skill 不可用时按 requiredSkillPolicy 阻断并如实报告。",
         "- 面向人的状态报告必须把控制器 UTC 时间转换为当前运行环境的本机时区，并显式标注 UTC 偏移；机器时间字段保持不变。",
         "- 不提交、推送、发布，也不得自行报告 PASS。",
         "- 最终只返回 IMPLEMENTED 或 BLOCKED，并携带当前 Operation ID、变更文件和测试事实。",
         "- IMPLEMENTED 时 failure 必须为 null；BLOCKED 时必须改为 class/code/summary，并使用 RETRYABLE、REMEDIATION_REQUIRED、CONTRACT_CHANGE、EXTERNAL_AUTHORITY 或 NON_RETRYABLE 分类。",
         "- 宿主必须先按 evidenceContractRefs.result 调用只读 evidence-contract，取得绑定当前 operation 的 IMPLEMENTED/BLOCKED 模板，再用 task-result 回收结果；IMPLEMENTED 不是完成状态。",
         "- Result、Gate 或验证修正需要 evidence 时，宿主只按 evidenceContractRefs 从 SQLite 单项取得模板；不得读取控制器源码或 memory 文件反推 schema。",
+        "- Result evidence 的 skillUsage 必须与冻结 DEVELOPMENT Skill 精确一致，并具体说明完整流程如何用于本 Task；缺失时 IMPLEMENTED 会被机械拒绝。",
         "- 门禁通过后仍需独立验收、生成用户验收报告并取得用户确认。",
         "",
         "冻结上下文：",

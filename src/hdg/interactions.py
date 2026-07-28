@@ -98,12 +98,17 @@ def list_interactions(
     *,
     root: str,
     item_id: str | None = None,
+    after_event_id: int | None = None,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """Return append-only interaction events, optionally for one work item."""
     repository = GovernanceRepository(root)
     registry = repository.read_operational_registry()
     if item_id is None:
-        return repository.read_interaction_events()
+        return repository.read_interaction_events(
+            after_event_id=after_event_id,
+            limit=limit,
+        )
     entry = repository.item_by_id(registry, item_id)
     by_id = {item["id"]: item for item in registry["workItems"]}
 
@@ -113,4 +118,8 @@ def list_interactions(
             result.extend(subtree_ids(by_id[child_id]))
         return result
 
-    return repository.read_interaction_events(subtree_ids(entry))
+    return repository.read_interaction_events(
+        subtree_ids(entry),
+        after_event_id=after_event_id,
+        limit=limit,
+    )

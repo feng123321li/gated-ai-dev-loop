@@ -40,12 +40,14 @@ def _validated_gate_artifact(
     definition: dict[str, Any],
     status: str | None = None,
     additional_planned_files: set[str] | None = None,
+    required_skills: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, str], dict[str, Any]]:
     if not valid_gate_artifact(
         evidence,
         entry,
         definition,
         additional_planned_files=additional_planned_files,
+        required_skills=required_skills,
     ) or (
         status is not None and evidence.get("verdict") != status
     ):
@@ -58,11 +60,13 @@ def _validated_gate_artifact(
                 definition,
                 additional_planned_files=additional_planned_files,
                 requested_verdict=status,
+                required_skills=required_skills,
             ),
             evidenceContract=gate_evidence_contract(
                 entry,
                 definition,
                 additional_planned_files=additional_planned_files,
+                required_skills=required_skills,
             ),
         )
     return evidence_record(evidence), evidence
@@ -93,14 +97,22 @@ def record_work_item_gate(
     at = timestamp(now)
     with repository.transaction() as registry:
         entry = repository.item_by_id(registry, item_id)
+        if status == "PASS":
+            repository.assert_subtree_operational(registry, entry)
         definition = repository.assert_current_lineage(registry, entry)[0]
         remediation_files = _remediation_files(repository, entry, definition)
+        required_skills = repository.effective_required_skills(
+            registry,
+            entry,
+            stage="GATE",
+        )
         verified_reference, verified_artifact = _validated_gate_artifact(
             evidence,
             entry=entry,
             definition=definition,
             status=status,
             additional_planned_files=remediation_files,
+            required_skills=required_skills,
         )
         if entry["status"] == "BLOCKED":
             fail("WORK_ITEM_RETRY_REQUIRED", f"{item_id} must be explicitly retried before its gate can run again")
@@ -138,17 +150,39 @@ def record_work_item_gate(
         registry["revision"] += 1
         registry["updatedAt"] = at
         root_entry = hierarchy_root_entry(registry, entry)
+        blocked_skill_usage = [
+            dict(usage)
+            for usage in verified_artifact.get("skillUsage", [])
+            if usage["status"] == "BLOCKED"
+        ]
+        event_payload = {
+            "status": status,
+            "evidence": verified_reference,
+        }
+        if status == "FAIL":
+            event_payload["failureClass"] = (
+                "NON_RETRYABLE"
+                if blocked_skill_usage
+                else "GATE_FAILURE"
+            )
+            if blocked_skill_usage:
+                event_payload["blockedSkillUsage"] = blocked_skill_usage
         repository.append_graph_event(
             root_id=root_entry["id"],
             node_id=gate_node_id(item_id),
             event_type="GATE_PASSED" if status == "PASS" else "GATE_FAILED",
             actor="AGENT",
             operation_id=None,
-            payload={"status": status, "evidence": verified_reference},
+            payload=event_payload,
             recorded_at=at,
             evidence_artifact=verified_artifact,
         )
-        repository.write_acceptance_report(entry, definition, at)
+        repository.write_acceptance_report(
+            registry,
+            entry,
+            definition,
+            at,
+        )
         repository.write_registry(
             registry,
             changed_item_ids=repository.lineage_item_ids(registry, item_id),
@@ -175,11 +209,17 @@ def accept_work_item(
     entry = repository.item_by_id(registry, item_id)
     definition = repository.assert_current_lineage(registry, entry)[0]
     remediation_files = _remediation_files(repository, entry, definition)
+    required_skills = repository.effective_required_skills(
+        registry,
+        entry,
+        stage="GATE",
+    )
     _, artifact = _validated_gate_artifact(
         evidence,
         entry=entry,
         definition=definition,
         additional_planned_files=remediation_files,
+        required_skills=required_skills,
     )
     return record_work_item_gate(
         root=root,
@@ -202,24 +242,57 @@ def record_acceptance(
 ) -> dict[str, Any]:
     repository = GovernanceRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
-    if action not in {"INDEPENDENT_REVIEW_PASS", "HUMAN_REVIEW_ACCEPTED", "USER_CONFIRMED"}:
+    if action not in {
+        "INDEPENDENT_REVIEW_PASS",
+        "REVIEW_BLOCKED",
+        "HUMAN_REVIEW_ACCEPTED",
+        "USER_CONFIRMED",
+    }:
         fail("WORK_ITEM_ACCEPTANCE_ACTION_INVALID", "Acceptance action is invalid")
     at = timestamp(now)
     with repository.transaction() as registry:
         entry = repository.item_by_id(registry, item_id)
+        repository.assert_subtree_operational(registry, entry)
         if entry["parentId"] is not None or entry["status"] != "VERIFIED":
             fail("WORK_ITEM_ACCEPTANCE_INVALID", "Only a verified root work item can advance final acceptance")
         definition = repository.assert_current_lineage(registry, entry)[0]
         acceptance = entry["acceptance"]
         artifact = evidence
-        if not valid_review_artifact(action, artifact):
+        required_skills = repository.effective_required_skills(
+            registry,
+            entry,
+            stage="FINAL_REVIEW",
+        )
+        if action == "HUMAN_REVIEW_ACCEPTED" and required_skills:
+            fail(
+                "WORK_ITEM_REQUIRED_SKILL_NOT_APPLIED",
+                "Human review cannot bypass frozen FINAL_REVIEW Skill requirements",
+                requiredSkills=required_skills,
+            )
+        if action == "REVIEW_BLOCKED" and not required_skills:
+            fail(
+                "WORK_ITEM_ACCEPTANCE_ACTION_INVALID",
+                "REVIEW_BLOCKED requires at least one frozen FINAL_REVIEW Skill",
+            )
+        if not valid_review_artifact(
+            action,
+            artifact,
+            required_skills=(
+                required_skills
+                if action in {
+                    "INDEPENDENT_REVIEW_PASS",
+                    "REVIEW_BLOCKED",
+                }
+                else None
+            ),
+        ):
             fail(
                 "WORK_ITEM_ACCEPTANCE_EVIDENCE_INVALID",
                 f"Acceptance evidence does not prove {action}",
                 evidenceContract=(
                     confirmation_evidence_contract()
                     if action == "USER_CONFIRMED"
-                    else review_evidence_contract()
+                    else review_evidence_contract(required_skills)
                 ),
             )
         reference = evidence_record(artifact)
@@ -244,7 +317,11 @@ def record_acceptance(
                 fail("WORK_ITEM_ACCEPTANCE_STAGE_INVALID", "Work item is not waiting for independent review")
             entry["acceptance"] = {
                 **acceptance,
-                "status": "WAITING_FOR_USER_CONFIRMATION",
+                "status": (
+                    "REVIEW_BLOCKED"
+                    if action == "REVIEW_BLOCKED"
+                    else "WAITING_FOR_USER_CONFIRMATION"
+                ),
                 "review": {
                     "action": action,
                     "evidence": reference,
@@ -261,7 +338,13 @@ def record_acceptance(
         entry["updatedAt"] = at
         registry["currentFocus"] = {
             "workItemId": item_id,
-            "purpose": "ACCEPTANCE_COMPLETE" if entry["acceptance"]["status"] == "COMPLETED" else "USER_CONFIRMATION",
+            "purpose": (
+                "ACCEPTANCE_COMPLETE"
+                if entry["acceptance"]["status"] == "COMPLETED"
+                else "REVIEW_INTERVENTION"
+                if entry["acceptance"]["status"] == "REVIEW_BLOCKED"
+                else "USER_CONFIRMATION"
+            ),
         }
         registry["revision"] += 1
         registry["updatedAt"] = at
@@ -273,14 +356,25 @@ def record_acceptance(
         repository.append_graph_event(
             root_id=item_id,
             node_id=node_id,
-            event_type="USER_CONFIRMED" if action == "USER_CONFIRMED" else "REVIEW_PASSED",
+            event_type=(
+                "USER_CONFIRMED"
+                if action == "USER_CONFIRMED"
+                else "REVIEW_BLOCKED"
+                if action == "REVIEW_BLOCKED"
+                else "REVIEW_PASSED"
+            ),
             actor="USER" if action == "USER_CONFIRMED" else "REVIEWER",
             operation_id=None,
             payload={"action": action, "evidence": reference},
             recorded_at=at,
             evidence_artifact=artifact,
         )
-        repository.write_acceptance_report(entry, definition, at)
+        repository.write_acceptance_report(
+            registry,
+            entry,
+            definition,
+            at,
+        )
         repository.write_registry(
             registry,
             changed_item_ids={item_id},

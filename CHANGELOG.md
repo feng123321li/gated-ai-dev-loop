@@ -4,6 +4,23 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.15.0 — 待发布
+
+- 新增 Python 标准库实现的单进程 stdio MCP Server，以 35 个结构化工具覆盖工作区状态识别、分层规划、Graph 推进、执行、门禁、审查、确认、恢复和超限 payload 暂存；CLI 保留为 MCP 不可用时的 fallback。
+- MCP 与 CLI 改为共用应用服务和 SQLite repository，不通过 MCP 包装或解析 CLI 子进程。
+- 项目根在 Server 生命周期内绑定一次：Claude 使用项目环境变量，Codex 使用宿主注入的可信 sandbox cwd；`root`、维护专用 `dogfood` 和确认布尔值 `confirmed` 不进入工具参数，根发生漂移时拒绝调用。
+- Codex/Claude Plugin 增加各自的 MCP 配置与内嵌启动器，权限从任意 Bash/Python 通配规则收窄为 MCP tool 级控制；30 个中段工具可自动执行，冻结、重建、取消、人工审查接受和最终确认保持人工 prompt。识别到低于 2.1.199 的 Claude Code 时，Server 拒绝可能被旧宿主忽略强制交互元数据的敏感调用。
+- 明确 active/manual 契约：用户确认开发方案后，当前窗口或新运行窗口从同一 graph run 自动完成范围内开发、测试、门禁、预算内重试和租约恢复，直到最终验收阶段；`USER_CONFIRMED` 及 Git、发布、迁移和新增外部权限仍需用户授权。
+- schema v3 baseline 新增 `requiredSkills`：按 `DEVELOPMENT/GATE/FINAL_REVIEW` 冻结可移植 Skill 名和使用目的，根级要求向后代继承；frontier、Task context 和 evidence contract 持续投影，成功迁移必须逐项提交具体 `skillUsage`。最终验收报告按 Task、operation 和 result 状态聚合实际开发调用，并另列 gate/review 使用审计。
+- required Skill evidence 拒绝控制器模板占位符；存在只读隔离后代时机械阻断祖先聚合 gate、根 review 和最终用户确认，同时保持无关需求与有效兄弟 Task 可继续。
+- 冻结的 `FINAL_REVIEW` Skill 不可用时可用 `REVIEW_BLOCKED` 持久化具体阻断 evidence；Graph 明确路由到人工干预，并可在问题消除后通过 `retry-item` 创建新的 review attempt，不能绕过为 PASS。
+- 补齐 MCP 生命周期、请求 ID、已知工具参数错误、输入深度/复杂度限制和自由文本脱敏；超出 8 MiB 的输入行只报错一次、限块排空后继续，环境变量凭据、常见服务 token 和宿主/容器绝对路径不回传模型。
+- 新增目标绑定的无损 payload 暂存：64 MiB 单包、1 MiB 分块、每项目 16 个未过期 upload / 256 MiB 配额、128 字符 upload ID 上限和 Server 生成的 generation fencing；逐块及整包 SHA-256、严格 JSON/UTF-8、重复键/孤立代理项/非有限数字拒绝、紧凑无键名回显状态与一小时逻辑过期。finalize 不修改业务状态，仍须调用原业务工具并经过原权限与事务门禁；分块解决传输，不宣称宿主上下文压缩。
+- 新增无参数 MCP `workspace_status` 与 CLI `workspace-status`，机械区分 `ABSENT`、`STAGING_ONLY` 与 `ACTIVE`；Graph/interaction MCP 日志改为最多 200 项的 cursor 分页，并把查询分页下推到 SQLite/事件流，避免把整份历史保留在响应内存。
+- 强化数据库与输出边界：治理库拒绝符号链接、跨路径硬链接、缺失 payload `CHECK`/复合键/级联外键/过期索引的伪 schema v3；dogfood 检测覆盖源码仓库子目录和带 TOML 行内注释的项目名；自由文本脱敏覆盖带空格 Windows 路径及常见容器路径。
+- 增加 MCP/CLI、严格 JSON、payload 并发与配额、权限、schema、分页和 required Skill 审计回归；Python 3.14 全量测试 213 项通过。
+- 只读查询改用 SQLite `mode=ro`，不再持久改写数据库日志模式；提交后投影增加可重入的跨线程、跨进程轻量锁，并在锁内追赶最新 revision，消除并行写入时的旧投影覆盖和 Windows 文件替换竞争。
+
 ## 0.14.1 — 2026-07-27
 
 发布提交：`cca5765`

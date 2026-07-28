@@ -289,7 +289,7 @@ class HierarchyPackageTests(unittest.TestCase):
                 ".layered-delivery",
                 "workspace-overview.md",
             ).read_text(encoding="utf-8")
-            self.assertNotIn("开发建议：active（需求评审时选择）", workspace_overview)
+            self.assertNotIn("开发建议：自动（需求评审时选择）", workspace_overview)
             monthly_root = Path(
                 temporary,
                 ".layered-delivery",
@@ -299,11 +299,11 @@ class HierarchyPackageTests(unittest.TestCase):
             monthly_overview = (
                 monthly_root / monthly_index.stem / "c-python-runtime.md"
             ).read_text(encoding="utf-8")
-            self.assertIn("开发建议：active（需求评审时选择）", monthly_overview)
+            self.assertIn("开发建议：自动（需求评审时选择）", monthly_overview)
             child_progress = (
                 root_path / "children" / "t-python-controller" / "progress.md"
             ).read_text(encoding="utf-8")
-            self.assertIn("开发建议：active", child_progress)
+            self.assertIn("开发建议：自动", child_progress)
 
             repeated = freeze_hierarchy(
                 root=temporary,
@@ -589,7 +589,7 @@ class HierarchyPackageTests(unittest.TestCase):
             monthly_detail = monthly_detail_path.read_text(encoding="utf-8")
             self.assertIn("## 需求索引", overview)
             self.assertIn(
-                "| 最近更新（本机时区） | 创建时间（本机时区） | 需求根 | 类型 | 状态 | 门禁 | 后代进度 | 入口 |",
+                "| 最近更新（东八区） | 创建时间（东八区） | 需求根 | 类型 | 状态 | 门禁 | 后代进度 | 入口 |",
                 overview,
             )
             self.assertRegex(
@@ -614,7 +614,7 @@ class HierarchyPackageTests(unittest.TestCase):
                 f"[查看需求明细]({monthly_files[0].stem}/c-python-runtime.md)",
                 monthly_index,
             )
-            self.assertIn("创建时间（本机时区）", monthly_index)
+            self.assertIn("创建时间（东八区）", monthly_index)
             self.assertRegex(
                 monthly_index,
                 r"\| \d{4}-\d{2}-\d{2} \d{2}:\d{2} \| 未完成 \|",
@@ -623,10 +623,10 @@ class HierarchyPackageTests(unittest.TestCase):
             self.assertNotIn('<a id="requirement-c-python-runtime"></a>', monthly_detail)
             self.assertRegex(
                 monthly_detail,
-                r"- 需求开始时间（本机时区）：\d{4}-\d{2}-\d{2} \d{2}:\d{2}",
+                r"- 需求开始时间（东八区）：\d{4}-\d{2}-\d{2} \d{2}:\d{2}",
             )
-            self.assertIn("- 需求完成日期（本机时区）：未完成", monthly_detail)
-            self.assertIn("日期按运行控制器的电脑本地时区显示和归档", monthly_index)
+            self.assertIn("- 需求完成日期（东八区）：未完成", monthly_detail)
+            self.assertIn("日期统一按东八区（UTC+08:00）显示和归档", monthly_index)
             self.assertIn(
                 "| 层级工作项 | 状态 | 门禁 | 开发方式 | 节点文件 |",
                 monthly_detail,

@@ -279,20 +279,21 @@ class RequiredSkillContractTests(unittest.TestCase):
                 "review": {"status": "WAITING_FOR_HUMAN_REVIEW"},
             },
         )
-        self.assertIn("Required Skills", baseline)
+        self.assertIn("必须使用的技能", baseline)
+        self.assertNotIn("# Work Item Baseline", baseline)
         self.assertIn("tdd-workflow", baseline)
-        self.assertIn("必须使用的 Skills", plan)
-        self.assertIn("FINAL_REVIEW", plan)
+        self.assertIn("必须使用的技能", plan)
+        self.assertIn("最终审查", plan)
         self.assertIn(
-            "required Skill 是执行指令，不是业务需求分析输入",
+            "必需技能是执行指令，不是业务需求分析输入",
             plan,
         )
         self.assertIn(
-            "不预分析、不递归展开，也不自动加入 GATE",
+            "不预分析、不递归展开，也不自动加入门禁",
             plan,
         )
         self.assertIn(
-            "宿主级 root 与项目级 project catalog 联合验证存在",
+            "宿主级与项目级技能目录联合验证存在",
             plan,
         )
 
@@ -553,15 +554,15 @@ class RequiredSkillContractTests(unittest.TestCase):
                 temporary,
                 accepted["acceptanceReport"]["markdownPath"],
             ).read_text(encoding="utf-8")
-            self.assertIn("## 实际开发 Skill 调用", report)
+            self.assertIn("## 实际开发技能调用", report)
             self.assertIn("op-required-skills", report)
             self.assertIn(
                 "Applied red-green-refactor and used the frozen unittest as the regression checkpoint.",
                 report,
             )
-            self.assertIn("## Skill 使用审计", report)
+            self.assertIn("## 技能使用审计", report)
             self.assertIn("tdd-workflow", report)
-            self.assertIn("APPLIED", report)
+            self.assertIn("已应用", report)
             self.assertIn("acceptance trace", report)
 
             frontier = get_graph_frontier(

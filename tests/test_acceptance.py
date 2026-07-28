@@ -173,10 +173,10 @@ class AcceptanceFlowTests(unittest.TestCase):
             monthly_overview = (
                 monthly_root / monthly_index.stem / f"{task_id}.md"
             ).read_text(encoding="utf-8")
-            self.assertNotIn("- 需求完成日期（本机时区）：未完成", monthly_overview)
+            self.assertNotIn("- 需求完成日期（东八区）：未完成", monthly_overview)
             self.assertRegex(
                 monthly_overview,
-                r"- 需求完成日期（本机时区）：\d{4}-\d{2}-\d{2}",
+                r"- 需求完成日期（东八区）：\d{4}-\d{2}-\d{2}",
             )
 
 

@@ -34,8 +34,8 @@ class WorkItemModelTests(unittest.TestCase):
     def test_all_hierarchy_shapes_render_distinct_plans(self) -> None:
         for source, heading in (
             (task_definition(), "## 文件改动"),
-            (capability_definition(), "## Task 开发内容"),
-            (delivery_definition(), "## Capability 开发内容"),
+            (capability_definition(), "## 任务开发内容"),
+            (delivery_definition(), "## 能力开发内容"),
         ):
             definition = validate_work_item_definition(source)
             fingerprint = work_item_baseline_fingerprint(definition)

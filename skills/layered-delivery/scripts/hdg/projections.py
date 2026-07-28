@@ -2,10 +2,17 @@ from __future__ import annotations
 
 import json
 import posixpath
-from datetime import datetime
 from typing import Any
 
 from .constants import SCHEMA_VERSION
+from .display import (
+    DISPLAY_TIMEZONE_DESCRIPTION,
+    DISPLAY_TIMEZONE_LABEL,
+    format_display_date,
+    format_display_minute,
+    format_display_month,
+    format_display_timestamp,
+)
 from .host_runtime import is_claude_runtime
 
 GOVERNANCE_DIRECTORY = ".layered-delivery"
@@ -36,18 +43,6 @@ def _node_progress_filename(entry: dict[str, Any]) -> str:
     return "node-progress.md" if entry["parentId"] is None else "progress.md"
 
 
-def _local_datetime(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone()
-
-
-def _local_date(value: str) -> str:
-    return _local_datetime(value).strftime("%Y-%m-%d")
-
-
-def _local_minute(value: str) -> str:
-    return _local_datetime(value).strftime("%Y-%m-%d %H:%M")
-
-
 def human_status(value: object) -> str:
     return {
         "DELIVERY": "交付",
@@ -69,6 +64,19 @@ def human_status(value: object) -> str:
         "NOT_RUN": "未运行",
         "PASS": "通过",
         "FAIL": "未通过",
+        "LIGHT": "轻量",
+        "FULL": "完整",
+        "DEVELOPMENT": "开发",
+        "GATE": "门禁",
+        "FINAL_REVIEW": "最终审查",
+        "INVOKED": "已调用",
+        "NOT_INVOKED": "未调用",
+        "APPLIED": "已应用",
+        "ACTIVE": "运行中",
+        "PLANNED": "已规划",
+        "APPROVED": "已批准",
+        "active": "自动",
+        "manual": "手动",
     }.get(value, str(value) if value is not None else "无")
 
 
@@ -185,7 +193,7 @@ def render_workspace_overview(
         "> 本文件是面向用户和协作者的可读投影；机器权威为 `governance.sqlite3`。",
         f"> 注册表版本：{registry['revision']}",
         f"> 当前焦点：{registry['currentFocus']['workItemId'] or '无'}",
-        "> 共享运行时策略：[状态迁移图 / State Transition Graph](state-transition-graph.md)",
+        "> 共享运行时策略：[状态迁移图](state-transition-graph.md)",
     ]
     isolated = sorted(isolated_item_ids or set())
     if isolated:
@@ -203,7 +211,7 @@ def render_workspace_overview(
         "",
         "> 按最近更新时间倒序排列；目录继续使用稳定根 ID，日期只用于检索和浏览。",
         "",
-        "| 最近更新（本机时区） | 创建时间（本机时区） | 需求根 | 类型 | 状态 | 门禁 | 后代进度 | 入口 |",
+        f"| 最近更新（{DISPLAY_TIMEZONE_LABEL}） | 创建时间（{DISPLAY_TIMEZONE_LABEL}） | 需求根 | 类型 | 状态 | 门禁 | 后代进度 | 入口 |",
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ])
     if not roots:
@@ -221,7 +229,7 @@ def render_workspace_overview(
         month = _workspace_month(root)
         monthly_detail = f"workspace-overview/{month}/{root['id']}.md"
         lines.append(
-            f"| {_local_minute(root['updatedAt'])} | {_local_minute(root['createdAt'])} | "
+            f"| {format_display_minute(root['updatedAt'])} | {format_display_minute(root['createdAt'])} | "
             f"[`{root['id']}`]({overview}) | "
             f"{human_status(root['kind'])} | {human_status(root['status'])} | "
             f"{human_status(root['gate']['status'])} | "
@@ -241,7 +249,7 @@ def _workspace_roots(registry: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _workspace_month(root: dict[str, Any]) -> str:
-    return _local_datetime(root["createdAt"]).strftime("%Y-%m")
+    return format_display_month(root["createdAt"])
 
 
 def _requirement_completion_date(root: dict[str, Any]) -> str:
@@ -250,7 +258,7 @@ def _requirement_completion_date(root: dict[str, Any]) -> str:
     recorded_at = confirmation.get("recordedAt")
     if acceptance.get("status") != "COMPLETED" or not isinstance(recorded_at, str):
         return "未完成"
-    return _local_date(recorded_at)
+    return format_display_date(recorded_at)
 
 
 def render_workspace_month_overviews(registry: dict[str, Any]) -> dict[str, str]:
@@ -266,19 +274,19 @@ def render_workspace_month_overviews(registry: dict[str, Any]) -> dict[str, str]
             "",
             "> 本文件按需求创建月份归档；每个需求使用独立明细文件，避免依赖跨文件标题锚点。",
             "> 机器权威为 `../governance.sqlite3`，物理目录继续使用稳定根 ID。",
-            "> 日期按运行控制器的电脑本地时区显示和归档。",
+            f"> 日期统一按{DISPLAY_TIMEZONE_DESCRIPTION}显示和归档。",
             "",
             "[返回全局需求索引](../workspace-overview.md)",
             "",
-            "| 创建时间（本机时区） | 完成日期（本机时区） | 最近更新（本机时区） | 需求根 | 状态 | 门禁 | 入口 |",
+            f"| 创建时间（{DISPLAY_TIMEZONE_LABEL}） | 完成日期（{DISPLAY_TIMEZONE_LABEL}） | 最近更新（{DISPLAY_TIMEZONE_LABEL}） | 需求根 | 状态 | 门禁 | 入口 |",
             "| --- | --- | --- | --- | --- | --- | --- |",
         ]
 
         for root in month_roots:
             detail_path = f"{month}/{root['id']}.md"
             month_lines.append(
-                f"| {_local_minute(root['createdAt'])} | {_requirement_completion_date(root)} | "
-                f"{_local_minute(root['updatedAt'])} | `{root['id']}` | "
+                f"| {format_display_minute(root['createdAt'])} | {_requirement_completion_date(root)} | "
+                f"{format_display_minute(root['updatedAt'])} | `{root['id']}` | "
                 f"{human_status(root['status'])} | {human_status(root['gate']['status'])} | "
                 f"[查看需求明细]({detail_path}) |"
             )
@@ -303,15 +311,15 @@ def _render_workspace_requirement_detail(
         f"# 需求：{root['id']}",
         "",
         "> 本文件是单个需求的可读投影；状态与门禁会随 SQLite 写回自动刷新。",
-        "> 机器权威为 `../../governance.sqlite3`，日期按运行控制器的电脑本地时区显示。",
+        f"> 机器权威为 `../../governance.sqlite3`，日期统一按{DISPLAY_TIMEZONE_DESCRIPTION}显示。",
         "",
         f"[返回 {month} 月度索引](../{month}.md) · [返回全局需求索引](../../workspace-overview.md)",
         "",
-        f"- 需求开始时间（本机时区）：{_local_minute(root['createdAt'])}",
-        f"- 需求完成日期（本机时区）：{_requirement_completion_date(root)}",
-        f"- 最近更新（本机时区）：{_local_minute(root['updatedAt'])}",
+        f"- 需求开始时间（{DISPLAY_TIMEZONE_LABEL}）：{format_display_minute(root['createdAt'])}",
+        f"- 需求完成日期（{DISPLAY_TIMEZONE_LABEL}）：{_requirement_completion_date(root)}",
+        f"- 最近更新（{DISPLAY_TIMEZONE_LABEL}）：{format_display_minute(root['updatedAt'])}",
         f"- 开发方案：[查看整树 development-plan.md]({plan})",
-        f"- 开发建议：{_development_mode(root, by_id)}（需求评审时选择）",
+        f"- 开发建议：{human_status(_development_mode(root, by_id))}（需求评审时选择）",
         f"- 最终验收：{human_status(acceptance['status']) if acceptance else '不适用'}",
         f"- 进度：{root['progress']['descendants']['verified']}/{root['progress']['descendants']['total']} 个后代已验证",
         "",
@@ -327,7 +335,7 @@ def _render_workspace_requirement_detail(
             item["packagePath"],
             _node_progress_filename(item),
         )
-        mode = _development_mode(item, by_id)
+        mode = human_status(_development_mode(item, by_id))
         indentation = "　" * max(depth - 1, 0)
         hierarchy_item = (
             f"{indentation}{connector}{human_status(item['kind'])} `{item['id']}`"
@@ -370,8 +378,8 @@ def render_item_overview(entry: dict[str, Any], by_id: dict[str, dict[str, Any]]
     return "\n".join([
         f"# {entry['id']} 工作项概览",
         "",
-        f"- 类型：{entry['kind']}",
-        f"- 门禁等级：{entry['gateLevel']}",
+        f"- 类型：{human_status(entry['kind'])}",
+        f"- 门禁等级：{human_status(entry['gateLevel'])}",
         f"- 权限性质：{entry['authorityKind']}",
         f"- 父级：{parent_link}",
         "- 基线：[baseline.md](baseline.md)",
@@ -400,7 +408,7 @@ def render_requirement_handoff(
         "## 权威入口",
         "",
         f"- 根工作项：`{root['id']}`",
-        "- 开发方式：manual",
+        "- 开发方式：手动",
         "- 完整冻结方案：[development-plan.md](development-plan.md)",
         "- 实时进度：[progress.md](progress.md)",
         "",
@@ -434,7 +442,7 @@ def render_requirement_handoff(
         "6. 执行适配器独立按 `nextWakeAt` 重新查询 frontier 并消费到期的 `HEARTBEAT_TASK`；没有独立适配器时当前会话承担续租。每个 Task 严格使用自己的 context、scope、结果和证据，循环实现、回归测试、修复和复测；写回前用 `evidence_contract` 查询绑定当前 operation 的 result 模板，通过 `task_result` 提交 `IMPLEMENTED` 或 `BLOCKED` 后完成该 Task 门禁。",
         "7. 每个 frontier action 和 Task context 中的 `requiredSkills` 都来自已获用户一次批准的冻结 baseline，active 与 manual 均不再二次授权。当前执行适配器必须在实际阶段 executor context 自动通过本 Agent 的原生 Skill 入口逐项调用，并用统一 `HOST_NATIVE_SKILL` 凭证调用 `record_skill_activation`，记录当前执行宿主、绑定 attempt 和独立原生调用 ID；不得要求用户再次输入 `$skill` 或确认 Skill。Read 或 load 本身不算激活。完整执行后由同一执行宿主用 `record_skill_conformance` 记录针对实际产物的检查，成功迁移要求逐项 PASS；artifact 还必须回显精确 `skillUsage`。",
         "8. 每次状态写回后重新查询 frontier，由 Graph 重算目标 Agent 数与后续波次；全部子级 VERIFIED 后运行 Capability/Delivery 聚合门禁。",
-        "9. 面向人的状态报告必须把控制器 UTC 时间转换为当前运行环境的本机时区，并显式标注 UTC 偏移（例如 `UTC+08:00`）；SQLite、事件链和控制器 JSON 的机器时间字段保持不变。",
+        "9. 面向人的状态报告默认使用简体中文，内部英文状态码不直接复述给用户；日期统一按 `UTC+08:00` 展示。SQLite、事件链和控制器 JSON 的机器字段保持英文，机器时间保持 UTC。",
         "10. 不要要求用户逐 Task 回复启动，也不要在正常 Task 切换、并发降级或自动重试时请求人工确认。",
         "11. 硬过期时消费 frontier 的 `ADVANCE_GRAPH`，重新查询并用新 operation 重新认领；这是自动恢复，不请求人工重置。只有冻结目标、范围、接口、授权必须改变、`RETRY_EXHAUSTED` 或出现无法自动消除的真实阻断时才返回用户；代码和测试完成后必须先提交 Task 结果并继续消费 gate/review，根门禁与独立审查通过后停在最终验收阶段，由用户人工确认。",
         "12. 不修改 SQLite、baseline、治理投影或 `.git/**`；未获得单独授权时不提交、推送、合并、发布或改变外部状态。",
@@ -489,12 +497,12 @@ def render_item_progress(
         f"# {entry['id']} {'整树进度' if include_hierarchy else '节点进度'}",
         "",
         f"- 记录版本：{entry['recordRevision']}",
-        f"- 阶段：{entry['stage']}",
+        f"- 阶段：{human_status(entry['stage'])}",
         f"- 当前状态：{human_status(entry['status'])}",
-        f"- 门禁等级：{entry['gateLevel']}",
+        f"- 门禁等级：{human_status(entry['gateLevel'])}",
         f"- 最终验收：{human_status(acceptance['status']) if acceptance else '不适用'}",
         f"- 门禁：{human_status(entry['gate']['status'])}",
-        f"- 开发建议：{mode}",
+        f"- 开发建议：{human_status(mode)}",
         "- 开发方案：[development-plan.md](development-plan.md)",
         *(["- 交互记录：[interaction-log.md](interaction-log.md)"] if entry["parentId"] is None else []),
         *(["- 需求级交接：[requirement-handoff.md](requirement-handoff.md)"] if requirement_handoff else []),
@@ -505,7 +513,7 @@ def render_item_progress(
         f"{entry['progress']['descendants']['blocked']} 阻断；{entry['progress']['descendants']['active']} 活动",
         f"- 验收报告：{'[acceptance-report.md](acceptance-report.md)' if entry.get('acceptanceReport') else '尚未生成'}",
         f"- 下一步：{next_action(entry, by_id)}",
-        f"- 更新时间：{entry['updatedAt']}",
+        f"- 更新时间（{DISPLAY_TIMEZONE_LABEL}）：{format_display_timestamp(entry['updatedAt'])}",
         "",
     ]
     if include_hierarchy:
@@ -521,7 +529,7 @@ def render_interaction_log(root: dict[str, Any], events: list[dict[str, Any]]) -
         "> SQLite 保存结构化交互事件，本文件仅供人工查看。",
         "> 只记录指令、决策和状态摘要，不记录隐藏思考过程或敏感原文。",
         "",
-        "| 序号 | 时间 | 工作项 | 参与者 | 事件 | 摘要 | 操作 |",
+        f"| 序号 | 时间（{DISPLAY_TIMEZONE_LABEL}） | 工作项 | 参与者 | 事件 | 摘要 | 操作 |",
         "| ---: | --- | --- | --- | --- | --- | --- |",
     ]
     if not events:
@@ -529,7 +537,7 @@ def render_interaction_log(root: dict[str, Any], events: list[dict[str, Any]]) -
     for event in events:
         summary = str(event["summary"]).replace("|", "\\|").replace("\n", " ")
         lines.append(
-            f"| {event['eventId']} | {event['recordedAt']} | `{event['workItemId']}` | "
+            f"| {event['eventId']} | {format_display_timestamp(event['recordedAt'])} | `{event['workItemId']}` | "
             f"{event['actor']} | `{event['eventType']}` | {summary} | "
             f"{event['operationId'] or '无'} |"
         )
@@ -647,9 +655,9 @@ def _append_validation_remediations(
         lines.append("- 无。")
         return
     lines.extend([
-        "> 以下内容是原冻结契约下的追加式验证修正；原 baseline、需求 ID 和层级结构保持不变。",
+        "> 以下内容是原冻结契约下的追加式验证修正；原基线、需求 ID 和层级结构保持不变。",
         "",
-        "| 序号 | 发现阶段 | 对应验收项 | 修正原因 | 补充授权文件 | 记录时间 |",
+        f"| 序号 | 发现阶段 | 对应验收项 | 修正原因 | 补充授权文件 | 记录时间（{DISPLAY_TIMEZONE_LABEL}） |",
         "| ---: | --- | --- | --- | --- | --- |",
     ])
     for index, record in enumerate(remediations, start=1):
@@ -659,7 +667,7 @@ def _append_validation_remediations(
         lines.append(
             f"| {index} | `{artifact['source']}` | "
             f"{', '.join(f'`{item}`' for item in artifact['acceptanceIds'])} | "
-            f"{summary} | {files} | {record['recordedAt']} |"
+            f"{summary} | {files} | {format_display_timestamp(record['recordedAt'])} |"
         )
 
 
@@ -671,10 +679,10 @@ def _append_skill_usage(
 ) -> None:
     lines.extend(["", f"## {heading}", ""])
     if not usages:
-        lines.append("- 当前 artifact 未要求或尚未记录 Skill 使用。")
+        lines.append("- 当前产物未要求或尚未记录技能使用。")
         return
     lines.extend([
-        "| Skill | 阶段 | 状态 | 具体使用情况 |",
+        "| 技能 | 阶段 | 状态 | 具体使用情况 |",
         "| --- | --- | --- | --- |",
     ])
     for usage in usages:
@@ -682,8 +690,8 @@ def _append_skill_usage(
             "\n", "<br>"
         )
         lines.append(
-            f"| `{usage['name']}` | `{usage['stage']}` | "
-            f"`{usage['status']}` | {evidence} |"
+            f"| `{usage['name']}` | {human_status(usage['stage'])} | "
+            f"{human_status(usage['status'])} | {evidence} |"
         )
 
 
@@ -691,12 +699,12 @@ def _append_actual_development_skill_usage(
     lines: list[str],
     records: list[dict[str, Any]],
 ) -> None:
-    lines.extend(["", "## 实际开发 Skill 调用", ""])
+    lines.extend(["", "## 实际开发技能调用", ""])
     if not records:
-        lines.append("- Task result 未记录开发阶段 Skill 调用。")
+        lines.append("- 任务结果未记录开发阶段技能调用。")
         return
     lines.extend([
-        "| Task | Operation | Result | Skill | 阶段 | 状态 | 具体使用情况 |",
+        "| 任务 | 操作 | 结果 | 技能 | 阶段 | 状态 | 具体使用情况 |",
         "| --- | --- | --- | --- | --- | --- | --- |",
     ])
     for record in records:
@@ -710,8 +718,8 @@ def _append_actual_development_skill_usage(
             lines.append(
                 f"| `{record['taskId']}` {task_title} | "
                 f"`{record['operationId']}` | "
-                f"`{record['resultStatus']}` | `{usage['name']}` | "
-                f"`{usage['stage']}` | `{usage['status']}` | {evidence} |"
+                f"{human_status(record['resultStatus'])} | `{usage['name']}` | "
+                f"{human_status(usage['stage'])} | {human_status(usage['status'])} | {evidence} |"
             )
 
 
@@ -719,14 +727,14 @@ def _append_skill_execution_audit(
     lines: list[str],
     records: list[dict[str, Any]],
 ) -> None:
-    lines.extend(["", "## 实际 Skill 原生调用与符合性", ""])
+    lines.extend(["", "## 实际技能原生调用与符合性", ""])
     if not records:
         lines.append(
-            "- 尚无 Graph 绑定的原生 Skill 调用凭证；Read/加载记录不计为执行。"
+            "- 尚无图绑定的原生技能调用凭证；读取/加载记录不计为执行。"
         )
         return
     lines.extend([
-        "| 工作项 | 轮次 | Skill | 阶段 | Host / 原生机制 | 调用状态 | 原生调用 ID | 符合性 | 实际检查 | 调用凭证 |",
+        "| 工作项 | 轮次 | 技能 | 阶段 | 宿主/原生机制 | 调用状态 | 原生调用 ID | 符合性 | 实际检查 | 调用凭证 |",
         "| --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |",
     ])
     for record in records:
@@ -736,7 +744,7 @@ def _append_skill_execution_audit(
                 "|", "\\|"
             ).replace("\n", "<br>")
             rendered_checks.append(
-                f"`{check['name']}`={check['status']}：{evidence}"
+                f"`{check['name']}`={human_status(check['status'])}：{evidence}"
             )
         checks = "<br>".join(rendered_checks) or "未记录"
         conformance = {
@@ -749,9 +757,9 @@ def _append_skill_execution_audit(
         )
         lines.append(
             f"| `{record['workItemId']}` | {record['attempt']} | "
-            f"`{record['skillName']}` | `{record['stage']}` | "
+            f"`{record['skillName']}` | {human_status(record['stage'])} | "
             f"`{record['hostRuntime']}` / `{record['mechanism']}` | "
-            f"`{record['activationStatus']}` | "
+            f"{human_status(record['activationStatus'])} | "
             f"`{record['nativeInvocationId']}` | {conformance} | "
             f"{checks} | `{record['activationReceiptId']}` |"
         )
@@ -778,15 +786,15 @@ def render_development_review(report: dict[str, Any]) -> str:
         f"# 开发复核：{report['workItem']['title']}",
         "",
         f"- 工作项：{report['workItem']['id']}",
-        f"- Baseline 指纹：{report['workItem']['baselineFingerprint']}",
-        f"- 开发结果：{report['status']}",
-        f"- 写回时间：{report['generatedAt']}",
+        f"- 基线指纹：{report['workItem']['baselineFingerprint']}",
+        f"- 开发结果：{human_status(report['status'])}",
+        f"- 写回时间（{DISPLAY_TIMEZONE_LABEL}）：{format_display_timestamp(report['generatedAt'])}",
         "",
         "## 冻结计划与实际改动",
         "",
         f"- 开发目的：{plan['purpose']}",
         f"- 冻结计划文件：{'、'.join(planned_files) or '无'}",
-        f"- ADD-only 生成目录：{'、'.join(generated_roots) or '无'}",
+        f"- 仅新增生成目录：{'、'.join(generated_roots) or '无'}",
         f"- 实际新增生成文件：{'、'.join(generated_files) or '无'}",
         f"- 验证修正补充文件：{'、'.join(remediation_files) or '无'}",
         f"- 实际文件：{'、'.join(actual_files) or '无'}",
@@ -818,7 +826,7 @@ def render_development_review(report: dict[str, Any]) -> str:
     _append_skill_usage(
         lines,
         result.get("skillUsage", []),
-        heading="开发阶段 Skill 使用审计",
+        heading="开发阶段技能使用审计",
     )
     _append_skill_execution_audit(
         lines,
@@ -861,12 +869,12 @@ def render_acceptance_report(report: dict[str, Any]) -> str:
         f"# 验收报告：{report['workItem']['title']}",
         "",
         f"- 工作项：{report['workItem']['id']}",
-        f"- 类型：{report['workItem']['kind']}",
-        f"- 门禁等级：{report['workItem']['gateLevel']}",
+        f"- 类型：{human_status(report['workItem']['kind'])}",
+        f"- 门禁等级：{human_status(report['workItem']['gateLevel'])}",
         f"- 基线指纹：{report['workItem']['baselineFingerprint']}",
         f"- 最终状态：{status_text.get(report['status'], report['status'])}",
         f"- 门禁结论：{gate_text.get(report['gate']['status'], report['gate']['status'])}",
-        f"- 生成时间：{report['generatedAt']}",
+        f"- 生成时间（{DISPLAY_TIMEZONE_LABEL}）：{format_display_timestamp(report['generatedAt'])}",
         "",
         "## 验收项",
         "",
@@ -897,7 +905,7 @@ def render_acceptance_report(report: dict[str, Any]) -> str:
         lines.append("- 尚无测试证据。")
     for result in tests:
         argv = json.dumps(result["argv"], ensure_ascii=False, separators=(",", ":"))
-        summary = result.get("summary", f"Tests run: {result.get('testsRun', '未记录')}")
+        summary = result.get("summary", f"执行 {result.get('testsRun', '未记录')} 项测试")
         lines.append(f"- `{argv}`：退出码 {result['exitCode']}；{summary}")
     _append_actual_development_skill_usage(
         lines,
@@ -915,7 +923,7 @@ def render_acceptance_report(report: dict[str, Any]) -> str:
     _append_skill_usage(
         lines,
         skill_usages,
-        heading="Skill 使用审计",
+        heading="技能使用审计",
     )
     scope = (gate_artifact or {}).get("scope", {})
     lines.extend(["", "## 变更范围", ""])
@@ -952,7 +960,7 @@ def render_acceptance_report(report: dict[str, Any]) -> str:
         "",
         "## 独立验收",
         "",
-        f"- {report['review']['artifact']['reviewer']}：{report['review']['artifact']['verdict']}" if report.get("review") else "- 尚未完成。",
+        f"- {report['review']['artifact']['reviewer']}：{human_status(report['review']['artifact']['verdict'])}" if report.get("review") else "- 尚未完成。",
         "",
         "## 用户确认",
         "",

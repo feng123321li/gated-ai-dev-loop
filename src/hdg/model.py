@@ -4,6 +4,8 @@ import re
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
+from .display import DISPLAY_TIMEZONE_LABEL, format_display_timestamp
+
 from .constants import MAX_IDENTIFIER_LENGTH, SCHEMA_VERSION
 from .errors import GatedLoopError, fail
 from .jsonio import canonical_json, fingerprint
@@ -938,31 +940,51 @@ def _list(values: list[str]) -> str:
     return "\n".join(f"- {value}" for value in values)
 
 
+KIND_TEXT = {
+    "DELIVERY": "交付",
+    "CAPABILITY": "能力",
+    "TASK": "任务",
+}
+GATE_LEVEL_TEXT = {
+    "LIGHT": "轻量",
+    "FULL": "完整",
+}
+AUTHORITY_TEXT = {
+    "COORDINATION": "协调",
+    "EXECUTION": "执行",
+}
+SKILL_STAGE_TEXT = {
+    "DEVELOPMENT": "开发",
+    "GATE": "门禁",
+    "FINAL_REVIEW": "最终审查",
+}
+
+
 def render_work_item_baseline(definition: dict[str, Any]) -> str:
     lines = [
-        "# Work Item Baseline",
+        "# 工作项基线",
         "",
-        f"Work Item: {definition['id']}",
-        f"Kind: {definition['kind']}",
-        f"Gate Level: {definition['gateLevel']}",
-        f"Authority: {definition['authorityKind']}",
-        f"Parent: {definition['parentId'] or 'none'}",
-        f"Parent Contract: {definition['parentContractFingerprint'] or 'none'}",
+        f"工作项：{definition['id']}",
+        f"类型：{KIND_TEXT[definition['kind']]}",
+        f"门禁等级：{GATE_LEVEL_TEXT[definition['gateLevel']]}",
+        f"权威类型：{AUTHORITY_TEXT[definition['authorityKind']]}",
+        f"父级：{definition['parentId'] or '无'}",
+        f"父级契约：{definition['parentContractFingerprint'] or '无'}",
         "",
-        "## Goal",
+        "## 目标",
         definition["goal"],
         "",
-        "## Scope",
+        "## 范围",
         _list(definition["scope"]),
         "",
-        "## Non-Goals",
+        "## 非目标",
         _list(definition["nonGoals"]),
         "",
-        "## Requirements",
+        "## 需求",
     ]
     for requirement in definition["requirements"]:
         lines.extend([f"### {requirement['id']}", requirement["text"], ""])
-    lines.append("## Acceptance")
+    lines.append("## 验收项")
     for acceptance in definition["acceptance"]:
         lines.extend([
             f"### {acceptance['id']} [{','.join(acceptance['requirementIds'])}]",
@@ -971,48 +993,48 @@ def render_work_item_baseline(definition: dict[str, Any]) -> str:
         ])
     if "children" in definition:
         lines.extend([
-            "## Decomposition",
-            f"- Status: {definition['decomposition']['status']}",
+            "## 分解",
+            f"- 状态：{'已规划' if definition['decomposition']['status'] == 'PLANNED' else definition['decomposition']['status']}",
         ])
         if definition["kind"] == "CAPABILITY":
-            lines.append(f"- Capability dependencies: {', '.join(definition['decomposition']['dependsOn']) or 'none'}")
-        lines.extend(["", "## Children"])
+            lines.append(f"- 能力依赖：{', '.join(definition['decomposition']['dependsOn']) or '无'}")
+        lines.extend(["", "## 子级"])
         for child in definition["children"]:
             lines.append(
-                f"- {child['id']} [{child['kind']}] [{','.join(child['requirementIds'])}] "
+                f"- {child['id']} [{KIND_TEXT[child['kind']]}] [{','.join(child['requirementIds'])}] "
                 f"[{','.join(child['acceptanceIds'])}] {child['title']}"
             )
     else:
         lines.extend([
-            "## Execution",
-            f"- Depends on: {', '.join(definition['execution']['dependsOn']) or 'none'}",
-            f"- Inputs: {'; '.join(definition['execution']['inputs']) or 'none'}",
-            f"- Outputs: {'; '.join(definition['execution']['outputs'])}",
+            "## 执行",
+            f"- 依赖：{', '.join(definition['execution']['dependsOn']) or '无'}",
+            f"- 输入：{'; '.join(definition['execution']['inputs']) or '无'}",
+            f"- 输出：{'; '.join(definition['execution']['outputs'])}",
         ])
     import json
 
-    lines.extend(["", "## Test Commands"])
+    lines.extend(["", "## 测试命令"])
     lines.extend(f"- {json.dumps(argv, ensure_ascii=False, separators=(',', ':'))}" for argv in definition["testCommands"])
-    lines.extend(["", "## Required Skills"])
+    lines.extend(["", "## 必须使用的技能"])
     if definition["requiredSkills"]:
         lines.extend(
-            f"- {item['name']} [{', '.join(item['stages'])}]: {item['purpose']}"
+            f"- {item['name']} [{'、'.join(SKILL_STAGE_TEXT[stage] for stage in item['stages'])}]：{item['purpose']}"
             for item in definition["requiredSkills"]
         )
     else:
-        lines.append("- none")
+        lines.append("- 无")
     lines.extend([
         "",
-        "## Development Plan Contract",
+        "## 开发方案契约",
         definition["developmentPlan"]["purpose"],
         "",
-        "- Full human-readable plan: [development-plan.md](development-plan.md)",
-        "- Structured plan authority: project governance SQLite database",
+        "- 完整可读方案：[development-plan.md](development-plan.md)",
+        "- 结构化方案权威：项目治理 SQLite 数据库",
         "",
-        "## Risks",
+        "## 风险",
         _list(definition["risks"]),
         "",
-        "## Decisions",
+        "## 决策",
         _list(definition["decisions"]),
         "",
     ])
@@ -1022,7 +1044,10 @@ def render_work_item_baseline(definition: dict[str, Any]) -> str:
 def _review_status_text(state: dict[str, Any]) -> str:
     review = state.get("review", {})
     if review.get("status") == "APPROVED":
-        return f"已由人工确认（{review['reviewedBy']}，{review['reviewedAt']}）"
+        return (
+            f"已由人工确认（{review['reviewedBy']}，"
+            f"{format_display_timestamp(review['reviewedAt'])}，{DISPLAY_TIMEZONE_LABEL}）"
+        )
     return "等待人工评审；尚未冻结，禁止开始开发"
 
 
@@ -1036,9 +1061,9 @@ def render_development_plan(definition: dict[str, Any], state: dict[str, Any]) -
         f"# 开发方案：{definition['title']}",
         "",
         f"- 工作项：{definition['id']}",
-        f"- 层级：{definition['kind']}",
-        f"- 门禁等级：{definition['gateLevel']}",
-        f"- Baseline 指纹：{state['baselineFingerprint']}",
+        f"- 层级：{KIND_TEXT[definition['kind']]}",
+        f"- 门禁等级：{GATE_LEVEL_TEXT[definition['gateLevel']]}",
+        f"- 基线指纹：{state['baselineFingerprint']}",
         f"- 评审状态：{_review_status_text(state)}",
         f"- 开发目的：{plan['purpose']}",
         "",
@@ -1059,23 +1084,23 @@ def render_development_plan(definition: dict[str, Any], state: dict[str, Any]) -
     )
     lines.extend([
         "",
-        "## 必须使用的 Skills",
+        "## 必须使用的技能",
         "",
-        "> 名称是可移植的 Skill catalog 标识；`/skill`、`$skill` 等宿主调用语法不进入 baseline。",
-        "> required Skill 是执行指令，不是业务需求分析输入；用户仅指定开发使用时，不预分析、不递归展开，也不自动加入 GATE。",
-        "> 本方案中的 required Skill 已在 prepare 前由宿主级 root 与项目级 project catalog 联合验证存在；执行阶段仍须由实际 worker 原生调用。",
+        "> 名称是可移植的技能目录标识；`/skill`、`$skill` 等宿主调用语法不进入基线。",
+        "> 必需技能是执行指令，不是业务需求分析输入；用户仅指定开发使用时，不预分析、不递归展开，也不自动加入门禁。",
+        "> 本方案中的必需技能已在准备前由宿主级与项目级技能目录联合验证存在；执行阶段仍须由实际执行者原生调用。",
         "",
-        "| Skill | 适用阶段 | 使用目的 |",
+        "| 技能 | 适用阶段 | 使用目的 |",
         "| --- | --- | --- |",
     ])
     if definition["requiredSkills"]:
         lines.extend(
-            f"| `{item['name']}` | {', '.join(item['stages'])} | "
+            f"| `{item['name']}` | {'、'.join(SKILL_STAGE_TEXT[stage] for stage in item['stages'])} | "
             f"{_markdown_cell(item['purpose'])} |"
             for item in definition["requiredSkills"]
         )
     else:
-        lines.append("| 无 | - | 本节点未追加 Skill 要求；仍须遵守祖先 baseline 继承的要求。 |")
+        lines.append("| 无 | - | 本节点未追加技能要求；仍须遵守从祖先基线继承的要求。 |")
     lines.append("")
 
     if definition["kind"] == "TASK":
@@ -1103,7 +1128,7 @@ def render_development_plan(definition: dict[str, Any], state: dict[str, Any]) -
         if plan["generatedFileRoots"]:
             lines.extend([
                 "",
-                "### ADD-only 生成目录",
+                "### 仅新增生成目录",
                 "",
                 "> 这些目录只授权新增生成文件；修改或删除既有文件仍须逐文件登记。",
                 "",
@@ -1116,7 +1141,7 @@ def render_development_plan(definition: dict[str, Any], state: dict[str, Any]) -
             )
         lines.extend(["", "## 接口与功能契约", ""])
         if not plan["interfaces"]:
-            lines.append("- 本 Task 不新增、修改或删除外部/内部接口。")
+            lines.append("- 本任务不新增、修改或删除外部/内部接口。")
         else:
             lines.extend([
                 "| 动作 | 类型 | 名称与位置 | 当前契约 | 目标契约 | 覆盖需求 |",
@@ -1138,11 +1163,11 @@ def render_development_plan(definition: dict[str, Any], state: dict[str, Any]) -
         lines.extend(["", "## 兼容性", ""])
         lines.extend(f"- {item}" for item in plan["compatibility"])
     else:
-        child_label = "Capability" if definition["kind"] == "DELIVERY" else "Task"
+        child_label = "能力" if definition["kind"] == "DELIVERY" else "任务"
         lines.extend([
-            f"## {child_label} 开发内容",
+            f"## {child_label}开发内容",
             "",
-            f"| {child_label} | 开发目的 | 交付内容 | 依赖 | R/A |",
+            f"| {child_label} | 开发目的 | 交付内容 | 依赖 | 需求/验收 |",
             "| --- | --- | --- | --- | --- |",
         ])
         lines.extend(
@@ -1151,9 +1176,9 @@ def render_development_plan(definition: dict[str, Any], state: dict[str, Any]) -
             f"{', '.join(item['requirementIds'])} / {', '.join(item['acceptanceIds'])} |"
             for item in plan["childPlans"]
         )
-        lines.extend(["", f"## 跨 {child_label} 接口与共享契约", ""])
+        lines.extend(["", f"## 跨{child_label}接口与共享契约", ""])
         if not plan["sharedContracts"]:
-            lines.append(f"- 无跨 {child_label} 共享接口；子级仅通过冻结输出和聚合门禁组合。")
+            lines.append(f"- 无跨{child_label}共享接口；子级仅通过冻结输出和聚合门禁组合。")
         else:
             lines.extend([
                 "| 类型 | 契约 | 提供方 | 消费方 | 说明 | 覆盖需求 |",
@@ -1198,9 +1223,9 @@ def render_development_plan(definition: dict[str, Any], state: dict[str, Any]) -
         "## 冻结说明",
         "",
         "- 请先评审本文件中的开发目的、内容、文件、接口/共享契约、依赖波次和测试映射。",
-        "- 如需修改，先修改 definition 并重新 prepare；不要冻结错误版本。",
-        "- 人工评审当前开发方案并选择 active/manual 后一次确认，无需复制或复述指纹。",
-        "- Agent 必须使用展示本方案时保存的当前指纹调用冻结；方案已变化时控制器会拒绝旧确认。",
+        "- 如需修改，先修改结构化定义并重新准备；不要冻结错误版本。",
+        "- 人工评审当前开发方案并选择 `active`（自动）或 `manual`（手动）后一次确认，无需复制或复述指纹。",
+        "- 智能体必须使用展示本方案时保存的当前指纹调用冻结；方案已变化时控制器会拒绝旧确认。",
         "",
     ])
     return "\n".join(lines)
@@ -1215,7 +1240,7 @@ def render_hierarchy_plan(
     kind_text = {"DELIVERY": "交付", "CAPABILITY": "能力", "TASK": "任务"}
     review = hierarchy_state["review"]
     review_text = (
-        f"已由人工确认（{review['reviewedBy']}，{review['reviewedAt']}）"
+        f"已由人工确认（{review['reviewedBy']}，{format_display_timestamp(review['reviewedAt'])}，{DISPLAY_TIMEZONE_LABEL}）"
         if review["status"] == "APPROVED"
         else "等待人工评审；尚未冻结，禁止开始开发"
     )
@@ -1225,7 +1250,7 @@ def render_hierarchy_plan(
         f"- 根工作项：{hierarchy_state['rootId']}",
         f"- 层级指纹：{hierarchy_state['hierarchyFingerprint']}",
         f"- 方案状态：{review_text}",
-        "- 确认方式：人工评审本文件、选择 active/manual 后一次确认，无需复制或复述指纹。",
+        "- 确认方式：人工评审本文件、选择 `active`（自动）或 `manual`（手动）后一次确认，无需复制或复述指纹。",
         "",
         "## 层级结构",
         "",
@@ -1266,7 +1291,7 @@ def render_hierarchy_plan(
         "",
         "- 本文件一次展示并绑定整棵当前需求树的所有 baseline、接口、文件、依赖波次和测试映射。",
         "- 需要修改时重新准备整棵树；旧层级指纹会自动失效。",
-        "- 人工选择根级开发方式并确认本文件后，Agent 使用已保存的层级指纹一次记录方式并冻结全部节点。",
+        "- 人工选择根级开发方式并确认本文件后，智能体使用已保存的层级指纹一次记录方式并冻结全部节点。",
         "- 冻结后不得静默新增或修改节点；需求边界变化时停止执行并重新规划完整需求树。",
         "",
     ])

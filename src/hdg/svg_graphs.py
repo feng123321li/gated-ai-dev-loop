@@ -11,12 +11,12 @@ GRAPH_ASSET_PATHS = {
 }
 
 KIND_LABELS = {
-    "TASK_EXECUTION": "任务执行 / Task Execution",
-    "TASK_GATE": "任务门禁 / Task Gate",
-    "CAPABILITY_GATE": "能力门禁 / Capability Gate",
-    "DELIVERY_GATE": "交付门禁 / Delivery Gate",
-    "ROOT_REVIEW": "根级审查 / Root Review",
-    "USER_CONFIRMATION": "用户确认 / User Confirmation",
+    "TASK_EXECUTION": "任务执行",
+    "TASK_GATE": "任务门禁",
+    "CAPABILITY_GATE": "能力门禁",
+    "DELIVERY_GATE": "交付门禁",
+    "ROOT_REVIEW": "根级审查",
+    "USER_CONFIRMATION": "用户确认",
 }
 
 KIND_COLORS = {
@@ -29,14 +29,14 @@ KIND_COLORS = {
 }
 
 STATE_LABELS = {
-    "PENDING": "等待 / Pending",
-    "READY": "就绪 / Ready",
-    "CLAIMED": "执行中 / Claimed",
-    "SUCCEEDED": "成功 / Succeeded",
-    "BLOCKED": "阻断 / Blocked",
-    "PAUSED": "暂停 / Paused",
-    "CANCELLED": "取消 / Cancelled",
-    "COMPLETED": "完成 / Completed",
+    "PENDING": "等待",
+    "READY": "就绪",
+    "CLAIMED": "执行中",
+    "SUCCEEDED": "成功",
+    "BLOCKED": "阻断",
+    "PAUSED": "暂停",
+    "CANCELLED": "取消",
+    "COMPLETED": "完成",
 }
 
 STATE_COLORS = {
@@ -51,9 +51,9 @@ STATE_COLORS = {
 }
 
 EDGE_LABELS = {
-    "ON_SUCCESS": "成功 / Success",
-    "REQUIRES_PASS": "通过后 / Requires Pass",
-    "ALL_OF": "全部汇聚 / All Of",
+    "ON_SUCCESS": "成功",
+    "REQUIRES_PASS": "通过后",
+    "ALL_OF": "全部汇聚",
 }
 
 
@@ -269,15 +269,15 @@ def render_plane_svg(graph: dict[str, Any], plane: str) -> str:
     legend_y = height - 40
     body.extend([
         f'  <circle cx="{margin_x + 8}" cy="{legend_y}" r="6" fill="#0284c7"/>',
-        f'  <text x="{margin_x + 22}" y="{legend_y + 5}" class="subtitle">任务执行 / Task</text>',
+        f'  <text x="{margin_x + 22}" y="{legend_y + 5}" class="subtitle">任务执行</text>',
         f'  <circle cx="{margin_x + 170}" cy="{legend_y}" r="6" fill="#16a34a"/>',
-        f'  <text x="{margin_x + 184}" y="{legend_y + 5}" class="subtitle">门禁 / Gate</text>',
+        f'  <text x="{margin_x + 184}" y="{legend_y + 5}" class="subtitle">门禁</text>',
         f'  <circle cx="{margin_x + 300}" cy="{legend_y}" r="6" fill="#7c3aed"/>',
-        f'  <text x="{margin_x + 314}" y="{legend_y + 5}" class="subtitle">审查 / Review</text>',
+        f'  <text x="{margin_x + 314}" y="{legend_y + 5}" class="subtitle">审查</text>',
         f'  <circle cx="{margin_x + 440}" cy="{legend_y}" r="6" fill="#dc2626"/>',
-        f'  <text x="{margin_x + 454}" y="{legend_y + 5}" class="subtitle">确认 / Confirmation</text>',
+        f'  <text x="{margin_x + 454}" y="{legend_y + 5}" class="subtitle">确认</text>',
     ])
-    title = "执行图 / Execution Graph" if plane == "EXECUTION" else "治理图 / Governance Graph"
+    title = "执行图" if plane == "EXECUTION" else "治理图"
     subtitle = (
         "任务依赖、并行分支与分级汇聚"
         if plane == "EXECUTION"
@@ -292,18 +292,18 @@ def render_development_flow_svg(runtime: dict[str, Any]) -> str:
     height = 850
     body = []
     boxes = {
-        "plan": (55, 125, 215, 70, "人工：方案确认", "Plan Review & Confirm", "#ffedd5", "#ea580c"),
-        "freeze": (325, 125, 215, 70, "Graph：冻结合同", "Freeze Contract Graph", "#dbeafe", "#2563eb"),
-        "frontier": (595, 125, 220, 70, "Graph：计算 Frontier", "Dependencies & Claims", "#dbeafe", "#2563eb"),
-        "dispatch": (870, 125, 240, 70, "Graph：自动 Agent 计划", "Count, Order & Queue", "#e0f2fe", "#0284c7"),
-        "agent_a": (710, 320, 220, 70, "Agent A：任务执行", "Implement & Test", "#dcfce7", "#16a34a"),
-        "agent_b": (980, 320, 220, 70, "Agent B：任务执行", "Implement & Test", "#dcfce7", "#16a34a"),
-        "queue": (1125, 460, 210, 70, "容量不足：排队", "Stable Queue", "#f1f5f9", "#64748b"),
-        "join": (835, 500, 220, 70, "Graph：结果汇合", "Result Join", "#ede9fe", "#7c3aed"),
-        "gate": (835, 650, 220, 70, "Graph：门禁与审查", "Gate & Review", "#dcfce7", "#16a34a"),
-        "failure": (555, 650, 220, 70, "Graph：失败分类", "Failure Router", "#fee2e2", "#dc2626"),
-        "retry": (275, 650, 220, 70, "Graph：重试与恢复", f"Max attempts: {retry['maxAttempts']}", "#fef3c7", "#d97706"),
-        "final": (1110, 650, 215, 70, "人工：最终验收", "Final Acceptance", "#fee2e2", "#dc2626"),
+        "plan": (55, 125, 215, 70, "人工：方案确认", "评审并确认方案", "#ffedd5", "#ea580c"),
+        "freeze": (325, 125, 215, 70, "图：冻结合约", "冻结合约图", "#dbeafe", "#2563eb"),
+        "frontier": (595, 125, 220, 70, "图：计算前沿", "依赖与认领", "#dbeafe", "#2563eb"),
+        "dispatch": (870, 125, 240, 70, "图：自动调度计划", "数量、顺序与队列", "#e0f2fe", "#0284c7"),
+        "agent_a": (710, 320, 220, 70, "智能体 A：任务执行", "实现与测试", "#dcfce7", "#16a34a"),
+        "agent_b": (980, 320, 220, 70, "智能体 B：任务执行", "实现与测试", "#dcfce7", "#16a34a"),
+        "queue": (1125, 460, 210, 70, "容量不足：排队", "稳定队列", "#f1f5f9", "#64748b"),
+        "join": (835, 500, 220, 70, "图：结果汇合", "汇合结果", "#ede9fe", "#7c3aed"),
+        "gate": (835, 650, 220, 70, "图：门禁与审查", "门禁与审查", "#dcfce7", "#16a34a"),
+        "failure": (555, 650, 220, 70, "图：失败分类", "失败路由", "#fee2e2", "#dc2626"),
+        "retry": (275, 650, 220, 70, "图：重试与恢复", f"最多尝试 {retry['maxAttempts']} 次", "#fef3c7", "#d97706"),
+        "final": (1110, 650, 215, 70, "人工：最终验收", "最终验收", "#fee2e2", "#dc2626"),
     }
     for x, y, box_width, box_height, title, subtitle, fill, stroke in boxes.values():
         body.extend(_rounded_box(
@@ -333,24 +333,24 @@ def render_development_flow_svg(runtime: dict[str, Any]) -> str:
         x, y, box_width, box_height, *_ = boxes[name]
         return x + box_width, y + box_height / 2
 
-    body.extend(_edge(source=right("plan"), target=left("freeze"), label="确认 / Confirm"))
+    body.extend(_edge(source=right("plan"), target=left("freeze"), label="确认"))
     body.extend(_edge(source=right("freeze"), target=left("frontier")))
     body.extend(_edge(source=right("frontier"), target=left("dispatch")))
-    body.extend(_edge(source=bottom("dispatch"), target=top("agent_a"), label="自动派发 / Auto"))
-    body.extend(_edge(source=bottom("dispatch"), target=top("agent_b"), label="自动派发 / Auto"))
-    body.extend(_edge(source=bottom("dispatch"), target=top("queue"), label="容量不足 / Limited", dashed=True))
+    body.extend(_edge(source=bottom("dispatch"), target=top("agent_a"), label="自动派发"))
+    body.extend(_edge(source=bottom("dispatch"), target=top("agent_b"), label="自动派发"))
+    body.extend(_edge(source=bottom("dispatch"), target=top("queue"), label="容量不足", dashed=True))
     body.extend(_edge(source=bottom("agent_a"), target=top("join")))
     body.extend(_edge(source=bottom("agent_b"), target=top("join")))
     body.extend(_edge(source=left("queue"), target=right("join"), dashed=True))
     body.extend(_edge(source=bottom("join"), target=top("gate")))
-    body.extend(_edge(source=right("gate"), target=left("final"), label="通过 / Pass"))
-    body.extend(_edge(source=left("gate"), target=right("failure"), label="失败 / Fail", dashed=True))
-    body.extend(_edge(source=left("failure"), target=right("retry"), label="可恢复 / Recover"))
-    body.extend(_edge(source=top("retry"), target=bottom("frontier"), label="重新计算 / Recompute", dashed=True))
+    body.extend(_edge(source=right("gate"), target=left("final"), label="通过"))
+    body.extend(_edge(source=left("gate"), target=right("failure"), label="失败", dashed=True))
+    body.extend(_edge(source=left("failure"), target=right("retry"), label="可恢复"))
+    body.extend(_edge(source=top("retry"), target=bottom("frontier"), label="重新计算", dashed=True))
     return _svg_document(
         width=width,
         height=height,
-        title="开发执行流程 / Development Execution Flow",
+        title="开发执行流程",
         subtitle="人工只确认方案与最终验收；中间依赖、调度、门禁与失败恢复由 Graph 管理",
         body=body,
     )
@@ -394,25 +394,25 @@ def render_node_state_machine_svg(runtime: dict[str, Any]) -> str:
 
     events = {transition["eventType"] for transition in runtime["transitions"]}
     if {"PENDING", "READY"} <= present:
-        body.extend(_edge(source=right("PENDING"), target=left("READY"), label="前置满足 / Ready"))
+        body.extend(_edge(source=right("PENDING"), target=left("READY"), label="前置满足"))
     if "TASK_CLAIMED" in events:
-        body.extend(_edge(source=right("READY"), target=left("CLAIMED"), label="派发 / Dispatch"))
+        body.extend(_edge(source=right("READY"), target=left("CLAIMED"), label="派发"))
     if "TASK_IMPLEMENTED" in events:
-        body.extend(_edge(source=right("CLAIMED"), target=left("SUCCEEDED"), label="成功 / Success"))
+        body.extend(_edge(source=right("CLAIMED"), target=left("SUCCEEDED"), label="成功"))
     if "USER_CONFIRMED" in events:
-        body.extend(_edge(source=right("SUCCEEDED"), target=left("COMPLETED"), label="根完成 / Complete"))
+        body.extend(_edge(source=right("SUCCEEDED"), target=left("COMPLETED"), label="根完成"))
     if {"TASK_BLOCKED", "CLAIM_LEASE_EXPIRED"} & events:
         body.extend(_edge(source=bottom("CLAIMED"), target=top("BLOCKED"), label="失败 / 失联"))
     if "NODE_RETRY_SCHEDULED" in events:
-        body.extend(_edge(source=left("BLOCKED"), target=bottom("READY"), label="新 attempt / Retry"))
+        body.extend(_edge(source=left("BLOCKED"), target=bottom("READY"), label="新尝试"))
     if "NODE_PAUSED" in events:
-        body.extend(_edge(source=bottom("CLAIMED"), target=top("PAUSED"), label="暂停 / Pause"))
+        body.extend(_edge(source=bottom("CLAIMED"), target=top("PAUSED"), label="暂停"))
     if "NODE_RESUMED" in events:
-        body.extend(_edge(source=left("PAUSED"), target=bottom("READY"), label="恢复 / Resume"))
+        body.extend(_edge(source=left("PAUSED"), target=bottom("READY"), label="恢复"))
     if "GRAPH_RUN_CANCELLED" in events:
-        body.extend(_edge(source=bottom("BLOCKED"), target=top("CANCELLED"), label="确认取消 / Cancel", dashed=True))
+        body.extend(_edge(source=bottom("BLOCKED"), target=top("CANCELLED"), label="确认取消", dashed=True))
     if "GRAPH_INVALIDATED" in events:
-        body.extend(_edge(source=top("SUCCEEDED"), target=bottom("READY"), label="修正失效 / Remediation", dashed=True))
+        body.extend(_edge(source=top("SUCCEEDED"), target=bottom("READY"), label="修正失效", dashed=True))
 
     for state in runtime["states"]:
         if state not in positions:
@@ -424,8 +424,7 @@ def render_node_state_machine_svg(runtime: dict[str, Any]) -> str:
             y=y,
             width=node_width,
             height=node_height,
-            title=state,
-            subtitle=STATE_LABELS[state],
+            title=STATE_LABELS[state],
             fill=fill,
             stroke=stroke,
         ))
@@ -433,12 +432,12 @@ def render_node_state_machine_svg(runtime: dict[str, Any]) -> str:
     claim = runtime["claimPolicy"]
     body.extend([
         f'  <text x="70" y="620" class="subtitle">自动恢复：{_escape(", ".join(retry["automaticFailureClasses"]))}；最大尝试 {retry["maxAttempts"]} 次</text>',
-        f'  <text x="70" y="646" class="subtitle">Claim 租约：{claim["leaseSeconds"]} 秒；心跳：{claim["heartbeatSeconds"]} 秒；宽限：{claim["graceSeconds"]} 秒</text>',
+        f'  <text x="70" y="646" class="subtitle">认领租约：{claim["leaseSeconds"]} 秒；心跳：{claim["heartbeatSeconds"]} 秒；宽限：{claim["graceSeconds"]} 秒</text>',
     ])
     return _svg_document(
         width=width,
         height=height,
-        title="节点有限状态机 / Node Finite State Machine",
+        title="节点有限状态机",
         subtitle="成功、阻断、重试、暂停、恢复、修正与取消的可视化摘要",
         body=body,
     )

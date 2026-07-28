@@ -6,7 +6,9 @@
 
 Claude Code 的权限模式仍属于执行宿主安全边界，不能由聊天提示、Skill 或仓库内容自行切换，MCP Server 也不能越过这条边界。首次安装/启用 Plugin 时，用户或组织策略可能需要信任 Server；随后应在 `/permissions` 或托管策略中按 MCP Server/tool 配置权限。项目根由 `${CLAUDE_PROJECT_DIR}` 在 Server 启动时绑定，工具调用不能传入 `root`、`dogfood` 或通用 `confirmed` 参数来扩大范围。
 
-MCP 协议工具本名是 `graph_frontier` 等 snake_case 名称；`mcp__plugin_layered-delivery_layered-delivery__graph_frontier` 只是 Claude 的权限规则名，其中插件名与 Server 名用于宿主隔离。Plugin Skill 的 `allowed-tools` 使用 `mcp__plugin_layered-delivery_layered-delivery__*` 预批准当前 Server 的工具，但不批准任意 Shell；Plugin 根目录的 `hooks/hooks.json` 通过 `PreToolUse` 对 `freeze_hierarchy`、`rebuild_graph_run`、`cancel_graph_run`、`record_human_review_acceptance` 和最终 `record_user_confirmation` 强制返回 `ask`。Claude 合并权限决策时 `ask` 比通配符 `allow` 更严格，因此这 5 个工具仍必须到达人；Hook 输入异常、事件或工具名漂移时失败关闭并阻断调用。Server 同时将它们标记为 `anthropic/requiresUserInteraction`，形成纵深防护。五个 payload 暂存工具只运输目标绑定的输入，finalize 不执行业务动作；敏感目标仍必须调用原工具并触发原 prompt。方案冻结只能紧邻用户对当前指纹方案和方式的确认调用，不能从旧对话或自然语言关键词推断。
+MCP 协议工具本名是 `graph_frontier` 等 snake_case 名称；`mcp__plugin_layered-delivery_layered-delivery__graph_frontier` 只是 Claude 的权限规则名，其中插件名与 Server 名用于宿主隔离。Plugin Skill 的 `allowed-tools` 使用 `mcp__plugin_layered-delivery_layered-delivery__*` 预批准当前 Server 的工具，但不批准任意 Shell。用户评审当前指纹方案并选择 `active` 或 `manual` 的回复，就是冻结确认；Agent 必须紧邻该回复调用一次 `freeze_hierarchy`，不得再发起第二次询问或等待独立工具批准，也不能从旧对话或自然语言关键词推断、重放方式选择。
+
+Plugin 根目录的 `hooks/hooks.json` 通过 `PreToolUse` 仅对 `rebuild_graph_run`、`cancel_graph_run`、`record_human_review_acceptance` 和最终 `record_user_confirmation` 强制返回 `ask`。Claude 合并权限决策时 `ask` 比通配符 `allow` 更严格，因此这 4 个独立敏感动作仍必须到达人；Hook 输入异常、事件或工具名漂移时失败关闭并阻断调用。Server 同时只将这 4 个工具标记为 `anthropic/requiresUserInteraction`，形成纵深防护。五个 payload 暂存工具只运输目标绑定的输入，finalize 不执行业务动作；敏感目标仍必须调用原工具并触发原 prompt。
 
 ## Claude required Skill 原生调用
 
@@ -16,7 +18,7 @@ Claude 可以执行由任意已接入 Plugin MCP 的 Agent 宿主创建并冻结
 
 Claude subagent 是新的 context，父会话调用过 Skill 不会替代子 Agent 的调用。若真正执行阶段的是 subagent，它必须在自己的 context 明确调用并记录凭证。完整执行 Skill 后，执行者或独立 gate/reviewer 针对真实代码、diff、测试和产物形成命名检查，以 `record_skill_conformance` 绑定原激活凭证；成功迁移要求全部检查 `PASS`。如果 Skill 不存在，记录 `BLOCKED` 激活与符合性并按阶段 artifact 形成阻断，不能把 Read 或宽松匹配记为 PASS。
 
-`hooks/hooks.json` 是 Claude Plugin 的宿主权限适配，不是 MCP 协议能力；Codex 继续使用自己的 Plugin manifest，其他 Agent 也必须提供等价的敏感工具 prompt/ask 策略。`anthropic/requiresUserInteraction` 是 Claude Code 的宿主扩展，不是 MCP Server 自己弹窗；MCP 标准 annotations 也只是宿主提示，不能替代权限策略。Claude Code 至少使用 2.1.199：更早版本会忽略该扩展，因此 Server 在识别到旧版 Claude Code 时直接以 `MCP_CLIENT_UPGRADE_REQUIRED` 拒绝上述五个敏感工具。版本满足要求后，是否允许仍由 Claude Code 的 Hook、权限模式、tool 规则和组织策略共同决定。
+`hooks/hooks.json` 是 Claude Plugin 的宿主权限适配，不是 MCP 协议能力；Codex 继续使用自己的 Plugin manifest，其他 Agent 也必须为上述 4 个独立敏感动作提供等价的 prompt/ask 策略。`anthropic/requiresUserInteraction` 是 Claude Code 的宿主扩展，不是 MCP Server 自己弹窗；MCP 标准 annotations 也只是宿主提示，不能替代权限策略。Claude Code 至少使用 2.1.199：更早版本会忽略该扩展，因此 Server 在识别到旧版 Claude Code 时直接以 `MCP_CLIENT_UPGRADE_REQUIRED` 拒绝上述 4 个工具。版本满足要求后，是否允许仍由 Claude Code 的 Hook、权限模式、tool 规则和组织策略共同决定。
 
 ## 一次配置后的 active 自治
 

@@ -662,6 +662,15 @@ class PermissionAndStorageHardeningTests(unittest.TestCase):
             )
             response = mcp_server.handle_message(
                 _tool_call(
+                    "cancel_graph_run",
+                    {
+                        "item_id": "t-example",
+                    },
+                ),
+                session=session,
+            )
+            freeze_response = mcp_server.handle_message(
+                _tool_call(
                     "freeze_hierarchy",
                     {
                         "item_id": "t-example",
@@ -674,6 +683,8 @@ class PermissionAndStorageHardeningTests(unittest.TestCase):
 
         error = response["result"]["structuredContent"]["error"]
         self.assertEqual(error["code"], "MCP_CLIENT_UPGRADE_REQUIRED")
+        freeze_error = freeze_response["result"]["structuredContent"]["error"]
+        self.assertEqual(freeze_error["code"], "WORK_ITEM_NOT_FOUND")
 
     def test_mutating_tool_annotations_do_not_claim_replacements_are_additive(
         self,

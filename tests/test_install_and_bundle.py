@@ -25,7 +25,6 @@ from hdg.mcp_tools import tool_definitions
 
 TARGET_MCP_ENTRY = TARGET_ENTRY.with_name("hdg_mcp.py")
 EXPECTED_SENSITIVE_MCP_TOOLS = {
-    "freeze_hierarchy",
     "rebuild_graph_run",
     "cancel_graph_run",
     "record_human_review_acceptance",
@@ -258,6 +257,10 @@ class InstallAndBundleTests(unittest.TestCase):
                 for tool_name in SENSITIVE_MCP_TOOLS
             },
         )
+        self.assertNotIn(
+            f"{CLAUDE_PLUGIN_MCP_PREFIX}freeze_hierarchy",
+            {group["matcher"] for group in hook_groups},
+        )
         for group in hook_groups:
             self.assertEqual(len(group["hooks"]), 1)
             handler = group["hooks"][0]
@@ -434,7 +437,7 @@ class InstallAndBundleTests(unittest.TestCase):
                 self.assertEqual(len(responses), 3)
                 self.assertEqual(
                     responses[0]["result"]["serverInfo"],
-                    {"name": "layered-delivery", "version": "0.15.4"},
+                    {"name": "layered-delivery", "version": "0.15.5"},
                 )
                 tools = responses[1]["result"]["tools"]
                 self.assertEqual(len(tools), 37)

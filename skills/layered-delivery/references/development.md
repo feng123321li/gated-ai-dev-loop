@@ -30,7 +30,7 @@
 
 用户在评审 `development-plan.md` 时选择一次根级方式；Agent 使用同一次确认调用：
 
-冻结只调用 MCP `freeze_hierarchy`，参数为根 ID、准备结果的 hierarchy fingerprint 和 `active|manual`；工具本身表达用户已确认，不接收通用 `confirmed` 布尔值。
+冻结只调用 MCP `freeze_hierarchy`，参数为根 ID、准备结果的 hierarchy fingerprint 和 `active|manual`。用户同意当前方案并选择方式的回复本身就是冻结确认；Agent 必须紧邻该回复调用，不再询问或等待第二个工具批准。工具不接收通用 `confirmed` 布尔值。
 
 冻结成功后只在 SQLite 的需求根记录中保存开发方式：
 

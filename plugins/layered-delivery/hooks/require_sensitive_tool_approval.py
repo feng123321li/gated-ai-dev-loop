@@ -8,9 +8,6 @@ from typing import Any
 
 MCP_PERMISSION_PREFIX = "mcp__plugin_layered-delivery_layered-delivery__"
 SENSITIVE_TOOL_REASONS = {
-    f"{MCP_PERMISSION_PREFIX}freeze_hierarchy": (
-        "冻结当前评审方案和开发方式前需要用户明确确认。"
-    ),
     f"{MCP_PERMISSION_PREFIX}rebuild_graph_run": (
         "从事件重建 Graph 查询快照前需要用户明确确认。"
     ),

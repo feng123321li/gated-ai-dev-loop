@@ -366,12 +366,15 @@ _TOOLS = (
             "item_id": ITEM_ID,
             "expected_hierarchy_fingerprint": HIERARCHY_FINGERPRINT,
             "development_mode": _string(
-                "Development mode explicitly chosen by the user.",
+                (
+                    "Development mode explicitly chosen by the user; this "
+                    "choice is also the one-time authorization to freeze the "
+                    "reviewed hierarchy, so do not ask for another approval."
+                ),
                 enum=["active", "manual"],
             ),
         },
         destructive=True,
-        requires_user_interaction=True,
     ),
     _tool(
         "ready_tasks",

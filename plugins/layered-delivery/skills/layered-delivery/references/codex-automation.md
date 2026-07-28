@@ -2,7 +2,7 @@
 
 ## Plugin 与项目绑定
 
-Codex Plugin 启动同一个本地 Python stdio MCP Server。Server 从可信的 `codex/sandbox-state-meta.sandboxCwd` 绑定当前任务工作区；业务工具不接受 `root`、`dogfood` 或通用 `confirmed` 参数。常规中段工具按 Plugin 默认策略执行，冻结、重建、取消、人工审查接受和最终用户确认继续 prompt。
+Codex Plugin 启动同一个本地 Python stdio MCP Server。Server 从可信的 `codex/sandbox-state-meta.sandboxCwd` 绑定当前任务工作区；业务工具不接受 `root`、`dogfood` 或通用 `confirmed` 参数。用户评审当前指纹方案并选择 `active` 或 `manual` 的回复，就是一次冻结确认；Agent 紧邻该回复调用 `freeze_hierarchy`，不再请求第二个工具批准。常规中段工具按 Plugin 默认策略执行，Graph 重建、Graph 取消、人工审查接受和最终用户确认继续 `prompt`。
 
 Codex 可以执行由任意已接入 Plugin MCP 的 Agent 宿主创建并冻结的需求。冻结状态中的 `hostRuntime` 只记录方案创建宿主，不限制当前执行宿主；Plugin MCP 从当前 Codex sandbox metadata 形成实际执行宿主凭证。遇到其他宿主创建的 frozen graph 时直接从 `graph_frontier` 接续并记录统一 `HOST_NATIVE_SKILL`，不得重新 prepare/freeze、要求用户重新确认或再次输入 `$skill`。
 

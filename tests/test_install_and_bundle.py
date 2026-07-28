@@ -515,22 +515,21 @@ class InstallAndBundleTests(unittest.TestCase):
         self.assertFalse(
             (REPOSITORY_ROOT / ".claude-plugin" / "marketplace.json").exists()
         )
-        readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertIn(
-            "Marketplace\n只维护指向 `plugins/layered-delivery` 的 Git 版本映射",
-            readme,
-        )
 
-    def test_readme_documents_plugin_only_installation(self) -> None:
+    def test_readme_documents_current_purpose_and_usage(self) -> None:
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
-        self.assertLess(readme.index("## 安装"), readme.index("## 核心契约"))
-        self.assertIn("Plugin-only", readme)
+        self.assertLess(readme.index("## 能做什么"), readme.index("## 怎么用"))
+        self.assertIn("当前版本：**0.15.5**", readme)
+        self.assertIn("选择 `active` 或 `manual`", readme)
+        self.assertIn("直接在对话中说明即可", readme)
+        self.assertIn("用户不需要填写 `requiredSkills` 字段", readme)
         self.assertIn("Codex", readme)
-        self.assertIn("Claude", readme)
+        self.assertIn("Claude Code", readme)
+        self.assertNotIn("Plugin-only", readme)
+        self.assertNotIn("Skill-only", readme)
         self.assertNotIn("CLI fallback", readme)
         self.assertNotIn("npx skills add", readme)
-        self.assertIn("MCP 未连接时禁止开始或恢复治理写入", readme)
-        self.assertIn("不需要另行执行 `claude mcp add`", readme)
+        self.assertIn("MCP 未连接或工具注册失败时不能开始开发", readme)
         for retired in (
             "codex plugin marketplace add feng123321li/layered-delivery",
             "claude plugin marketplace add feng123321li/layered-delivery",

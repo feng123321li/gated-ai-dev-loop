@@ -1,6 +1,6 @@
 {
   "name": "layered-delivery",
-  "version": "0.16.2",
+  "version": "0.16.3",
   "description": "面向 AI 辅助开发、可人工评审的分层交付治理插件",
   "author": {
     "name": "layered-delivery contributors",

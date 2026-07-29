@@ -103,12 +103,11 @@ class PluginBundleTests(unittest.TestCase):
             {
                 "rebuild_graph_run",
                 "cancel_graph_run",
-                "record_user_confirmation",
             },
         )
         self.assertLessEqual(matchers, names)
 
-    def test_freeze_uses_the_skill_choice_not_host_reapproval(
+    def test_explicit_user_choices_do_not_trigger_host_reapproval(
         self,
     ) -> None:
         manifest = json.loads(
@@ -123,10 +122,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         approvals = server["tools"]
         self.assertNotIn("freeze_hierarchy", approvals)
-        self.assertEqual(
-            approvals["record_user_confirmation"]["approval_mode"],
-            "prompt",
-        )
+        self.assertNotIn("record_user_confirmation", approvals)
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
         self.assertEqual(len(tool_definitions()), 17)

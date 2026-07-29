@@ -20,6 +20,7 @@ description: "调度或恢复多项目、多模块的软件交付 Graph。用于
 - 不把内部 `GATE_FAILED`、`TASK_IMPLEMENTED` 或 Skill 生命周期事件提升为外层 Graph 事件。Loop 只返回 `SUCCEEDED`、`BLOCKED`、`REPLAN_REQUIRED` 或 `CANCELLED`。
 - 仅对 `RETRYABLE_INFRA` 与 `WORKER_LOST` 自动重试。业务阻断、契约变化与外部权限交给 frontier。
 - 最终完成必须取得真实用户确认。Git、发布、迁移和新增外部权限继续单独授权。
+- `owner`、`confirmed_by` 等调度身份使用控制器接受的可移植 ASCII 标识；具体字符约束以 MCP 契约和错误响应为准，不把运行经验写入宿主记忆来替代正式契约。
 - 准备完成后向用户提供“自动执行 / 手动交接”两个确认开发选项，并保留“调整需求”的非确认分支。选择自动或手动本身就是完整冻结授权；任何其他反馈都继续需求交互并重新 prepare。确认后立即调用由宿主自动批准的 `freeze_hierarchy`，不要再请求通用 Yes/No，也不要向工具发送内部 `confirmed` 参数。
 - 总调度上下文只消费 frontier 和路由 Loop，不在自身上下文内实现 TASK 或 Review。每个 Loop 使用独立接收上下文；宿主支持 Agent 时优先自动派遣，无可用执行容量时才生成人工交接。
 - 严格区分三类执行容量状态：未 claim 且无 Agent 容量时只生成人工交接；已 claim、租约有效且出现上下文或 Hook 压力时才调用 `pause_loop`；租约过期时调用 `advance_graph`，禁止 pause。前两类都不提交 Loop outcome，不要把 Capacity 与 lease 合并成同一恢复动作。
@@ -29,7 +30,7 @@ description: "调度或恢复多项目、多模块的软件交付 Graph。用于
 1. 调用 `workspace_status`。
 2. `ACTIVE`、`BLOCKED` 或 `PAUSED`：读取 [execution-quickstart.md](references/execution-quickstart.md)，从 `graph_frontier` 恢复。
 3. `ABSENT` 或 `PREPARED` 且用户要求新交付：读取 [planning-quickstart.md](references/planning-quickstart.md)。
-4. `COMPLETED` 或 `CANCELLED`：用户要求新 Delivery 时读取规划说明；否则只报告终态，不写入新的调度状态。
+4. `COMPLETED` 或 `CANCELLED`：用户要求新 Delivery 时读取规划说明；否则只报告终态，不写入新的调度状态，不触发宿主记忆、持续学习或任何文件更新。
 5. 只读分析、代码审查或问答不创建调度状态。
 
 ## 调度循环

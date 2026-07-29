@@ -14,9 +14,6 @@ SENSITIVE_TOOL_REASONS = {
     f"{MCP_PERMISSION_PREFIX}cancel_graph_run": (
         "取消当前 Graph 运行前需要用户明确确认。"
     ),
-    f"{MCP_PERMISSION_PREFIX}record_user_confirmation": (
-        "写入最终用户验收前必须由用户明确接受完整验收报告。"
-    ),
 }
 
 

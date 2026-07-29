@@ -382,21 +382,43 @@ cancel_graph_run
 
 ```text
 src/hdg/
-├── model.py                 # 分层 definition 与合同校验
+├── model_core.py            # 分层 definition、合同校验与指纹
+├── model_rendering.py       # baseline、开发计划与层级 Markdown
+├── model.py                 # 稳定 model façade
+├── evidence_validation.py   # evidence 规则、校验和问题诊断
+├── evidence_hydration.py    # Task/Gate evidence delta 补全
+├── evidence_contracts.py    # 按需 evidence contract
+├── evidence.py              # 稳定 evidence façade
 ├── graph_model.py           # 图编译、图校验与图指纹
-├── graph_runtime.py         # 节点状态、frontier 与图查询
+├── graph_state.py           # 节点状态、事件回放与关键路径
+├── graph_contracts.py       # MCP 调用引用与 evidence contract 组装
+├── graph_queries.py         # 图状态、回放与 evidence 查询
+├── graph_frontier.py        # frontier 动作、阻断和紧凑响应
+├── graph_runtime.py         # 稳定 façade 与图恢复命令
 ├── graph_projections.py     # 双语图和运行时间线
-├── repository.py            # SQLite 事务、运行记录和事件链
+├── repository_contracts.py  # SQLite schema 合同与共享轻量校验
+├── repository_sqlite.py     # SQLite 连接、建库与 schema 校验
+├── repository_graph_store.py # 图定义、run、event 与 evidence 存储
+├── repository_evidence_store.py # interaction 与 evidence 恢复校验
+├── repository_projections.py # Markdown/SVG 投影和报告写入
+├── repository.py            # 稳定 repository façade 与 registry/package
 ├── planning.py              # prepare、freeze 与 retry
 ├── execution.py             # Task 派发、上下文和结果写回
 ├── acceptance.py            # gate、review 与 confirmation
 ├── remediation.py           # 同合同修正与图失效传播
-├── operations.py            # MCP 工具共享的应用服务入口
+├── operation_*.py           # 按 payload/graph/task/review 等领域分组的 handler
+├── operations.py            # 小型 MCP 应用服务分派入口
 ├── mcp_tools.py             # MCP 工具 schema 与参数门禁
 └── mcp_server.py            # Plugin stdio MCP Server
 ```
 
 `scripts/build_skill.py` 会把 MCP 运行时从 `src/hdg` 重建到 `skills/layered-delivery/scripts/hdg`，再生成 Claude/Codex Plugin 载荷。产物不包含 CLI 模块或入口。
+
+`tests/test_context_budgets.py` 对稳定 façade 的源码大小、operation dispatcher
+长度和完整 `tools/list` 序列化大小设置回归预算。工具目录省略 MCP 规范允许省略且
+与 annotations 重复的顶层 `title`、共享 `outputSchema`，大 payload 的输入 schema
+只声明必须原样传递 `finalize_payload_upload` 返回的 `payloadRef`；服务端仍对该
+引用执行完整绑定和摘要校验。
 
 ## 15. 项目边界
 

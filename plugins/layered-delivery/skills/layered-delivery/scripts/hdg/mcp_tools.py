@@ -169,28 +169,10 @@ def _payload_capable_object(description: str) -> dict[str, Any]:
                 "properties": {
                     "payloadRef": {
                         "type": "object",
-                        "properties": {
-                            "uploadId": copy.deepcopy(UPLOAD_ID),
-                            "generationId": copy.deepcopy(GENERATION_ID),
-                            "sha256": _string(
-                                "SHA-256 of the finalized payload.",
-                                pattern=FINGERPRINT_PATTERN,
-                                min_length=64,
-                                max_length=64,
-                            ),
-                            "sizeBytes": _integer(
-                                "Exact UTF-8 byte length of the payload.",
-                                minimum=1,
-                                maximum=MAX_PAYLOAD_BYTES,
-                            ),
-                        },
-                        "required": [
-                            "uploadId",
-                            "generationId",
-                            "sha256",
-                            "sizeBytes",
-                        ],
-                        "additionalProperties": False,
+                        "description": (
+                            "Exact payloadRef object returned by "
+                            "finalize_payload_upload; do not reconstruct it."
+                        ),
                     },
                 },
                 "required": ["payloadRef"],
@@ -225,13 +207,6 @@ def _input_schema(
     }
 
 
-OUTPUT_SCHEMA = {
-    "type": "object",
-    "properties": {"ok": {"type": "boolean"}},
-    "required": ["ok"],
-}
-
-
 def _tool(
     name: str,
     title: str,
@@ -246,13 +221,11 @@ def _tool(
 ) -> dict[str, Any]:
     definition = {
         "name": name,
-        "title": title,
         "description": description,
         "inputSchema": _input_schema(
             properties,
             optional_properties,
         ),
-        "outputSchema": OUTPUT_SCHEMA,
         "annotations": {
             "title": title,
             "readOnlyHint": read_only,

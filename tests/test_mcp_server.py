@@ -8,7 +8,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from hdg import mcp_server, mcp_tools, operations
+from hdg import (
+    mcp_server,
+    mcp_tools,
+    operation_review,
+    operation_support,
+    operations,
+)
 from hdg.errors import GatedLoopError
 from hdg.mcp_tools import tool_definitions
 
@@ -1277,12 +1283,12 @@ class McpServerProtocolTests(unittest.TestCase):
             with self.subTest(operation=operation_name):
                 with (
                     patch.object(
-                        operations,
+                        operation_review,
                         "record_acceptance",
                         return_value={"action": expected_action},
                     ) as mocked_record,
                     patch.object(
-                        operations,
+                        operation_support,
                         "get_graph_frontier",
                         return_value={"responseMode": "COMPACT"},
                     ),

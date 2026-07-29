@@ -639,7 +639,7 @@ Graph 会消费同一 `parallelGroup` 中全部范围互斥 Task。执行平台�
 | 文件 | 责任 |
 |---|---|
 | `src/hdg/graph_model.py` | Graph IR、节点/边校验、图指纹，并把完整 hierarchy 确定性编译成合同图 |
-| `src/hdg/graph_runtime.py` | 事件回放、节点状态、关键路径、frontier、图状态和恢复 |
+| `src/hdg/graph_state.py`、`graph_contracts.py`、`graph_queries.py`、`graph_frontier.py`、`graph_runtime.py` | 分别承载事件回放与节点状态、evidence contract、图查询、frontier 和稳定恢复 façade |
 | `src/hdg/graph_projections.py` | 需求级 `execution-graph.md`、工作区级 `state-transition-graph.md`、`frontier.md`、`run-timeline.md`、SVG 嵌入和折叠 Mermaid 渲染 |
 | `src/hdg/svg_graphs.py` | 不依赖第三方工具的确定性 SVG 执行图、治理图、开发流程与节点 FSM |
 
@@ -649,13 +649,13 @@ Graph 会消费同一 `parallelGroup` 中全部范围互斥 Task。执行平台�
 
 | 文件 | 改动 |
 |---|---|
-| `src/hdg/model.py` | 保留层级 definition 与依赖合法性校验 |
+| `src/hdg/model_core.py`、`model_rendering.py` 与 `model.py` | 分离层级 definition/依赖合法性校验与 Markdown 渲染，并由稳定 façade 重导出 |
 | `src/hdg/planning.py` | prepare 时编译图；freeze 时绑定 graph fingerprint 并创建 run |
-| `src/hdg/repository.py` | 增加 graph/evidence 表、精确 schema 校验、图坐标证据绑定、事件链回放和快照重建 |
+| `src/hdg/repository_contracts.py`、`repository_sqlite.py`、`repository_graph_store.py`、`repository_evidence_store.py`、`repository_projections.py`、`repository.py` | 分离 schema、SQLite、图存储、evidence 恢复、投影写入，并由稳定 façade 保持调用兼容 |
 | `src/hdg/execution.py` | `_task_ready` 改为 graph frontier 的 Task 视图；dispatch/result 驱动 node event |
 | `src/hdg/acceptance.py` | Task/Capability/Delivery gate 统一映射到 gate node |
 | `src/hdg/remediation.py` | 根据显式边计算失效闭包并创建下一 attempt |
-| `src/hdg/mcp_tools.py` 与 `src/hdg/mcp_server.py` | 通过 Plugin stdio MCP 提供 status/frontier/events/replay、advance、heartbeat、pause/resume、cancel 与 rebuild 工具 |
+| `src/hdg/operation_*.py`、`operations.py`、`mcp_tools.py` 与 `mcp_server.py` | 按领域 handler 分派 Plugin stdio MCP 工具，并对完整工具目录设置上下文预算 |
 | `README.md` | 从“分层树调度”更新为“分层合同 + 图运行 + 节点循环” |
 | `skills/layered-delivery/SKILL.md` | 用 graph frontier 描述 active/manual 自动推进流程 |
 | `skills/layered-delivery/references/*.md` | 更新 baseline、执行、并发、事务、恢复、验收和跟踪契约 |

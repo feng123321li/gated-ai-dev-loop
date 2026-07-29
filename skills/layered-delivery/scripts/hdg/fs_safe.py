@@ -245,6 +245,17 @@ def atomic_create_directory(target: str | os.PathLike[str], populate: Callable[[
             shutil.rmtree(staging)
 
 
+def _remove_path(path: Path) -> None:
+    try:
+        mode = path.lstat().st_mode
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(mode) and not stat.S_ISLNK(mode):
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
 def atomic_replace_directory(target: str | os.PathLike[str], populate: Callable[[Path], None]) -> None:
     destination = Path(target)
     staging = destination.with_name(f"{destination.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
@@ -258,13 +269,13 @@ def atomic_replace_directory(target: str | os.PathLike[str], populate: Callable[
             moved_old = True
         os.replace(staging, destination)
         if moved_old:
-            shutil.rmtree(backup)
+            _remove_path(backup)
     except Exception:
         if moved_old and not destination.exists() and backup.exists():
             os.replace(backup, destination)
         raise
     finally:
         if staging.exists():
-            shutil.rmtree(staging)
+            _remove_path(staging)
         if backup.exists() and destination.exists():
-            shutil.rmtree(backup)
+            _remove_path(backup)

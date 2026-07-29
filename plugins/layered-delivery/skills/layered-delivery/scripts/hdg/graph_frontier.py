@@ -4,7 +4,10 @@ from typing import Any
 
 from .graph_model import LOOP_NODE_KINDS
 from .graph_runtime import advance_graph
-from .loop_contracts import resource_claims_overlap
+from .loop_contracts import (
+    loop_execution_policy,
+    resource_claims_overlap,
+)
 from .repository import SchedulerRepository
 
 
@@ -19,6 +22,7 @@ def build_graph_frontier(
             "status": run["status"],
             "readyLoops": [],
             "activeLoops": [],
+            "pausedLoops": [],
             "blockedLoops": [],
             "actions": [],
         }
@@ -34,6 +38,7 @@ def build_graph_frontier(
     actions: list[dict[str, Any]] = []
     ready_loops: list[dict[str, Any]] = []
     active_loops: list[dict[str, Any]] = []
+    paused_loops: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
     reserved_claims = [
         (
@@ -76,6 +81,7 @@ def build_graph_frontier(
                         "action": "DISPATCH_LOOP",
                         "nodeId": state["nodeId"],
                         "loopRef": definition["loop"]["ref"],
+                        "executionPolicy": loop_execution_policy(),
                     }
                 )
         elif state["status"] == "CLAIMED":
@@ -94,6 +100,24 @@ def build_graph_frontier(
                     "action": "CONTINUE_OR_HEARTBEAT_LOOP",
                     "nodeId": state["nodeId"],
                     "operationId": state["operationId"],
+                    "executionPolicy": loop_execution_policy(),
+                }
+            )
+        elif state["status"] == "PAUSED" and kind in LOOP_NODE_KINDS:
+            record = {
+                "nodeId": state["nodeId"],
+                "kind": kind,
+                "workItemId": definition["workItemId"],
+                "attempt": state["attempt"],
+                "previousOwner": state["owner"],
+                "previousOperationId": state["operationId"],
+            }
+            paused_loops.append(record)
+            actions.append(
+                {
+                    "action": "RESUME_LOOP_IN_INDEPENDENT_CONTEXT",
+                    "nodeId": state["nodeId"],
+                    "executionPolicy": loop_execution_policy(),
                 }
             )
         elif state["status"] in {"BLOCKED", "CANCELLED"}:
@@ -147,6 +171,7 @@ def build_graph_frontier(
         "status": run["status"],
         "readyLoops": ready_loops,
         "activeLoops": active_loops,
+        "pausedLoops": paused_loops,
         "blockedLoops": blocked,
         "actions": actions,
     }

@@ -17,6 +17,17 @@ LOOP_TERMINAL_STATUSES = (
 
 LOOP_REFERENCE = re.compile(r"^[a-z0-9][a-z0-9._:/@-]{0,191}$")
 RESOURCE_CLAIM = re.compile(r"^[a-z0-9][a-z0-9._:/@-]{0,255}$")
+_LOOP_EXECUTION_POLICY = {
+    "contextIsolation": "REQUIRED",
+    "agentDispatch": "AUTO_PREFERRED",
+    "manualHandoff": "WHEN_NO_AGENT_CAPACITY",
+    "capacityPressureAction": "PAUSE_AND_HANDOFF",
+    "capacityPressureIsBlocked": False,
+    "capacityPressureIsWorkerLost": False,
+    "capacityPressureRequiresReplan": False,
+    "receivingSessionReusesFrozenGraph": True,
+    "receivingSessionReloadsViaMcp": True,
+}
 
 
 def _non_empty_text(value: object, field: str) -> str:
@@ -134,8 +145,15 @@ def resource_claims_overlap(
     return bool(set(left) & set(right))
 
 
+def loop_execution_policy() -> dict[str, Any]:
+    """Return the host-neutral execution-context policy for every Loop."""
+
+    return deepcopy(_LOOP_EXECUTION_POLICY)
+
+
 __all__ = (
     "LOOP_TERMINAL_STATUSES",
+    "loop_execution_policy",
     "resource_claims_overlap",
     "validate_loop_descriptor",
     "validate_loop_outcome",

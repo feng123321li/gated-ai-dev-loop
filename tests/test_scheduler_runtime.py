@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
+import shutil
 from tempfile import TemporaryDirectory
 from threading import Event, Lock, Thread, current_thread
 import unittest
@@ -27,12 +28,15 @@ from hdg.graph_runtime import (
     rebuild_graph_run,
     record_loop_result,
     record_user_confirmation,
+    resume_loop,
 )
+from hdg.loop_contracts import loop_execution_policy
 from hdg.mcp_tools import tool_definitions
 from hdg.model_core import validate_hierarchy_definition
 from hdg.model_rendering import (
     PROJECTION_TEMPLATES,
     PROJECTION_TEMPLATE_VERSION,
+    TASK_BASELINE_DIRECTORY,
 )
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.repository import SchedulerRepository
@@ -527,6 +531,124 @@ class SchedulerRuntimeTests(unittest.TestCase):
             2,
         )
 
+    def test_loop_capacity_handoff_reuses_the_frozen_graph(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        policy = loop_execution_policy()
+
+        frontier = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(2),
+        )
+        dispatch_action = next(
+            action
+            for action in frontier["actions"]
+            if action["action"] == "DISPATCH_LOOP"
+        )
+        self.assertEqual(
+            dispatch_action["executionPolicy"],
+            policy,
+        )
+
+        context = loop_context(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+        )
+        self.assertEqual(context["executionPolicy"], policy)
+        self.assertEqual(
+            context["humanArtifacts"]["taskBaseline"],
+            (
+                f".layered-delivery/{root_id}/"
+                f"{TASK_BASELINE_DIRECTORY}/t-service.md"
+            ),
+        )
+        self.assertTrue(
+            context["rules"]["coordinatorMustNotExecuteLoopInline"]
+        )
+        self.assertTrue(
+            context["rules"][
+                "capacityPressureMustPauseAndHandoff"
+            ]
+        )
+
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="agent-original",
+            operation_id="op-original",
+            now=at(3),
+        )
+        paused = pause_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id="op-original",
+            now=at(4),
+        )
+        self.assertEqual(paused["status"], "PAUSED")
+        self.assertEqual(paused["executionPolicy"], policy)
+        self.assertEqual(
+            paused["handoff"]["resumeSequence"],
+            [
+                "graph_frontier",
+                "resume_loop",
+                "graph_frontier",
+                "loop_context",
+                "dispatch_loop",
+            ],
+        )
+        self.assertTrue(paused["handoff"]["reuseFrozenGraph"])
+        self.assertFalse(paused["handoff"]["reprepare"])
+        self.assertFalse(paused["handoff"]["refreeze"])
+
+        paused_frontier = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(5),
+        )
+        self.assertEqual(
+            [item["nodeId"] for item in paused_frontier["pausedLoops"]],
+            [node_id],
+        )
+        self.assertIn(
+            {
+                "action": "RESUME_LOOP_IN_INDEPENDENT_CONTEXT",
+                "nodeId": node_id,
+                "executionPolicy": policy,
+            },
+            paused_frontier["actions"],
+        )
+
+        resumed = resume_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            now=at(6),
+        )
+        self.assertEqual(resumed["status"], "READY")
+        self.assertEqual(resumed["executionPolicy"], policy)
+        self.assertIn("REDISPATCH", resumed["nextAction"])
+        ready_frontier = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(7),
+        )
+        self.assertEqual(ready_frontier["pausedLoops"], [])
+        self.assertIn(
+            node_id,
+            [
+                action["nodeId"]
+                for action in ready_frontier["actions"]
+                if action["action"] == "DISPATCH_LOOP"
+            ],
+        )
+
     def test_infrastructure_failure_retries_but_loop_block_does_not(
         self,
     ) -> None:
@@ -655,6 +777,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "action": "DISPATCH_LOOP",
                     "nodeId": loop_node_id("t-api"),
                     "loopRef": "project/java-service-loop@1",
+                    "executionPolicy": loop_execution_policy(),
                 }
             ],
         )
@@ -775,6 +898,19 @@ class SchedulerRuntimeTests(unittest.TestCase):
         control = Path(self.root) / ".layered-delivery"
         projections = control / prepared["rootId"]
         artifact_prefix = f".layered-delivery/{prepared['rootId']}"
+        nodes = hierarchy_nodes(hierarchy)
+        task_nodes = [
+            current
+            for current in nodes
+            if current["definition"]["kind"] == "TASK"
+        ]
+        expected_task_baselines = {
+            current["definition"]["id"]: (
+                f"{artifact_prefix}/{TASK_BASELINE_DIRECTORY}/"
+                f"{current['definition']['id']}.md"
+            )
+            for current in task_nodes
+        }
 
         self.assertEqual(
             prepared["humanArtifacts"],
@@ -783,6 +919,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "hierarchy": f"{artifact_prefix}/hierarchy.json",
                 "graph": f"{artifact_prefix}/graph.json",
                 "state": f"{artifact_prefix}/state.json",
+                "taskBaselines": expected_task_baselines,
             },
         )
         self.assertTrue((control / "scheduler.db").is_file())
@@ -815,7 +952,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertIn("## GROUP/TASK 清单", overview)
         self.assertIn(
             "| 路径 | 类型 | 父级 | 同级依赖（dependsOn） | "
-            "当前状态 | 标题 |",
+            "当前状态 | 标题 | TASK baseline |",
             overview,
         )
         self.assertIn("递归分组（GROUP）", overview)
@@ -824,30 +961,64 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertIn("不预先绑定节点", overview)
         self.assertIn(hierarchy["delivery"]["summary"], overview)
 
-        nodes = hierarchy_nodes(hierarchy)
-        self.assertGreaterEqual(
-            overview.count("dependsOn"),
-            len(nodes),
+        baseline_root = projections / TASK_BASELINE_DIRECTORY
+        self.assertTrue(baseline_root.is_dir())
+        self.assertEqual(
+            {
+                path.name
+                for path in baseline_root.iterdir()
+                if path.is_file()
+            },
+            {
+                f"{current['definition']['id']}.md"
+                for current in task_nodes
+            },
         )
         for current in nodes:
             definition = current["definition"]
             item_id = definition["id"]
             with self.subTest(work_item_id=item_id):
                 self.assertIn(item_id, overview)
-                self.assertIn(definition["summary"], overview)
                 if definition["kind"] == "TASK":
                     loop = definition["execution"]["loop"]
+                    baseline = (
+                        baseline_root / f"{item_id}.md"
+                    ).read_text(encoding="utf-8")
+                    self.assertIn(
+                        f"投影模板版本：{PROJECTION_TEMPLATE_VERSION}",
+                        baseline,
+                    )
+                    self.assertIn(
+                        prepared["hierarchyFingerprint"],
+                        baseline,
+                    )
+                    self.assertIn(
+                        prepared["graphFingerprint"],
+                        baseline,
+                    )
+                    self.assertIn(definition["summary"], baseline)
                     for dependency in definition["execution"][
                         "dependsOn"
                     ]:
-                        self.assertIn(dependency, overview)
-                    self.assertIn(loop["ref"], overview)
-                    self.assertIn(loop["resourceClaims"][0], overview)
+                        self.assertIn(dependency, baseline)
+                    self.assertIn(loop["ref"], baseline)
                     self.assertIn(
+                        loop["resourceClaims"][0],
+                        baseline,
+                    )
+                    self.assertIn(
+                        loop["payload"]["rawAuditMarker"],
+                        baseline,
+                    )
+                    self.assertIn("springboot-tdd", baseline)
+                    self.assertNotIn(definition["summary"], overview)
+                    self.assertNotIn(loop["ref"], overview)
+                    self.assertNotIn(
                         loop["payload"]["rawAuditMarker"],
                         overview,
                     )
                 else:
+                    self.assertIn(definition["summary"], overview)
                     for dependency in definition["decomposition"][
                         "dependsOn"
                     ]:
@@ -901,7 +1072,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "overview.md",
             },
         )
-        self.assertGreaterEqual(PROJECTION_TEMPLATE_VERSION, 1)
+        self.assertGreaterEqual(PROJECTION_TEMPLATE_VERSION, 2)
         prepared = prepare_hierarchy(
             root=self.root,
             hierarchy=auditable_recursive_hierarchy(),
@@ -927,11 +1098,26 @@ class SchedulerRuntimeTests(unittest.TestCase):
             filename: (projection_root / filename).read_bytes()
             for filename in filenames
         }
+        baseline_root = projection_root / TASK_BASELINE_DIRECTORY
+        original_baselines = {
+            path.name: path.read_bytes()
+            for path in baseline_root.iterdir()
+            if path.is_file()
+        }
         for filename in filenames:
             (projection_root / filename).write_text(
                 f"agent-authored replacement: {filename}\n",
                 encoding="utf-8",
             )
+        for filename in original_baselines:
+            (baseline_root / filename).write_text(
+                f"agent-authored replacement: {filename}\n",
+                encoding="utf-8",
+            )
+        (baseline_root / "stale-agent-file.md").write_text(
+            "not controller data\n",
+            encoding="utf-8",
+        )
 
         repository = SchedulerRepository(self.root)
         repository.write_projections(prepared["rootId"])
@@ -940,7 +1126,32 @@ class SchedulerRuntimeTests(unittest.TestCase):
             filename: (projection_root / filename).read_bytes()
             for filename in filenames
         }
+        rebuilt_baselines = {
+            path.name: path.read_bytes()
+            for path in baseline_root.iterdir()
+            if path.is_file()
+        }
         self.assertEqual(rebuilt, original)
+        self.assertEqual(rebuilt_baselines, original_baselines)
+        self.assertNotIn(
+            "stale-agent-file.md",
+            rebuilt_baselines,
+        )
+        shutil.rmtree(baseline_root)
+        baseline_root.write_text(
+            "agent replaced the controller directory\n",
+            encoding="utf-8",
+        )
+        repository.write_projections(prepared["rootId"])
+        self.assertTrue(baseline_root.is_dir())
+        self.assertEqual(
+            {
+                path.name: path.read_bytes()
+                for path in baseline_root.iterdir()
+                if path.is_file()
+            },
+            original_baselines,
+        )
         stored = repository.hierarchy(prepared["rootId"])
         self.assertEqual(
             json.loads(rebuilt["hierarchy.json"]),
@@ -957,6 +1168,44 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertIn(
             f"投影模板版本：{PROJECTION_TEMPLATE_VERSION}",
             rebuilt["overview.md"].decode("utf-8"),
+        )
+
+    def test_reprepare_replaces_the_exact_task_baseline_set(
+        self,
+    ) -> None:
+        original_hierarchy = task_hierarchy()
+        prepared = prepare_hierarchy(
+            root=self.root,
+            hierarchy=original_hierarchy,
+            now=at(0),
+        )
+        baseline_root = (
+            Path(self.root)
+            / ".layered-delivery"
+            / prepared["rootId"]
+            / TASK_BASELINE_DIRECTORY
+        )
+        self.assertTrue((baseline_root / "t-service.md").is_file())
+
+        replacement = task_hierarchy()
+        replacement["root"]["definition"]["id"] = "t-replacement"
+        replacement["root"]["definition"]["title"] = "Replacement task"
+        replacement["root"]["definition"]["summary"] = (
+            "Execute the replacement Task Loop."
+        )
+        updated = prepare_hierarchy(
+            root=self.root,
+            hierarchy=replacement,
+            now=at(1),
+        )
+
+        self.assertEqual(updated["rootId"], prepared["rootId"])
+        self.assertFalse((baseline_root / "t-service.md").exists())
+        replacement_baseline = baseline_root / "t-replacement.md"
+        self.assertTrue(replacement_baseline.is_file())
+        self.assertIn(
+            "Execute the replacement Task Loop.",
+            replacement_baseline.read_text(encoding="utf-8"),
         )
 
     def test_concurrent_disjoint_dispatch_projection_does_not_regress(

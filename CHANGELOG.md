@@ -4,6 +4,13 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.19.0 — 待发布
+
+- 每个 TASK、GROUP Review 和 Delivery Review Loop 默认路由到独立接收上下文；宿主支持原生 Agent 时优先自动派遣，没有可用容量时才人工交接，总调度上下文不再内联执行 Loop。
+- 上下文容量压力或高轮次 Hook 摩擦统一走 `pause_loop → 新接收上下文 resume_loop → 重新 dispatch`；frontier 新增暂停 Loop 与恢复 action，这类执行容量问题不再误报为 `BLOCKED`、`WORKER_LOST` 或 `REPLAN_REQUIRED`。
+- 将 TASK 详细调度基线从 `overview.md` 拆分为 `.layered-delivery/<delivery-id>/task-baselines/<task-id>.md`；每份 baseline 通过固定模板展示双指纹、summary、dependsOn、Loop、资源锁、原始 payload 和共享 Skill Hint。
+- `task-baselines/` 由控制器从 SQLite 权威状态整体原子替换；重新 prepare 删除或改名 TASK 时自动移除旧文件。overview 只保留 Delivery 状态、GROUP/TASK 清单、TASK 运行快照及 Review/最终进度。
+
 ## 0.18.1 — 2026-07-29
 
 发布提交：`f9ef70b`

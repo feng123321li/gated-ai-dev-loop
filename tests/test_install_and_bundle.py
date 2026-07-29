@@ -465,7 +465,7 @@ class InstallAndBundleTests(unittest.TestCase):
                 self.assertEqual(len(responses), 3)
                 self.assertEqual(
                     responses[0]["result"]["serverInfo"],
-                    {"name": "layered-delivery", "version": "0.16.4"},
+                    {"name": "layered-delivery", "version": "0.16.5"},
                 )
                 tools = responses[1]["result"]["tools"]
                 self.assertEqual(len(tools), 38)
@@ -547,7 +547,7 @@ class InstallAndBundleTests(unittest.TestCase):
     def test_readme_documents_current_purpose_and_usage(self) -> None:
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
         self.assertLess(readme.index("## 能做什么"), readme.index("## 怎么用"))
-        self.assertIn("当前版本：**0.16.4**", readme)
+        self.assertIn("当前版本：**0.16.5**", readme)
         self.assertIn("选择 `active` 或 `manual`", readme)
         self.assertIn("直接在对话中说明即可", readme)
         self.assertIn("用户不需要填写 `requiredSkills` 字段", readme)

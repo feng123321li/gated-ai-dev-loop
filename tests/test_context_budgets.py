@@ -7,7 +7,6 @@ from pathlib import Path
 
 from hdg.mcp_tools import tool_definitions
 
-
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PACKAGE = REPOSITORY_ROOT / "src" / "hdg"
 
@@ -29,7 +28,19 @@ def _function_span(name: str, function_name: str) -> int:
 
 class SourceContextBudgetTests(unittest.TestCase):
     def test_repository_facade_stays_within_targeted_reading_budget(self) -> None:
-        self.assertLessEqual(_source_size("repository.py"), 50_000)
+        self.assertLessEqual(_source_size("repository.py"), 12_000)
+
+    def test_repository_responsibility_modules_stay_targeted(self) -> None:
+        budgets = {
+            "repository_hierarchy.py": 12_000,
+            "repository_packages.py": 15_000,
+            "repository_registry.py": 18_000,
+            "repository_registry_validation.py": 18_000,
+            "repository_workspace.py": 12_000,
+        }
+        for name, budget in budgets.items():
+            with self.subTest(module=name):
+                self.assertLessEqual(_source_size(name), budget)
 
     def test_graph_runtime_facade_stays_within_targeted_reading_budget(self) -> None:
         self.assertLessEqual(_source_size("graph_runtime.py"), 15_000)

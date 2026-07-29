@@ -15,8 +15,6 @@ from urllib.parse import unquote, urlsplit
 from . import __version__
 from .errors import GatedLoopError
 from .jsonio import (
-    MAX_JSON_DEPTH,
-    MAX_JSON_STRUCTURAL_TOKENS,
     json_structure_within_limits,
     redact,
     strict_json_loads,

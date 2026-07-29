@@ -7,13 +7,14 @@ import sqlite3
 from typing import Any
 
 from .errors import GatedLoopError, fail
-from .evidence import safe_work_item_id
+from .evidence_validation import safe_work_item_id
 from .jsonio import (
     json_structure_within_limits,
     sha256_bytes,
     strict_json_loads,
 )
-from .repository import GovernanceRepository, timestamp, timestamp_after
+from .repository import GovernanceRepository
+from .repository_contracts import timestamp, timestamp_after
 
 
 MAX_PAYLOAD_BYTES = 64 * 1024 * 1024

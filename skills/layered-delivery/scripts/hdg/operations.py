@@ -12,8 +12,12 @@ from .operation_interaction import execute_interaction_operation
 from .operation_support import (
     NOT_HANDLED,
     OperationContext,
-    _bounded_event_page,
-    _with_next_frontier,
+)
+
+
+__all__ = (
+    "OperationContext",
+    "execute_operation",
 )
 
 

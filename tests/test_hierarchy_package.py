@@ -8,7 +8,7 @@ from unittest.mock import patch
 from hdg.acceptance import record_work_item_gate
 from hdg.errors import GatedLoopError
 from hdg.execution import build_task_context, dispatch_task, list_ready_tasks, record_task_result
-from hdg import repository, repository_projections
+from hdg import repository_projections
 from hdg.planning import freeze_hierarchy, prepare_hierarchy, refresh_work_item_projections
 from hdg.repository import GovernanceRepository
 
@@ -337,7 +337,7 @@ class HierarchyPackageTests(unittest.TestCase):
                 development_mode="active",
                 confirmed=True,
             )
-            real_atomic_write = repository.atomic_write
+            real_atomic_write = repository_projections.atomic_write
 
             def fail_bound_context(
                 target: Path,

@@ -16,6 +16,7 @@ from hdg import (
     operations,
 )
 from hdg.errors import GatedLoopError
+from hdg.jsonio import MAX_JSON_DEPTH
 from hdg.mcp_tools import tool_definitions
 
 
@@ -867,9 +868,9 @@ class McpServerProtocolTests(unittest.TestCase):
     def test_excessive_json_nesting_is_rejected_without_stopping_server(
         self,
     ) -> None:
-        too_deep = "[" * (mcp_server.MAX_JSON_DEPTH + 1)
+        too_deep = "[" * (MAX_JSON_DEPTH + 1)
         too_deep += "0"
-        too_deep += "]" * (mcp_server.MAX_JSON_DEPTH + 1)
+        too_deep += "]" * (MAX_JSON_DEPTH + 1)
         initialize = rpc_request(
             "initialize",
             request_id=9,

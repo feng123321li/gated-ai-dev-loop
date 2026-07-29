@@ -24,12 +24,14 @@ from .graph_projections import (
 )
 from .svg_graphs import render_delivery_graph_svg_assets, render_runtime_policy_svg_assets
 from .jsonio import canonical_json
-from .model import (
+from .model_core import (
+    validate_hierarchy_definition,
+)
+from .model_rendering import (
     render_development_plan,
     render_hierarchy_plan,
     render_work_item_baseline,
     raw_definition,
-    validate_hierarchy_definition,
 )
 from .projections import (
     render_acceptance_report,
@@ -125,8 +127,8 @@ def _graph_projection_snapshot(
     stored_graph: dict[str, Any],
     graph_run: dict[str, Any] | None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
-    from .graph_runtime import (
-        build_graph_frontier,
+    from .graph_frontier import build_graph_frontier
+    from .graph_state import (
         critical_path,
         derive_node_states,
         materialized_graph_states,

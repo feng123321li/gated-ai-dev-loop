@@ -649,9 +649,9 @@ Graph 会消费同一 `parallelGroup` 中全部范围互斥 Task。执行平台�
 
 | 文件 | 改动 |
 |---|---|
-| `src/hdg/model_core.py`、`model_rendering.py` 与 `model.py` | 分离层级 definition/依赖合法性校验与 Markdown 渲染，并由稳定 façade 重导出 |
+| `src/hdg/model_core.py`、`model_rendering.py` 与 `model.py` | 分离层级 definition/依赖合法性校验与 Markdown 渲染；内部调用直连职责模块，稳定 façade 只暴露显式公共 API |
 | `src/hdg/planning.py` | prepare 时编译图；freeze 时绑定 graph fingerprint 并创建 run |
-| `src/hdg/repository_contracts.py`、`repository_sqlite.py`、`repository_graph_store.py`、`repository_evidence_store.py`、`repository_projections.py`、`repository.py` | 分离 schema、SQLite、图存储、evidence 恢复、投影写入，并由稳定 façade 保持调用兼容 |
+| `src/hdg/repository_contracts.py`、`repository_sqlite.py`、`repository_workspace.py`、`repository_hierarchy.py`、`repository_registry_validation.py`、`repository_registry.py`、`repository_packages.py`、`repository_graph_store.py`、`repository_evidence_store.py`、`repository_projections.py`、`repository.py` | 分离 schema、SQLite、工作区、层级查询、registry 校验、registry 事务、package、图存储、evidence 恢复和投影写入；内部调用直连职责模块，`repository.py` 只稳定保留仓储类装配入口 |
 | `src/hdg/execution.py` | `_task_ready` 改为 graph frontier 的 Task 视图；dispatch/result 驱动 node event |
 | `src/hdg/acceptance.py` | Task/Capability/Delivery gate 统一映射到 gate node |
 | `src/hdg/remediation.py` | 根据显式边计算失效闭包并创建下一 attempt |
@@ -668,6 +668,7 @@ Graph 会消费同一 `parallelGroup` 中全部范围互斥 Task。执行平台�
 |---|---|
 | `tests/test_graph_model.py` | 节点/边精确字段、确定性指纹、未知类型、环路、非法 join、关键路径 fan-in |
 | `tests/test_graph_runtime.py` | frontier 看板、并行、fan-in、gate、review、confirmation、bound evidence、事件回放与重建 |
+| `tests/test_module_boundaries.py` | 五个稳定 façade 的显式公共 API，以及源码内部不得绕经聚合 façade 获取实现 |
 | `tests/test_runtime_fsm.py` | runtime policy、流程图、失败分类、自动重试耗尽、租约失联恢复、暂停/恢复与取消 |
 | `tests/test_remediation.py` | Task、依赖消费者和聚合 gate 的失效闭包与下一 attempt |
 

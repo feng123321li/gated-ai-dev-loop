@@ -260,6 +260,26 @@ _TOOLS = (
         idempotent=True,
     ),
     _tool(
+        "hierarchy_contract",
+        "Read hierarchy planning contract",
+        (
+            "Return the exact on-demand schema-v3 inputSchema and one valid "
+            "example for a planned hierarchy."
+        ),
+        {
+            "root_kind": _string(
+                "Planned hierarchy root kind.",
+                enum=["TASK", "CAPABILITY", "DELIVERY"],
+            ),
+            "input_mode": _string(
+                "Planning input shape to return.",
+                enum=["COMPACT_TASK", "FULL_HIERARCHY"],
+            ),
+        },
+        read_only=True,
+        idempotent=True,
+    ),
+    _tool(
         "begin_payload_upload",
         "Begin staged payload upload",
         (
@@ -350,18 +370,12 @@ _TOOLS = (
         "Validate and persist one complete reviewable requirement hierarchy before it is frozen.",
         {
             "hierarchy": _payload_capable_object(
-                "Complete schema-v3 Task, Capability, or Delivery hierarchy, "
-                "where each definition may omit requiredSkills or use an "
-                "empty array when no Skill gate is required; when the user "
-                "explicitly names a development-only Skill, register it as "
-                "DEVELOPMENT only without preloading, recursively expanding, or adding GATE; "
-                "use the narrowest practical module-level scope such as module/** "
-                "and keep modifications/removals exact in fileChanges; "
-                "a root LIGHT Task may use the compactLightTask v3 shorthand, "
-                "and ADD-only generatedFileRoots may authorize unpredictable "
-                "generated filenames; "
-                "for a genuinely oversized hierarchy, pass an exact READY "
-                "payloadRef bound to this tool."
+                "Complete schema-v3 hierarchy or exact READY payloadRef; call "
+                "hierarchy_contract first. requiredSkills may be omitted or "
+                "empty; named development-only Skills stay DEVELOPMENT only. "
+                "Use module-level scope, exact modifications/removals in "
+                "fileChanges, ADD-only generatedFileRoots, and compactTask "
+                "for a root LIGHT or FULL Task."
             ),
             "host_runtime": _string(
                 "Lowercase host Agent runtime identifier.",

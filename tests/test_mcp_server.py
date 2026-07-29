@@ -22,6 +22,7 @@ from hdg.mcp_tools import tool_definitions
 
 EXPECTED_TOOL_PROPERTIES = {
     "workspace_status": set(),
+    "hierarchy_contract": {"root_kind", "input_mode"},
     "begin_payload_upload": {
         "upload_id",
         "target_tool",
@@ -97,6 +98,7 @@ EXPECTED_TOOL_PROPERTIES = {
 
 READ_ONLY_TOOLS = {
     "workspace_status",
+    "hierarchy_contract",
     "payload_upload_status",
     "ready_tasks",
     "graph_status",
@@ -278,7 +280,7 @@ class McpServerProtocolTests(unittest.TestCase):
         self.assertIsNone(response)
         self.assertIs(session.initialized, True)
 
-    def test_tools_list_exposes_37_strict_snake_case_tools(self) -> None:
+    def test_tools_list_exposes_38_strict_snake_case_tools(self) -> None:
         response = mcp_server.handle_message(
             rpc_request("tools/list"),
             session=ready_session(),
@@ -288,7 +290,7 @@ class McpServerProtocolTests(unittest.TestCase):
         tools = response["result"]["tools"]
         by_name = {tool["name"]: tool for tool in tools}
 
-        self.assertEqual(len(tools), 37)
+        self.assertEqual(len(tools), 38)
         self.assertIn("record_skill_activation", by_name)
         self.assertIn("record_skill_conformance", by_name)
         hierarchy_description = by_name["prepare_hierarchy"][
@@ -297,25 +299,34 @@ class McpServerProtocolTests(unittest.TestCase):
         available_skills_schema = by_name["prepare_hierarchy"][
             "inputSchema"
         ]["properties"]["available_skills"]
-        self.assertIn("may omit requiredSkills", hierarchy_description)
-        self.assertIn("empty array", hierarchy_description)
+        contract_schema = by_name["hierarchy_contract"]["inputSchema"]
+        self.assertEqual(
+            contract_schema["properties"]["root_kind"]["enum"],
+            ["TASK", "CAPABILITY", "DELIVERY"],
+        )
+        self.assertEqual(
+            contract_schema["properties"]["input_mode"]["enum"],
+            ["COMPACT_TASK", "FULL_HIERARCHY"],
+        )
+        self.assertIn("requiredSkills may be omitted", hierarchy_description)
+        self.assertIn("empty", hierarchy_description)
         self.assertIn(
-            "user explicitly names a development-only Skill",
+            "development-only Skills",
             hierarchy_description,
         )
         self.assertIn(
-            "DEVELOPMENT only without preloading, recursively expanding, or adding GATE",
+            "DEVELOPMENT only",
             hierarchy_description,
         )
         self.assertIn(
-            "use the narrowest practical module-level scope",
+            "module-level scope",
             hierarchy_description,
         )
         self.assertIn(
-            "keep modifications/removals exact in fileChanges",
+            "exact modifications/removals in fileChanges",
             hierarchy_description,
         )
-        self.assertIn("compactLightTask v3 shorthand", hierarchy_description)
+        self.assertIn("compactTask", hierarchy_description)
         self.assertIn("ADD-only generatedFileRoots", hierarchy_description)
         self.assertEqual(available_skills_schema["type"], "object")
         self.assertEqual(

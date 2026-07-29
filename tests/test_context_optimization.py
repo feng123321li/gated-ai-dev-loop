@@ -87,6 +87,40 @@ class ContextOptimizationTests(unittest.TestCase):
                 [],
             )
 
+    def test_compact_task_supports_full_and_light_gate_levels(self) -> None:
+        for gate_level in ("LIGHT", "FULL"):
+            with self.subTest(gate_level=gate_level):
+                compact = self._compact_light_task()["compactLightTask"]
+                hierarchy = {
+                    "schemaVersion": 3,
+                    "compactTask": {
+                        **compact,
+                        "id": f"t-compact-{gate_level.lower()}",
+                        "gateLevel": gate_level,
+                    },
+                }
+                with tempfile.TemporaryDirectory() as temporary:
+                    prepared = prepare_hierarchy(
+                        root=temporary,
+                        hierarchy=hierarchy,
+                        host_runtime="codex",
+                    )
+                    repository = GovernanceRepository(temporary)
+                    registry = repository.read_registry()
+                    entry = repository.item_by_id(
+                        registry,
+                        prepared["rootId"],
+                    )
+                    definition = repository.read_package(
+                        registry,
+                        entry,
+                    )[0]
+
+                self.assertEqual(prepared["inputMode"], "COMPACT_TASK")
+                self.assertEqual(definition["gateLevel"], gate_level)
+                self.assertEqual(definition["schemaVersion"], 3)
+                self.assertEqual(definition["kind"], "TASK")
+
     def test_generated_roots_require_explicit_add_only_file_evidence(
         self,
     ) -> None:

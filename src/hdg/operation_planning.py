@@ -7,6 +7,7 @@ from .planning import (
     prepare_hierarchy,
     refresh_work_item_projections,
 )
+from .hierarchy_contract import hierarchy_contract
 from .repository import GovernanceRepository
 from .operation_support import (
     NOT_HANDLED,
@@ -26,6 +27,11 @@ def execute_planning_operation(
 
     if name == "workspace_status":
         return GovernanceRepository(root).inspect_workspace_state()
+    if name == "hierarchy_contract":
+        return hierarchy_contract(
+            root_kind=arguments["root_kind"],
+            input_mode=arguments["input_mode"],
+        )
     if name == "prepare_hierarchy":
         return prepare_hierarchy(
             root=root,

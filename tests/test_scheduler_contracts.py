@@ -180,7 +180,9 @@ class HierarchyContractTests(unittest.TestCase):
 
 
 class McpSurfaceTests(unittest.TestCase):
-    def test_tool_schemas_are_closed_and_confirmations_are_human(self) -> None:
+    def test_tool_schemas_are_closed_and_only_destructive_calls_prompt(
+        self,
+    ) -> None:
         tools = tool_definitions()
         self.assertTrue(tools)
         self.assertTrue(
@@ -199,7 +201,6 @@ class McpSurfaceTests(unittest.TestCase):
         self.assertEqual(
             human,
             {
-                "record_user_confirmation",
                 "cancel_graph_run",
             },
         )
@@ -224,6 +225,10 @@ class McpSurfaceTests(unittest.TestCase):
         final_confirmation = by_name["record_user_confirmation"][
             "inputSchema"
         ]["properties"]["confirmed"]
+        self.assertNotIn(
+            "_meta",
+            by_name["record_user_confirmation"],
+        )
         self.assertEqual(final_confirmation["type"], "boolean")
         self.assertIs(final_confirmation["const"], True)
 

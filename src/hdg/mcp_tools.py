@@ -318,7 +318,6 @@ TOOLS = (
                 "summary",
             ],
         ),
-        human=True,
     ),
     _tool(
         "cancel_graph_run",

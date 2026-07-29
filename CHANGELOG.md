@@ -4,7 +4,9 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
-## 0.19.0 — 待发布
+## 0.19.0 — 2026-07-29
+
+发布提交：`df2955c`
 
 - 每个 TASK、GROUP Review 和 Delivery Review Loop 默认路由到独立接收上下文；宿主支持原生 Agent 时优先自动派遣，没有可用容量时才人工交接，总调度上下文不再内联执行 Loop。
 - 上下文容量压力或高轮次 Hook 摩擦统一走 `pause_loop → 新接收上下文 resume_loop → 重新 dispatch`；frontier 新增暂停 Loop 与恢复 action，这类执行容量问题不再误报为 `BLOCKED`、`WORKER_LOST` 或 `REPLAN_REQUIRED`。

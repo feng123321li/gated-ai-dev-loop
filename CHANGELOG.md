@@ -6,7 +6,7 @@
 
 ## 0.17.0 — 2026-07-29
 
-发布提交：待发布
+发布提交：`55b13ad`
 
 - 将 `layered-delivery` 收敛为外层 Graph Scheduler：Task 和最终审查统一为可插拔 Loop，Capability/Delivery 只保留 Join，最终仍由用户确认。
 - 删除外层 `scope`、`developmentPlan`、test command、Gate level、required Skill stage、文件授权、evidence hydration、remediation 和 Gate→development 路由；实现、测试、Gate、修正及 Skill 调用由各 Task Loop 内部协议负责。

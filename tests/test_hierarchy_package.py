@@ -8,7 +8,7 @@ from unittest.mock import patch
 from hdg.acceptance import record_work_item_gate
 from hdg.errors import GatedLoopError
 from hdg.execution import build_task_context, dispatch_task, list_ready_tasks, record_task_result
-from hdg import repository
+from hdg import repository, repository_projections
 from hdg.planning import freeze_hierarchy, prepare_hierarchy, refresh_work_item_projections
 from hdg.repository import GovernanceRepository
 
@@ -348,7 +348,11 @@ class HierarchyPackageTests(unittest.TestCase):
                     raise OSError("simulated context write failure")
                 real_atomic_write(target, content, **kwargs)
 
-            with patch("hdg.repository.atomic_write", side_effect=fail_bound_context):
+            with patch.object(
+                repository_projections,
+                "atomic_write",
+                side_effect=fail_bound_context,
+            ):
                 with self.assertRaises(GatedLoopError) as raised:
                     dispatch_task(
                         root=temporary,

@@ -4,7 +4,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from hdg import mcp_tools, operations
+from hdg import (
+    mcp_tools,
+    operation_review,
+    operation_support,
+    operations,
+)
 from hdg.acceptance import accept_work_item, record_acceptance
 from hdg.errors import GatedLoopError
 from hdg.execution import dispatch_task, record_task_result
@@ -391,12 +396,12 @@ class ReviewBlockedTests(unittest.TestCase):
         )
         with (
             patch.object(
-                operations,
+                operation_review,
                 "record_acceptance",
                 return_value={"action": "REVIEW_BLOCKED"},
             ) as record,
             patch.object(
-                operations,
+                operation_support,
                 "get_graph_frontier",
                 return_value={"responseMode": "COMPACT"},
             ),

@@ -10,7 +10,13 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from hdg import mcp_server, mcp_tools, operations
+from hdg import (
+    mcp_server,
+    mcp_tools,
+    operation_graph,
+    operation_interaction,
+    operations,
+)
 from hdg.errors import GatedLoopError
 from hdg.jsonio import canonical_json, strict_json_loads
 from hdg.mcp_tools import call_tool, tool_definitions
@@ -238,7 +244,7 @@ class PayloadHardeningTests(unittest.TestCase):
         self.assertNotIn("value", raised.exception.details)
         self.assertEqual(raised.exception.details["maxLength"], 128)
 
-    def test_payload_reference_has_an_exact_nested_schema(self) -> None:
+    def test_payload_reference_schema_uses_compact_opaque_handoff(self) -> None:
         tools = {
             tool["name"]: tool
             for tool in tool_definitions()
@@ -251,15 +257,11 @@ class PayloadHardeningTests(unittest.TestCase):
                 schema = tools[tool_name]["inputSchema"]["properties"][field]
                 reference_branch = schema["oneOf"][0]
                 payload_ref = reference_branch["properties"]["payloadRef"]
-                self.assertEqual(
-                    set(payload_ref["required"]),
-                    {"uploadId", "generationId", "sha256", "sizeBytes"},
-                )
-                self.assertIs(payload_ref["additionalProperties"], False)
-                self.assertEqual(
-                    payload_ref["properties"]["generationId"]["maxLength"],
-                    32,
-                )
+                self.assertEqual(payload_ref["type"], "object")
+                self.assertNotIn("properties", payload_ref)
+                self.assertIn("finalize_payload_upload", payload_ref["description"])
+                self.assertEqual(reference_branch["required"], ["payloadRef"])
+                self.assertIs(reference_branch["additionalProperties"], False)
 
     def test_finalize_returns_no_payload_keys_or_payload_content(self) -> None:
         marker = "CANARY_PAYLOAD_KEY_MUST_NOT_RETURN"
@@ -705,31 +707,12 @@ class PermissionAndStorageHardeningTests(unittest.TestCase):
                     True,
                 )
 
-    def test_tool_output_schema_keeps_only_the_shared_envelope_discriminator(
+    def test_tool_catalog_omits_optional_repeated_output_schema(
         self,
     ) -> None:
-        schemas = {
-            json.dumps(tool["outputSchema"], sort_keys=True)
-            for tool in tool_definitions()
-        }
-        self.assertEqual(len(schemas), 1)
-        schema = tool_definitions()[0]["outputSchema"]
-        self.assertEqual(schema["type"], "object")
-        self.assertEqual(
-            schema,
-            {
-                "type": "object",
-                "properties": {"ok": {"type": "boolean"}},
-                "required": ["ok"],
-            },
-        )
-        self.assertLess(
-            sum(
-                len(json.dumps(tool["outputSchema"]))
-                for tool in tool_definitions()
-            ),
-            4000,
-        )
+        for tool in tool_definitions():
+            with self.subTest(tool=tool["name"]):
+                self.assertNotIn("outputSchema", tool)
 
 
 class BoundedQueryTests(unittest.TestCase):
@@ -740,8 +723,8 @@ class BoundedQueryTests(unittest.TestCase):
             {"eventId": 3, "eventType": "THREE"},
         ]
         with patch.object(
-            operations,
-            "list_graph_events",
+                operation_graph,
+                "list_graph_events",
             return_value=events,
         ) as mocked_list:
             result = operations.execute_operation(
@@ -770,8 +753,8 @@ class BoundedQueryTests(unittest.TestCase):
             {"eventId": 11, "eventType": "TWO"},
         ]
         with patch.object(
-            operations,
-            "list_interactions",
+                operation_interaction,
+                "list_interactions",
             return_value=events,
         ) as mocked_list:
             result = operations.execute_operation(

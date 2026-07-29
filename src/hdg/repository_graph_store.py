@@ -7,7 +7,7 @@ from typing import Any
 
 from .constants import SCHEMA_VERSION
 from .errors import fail
-from .evidence import (
+from .evidence_validation import (
     evidence_record,
     valid_timestamp,
 )
@@ -560,7 +560,7 @@ def sync_graph_runs(
     *,
     root_ids: set[str] | None = None,
 ) -> None:
-    from .graph_runtime import replay_graph_events
+    from .graph_state import replay_graph_events
 
     connection = self._active_connection()
     roots_with_runs = [
@@ -627,7 +627,7 @@ def sync_graph_runs(
             )
 
 def rebuild_graph_run_from_events(self, root_id: str) -> dict[str, Any]:
-    from .graph_runtime import replay_graph_events
+    from .graph_state import replay_graph_events
 
     connection = self._active_connection()
     stored = self.read_graph_definition(root_id)

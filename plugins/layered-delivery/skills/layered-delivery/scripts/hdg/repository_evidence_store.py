@@ -5,7 +5,7 @@ from copy import deepcopy
 from typing import Any
 
 from .errors import GatedLoopError, fail
-from .evidence import (
+from .evidence_validation import (
     evidence_record,
     valid_evidence_record,
     valid_gate_artifact,
@@ -20,7 +20,7 @@ from .graph_model import (
     review_node_id,
 )
 from .jsonio import canonical_json, sha256_bytes, strict_json_loads
-from .model import (
+from .model_core import (
     WORK_ITEM_SKILL_STAGES,
     work_item_baseline_fingerprint,
 )

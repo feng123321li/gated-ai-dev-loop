@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from .constants import SCHEMA_VERSION
 from .errors import fail
-from .evidence import valid_evidence_record, valid_timestamp
+from .evidence_validation import valid_evidence_record, valid_timestamp
 
 
 WORK_ITEM_DATABASE_FILE = "governance.sqlite3"

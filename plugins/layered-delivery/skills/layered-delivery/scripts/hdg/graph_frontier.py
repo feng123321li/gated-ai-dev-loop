@@ -4,7 +4,7 @@ from typing import Any
 
 from .constants import SCHEMA_VERSION
 from .errors import fail
-from .model import required_skill_policy, scope_patterns_overlap
+from .model_core import required_skill_policy, scope_patterns_overlap
 from .graph_contracts import (
     evidence_contract_ref,
     mcp_call,
@@ -44,7 +44,7 @@ def build_graph_frontier(
     *,
     at: str | None = None,
 ) -> dict[str, Any]:
-    from .repository import timestamp
+    from .repository_contracts import timestamp
 
     graph = stored["graph"]
     at = at or timestamp(repository.now)
@@ -658,7 +658,7 @@ def get_graph_frontier(
     else:
         states = materialized_graph_states(stored["graph"], run, registry)
         frontier_source = "SNAPSHOT"
-    from .repository import timestamp
+    from .repository_contracts import timestamp
 
     frontier = build_graph_frontier(
         repository,

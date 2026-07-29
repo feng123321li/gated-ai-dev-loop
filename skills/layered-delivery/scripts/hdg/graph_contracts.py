@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .errors import fail
-from .evidence import (
+from .evidence_contracts import (
     gate_evidence_contract,
     task_result_evidence_contract,
     validation_remediation_evidence_contract,

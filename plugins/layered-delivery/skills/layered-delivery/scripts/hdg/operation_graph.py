@@ -6,12 +6,14 @@ from .execution import list_ready_tasks
 from .graph_runtime import (
     advance_graph,
     cancel_graph_run,
-    get_evidence_contract,
-    get_graph_frontier,
-    get_graph_replay,
-    get_graph_status,
     list_graph_events,
     rebuild_graph_run,
+)
+from .graph_frontier import get_graph_frontier
+from .graph_queries import (
+    get_evidence_contract,
+    get_graph_replay,
+    get_graph_status,
 )
 from .operation_support import (
     NOT_HANDLED,

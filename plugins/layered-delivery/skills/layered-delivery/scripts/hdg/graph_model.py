@@ -6,7 +6,7 @@ from typing import Any
 from .constants import SCHEMA_VERSION
 from .errors import fail
 from .jsonio import fingerprint
-from .model import safe_id
+from .model_core import safe_id
 
 
 GRAPH_NODE_KINDS = (

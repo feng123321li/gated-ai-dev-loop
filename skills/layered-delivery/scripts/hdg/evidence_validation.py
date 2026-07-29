@@ -470,7 +470,7 @@ def valid_validation_remediation_artifact(
     ):
         return False
 
-    from .model import WILDCARD, normalize_scope_pattern
+    from .model_core import WILDCARD, normalize_scope_pattern
 
     paths: list[str] = []
     for change in file_changes:

@@ -5,7 +5,7 @@ from typing import Any
 
 from .constants import MAX_MCP_EVENT_PAGE_SIZE
 from .errors import GatedLoopError
-from .graph_runtime import get_graph_frontier
+from .graph_frontier import get_graph_frontier
 
 
 NOT_HANDLED = object()

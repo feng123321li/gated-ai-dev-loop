@@ -6,7 +6,8 @@ from typing import Any
 from .constants import SCHEMA_VERSION
 from .errors import fail
 from .host_runtime import is_agent_runtime
-from .repository import GovernanceRepository, timestamp
+from .repository import GovernanceRepository
+from .repository_contracts import timestamp
 
 
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")

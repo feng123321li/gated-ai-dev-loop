@@ -4,7 +4,6 @@ import json
 import posixpath
 from typing import Any
 
-from .constants import SCHEMA_VERSION
 from .display import (
     DISPLAY_TIMEZONE_DESCRIPTION,
     DISPLAY_TIMEZONE_LABEL,

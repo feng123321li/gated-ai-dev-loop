@@ -6,7 +6,7 @@ from typing import Any
 
 from .constants import SCHEMA_VERSION
 from .errors import fail
-from .evidence import FINGERPRINT, concrete_skill_evidence
+from .evidence_validation import FINGERPRINT, concrete_skill_evidence
 from .graph_model import execution_node_id, gate_node_id, review_node_id
 from .host_runtime import (
     is_agent_runtime,
@@ -14,7 +14,8 @@ from .host_runtime import (
     require_host_runtime,
 )
 from .jsonio import canonical_json, sha256_bytes
-from .repository import GovernanceRepository, timestamp
+from .repository import GovernanceRepository
+from .repository_contracts import timestamp
 
 
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,191}$")

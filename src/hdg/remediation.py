@@ -4,15 +4,16 @@ from copy import deepcopy
 from typing import Any
 
 from .errors import fail
-from .evidence import (
+from .evidence_contracts import validation_remediation_evidence_contract
+from .evidence_validation import (
     evidence_record,
     valid_validation_remediation_artifact,
     validation_remediation_artifact_issues,
-    validation_remediation_evidence_contract,
 )
 from .graph_model import execution_node_id
-from .model import scope_patterns_overlap
-from .repository import GovernanceRepository, timestamp
+from .model_core import scope_patterns_overlap
+from .repository import GovernanceRepository
+from .repository_contracts import timestamp
 
 
 def _hierarchy_chain(

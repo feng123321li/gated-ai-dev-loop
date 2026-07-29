@@ -398,10 +398,15 @@ src/hdg/
 ├── graph_projections.py     # 双语图和运行时间线
 ├── repository_contracts.py  # SQLite schema 合同与共享轻量校验
 ├── repository_sqlite.py     # SQLite 连接、建库与 schema 校验
+├── repository_workspace.py  # 工作区识别、自托管保护与控制面初始化
+├── repository_hierarchy.py  # registry 层级查询与隔离边界
+├── repository_registry_validation.py # registry 合同与历史 evidence 隔离校验
+├── repository_registry.py   # registry 读取、事务和增量投影调度
+├── repository_packages.py   # hierarchy package 物化、读取与进度计算
 ├── repository_graph_store.py # 图定义、run、event 与 evidence 存储
 ├── repository_evidence_store.py # interaction 与 evidence 恢复校验
 ├── repository_projections.py # Markdown/SVG 投影和报告写入
-├── repository.py            # 稳定 repository façade 与 registry/package
+├── repository.py            # 小型 GovernanceRepository 装配入口
 ├── planning.py              # prepare、freeze 与 retry
 ├── execution.py             # Task 派发、上下文和结果写回
 ├── acceptance.py            # gate、review 与 confirmation
@@ -414,11 +419,20 @@ src/hdg/
 
 `scripts/build_skill.py` 会把 MCP 运行时从 `src/hdg` 重建到 `skills/layered-delivery/scripts/hdg`，再生成 Claude/Codex Plugin 载荷。产物不包含 CLI 模块或入口。
 
+源码内部不通过 `model.py`、`evidence.py` 或其他聚合 façade 获取实现函数，而是直接导入
+`model_core.py`、`evidence_validation.py`、`graph_frontier.py` 等职责模块。稳定 façade 只用
+显式 `__all__` 暴露 29 个经过回归冻结的公共入口；`repository.py` 继续拥有
+`GovernanceRepository`，`graph_runtime.py` 继续拥有图恢复、推进和取消命令。这样 Agent
+可以从调用点直接定位实现文件，也不会把私有 helper 误当成跨模块 API。
+
 `tests/test_context_budgets.py` 对稳定 façade 的源码大小、operation dispatcher
 长度和完整 `tools/list` 序列化大小设置回归预算。工具目录省略 MCP 规范允许省略且
 与 annotations 重复的顶层 `title`、共享 `outputSchema`，大 payload 的输入 schema
 只声明必须原样传递 `finalize_payload_upload` 返回的 `payloadRef`；服务端仍对该
 引用执行完整绑定和摘要校验。
+
+`tests/test_module_boundaries.py` 冻结五个稳定 façade 的公共符号集合，并静态拒绝源码
+重新从聚合入口导入实现符号。
 
 ## 15. 项目边界
 

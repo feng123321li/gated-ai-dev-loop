@@ -1,41 +1,14 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 from typing import Any
 
-from .constants import SCHEMA_VERSION
 from .errors import fail
-from .evidence import (
-    confirmation_evidence_contract,
-    gate_evidence_contract,
-    review_evidence_contract,
-    task_result_evidence_contract,
-    validation_remediation_evidence_contract,
-)
-from .graph_model import graph_summary, runtime_transition
-from .jsonio import fingerprint
-from .model import required_skill_policy, scope_patterns_overlap
-from .graph_contracts import (
-    _gate_contract,
-    _remediation_contract,
-    _result_contract,
-    evidence_contract_ref,
-    mcp_call,
-)
 
 from .graph_state import (
-    materialized_graph_states,
-    retry_budget,
     failure_routing_decision,
     hierarchy_root_entry,
     is_descendant,
-    _base_node_state,
-    derive_node_states,
-    _set_replay_node,
-    _refresh_replay_readiness,
-    _new_replay_attempts,
     replay_graph_events,
-    replay_mismatches,
     critical_path,
     _runtime_time,
     _runtime_timestamp_after,
@@ -50,11 +23,22 @@ from .graph_queries import (
 )
 
 from .graph_frontier import (
-    _task_write_scope,
-    build_graph_frontier,
-    compact_graph_frontier,
     get_graph_frontier,
 )
+
+
+__all__ = (
+    "advance_graph",
+    "cancel_graph_run",
+    "critical_path",
+    "get_evidence_contract",
+    "get_graph_frontier",
+    "get_graph_replay",
+    "get_graph_status",
+    "list_graph_events",
+    "rebuild_graph_run",
+)
+
 
 def rebuild_graph_run(
     *,
@@ -65,7 +49,8 @@ def rebuild_graph_run(
 ) -> dict[str, Any]:
     if not confirmed:
         fail("CONFIRMATION_REQUIRED", "Graph snapshot rebuild requires explicit confirmation")
-    from .repository import GovernanceRepository, timestamp
+    from .repository import GovernanceRepository
+    from .repository_contracts import timestamp
 
     repository = GovernanceRepository(root)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
@@ -110,7 +95,8 @@ def advance_graph(
     now: object = None,
 ) -> dict[str, Any]:
     """Apply deterministic controller routes such as expired-claim recovery."""
-    from .repository import GovernanceRepository, timestamp
+    from .repository import GovernanceRepository
+    from .repository_contracts import timestamp
 
     repository = GovernanceRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
@@ -243,7 +229,8 @@ def cancel_graph_run(
 ) -> dict[str, Any]:
     if not confirmed:
         fail("CONFIRMATION_REQUIRED", "Graph run cancellation requires explicit confirmation")
-    from .repository import GovernanceRepository, timestamp
+    from .repository import GovernanceRepository
+    from .repository_contracts import timestamp
 
     repository = GovernanceRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)

@@ -6,10 +6,10 @@ from typing import Any
 
 from .constants import MAX_IDENTIFIER_LENGTH, MAX_MCP_EVENT_PAGE_SIZE
 from .errors import GatedLoopError
-from .evidence import safe_work_item_id
-from .operations import OperationContext, execute_operation
+from .evidence_validation import safe_work_item_id
+from .operations import execute_operation
+from .operation_support import OperationContext
 from .payloads import (
-    MAX_PAYLOAD_BYTES,
     MAX_PAYLOAD_CHUNK_BYTES,
     MAX_UPLOAD_ID_LENGTH,
     MAX_PAYLOAD_CHUNKS,

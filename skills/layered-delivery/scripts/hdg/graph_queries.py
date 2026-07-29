@@ -4,7 +4,7 @@ from typing import Any
 
 from .constants import SCHEMA_VERSION
 from .errors import fail
-from .evidence import (
+from .evidence_contracts import (
     confirmation_evidence_contract,
     review_evidence_contract,
 )

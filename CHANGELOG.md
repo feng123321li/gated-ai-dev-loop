@@ -6,7 +6,7 @@
 
 ## 0.20.1 — 2026-07-29
 
-发布提交：待发布
+发布提交：`a644bf1`
 
 - 修复用户已经明确接受完整验收报告后，`record_user_confirmation` 仍被 Codex manifest、Claude `PreToolUse` Hook 与 MCP `requiresUserInteraction` 重复触发权限弹窗的问题；用户的明确接受现在直接授权控制器写入最终确认事件。
 - 保留最终用户确认边界、`confirmed: true` 严格布尔校验和 Review 成功前置条件；本次调整不会自动接受交付，也不授权提交、推送、合并、迁移或发布。

@@ -9,6 +9,7 @@ from hdg.graph_model import (
     confirmation_node_id,
     graph_fingerprint,
     graph_summary,
+    group_review_node_id,
     join_node_id,
     loop_node_id,
     review_node_id,
@@ -43,10 +44,7 @@ def skill_hint(
     name: str,
     purpose: str = "Prefer this Skill when it fits the active Loop.",
 ) -> dict:
-    return {
-        "name": name,
-        "purpose": purpose,
-    }
+    return {"name": name, "purpose": purpose}
 
 
 def task_definition(
@@ -62,7 +60,7 @@ def task_definition(
         "kind": "TASK",
         "parentId": parent_id,
         "title": f"Run {item_id}",
-        "summary": "Schedule one opaque Task Loop.",
+        "summary": "Schedule one opaque TASK Loop.",
         "execution": {
             "dependsOn": depends_on or [],
             "loop": loop_descriptor(claims=claims),
@@ -70,62 +68,180 @@ def task_definition(
     }
 
 
-def node(definition: dict, children: list[dict] | None = None) -> dict:
-    return {"definition": definition, "children": children or []}
+def group_definition(
+    *,
+    item_id: str,
+    parent_id: str | None,
+    children: list[dict],
+    depends_on: list[str] | None = None,
+) -> dict:
+    return {
+        "schemaVersion": 3,
+        "id": item_id,
+        "kind": "GROUP",
+        "parentId": parent_id,
+        "title": f"Coordinate {item_id}",
+        "summary": "Join and review direct GROUP/TASK children.",
+        "decomposition": {"dependsOn": depends_on or []},
+        "children": [
+            {
+                "id": child["definition"]["id"],
+                "kind": child["definition"]["kind"],
+                "title": child["definition"]["title"],
+            }
+            for child in children
+        ],
+    }
+
+
+def node(
+    definition: dict,
+    children: list[dict] | None = None,
+    *,
+    review_loop: dict | None = None,
+) -> dict:
+    if definition["kind"] == "TASK":
+        return {
+            "definition": definition,
+            "reviewLoop": None,
+            "children": children or [],
+        }
+    return {
+        "definition": definition,
+        "reviewLoop": review_loop
+        or loop_descriptor("group/independent-review-loop@1"),
+        "children": children or [],
+    }
+
+
+def delivery(root: dict, *, delivery_id: str = "d-service") -> dict:
+    return {
+        "delivery": {
+            "id": delivery_id,
+            "title": f"Deliver {delivery_id}",
+            "summary": "Complete and independently review the Delivery.",
+            "reviewLoop": loop_descriptor(
+                "delivery/independent-review-loop@1"
+            ),
+        },
+        "root": {
+            "schemaVersion": 3,
+            "skillHints": [],
+            **root,
+        },
+    }
 
 
 def task_hierarchy() -> dict:
-    return {
-        "schemaVersion": 3,
-        "skillHints": [],
-        "reviewLoop": loop_descriptor(
-            "root/independent-review-loop@1",
-        ),
-        "root": node(task_definition()),
-    }
+    return delivery(node(task_definition()))
 
 
-def capability_hierarchy() -> dict:
-    capability = {
-        "schemaVersion": 3,
-        "id": "c-service",
-        "kind": "CAPABILITY",
-        "parentId": None,
-        "title": "Coordinate service loops",
-        "summary": "Join two schedulable Task Loops.",
-        "decomposition": {"dependsOn": []},
-        "children": [
-            {"id": "t-api", "kind": "TASK", "title": "Run t-api"},
-            {"id": "t-core", "kind": "TASK", "title": "Run t-core"},
-        ],
-    }
-    return {
-        "schemaVersion": 3,
-        "skillHints": [],
-        "reviewLoop": loop_descriptor(
-            "root/independent-review-loop@1",
+def group_hierarchy() -> dict:
+    children = [
+        node(
+            task_definition(
+                item_id="t-api",
+                parent_id="g-service",
+                claims=["project:erp/module:api"],
+            )
         ),
-        "root": node(
-            capability,
-            [
-                node(
-                    task_definition(
-                        item_id="t-api",
-                        parent_id="c-service",
-                        claims=["project:erp/module:api"],
-                    )
-                ),
-                node(
-                    task_definition(
-                        item_id="t-core",
-                        parent_id="c-service",
-                        depends_on=["t-api"],
-                        claims=["project:erp/module:core"],
-                    )
-                ),
-            ],
+        node(
+            task_definition(
+                item_id="t-core",
+                parent_id="g-service",
+                depends_on=["t-api"],
+                claims=["project:erp/module:core"],
+            )
         ),
-    }
+    ]
+    return delivery(
+        node(
+            group_definition(
+                item_id="g-service",
+                parent_id=None,
+                children=children,
+            ),
+            children,
+        )
+    )
+
+
+def recursive_hierarchy() -> dict:
+    domain_tasks = [
+        node(
+            task_definition(
+                item_id="t-model",
+                parent_id="g-domain",
+            )
+        ),
+        node(
+            task_definition(
+                item_id="t-repository",
+                parent_id="g-domain",
+                depends_on=["t-model"],
+            )
+        ),
+    ]
+    domain = node(
+        group_definition(
+            item_id="g-domain",
+            parent_id="g-backend",
+            children=domain_tasks,
+        ),
+        domain_tasks,
+    )
+    api = node(
+        task_definition(
+            item_id="t-api",
+            parent_id="g-backend",
+            depends_on=["g-domain"],
+        )
+    )
+    backend_children = [domain, api]
+    backend = node(
+        group_definition(
+            item_id="g-backend",
+            parent_id="g-root",
+            children=backend_children,
+            depends_on=["t-bootstrap"],
+        ),
+        backend_children,
+    )
+    quality_task = node(
+        task_definition(item_id="t-e2e", parent_id="g-quality")
+    )
+    quality = node(
+        group_definition(
+            item_id="g-quality",
+            parent_id="g-root",
+            children=[quality_task],
+            depends_on=["g-backend"],
+        ),
+        [quality_task],
+    )
+    root_children = [
+        node(task_definition(item_id="t-bootstrap", parent_id="g-root")),
+        backend,
+        quality,
+        node(
+            task_definition(
+                item_id="t-docs",
+                parent_id="g-root",
+                depends_on=["g-quality"],
+            )
+        ),
+    ]
+    return delivery(
+        node(
+            group_definition(
+                item_id="g-root",
+                parent_id=None,
+                children=root_children,
+            ),
+            root_children,
+        ),
+        delivery_id="d-recursive",
+    )
 
 
 class LoopContractTests(unittest.TestCase):
@@ -190,18 +306,17 @@ class SchedulerGraphTests(unittest.TestCase):
             hierarchy_fingerprint=hierarchy_fingerprint(hierarchy),
         )
 
-    def test_root_task_compiles_to_one_task_loop_and_one_review_loop(
+    def test_root_task_compiles_to_delivery_review_and_confirmation(
         self,
     ) -> None:
         graph = self.compile(task_hierarchy())
-        task_id = "t-service"
 
         self.assertEqual(
             {item["id"] for item in graph["nodes"]},
             {
-                loop_node_id(task_id),
-                review_node_id(task_id),
-                confirmation_node_id(task_id),
+                loop_node_id("t-service"),
+                review_node_id("d-service"),
+                confirmation_node_id("d-service"),
             },
         )
         self.assertEqual(
@@ -216,18 +331,93 @@ class SchedulerGraphTests(unittest.TestCase):
                 "runtimeTransitions": len(graph["runtime"]["transitions"]),
             },
         )
-        self.assertNotIn(
-            "TASK_GATE",
-            {item["kind"] for item in graph["nodes"]},
-        )
         self.assertEqual(validate_delivery_graph(graph), graph)
         self.assertRegex(graph_fingerprint(graph), r"^[0-9a-f]{64}$")
+
+    def test_group_compiles_to_join_then_recursive_review(self) -> None:
+        graph = self.compile(group_hierarchy())
+        edges = {
+            (item["source"], item["target"], item["kind"])
+            for item in graph["edges"]
+        }
+
+        self.assertIn(
+            (
+                loop_node_id("t-api"),
+                loop_node_id("t-core"),
+                "REQUIRES_SUCCESS",
+            ),
+            edges,
+        )
+        for task_id in ("t-api", "t-core"):
+            self.assertIn(
+                (
+                    loop_node_id(task_id),
+                    join_node_id("g-service"),
+                    "ALL_OF",
+                ),
+                edges,
+            )
+        self.assertIn(
+            (
+                join_node_id("g-service"),
+                group_review_node_id("g-service"),
+                "REQUIRES_SUCCESS",
+            ),
+            edges,
+        )
+        self.assertIn(
+            (
+                group_review_node_id("g-service"),
+                review_node_id("d-service"),
+                "REQUIRES_SUCCESS",
+            ),
+            edges,
+        )
+
+    def test_recursive_mixed_dependencies_gate_subtree_entries(self) -> None:
+        graph = self.compile(recursive_hierarchy())
+        edges = {
+            (item["source"], item["target"], item["kind"])
+            for item in graph["edges"]
+        }
+
+        expected = {
+            (
+                loop_node_id("t-model"),
+                loop_node_id("t-repository"),
+                "REQUIRES_SUCCESS",
+            ),
+            (
+                group_review_node_id("g-domain"),
+                loop_node_id("t-api"),
+                "REQUIRES_SUCCESS",
+            ),
+            (
+                loop_node_id("t-bootstrap"),
+                loop_node_id("t-model"),
+                "REQUIRES_SUCCESS",
+            ),
+            (
+                group_review_node_id("g-backend"),
+                loop_node_id("t-e2e"),
+                "REQUIRES_SUCCESS",
+            ),
+            (
+                group_review_node_id("g-quality"),
+                loop_node_id("t-docs"),
+                "REQUIRES_SUCCESS",
+            ),
+        }
+        self.assertLessEqual(expected, edges)
+        self.assertEqual(graph_summary(graph)["joinNodes"], 4)
+        self.assertEqual(graph_summary(graph)["reviewLoops"], 5)
 
     def test_skill_hints_are_shared_late_bound_input_not_graph_nodes(
         self,
     ) -> None:
         source = task_hierarchy()
-        source["skillHints"] = [
+        source["root"]["skillHints"] = [
             skill_hint("springboot-tdd", "Prefer TDD when applicable."),
             skill_hint(
                 "java-coding-standards",
@@ -242,22 +432,19 @@ class SchedulerGraphTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            [hint["name"] for hint in hierarchy["skillHints"]],
+            [
+                hint["name"]
+                for hint in hierarchy["root"]["skillHints"]
+            ],
             ["java-coding-standards", "springboot-tdd"],
         )
         self.assertTrue(
-            all("skillHints" not in node for node in graph["nodes"])
-        )
-        self.assertTrue(
-            all(
-                "requiredSkills" not in node
-                for node in graph["nodes"]
-            )
+            all("skillHints" not in graph_node for graph_node in graph["nodes"])
         )
 
     def test_skill_hints_must_be_unique_and_well_formed(self) -> None:
         duplicate = task_hierarchy()
-        duplicate["skillHints"] = [
+        duplicate["root"]["skillHints"] = [
             skill_hint("springboot-tdd"),
             skill_hint("springboot-tdd", "Another purpose."),
         ]
@@ -265,14 +452,14 @@ class SchedulerGraphTests(unittest.TestCase):
             validate_hierarchy_definition(duplicate)
 
         missing = task_hierarchy()
-        del missing["skillHints"]
+        del missing["root"]["skillHints"]
         with self.assertRaises(GatedLoopError):
             validate_hierarchy_definition(missing)
 
     def test_parent_child_summary_must_match_materialized_title(
         self,
     ) -> None:
-        source = capability_hierarchy()
+        source = group_hierarchy()
         source["root"]["definition"]["children"][0][
             "title"
         ] = "A conflicting title"
@@ -280,39 +467,41 @@ class SchedulerGraphTests(unittest.TestCase):
         with self.assertRaises(GatedLoopError):
             validate_hierarchy_definition(source)
 
-    def test_capability_uses_a_join_and_task_dependency_targets_loops(
+    def test_invalid_recursive_shapes_and_dependencies_are_rejected(
         self,
     ) -> None:
-        graph = self.compile(capability_hierarchy())
-        edges = {
-            (item["source"], item["target"], item["kind"])
-            for item in graph["edges"]
-        }
+        empty_group = group_hierarchy()
+        empty_group["root"]["definition"]["children"] = []
+        empty_group["root"]["children"] = []
 
-        self.assertIn(
-            (
-                loop_node_id("t-api"),
-                loop_node_id("t-core"),
-                "REQUIRES_SUCCESS",
-            ),
-            edges,
-        )
-        self.assertIn(
-            (
-                loop_node_id("t-api"),
-                join_node_id("c-service"),
-                "ALL_OF",
-            ),
-            edges,
-        )
-        self.assertIn(
-            (
-                loop_node_id("t-core"),
-                join_node_id("c-service"),
-                "ALL_OF",
-            ),
-            edges,
-        )
+        task_with_child = task_hierarchy()
+        task_with_child["root"]["children"] = [
+            node(task_definition(item_id="t-invalid", parent_id="t-service"))
+        ]
+
+        non_sibling = group_hierarchy()
+        non_sibling["root"]["children"][1]["definition"]["execution"][
+            "dependsOn"
+        ] = ["g-outside"]
+
+        cycle = group_hierarchy()
+        cycle["root"]["children"][0]["definition"]["execution"][
+            "dependsOn"
+        ] = ["t-core"]
+
+        legacy = task_hierarchy()
+        legacy["root"]["definition"]["kind"] = "CAPABILITY"
+
+        for invalid in (
+            empty_group,
+            task_with_child,
+            non_sibling,
+            cycle,
+            legacy,
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(GatedLoopError):
+                    validate_hierarchy_definition(invalid)
 
     def test_graph_runtime_retries_only_infrastructure_failures(self) -> None:
         graph = self.compile(task_hierarchy())
@@ -322,15 +511,37 @@ class SchedulerGraphTests(unittest.TestCase):
             policy["retryPolicy"]["automaticFailureClasses"],
             ["RETRYABLE_INFRA", "WORKER_LOST"],
         )
-        events = {
-            item["eventType"]
-            for item in policy["transitions"]
-        }
+        events = {item["eventType"] for item in policy["transitions"]}
         self.assertIn("LOOP_SUCCEEDED", events)
         self.assertIn("LOOP_BLOCKED", events)
         self.assertIn("LOOP_REPLAN_REQUIRED", events)
         self.assertNotIn("GATE_FAILED", events)
         self.assertNotIn("TASK_IMPLEMENTED", events)
+        transitions = {
+            item["eventType"]: item
+            for item in policy["transitions"]
+        }
+        self.assertEqual(
+            (
+                transitions["NODE_READY"]["fromStates"],
+                transitions["NODE_READY"]["toStates"],
+            ),
+            (["PENDING"], ["READY"]),
+        )
+        self.assertEqual(
+            (
+                transitions["JOIN_COMPLETED"]["fromStates"],
+                transitions["JOIN_COMPLETED"]["toStates"],
+            ),
+            (["PENDING"], ["SUCCEEDED"]),
+        )
+        self.assertEqual(
+            (
+                transitions["NODE_RESUMED"]["fromStates"],
+                transitions["NODE_RESUMED"]["toStates"],
+            ),
+            (["PAUSED"], ["PENDING"]),
+        )
 
 
 if __name__ == "__main__":

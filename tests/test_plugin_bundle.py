@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -9,6 +10,7 @@ import unittest
 
 import hdg
 from hdg.mcp_tools import tool_definitions
+from hdg.model_core import validate_hierarchy_definition
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,6 +22,29 @@ PLUGIN_SKILL = PLUGIN / "skills" / "layered-delivery"
 
 
 class PluginBundleTests(unittest.TestCase):
+    def test_documented_hierarchy_examples_are_valid(self) -> None:
+        documents = (
+            ROOT / "README.md",
+            SKILL / "references" / "planning-quickstart.md",
+        )
+        examples = 0
+        for document in documents:
+            text = document.read_text(encoding="utf-8")
+            for block in re.findall(
+                r"```json\s*\n(.*?)\n```",
+                text,
+                flags=re.DOTALL,
+            ):
+                value = json.loads(block)
+                if not (
+                    isinstance(value, dict)
+                    and set(value) == {"delivery", "root"}
+                ):
+                    continue
+                validate_hierarchy_definition(value)
+                examples += 1
+        self.assertGreaterEqual(examples, 3)
+
     def test_runtime_is_an_exact_source_copy_without_cli(self) -> None:
         source_files = {
             path.name: path.read_bytes()
@@ -59,7 +84,8 @@ class PluginBundleTests(unittest.TestCase):
                     (PLUGIN / relative).read_text(encoding="utf-8")
                 )
                 self.assertEqual(manifest["version"], hdg.__version__)
-                self.assertIn("Task Loop", manifest["description"])
+                self.assertIn("GROUP", manifest["description"])
+                self.assertIn("TASK", manifest["description"])
 
     def test_sensitive_hook_references_only_existing_tools(self) -> None:
         hooks = json.loads(

@@ -6,7 +6,7 @@
 
 ## 0.20.0 — 2026-07-29
 
-发布提交：待发布
+发布提交：`1393a14`
 
 - 新增 `.layered-delivery/overview.md` 工作区总览，由控制器从 SQLite 汇总全部 Delivery 的中文状态、TASK 完成数量、GROUP 数量、更新时间和详情链接；任一 Delivery 状态变化时同步刷新。
 - TASK baseline、GROUP Review 和 Delivery Review 的不透明 payload 改为固定模板的递归 Markdown：常用字段映射为中文标题，对象和数组展开为层级列表，未知字段保留原名，不再向人类投影输出 JSON 代码块。

@@ -1,7 +1,7 @@
 {
   "name": "layered-delivery",
-  "version": "0.16.6",
-  "description": "面向 AI 辅助开发、可人工评审的分层交付治理插件",
+  "version": "0.17.0",
+  "description": "面向可插拔 Task Loop 的分层交付 Graph 调度插件",
   "author": {
     "name": "layered-delivery contributors",
     "url": "https://github.com/feng123321li/layered-delivery"
@@ -11,7 +11,7 @@
   "license": "MIT",
   "keywords": [
     "ai-development",
-    "delivery-governance",
-    "workflow"
+    "graph-scheduling",
+    "task-loop"
   ]
 }

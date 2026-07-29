@@ -1,6 +1,7 @@
 interface:
-  display_name: "分层交付"
-  short_description: "恢复有效治理状态，或以最浅合法树治理开发、门禁与验收"
-  default_prompt: "使用 $layered-delivery：先检查治理状态，再恢复运行或按最浅合法结构推进新需求。"
+  display_name: "分层交付调度"
+  short_description: "调度多项目、多模块的 Task Loop 与交付 Graph"
+  default_prompt: "使用 $layered-delivery 检查当前调度状态，并恢复或创建最浅合法的交付 Graph。"
+
 policy:
   allow_implicit_invocation: true

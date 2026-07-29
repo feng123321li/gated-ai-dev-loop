@@ -8,14 +8,14 @@ from typing import Any
 
 MCP_PERMISSION_PREFIX = "mcp__plugin_layered-delivery_layered-delivery__"
 SENSITIVE_TOOL_REASONS = {
+    f"{MCP_PERMISSION_PREFIX}freeze_hierarchy": (
+        "冻结新的外层 Graph 前需要用户明确确认当前调度方案。"
+    ),
     f"{MCP_PERMISSION_PREFIX}rebuild_graph_run": (
         "从事件重建 Graph 查询快照前需要用户明确确认。"
     ),
     f"{MCP_PERMISSION_PREFIX}cancel_graph_run": (
         "取消当前 Graph 运行前需要用户明确确认。"
-    ),
-    f"{MCP_PERMISSION_PREFIX}record_human_review_acceptance": (
-        "记录人工审查接受前必须由用户确认审查结论。"
     ),
     f"{MCP_PERMISSION_PREFIX}record_user_confirmation": (
         "写入最终用户验收前必须由用户明确接受完整验收报告。"

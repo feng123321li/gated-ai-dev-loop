@@ -1,115 +1,169 @@
 # Layered Delivery
 
-`layered-delivery` 用于治理 AI Agent 的软件开发过程。它先把需求整理成一份可人工评审的开发方案，再将方案冻结为可恢复的执行图，驱动 Agent 完成开发、测试、门禁、审查和最终验收。
+`layered-delivery` 是面向可插拔 Task Loop 的外层交付 Graph 调度器。
 
-当前版本：**0.16.6**
+当前版本：**0.17.0**
 
-## 能做什么
+它负责：
 
-- 根据需求复杂度选择最浅合法层级：`Task`、`Capability → Task` 或 `Delivery → Capability → Task`。
-- 在开发前生成完整方案，让用户确认范围、文件、接口、测试和验收标准。
-- 用户只需确认一次方案并选择开发方式，不会再为同一次冻结弹出第二个确认。
-- 自动调度 Task，支持并行开发、测试失败修复、门禁重试和中断恢复。
-- 允许需求指定任意 required Skill，并检查实际原生调用和产物符合性，而不只记录 Skill 被读取。
-- 使用 SQLite 保存权威状态，新 Agent 或新会话可以从原执行图继续。
-- 开发和门禁完成后停在最终验收，只有用户明确接受才完成需求。
+- Task Loop 之间的依赖与并行；
+- Capability / Delivery 的确定性 Join；
+- 多项目、多模块的精确资源声明与互斥；
+- claim、heartbeat、lease 和失联恢复；
+- 仅针对基础设施故障的预算内自动重试；
+- 根级 Review Loop；
+- 最终用户确认；
+- SQLite 状态、哈希事件链和可重建投影。
 
-## 支持的 Agent
+它不负责：
 
-项目直接提供 Claude Code 和 Codex 的插件配置。两者都可以：
+- 约定 implementation plan 或 `developmentPlan`；
+- 解释文件 `scope` 或授权具体文件修改；
+- 内置测试、Gate、Gate→development 修正循环；
+- 规定开发 Skill、Gate Skill 或 Skill lifecycle evidence；
+- 解析各 Loop 的 payload/result 内容。
 
-- 规划并冻结新需求；
-- 自动开发自己冻结的需求；
-- 接续另一 Agent 已冻结的需求。
+这些实现细节都属于对应 Task Loop。不同节点可以选择不同的 Loop 和 Skill。用户在需求阶段给出的 Skill 只作为共享的运行时优先提示，不会预先绑定到某个 Task 或阶段。
 
-Cursor 或其他 Agent 也可以接入，但宿主需要同时提供：
-
-- `layered-delivery` MCP Server 的启动和项目根绑定；
-- 原生 Skill 调用入口；
-- 对敏感工具的人工确认策略。
-
-方案由哪个 Agent 创建只作审计，不限制后续由哪个 Agent 开发。
-
-## 开始前
-
-- Python 3.10+；
-- `python` 可从 PATH 启动；
-- 已安装并启用 `layered-delivery`；
-- 当前会话已成功连接 MCP Server，并注册全部 38 个工具。
-
-MCP 未连接或工具注册失败时不能开始开发，也不能使用 Shell 或直接修改 SQLite 绕过治理。
-
-从组织或公开 Marketplace 安装或更新插件后，必须新建 Agent 会话，让宿主重新加载 Skill、MCP Server 和权限配置。旧会话会继续使用启动时缓存的版本。
-
-## 怎么用
-
-在已接入插件的 Agent 中直接提出需求：
+## 运行模型
 
 ```text
-使用 layered-delivery 规划并治理这个需求：
-<需求内容>
+Task Loop ─┐
+Task Loop ─┼─> Capability Join ─┐
+Task Loop ─┘                    ├─> Delivery Join
+Capability Join ────────────────┘
+                                  ↓
+                            Review Loop
+                                  ↓
+                          User Confirmation
 ```
 
-Agent 会按以下流程处理：
+外层依赖图保持 DAG；Loop 内部可以拥有自己的开发、测试、Gate 和修正循环。这样外层 Graph 只处理“何时调度哪个独立工作单元”，内部 Loop 处理“这个工作单元怎样完成”。
 
-1. 检查当前工作区是否已有可恢复的交付运行。
-2. 新需求生成开发方案、执行图和验收标准。
-3. 用户评审方案，并选择 `active` 或 `manual`。
-4. 这一次选择就是当前方案的冻结确认；Agent 紧接着冻结整棵需求树，不再请求第二次批准。
-5. Graph 驱动开发、测试、修复、门禁和审查。
-6. 全部通过后等待用户最终验收。
+## Schema v3
 
-### 选择开发方式
+Hierarchy 顶层保存一次共享 Skill Hint：
 
-| 方式 | 用途 |
+```json
+{
+  "schemaVersion": 3,
+  "skillHints": [
+    {
+      "name": "springboot-tdd",
+      "purpose": "实际 Loop 处理 Spring Boot 开发时优先采用 TDD"
+    }
+  ],
+  "reviewLoop": {},
+  "root": {}
+}
+```
+
+`skillHints` 是建议性的晚绑定输入。每个 Task/Review Loop 启动后，先根据真实任务和宿主可用 Skill 判断哪些提示适用，再优先原生触发；它可以跳过不适用的提示，也可以使用其他 Skill。调度器不分配 Skill、不查询 catalog、不校验 Skill lifecycle，也不因提示未使用而判定失败。
+
+Task 的调度定义只保留：
+
+```json
+{
+  "schemaVersion": 3,
+  "id": "t-order",
+  "kind": "TASK",
+  "parentId": "c-order",
+  "title": "交付订单能力",
+  "summary": "运行一个独立订单 Task Loop",
+  "execution": {
+    "dependsOn": [],
+    "loop": {
+      "ref": "project/java-service-loop@1",
+      "payload": {
+        "goal": "实现订单能力并完成内部验证"
+      },
+      "resourceClaims": [
+        "project:erp/module:order"
+      ]
+    }
+  }
+}
+```
+
+`payload` 和 Loop 返回的 `result` 对调度器不透明。`resourceClaims` 是精确排他锁键，不是路径 glob，也不是文件写授权。
+
+`loop_context` 同时返回直接 `predecessors` 和传递闭包中的 `upstreamLoopResults`。因此 Capability/Delivery Join 不需要解释或聚合业务 result，最终 Review Loop 仍能读取所有 Task Loop 的不透明结果。
+
+## 标准 Loop 结果
+
+```json
+{
+  "status": "SUCCEEDED",
+  "summary": "内部开发、测试与 Gate 已完成",
+  "result": {
+    "evidence": "由 Loop 自己定义"
+  }
+}
+```
+
+支持四个终态：
+
+- `SUCCEEDED`
+- `BLOCKED`
+- `REPLAN_REQUIRED`
+- `CANCELLED`
+
+只有 `RETRYABLE_INFRA` 和 `WORKER_LOST` 会触发外层自动重试。业务 Gate 失败若可在原任务内修正，应由 Task Loop 内部处理，不进入外层事件。
+
+## MCP 流程
+
+```text
+workspace_status
+→ hierarchy_contract
+→ prepare_hierarchy
+→ 用户确认
+→ freeze_hierarchy
+→ graph_frontier
+→ loop_context / dispatch_loop / heartbeat_loop
+→ record_loop_result
+→ Review Loop
+→ record_user_confirmation
+```
+
+当前 Plugin 注册 17 个外层调度工具。MCP 绑定一个项目协调根；多仓库或多服务目标通过 Loop ref/payload 与资源声明表达。
+
+## 主要投影
+
+| 文件 | 内容 |
 |---|---|
-| `active` | 当前会话冻结后立即自动开发，持续推进到最终验收。 |
-| `manual` | 当前会话冻结并生成一次性交接，新 Agent 从同一执行图自动继续。 |
+| `.layered-delivery/scheduler.db` | SQLite 机器权威 |
+| `.layered-delivery/hierarchy.json` | 冻结层级投影 |
+| `.layered-delivery/graph.json` | 编译 Graph 投影 |
+| `.layered-delivery/state.json` | 当前运行投影 |
+| `.layered-delivery/overview.md` | 人类可读调度总览 |
 
-`manual` 交接后不会重新准备需求、重新冻结、重新选择方式或逐 Task 请求确认。
+不再生成 `development-plan.md`、Task Gate 报告、Skill activation 记录或文件 scope 授权投影。
 
-如果需求必须使用某个 Skill，直接在对话中说明即可，用户不需要填写 `requiredSkills` 字段。用户明确指定仅在开发过程中使用的 Skill 时，Agent 不预分析、不递归展开，也不自动加入 `GATE`；但会先同时检查宿主级 root 和当前项目级 project 的 Skill catalog。存在时才登记为 `DEVELOPMENT` 执行约束并在开发时调用；不存在或疑似打错字时，准备阶段会给出带来源的近似 Skill 选项，并显示人类友好的中文标题、说明、“宿主级/项目级”来源和安装兜底指引，让用户选择正确名称或安装，不会静默改名。
+## 支持的宿主
 
-Scope 按最小可用模块边界适当放宽，通常使用 `module/**`，以容纳同模块内必要的新文件；实际写授权仍由开发方案中的精确 `fileChanges` 冻结。不要使用全仓库 `**`，因为重叠 Scope 会减少 Task 并行度。
+仓库构建一个双宿主 Plugin payload：
 
-低风险单目标需求优先采用根 Task + LIGHT：方案文字保持简洁、优先运行定向测试、开发 handoff 只携带最小开工上下文。独立验收、精确文件授权、真实测试、P0/P1 和最终用户确认仍保留。
+- Codex：`.codex-plugin/plugin.json`
+- Claude Code：`.claude-plugin/plugin.json`、`.mcp.json` 和敏感操作 Hook
 
-## 哪些操作会要求确认
+安装或更新 Plugin 后应新建 Agent 会话，使宿主重新加载 Skill、MCP Server 和工具权限。
 
-| 操作 | 是否需要新的用户确认 |
-|---|---|
-| 评审方案、选择 `active` 或 `manual` 并冻结 | 只确认一次 |
-| 冻结范围内的 Skill 调用、开发、测试、门禁、重试和恢复 | 否 |
-| Graph 重建、Graph 取消、人工审查接受、最终用户验收 | 是 |
-| Git 提交、推送、合并、迁移、发布或新增外部权限 | 是 |
+## 开发验证
 
-Claude Code 的 Auto 权限或代码编辑、测试命令权限属于宿主启动前置条件，不是第二次冻结确认。
+```text
+python -m unittest
+python -m compileall -q src tests
+python scripts/build_skill.py
+python <skill-creator>/scripts/quick_validate.py skills/layered-delivery
+git diff --check
+```
 
-## 恢复与故障
+项目使用 Python 3.10+ 和标准库，不提供 CLI 入口，也不维护旧 schema 兼容层。
 
-- 新会话先调用 `workspace_status` 检查工作区状态。
-- 存在活动交付时，从 `graph_frontier` 恢复，不重新准备或冻结。
-- MCP 意外断开时立即停止新的代码和治理写入，并返回 `PLUGIN_MCP_DISCONNECTED`。
-- 写操作响应未送达时，提交状态记为未知；重连后以 SQLite 状态为准，不能盲目重放。
-- MCP 未安装、未连接或工具注册失败时，返回 `PLUGIN_MCP_UNAVAILABLE`。
+0.17.0 是 schema v3 的破坏性语义替换。若工作区仍有旧 `.layered-delivery/governance.sqlite3`，控制器会明确阻断；请先归档旧运行包，再创建新的 Task Loop Graph。
 
-## 主要产物
+## 文档
 
-| 文件 | 用途 |
-|---|---|
-| `development-plan.md` | 开发前评审完整方案 |
-| `execution-graph.md` | 查看执行与治理节点 |
-| `frontier.md` | 查看下一步、关键路径和阻断 |
-| `development-review.md` | 对照方案检查实际开发结果 |
-| `acceptance-report.md` | 查看门禁、Skill 执行和验收证据 |
-| `run-timeline.md` | 查看 attempt、失败和恢复记录 |
-| `requirement-handoff.md` | `manual` 模式的一次性交接 |
-
-## 更多文档
-
-- [版本更新记录](CHANGELOG.md)
-- [Skill 使用规则](skills/layered-delivery/SKILL.md)
-- [规划与一次冻结](skills/layered-delivery/references/planning-quickstart.md)
-- [Graph 执行与修正](skills/layered-delivery/references/execution-quickstart.md)
-- [验收与最终确认](skills/layered-delivery/references/acceptance.md)
-- [超限传输与断连恢复](skills/layered-delivery/references/mcp-transport.md)
+- [Graph Engineering 架构](docs/graph-engineering-upgrade.md)
+- [项目实现结构](docs/project-engineering.md)
+- [Skill 调度说明](skills/layered-delivery/SKILL.md)

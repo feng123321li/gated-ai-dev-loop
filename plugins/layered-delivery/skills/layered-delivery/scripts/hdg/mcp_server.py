@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import re
 import sys
-import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, BinaryIO, TextIO
@@ -39,10 +37,6 @@ _USER_INTERACTION_TOOLS = frozenset(
     for tool in tool_definitions()
     if tool.get("_meta", {}).get("anthropic/requiresUserInteraction") is True
 )
-_SKILL_LIFECYCLE_TOOLS = frozenset({
-    "record_skill_activation",
-    "record_skill_conformance",
-})
 
 
 def _rpc_error(
@@ -311,30 +305,6 @@ def _claude_user_interaction_is_supported(session: ServerSession) -> bool:
     )
 
 
-def _execution_host_runtime(session: ServerSession) -> str | None:
-    """Return a safe current Agent identifier bound to this MCP session."""
-
-    if session.project_root.from_sandbox_meta:
-        return "codex"
-    if session.client_name is None:
-        return None
-    client_name = unicodedata.normalize(
-        "NFKD",
-        session.client_name,
-    ).encode("ascii", "ignore").decode("ascii").casefold()
-    identifier = re.sub(r"[^a-z0-9]+", "-", client_name).strip("-")
-    digest = hashlib.sha256(
-        session.client_name.encode("utf-8")
-    ).hexdigest()[:12]
-    if not identifier:
-        identifier = f"agent-{digest}"
-    elif identifier[0].isdigit():
-        identifier = f"agent-{identifier}"
-    if len(identifier) > 64:
-        identifier = f"{identifier[:51].rstrip('-')}-{digest}"
-    return identifier
-
-
 def handle_message(
     message: object,
     *,
@@ -416,24 +386,21 @@ def handle_message(
                     "version": __version__,
                 },
                 "instructions": (
-                    "Use these tools to plan, execute, gate, and recover one "
-                    "layered software delivery in the bound project. Start "
-                    "with workspace_status: ACTIVE continues through "
-                    "graph_frontier, while ABSENT or STAGING_ONLY has no "
-                    "active delivery to recover. Follow every frontier action, "
-                    "including each frozen requiredSkills entry and matching "
-                    "skillUsage evidence. Any receiving Agent session "
-                    "continues the same frozen graph through its native Skill "
-                    "entry and the unified HOST_NATIVE_SKILL credential; the "
-                    "planning host is not an execution constraint. Use "
-                    "record_independent_review_blocked when a frozen "
-                    "FINAL_REVIEW Skill is unavailable, then follow the "
-                    "frontier recovery route; use "
-                    "prepare_hierarchy only for a new "
-                    "requirement. Active and manual execution continue through "
-                    "the graph automatically, but record_user_confirmation "
-                    "requires explicit final user acceptance and external Git "
-                    "or publication actions remain outside this server."
+                    "Use these tools as an outer Graph scheduler for one "
+                    "layered delivery. Start with workspace_status. Prepare "
+                    "and explicitly freeze a hierarchy, then follow every "
+                    "graph_frontier action. Each TASK_LOOP or REVIEW_LOOP owns "
+                    "its implementation plan, tests, gates, rework, and Skill "
+                    "usage internally. Shared skillHints are advisory runtime "
+                    "preferences: each Loop discovers its actual context and "
+                    "prioritizes only applicable hints; they are not assigned "
+                    "to Tasks during requirement planning. The scheduler "
+                    "treats Loop payload and result as opaque and accepts only "
+                    "standard Loop outcomes. "
+                    "resourceClaims are exact scheduling locks, not file "
+                    "scopes. Final completion still requires explicit user "
+                    "confirmation. External Git and publication actions remain "
+                    "outside this server."
                 ),
             },
         )
@@ -508,24 +475,11 @@ def handle_message(
                 _gated_error_tool_result(error),
             )
         try:
-            execution_host_runtime = _execution_host_runtime(session)
-            if (
-                name in _SKILL_LIFECYCLE_TOOLS
-                and execution_host_runtime is None
-            ):
-                raise GatedLoopError(
-                    "MCP_SKILL_EXECUTION_HOST_REQUIRED",
-                    (
-                        "Required Skill lifecycle tools need the current "
-                        "MCP Agent client identity"
-                    ),
-                )
             root = session.project_root.resolve(request_meta)
             business_result = call_tool(
                 name,
                 arguments,
                 root=root,
-                execution_host_runtime=execution_host_runtime,
                 explicit_dogfood=explicit_dogfood,
             )
             payload = {
@@ -667,11 +621,10 @@ def serve(
                     data={
                         "maxBytes": MAX_MESSAGE_BYTES,
                         "messageDiscarded": True,
-                        "recoveryTools": [
-                            "begin_payload_upload",
-                            "append_payload_chunk",
-                            "finalize_payload_upload",
-                        ],
+                        "recovery": (
+                            "Keep outer scheduler payloads compact; let the "
+                            "selected Loop own any large artifact transport."
+                        ),
                     },
                 ),
             )

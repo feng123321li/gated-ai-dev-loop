@@ -1,49 +1,70 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
-from .errors import GatedLoopError
-from .operation_payload import execute_payload_operation
-from .operation_planning import execute_planning_operation
-from .operation_graph import execute_graph_operation
-from .operation_task import execute_task_operation
-from .operation_review import execute_review_operation
-from .operation_interaction import execute_interaction_operation
-from .operation_support import (
-    NOT_HANDLED,
-    OperationContext,
+from .graph_frontier import get_graph_frontier
+from .graph_runtime import (
+    advance_graph,
+    cancel_graph_run,
+    dispatch_loop,
+    graph_events,
+    graph_status,
+    heartbeat_loop,
+    loop_context,
+    pause_loop,
+    rebuild_graph_run,
+    record_loop_result,
+    record_user_confirmation,
+    resume_loop,
+)
+from .hierarchy_contract import hierarchy_contract
+from .planning import (
+    freeze_hierarchy,
+    prepare_hierarchy,
+    workspace_status,
 )
 
 
-__all__ = (
-    "OperationContext",
-    "execute_operation",
-)
+Operation = Callable[..., dict[str, Any]]
 
-
-_OPERATION_HANDLERS = (
-    execute_payload_operation,
-    execute_planning_operation,
-    execute_graph_operation,
-    execute_task_operation,
-    execute_review_operation,
-    execute_interaction_operation,
-)
+OPERATIONS: dict[str, Operation] = {
+    "workspace_status": workspace_status,
+    "hierarchy_contract": hierarchy_contract,
+    "prepare_hierarchy": prepare_hierarchy,
+    "freeze_hierarchy": freeze_hierarchy,
+    "graph_frontier": get_graph_frontier,
+    "graph_status": graph_status,
+    "graph_events": graph_events,
+    "advance_graph": advance_graph,
+    "loop_context": loop_context,
+    "dispatch_loop": dispatch_loop,
+    "heartbeat_loop": heartbeat_loop,
+    "pause_loop": pause_loop,
+    "resume_loop": resume_loop,
+    "record_loop_result": record_loop_result,
+    "rebuild_graph_run": rebuild_graph_run,
+    "record_user_confirmation": record_user_confirmation,
+    "cancel_graph_run": cancel_graph_run,
+}
 
 
 def execute_operation(
     name: str,
-    arguments: dict[str, Any],
     *,
-    context: OperationContext,
-) -> Any:
-    """Execute one structured controller operation without a shell boundary."""
+    root: str,
+    explicit_dogfood: bool = False,
+    **arguments: Any,
+) -> dict[str, Any]:
+    operation = OPERATIONS.get(name)
+    if operation is None:
+        from .errors import fail
 
-    for handler in _OPERATION_HANDLERS:
-        result = handler(name, arguments, context=context)
-        if result is not NOT_HANDLED:
-            return result
-    raise GatedLoopError(
-        "UNKNOWN_OPERATION",
-        f"Unknown structured controller operation: {name}",
+        fail("MCP_TOOL_UNKNOWN", f"Unknown scheduler tool: {name}")
+    return operation(
+        root=root,
+        explicit_dogfood=explicit_dogfood,
+        **arguments,
     )
+
+
+__all__ = ("execute_operation",)

@@ -1,44 +1,51 @@
 ---
 name: layered-delivery
-description: "治理或恢复分层软件交付。当工作区存在 `.layered-delivery/` 时接管现有 SQLite/Graph 运行；无治理状态时，按最浅合法层级规划并推进开发、门禁、审查和验收。"
-allowed-tools:
-  - mcp__plugin_layered-delivery_layered-delivery__*
+description: "调度或恢复多项目、多模块的软件交付 Graph。用于把需求组织成 Task Loop、Capability/Delivery Join、Review Loop 与最终用户确认；只治理依赖、资源声明、租约、重试和标准 Loop 结果，不规定实现计划、文件 scope、测试、门禁或内部 Skill 流程。"
 ---
 
 # Layered Delivery
 
-控制器保存契约和状态，Graph 决定运行方向。
+把本 Skill 当作外层 Graph Scheduler。不要把它当作开发方法、代码规范或 Gate 实现。
 
-## 硬边界
+## 边界
 
-- 首次只读取本文件；不得预读全部 references、源码、memory 或整树模板。
-- 只调用 Plugin 注册的 MCP 工具；Server 固定项目根，业务工具不接收项目根或通用确认参数。
-- MCP 未安装、未连接或工具未注册时报告 `PLUGIN_MCP_UNAVAILABLE` 并停止；不得编辑业务代码、启动 Shell/CLI 控制器、直接写 SQLite 或从源码/Markdown 猜状态。
-- SQLite/Graph 是机器权威，Markdown 只是投影。Agent 不直接改 SQLite、baseline、图或投影。
-- 只用完整 schema v3；规划时以按需 `hierarchy_contract` 返回的精确 schema、示例和结构化错误为准，不从源码猜类型，也不在常驻上下文复制完整模板。
-- 所有面向用户的说明、进度、警告、验收结论和 Markdown 默认使用简体中文，优先转述结构化错误中的中文 `userPrompt`，不直接复述内部英文状态码；日期默认按 `UTC+08:00` 展示。MCP、SQLite、事件链和 JSON 的机器字段保持英文，机器时间保持 UTC。
+- 只调用 Plugin 注册的 MCP 工具。MCP 不可用时报告 `PLUGIN_MCP_UNAVAILABLE` 并停止治理写入；不要直接修改 SQLite 或投影。
+- 以 SQLite 与事件链为机器权威；Markdown/JSON 文件只是可读投影。
+- 只使用 schema v3。调用 `hierarchy_contract` 取得当前精确结构，不从源码或旧会话猜 schema。
+- 不解释或约束 `loop.payload` 和 `loop.result`。实现方案、测试、Gate、修正循环及 Skill 调用属于相应 Task Loop。
+- 用户给出的 Skill 只登记为 hierarchy 顶层共享 `skillHints`。它们是运行时优先提示，不是必选项、阶段门禁或 Task 绑定；具体 Loop 在启动后根据真实上下文发现并优先触发适用提示。
+- 不使用文件 scope 做调度授权。`resourceClaims` 是精确排他锁键，可表达项目、模块、数据库或外部环境，例如 `project:erp/module:order`。
+- 不把内部 `GATE_FAILED`、`TASK_IMPLEMENTED` 或 Skill 生命周期事件提升为外层 Graph 事件。Loop 只返回 `SUCCEEDED`、`BLOCKED`、`REPLAN_REQUIRED` 或 `CANCELLED`。
+- 仅对 `RETRYABLE_INFRA` 与 `WORKER_LOST` 自动重试。业务阻断、契约变化与外部权限交给 frontier。
+- 最终完成必须取得真实用户确认。Git、发布、迁移和新增外部权限继续单独授权。
 
-## 不变量
+## 入口
 
-- 选择 `Task`、`Capability → Task` 或 `Delivery → Capability → Task` 中最浅的合法结构；Task 是唯一执行叶子。
-- 人只评审并冻结一次整树；Graph 决定 Task、Agent 数、顺序、门禁、重试和恢复。`active` 与 manual 接收会话都不逐 Task 二次确认。
-- 每个 requirement 都有独立、可观察的 acceptance。`scope` 使用最小可用模块边界，精确修改/删除由 `fileChanges` 授权，批量新增只能落入 ADD-only `generatedFileRoots`。
-- 用户指定的开发 Skill 不进入需求分析：先验证宿主级 `root` 与项目级 `project` catalog；不存在或疑似拼错时停止并优先展示人类友好的 `userPrompt`。存在时只登记 `DEVELOPMENT`，不预读、不递归展开、不自动加入 `GATE`。
-- required Skill 在实际阶段由当前执行宿主原生调用；分别记录 activation 与 conformance。Read/load、父会话调用或 `skillUsage` 自述不能替代，成功 result/gate/review 要求逐项 `INVOKED + PASS`。
-- 同契约修正回原 Task；契约或权限变化回人工评审。只有用户最终确认后才能 `COMPLETED`。
-- Graph 重建、运行取消、人工审查接受和用户最终确认都必须来自真实用户决定，不能由模型自授权。
-- 提交、推送、合并、迁移、发布及新增外部权限始终需要单独授权。
+1. 调用 `workspace_status`。
+2. `ACTIVE`、`BLOCKED` 或 `PAUSED`：读取 [execution-quickstart.md](references/execution-quickstart.md)，从 `graph_frontier` 恢复。
+3. `ABSENT` 或 `PREPARED` 且用户要求新交付：读取 [planning-quickstart.md](references/planning-quickstart.md)。
+4. 只读分析、代码审查或问答不创建调度状态。
 
-## 路由
+## 调度循环
 
-1. 确认 MCP 已注册后调用 `workspace_status`，不按文件推断。
-2. `ACTIVE`：读取 [execution-quickstart.md](references/execution-quickstart.md)，再用 `graph_frontier` 恢复。优先使用精确 ID、数据库焦点或唯一候选；多候选才请用户选择。
-3. `ABSENT/STAGING_ONLY`：没有可恢复交付。只读分析、审查或问答直接完成；开发新需求才读取 [planning-quickstart.md](references/planning-quickstart.md)。
-4. 冻结或恢复后消费 Graph，直到真实阻断或 `REQUEST_USER_CONFIRMATION`；不得用聊天总结代替 Graph 收尾。
+1. 持续调用 `graph_frontier`，按顺序消费所有 action。
+2. 对 `DISPATCH_LOOP`，读取 `loop_context`，在真实执行容量可用时调用 `dispatch_loop`。
+3. 将 `loop.ref`、不透明 `payload` 和共享 `skillHints` 交给该 Loop 的执行适配器。
+4. Loop 先识别当前任务和宿主可用 Skill，再优先原生触发适用提示；可以跳过不适用提示，也可以按实际需要使用其他 Skill。不同节点可以作出不同选择。
+5. 长运行在租约到期前调用 `heartbeat_loop`。
+6. 只把 Loop 的标准终态提交给 `record_loop_result`；不要把内部步骤映射成外层节点。
+7. 继续消费 frontier，直到阻断、需要重新规划或需要最终用户确认。
 
-## 按需读取
+## 恢复
 
-- 新需求规划与一次冻结：[planning-quickstart.md](references/planning-quickstart.md)
-- Graph 执行、Skill 调用、证据、重试和修正：[execution-quickstart.md](references/execution-quickstart.md)
-- gate、独立审查与最终验收：[acceptance.md](references/acceptance.md)
-- 仅当 payload 确实超限或 MCP 断连时：[mcp-transport.md](references/mcp-transport.md)
+- MCP 响应未知时先重新读取 `workspace_status`、`graph_status` 和 `graph_frontier`，不要盲目重放写操作。
+- 租约过期与基础设施失败交给 `advance_graph`；不要手工改 attempt。
+- 物化状态损坏时用 `rebuild_graph_run` 从已校验事件链重建；不要改事件。
+- Loop 要求改变外层依赖、资源声明或拓扑时，记录 `REPLAN_REQUIRED` 并回到新的人工评审，不在原冻结图中暗改。
+
+## 按需参考
+
+- 新图的层级、Loop 描述和一次冻结：[planning-quickstart.md](references/planning-quickstart.md)
+- frontier、资源锁、租约、结果和恢复：[execution-quickstart.md](references/execution-quickstart.md)
+- Review Loop 与最终确认：[acceptance.md](references/acceptance.md)
+- MCP 断连与项目根绑定：[mcp-transport.md](references/mcp-transport.md)

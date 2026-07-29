@@ -4,9 +4,9 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
-## 0.18.0 — 待发布
+## 0.18.0 — 2026-07-29
 
-发布提交：待定
+发布提交：`ea1f109`
 
 - 用递归 `GROUP` / `TASK` 模型替换固定 Delivery / Capability / Task 三层：TASK 是唯一执行叶子，GROUP 可混合包含直接子 GROUP/TASK；Delivery 保留为顶层 Graph/run 与最终验收边界，不属于 work item kind。
 - hierarchy 最外层收敛为 `delivery` 与 `root`；schema 版本和共享 `skillHints` 归入根包装节点，嵌套节点只保存自己的 definition、Review 与 children。

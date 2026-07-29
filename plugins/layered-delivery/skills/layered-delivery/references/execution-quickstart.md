@@ -38,6 +38,12 @@ Join 不需要 dispatch，也不包含实现内容。不要绕过某一级 GROUP
 9. `pause_loop` 返回固定 handoff 数据。优先自动派遣新的接收 Agent；没有容量时输出人工交接。接收方使用同一 `rootId/nodeId` 调用 `resume_loop`，重新读取 frontier 和 `loop_context`，再以新 owner/operation dispatch；不重新 prepare/freeze。
 10. 只有真实业务终态才用 `record_loop_result` 提交标准结果。
 
+不要合并以下恢复分支：
+
+- 未 claim 且无 Agent 容量：人工交接，不调用 `dispatch_loop` 或 `pause_loop`。
+- 已 claim、租约有效且上下文/Hook 压力升高：`pause_loop`，不提交 Loop outcome。
+- 租约已经过期：停止使用旧 operation，调用 `graph_frontier`/`advance_graph`，禁止 `pause_loop`。
+
 `predecessors` 表示 Graph 直接前驱；`upstreamLoopResults` 提供所有传递上游 Loop 的不透明结果，供依赖 TASK 和各级 Review 消费。Join 自身没有业务 result，不能用 Join 的空 outcome 替代 TASK 或下层 Review 的结果。
 
 claim 超过 `leaseExpiresAt` 后，旧 operation 不能 heartbeat、pause 或提交结果。先让 `graph_frontier`/`advance_graph` 回收失联 attempt，再使用新 operation 继续。
@@ -62,7 +68,9 @@ claim 超过 `leaseExpiresAt` 后，旧 operation 不能 heartbeat、pause 或�
 - 普通 `BLOCKED`：不自动重跑，避免把业务错误伪装成瞬时故障。
 - `REPLAN_REQUIRED`：冻结图的调度契约已不适用，回到人工规划。
 - `CANCELLED`：结束当前 Loop，不自动重试。
-- 上下文容量不足、宿主 Agent 暂时不可用或 Hook 导致的高轮次消耗：使用 pause/handoff，不是 `BLOCKED`、`WORKER_LOST` 或 `REPLAN_REQUIRED`。
+- 未 claim 且宿主 Agent 暂时不可用：人工交接，不提前 claim。
+- 已 claim 且租约有效时的上下文容量不足或 Hook 高轮次消耗：使用 pause/handoff，不是 `BLOCKED`、`WORKER_LOST` 或 `REPLAN_REQUIRED`。
+- 租约过期：由 `advance_graph` 记录失联并按预算恢复；不是 pause/handoff。
 
 MCP 写响应未知时先读状态。operation ID 永不复用。
 

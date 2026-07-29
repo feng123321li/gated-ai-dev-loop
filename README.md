@@ -2,7 +2,7 @@
 
 `layered-delivery` 是面向可插拔 Loop 的递归交付 Graph 调度器。
 
-当前版本：**0.19.0**
+当前版本：**0.20.0**
 
 它负责：
 
@@ -222,7 +222,8 @@ workspace_status
 → freeze_hierarchy（自动或手动选择即为唯一一次冻结确认）
 → graph_frontier
 → 独立 Agent：loop_context / dispatch_loop / heartbeat_loop
-→ 容量压力：pause_loop / 新 Agent resume_loop / 重新 dispatch
+→ 租约有效且上下文压力：pause_loop / 新 Agent resume_loop / 重新 dispatch
+→ 租约过期：advance_graph 回收旧 attempt
 → record_loop_result
 → GROUP Review / Delivery Review
 → record_user_confirmation
@@ -232,7 +233,7 @@ workspace_status
 
 `freeze_hierarchy` 对模型只暴露 `execution_mode=active|manual`，不暴露内部 `confirmed`。自动和手动都表示完整授权并确认开发，区别只在冻结后由当前会话继续调度还是生成交接；冻结工具在宿主权限层统一走自动批准，MCP 适配器在控制器边界内注入 Python `True`，不得再为同一次冻结追加通用 Yes/No 或其他弹窗。“调整需求”及任何其他反馈均表示未确认，不调用 freeze，而是继续交互并在修改 hierarchy 后重新 prepare。
 
-总调度上下文只消费 frontier。每个 TASK、GROUP Review 和 Delivery Review Loop 默认路由到独立接收上下文；宿主支持原生 Agent 时优先自动派遣，没有可用容量时才人工交接。上下文压力或高轮次 Hook 摩擦使用 `pause_loop → 新上下文 resume_loop → 重新 dispatch`，不记为业务 `BLOCKED` 或 `REPLAN_REQUIRED`，接收方继续同一冻结 Graph。
+总调度上下文只消费 frontier。每个 TASK、GROUP Review 和 Delivery Review Loop 默认路由到独立接收上下文；宿主支持原生 Agent 时优先自动派遣。未 claim 且没有 Agent 容量时只生成人工交接，不提前 claim；已 claim、租约有效且出现上下文压力或高轮次 Hook 摩擦时，使用 `pause_loop → 新上下文 resume_loop → 重新 dispatch`，不提交业务 outcome；租约过期时由 `advance_graph` 回收旧 attempt，禁止调用 `pause_loop`。接收方始终继续同一冻结 Graph。
 
 ## 主要投影
 
@@ -241,6 +242,7 @@ workspace_status
 ```text
 .layered-delivery/
 ├── scheduler.db
+├── overview.md
 ├── d-order/
 │   ├── hierarchy.json
 │   ├── graph.json
@@ -259,6 +261,7 @@ workspace_status
 | 文件 | 内容 |
 |---|---|
 | `.layered-delivery/scheduler.db` | SQLite 机器权威 |
+| `.layered-delivery/overview.md` | 工作区内全部 Delivery 的中文进度总览 |
 | `.layered-delivery/<delivery-id>/hierarchy.json` | Delivery 交付信息与递归 GROUP/TASK 层级投影 |
 | `.layered-delivery/<delivery-id>/graph.json` | 编译 Graph 投影 |
 | `.layered-delivery/<delivery-id>/state.json` | 冻结启动后生成的当前运行投影 |
@@ -267,11 +270,13 @@ workspace_status
 
 目录使用不可变的 Delivery ID，不使用可修改的标题。同一工作区可以保留多个 Delivery 需求目录；GROUP/TASK 的父子关系保存在 hierarchy 和 Graph 内，不映射成下一层文件夹。
 
-`overview.md` 顶部给出 Delivery 状态与双指纹，随后列出完整 GROUP/TASK 清单、TASK Loop 运行快照、GROUP Join/Review 和最终进度。TASK 的详细调度基线不再聚合到 overview；每个 `task-baselines/<task-id>.md` 单独展示 summary、`dependsOn`、Loop 引用、资源锁、原始 payload 和共享 Skill Hint。人类时间统一显示为 UTC+8；SQLite、事件链和 JSON 机器字段继续使用 UTC。
+根级 `overview.md` 汇总 SQLite 中全部 Delivery 的标题、中文状态、TASK 完成数量、GROUP 数量、最近更新时间和详情链接。每个 Delivery 自己的 `overview.md` 给出交付状态与双指纹，随后列出完整 GROUP/TASK 清单、TASK 执行进度、GROUP 汇合/审查和最终进度。TASK 的详细调度基线不再聚合到 Delivery 总览；每个 `task-baselines/<task-id>.md` 单独展示摘要、前置依赖、Loop 引用、资源锁、结构化执行输入和共享 Skill 提示。
 
-四类主投影和 TASK baseline 使用控制器内置的固定版本模板。控制器在状态提交后重新读取 SQLite，原子更新主文件并整体替换平面的 `task-baselines/` 目录，确保 TASK 删除或改名后不遗留旧文件。Agent 通过合法 MCP 输入提交的 hierarchy、summary 和 payload 会按模板成为投影中的领域数据；模板结构、固定相对文件名、序列化和落盘完全由控制器负责。Agent 只通过已注册的 MCP 工具读取调度状态，不直连 `scheduler.db`，也不自行创建、修补或重写投影。投影用于人类评审与进度掌控，不反向成为机器权威。
+人类 Markdown 不展示 JSON 代码块或原始状态枚举。控制器只对不透明 payload 做确定性的结构展开：常用字段使用固定中文标签，对象递归为分组列表，数组递归为条目，未知字段保留原名以避免擅自解释业务含义；所有领域文本均经过 Markdown 转义，不能改变模板结构。人类时间统一显示为 UTC+8；SQLite、事件链和 JSON 机器投影继续使用 UTC 和原始机器字段。
 
-`prepare_hierarchy` 阶段已经生成 hierarchy、graph、overview 和全部 TASK baseline；`state.json` 在 `freeze_hierarchy` 启动 Graph 后出现并持续刷新。
+根总览、四类 Delivery 主投影和 TASK baseline 使用控制器内置的固定版本模板。控制器在状态提交后重新读取 SQLite，原子更新根总览和主文件，并整体替换平面的 `task-baselines/` 目录，确保 TASK 删除或改名后不遗留旧文件。Agent 通过合法 MCP 输入提交的 hierarchy、summary 和 payload 会按模板成为投影中的领域数据；模板结构、固定相对文件名、序列化和落盘完全由控制器负责。Agent 只通过已注册的 MCP 工具读取调度状态，不直连 `scheduler.db`，也不自行创建、修补或重写投影。投影用于人类评审与进度掌控，不反向成为机器权威。
+
+`prepare_hierarchy` 阶段已经生成根总览、Delivery 的 hierarchy/graph/overview 和全部 TASK baseline；`state.json` 在 `freeze_hierarchy` 启动 Graph 后出现并持续刷新。
 
 不再生成 `development-plan.md`、Task Gate 报告、Skill activation 记录或文件 scope 授权投影。
 

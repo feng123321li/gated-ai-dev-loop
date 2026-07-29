@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import re
 from datetime import datetime, timedelta, timezone
 from string import Template
 from types import MappingProxyType
@@ -19,8 +17,8 @@ from .model_core import iter_hierarchy_nodes
 
 
 KIND_TEXT = {
-    "GROUP": "递归分组",
-    "TASK": "任务 Loop",
+    "GROUP": "分组",
+    "TASK": "任务",
 }
 STATUS_TEXT = {
     "PREPARED": "待冻结",
@@ -39,10 +37,100 @@ STATUS_TEXT = {
     "UNKNOWN": "未知",
     "UNAVAILABLE": "不可用",
 }
+FAILURE_CLASS_TEXT = {
+    "RETRYABLE_INFRA": "可重试的基础设施故障",
+    "WORKER_LOST": "执行上下文失联",
+    "REPLAN_REQUIRED": "需要重新规划",
+    "NON_RETRYABLE": "不可重试故障",
+}
+PAYLOAD_FIELD_TEXT = MappingProxyType(
+    {
+        "acceptance": "验收标准",
+        "acceptanceCriteria": "验收标准",
+        "assumptions": "前提假设",
+        "businessRules": "业务规则",
+        "constraints": "约束条件",
+        "context": "背景信息",
+        "deliverables": "交付物",
+        "deliveryId": "交付标识",
+        "dependencies": "依赖",
+        "evidence": "验证证据",
+        "files": "相关文件",
+        "goal": "目标",
+        "inputs": "输入",
+        "modules": "相关模块",
+        "nested": "嵌套信息",
+        "notes": "补充说明",
+        "output": "输出",
+        "outputs": "输出",
+        "process": "处理流程",
+        "rawAuditMarker": "原始审计标记",
+        "requirements": "需求说明",
+        "reviewFocus": "审查重点",
+        "risks": "风险",
+        "scope": "处理范围",
+        "services": "相关服务",
+        "steps": "执行步骤",
+        "successCriteria": "成功标准",
+        "testRequirements": "测试要求",
+        "tests": "测试要求",
+        "workItemId": "工作项标识",
+    }
+)
+PAYLOAD_FIELD_ORDER = MappingProxyType(
+    {
+        key: index
+        for index, key in enumerate(
+            (
+                "goal",
+                "reviewFocus",
+                "context",
+                "requirements",
+                "businessRules",
+                "process",
+                "steps",
+                "inputs",
+                "outputs",
+                "deliverables",
+                "dependencies",
+                "constraints",
+                "acceptance",
+                "acceptanceCriteria",
+                "successCriteria",
+                "tests",
+                "testRequirements",
+                "evidence",
+                "risks",
+                "assumptions",
+                "notes",
+                "rawAuditMarker",
+                "nested",
+            )
+        )
+    }
+)
 UTC_PLUS_8 = timezone(timedelta(hours=8))
-PROJECTION_TEMPLATE_VERSION = 2
+PROJECTION_TEMPLATE_VERSION = 3
 TASK_BASELINE_DIRECTORY = "task-baselines"
 JSON_PROJECTION_TEMPLATE = Template("${document}\n")
+WORKSPACE_OVERVIEW_PROJECTION_TEMPLATE = Template(
+    """# 全部交付调度与进度总览
+
+## 工作区状态
+
+- 投影模板版本：${template_version}
+- 交付数量：${delivery_count}
+- 更新时间（UTC+8）：${updated_at}
+
+本文件由控制器从 SQLite 权威状态统一生成，用于查看工作区内全部交付需求。
+
+## Delivery 清单
+
+| 交付标识 | 需求标题 | 需求摘要 | 当前状态 | TASK 进度 | GROUP 数量 | 最近更新（UTC+8） | 交付详情 |
+|---|---|---|---|---|---|---|---|
+${delivery_rows}
+"""
+)
 OVERVIEW_PROJECTION_TEMPLATE = Template(
     """# 交付调度与进度总览
 
@@ -52,7 +140,7 @@ OVERVIEW_PROJECTION_TEMPLATE = Template(
 ${delivery_status}
 
 实现规范、测试、门禁与 Skill 激活由各 Loop 内部负责。
-TASK 调度基线和原始输入已拆分到固定的 `task-baselines/` 投影。
+TASK 调度基线和执行输入已拆分到固定的 `task-baselines/` 投影。
 Skill 提示在 Loop 启动后按真实上下文选择，不预先绑定节点。
 
 ## Skill 提示
@@ -61,17 +149,17 @@ ${skill_hints}
 
 ## GROUP/TASK 清单
 
-| 路径 | 类型 | 父级 | 同级依赖（dependsOn） | 当前状态 | 标题 | TASK baseline |
+| 层级路径 | 节点类型 | 上级 | 前置依赖 | 当前状态 | 标题 | 任务基线 |
 |---|---|---|---|---|---|---|
 ${checklist_rows}
 
-## TASK Loop 运行快照
+## TASK 执行进度
 
 ${task_progress}
-## GROUP 协调与 Review
+## GROUP 协调与审查
 
 ${group_details}
-## 交付最终审查 Loop
+## 交付最终审查
 
 ${delivery_review}
 ## 最终用户确认
@@ -85,26 +173,28 @@ TASK_BASELINE_PROJECTION_TEMPLATE = Template(
 ## 基线标识
 
 - 投影模板版本：${template_version}
-- 交付 ID（delivery.id）：${delivery_id}
+- 交付标识：${delivery_id}
 - 交付标题：${delivery_title}
-- TASK ID：${task_id}
-- 层级状态（hierarchyStatus）：${hierarchy_status}
-- 层级指纹（hierarchyFingerprint）：${hierarchy_fingerprint}
-- 图指纹（graphFingerprint）：${graph_fingerprint}
+- 任务标识：${task_id}
+- 层级状态：${hierarchy_status}
+- 层级指纹：${hierarchy_fingerprint}
+- 调度图指纹：${graph_fingerprint}
 - 更新时间（UTC+8）：${updated_at}
 
-## TASK 定义
+## 任务定义
 
 - 标题：${task_title}
 - 摘要：${task_summary}
-- 父级：${parent_id}
-- 同级依赖（dependsOn）：${dependencies}
+- 上级：${parent_id}
+- 前置依赖：${dependencies}
 
-## Task Loop
+## 执行 Loop
 
 - Loop 引用：${loop_ref}
-- 资源锁声明（resourceClaims）：${resource_claims}
-- 原始输入（payload）：
+- 资源锁：${resource_claims}
+
+## 执行输入
+
 ${payload}
 
 ## 共享 Skill 提示
@@ -126,7 +216,11 @@ PROJECTION_TEMPLATES = MappingProxyType(
 
 
 def _status_text(value: str) -> str:
-    return f"{STATUS_TEXT.get(value, value)}（{value}）"
+    return STATUS_TEXT.get(value, "未知状态")
+
+
+def _failure_class_text(value: str) -> str:
+    return FAILURE_CLASS_TEXT.get(value, "其他故障")
 
 
 def _utc_plus_8(value: str | None) -> str:
@@ -141,32 +235,213 @@ def _utc_plus_8(value: str | None) -> str:
     return parsed.astimezone(UTC_PLUS_8).isoformat(timespec="seconds")
 
 
+def _markdown_text(value: object) -> str:
+    text = str(value)
+    text = text.replace("&", "&amp;")
+    text = text.replace("<", "&lt;").replace(">", "&gt;")
+    for character in ("\\", "`", "*", "_", "[", "]", "#", "|"):
+        text = text.replace(character, f"\\{character}")
+    return (
+        text.replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .replace("\n", "<br>")
+    )
+
+
+def _payload_field_text(key: str) -> str:
+    return PAYLOAD_FIELD_TEXT.get(key, key)
+
+
+def _payload_field_sort_key(key: str) -> tuple[int, str]:
+    return (PAYLOAD_FIELD_ORDER.get(key, len(PAYLOAD_FIELD_ORDER)), key)
+
+
+def _payload_scalar_text(value: object) -> str:
+    if value is None:
+        return "无"
+    if value is True:
+        return "是"
+    if value is False:
+        return "否"
+    if isinstance(value, str) and not value:
+        return "（空）"
+    return _markdown_text(value)
+
+
+def _payload_value_lines(
+    value: object,
+    *,
+    indent: int = 0,
+) -> list[str]:
+    prefix = " " * indent
+    if isinstance(value, dict):
+        if not value:
+            return [f"{prefix}- 无"]
+        lines: list[str] = []
+        for key in sorted(value, key=_payload_field_sort_key):
+            child = value[key]
+            label = _markdown_text(_payload_field_text(key))
+            if not isinstance(child, (dict, list)):
+                lines.append(
+                    f"{prefix}- **{label}**："
+                    f"{_payload_scalar_text(child)}"
+                )
+                continue
+            lines.append(f"{prefix}- **{label}**")
+            lines.extend(
+                _payload_value_lines(child, indent=indent + 2)
+            )
+        return lines
+    if isinstance(value, list):
+        if not value:
+            return [f"{prefix}- 无"]
+        lines = []
+        for index, child in enumerate(value, start=1):
+            if not isinstance(child, (dict, list)):
+                lines.append(
+                    f"{prefix}- {_payload_scalar_text(child)}"
+                )
+                continue
+            lines.append(f"{prefix}- **第 {index} 项**")
+            lines.extend(
+                _payload_value_lines(child, indent=indent + 2)
+            )
+        return lines
+    return [f"{prefix}- {_payload_scalar_text(value)}"]
+
+
+def _render_payload_markdown(
+    payload: dict[str, Any],
+    *,
+    heading_level: int,
+) -> str:
+    if not payload:
+        return "- 无"
+    level = max(1, min(heading_level, 6))
+    lines: list[str] = []
+    for key in sorted(payload, key=_payload_field_sort_key):
+        lines.extend(
+            [
+                (
+                    f"{'#' * level} "
+                    f"{_markdown_text(_payload_field_text(key))}"
+                ),
+                "",
+                *_payload_value_lines(payload[key]),
+                "",
+            ]
+        )
+    return "\n".join(lines).rstrip()
+
+
 def raw_definition(
     definition: dict[str, Any],
 ) -> dict[str, Any]:
     return dict(definition)
 
 
-def _json_block_lines(value: object) -> list[str]:
-    rendered = json.dumps(
-        value,
-        ensure_ascii=False,
-        indent=2,
-        sort_keys=True,
-    )
-    longest = max(
-        (
-            len(match.group(0))
-            for match in re.finditer(r"`+", rendered)
-        ),
-        default=0,
-    )
-    fence = "`" * max(3, longest + 1)
-    return [f"{fence}json", rendered, fence]
-
-
 def task_baseline_relative_path(task_id: str) -> str:
     return f"{TASK_BASELINE_DIRECTORY}/{task_id}.md"
+
+
+def render_workspace_overview(
+    deliveries: list[dict[str, Any]],
+) -> str:
+    """Render the workspace-wide Delivery summary from SQLite-loaded state."""
+
+    ordered = sorted(
+        deliveries,
+        key=lambda item: (
+            (
+                item["run"]["updatedAt"]
+                if item.get("run") is not None
+                else item["updatedAt"]
+            ),
+            item["rootId"],
+        ),
+        reverse=True,
+    )
+    rows: list[str] = []
+    for item in ordered:
+        hierarchy = item["hierarchy"]
+        run = item.get("run")
+        definitions = [
+            node["definition"]
+            for node in iter_hierarchy_nodes(hierarchy)
+        ]
+        tasks = [
+            definition
+            for definition in definitions
+            if definition["kind"] == "TASK"
+        ]
+        groups = [
+            definition
+            for definition in definitions
+            if definition["kind"] == "GROUP"
+        ]
+        states = {
+            node["nodeId"]: node["status"]
+            for node in (run or {}).get("nodes", [])
+        }
+        completed_tasks = sum(
+            states.get(loop_node_id(task["id"]))
+            in {"SUCCEEDED", "COMPLETED"}
+            for task in tasks
+        )
+        status = (
+            run["status"]
+            if run is not None
+            else item["status"]
+        )
+        updated_at = (
+            run["updatedAt"]
+            if run is not None
+            else item["updatedAt"]
+        )
+        cells = [
+            item["rootId"],
+            hierarchy["delivery"]["title"],
+            hierarchy["delivery"]["summary"],
+            _status_text(status),
+            f"已完成 {completed_tasks}/{len(tasks)}",
+            str(len(groups)),
+            _utc_plus_8(updated_at),
+        ]
+        detail_link = (
+            f"[查看交付详情]({item['rootId']}/overview.md)"
+        )
+        rows.append(
+            "| "
+            + " | ".join(
+                [
+                    *(_markdown_text(cell) for cell in cells),
+                    detail_link,
+                ]
+            )
+            + " |"
+        )
+    latest_update = (
+        max(
+            (
+                (
+                    item["run"]["updatedAt"]
+                    if item.get("run") is not None
+                    else item["updatedAt"]
+                )
+                for item in deliveries
+            ),
+            default=None,
+        )
+    )
+    return WORKSPACE_OVERVIEW_PROJECTION_TEMPLATE.substitute(
+        template_version=str(PROJECTION_TEMPLATE_VERSION),
+        delivery_count=str(len(deliveries)),
+        updated_at=_utc_plus_8(latest_update),
+        delivery_rows=(
+            "\n".join(rows)
+            or "| 无 | 无 | 无 | 无 | 无 | 0 | 无 | 无 |"
+        ),
+    )
 
 
 def render_work_item_baseline(
@@ -181,7 +456,8 @@ def render_work_item_baseline(
 ) -> str:
     """Render one TASK baseline from scheduler-visible metadata.
 
-    Loop payloads remain opaque and are shown as JSON for auditability.
+    Loop payloads remain semantically opaque and are structurally projected
+    through a fixed human-readable Markdown renderer.
     """
 
     if definition["kind"] != "TASK":
@@ -190,7 +466,8 @@ def render_work_item_baseline(
     hints = skill_hints or []
     rendered_hints = (
         "\n".join(
-            f"- {hint['name']}：{hint['purpose']}"
+            f"- {_markdown_text(hint['name'])}："
+            f"{_markdown_text(hint['purpose'])}"
             for hint in hints
         )
         if hints
@@ -199,28 +476,41 @@ def render_work_item_baseline(
     delivery = delivery or {}
     return TASK_BASELINE_PROJECTION_TEMPLATE.substitute(
         template_version=str(PROJECTION_TEMPLATE_VERSION),
-        delivery_id=delivery.get("id", "UNAVAILABLE"),
-        delivery_title=delivery.get("title", "UNAVAILABLE"),
-        task_id=definition["id"],
+        delivery_id=_markdown_text(delivery.get("id", "不可用")),
+        delivery_title=_markdown_text(
+            delivery.get("title", "不可用")
+        ),
+        task_id=_markdown_text(definition["id"]),
         hierarchy_status=_status_text(
             hierarchy_status or "UNKNOWN"
         ),
         hierarchy_fingerprint=(
-            hierarchy_fingerprint or "UNAVAILABLE"
+            hierarchy_fingerprint or "不可用"
         ),
-        graph_fingerprint=graph_fingerprint or "UNAVAILABLE",
+        graph_fingerprint=graph_fingerprint or "不可用",
         updated_at=_utc_plus_8(updated_at),
-        task_title=definition["title"],
-        task_summary=definition["summary"],
-        parent_id=definition["parentId"] or "无",
+        task_title=_markdown_text(definition["title"]),
+        task_summary=_markdown_text(definition["summary"]),
+        parent_id=_markdown_text(definition["parentId"] or "无"),
         dependencies=(
-            ", ".join(definition["execution"]["dependsOn"]) or "无"
+            "、".join(
+                _markdown_text(item)
+                for item in definition["execution"]["dependsOn"]
+            )
+            or "无"
         ),
-        loop_ref=loop["ref"],
+        loop_ref=_markdown_text(loop["ref"]),
         resource_claims=(
-            ", ".join(loop["resourceClaims"]) or "无"
+            "、".join(
+                _markdown_text(item)
+                for item in loop["resourceClaims"]
+            )
+            or "无"
         ),
-        payload="\n".join(_json_block_lines(loop["payload"])),
+        payload=_render_payload_markdown(
+            loop["payload"],
+            heading_level=3,
+        ),
         skill_hints=rendered_hints,
     )
 
@@ -249,20 +539,22 @@ def render_scheduling_plan(
         state = states.get(node_id)
         if state is None:
             return [
-                f"- 当前进度：{node_id} = {_status_text('NOT_STARTED')}"
+                f"- 调度节点：{_markdown_text(node_id)}",
+                f"- 当前进度：{_status_text('NOT_STARTED')}",
             ]
         lines = [
-            (
-                f"- 当前进度：{node_id} = "
-                f"{_status_text(state['status'])}"
-            ),
-            f"- 尝试次数（attempt）：{state['attempt']}",
+            f"- 调度节点：{_markdown_text(node_id)}",
+            f"- 当前进度：{_status_text(state['status'])}",
+            f"- 尝试次数：{state['attempt']}",
         ]
         if state["owner"]:
-            lines.append(f"- 执行者（owner）：{state['owner']}")
+            lines.append(
+                f"- 执行者：{_markdown_text(state['owner'])}"
+            )
         if state["failureClass"]:
             lines.append(
-                f"- 失败分类（failureClass）：{state['failureClass']}"
+                "- 失败分类："
+                f"{_failure_class_text(state['failureClass'])}"
             )
         for key, label in (
             ("claimedAt", "认领时间"),
@@ -278,19 +570,20 @@ def render_scheduling_plan(
         if outcome is not None:
             if outcome.get("status"):
                 lines.append(
-                    "- 结果状态（outcome）："
+                    "- 结果状态："
                     f"{_status_text(outcome['status'])}"
                 )
             if outcome.get("summary"):
-                lines.append(f"- 结果摘要：{outcome['summary']}")
+                lines.append(
+                    "- 结果摘要："
+                    f"{_markdown_text(outcome['summary'])}"
+                )
             if outcome.get("confirmedBy"):
                 lines.append(
-                    f"- 确认人：{outcome['confirmedBy']}"
+                    "- 确认人："
+                    f"{_markdown_text(outcome['confirmedBy'])}"
                 )
         return lines
-
-    def json_block(value: object) -> list[str]:
-        return _json_block_lines(value)
 
     def loop_lines(
         label: str,
@@ -300,45 +593,59 @@ def render_scheduling_plan(
         lines = [
             f"#### {label}",
             "",
-            f"- 节点：{node_id}",
-            f"- Loop 引用：{loop['ref']}",
+            f"- Loop 引用：{_markdown_text(loop['ref'])}",
             (
-                "- 资源锁声明（resourceClaims）："
-                f"{', '.join(loop['resourceClaims']) or '无'}"
+                "- 资源锁："
+                + (
+                    "、".join(
+                        _markdown_text(item)
+                        for item in loop["resourceClaims"]
+                    )
+                    or "无"
+                )
             ),
         ]
         lines.extend(state_lines(node_id))
         lines.extend(
-            ["- 原始输入（payload）：", *json_block(loop["payload"]), ""]
+            [
+                "",
+                "##### 审查输入",
+                "",
+                _render_payload_markdown(
+                    loop["payload"],
+                    heading_level=6,
+                ),
+                "",
+            ]
         )
         return lines
 
     baseline_lines = [
-        f"- 交付 ID（delivery.id）：{delivery['id']}",
-        f"- 标题：{delivery['title']}",
-        f"- 摘要：{delivery['summary']}",
-        f"- Schema 版本：{hierarchy['root']['schemaVersion']}",
+        f"- 交付标识：{_markdown_text(delivery['id'])}",
+        f"- 标题：{_markdown_text(delivery['title'])}",
+        f"- 摘要：{_markdown_text(delivery['summary'])}",
+        f"- 数据结构版本：{hierarchy['root']['schemaVersion']}",
         (
-            "- 层级状态（hierarchyStatus）："
+            "- 层级状态："
             f"{_status_text(hierarchy_status or 'UNKNOWN')}"
         ),
         (
-            "- 运行状态（runStatus）："
+            "- 运行状态："
             f"{_status_text((run or {}).get('status', 'NOT_STARTED'))}"
         ),
         (
-            "- 层级指纹（hierarchyFingerprint）："
-            f"{hierarchy_fingerprint or 'UNAVAILABLE'}"
+            "- 层级指纹："
+            f"{hierarchy_fingerprint or '不可用'}"
         ),
         (
-            "- 图指纹（graphFingerprint）："
-            f"{graph_fingerprint or 'UNAVAILABLE'}"
+            "- 调度图指纹："
+            f"{graph_fingerprint or '不可用'}"
         ),
     ]
     if run is not None:
         baseline_lines.extend(
             [
-                f"- 运行 ID（runId）：{run['runId']}",
+                f"- 运行标识：{_markdown_text(run['runId'])}",
                 f"- 启动时间（UTC+8）：{_utc_plus_8(run['startedAt'])}",
             ]
         )
@@ -348,7 +655,8 @@ def render_scheduling_plan(
     hints = hierarchy["root"]["skillHints"]
     if hints:
         skill_hint_lines = [
-            f"- {hint['name']}：{hint['purpose']}"
+            f"- {_markdown_text(hint['name'])}："
+            f"{_markdown_text(hint['purpose'])}"
             for hint in hints
         ]
     else:
@@ -382,15 +690,16 @@ def render_scheduling_plan(
             progress = state_text(loop_node_id(definition["id"]))
         else:
             progress = (
-                f"JOIN={state_text(join_node_id(definition['id']))}; "
-                "REVIEW="
+                "汇合："
+                f"{state_text(join_node_id(definition['id']))}；"
+                "审查："
                 f"{state_text(group_review_node_id(definition['id']))}"
             )
         cells = [
             path,
-            f"{KIND_TEXT[definition['kind']]}（{definition['kind']}）",
+            KIND_TEXT[definition["kind"]],
             definition["parentId"] or "无",
-            ", ".join(dependencies) or "无",
+            "、".join(dependencies) or "无",
             progress,
             definition["title"],
             (
@@ -401,10 +710,14 @@ def render_scheduling_plan(
             ),
         ]
         checklist_rows.append(
-            "| " + " | ".join(
-                str(cell).replace("|", r"\|").replace("\n", " ")
-                for cell in cells
-            ) + " |"
+            "| "
+            + " | ".join(
+                [
+                    *(_markdown_text(cell) for cell in cells[:-1]),
+                    cells[-1],
+                ]
+            )
+            + " |"
         )
     task_progress_lines: list[str] = []
     group_detail_lines: list[str] = []
@@ -414,8 +727,15 @@ def render_scheduling_plan(
             task_node_id = loop_node_id(definition["id"])
             task_progress_lines.extend(
                 [
-                    f"### {task_node_id}",
+                    (
+                        "### TASK："
+                        f"{_markdown_text(definition['title'])}"
+                    ),
                     "",
+                    (
+                        "- 任务标识："
+                        f"{_markdown_text(definition['id'])}"
+                    ),
                     *state_lines(task_node_id),
                     "",
                 ]
@@ -425,16 +745,28 @@ def render_scheduling_plan(
         group_detail_lines.extend(
             [
                 (
-                    f"### {definition['id']} "
-                    f"[{KIND_TEXT[definition['kind']]}]"
+                    "### GROUP："
+                    f"{_markdown_text(definition['title'])}"
                 ),
                 "",
-                f"- 标题：{definition['title']}",
-                f"- 摘要：{definition['summary']}",
-                f"- 父级：{definition['parentId'] or '无'}",
                 (
-                    "- 同级依赖（dependsOn）："
-                    f"{', '.join(dependencies) or '无'}"
+                    "- 分组标识："
+                    f"{_markdown_text(definition['id'])}"
+                ),
+                f"- 摘要：{_markdown_text(definition['summary'])}",
+                (
+                    "- 上级："
+                    f"{_markdown_text(definition['parentId'] or '无')}"
+                ),
+                (
+                    "- 前置依赖："
+                    + (
+                        "、".join(
+                            _markdown_text(item)
+                            for item in dependencies
+                        )
+                        or "无"
+                    )
                 ),
             ]
         )
@@ -442,15 +774,17 @@ def render_scheduling_plan(
             [
                 (
                     "- 直接子级："
-                    + ", ".join(
-                        f"{child['id']} [{child['kind']}]"
+                    + "、".join(
+                        (
+                            f"{_markdown_text(child['id'])}"
+                            f"（{KIND_TEXT[child['kind']]}）"
+                        )
                         for child in definition["children"]
                     )
                 ),
-                (
-                    "- 分组汇合节点（GROUP_JOIN）："
-                    f"{join_node_id(definition['id'])}"
-                ),
+                "",
+                "#### 分组汇合进度",
+                "",
                 *state_lines(join_node_id(definition["id"])),
                 "",
             ]
@@ -469,10 +803,7 @@ def render_scheduling_plan(
         delivery["reviewLoop"],
         delivery_review_id,
     )
-    confirmation_lines = [
-        f"- 节点：{confirmation_id}",
-        *state_lines(confirmation_id),
-    ]
+    confirmation_lines = state_lines(confirmation_id)
     return OVERVIEW_PROJECTION_TEMPLATE.substitute(
         template_version=str(PROJECTION_TEMPLATE_VERSION),
         delivery_status="\n".join(baseline_lines),
@@ -586,10 +917,12 @@ __all__ = (
     "PROJECTION_TEMPLATE_VERSION",
     "TASK_BASELINE_DIRECTORY",
     "TASK_BASELINE_PROJECTION_TEMPLATE",
+    "WORKSPACE_OVERVIEW_PROJECTION_TEMPLATE",
     "raw_definition",
     "render_projection_documents",
     "render_scheduling_plan",
     "render_task_baseline_documents",
     "render_work_item_baseline",
+    "render_workspace_overview",
     "task_baseline_relative_path",
 )

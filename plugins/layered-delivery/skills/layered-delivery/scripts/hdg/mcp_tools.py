@@ -198,7 +198,8 @@ TOOLS = (
         (
             "Read one opaque Loop descriptor, shared late-bound Skill hints, "
             "direct predecessors, transitive upstream results, TASK baseline "
-            "path, and the independent-context execution policy."
+            "path, and the execution policy separating pre-claim capacity, "
+            "live-lease handoff, and expired-lease recovery."
         ),
         _object(
             {"root_id": ROOT_ID, "node_id": NODE_ID},
@@ -242,8 +243,8 @@ TOOLS = (
     _tool(
         "pause_loop",
         (
-            "Pause one claimed Loop for capacity handoff while preserving "
-            "its current attempt and frozen Graph."
+            "Pause one claimed Loop with a live lease for context handoff "
+            "while preserving its current attempt and frozen Graph."
         ),
         _object(
             {

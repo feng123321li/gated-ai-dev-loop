@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.20.0 — 2026-07-29
+
+发布提交：`1393a14`
+
+- 新增 `.layered-delivery/overview.md` 工作区总览，由控制器从 SQLite 汇总全部 Delivery 的中文状态、TASK 完成数量、GROUP 数量、更新时间和详情链接；任一 Delivery 状态变化时同步刷新。
+- TASK baseline、GROUP Review 和 Delivery Review 的不透明 payload 改为固定模板的递归 Markdown：常用字段映射为中文标题，对象和数组展开为层级列表，未知字段保留原名，不再向人类投影输出 JSON 代码块。
+- Delivery 总览中的状态、节点类型、依赖、资源、运行结果和审查信息统一使用中文标签，不再附带 `PREPARED`、`ACTIVE` 等机器枚举；SQLite、事件链及三类 JSON 文件继续保留完整机器字段。
+- 人类投影中的领域文本统一进行 Markdown 转义，MCP 输入只能提供领域数据，不能改变模板结构；根总览、Delivery 总览和全部 TASK baseline 均可从 SQLite 确定性重建。
+- 收敛 `loop_context.executionPolicy`：未 claim 且无 Agent 容量时人工交接，已 claim 且租约有效的上下文/Hook 压力才使用 pause/handoff，租约过期固定交给 `advance_graph`；删除 `rules` 中重复的 Capacity 布尔字段，避免宿主将 Capacity 与 lease 错误合并为同一运行提示。
+
 ## 0.19.0 — 2026-07-29
 
 发布提交：`df2955c`

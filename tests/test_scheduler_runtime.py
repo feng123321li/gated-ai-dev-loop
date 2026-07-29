@@ -36,6 +36,7 @@ from hdg.model_core import validate_hierarchy_definition
 from hdg.model_rendering import (
     PROJECTION_TEMPLATES,
     PROJECTION_TEMPLATE_VERSION,
+    STATUS_TEXT,
     TASK_BASELINE_DIRECTORY,
 )
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
@@ -116,7 +117,18 @@ def auditable_recursive_hierarchy() -> dict:
             ]
             loop["payload"] = {
                 "rawAuditMarker": f"raw-task-payload::{item_id}",
-                "nested": {"workItemId": item_id},
+                "acceptance": [
+                    f"{item_id} 的验收结果可独立核对",
+                    "所有自动化检查通过",
+                ],
+                "businessRules": [
+                    "保持依赖关系与资源锁一致",
+                ],
+                "nested": {
+                    "workItemId": item_id,
+                    "enabled": True,
+                },
+                "notes": "首行\n# 不能改变模板 | `原样文本`",
             }
         else:
             review = current["reviewLoop"]
@@ -126,6 +138,7 @@ def auditable_recursive_hierarchy() -> dict:
             ]
             review["payload"] = {
                 "rawAuditMarker": f"raw-group-review::{item_id}",
+                "reviewFocus": ["核对全部直接子级结果"],
                 "nested": {"workItemId": item_id},
             }
     delivery = source["delivery"]
@@ -137,6 +150,7 @@ def auditable_recursive_hierarchy() -> dict:
     ]
     delivery_review["payload"] = {
         "rawAuditMarker": "raw-delivery-review::d-recursive",
+        "reviewFocus": ["核对完整交付结果"],
         "nested": {"deliveryId": "d-recursive"},
     }
     return source
@@ -280,9 +294,17 @@ class SchedulerRuntimeTests(unittest.TestCase):
             / "overview.md"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            "结果状态（outcome）：已成功（SUCCEEDED）",
+            "结果状态：已成功",
             completed_overview,
         )
+        self.assertNotIn("SUCCEEDED", completed_overview)
+        workspace_overview = (
+            Path(self.root)
+            / ".layered-delivery"
+            / "overview.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("| 已完成 | 已完成 1/1 |", workspace_overview)
+        self.assertNotIn("COMPLETED", workspace_overview)
 
         event_types = [
             item["eventType"]
@@ -531,13 +553,41 @@ class SchedulerRuntimeTests(unittest.TestCase):
             2,
         )
 
-    def test_loop_capacity_handoff_reuses_the_frozen_graph(
+    def test_loop_context_handoff_separates_expired_lease_recovery(
         self,
     ) -> None:
         prepared = self.prepare_and_freeze(task_hierarchy())
         root_id = prepared["rootId"]
         node_id = loop_node_id("t-service")
         policy = loop_execution_policy()
+        self.assertEqual(
+            policy,
+            {
+                "contextIsolation": "REQUIRED",
+                "dispatch": {
+                    "preferredExecutor": "HOST_NATIVE_AGENT",
+                    "noAgentCapacityBeforeClaim": (
+                        "MANUAL_HANDOFF_WITHOUT_CLAIM"
+                    ),
+                },
+                "claimedLoopHandoff": {
+                    "trigger": "CONTEXT_OR_HOOK_PRESSURE",
+                    "requiresLiveLease": True,
+                    "action": "PAUSE_AND_HANDOFF",
+                    "loopOutcome": "NONE",
+                },
+                "expiredLeaseRecovery": {
+                    "action": "ADVANCE_GRAPH",
+                    "pauseAllowed": False,
+                    "reuseOperationId": False,
+                },
+                "receivingContext": {
+                    "reuseFrozenGraph": True,
+                    "reloadViaMcp": True,
+                },
+            },
+        )
+        self.assertNotIn("capacityPressure", repr(policy))
 
         frontier = get_graph_frontier(
             root=self.root,
@@ -567,13 +617,17 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 f"{TASK_BASELINE_DIRECTORY}/t-service.md"
             ),
         )
-        self.assertTrue(
-            context["rules"]["coordinatorMustNotExecuteLoopInline"]
-        )
-        self.assertTrue(
-            context["rules"][
-                "capacityPressureMustPauseAndHandoff"
-            ]
+        self.assertEqual(
+            context["rules"],
+            {
+                "payloadIsOpaqueToScheduler": True,
+                "internalGateAndSkillPolicyOwnedByLoop": True,
+                "skillHintsAreAdvisory": True,
+                "selectSkillsAtRuntime": True,
+                "prioritizeApplicableSkillHints": True,
+                "returnOnlyStandardLoopOutcome": True,
+                "coordinatorMustNotExecuteLoopInline": True,
+            },
         )
 
         dispatch_loop(
@@ -915,6 +969,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(
             prepared["humanArtifacts"],
             {
+                "workspaceOverview": ".layered-delivery/overview.md",
                 "overview": f"{artifact_prefix}/overview.md",
                 "hierarchy": f"{artifact_prefix}/hierarchy.json",
                 "graph": f"{artifact_prefix}/graph.json",
@@ -923,12 +978,12 @@ class SchedulerRuntimeTests(unittest.TestCase):
             },
         )
         self.assertTrue((control / "scheduler.db").is_file())
+        self.assertTrue((control / "overview.md").is_file())
         self.assertTrue((projections / "overview.md").is_file())
         self.assertTrue((projections / "hierarchy.json").is_file())
         self.assertTrue((projections / "graph.json").is_file())
         self.assertFalse((projections / "state.json").exists())
         for filename in (
-            "overview.md",
             "hierarchy.json",
             "graph.json",
             "state.json",
@@ -937,29 +992,44 @@ class SchedulerRuntimeTests(unittest.TestCase):
         overview = (projections / "overview.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("hierarchyFingerprint", overview)
+        self.assertNotIn("hierarchyFingerprint", overview)
         self.assertIn(prepared["hierarchyFingerprint"], overview)
-        self.assertIn("graphFingerprint", overview)
+        self.assertNotIn("graphFingerprint", overview)
         self.assertIn(prepared["graphFingerprint"], overview)
         self.assertIn(
-            "层级状态（hierarchyStatus）：待冻结（PREPARED）",
+            "层级状态：待冻结",
             overview,
         )
         self.assertIn(
-            "运行状态（runStatus）：未启动（NOT_STARTED）",
+            "运行状态：未启动",
             overview,
         )
         self.assertIn("## GROUP/TASK 清单", overview)
         self.assertIn(
-            "| 路径 | 类型 | 父级 | 同级依赖（dependsOn） | "
-            "当前状态 | 标题 | TASK baseline |",
+            "| 层级路径 | 节点类型 | 上级 | 前置依赖 | "
+            "当前状态 | 标题 | 任务基线 |",
             overview,
         )
-        self.assertIn("递归分组（GROUP）", overview)
-        self.assertIn("任务 Loop（TASK）", overview)
+        self.assertIn("| 分组 |", overview)
+        self.assertIn("| 任务 |", overview)
         self.assertIn("springboot-tdd", overview)
         self.assertIn("不预先绑定节点", overview)
         self.assertIn(hierarchy["delivery"]["summary"], overview)
+        self.assertNotIn("```json", overview)
+        self.assertNotIn("（PREPARED）", overview)
+
+        workspace_overview = (control / "overview.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("# 全部交付调度与进度总览", workspace_overview)
+        self.assertIn("交付数量：1", workspace_overview)
+        self.assertIn(prepared["rootId"], workspace_overview)
+        self.assertIn(
+            f"({prepared['rootId']}/overview.md)",
+            workspace_overview,
+        )
+        self.assertIn("待冻结", workspace_overview)
+        self.assertNotIn("PREPARED", workspace_overview)
 
         baseline_root = projections / TASK_BASELINE_DIRECTORY
         self.assertTrue(baseline_root.is_dir())
@@ -1010,6 +1080,16 @@ class SchedulerRuntimeTests(unittest.TestCase):
                         loop["payload"]["rawAuditMarker"],
                         baseline,
                     )
+                    self.assertIn("### 验收标准", baseline)
+                    self.assertIn("### 业务规则", baseline)
+                    self.assertIn("：是", baseline)
+                    self.assertIn(
+                        r"首行<br>\# 不能改变模板 \| \`原样文本\`",
+                        baseline,
+                    )
+                    self.assertNotIn("```json", baseline)
+                    self.assertNotIn('"acceptance"', baseline)
+                    self.assertNotIn('"rawAuditMarker"', baseline)
                     self.assertIn("springboot-tdd", baseline)
                     self.assertNotIn(definition["summary"], overview)
                     self.assertNotIn(loop["ref"], overview)
@@ -1033,6 +1113,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                         review["payload"]["rawAuditMarker"],
                         overview,
                     )
+                    self.assertIn("###### 审查重点", overview)
 
         delivery_review = hierarchy["delivery"]["reviewLoop"]
         self.assertIn(delivery_review["ref"], overview)
@@ -1044,7 +1125,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
             delivery_review["payload"]["rawAuditMarker"],
             overview,
         )
-        self.assertIn('"rawAuditMarker"', overview)
+        self.assertIn("###### 原始审计标记", overview)
+        self.assertNotIn('"rawAuditMarker"', overview)
 
         work_item_ids = {
             current["definition"]["id"]
@@ -1072,7 +1154,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "overview.md",
             },
         )
-        self.assertGreaterEqual(PROJECTION_TEMPLATE_VERSION, 2)
+        self.assertGreaterEqual(PROJECTION_TEMPLATE_VERSION, 3)
         prepared = prepare_hierarchy(
             root=self.root,
             hierarchy=auditable_recursive_hierarchy(),
@@ -1092,6 +1174,12 @@ class SchedulerRuntimeTests(unittest.TestCase):
             Path(self.root)
             / ".layered-delivery"
             / prepared["rootId"]
+        )
+        workspace_overview_path = (
+            Path(self.root) / ".layered-delivery" / "overview.md"
+        )
+        original_workspace_overview = (
+            workspace_overview_path.read_bytes()
         )
         filenames = set(PROJECTION_TEMPLATES)
         original = {
@@ -1118,6 +1206,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "not controller data\n",
             encoding="utf-8",
         )
+        workspace_overview_path.write_text(
+            "agent-authored workspace summary\n",
+            encoding="utf-8",
+        )
 
         repository = SchedulerRepository(self.root)
         repository.write_projections(prepared["rootId"])
@@ -1132,6 +1224,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
             if path.is_file()
         }
         self.assertEqual(rebuilt, original)
+        self.assertEqual(
+            workspace_overview_path.read_bytes(),
+            original_workspace_overview,
+        )
         self.assertEqual(rebuilt_baselines, original_baselines)
         self.assertNotIn(
             "stale-agent-file.md",
@@ -1406,6 +1502,20 @@ class SchedulerRuntimeTests(unittest.TestCase):
             second_prepared["rootId"],
             second_overview.read_text(encoding="utf-8"),
         )
+        workspace_overview = (
+            control / "overview.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("交付数量：2", workspace_overview)
+        self.assertIn(first_prepared["rootId"], workspace_overview)
+        self.assertIn(second_prepared["rootId"], workspace_overview)
+        self.assertIn(
+            f"({first_prepared['rootId']}/overview.md)",
+            workspace_overview,
+        )
+        self.assertIn(
+            f"({second_prepared['rootId']}/overview.md)",
+            workspace_overview,
+        )
 
     def test_frozen_projection_contains_runtime_progress(self) -> None:
         hierarchy = auditable_recursive_hierarchy()
@@ -1435,7 +1545,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
 
         self.assertEqual(frozen["status"], "ACTIVE")
         self.assertTrue((projections / "state.json").is_file())
-        self.assertIn("ACTIVE", overview)
+        self.assertIn("运行状态：运行中", overview)
+        self.assertNotIn("ACTIVE", overview)
         statuses = {
             state["status"]
             for state in frozen["nodes"]
@@ -1445,17 +1556,13 @@ class SchedulerRuntimeTests(unittest.TestCase):
         lines = overview.splitlines()
         for state in frozen["nodes"]:
             with self.subTest(node_id=state["nodeId"]):
-                self.assertTrue(
-                    any(
-                        state["nodeId"] in line
-                        and state["status"] in line
-                        for line in lines
-                    ),
-                    (
-                        f"overview must pair {state['nodeId']} with "
-                        f"{state['status']}"
-                ),
-            )
+                node_line = f"- 调度节点：{state['nodeId']}"
+                self.assertIn(node_line, lines)
+                node_index = lines.index(node_line)
+                self.assertEqual(
+                    lines[node_index + 1],
+                    f"- 当前进度：{STATUS_TEXT[state['status']]}",
+                )
 
     def test_projection_labels_statuses_and_times_are_localized(
         self,
@@ -1490,10 +1597,11 @@ class SchedulerRuntimeTests(unittest.TestCase):
             prepared_overview,
         )
         self.assertIn(
-            "层级状态（hierarchyStatus）：待冻结（PREPARED）",
+            "层级状态：待冻结",
             prepared_overview,
         )
-        self.assertIn("任务 Loop（TASK）", prepared_overview)
+        self.assertIn("| 任务 |", prepared_overview)
+        self.assertNotIn("PREPARED", prepared_overview)
 
         freeze_hierarchy(
             root=self.root,
@@ -1516,14 +1624,16 @@ class SchedulerRuntimeTests(unittest.TestCase):
         active_overview = overview_path.read_text(encoding="utf-8")
 
         self.assertIn(
-            "层级状态（hierarchyStatus）：已冻结（FROZEN）",
+            "层级状态：已冻结",
             active_overview,
         )
         self.assertIn(
-            "运行状态（runStatus）：运行中（ACTIVE）",
+            "运行状态：运行中",
             active_overview,
         )
-        self.assertIn("执行中（CLAIMED）", active_overview)
+        self.assertIn("当前进度：执行中", active_overview)
+        for machine_status in ("FROZEN", "ACTIVE", "CLAIMED"):
+            self.assertNotIn(machine_status, active_overview)
         for expected in (
             "认领时间（UTC+8）：2026-01-01T08:02:00+08:00",
             "最近心跳（UTC+8）：2026-01-01T08:02:00+08:00",
@@ -1773,6 +1883,21 @@ class RemovedCouplingTests(unittest.TestCase):
         self.assertNotIn("record_skill_activation", names)
         self.assertNotIn("record_skill_conformance", names)
         self.assertNotIn("remediate_task", names)
+        pause_tool = next(
+            tool for tool in tools if tool["name"] == "pause_loop"
+        )
+        self.assertIn("live lease", pause_tool["description"])
+        self.assertNotIn(
+            "capacity handoff",
+            pause_tool["description"],
+        )
+        context_tool = next(
+            tool for tool in tools if tool["name"] == "loop_context"
+        )
+        self.assertIn(
+            "expired-lease recovery",
+            context_tool["description"],
+        )
         self.assertTrue(
             {
                 "execute_sql",

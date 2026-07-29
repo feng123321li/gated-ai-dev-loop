@@ -101,13 +101,32 @@ class PluginBundleTests(unittest.TestCase):
         self.assertEqual(
             matchers,
             {
-                "freeze_hierarchy",
                 "rebuild_graph_run",
                 "cancel_graph_run",
                 "record_user_confirmation",
             },
         )
         self.assertLessEqual(matchers, names)
+
+    def test_freeze_uses_the_skill_choice_not_host_reapproval(
+        self,
+    ) -> None:
+        manifest = json.loads(
+            (PLUGIN / ".codex-plugin" / "plugin.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        server = manifest["mcpServers"]["layered-delivery"]
+        self.assertEqual(
+            server["default_tools_approval_mode"],
+            "approve",
+        )
+        approvals = server["tools"]
+        self.assertNotIn("freeze_hierarchy", approvals)
+        self.assertEqual(
+            approvals["record_user_confirmation"]["approval_mode"],
+            "prompt",
+        )
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
         self.assertEqual(len(tool_definitions()), 17)

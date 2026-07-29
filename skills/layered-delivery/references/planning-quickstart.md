@@ -239,6 +239,9 @@ TASK、GROUP Review 和 Delivery Review 使用相同 Loop 描述协议：
 1. 调用 `hierarchy_contract(root_kind=...)`。
 2. 按返回的 schema 和 example 创建完整 hierarchy。
 3. 调用 `prepare_hierarchy`，依据 MCP 响应和刚提交的 hierarchy 向用户概述双指纹、状态、完整 GROUP/TASK 清单、summary、依赖、Loop 引用、资源声明和原始 payload；同时提供 `humanArtifacts.overview` 路径，供用户直接检查控制器生成的中文、UTC+8 人类投影。不要读取投影来反推机器状态，也不要自行重演渲染器。
-4. 用户要求修改时重新 prepare；不要复用旧 fingerprint。
-5. 用户明确同意后，使用当前 `hierarchyFingerprint` 调用 `freeze_hierarchy`。
-6. 冻结后立即转到 `graph_frontier`，不再逐 TASK 请求方案确认。
+4. 提供两个确认开发选项和一个非确认分支：
+   - **自动执行**（确认开发）：用户选择后，立即以当前 `hierarchyFingerprint`、`execution_mode=active` 和真实确认人调用 `freeze_hierarchy`；冻结成功后直接进入 `graph_frontier` 调度循环。
+   - **手动交接**（确认开发）：用户选择后，立即以当前 `hierarchyFingerprint`、`execution_mode=manual` 和真实确认人调用 `freeze_hierarchy`；冻结成功后只输出一次包含 `rootId` 的纯文本交接说明，接收会话从 `graph_frontier` 恢复，不重新 prepare 或 freeze。
+   - **调整需求或任何其他反馈**（未确认）：不要调用 freeze；继续与用户交互，按改动重新 prepare，不复用旧 fingerprint。
+5. 自动或手动选择本身就是一次性的完整冻结授权。只有这两个选择可以紧邻调用 `freeze_hierarchy`；该工具在宿主权限层使用自动批准，不得再询问通用 Yes/No 或触发任何冻结弹窗，也不要向 MCP 发送内部 `confirmed` 字段。适配器会在控制器边界内注入严格的布尔值 `True`；自动/手动只决定当前会话继续还是交接，不改变内部自动确认模式。
+6. 冻结后不再逐 TASK 请求方案确认。自动模式继续消费 frontier；手动模式到一次性交接后停止当前会话的执行循环。

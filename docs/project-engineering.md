@@ -132,7 +132,7 @@ Task 内部仍然运行原有 Loop：理解冻结上下文 → 实现 → 测试
 
 ## 6. 图是怎样生成的
 
-用户通过 schema v3 提交完整嵌套层级。MCP `prepare_hierarchy` 完成四件事：
+用户先通过只读 MCP `hierarchy_contract` 按根类型与输入模式取得精确 schema v3 和可直接提交的示例，再向 `prepare_hierarchy` 提交完整嵌套层级或根 Task 紧凑输入。`prepare_hierarchy` 完成四件事：
 
 1. 校验层级、合同、依赖、波次、scope 和精确文件计划；
 2. 生成可供人评审的 `development-plan.md`；
@@ -321,7 +321,9 @@ Markdown 只是可由 SQLite 与控制器当前 schema v3 runtime 策略重建�
 ### 11.1 新需求
 
 ```text
-prepare_hierarchy
+hierarchy_contract
+→ 取得当前精确 schema v3 与有效示例
+→ prepare_hierarchy
 → 评审需求级 development-plan.md、execution-graph.md 与工作区级 state-transition-graph.md
 → 选择 active 或 manual
 → freeze_hierarchy
@@ -411,6 +413,7 @@ src/hdg/
 ├── execution.py             # Task 派发、上下文和结果写回
 ├── acceptance.py            # gate、review 与 confirmation
 ├── remediation.py           # 同合同修正与图失效传播
+├── hierarchy_contract.py    # 按需规划 schema 与可提交示例
 ├── operation_*.py           # 按 payload/graph/task/review 等领域分组的 handler
 ├── operations.py            # 小型 MCP 应用服务分派入口
 ├── mcp_tools.py             # MCP 工具 schema 与参数门禁

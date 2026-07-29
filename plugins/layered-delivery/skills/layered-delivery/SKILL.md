@@ -15,7 +15,7 @@ allowed-tools:
 - 只调用 Plugin 注册的 MCP 工具；Server 固定项目根，业务工具不接收项目根或通用确认参数。
 - MCP 未安装、未连接或工具未注册时报告 `PLUGIN_MCP_UNAVAILABLE` 并停止；不得编辑业务代码、启动 Shell/CLI 控制器、直接写 SQLite 或从源码/Markdown 猜状态。
 - SQLite/Graph 是机器权威，Markdown 只是投影。Agent 不直接改 SQLite、baseline、图或投影。
-- 只用完整 schema v3；具体输入以当前工具 schema 和结构化错误为准，不在上下文复制完整模板。
+- 只用完整 schema v3；规划时以按需 `hierarchy_contract` 返回的精确 schema、示例和结构化错误为准，不从源码猜类型，也不在常驻上下文复制完整模板。
 - 所有面向用户的说明、进度、警告、验收结论和 Markdown 默认使用简体中文，优先转述结构化错误中的中文 `userPrompt`，不直接复述内部英文状态码；日期默认按 `UTC+08:00` 展示。MCP、SQLite、事件链和 JSON 的机器字段保持英文，机器时间保持 UTC。
 
 ## 不变量

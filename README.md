@@ -35,7 +35,7 @@ Cursor 或其他 Agent 也可以接入，但宿主需要同时提供：
 - Python 3.10+；
 - `python` 可从 PATH 启动；
 - 已安装并启用 `layered-delivery`；
-- 当前会话已成功连接 MCP Server，并注册全部 37 个工具。
+- 当前会话已成功连接 MCP Server，并注册全部 38 个工具。
 
 MCP 未连接或工具注册失败时不能开始开发，也不能使用 Shell 或直接修改 SQLite 绕过治理。
 

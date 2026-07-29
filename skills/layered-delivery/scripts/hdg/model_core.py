@@ -78,6 +78,37 @@ SKILL_STAGE_TEXT = {
 def _exact_keys(value: object, expected: list[str] | tuple[str, ...]) -> bool:
     return isinstance(value, dict) and set(value) == set(expected)
 
+
+def _fail_shape(
+    code: str,
+    message: str,
+    value: object,
+    *,
+    field: str,
+    required: list[str] | tuple[str, ...] | set[str],
+    optional: list[str] | tuple[str, ...] | set[str] = (),
+) -> None:
+    """Raise one stable error with the complete object-key difference."""
+
+    required_keys = set(required)
+    optional_keys = set(optional)
+    actual_keys = set(value) if isinstance(value, dict) else set()
+    fail(
+        code,
+        message,
+        field=field,
+        requiredKeys=sorted(required_keys),
+        optionalKeys=sorted(optional_keys),
+        expectedKeys=sorted(required_keys | optional_keys),
+        actualKeys=sorted(actual_keys),
+        missingKeys=sorted(required_keys - actual_keys),
+        unknownKeys=sorted(
+            actual_keys - required_keys - optional_keys,
+        ),
+        actualType=type(value).__name__,
+    )
+
+
 def _text(value: object, field: str) -> str:
     if not isinstance(value, str) or not value.strip() or PLACEHOLDER.search(value) or CONTROL.search(value):
         fail("WORK_ITEM_VALUE_INVALID", f"{field} must be nonempty text without placeholders", field=field)
@@ -94,11 +125,21 @@ def safe_id(value: object, field: str = "id") -> str:
         )
     return value
 
-def _gate_level(value: object, kind: str) -> str:
+def _gate_level(
+    value: object,
+    kind: str,
+    field: str = "definition.gateLevel",
+) -> str:
     if value not in WORK_ITEM_GATE_LEVELS or (kind != "TASK" and value != "FULL"):
         fail(
             "WORK_ITEM_GATE_LEVEL_INVALID",
             "gateLevel must be LIGHT or FULL, and coordination work items must be FULL",
+            field=field,
+            allowed=(
+                list(WORK_ITEM_GATE_LEVELS)
+                if kind == "TASK"
+                else ["FULL"]
+            ),
         )
     return str(value)
 
@@ -140,15 +181,29 @@ def _trace_records(values: object, prefix: str, field: str) -> list[dict[str, An
     seen: set[str] = set()
     for index, entry in enumerate(values):
         expected = ["id", "text"] if prefix == "R" else ["id", "requirementIds", "expectedResult"]
+        record_field = f"{field}[{index}]"
+        if not _exact_keys(entry, expected):
+            _fail_shape(
+                "WORK_ITEM_TRACE_INVALID",
+                f"{record_field} has missing or unknown fields",
+                entry,
+                field=record_field,
+                required=expected,
+            )
         entry_id = entry.get("id") if isinstance(entry, dict) else None
         if (
-            not _exact_keys(entry, expected)
-            or not isinstance(entry_id, str)
+            not isinstance(entry_id, str)
             or not TRACE_ID.fullmatch(entry_id)
             or not entry_id.startswith(prefix + "-")
             or entry_id in seen
         ):
-            fail("WORK_ITEM_TRACE_INVALID", f"{field}[{index}] has an invalid or duplicate ID", field=field, index=index)
+            fail(
+                "WORK_ITEM_TRACE_INVALID",
+                f"{record_field} has an invalid or duplicate ID",
+                field=f"{record_field}.id",
+                index=index,
+                pattern=TRACE_ID.pattern,
+            )
         seen.add(entry_id)
         if prefix == "R":
             result.append({"id": entry_id, "text": _text(entry["text"], f"{field}.{entry_id}")})
@@ -184,6 +239,8 @@ def _child_records(
     kind: str,
     requirements: list[dict[str, Any]],
     acceptance: list[dict[str, Any]],
+    *,
+    field: str,
 ) -> list[dict[str, Any]]:
     if not isinstance(values, list) or not values:
         fail("WORK_ITEM_CHILDREN_INVALID", f"{kind} must declare at least one child work item")
@@ -193,9 +250,25 @@ def _child_records(
     seen: set[str] = set()
     result = []
     for index, entry in enumerate(values):
-        if not _exact_keys(entry, ["id", "kind", "title", "requirementIds", "acceptanceIds"]) or entry["kind"] != expected_kind:
-            fail("WORK_ITEM_CHILDREN_INVALID", f"{kind} children must be {expected_kind} records", index=index)
-        entry_id = safe_id(entry["id"], f"children[{index}].id")
+        keys = ["id", "kind", "title", "requirementIds", "acceptanceIds"]
+        record_field = f"{field}[{index}]"
+        if not _exact_keys(entry, keys):
+            _fail_shape(
+                "WORK_ITEM_CHILDREN_INVALID",
+                f"{record_field} has missing or unknown fields",
+                entry,
+                field=record_field,
+                required=keys,
+            )
+        if entry["kind"] != expected_kind:
+            fail(
+                "WORK_ITEM_CHILDREN_INVALID",
+                f"{kind} children must be {expected_kind} records",
+                field=f"{record_field}.kind",
+                index=index,
+                allowed=[expected_kind],
+            )
+        entry_id = safe_id(entry["id"], f"{record_field}.id")
         if entry_id in seen:
             fail("WORK_ITEM_CHILDREN_INVALID", f"Duplicate child ID: {entry_id}")
         seen.add(entry_id)
@@ -214,9 +287,21 @@ def _child_records(
         })
     return sorted(result, key=lambda item: item["id"])
 
-def _execution_record(value: object, item_id: str) -> dict[str, Any]:
-    if not _exact_keys(value, ["dependsOn", "inputs", "outputs"]):
-        fail("WORK_ITEM_EXECUTION_INVALID", "Task execution must contain dependsOn, inputs, and outputs")
+def _execution_record(
+    value: object,
+    item_id: str,
+    *,
+    field: str,
+) -> dict[str, Any]:
+    keys = ["dependsOn", "inputs", "outputs"]
+    if not _exact_keys(value, keys):
+        _fail_shape(
+            "WORK_ITEM_EXECUTION_INVALID",
+            "Task execution contains missing or unknown fields",
+            value,
+            field=field,
+            required=keys,
+        )
     if not isinstance(value["dependsOn"], list):
         fail("WORK_ITEM_DEPENDENCY_INVALID", "Task dependsOn must be an array")
     depends_on = [safe_id(item, f"dependsOn[{index}]") for index, item in enumerate(value["dependsOn"])]
@@ -228,10 +313,30 @@ def _execution_record(value: object, item_id: str) -> dict[str, Any]:
         "outputs": _strings(value["outputs"], "execution.outputs"),
     }
 
-def _decomposition_record(value: object, kind: str, item_id: str, parent: dict[str, Any] | None) -> dict[str, Any]:
+def _decomposition_record(
+    value: object,
+    kind: str,
+    item_id: str,
+    parent: dict[str, Any] | None,
+    *,
+    field: str,
+) -> dict[str, Any]:
     expected = ["status", "dependsOn"] if kind == "CAPABILITY" else ["status"]
-    if not _exact_keys(value, expected) or value["status"] not in {"OPEN", "SEALED"}:
-        fail("WORK_ITEM_DECOMPOSITION_INVALID", "Coordination work items require decomposition status OPEN or SEALED")
+    if not _exact_keys(value, expected):
+        _fail_shape(
+            "WORK_ITEM_DECOMPOSITION_INVALID",
+            "Coordination decomposition contains missing or unknown fields",
+            value,
+            field=field,
+            required=expected,
+        )
+    if value["status"] not in {"OPEN", "SEALED"}:
+        fail(
+            "WORK_ITEM_DECOMPOSITION_INVALID",
+            "Coordination work items require decomposition status OPEN or SEALED",
+            field=f"{field}.status",
+            allowed=["OPEN", "SEALED"],
+        )
     if kind == "DELIVERY":
         return {"status": value["status"]}
     if not isinstance(value["dependsOn"], list):
@@ -258,7 +363,11 @@ def _test_commands(values: object) -> list[list[str]]:
         fail("WORK_ITEM_TEST_COMMAND_INVALID", "Duplicate test command")
     return normalized
 
-def _required_skills(values: object) -> list[dict[str, Any]]:
+def _required_skills(
+    values: object,
+    *,
+    field: str,
+) -> list[dict[str, Any]]:
     if not isinstance(values, list):
         fail(
             "WORK_ITEM_REQUIRED_SKILL_INVALID",
@@ -270,12 +379,15 @@ def _required_skills(values: object) -> list[dict[str, Any]]:
         stage: index for index, stage in enumerate(WORK_ITEM_SKILL_STAGES)
     }
     for index, entry in enumerate(values):
-        field = f"requiredSkills[{index}]"
-        if not _exact_keys(entry, ["name", "stages", "purpose"]):
-            fail(
+        record_field = f"{field}[{index}]"
+        keys = ["name", "stages", "purpose"]
+        if not _exact_keys(entry, keys):
+            _fail_shape(
                 "WORK_ITEM_REQUIRED_SKILL_INVALID",
-                f"{field} must contain only name, stages, and purpose",
-                field=field,
+                f"{record_field} contains missing or unknown fields",
+                entry,
+                field=record_field,
+                required=keys,
             )
         name = entry["name"]
         if (
@@ -285,8 +397,8 @@ def _required_skills(values: object) -> list[dict[str, Any]]:
         ):
             fail(
                 "WORK_ITEM_REQUIRED_SKILL_INVALID",
-                f"{field}.name must be a unique portable Skill catalog name",
-                field=f"{field}.name",
+                f"{record_field}.name must be a unique portable Skill catalog name",
+                field=f"{record_field}.name",
             )
         stages = entry["stages"]
         if (
@@ -297,15 +409,15 @@ def _required_skills(values: object) -> list[dict[str, Any]]:
         ):
             fail(
                 "WORK_ITEM_REQUIRED_SKILL_INVALID",
-                f"{field}.stages must contain unique supported stages",
-                field=f"{field}.stages",
+                f"{record_field}.stages must contain unique supported stages",
+                field=f"{record_field}.stages",
                 allowed=list(WORK_ITEM_SKILL_STAGES),
             )
         seen.add(name)
         result.append({
             "name": name,
             "stages": sorted(stages, key=stage_order.__getitem__),
-            "purpose": _text(entry["purpose"], f"{field}.purpose"),
+            "purpose": _text(entry["purpose"], f"{record_field}.purpose"),
         })
     return sorted(result, key=lambda item: item["name"])
 
@@ -313,12 +425,12 @@ def validate_skill_catalog(values: object) -> dict[str, list[str]]:
     """Validate root- and project-scoped Skill names from the current host."""
 
     if not _exact_keys(values, ["root", "project"]):
-        fail(
+        _fail_shape(
             "WORK_ITEM_SKILL_CATALOG_INVALID",
-            (
-                "available_skills must contain only root and project Skill "
-                "catalog arrays"
-            ),
+            "available_skills contains missing or unknown fields",
+            values,
+            field="available_skills",
+            required=["root", "project"],
         )
     result: dict[str, list[str]] = {}
     for scope in ("root", "project"):
@@ -380,17 +492,34 @@ def _development_test_plan(
     values: object,
     acceptance: list[dict[str, Any]],
     test_command_count: int,
+    *,
+    field: str,
 ) -> list[dict[str, Any]]:
     if not isinstance(values, list) or not values:
-        fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "developmentPlan.testPlan must be a nonempty array")
+        fail(
+            "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+            f"{field} must be a nonempty array",
+            field=field,
+        )
     acceptance_ids = {item["id"] for item in acceptance}
     covered: set[str] = set()
     result = []
     for index, entry in enumerate(values):
-        field = f"developmentPlan.testPlan[{index}]"
-        if not _exact_keys(entry, ["acceptanceIds", "approach", "commandIndexes"]):
-            fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", f"{field} has missing or unknown fields", field=field)
-        linked = _linked_trace_ids(entry["acceptanceIds"], acceptance_ids, f"{field}.acceptanceIds")
+        record_field = f"{field}[{index}]"
+        keys = ["acceptanceIds", "approach", "commandIndexes"]
+        if not _exact_keys(entry, keys):
+            _fail_shape(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{record_field} has missing or unknown fields",
+                entry,
+                field=record_field,
+                required=keys,
+            )
+        linked = _linked_trace_ids(
+            entry["acceptanceIds"],
+            acceptance_ids,
+            f"{record_field}.acceptanceIds",
+        )
         covered.update(linked)
         indexes = entry["commandIndexes"]
         if (
@@ -399,17 +528,32 @@ def _development_test_plan(
             or any(not isinstance(item, int) or isinstance(item, bool) or item < 0 or item >= test_command_count for item in indexes)
             or len(set(indexes)) != len(indexes)
         ):
-            fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", f"{field}.commandIndexes must reference frozen test commands", field=field)
+            fail(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                (
+                    f"{record_field}.commandIndexes must reference frozen "
+                    "test commands"
+                ),
+                field=f"{record_field}.commandIndexes",
+            )
         result.append({
             "acceptanceIds": linked,
-            "approach": _text(entry["approach"], f"{field}.approach"),
+            "approach": _text(
+                entry["approach"],
+                f"{record_field}.approach",
+            ),
             "commandIndexes": sorted(indexes),
         })
     if any(item["id"] not in covered for item in acceptance):
         fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "Every acceptance criterion must be covered by developmentPlan.testPlan")
     return result
 
-def _task_development_plan(value: object, normalized: dict[str, Any]) -> dict[str, Any]:
+def _task_development_plan(
+    value: object,
+    normalized: dict[str, Any],
+    *,
+    field: str,
+) -> dict[str, Any]:
     keys = [
         "purpose", "scenarios", "fileChanges", "interfaces", "logic", "dataAndTransactions",
         "compatibility", "testPlan", "reviewPoints",
@@ -419,22 +563,50 @@ def _task_development_plan(value: object, normalized: dict[str, Any]) -> dict[st
         or not set(keys).issubset(value)
         or not set(value).issubset(set(keys) | {"generatedFileRoots"})
     ):
-        fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "Task developmentPlan contains missing or unknown fields")
+        _fail_shape(
+            "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+            "Task developmentPlan contains missing or unknown fields",
+            value,
+            field=field,
+            required=keys,
+            optional=["generatedFileRoots"],
+        )
     requirement_ids = {item["id"] for item in normalized["requirements"]}
     covered: set[str] = set()
     if not isinstance(value["scenarios"], list) or not value["scenarios"]:
         fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "Task developmentPlan.scenarios must be nonempty")
     scenarios = []
     for index, entry in enumerate(value["scenarios"]):
-        field = f"developmentPlan.scenarios[{index}]"
-        if not _exact_keys(entry, ["kind", "title", "description", "requirementIds"]) or entry["kind"] not in WORK_ITEM_CHANGE_SCENARIOS:
-            fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", f"{field} is invalid", field=field)
-        linked = _linked_trace_ids(entry["requirementIds"], requirement_ids, f"{field}.requirementIds")
+        record_field = f"{field}.scenarios[{index}]"
+        keys = ["kind", "title", "description", "requirementIds"]
+        if not _exact_keys(entry, keys):
+            _fail_shape(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{record_field} has missing or unknown fields",
+                entry,
+                field=record_field,
+                required=keys,
+            )
+        if entry["kind"] not in WORK_ITEM_CHANGE_SCENARIOS:
+            fail(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{record_field}.kind is invalid",
+                field=f"{record_field}.kind",
+                allowed=list(WORK_ITEM_CHANGE_SCENARIOS),
+            )
+        linked = _linked_trace_ids(
+            entry["requirementIds"],
+            requirement_ids,
+            f"{record_field}.requirementIds",
+        )
         covered.update(linked)
         scenarios.append({
             "kind": entry["kind"],
-            "title": _text(entry["title"], f"{field}.title"),
-            "description": _text(entry["description"], f"{field}.description"),
+            "title": _text(entry["title"], f"{record_field}.title"),
+            "description": _text(
+                entry["description"],
+                f"{record_field}.description",
+            ),
             "requirementIds": linked,
         })
     if any(item["id"] not in covered for item in normalized["requirements"]):
@@ -449,12 +621,15 @@ def _task_development_plan(value: object, normalized: dict[str, Any]) -> dict[st
     generated_file_roots: list[dict[str, str]] = []
     seen_generated_roots: set[str] = set()
     for index, entry in enumerate(generated_roots_value):
-        field = f"developmentPlan.generatedFileRoots[{index}]"
-        if not _exact_keys(entry, ["path", "purpose"]):
-            fail(
+        record_field = f"{field}.generatedFileRoots[{index}]"
+        keys = ["path", "purpose"]
+        if not _exact_keys(entry, keys):
+            _fail_shape(
                 "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
-                f"{field} is invalid",
-                field=field,
+                f"{record_field} has missing or unknown fields",
+                entry,
+                field=record_field,
+                required=keys,
             )
         generated_path = normalize_scope_pattern(entry["path"])
         if (
@@ -471,15 +646,18 @@ def _task_development_plan(value: object, normalized: dict[str, Any]) -> dict[st
             fail(
                 "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
                 (
-                    f"{field}.path must be a unique, non-overlapping /** "
+                    f"{record_field}.path must be a unique, non-overlapping /** "
                     "subtree inside Task scope"
                 ),
-                field=field,
+                field=f"{record_field}.path",
             )
         seen_generated_roots.add(generated_path)
         generated_file_roots.append({
             "path": generated_path,
-            "purpose": _text(entry["purpose"], f"{field}.purpose"),
+            "purpose": _text(
+                entry["purpose"],
+                f"{record_field}.purpose",
+            ),
         })
     generated_file_roots.sort(key=lambda item: item["path"])
 
@@ -500,9 +678,23 @@ def _task_development_plan(value: object, normalized: dict[str, Any]) -> dict[st
     seen_paths: set[str] = set()
     file_changes = []
     for index, entry in enumerate(value["fileChanges"]):
-        field = f"developmentPlan.fileChanges[{index}]"
-        if not _exact_keys(entry, ["path", "action", "purpose"]) or entry["action"] not in {"ADD", "MODIFY", "REMOVE"}:
-            fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", f"{field} is invalid", field=field)
+        record_field = f"{field}.fileChanges[{index}]"
+        keys = ["path", "action", "purpose"]
+        if not _exact_keys(entry, keys):
+            _fail_shape(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{record_field} has missing or unknown fields",
+                entry,
+                field=record_field,
+                required=keys,
+            )
+        if entry["action"] not in {"ADD", "MODIFY", "REMOVE"}:
+            fail(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{record_field}.action is invalid",
+                field=f"{record_field}.action",
+                allowed=["ADD", "MODIFY", "REMOVE"],
+            )
         planned_path = normalize_scope_pattern(entry["path"])
         if (
             WILDCARD.search(planned_path)
@@ -513,12 +705,22 @@ def _task_development_plan(value: object, normalized: dict[str, Any]) -> dict[st
                 for root in generated_file_roots
             )
         ):
-            fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", f"{field}.path must be a unique exact path inside Task scope", field=field)
+            fail(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                (
+                    f"{record_field}.path must be a unique exact path "
+                    "inside Task scope"
+                ),
+                field=f"{record_field}.path",
+            )
         seen_paths.add(planned_path)
         file_changes.append({
             "path": planned_path,
             "action": entry["action"],
-            "purpose": _text(entry["purpose"], f"{field}.purpose"),
+            "purpose": _text(
+                entry["purpose"],
+                f"{record_field}.purpose",
+            ),
         })
     file_changes.sort(key=lambda item: item["path"])
 
@@ -527,42 +729,97 @@ def _task_development_plan(value: object, normalized: dict[str, Any]) -> dict[st
     interfaces = []
     interface_keys = ["name", "kind", "action", "location", "currentContract", "targetContract", "requirementIds"]
     for index, entry in enumerate(value["interfaces"]):
-        field = f"developmentPlan.interfaces[{index}]"
-        if (
-            not _exact_keys(entry, interface_keys)
-            or entry["kind"] not in WORK_ITEM_INTERFACE_KINDS
-            or entry["action"] not in {"ADD", "MODIFY", "REMOVE"}
-        ):
-            fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", f"{field} is invalid", field=field)
+        record_field = f"{field}.interfaces[{index}]"
+        if not _exact_keys(entry, interface_keys):
+            _fail_shape(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{record_field} has missing or unknown fields",
+                entry,
+                field=record_field,
+                required=interface_keys,
+            )
+        if entry["kind"] not in WORK_ITEM_INTERFACE_KINDS:
+            fail(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{record_field}.kind is invalid",
+                field=f"{record_field}.kind",
+                allowed=list(WORK_ITEM_INTERFACE_KINDS),
+            )
+        if entry["action"] not in {"ADD", "MODIFY", "REMOVE"}:
+            fail(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{record_field}.action is invalid",
+                field=f"{record_field}.action",
+                allowed=["ADD", "MODIFY", "REMOVE"],
+            )
         interfaces.append({
-            "name": _text(entry["name"], f"{field}.name"),
+            "name": _text(entry["name"], f"{record_field}.name"),
             "kind": entry["kind"],
             "action": entry["action"],
-            "location": _text(entry["location"], f"{field}.location"),
-            "currentContract": _text(entry["currentContract"], f"{field}.currentContract"),
-            "targetContract": _text(entry["targetContract"], f"{field}.targetContract"),
-            "requirementIds": _linked_trace_ids(entry["requirementIds"], requirement_ids, f"{field}.requirementIds"),
+            "location": _text(
+                entry["location"],
+                f"{record_field}.location",
+            ),
+            "currentContract": _text(
+                entry["currentContract"],
+                f"{record_field}.currentContract",
+            ),
+            "targetContract": _text(
+                entry["targetContract"],
+                f"{record_field}.targetContract",
+            ),
+            "requirementIds": _linked_trace_ids(
+                entry["requirementIds"],
+                requirement_ids,
+                f"{record_field}.requirementIds",
+            ),
         })
     return {
-        "purpose": _text(value["purpose"], "developmentPlan.purpose"),
+        "purpose": _text(value["purpose"], f"{field}.purpose"),
         "scenarios": scenarios,
         "fileChanges": file_changes,
         "generatedFileRoots": generated_file_roots,
         "interfaces": interfaces,
-        "logic": _strings(value["logic"], "developmentPlan.logic"),
-        "dataAndTransactions": _strings(value["dataAndTransactions"], "developmentPlan.dataAndTransactions", allow_empty=True),
-        "compatibility": _strings(value["compatibility"], "developmentPlan.compatibility"),
-        "testPlan": _development_test_plan(value["testPlan"], normalized["acceptance"], len(normalized["testCommands"])),
-        "reviewPoints": _strings(value["reviewPoints"], "developmentPlan.reviewPoints"),
+        "logic": _strings(value["logic"], f"{field}.logic"),
+        "dataAndTransactions": _strings(
+            value["dataAndTransactions"],
+            f"{field}.dataAndTransactions",
+            allow_empty=True,
+        ),
+        "compatibility": _strings(
+            value["compatibility"],
+            f"{field}.compatibility",
+        ),
+        "testPlan": _development_test_plan(
+            value["testPlan"],
+            normalized["acceptance"],
+            len(normalized["testCommands"]),
+            field=f"{field}.testPlan",
+        ),
+        "reviewPoints": _strings(
+            value["reviewPoints"],
+            f"{field}.reviewPoints",
+        ),
     }
 
-def _coordination_development_plan(value: object, normalized: dict[str, Any]) -> dict[str, Any]:
+def _coordination_development_plan(
+    value: object,
+    normalized: dict[str, Any],
+    *,
+    field: str,
+) -> dict[str, Any]:
     keys = [
         "purpose", "childPlans", "sharedContracts", "integrationFlow", "deliveryWaves",
         "testPlan", "reviewPoints",
     ]
     if not _exact_keys(value, keys):
-        fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "Coordination developmentPlan contains missing or unknown fields")
+        _fail_shape(
+            "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+            "Coordination developmentPlan contains missing or unknown fields",
+            value,
+            field=field,
+            required=keys,
+        )
     requirements = {item["id"] for item in normalized["requirements"]}
     acceptance = {item["id"] for item in normalized["acceptance"]}
     child_by_id = {item["id"]: item for item in normalized["children"]}
@@ -571,29 +828,86 @@ def _coordination_development_plan(value: object, normalized: dict[str, Any]) ->
     seen: set[str] = set()
     child_plans = []
     for index, entry in enumerate(value["childPlans"]):
-        field = f"developmentPlan.childPlans[{index}]"
+        record_field = f"{field}.childPlans[{index}]"
+        keys = [
+            "id",
+            "purpose",
+            "deliverables",
+            "requirementIds",
+            "acceptanceIds",
+            "dependsOn",
+        ]
+        if not _exact_keys(entry, keys):
+            _fail_shape(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{record_field} has missing or unknown fields",
+                entry,
+                field=record_field,
+                required=keys,
+            )
         entry_id = entry.get("id") if isinstance(entry, dict) else None
         child = child_by_id.get(entry_id)
         if (
-            not _exact_keys(entry, ["id", "purpose", "deliverables", "requirementIds", "acceptanceIds", "dependsOn"])
-            or child is None
+            child is None
             or entry_id in seen
         ):
-            fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", f"{field} does not match a unique planned child", field=field)
+            fail(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{record_field} does not match a unique planned child",
+                field=f"{record_field}.id",
+            )
         seen.add(entry_id)
-        linked_requirements = _linked_trace_ids(entry["requirementIds"], requirements, f"{field}.requirementIds")
-        linked_acceptance = _linked_trace_ids(entry["acceptanceIds"], acceptance, f"{field}.acceptanceIds")
+        linked_requirements = _linked_trace_ids(
+            entry["requirementIds"],
+            requirements,
+            f"{record_field}.requirementIds",
+        )
+        linked_acceptance = _linked_trace_ids(
+            entry["acceptanceIds"],
+            acceptance,
+            f"{record_field}.acceptanceIds",
+        )
         if linked_requirements != child["requirementIds"] or linked_acceptance != child["acceptanceIds"]:
-            fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", f"{field} trace mapping must match the child contract", field=field)
+            fail(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{record_field} trace mapping must match the child contract",
+                field=record_field,
+            )
         if not isinstance(entry["dependsOn"], list):
-            fail("WORK_ITEM_DEPENDENCY_INVALID", f"{field}.dependsOn must reference unique sibling children", field=field)
-        depends_on = [safe_id(item, f"{field}.dependsOn[{dependency_index}]") for dependency_index, item in enumerate(entry["dependsOn"])]
+            fail(
+                "WORK_ITEM_DEPENDENCY_INVALID",
+                (
+                    f"{record_field}.dependsOn must reference unique "
+                    "sibling children"
+                ),
+                field=f"{record_field}.dependsOn",
+            )
+        depends_on = [
+            safe_id(
+                item,
+                f"{record_field}.dependsOn[{dependency_index}]",
+            )
+            for dependency_index, item in enumerate(entry["dependsOn"])
+        ]
         if entry_id in depends_on or len(set(depends_on)) != len(depends_on) or any(item not in child_by_id for item in depends_on):
-            fail("WORK_ITEM_DEPENDENCY_INVALID", f"{field}.dependsOn must reference unique sibling children", field=field)
+            fail(
+                "WORK_ITEM_DEPENDENCY_INVALID",
+                (
+                    f"{record_field}.dependsOn must reference unique "
+                    "sibling children"
+                ),
+                field=f"{record_field}.dependsOn",
+            )
         child_plans.append({
             "id": entry_id,
-            "purpose": _text(entry["purpose"], f"{field}.purpose"),
-            "deliverables": _strings(entry["deliverables"], f"{field}.deliverables"),
+            "purpose": _text(
+                entry["purpose"],
+                f"{record_field}.purpose",
+            ),
+            "deliverables": _strings(
+                entry["deliverables"],
+                f"{record_field}.deliverables",
+            ),
             "requirementIds": linked_requirements,
             "acceptanceIds": linked_acceptance,
             "dependsOn": sorted(depends_on),
@@ -623,20 +937,50 @@ def _coordination_development_plan(value: object, normalized: dict[str, Any]) ->
     shared_contracts = []
     contract_keys = ["name", "kind", "description", "providerChildIds", "consumerChildIds", "requirementIds"]
     for index, entry in enumerate(value["sharedContracts"]):
-        field = f"developmentPlan.sharedContracts[{index}]"
-        if not _exact_keys(entry, contract_keys) or entry["kind"] not in WORK_ITEM_INTERFACE_KINDS:
-            fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", f"{field} is invalid", field=field)
-        providers = sorted(_strings(entry["providerChildIds"], f"{field}.providerChildIds"))
-        consumers = sorted(_strings(entry["consumerChildIds"], f"{field}.consumerChildIds"))
+        record_field = f"{field}.sharedContracts[{index}]"
+        if not _exact_keys(entry, contract_keys):
+            _fail_shape(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{record_field} has missing or unknown fields",
+                entry,
+                field=record_field,
+                required=contract_keys,
+            )
+        if entry["kind"] not in WORK_ITEM_INTERFACE_KINDS:
+            fail(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{record_field}.kind is invalid",
+                field=f"{record_field}.kind",
+                allowed=list(WORK_ITEM_INTERFACE_KINDS),
+            )
+        providers = sorted(_strings(
+            entry["providerChildIds"],
+            f"{record_field}.providerChildIds",
+        ))
+        consumers = sorted(_strings(
+            entry["consumerChildIds"],
+            f"{record_field}.consumerChildIds",
+        ))
         if any(item not in child_by_id for item in providers + consumers):
-            fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", f"{field} references an unknown child", field=field)
+            fail(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{record_field} references an unknown child",
+                field=record_field,
+            )
         shared_contracts.append({
-            "name": _text(entry["name"], f"{field}.name"),
+            "name": _text(entry["name"], f"{record_field}.name"),
             "kind": entry["kind"],
-            "description": _text(entry["description"], f"{field}.description"),
+            "description": _text(
+                entry["description"],
+                f"{record_field}.description",
+            ),
             "providerChildIds": providers,
             "consumerChildIds": consumers,
-            "requirementIds": _linked_trace_ids(entry["requirementIds"], requirements, f"{field}.requirementIds"),
+            "requirementIds": _linked_trace_ids(
+                entry["requirementIds"],
+                requirements,
+                f"{record_field}.requirementIds",
+            ),
         })
 
     if not isinstance(value["deliveryWaves"], list) or not value["deliveryWaves"]:
@@ -645,27 +989,53 @@ def _coordination_development_plan(value: object, normalized: dict[str, Any]) ->
     wave_orders: set[int] = set()
     delivery_waves = []
     for index, entry in enumerate(value["deliveryWaves"]):
-        field = f"developmentPlan.deliveryWaves[{index}]"
+        record_field = f"{field}.deliveryWaves[{index}]"
+        keys = ["order", "name", "childIds", "exitCriteria"]
+        if not _exact_keys(entry, keys):
+            _fail_shape(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{record_field} has missing or unknown fields",
+                entry,
+                field=record_field,
+                required=keys,
+            )
         order = entry.get("order") if isinstance(entry, dict) else None
         if (
-            not _exact_keys(entry, ["order", "name", "childIds", "exitCriteria"])
-            or not isinstance(order, int)
+            not isinstance(order, int)
             or isinstance(order, bool)
             or order < 1
             or order in wave_orders
         ):
-            fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", f"{field} is invalid", field=field)
+            fail(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{record_field}.order is invalid",
+                field=f"{record_field}.order",
+                minimum=1,
+            )
         wave_orders.add(order)
-        child_ids = sorted(safe_id(item, f"{field}.childIds") for item in _strings(entry["childIds"], f"{field}.childIds"))
+        child_ids = sorted(
+            safe_id(item, f"{record_field}.childIds")
+            for item in _strings(
+                entry["childIds"],
+                f"{record_field}.childIds",
+            )
+        )
         if any(item not in child_by_id or item in wave_by_child for item in child_ids):
-            fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", f"{field} must contain unique planned children", field=field)
+            fail(
+                "WORK_ITEM_DEVELOPMENT_PLAN_INVALID",
+                f"{record_field} must contain unique planned children",
+                field=f"{record_field}.childIds",
+            )
         for child_id in child_ids:
             wave_by_child[child_id] = order
         delivery_waves.append({
             "order": order,
-            "name": _text(entry["name"], f"{field}.name"),
+            "name": _text(entry["name"], f"{record_field}.name"),
             "childIds": child_ids,
-            "exitCriteria": _text(entry["exitCriteria"], f"{field}.exitCriteria"),
+            "exitCriteria": _text(
+                entry["exitCriteria"],
+                f"{record_field}.exitCriteria",
+            ),
         })
     delivery_waves.sort(key=lambda item: item["order"])
     if len(wave_by_child) != len(child_by_id) or any(
@@ -675,13 +1045,24 @@ def _coordination_development_plan(value: object, normalized: dict[str, Any]) ->
     ):
         fail("WORK_ITEM_DEVELOPMENT_PLAN_INVALID", "Delivery waves must cover every child and order dependencies before consumers")
     return {
-        "purpose": _text(value["purpose"], "developmentPlan.purpose"),
+        "purpose": _text(value["purpose"], f"{field}.purpose"),
         "childPlans": child_plans,
         "sharedContracts": shared_contracts,
-        "integrationFlow": _strings(value["integrationFlow"], "developmentPlan.integrationFlow"),
+        "integrationFlow": _strings(
+            value["integrationFlow"],
+            f"{field}.integrationFlow",
+        ),
         "deliveryWaves": delivery_waves,
-        "testPlan": _development_test_plan(value["testPlan"], normalized["acceptance"], len(normalized["testCommands"])),
-        "reviewPoints": _strings(value["reviewPoints"], "developmentPlan.reviewPoints"),
+        "testPlan": _development_test_plan(
+            value["testPlan"],
+            normalized["acceptance"],
+            len(normalized["testCommands"]),
+            field=f"{field}.testPlan",
+        ),
+        "reviewPoints": _strings(
+            value["reviewPoints"],
+            f"{field}.reviewPoints",
+        ),
     }
 
 def _scope_covers(parent_pattern: str, child_pattern: str) -> bool:
@@ -730,14 +1111,33 @@ def validate_work_item_definition(
     definition: object,
     *,
     parent: dict[str, Any] | None = None,
+    field: str = "definition",
 ) -> dict[str, Any]:
     if not isinstance(definition, dict):
-        fail("WORK_ITEM_DEFINITION_INVALID", "Work item definition must be an object")
+        fail(
+            "WORK_ITEM_DEFINITION_INVALID",
+            "Work item definition must be an object",
+            field=field,
+            actualType=type(definition).__name__,
+        )
     kind = definition.get("kind")
     if kind not in WORK_ITEM_KINDS:
-        fail("WORK_ITEM_KIND_INVALID", "Work item kind must be DELIVERY, CAPABILITY, or TASK")
+        fail(
+            "WORK_ITEM_KIND_INVALID",
+            "Work item kind must be DELIVERY, CAPABILITY, or TASK",
+            field=f"{field}.kind",
+            allowed=list(WORK_ITEM_KINDS),
+        )
     if definition.get("schemaVersion") != WORK_ITEM_SCHEMA_VERSION:
-        fail("WORK_ITEM_SCHEMA_INVALID", f"Work item schemaVersion must be {WORK_ITEM_SCHEMA_VERSION}")
+        fail(
+            "WORK_ITEM_SCHEMA_INVALID",
+            (
+                "Work item schemaVersion must be "
+                f"{WORK_ITEM_SCHEMA_VERSION}"
+            ),
+            field=f"{field}.schemaVersion",
+            allowed=[WORK_ITEM_SCHEMA_VERSION],
+        )
     if kind == "TASK" and "children" in definition:
         fail("WORK_ITEM_TASK_NOT_LEAF", "Task is an executable leaf and cannot contain children")
     if kind != "TASK" and "execution" in definition:
@@ -757,28 +1157,51 @@ def validate_work_item_definition(
     actual_keys = set(definition)
     required_keys = expected_keys - {"requiredSkills"}
     if not required_keys.issubset(actual_keys) or not actual_keys.issubset(expected_keys):
-        fail(
+        _fail_shape(
             "WORK_ITEM_DEFINITION_INVALID",
             "Work item definition contains missing or unknown fields",
-            expectedKeys=sorted(expected),
-            actualKeys=sorted(definition),
+            definition,
+            field=field,
+            required=required_keys,
+            optional=["requiredSkills"],
         )
     normalized: dict[str, Any] = {
         "schemaVersion": WORK_ITEM_SCHEMA_VERSION,
-        "id": safe_id(definition["id"]),
+        "id": safe_id(definition["id"], f"{field}.id"),
         "kind": kind,
-        "gateLevel": _gate_level(definition["gateLevel"], kind),
+        "gateLevel": _gate_level(
+            definition["gateLevel"],
+            kind,
+            f"{field}.gateLevel",
+        ),
         "authorityKind": WORK_ITEM_AUTHORITIES[kind],
-        "title": _text(definition["title"], "title"),
-        "goal": _text(definition["goal"], "goal"),
+        "title": _text(definition["title"], f"{field}.title"),
+        "goal": _text(definition["goal"], f"{field}.goal"),
         "scope": _normalize_scope(definition["scope"]),
-        "nonGoals": _strings(definition["nonGoals"], "nonGoals"),
-        "requirements": _trace_records(definition["requirements"], "R", "requirements"),
-        "acceptance": _trace_records(definition["acceptance"], "A", "acceptance"),
+        "nonGoals": _strings(
+            definition["nonGoals"],
+            f"{field}.nonGoals",
+        ),
+        "requirements": _trace_records(
+            definition["requirements"],
+            "R",
+            f"{field}.requirements",
+        ),
+        "acceptance": _trace_records(
+            definition["acceptance"],
+            "A",
+            f"{field}.acceptance",
+        ),
         "testCommands": _test_commands(definition["testCommands"]),
-        "requiredSkills": _required_skills(definition.get("requiredSkills", [])),
-        "risks": _strings(definition["risks"], "risks"),
-        "decisions": _strings(definition["decisions"], "decisions"),
+        "requiredSkills": _required_skills(
+            definition.get("requiredSkills", []),
+            field=f"{field}.requiredSkills",
+        ),
+        "risks": _strings(definition["risks"], f"{field}.risks"),
+        "decisions": _strings(
+            definition["decisions"],
+            f"{field}.decisions",
+        ),
     }
     if parent is not None and any(
         "FINAL_REVIEW" in requirement["stages"]
@@ -790,15 +1213,39 @@ def validate_work_item_definition(
         )
     _validate_trace(normalized["requirements"], normalized["acceptance"])
     if kind == "TASK":
-        normalized["execution"] = _execution_record(definition["execution"], normalized["id"])
+        normalized["execution"] = _execution_record(
+            definition["execution"],
+            normalized["id"],
+            field=f"{field}.execution",
+        )
     else:
-        normalized["decomposition"] = _decomposition_record(definition["decomposition"], kind, normalized["id"], parent)
-        normalized["children"] = _child_records(definition["children"], kind, normalized["requirements"], normalized["acceptance"])
+        normalized["decomposition"] = _decomposition_record(
+            definition["decomposition"],
+            kind,
+            normalized["id"],
+            parent,
+            field=f"{field}.decomposition",
+        )
+        normalized["children"] = _child_records(
+            definition["children"],
+            kind,
+            normalized["requirements"],
+            normalized["acceptance"],
+            field=f"{field}.children",
+        )
     if "developmentPlan" in definition:
         normalized["developmentPlan"] = (
-            _task_development_plan(definition["developmentPlan"], normalized)
+            _task_development_plan(
+                definition["developmentPlan"],
+                normalized,
+                field=f"{field}.developmentPlan",
+            )
             if kind == "TASK"
-            else _coordination_development_plan(definition["developmentPlan"], normalized)
+            else _coordination_development_plan(
+                definition["developmentPlan"],
+                normalized,
+                field=f"{field}.developmentPlan",
+            )
         )
     normalized.update(_normalize_parent({**definition, **normalized}, parent))
     if parent and parent.get("developmentPlan"):
@@ -813,9 +1260,12 @@ def validate_work_item_definition(
 def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
     """Validate and normalize one complete requirement hierarchy."""
     if not _exact_keys(hierarchy, ["schemaVersion", "root"]):
-        fail(
+        _fail_shape(
             "WORK_ITEM_HIERARCHY_INVALID",
-            "Hierarchy definition must contain only schemaVersion and root",
+            "Hierarchy definition contains missing or unknown fields",
+            hierarchy,
+            field="hierarchy",
+            required=["schemaVersion", "root"],
         )
     if hierarchy["schemaVersion"] != WORK_ITEM_SCHEMA_VERSION:
         fail(
@@ -825,15 +1275,27 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
 
     seen: set[str] = set()
 
-    def normalize_node(value: object, parent: dict[str, Any] | None) -> dict[str, Any]:
+    def normalize_node(
+        value: object,
+        parent: dict[str, Any] | None,
+        *,
+        field: str,
+    ) -> dict[str, Any]:
         if not _exact_keys(value, ["definition", "children"]):
-            fail(
+            _fail_shape(
                 "WORK_ITEM_HIERARCHY_INVALID",
-                "Every hierarchy node must contain only definition and children",
+                "Hierarchy node contains missing or unknown fields",
+                value,
+                field=field,
+                required=["definition", "children"],
             )
         if not isinstance(value["children"], list):
             fail("WORK_ITEM_HIERARCHY_INVALID", "Hierarchy node children must be an array")
-        definition = validate_work_item_definition(value["definition"], parent=parent)
+        definition = validate_work_item_definition(
+            value["definition"],
+            parent=parent,
+            field=f"{field}.definition",
+        )
         if definition["id"] in seen:
             fail(
                 "WORK_ITEM_HIERARCHY_INVALID",
@@ -847,9 +1309,23 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
 
         expected = {(item["id"], item["kind"]) for item in definition["children"]}
         declared: set[tuple[str, str]] = set()
-        for child in value["children"]:
+        for index, child in enumerate(value["children"]):
+            child_field = f"{field}.children[{index}]"
+            if not isinstance(child, dict):
+                _fail_shape(
+                    "WORK_ITEM_HIERARCHY_INVALID",
+                    "Hierarchy child node must be an object",
+                    child,
+                    field=child_field,
+                    required=["definition", "children"],
+                )
             if not isinstance(child, dict) or not isinstance(child.get("definition"), dict):
-                fail("WORK_ITEM_HIERARCHY_INVALID", "Hierarchy child definition is invalid")
+                fail(
+                    "WORK_ITEM_HIERARCHY_INVALID",
+                    "Hierarchy child definition must be an object",
+                    field=f"{child_field}.definition",
+                    actualType=type(child.get("definition")).__name__,
+                )
             child_definition = child["definition"]
             child_id = child_definition.get("id")
             child_kind = child_definition.get("kind")
@@ -862,11 +1338,18 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
                 expected=sorted(item[0] for item in expected),
                 actual=sorted(item[0] for item in declared),
             )
-        children = [normalize_node(child, definition) for child in value["children"]]
+        children = [
+            normalize_node(
+                child,
+                definition,
+                field=f"{field}.children[{index}]",
+            )
+            for index, child in enumerate(value["children"])
+        ]
         children.sort(key=lambda item: item["definition"]["id"])
         return {"definition": definition, "children": children}
 
-    root = normalize_node(hierarchy["root"], None)
+    root = normalize_node(hierarchy["root"], None, field="root")
     return {"schemaVersion": WORK_ITEM_SCHEMA_VERSION, "root": root}
 
 def iter_hierarchy_nodes(hierarchy: dict[str, Any]) -> list[dict[str, Any]]:

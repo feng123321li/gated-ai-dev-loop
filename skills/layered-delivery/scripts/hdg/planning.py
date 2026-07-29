@@ -417,6 +417,12 @@ def prepare_hierarchy(
     ):
         hierarchy = _hydrate_compact_light_task(hierarchy)
         input_mode = "COMPACT_LIGHT_TASK"
+    elif (
+        isinstance(hierarchy, dict)
+        and set(hierarchy) == {"schemaVersion", "compactTask"}
+    ):
+        hierarchy = _hydrate_compact_task(hierarchy)
+        input_mode = "COMPACT_TASK"
     normalized = validate_hierarchy_definition(hierarchy)
     runtime = require_host_runtime(host_runtime)
     required_skills = sorted({
@@ -616,12 +622,58 @@ def _hydrate_compact_light_task(
     envelope: dict[str, Any],
 ) -> dict[str, Any]:
     """Expand the v3 LIGHT shorthand into the sole canonical v3 hierarchy."""
+    return _hydrate_compact_task_definition(
+        envelope,
+        field_name="compactLightTask",
+        gate_level="LIGHT",
+        require_gate_level=False,
+        error_code="WORK_ITEM_COMPACT_LIGHT_INVALID",
+    )
+
+
+def _hydrate_compact_task(
+    envelope: dict[str, Any],
+) -> dict[str, Any]:
+    """Expand the v3 root Task shorthand into the canonical v3 hierarchy."""
+    compact = envelope.get("compactTask")
+    if not isinstance(compact, dict):
+        fail(
+            "WORK_ITEM_COMPACT_TASK_INVALID",
+            "compactTask must be an object",
+            field="compactTask",
+        )
+    gate_level = compact.get("gateLevel")
+    if gate_level not in {"LIGHT", "FULL"}:
+        fail(
+            "WORK_ITEM_COMPACT_TASK_INVALID",
+            "compactTask.gateLevel must be LIGHT or FULL",
+            field="compactTask.gateLevel",
+            allowed=["LIGHT", "FULL"],
+        )
+    return _hydrate_compact_task_definition(
+        envelope,
+        field_name="compactTask",
+        gate_level=gate_level,
+        require_gate_level=True,
+        error_code="WORK_ITEM_COMPACT_TASK_INVALID",
+    )
+
+
+def _hydrate_compact_task_definition(
+    envelope: dict[str, Any],
+    *,
+    field_name: str,
+    gate_level: str,
+    require_gate_level: bool,
+    error_code: str,
+) -> dict[str, Any]:
+    """Expand one current schema-v3 compact Task input."""
     if envelope.get("schemaVersion") != SCHEMA_VERSION:
         fail(
             "WORK_ITEM_SCHEMA_INVALID",
-            f"Compact LIGHT input schemaVersion must be {SCHEMA_VERSION}",
+            f"Compact Task input schemaVersion must be {SCHEMA_VERSION}",
         )
-    compact = envelope.get("compactLightTask")
+    compact = envelope.get(field_name)
     required = {
         "id",
         "title",
@@ -633,6 +685,8 @@ def _hydrate_compact_light_task(
         "fileChanges",
         "logic",
     }
+    if require_gate_level:
+        required.add("gateLevel")
     optional = {
         "nonGoals",
         "requiredSkills",
@@ -649,15 +703,23 @@ def _hydrate_compact_light_task(
     }
     if not isinstance(compact, dict):
         fail(
-            "WORK_ITEM_COMPACT_LIGHT_INVALID",
-            "compactLightTask must be an object",
+            error_code,
+            f"{field_name} must be an object",
+            field=field_name,
         )
     missing = sorted(required - set(compact))
     unknown = sorted(set(compact) - required - optional)
     if missing or unknown:
         fail(
-            "WORK_ITEM_COMPACT_LIGHT_INVALID",
-            "Compact LIGHT task contains missing or unknown fields",
+            error_code,
+            "Compact Task contains missing or unknown fields",
+            field=field_name,
+            requiredKeys=sorted(required),
+            optionalKeys=sorted(optional),
+            expectedKeys=sorted(required | optional),
+            actualKeys=sorted(compact),
+            missingKeys=missing,
+            unknownKeys=unknown,
             missingFields=missing,
             unknownFields=unknown,
         )
@@ -683,7 +745,7 @@ def _hydrate_compact_light_task(
     goal = compact["goal"]
     scenarios = compact.get("scenarios") or [{
         "kind": "OTHER",
-        "title": "LIGHT task implementation",
+        "title": f"{gate_level} task implementation",
         "description": goal,
         "requirementIds": requirement_ids,
     }]
@@ -701,7 +763,9 @@ def _hydrate_compact_light_task(
         ),
         "testPlan": [{
             "acceptanceIds": acceptance_ids,
-            "approach": "Run every frozen test command for the LIGHT task.",
+            "approach": (
+                f"Run every frozen test command for the {gate_level} task."
+            ),
             "commandIndexes": command_indexes,
         }],
         "reviewPoints": compact.get(
@@ -713,7 +777,7 @@ def _hydrate_compact_light_task(
         "schemaVersion": SCHEMA_VERSION,
         "id": compact["id"],
         "kind": "TASK",
-        "gateLevel": "LIGHT",
+        "gateLevel": gate_level,
         "parentId": None,
         "title": compact["title"],
         "goal": goal,
@@ -729,7 +793,7 @@ def _hydrate_compact_light_task(
             "inputs": compact.get("inputs", []),
             "outputs": compact.get(
                 "outputs",
-                ["Verified output for the compact LIGHT task."],
+                [f"Verified output for the compact {gate_level} task."],
             ),
         },
         "testCommands": test_commands,
@@ -740,7 +804,10 @@ def _hydrate_compact_light_task(
         ),
         "decisions": compact.get(
             "decisions",
-            ["Use one LIGHT Task because no decomposition is required."],
+            [
+                f"Use one {gate_level} Task because no decomposition "
+                "is required."
+            ],
         ),
         "developmentPlan": development_plan,
     }

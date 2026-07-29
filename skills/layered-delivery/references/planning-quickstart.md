@@ -14,19 +14,26 @@
 
 `scope` 按最小可用模块适当放宽，优先 `module/**`，不得使用全仓库 `**`。已知新增、修改、删除使用精确 `developmentPlan.fileChanges`；批量生成可用非重叠的 `generatedFileRoots`，但只授权新增文件。兄弟 Scope 重叠会限制并行。
 
-测试命令使用 argv 数组。Task 是执行叶子；依赖只引用合法兄弟，父级 development plan 覆盖全部直接子级及其需求/验收映射。完整 definition 以 `prepare_hierarchy` 的当前工具 schema 为准，不复制固定模板。
+测试命令使用 argv 数组。Task 是执行叶子；依赖只引用合法兄弟，父级 development plan 覆盖全部直接子级及其需求/验收映射。选定根类型后先调用只读 `hierarchy_contract`，不要从校验失败或控制器源码试探内部类型：
+
+- 根 Task：优先 `root_kind=TASK, input_mode=COMPACT_TASK`，返回的 `compactTask` 同时支持 `LIGHT` 与 `FULL`。
+- 必须显式提供完整根 Task definition 时：使用 `root_kind=TASK, input_mode=FULL_HIERARCHY`。
+- 根 Capability 或 Delivery：分别使用对应 `root_kind` 与 `input_mode=FULL_HIERARCHY`。
+
+直接以返回的 `inputSchema` 和 `example` 起草，字段不匹配时一次消费错误中的 `field`、`requiredKeys`、`optionalKeys`、`actualKeys`、`missingKeys`、`unknownKeys` 与 `allowed`，不得逐字段盲试。
 
 多个仓库或服务仍只使用一个协调根；路径必须是该根下的安全相对路径，并明确测试 cwd、提供/消费依赖和共享契约。目标不可安全访问时先阻断。
 
-## LIGHT 简写
+## 根 Task 简写
 
-普通单 Task 优先向 `prepare_hierarchy.hierarchy` 提交 `compactLightTask`：
+普通单 Task 优先向 `prepare_hierarchy.hierarchy` 提交 `compactTask`；`gateLevel` 根据风险选择 `LIGHT` 或 `FULL`：
 
 ```json
 {
   "schemaVersion": 3,
-  "compactLightTask": {
+  "compactTask": {
     "id": "t-example",
+    "gateLevel": "FULL",
     "title": "Example task",
     "goal": "Deliver one observable result.",
     "scope": ["module/**", "tests/test_example.py"],
@@ -56,7 +63,7 @@
 }
 ```
 
-至少提供一个精确 `fileChanges` 或一个 `generatedFileRoots`。控制器扩展后只存完整 schema v3；这不是旧 schema 兼容入口。校验失败时根据结构化字段错误补齐，不从源码猜 schema。
+至少提供一个精确 `fileChanges` 或一个 `generatedFileRoots`。控制器扩展后只存完整 schema v3；这不是旧 schema 兼容入口。`hierarchy_contract.example` 可直接提交，校验失败时一次读取完整结构化字段差异，不从源码猜 schema。
 
 ## 用户指定开发 Skill
 
@@ -69,7 +76,7 @@
 
 ## 一次评审和冻结
 
-1. 调用 `prepare_hierarchy`。
+1. 调用 `hierarchy_contract` 取得当前精确输入，再调用 `prepare_hierarchy`。
 2. 提供根级 `developmentPlan` 入口，并简述完整树、目的、范围、精确文件授权、接口/共享契约、依赖波次和测试；同时展示 `active` / `manual` 两个选项。
    选择 `active` 前先确认宿主已具备冻结范围内的代码编辑与测试权限；Skill 不能自行切换宿主权限模式。
 3. 用户要求调整时，以同一根 ID 重新准备完整树；旧 fingerprint 不再使用。

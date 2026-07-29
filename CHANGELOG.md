@@ -4,6 +4,12 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 未发布
+
+- 新增只读 `hierarchy_contract` MCP 工具，按根类型与输入模式返回完整 schema v3 JSON Schema、可直接提交的有效示例和核心不变量；规划 Skill 在 `prepare_hierarchy` 前按需读取契约，不再从失败响应或控制器源码试探内部类型。
+- 新增根 `compactTask` 输入，以显式 `gateLevel` 同时覆盖 `LIGHT` 与 `FULL` 单 Task；控制器仍只持久化完整 schema v3，原 `compactLightTask` 行为保持不变。
+- hierarchy、node、definition、execution、development plan 及其嵌套记录的结构错误统一返回字段路径、必需/可选/实际/缺失/未知键和允许枚举；MCP 工具数由 37 增至 38，全量 248 项测试通过。
+
 ## 0.16.4 — 2026-07-29
 
 发布提交：`2f1d7ef`

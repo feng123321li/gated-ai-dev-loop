@@ -16,6 +16,7 @@ from hdg.model import (
     render_development_plan,
     resolve_self_hosting_policy,
     scope_patterns_overlap,
+    validate_hierarchy_definition,
     validate_work_item_definition,
     work_item_baseline_fingerprint,
     work_item_child_contract_fingerprint,
@@ -26,6 +27,129 @@ from .fixtures import capability_definition, delivery_definition, task_definitio
 
 
 class WorkItemModelTests(unittest.TestCase):
+    def assert_shape_details(
+        self,
+        error: GatedLoopError,
+        *,
+        field: str,
+        required: set[str],
+        optional: set[str],
+        actual: set[str],
+    ) -> None:
+        self.assertEqual(error.details["field"], field)
+        self.assertEqual(set(error.details["requiredKeys"]), required)
+        self.assertEqual(set(error.details["optionalKeys"]), optional)
+        self.assertEqual(set(error.details["actualKeys"]), actual)
+        self.assertEqual(
+            set(error.details["missingKeys"]),
+            required - actual,
+        )
+        self.assertEqual(
+            set(error.details["unknownKeys"]),
+            actual - required - optional,
+        )
+
+    def test_hierarchy_shape_error_reports_the_complete_key_diff(self) -> None:
+        source = {"schemaVersion": 3, "delivery": {}}
+
+        with self.assertRaises(GatedLoopError) as raised:
+            validate_hierarchy_definition(source)
+
+        self.assertEqual(
+            raised.exception.code,
+            "WORK_ITEM_HIERARCHY_INVALID",
+        )
+        self.assert_shape_details(
+            raised.exception,
+            field="hierarchy",
+            required={"schemaVersion", "root"},
+            optional=set(),
+            actual={"schemaVersion", "delivery"},
+        )
+
+    def test_nested_shape_errors_report_field_and_all_expected_keys(
+        self,
+    ) -> None:
+        cases = []
+
+        node = {"schemaVersion": 3, "root": {"definition": {}}}
+        cases.append((
+            node,
+            "root",
+            {"definition", "children"},
+            set(),
+            {"definition"},
+        ))
+
+        execution = task_definition()
+        execution["execution"]["summary"] = "unknown"
+        cases.append((
+            execution,
+            "definition.execution",
+            {"dependsOn", "inputs", "outputs"},
+            set(),
+            {"dependsOn", "inputs", "outputs", "summary"},
+        ))
+
+        plan = task_definition()
+        plan["developmentPlan"]["summary"] = "unknown"
+        cases.append((
+            plan,
+            "definition.developmentPlan",
+            {
+                "purpose",
+                "scenarios",
+                "fileChanges",
+                "interfaces",
+                "logic",
+                "dataAndTransactions",
+                "compatibility",
+                "testPlan",
+                "reviewPoints",
+            },
+            {"generatedFileRoots"},
+            set(plan["developmentPlan"]),
+        ))
+
+        scenario = task_definition()
+        scenario["developmentPlan"]["scenarios"][0]["summary"] = "unknown"
+        cases.append((
+            scenario,
+            "definition.developmentPlan.scenarios[0]",
+            {"kind", "title", "description", "requirementIds"},
+            set(),
+            set(scenario["developmentPlan"]["scenarios"][0]),
+        ))
+
+        for source, field, required, optional, actual in cases:
+            with self.subTest(field=field):
+                with self.assertRaises(GatedLoopError) as raised:
+                    if "root" in source:
+                        validate_hierarchy_definition(source)
+                    else:
+                        validate_work_item_definition(source)
+                self.assert_shape_details(
+                    raised.exception,
+                    field=field,
+                    required=required,
+                    optional=optional,
+                    actual=actual,
+                )
+
+    def test_invalid_record_enum_reports_all_allowed_values(self) -> None:
+        source = task_definition()
+        source["developmentPlan"]["scenarios"][0]["kind"] = "UNKNOWN"
+
+        with self.assertRaises(GatedLoopError) as raised:
+            validate_work_item_definition(source)
+
+        self.assertEqual(
+            raised.exception.details["field"],
+            "definition.developmentPlan.scenarios[0].kind",
+        )
+        self.assertIn("API", raised.exception.details["allowed"])
+        self.assertIn("OTHER", raised.exception.details["allowed"])
+
     def test_task_is_normalized_and_fingerprinted(self) -> None:
         definition = validate_work_item_definition(task_definition())
         self.assertEqual(definition["authorityKind"], "EXECUTION")

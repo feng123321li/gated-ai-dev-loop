@@ -147,7 +147,8 @@ class InstallAndBundleTests(unittest.TestCase):
             "`developmentPlan.fileChanges`",
             planning_quickstart,
         )
-        self.assertIn("compactLightTask", planning_quickstart)
+        self.assertIn("hierarchy_contract", planning_quickstart)
+        self.assertIn("compactTask", planning_quickstart)
         self.assertIn("generatedFileRoots", planning_quickstart)
         self.assertIn("evidenceDelta", execution_quickstart)
         self.assertIn("nextFrontier", execution_quickstart)
@@ -467,7 +468,7 @@ class InstallAndBundleTests(unittest.TestCase):
                     {"name": "layered-delivery", "version": "0.16.4"},
                 )
                 tools = responses[1]["result"]["tools"]
-                self.assertEqual(len(tools), 37)
+                self.assertEqual(len(tools), 38)
                 self.assertEqual(
                     {
                         tool["name"]

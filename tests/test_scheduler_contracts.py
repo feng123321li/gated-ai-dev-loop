@@ -199,11 +199,33 @@ class McpSurfaceTests(unittest.TestCase):
         self.assertEqual(
             human,
             {
-                "freeze_hierarchy",
                 "record_user_confirmation",
                 "cancel_graph_run",
             },
         )
+        by_name = {tool["name"]: tool for tool in tools}
+        freeze = by_name["freeze_hierarchy"]
+        self.assertNotIn("_meta", freeze)
+        freeze_schema = freeze["inputSchema"]
+        self.assertNotIn("confirmed", freeze_schema["properties"])
+        self.assertEqual(
+            freeze_schema["properties"]["execution_mode"],
+            {
+                "type": "string",
+                "enum": ["active", "manual"],
+                "description": (
+                    "User-selected host execution mode. active continues "
+                    "the Graph in this session; manual freezes and emits "
+                    "a handoff for another session."
+                ),
+            },
+        )
+        self.assertIn("execution_mode", freeze_schema["required"])
+        final_confirmation = by_name["record_user_confirmation"][
+            "inputSchema"
+        ]["properties"]["confirmed"]
+        self.assertEqual(final_confirmation["type"], "boolean")
+        self.assertIs(final_confirmation["const"], True)
 
     def test_argument_validation_rejects_unknown_fields(self) -> None:
         with self.assertRaises(GatedLoopError):
@@ -213,6 +235,84 @@ class McpSurfaceTests(unittest.TestCase):
             )
         with self.assertRaises(GatedLoopError):
             validate_tool_arguments("missing_tool", {})
+        with self.assertRaises(GatedLoopError):
+            validate_tool_arguments(
+                "record_user_confirmation",
+                {
+                    "root_id": "d-service",
+                    "confirmed": "true",
+                    "confirmed_by": "human",
+                    "summary": "accepted",
+                },
+            )
+        with self.assertRaises(GatedLoopError):
+            validate_tool_arguments(
+                "freeze_hierarchy",
+                {
+                    "root_id": "d-service",
+                    "expected_hierarchy_fingerprint": "fingerprint",
+                    "execution_mode": "adjust",
+                    "confirmed_by": "human",
+                },
+            )
+        with self.assertRaises(GatedLoopError):
+            validate_tool_arguments(
+                "freeze_hierarchy",
+                {
+                    "root_id": "d-service",
+                    "expected_hierarchy_fingerprint": "fingerprint",
+                    "execution_mode": "active",
+                    "confirmed": True,
+                    "confirmed_by": "human",
+                },
+            )
+        with self.assertRaises(GatedLoopError):
+            validate_tool_arguments(
+                "record_user_confirmation",
+                {
+                    "root_id": "d-service",
+                    "confirmed": 1,
+                    "confirmed_by": "human",
+                    "summary": "accepted",
+                },
+            )
+
+    def test_freeze_adapter_injects_strict_boolean_confirmation(
+        self,
+    ) -> None:
+        for execution_mode in ("active", "manual"):
+            with self.subTest(execution_mode=execution_mode):
+                with TemporaryDirectory() as root:
+                    prepared = call_tool(
+                        "prepare_hierarchy",
+                        {"hierarchy": task_hierarchy()},
+                        root=root,
+                    )
+                    frozen = call_tool(
+                        "freeze_hierarchy",
+                        {
+                            "root_id": prepared["rootId"],
+                            "expected_hierarchy_fingerprint": (
+                                prepared["hierarchyFingerprint"]
+                            ),
+                            "execution_mode": execution_mode,
+                            "confirmed_by": "human",
+                        },
+                        root=root,
+                    )
+                    status = call_tool(
+                        "workspace_status",
+                        {},
+                        root=root,
+                    )
+
+                self.assertEqual(frozen["status"], "ACTIVE")
+                self.assertEqual(
+                    frozen["executionMode"],
+                    execution_mode,
+                )
+                self.assertEqual(frozen["confirmedBy"], "human")
+                self.assertEqual(status["status"], "ACTIVE")
 
     def test_workspace_status_tool_starts_absent(self) -> None:
         with TemporaryDirectory() as root:

@@ -20,6 +20,7 @@ description: "调度或恢复多项目、多模块的软件交付 Graph。用于
 - 不把内部 `GATE_FAILED`、`TASK_IMPLEMENTED` 或 Skill 生命周期事件提升为外层 Graph 事件。Loop 只返回 `SUCCEEDED`、`BLOCKED`、`REPLAN_REQUIRED` 或 `CANCELLED`。
 - 仅对 `RETRYABLE_INFRA` 与 `WORKER_LOST` 自动重试。业务阻断、契约变化与外部权限交给 frontier。
 - 最终完成必须取得真实用户确认。Git、发布、迁移和新增外部权限继续单独授权。
+- 准备完成后向用户提供“自动执行 / 手动交接”两个确认开发选项，并保留“调整需求”的非确认分支。选择自动或手动本身就是完整冻结授权；任何其他反馈都继续需求交互并重新 prepare。确认后立即调用由宿主自动批准的 `freeze_hierarchy`，不要再请求通用 Yes/No，也不要向工具发送内部 `confirmed` 参数。
 
 ## 入口
 

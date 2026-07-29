@@ -1,6 +1,6 @@
 {
   "name": "layered-delivery",
-  "version": "0.18.0",
+  "version": "0.18.1",
   "description": "调度递归 GROUP/TASK 工作树与多项目、多模块交付的 Graph 插件",
   "author": {
     "name": "layered-delivery contributors",

@@ -113,24 +113,34 @@ TOOLS = (
     ),
     _tool(
         "freeze_hierarchy",
-        "Freeze a prepared graph after explicit human confirmation and start it.",
+        (
+            "Freeze a prepared graph after the user selects active or manual "
+            "execution; that mode selection is the one-time confirmation."
+        ),
         _object(
             {
                 "root_id": ROOT_ID,
                 "expected_hierarchy_fingerprint": _string(
                     "Fingerprint returned by prepare_hierarchy."
                 ),
-                "confirmed": {"const": True},
+                "execution_mode": {
+                    "type": "string",
+                    "enum": ["active", "manual"],
+                    "description": (
+                        "User-selected host execution mode. active continues "
+                        "the Graph in this session; manual freezes and emits "
+                        "a handoff for another session."
+                    ),
+                },
                 "confirmed_by": _string("Human confirmer identity."),
             },
             required=[
                 "root_id",
                 "expected_hierarchy_fingerprint",
-                "confirmed",
+                "execution_mode",
                 "confirmed_by",
             ],
         ),
-        human=True,
     ),
     _tool(
         "graph_frontier",
@@ -282,7 +292,13 @@ TOOLS = (
         _object(
             {
                 "root_id": ROOT_ID,
-                "confirmed": {"const": True},
+                "confirmed": {
+                    "type": "boolean",
+                    "const": True,
+                    "description": (
+                        "JSON Boolean true after explicit user acceptance."
+                    ),
+                },
                 "confirmed_by": _string("Human confirmer identity."),
                 "summary": _string("Human completion summary."),
             },
@@ -320,6 +336,12 @@ def _validate_schema(
     schema: dict[str, Any],
     field: str,
 ) -> None:
+    expected_type = schema.get("type")
+    if expected_type == "boolean" and not isinstance(value, bool):
+        fail(
+            "MCP_TOOL_ARGUMENT_INVALID",
+            f"{field} must be a JSON boolean",
+        )
     if "const" in schema:
         if value != schema["const"]:
             fail(
@@ -327,7 +349,6 @@ def _validate_schema(
                 f"{field} must equal {schema['const']!r}",
             )
         return
-    expected_type = schema.get("type")
     if expected_type == "object":
         if not isinstance(value, dict):
             fail(
@@ -410,12 +431,23 @@ def call_tool(
     **_: Any,
 ) -> dict[str, Any]:
     validate_tool_arguments(name, arguments)
-    return execute_operation(
+    internal_arguments = dict(arguments)
+    execution_mode = None
+    if name == "freeze_hierarchy":
+        execution_mode = internal_arguments.pop("execution_mode")
+        internal_arguments["confirmed"] = True
+    result = execute_operation(
         name,
         root=root,
         explicit_dogfood=explicit_dogfood,
-        **arguments,
+        **internal_arguments,
     )
+    if name == "freeze_hierarchy":
+        return {
+            **result,
+            "executionMode": execution_mode,
+        }
+    return result
 
 
 __all__ = (

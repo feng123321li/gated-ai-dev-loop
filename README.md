@@ -2,7 +2,7 @@
 
 `layered-delivery` 是面向可插拔 Loop 的递归交付 Graph 调度器。
 
-当前版本：**0.18.0**
+当前版本：**0.18.1**
 
 它负责：
 
@@ -218,8 +218,8 @@ Task 的调度定义只保留：
 workspace_status
 → hierarchy_contract
 → prepare_hierarchy
-→ 用户确认
-→ freeze_hierarchy
+→ 用户选择：自动执行 / 手动交接 / 调整需求
+→ freeze_hierarchy（自动或手动选择即为唯一一次冻结确认）
 → graph_frontier
 → loop_context / dispatch_loop / heartbeat_loop
 → record_loop_result
@@ -228,6 +228,8 @@ workspace_status
 ```
 
 当前 Plugin 注册 17 个外层调度工具。MCP 绑定一个项目协调根；多仓库或多服务目标通过 Loop ref/payload 与资源声明表达。
+
+`freeze_hierarchy` 对模型只暴露 `execution_mode=active|manual`，不暴露内部 `confirmed`。自动和手动都表示完整授权并确认开发，区别只在冻结后由当前会话继续调度还是生成交接；冻结工具在宿主权限层统一走自动批准，MCP 适配器在控制器边界内注入 Python `True`，不得再为同一次冻结追加通用 Yes/No 或其他弹窗。“调整需求”及任何其他反馈均表示未确认，不调用 freeze，而是继续交互并在修改 hierarchy 后重新 prepare。
 
 ## 主要投影
 

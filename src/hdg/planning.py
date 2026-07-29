@@ -67,6 +67,7 @@ def prepare_hierarchy(
         **prepared,
         "graphSummary": graph_summary(graph),
         "humanArtifacts": {
+            "workspaceOverview": ".layered-delivery/overview.md",
             "overview": f"{projection_root}/overview.md",
             "hierarchy": f"{projection_root}/hierarchy.json",
             "graph": f"{projection_root}/graph.json",

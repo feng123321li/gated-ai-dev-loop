@@ -29,6 +29,7 @@ from .model_rendering import (
     TASK_BASELINE_DIRECTORY,
     render_projection_documents,
     render_task_baseline_documents,
+    render_workspace_overview,
 )
 
 
@@ -924,6 +925,60 @@ class SchedulerRepository:
                     task_baseline_root,
                     populate_task_baselines,
                 )
+            atomic_write(
+                safe_path(self.control_root, "overview.md"),
+                render_workspace_overview(
+                    self._workspace_projection_sources()
+                ),
+            )
+
+    def _workspace_projection_sources(self) -> list[dict[str, Any]]:
+        """Load every Delivery summary from SQLite for the root overview."""
+
+        with self.read() as connection:
+            rows = connection.execute(
+                "SELECT * FROM hierarchies ORDER BY updated_at DESC, root_id"
+            ).fetchall()
+            sources: list[dict[str, Any]] = []
+            for row in rows:
+                hierarchy, graph = _validated_stored_definition(row)
+                run_row = connection.execute(
+                    "SELECT * FROM runs WHERE root_id = ?",
+                    (row["root_id"],),
+                ).fetchone()
+                run = None
+                if run_row is not None:
+                    run = {
+                        "runId": run_row["run_id"],
+                        "rootId": run_row["root_id"],
+                        "status": run_row["status"],
+                        "startedAt": run_row["started_at"],
+                        "updatedAt": run_row["updated_at"],
+                        "completedAt": run_row["completed_at"],
+                        "cancelledAt": run_row["cancelled_at"],
+                        "nodes": self.latest_nodes(
+                            connection,
+                            run_row["run_id"],
+                        ),
+                    }
+                sources.append(
+                    {
+                        "rootId": row["root_id"],
+                        "status": row["status"],
+                        "hierarchyFingerprint": row[
+                            "hierarchy_fingerprint"
+                        ],
+                        "graphFingerprint": row[
+                            "graph_fingerprint"
+                        ],
+                        "hierarchy": hierarchy,
+                        "graph": graph,
+                        "createdAt": row["created_at"],
+                        "updatedAt": row["updated_at"],
+                        "run": run,
+                    }
+                )
+        return sources
 
 
 GovernanceRepository = SchedulerRepository

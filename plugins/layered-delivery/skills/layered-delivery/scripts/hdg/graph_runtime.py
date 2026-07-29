@@ -398,11 +398,6 @@ def loop_context(
             "prioritizeApplicableSkillHints": True,
             "returnOnlyStandardLoopOutcome": True,
             "coordinatorMustNotExecuteLoopInline": True,
-            "capacityPressureMustPauseAndHandoff": True,
-            "capacityPressureIsNotBlocked": True,
-            "capacityPressureIsNotWorkerLost": True,
-            "capacityPressureDoesNotRequireReplan": True,
-            "receivingSessionMustReuseFrozenGraph": True,
         },
     }
 

@@ -19,14 +19,27 @@ LOOP_REFERENCE = re.compile(r"^[a-z0-9][a-z0-9._:/@-]{0,191}$")
 RESOURCE_CLAIM = re.compile(r"^[a-z0-9][a-z0-9._:/@-]{0,255}$")
 _LOOP_EXECUTION_POLICY = {
     "contextIsolation": "REQUIRED",
-    "agentDispatch": "AUTO_PREFERRED",
-    "manualHandoff": "WHEN_NO_AGENT_CAPACITY",
-    "capacityPressureAction": "PAUSE_AND_HANDOFF",
-    "capacityPressureIsBlocked": False,
-    "capacityPressureIsWorkerLost": False,
-    "capacityPressureRequiresReplan": False,
-    "receivingSessionReusesFrozenGraph": True,
-    "receivingSessionReloadsViaMcp": True,
+    "dispatch": {
+        "preferredExecutor": "HOST_NATIVE_AGENT",
+        "noAgentCapacityBeforeClaim": (
+            "MANUAL_HANDOFF_WITHOUT_CLAIM"
+        ),
+    },
+    "claimedLoopHandoff": {
+        "trigger": "CONTEXT_OR_HOOK_PRESSURE",
+        "requiresLiveLease": True,
+        "action": "PAUSE_AND_HANDOFF",
+        "loopOutcome": "NONE",
+    },
+    "expiredLeaseRecovery": {
+        "action": "ADVANCE_GRAPH",
+        "pauseAllowed": False,
+        "reuseOperationId": False,
+    },
+    "receivingContext": {
+        "reuseFrozenGraph": True,
+        "reloadViaMcp": True,
+    },
 }
 
 
@@ -146,7 +159,7 @@ def resource_claims_overlap(
 
 
 def loop_execution_policy() -> dict[str, Any]:
-    """Return the host-neutral execution-context policy for every Loop."""
+    """Return mutually exclusive dispatch, handoff, and lease recovery rules."""
 
     return deepcopy(_LOOP_EXECUTION_POLICY)
 

@@ -394,13 +394,17 @@ class InstallAndBundleTests(unittest.TestCase):
                 {
                     "jsonrpc": "2.0",
                     "method": "notifications/initialized",
-                    "params": {},
+                    "params": None if request_meta else {},
                 },
                 {
                     "jsonrpc": "2.0",
                     "id": 2,
                     "method": "tools/list",
-                    "params": {},
+                    "params": (
+                        {"_meta": request_meta}
+                        if request_meta
+                        else {}
+                    ),
                 },
                 {
                     "jsonrpc": "2.0",

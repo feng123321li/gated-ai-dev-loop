@@ -371,7 +371,7 @@ def handle_message(
         if (
             method == "notifications/initialized"
             and session.initialize_requested
-            and isinstance(params, dict)
+            and (params is None or isinstance(params, dict))
         ):
             session.initialized = True
         return None
@@ -445,10 +445,17 @@ def handle_message(
         return _rpc_error(request_id, -32002, "Server not initialized")
 
     if method == "tools/list":
-        if set(params) - {"cursor"}:
+        if set(params) - {"cursor", "_meta"}:
             return _invalid_params(request_id)
         cursor = params.get("cursor")
-        if cursor is not None and not isinstance(cursor, str):
+        request_meta = params.get("_meta")
+        if (
+            (cursor is not None and not isinstance(cursor, str))
+            or (
+                request_meta is not None
+                and not isinstance(request_meta, dict)
+            )
+        ):
             return _invalid_params(request_id)
         return _rpc_result(
             request_id,

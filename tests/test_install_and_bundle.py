@@ -394,13 +394,17 @@ class InstallAndBundleTests(unittest.TestCase):
                 {
                     "jsonrpc": "2.0",
                     "method": "notifications/initialized",
-                    "params": {},
+                    "params": None if request_meta else {},
                 },
                 {
                     "jsonrpc": "2.0",
                     "id": 2,
                     "method": "tools/list",
-                    "params": {},
+                    "params": (
+                        {"_meta": request_meta}
+                        if request_meta
+                        else {}
+                    ),
                 },
                 {
                     "jsonrpc": "2.0",
@@ -465,7 +469,7 @@ class InstallAndBundleTests(unittest.TestCase):
                 self.assertEqual(len(responses), 3)
                 self.assertEqual(
                     responses[0]["result"]["serverInfo"],
-                    {"name": "layered-delivery", "version": "0.16.5"},
+                    {"name": "layered-delivery", "version": "0.16.6"},
                 )
                 tools = responses[1]["result"]["tools"]
                 self.assertEqual(len(tools), 38)
@@ -547,7 +551,7 @@ class InstallAndBundleTests(unittest.TestCase):
     def test_readme_documents_current_purpose_and_usage(self) -> None:
         readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
         self.assertLess(readme.index("## 能做什么"), readme.index("## 怎么用"))
-        self.assertIn("当前版本：**0.16.5**", readme)
+        self.assertIn("当前版本：**0.16.6**", readme)
         self.assertIn("选择 `active` 或 `manual`", readme)
         self.assertIn("直接在对话中说明即可", readme)
         self.assertIn("用户不需要填写 `requiredSkills` 字段", readme)

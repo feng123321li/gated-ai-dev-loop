@@ -264,25 +264,34 @@ class McpServerProtocolTests(unittest.TestCase):
                 )
                 self.assertTrue(response["result"]["serverInfo"]["version"])
 
-    def test_initialized_notification_has_no_response(self) -> None:
-        session = mcp_server.ServerSession(
-            project_root=mcp_server.ProjectRootBinding.from_startup("."),
-            initialize_requested=True,
-        )
-        response = mcp_server.handle_message(
-            {
-                "jsonrpc": "2.0",
-                "method": "notifications/initialized",
-                "params": {},
-            },
-            session=session,
-        )
-        self.assertIsNone(response)
-        self.assertIs(session.initialized, True)
+    def test_initialized_notification_accepts_empty_or_null_params(self) -> None:
+        for params in ({}, None):
+            with self.subTest(params=params):
+                session = mcp_server.ServerSession(
+                    project_root=mcp_server.ProjectRootBinding.from_startup("."),
+                    initialize_requested=True,
+                )
+                response = mcp_server.handle_message(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "notifications/initialized",
+                        "params": params,
+                    },
+                    session=session,
+                )
+                self.assertIsNone(response)
+                self.assertIs(session.initialized, True)
 
     def test_tools_list_exposes_38_strict_snake_case_tools(self) -> None:
         response = mcp_server.handle_message(
-            rpc_request("tools/list"),
+            rpc_request(
+                "tools/list",
+                params={
+                    "_meta": {
+                        "progressToken": "codex-tools-list",
+                    },
+                },
+            ),
             session=ready_session(),
         )
         self.assertIsNotNone(response)
@@ -304,6 +313,7 @@ class McpServerProtocolTests(unittest.TestCase):
             contract_schema["properties"]["root_kind"]["enum"],
             ["TASK", "CAPABILITY", "DELIVERY"],
         )
+
         self.assertEqual(
             contract_schema["properties"]["input_mode"]["enum"],
             ["COMPACT_TASK", "FULL_HIERARCHY"],
@@ -497,6 +507,19 @@ class McpServerProtocolTests(unittest.TestCase):
                     )
                 else:
                     self.assertNotIn("_meta", tool)
+
+    def test_tools_list_rejects_non_object_meta(self) -> None:
+        response = mcp_server.handle_message(
+            rpc_request(
+                "tools/list",
+                params={"_meta": "not-an-object"},
+            ),
+            session=ready_session(),
+        )
+
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertEqual(response["error"]["code"], -32602)
 
     def test_tools_call_returns_text_and_structured_success_result(self) -> None:
         business_result = {"id": "t-one", "status": "READY"}

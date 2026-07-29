@@ -10,10 +10,9 @@ from .loop_contracts import validate_loop_descriptor
 
 
 WORK_ITEM_SCHEMA_VERSION = SCHEMA_VERSION
-WORK_ITEM_KINDS = ("DELIVERY", "CAPABILITY", "TASK")
+WORK_ITEM_KINDS = ("GROUP", "TASK")
 WORK_ITEM_AUTHORITIES = {
-    "DELIVERY": "COORDINATION",
-    "CAPABILITY": "COORDINATION",
+    "GROUP": "COORDINATION",
     "TASK": "EXECUTION",
 }
 
@@ -114,24 +113,28 @@ def _depends_on(
     return sorted(result)
 
 
-def _skill_hints(value: object) -> list[dict[str, str]]:
+def _skill_hints(
+    value: object,
+    *,
+    field: str = "hierarchy.root.skillHints",
+) -> list[dict[str, str]]:
     if not isinstance(value, list):
         fail(
             "WORK_ITEM_SKILL_HINT_INVALID",
             "skillHints must be an array",
-            field="hierarchy.skillHints",
+            field=field,
         )
     expected = {"name", "purpose"}
     normalized: list[dict[str, str]] = []
     seen: set[str] = set()
     for index, entry in enumerate(value):
-        field = f"hierarchy.skillHints[{index}]"
+        entry_field = f"{field}[{index}]"
         if not _exact_keys(entry, expected):
             _shape_error(
                 "WORK_ITEM_SKILL_HINT_INVALID",
                 "Skill hint fields are invalid",
                 entry,
-                field=field,
+                field=entry_field,
                 expected=expected,
             )
         name = entry["name"]
@@ -142,13 +145,13 @@ def _skill_hints(value: object) -> list[dict[str, str]]:
             fail(
                 "WORK_ITEM_SKILL_HINT_INVALID",
                 "Skill hint name must be a safe host catalog name",
-                field=f"{field}.name",
+                field=f"{entry_field}.name",
             )
         if name in seen:
             fail(
                 "WORK_ITEM_SKILL_HINT_INVALID",
                 f"Duplicate Skill hint: {name}",
-                field=f"{field}.name",
+                field=f"{entry_field}.name",
             )
         seen.add(name)
         normalized.append(
@@ -156,7 +159,7 @@ def _skill_hints(value: object) -> list[dict[str, str]]:
                 "name": name,
                 "purpose": _text(
                     entry["purpose"],
-                    f"{field}.purpose",
+                    f"{entry_field}.purpose",
                 ),
             }
         )
@@ -166,16 +169,14 @@ def _skill_hints(value: object) -> list[dict[str, str]]:
 def _child_summaries(
     value: object,
     *,
-    parent_kind: str,
     field: str,
 ) -> list[dict[str, str]]:
     if not isinstance(value, list) or not value:
         fail(
             "WORK_ITEM_CHILDREN_INVALID",
-            f"{parent_kind} must declare at least one child",
+            "GROUP must declare at least one child",
             field=field,
         )
-    expected_kind = "CAPABILITY" if parent_kind == "DELIVERY" else "TASK"
     result: list[dict[str, str]] = []
     seen: set[str] = set()
     expected = {"id", "kind", "title"}
@@ -189,10 +190,11 @@ def _child_summaries(
                 field=child_field,
                 expected=expected,
             )
-        if entry["kind"] != expected_kind:
+        child_kind = entry["kind"]
+        if child_kind not in WORK_ITEM_KINDS:
             fail(
                 "WORK_ITEM_CHILDREN_INVALID",
-                f"{parent_kind} children must be {expected_kind}",
+                "GROUP children must be GROUP or TASK",
                 field=f"{child_field}.kind",
             )
         child_id = safe_id(entry["id"], f"{child_field}.id")
@@ -206,7 +208,7 @@ def _child_summaries(
         result.append(
             {
                 "id": child_id,
-                "kind": expected_kind,
+                "kind": child_kind,
                 "title": _text(entry["title"], f"{child_field}.title"),
             }
         )
@@ -219,28 +221,28 @@ def _normalize_parent(
 ) -> str | None:
     kind = definition["kind"]
     parent_id = definition.get("parentId")
-    if kind == "DELIVERY":
-        return None
-    if parent_id is None:
-        if parent is not None:
+    if parent is None:
+        if parent_id is not None:
             fail(
                 "WORK_ITEM_PARENT_INVALID",
-                f"{kind} nested in a hierarchy must declare parentId",
+                "A hierarchy root must use parentId=null",
             )
         return None
+    if parent_id is None:
+        fail(
+            "WORK_ITEM_PARENT_INVALID",
+            f"Nested {kind} nodes must declare parentId",
+        )
     normalized_parent_id = safe_id(parent_id, "parentId")
-    if parent is None or normalized_parent_id != parent["id"]:
+    if normalized_parent_id != parent["id"]:
         fail(
             "WORK_ITEM_PARENT_INVALID",
             f"{kind} must reference its supplied parent",
         )
-    expected_parent_kind = (
-        "DELIVERY" if kind == "CAPABILITY" else "CAPABILITY"
-    )
-    if parent["kind"] != expected_parent_kind:
+    if parent["kind"] != "GROUP":
         fail(
             "WORK_ITEM_PARENT_INVALID",
-            f"{kind} parent must be {expected_parent_kind}",
+            f"{kind} parent must be GROUP",
         )
     planned = next(
         (
@@ -283,20 +285,21 @@ def validate_work_item_definition(
     if kind not in WORK_ITEM_KINDS:
         fail(
             "WORK_ITEM_KIND_INVALID",
-            "kind must be DELIVERY, CAPABILITY, or TASK",
+            "kind must be GROUP or TASK",
             field=f"{field}.kind",
         )
-    common = {"schemaVersion", "id", "kind", "title", "summary"}
-    if kind == "DELIVERY":
+    common = {
+        "schemaVersion",
+        "id",
+        "kind",
+        "parentId",
+        "title",
+        "summary",
+    }
+    if kind == "GROUP":
         expected = common | {"decomposition", "children"}
-    elif kind == "CAPABILITY":
-        expected = common | {
-            "parentId",
-            "decomposition",
-            "children",
-        }
     else:
-        expected = common | {"parentId", "execution"}
+        expected = common | {"execution"}
     if not _exact_keys(definition, expected):
         _shape_error(
             "WORK_ITEM_DEFINITION_INVALID",
@@ -314,11 +317,10 @@ def validate_work_item_definition(
         "title": _text(definition["title"], f"{field}.title"),
         "summary": _text(definition["summary"], f"{field}.summary"),
     }
-    if kind != "DELIVERY":
-        normalized["parentId"] = _normalize_parent(
-            {**definition, "id": item_id, "kind": kind},
-            parent,
-        )
+    normalized["parentId"] = _normalize_parent(
+        {**definition, "id": item_id, "kind": kind},
+        parent,
+    )
 
     if kind == "TASK":
         execution = definition["execution"]
@@ -345,9 +347,7 @@ def validate_work_item_definition(
         return normalized
 
     decomposition = definition["decomposition"]
-    decomposition_fields = (
-        set() if kind == "DELIVERY" else {"dependsOn"}
-    )
+    decomposition_fields = {"dependsOn"}
     if not _exact_keys(decomposition, decomposition_fields):
         _shape_error(
             "WORK_ITEM_DECOMPOSITION_INVALID",
@@ -356,34 +356,83 @@ def validate_work_item_definition(
             field=f"{field}.decomposition",
             expected=decomposition_fields,
         )
-    normalized["decomposition"] = (
-        {}
-        if kind == "DELIVERY"
-        else {
-            "dependsOn": _depends_on(
-                decomposition["dependsOn"],
-                item_id=item_id,
-                field=f"{field}.decomposition.dependsOn",
-            )
-        }
-    )
+    normalized["decomposition"] = {
+        "dependsOn": _depends_on(
+            decomposition["dependsOn"],
+            item_id=item_id,
+            field=f"{field}.decomposition.dependsOn",
+        )
+    }
     normalized["children"] = _child_summaries(
         definition["children"],
-        parent_kind=kind,
         field=f"{field}.children",
     )
     return normalized
 
 
-def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
-    """Validate one complete scheduler hierarchy and its review Loop."""
+def work_item_dependencies(definition: dict[str, Any]) -> list[str]:
+    return (
+        definition["execution"]["dependsOn"]
+        if definition["kind"] == "TASK"
+        else definition["decomposition"]["dependsOn"]
+    )
 
-    expected = {
-        "schemaVersion",
-        "skillHints",
-        "reviewLoop",
-        "root",
+
+def _delivery_definition(value: object) -> dict[str, Any]:
+    expected = {"id", "title", "summary", "reviewLoop"}
+    if not _exact_keys(value, expected):
+        _shape_error(
+            "DELIVERY_DEFINITION_INVALID",
+            "Delivery fields are invalid",
+            value,
+            field="hierarchy.delivery",
+            expected=expected,
+        )
+    return {
+        "id": safe_id(value["id"], "hierarchy.delivery.id"),
+        "title": _text(value["title"], "hierarchy.delivery.title"),
+        "summary": _text(value["summary"], "hierarchy.delivery.summary"),
+        "reviewLoop": validate_loop_descriptor(
+            value["reviewLoop"],
+            field="hierarchy.delivery.reviewLoop",
+        ),
     }
+
+
+def _validate_dependency_dag(
+    dependencies_by_id: dict[str, list[str]],
+) -> None:
+    outgoing = {item_id: [] for item_id in dependencies_by_id}
+    indegree = {item_id: 0 for item_id in dependencies_by_id}
+    for item_id, dependencies in dependencies_by_id.items():
+        for dependency_id in dependencies:
+            outgoing[dependency_id].append(item_id)
+            indegree[item_id] += 1
+    ready = sorted(
+        item_id
+        for item_id, degree in indegree.items()
+        if degree == 0
+    )
+    visited = 0
+    while ready:
+        item_id = ready.pop(0)
+        visited += 1
+        for target in sorted(outgoing[item_id]):
+            indegree[target] -= 1
+            if indegree[target] == 0:
+                ready.append(target)
+                ready.sort()
+    if visited != len(dependencies_by_id):
+        fail(
+            "WORK_ITEM_DEPENDENCY_CYCLE",
+            "Sibling GROUP/TASK dependencies must be acyclic",
+        )
+
+
+def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
+    """Validate one Delivery with a recursive GROUP/TASK hierarchy."""
+
+    expected = {"delivery", "root"}
     if not _exact_keys(hierarchy, expected):
         _shape_error(
             "WORK_ITEM_HIERARCHY_INVALID",
@@ -392,13 +441,8 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
             field="hierarchy",
             expected=expected,
         )
-    if hierarchy["schemaVersion"] != WORK_ITEM_SCHEMA_VERSION:
-        fail(
-            "WORK_ITEM_SCHEMA_INVALID",
-            f"Hierarchy schemaVersion must be {WORK_ITEM_SCHEMA_VERSION}",
-        )
-
-    seen: set[str] = set()
+    delivery = _delivery_definition(hierarchy["delivery"])
+    seen: set[str] = {delivery["id"]}
 
     def normalize_node(
         value: object,
@@ -406,7 +450,10 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
         *,
         field: str,
     ) -> dict[str, Any]:
-        node_fields = {"definition", "children"}
+        is_root = parent is None
+        node_fields = {"definition", "reviewLoop", "children"}
+        if is_root:
+            node_fields |= {"schemaVersion", "skillHints"}
         if not _exact_keys(value, node_fields):
             _shape_error(
                 "WORK_ITEM_HIERARCHY_INVALID",
@@ -415,6 +462,22 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
                 field=field,
                 expected=node_fields,
             )
+        root_metadata: dict[str, Any] = {}
+        if is_root:
+            if value["schemaVersion"] != WORK_ITEM_SCHEMA_VERSION:
+                fail(
+                    "WORK_ITEM_SCHEMA_INVALID",
+                    "Root schemaVersion must be "
+                    f"{WORK_ITEM_SCHEMA_VERSION}",
+                    field=f"{field}.schemaVersion",
+                )
+            root_metadata = {
+                "schemaVersion": WORK_ITEM_SCHEMA_VERSION,
+                "skillHints": _skill_hints(
+                    value["skillHints"],
+                    field=f"{field}.skillHints",
+                ),
+            }
         if not isinstance(value["children"], list):
             fail(
                 "WORK_ITEM_HIERARCHY_INVALID",
@@ -439,7 +502,23 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
                     "WORK_ITEM_TASK_NOT_LEAF",
                     "Task hierarchy nodes cannot contain children",
                 )
-            return {"definition": definition, "children": []}
+            if value["reviewLoop"] is not None:
+                fail(
+                    "WORK_ITEM_TASK_REVIEW_INVALID",
+                    "TASK hierarchy nodes cannot carry outer Review Loops",
+                    field=f"{field}.reviewLoop",
+                )
+            return {
+                **root_metadata,
+                "definition": definition,
+                "reviewLoop": None,
+                "children": [],
+            }
+
+        review_loop = validate_loop_descriptor(
+            value["reviewLoop"],
+            field=f"{field}.reviewLoop",
+        )
 
         expected_children = {
             (child["id"], child["kind"], child["title"])
@@ -457,12 +536,20 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
                     "WORK_ITEM_HIERARCHY_INVALID",
                     "Hierarchy child definition must be an object",
                 )
-            actual_children.append(
-                (
-                    child_definition.get("id"),
-                    child_definition.get("kind"),
-                    child_definition.get("title"),
+            raw_id = child_definition.get("id")
+            raw_kind = child_definition.get("kind")
+            raw_title = child_definition.get("title")
+            if (
+                not isinstance(raw_id, str)
+                or raw_kind not in WORK_ITEM_KINDS
+                or not isinstance(raw_title, str)
+            ):
+                fail(
+                    "WORK_ITEM_HIERARCHY_INCOMPLETE",
+                    f"{item_id} contains an invalid child declaration",
                 )
+            actual_children.append(
+                (raw_id, raw_kind, raw_title)
             )
         if (
             set(actual_children) != expected_children
@@ -485,24 +572,13 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
             child["definition"]["id"]
             for child in children
         }
-        dependency_fields = (
-            [
-                (
-                    child["definition"]["id"],
-                    child["definition"]["execution"]["dependsOn"],
-                )
-                for child in children
-            ]
-            if definition["kind"] == "CAPABILITY"
-            else [
-                (
-                    child["definition"]["id"],
-                    child["definition"]["decomposition"]["dependsOn"],
-                )
-                for child in children
-            ]
-        )
-        for child_id, dependencies in dependency_fields:
+        dependencies_by_id = {
+            child["definition"]["id"]: work_item_dependencies(
+                child["definition"]
+            )
+            for child in children
+        }
+        for child_id, dependencies in dependencies_by_id.items():
             unknown = set(dependencies) - sibling_ids
             if unknown:
                 fail(
@@ -510,28 +586,23 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
                     f"{child_id} depends on non-sibling work items",
                     dependencyIds=sorted(unknown),
                 )
-        return {"definition": definition, "children": children}
+        _validate_dependency_dag(dependencies_by_id)
+        return {
+            **root_metadata,
+            "definition": definition,
+            "reviewLoop": review_loop,
+            "children": children,
+        }
 
     root = normalize_node(hierarchy["root"], None, field="root")
     root_definition = root["definition"]
-    if (
-        root_definition["kind"] == "TASK"
-        and root_definition["execution"]["dependsOn"]
-    ) or (
-        root_definition["kind"] == "CAPABILITY"
-        and root_definition["decomposition"]["dependsOn"]
-    ):
+    if work_item_dependencies(root_definition):
         fail(
             "WORK_ITEM_DEPENDENCY_INVALID",
             "A hierarchy root cannot depend on sibling work items",
         )
     return {
-        "schemaVersion": WORK_ITEM_SCHEMA_VERSION,
-        "skillHints": _skill_hints(hierarchy["skillHints"]),
-        "reviewLoop": validate_loop_descriptor(
-            hierarchy["reviewLoop"],
-            field="hierarchy.reviewLoop",
-        ),
+        "delivery": delivery,
         "root": root,
     }
 
@@ -540,13 +611,11 @@ def iter_hierarchy_nodes(
     hierarchy: dict[str, Any],
 ) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
-
-    def visit(node: dict[str, Any]) -> None:
+    pending = [hierarchy["root"]]
+    while pending:
+        node = pending.pop()
         result.append(node)
-        for child in node["children"]:
-            visit(child)
-
-    visit(hierarchy["root"])
+        pending.extend(reversed(node["children"]))
     return result
 
 
@@ -604,10 +673,10 @@ def resolve_self_hosting_policy(
         return {
             "route": "SELF_HOSTING_MAINTENANCE",
             "createsRuntimePackage": False,
-            "reason": "HIERARCHICAL_GOVERNANCE_SELF_MAINTENANCE",
+            "reason": "GRAPH_SCHEDULER_SELF_MAINTENANCE",
         }
     return {
-        "route": "STANDARD_HIERARCHICAL_GOVERNANCE",
+        "route": "STANDARD_GRAPH_SCHEDULER",
         "createsRuntimePackage": True,
         "reason": (
             "EXPLICIT_DOGFOOD"
@@ -628,6 +697,7 @@ __all__ = [
     "safe_id",
     "validate_hierarchy_definition",
     "validate_work_item_definition",
+    "work_item_dependencies",
     "work_item_baseline_fingerprint",
     "work_item_child_contract_fingerprint",
     "work_item_contract_fingerprint",

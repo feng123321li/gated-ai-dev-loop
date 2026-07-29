@@ -12,7 +12,7 @@ from .model_core import (
     hierarchy_fingerprint,
     validate_hierarchy_definition,
 )
-from .repository import SchedulerRepository, timestamp
+from .repository import SchedulerRepository
 
 
 def workspace_status(
@@ -49,15 +49,18 @@ def prepare_hierarchy(
         graph,
         hierarchy_fingerprint=hierarchy_value,
         graph_fingerprint=graph_value,
-        at=timestamp(now),
+    )
+    projection_root = (
+        f".layered-delivery/{normalized['delivery']['id']}"
     )
     return {
         **prepared,
         "graphSummary": graph_summary(graph),
         "humanArtifacts": {
-            "overview": ".layered-delivery/overview.md",
-            "hierarchy": ".layered-delivery/hierarchy.json",
-            "graph": ".layered-delivery/graph.json",
+            "overview": f"{projection_root}/overview.md",
+            "hierarchy": f"{projection_root}/hierarchy.json",
+            "graph": f"{projection_root}/graph.json",
+            "state": f"{projection_root}/state.json",
         },
         "nextAction": "FREEZE_HIERARCHY_AFTER_USER_CONFIRMATION",
     }
@@ -93,7 +96,6 @@ def freeze_hierarchy(
         expected_hierarchy_fingerprint=(
             expected_hierarchy_fingerprint
         ),
-        at=timestamp(now),
     )
     return {
         **result,

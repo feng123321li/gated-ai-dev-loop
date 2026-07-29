@@ -4,6 +4,22 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.18.0 — 待发布
+
+发布提交：待定
+
+- 用递归 `GROUP` / `TASK` 模型替换固定 Delivery / Capability / Task 三层：TASK 是唯一执行叶子，GROUP 可混合包含直接子 GROUP/TASK；Delivery 保留为顶层 Graph/run 与最终验收边界，不属于 work item kind。
+- hierarchy 最外层收敛为 `delivery` 与 `root`；schema 版本和共享 `skillHints` 归入根包装节点，嵌套节点只保存自己的 definition、Review 与 children。
+- 每个 GROUP 编译为 `GROUP_JOIN → GROUP_REVIEW_LOOP`；子 GROUP 只有在自己的 Review 成功后才向父层贡献终态，根工作项最终进入 `DELIVERY_REVIEW_LOOP → USER_CONFIRMATION`。
+- `dependsOn` 改为直接兄弟 GROUP/TASK 的启动屏障，支持 TASK→TASK、TASK→GROUP、GROUP→TASK 与 GROUP→GROUP；GROUP 依赖会阻止目标子树入口，直到来源 GROUP Review 成功。
+- 保留外层调度边界：TASK、GROUP Review 与 Delivery Review Loop 各自负责实现方法、测试、Gate、修正和实际 Skill 选择；共享 Skill Hint 只作为晚绑定优先提示。
+- 递归 GROUP/TASK 结构仅存在于 hierarchy 与编译 Graph；工作区共享 `.layered-delivery/scheduler.db`，并按稳定 `delivery.id` 写入 `.layered-delivery/<delivery-id>/{hierarchy.json,graph.json,state.json,overview.md}`，允许多份需求交付目录并存且不继续展开 GROUP/TASK 目录。
+- 恢复可核对的人类投影：`overview.md` 绑定 hierarchy/graph 指纹和冻结/运行状态，包含完整 GROUP/TASK 清单及每个节点的摘要、依赖、Loop、资源锁、原始 payload 和进度；文案使用中文，时间统一显示为 UTC+8。
+- 投影收敛为控制器从 SQLite 权威状态通过固定版本模板原子生成的四类文件；Agent 只能通过 MCP 读取调度数据，不能直连 SQLite、选择模板或直接创建、修补投影。
+- 投影刷新、事件快照重放和物化状态重建纳入统一 scheduler lock；所有运行变更在锁内取得单调提交时间，避免并发请求让 SQLite、`state.json` 或 `overview.md` 回退到旧状态。
+- 写操作在事务内重新校验 Delivery namespace、hierarchy 指纹及 hierarchy→graph 精确编译绑定，避免成对篡改图和指纹后产生部分提交；COMPLETED/CANCELLED Graph 的 frontier 与审计时间保持稳定终态。
+- 此版本是 schema v3 的破坏性语义替换，不提供 0.17.x hierarchy 或更早运行包的迁移/兼容入口；升级前需要归档旧 `.layered-delivery` 运行包。
+
 ## 0.17.0 — 2026-07-29
 
 发布提交：`55b13ad`

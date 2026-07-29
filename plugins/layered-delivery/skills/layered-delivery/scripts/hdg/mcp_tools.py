@@ -28,7 +28,7 @@ def _string(description: str) -> dict[str, Any]:
     }
 
 
-ROOT_ID = _string("Frozen hierarchy root ID.")
+ROOT_ID = _string("Frozen Delivery and Graph run ID.")
 NODE_ID = _string("Exact graph node ID from graph_frontier.")
 OPERATION_ID = _string("Globally unique Loop operation ID.")
 
@@ -86,7 +86,7 @@ TOOLS = (
             {
                 "root_kind": {
                     "type": "string",
-                    "enum": ["TASK", "CAPABILITY", "DELIVERY"],
+                    "enum": ["GROUP", "TASK"],
                 }
             },
             required=["root_kind"],
@@ -196,7 +196,10 @@ TOOLS = (
     ),
     _tool(
         "dispatch_loop",
-        "Claim one ready Task or Review Loop subject to exact resource locks.",
+        (
+            "Claim one ready TASK, GROUP Review, or Delivery Review Loop "
+            "subject to exact resource locks."
+        ),
         _object(
             {
                 "root_id": ROOT_ID,

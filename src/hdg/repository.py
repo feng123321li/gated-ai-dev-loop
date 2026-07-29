@@ -11,11 +11,16 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .errors import fail
-from .fs_safe import atomic_write, exclusive_file_lock
-from .graph_model import validate_delivery_graph
-from .jsonio import canonical_json, fingerprint, pretty_json
+from .fs_safe import atomic_write, exclusive_file_lock, safe_path
+from .graph_model import (
+    JOIN_NODE_KINDS,
+    compile_delivery_graph,
+    graph_fingerprint,
+    validate_delivery_graph,
+)
+from .jsonio import canonical_json, fingerprint
 from .model_core import validate_hierarchy_definition
-from .model_rendering import render_scheduling_plan
+from .model_rendering import render_projection_documents
 
 
 GOVERNANCE_DIRECTORY = ".layered-delivery"
@@ -64,6 +69,12 @@ def _validated_stored_definition(
             "SCHEDULER_STATE_INVALID",
             "Stored scheduler hierarchy changed",
         )
+    if not isinstance(hierarchy, dict) or "delivery" not in hierarchy:
+        fail(
+            "SCHEDULER_STATE_INCOMPATIBLE",
+            "Stored scheduler state predates the recursive GROUP/TASK "
+            "Delivery contract; archive it before creating a new Graph",
+        )
     normalized = validate_hierarchy_definition(hierarchy)
     if normalized != hierarchy:
         fail(
@@ -74,10 +85,17 @@ def _validated_stored_definition(
         row["graph_json"],
         row["graph_fingerprint"],
     )
+    expected_graph = compile_delivery_graph(
+        normalized,
+        hierarchy_fingerprint=row["hierarchy_fingerprint"],
+    )
     if (
-        graph["rootId"] != normalized["root"]["definition"]["id"]
+        row["root_id"] != normalized["delivery"]["id"]
+        or graph["rootId"] != normalized["delivery"]["id"]
         or graph["hierarchyFingerprint"]
         != row["hierarchy_fingerprint"]
+        or graph != expected_graph
+        or graph_fingerprint(expected_graph) != row["graph_fingerprint"]
     ):
         fail(
             "SCHEDULER_STATE_INVALID",
@@ -100,11 +118,29 @@ def timestamp(now: object = None) -> str:
     )
 
 
+def _commit_timestamp(
+    now: object,
+    current: str | None = None,
+) -> str:
+    """Resolve a transaction timestamp that never precedes stored state."""
+
+    candidate = timestamp(now)
+    if current is None:
+        return candidate
+    candidate_value = datetime.fromisoformat(
+        candidate.replace("Z", "+00:00")
+    )
+    current_value = datetime.fromisoformat(
+        current.replace("Z", "+00:00")
+    )
+    return current if candidate_value < current_value else candidate
+
+
 class SchedulerRepository:
     """SQLite-backed outer-graph scheduler state.
 
     The repository persists shared Skill hints with the hierarchy and keeps
-    Loop descriptors and outcomes as opaque JSON. It never stores per-Task
+    Loop descriptors and outcomes as opaque JSON. It never stores per-TASK
     Skill assignments, implementation plans, file scopes, test commands,
     gates, or Skill lifecycle records.
     """
@@ -252,6 +288,13 @@ class SchedulerRepository:
         )
 
     @contextmanager
+    def scheduler_lock(self) -> Iterator[None]:
+        """Hold the controller lock across a multi-read/write operation."""
+
+        with exclusive_file_lock(self.lock_path):
+            yield
+
+    @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:
         with exclusive_file_lock(self.lock_path):
             connection = self._connect()
@@ -287,7 +330,7 @@ class SchedulerRepository:
             }
         with self.read() as connection:
             rows = connection.execute(
-                "SELECT root_id, status, updated_at "
+                "SELECT * "
                 "FROM hierarchies ORDER BY updated_at DESC"
             ).fetchall()
             if not rows:
@@ -296,6 +339,7 @@ class SchedulerRepository:
                     "controlRoot": GOVERNANCE_DIRECTORY,
                 }
             latest = rows[0]
+            _validated_stored_definition(latest)
             run = connection.execute(
                 "SELECT status FROM runs WHERE root_id = ?",
                 (latest["root_id"],),
@@ -322,7 +366,6 @@ class SchedulerRepository:
         *,
         hierarchy_fingerprint: str,
         graph_fingerprint: str,
-        at: str,
     ) -> dict[str, Any]:
         root_id = graph["rootId"]
         with self.transaction() as connection:
@@ -341,7 +384,8 @@ class SchedulerRepository:
                     rootId=active["root_id"],
                 )
             frozen = connection.execute(
-                "SELECT status FROM hierarchies WHERE root_id = ?",
+                "SELECT status, updated_at FROM hierarchies "
+                "WHERE root_id = ?",
                 (root_id,),
             ).fetchone()
             if frozen is not None and frozen["status"] == "FROZEN":
@@ -349,6 +393,10 @@ class SchedulerRepository:
                     "SCHEDULER_HIERARCHY_FROZEN",
                     "A frozen hierarchy cannot be replaced",
                 )
+            at = _commit_timestamp(
+                self.now,
+                frozen["updated_at"] if frozen is not None else None,
+            )
             connection.execute(
                 """
                 INSERT INTO hierarchies(
@@ -418,7 +466,6 @@ class SchedulerRepository:
         root_id: str,
         *,
         expected_hierarchy_fingerprint: str,
-        at: str,
     ) -> dict[str, Any]:
         with self.transaction() as connection:
             row = connection.execute(
@@ -441,6 +488,7 @@ class SchedulerRepository:
             if row["status"] == "FROZEN":
                 return self.run(root_id)
             _, graph = _validated_stored_definition(row)
+            at = _commit_timestamp(self.now, row["updated_at"])
             run_id = f"run-{uuid.uuid4().hex}"
             connection.execute(
                 "UPDATE hierarchies SET status = 'FROZEN', updated_at = ? "
@@ -685,6 +733,18 @@ class SchedulerRepository:
     ) -> None:
         """Advance dependency-ready nodes and deterministic joins."""
 
+        run_state = connection.execute(
+            "SELECT status FROM runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if run_state is None:
+            fail(
+                "SCHEDULER_RUN_MISSING",
+                f"Scheduler run is missing: {run_id}",
+            )
+        if run_state["status"] in {"COMPLETED", "CANCELLED"}:
+            return
+
         incoming: dict[str, list[str]] = {
             node["id"]: []
             for node in graph["nodes"]
@@ -712,10 +772,7 @@ class SchedulerRepository:
                     for source in predecessors
                 ):
                     continue
-                if node_kind[node_id] in {
-                    "CAPABILITY_JOIN",
-                    "DELIVERY_JOIN",
-                }:
+                if node_kind[node_id] in JOIN_NODE_KINDS:
                     status = "SUCCEEDED"
                     event_type = "JOIN_COMPLETED"
                     finished = at
@@ -793,30 +850,26 @@ class SchedulerRepository:
             )
 
     def write_projections(self, root_id: str) -> None:
-        definition = self.hierarchy(root_id)
-        run = None
-        try:
-            run = self.run(root_id)
-        except Exception as error:
-            if getattr(error, "code", None) != "SCHEDULER_RUN_MISSING":
-                raise
-        atomic_write(
-            self.control_root / "hierarchy.json",
-            pretty_json(definition["hierarchy"]),
-        )
-        atomic_write(
-            self.control_root / "graph.json",
-            pretty_json(definition["graph"]),
-        )
-        atomic_write(
-            self.control_root / "overview.md",
-            render_scheduling_plan(definition["hierarchy"]),
-        )
-        if run is not None:
-            atomic_write(
-                self.control_root / "state.json",
-                pretty_json(run),
-            )
+        """Regenerate controller-owned projections from SQLite state."""
+
+        with exclusive_file_lock(self.lock_path):
+            definition = self.hierarchy(root_id)
+            run = None
+            try:
+                run = self.run(root_id)
+            except Exception as error:
+                if (
+                    getattr(error, "code", None)
+                    != "SCHEDULER_RUN_MISSING"
+                ):
+                    raise
+            projection_root = safe_path(self.control_root, root_id)
+            documents = render_projection_documents(definition, run)
+            for filename, content in documents.items():
+                atomic_write(
+                    projection_root / filename,
+                    content,
+                )
 
 
 GovernanceRepository = SchedulerRepository

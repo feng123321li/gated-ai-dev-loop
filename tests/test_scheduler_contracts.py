@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
 
 from hdg.errors import GatedLoopError
 from hdg.hierarchy_contract import hierarchy_contract
+from hdg.jsonio import fingerprint
 from hdg.mcp_server import (
     ProjectRootBinding,
     ServerSession,
@@ -20,14 +22,79 @@ from hdg.mcp_tools import (
 from hdg.model_core import validate_hierarchy_definition
 from hdg.planning import workspace_status
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
+from hdg.repository import SchedulerRepository
 
-from .test_loop_architecture import task_hierarchy
+from .test_loop_architecture import loop_descriptor, task_hierarchy
 from .test_scheduler_runtime import at
+
+
+def legacy_delivery_hierarchy_017() -> dict:
+    tasks = [
+        {
+            "definition": {
+                "schemaVersion": 3,
+                "id": "t-api",
+                "kind": "TASK",
+                "parentId": "c-service",
+                "title": "Run API task",
+                "summary": "Run the API Task Loop.",
+                "execution": {
+                    "dependsOn": [],
+                    "loop": loop_descriptor(),
+                },
+            },
+            "children": [],
+        }
+    ]
+    capability = {
+        "definition": {
+            "schemaVersion": 3,
+            "id": "c-service",
+            "kind": "CAPABILITY",
+            "parentId": "d-service",
+            "title": "Coordinate service capability",
+            "summary": "Join service Task Loops.",
+            "decomposition": {"dependsOn": []},
+            "children": [
+                {
+                    "id": "t-api",
+                    "kind": "TASK",
+                    "title": "Run API task",
+                }
+            ],
+        },
+        "children": tasks,
+    }
+    return {
+        "schemaVersion": 3,
+        "skillHints": [],
+        "reviewLoop": loop_descriptor(
+            "root/independent-review-loop@1"
+        ),
+        "root": {
+            "definition": {
+                "schemaVersion": 3,
+                "id": "d-service",
+                "kind": "DELIVERY",
+                "title": "Deliver service",
+                "summary": "Coordinate the service delivery.",
+                "decomposition": {},
+                "children": [
+                    {
+                        "id": "c-service",
+                        "kind": "CAPABILITY",
+                        "title": "Coordinate service capability",
+                    }
+                ],
+            },
+            "children": [capability],
+        },
+    }
 
 
 class HierarchyContractTests(unittest.TestCase):
     def test_every_contract_example_is_valid(self) -> None:
-        for root_kind in ("TASK", "CAPABILITY", "DELIVERY"):
+        for root_kind in ("TASK", "GROUP"):
             with self.subTest(root_kind=root_kind):
                 contract = hierarchy_contract(
                     root_kind=root_kind,
@@ -44,9 +111,9 @@ class HierarchyContractTests(unittest.TestCase):
         self,
     ) -> None:
         contract = hierarchy_contract(root_kind="TASK")
-        definition_properties = contract["inputSchema"][
-            "properties"
-        ]["root"]["properties"]["definition"]["properties"]
+        definition_properties = contract["inputSchema"]["$defs"][
+            "taskRootDefinition"
+        ]["properties"]
 
         self.assertEqual(
             set(definition_properties),
@@ -60,15 +127,27 @@ class HierarchyContractTests(unittest.TestCase):
                 "execution",
             },
         )
-        payload = definition_properties["execution"]["properties"][
-            "loop"
-        ]["properties"]["payload"]
-        self.assertTrue(payload["additionalProperties"])
-        skill_hints = contract["inputSchema"]["properties"][
-            "skillHints"
-        ]
         self.assertEqual(
-            skill_hints["items"]["required"],
+            definition_properties["execution"]["properties"]["loop"],
+            {"$ref": "#/$defs/loop"},
+        )
+        payload = contract["inputSchema"]["$defs"]["loop"][
+            "properties"
+        ]["payload"]
+        self.assertTrue(payload["additionalProperties"])
+        self.assertEqual(
+            set(contract["inputSchema"]["properties"]),
+            {"delivery", "root"},
+        )
+        skill_hints = contract["inputSchema"]["$defs"][
+            "taskRootNode"
+        ]["properties"]["skillHints"]
+        self.assertEqual(
+            skill_hints["items"],
+            {"$ref": "#/$defs/skillHint"},
+        )
+        self.assertEqual(
+            contract["inputSchema"]["$defs"]["skillHint"]["required"],
             ["name", "purpose"],
         )
         self.assertIn(
@@ -78,6 +157,25 @@ class HierarchyContractTests(unittest.TestCase):
         self.assertIn(
             "advisory",
             " ".join(contract["invariants"]).lower(),
+        )
+        group_children = contract["inputSchema"]["$defs"][
+            "groupChildNode"
+        ]["properties"]["children"]["items"]["oneOf"]
+        self.assertEqual(
+            {
+                item["$ref"]
+                for item in group_children
+            },
+            {
+                "#/$defs/groupChildNode",
+                "#/$defs/taskChildNode",
+            },
+        )
+        self.assertEqual(
+            contract["inputSchema"]["properties"]["delivery"]["properties"][
+                "reviewLoop"
+            ],
+            {"$ref": "#/$defs/loop"},
         )
 
 
@@ -157,6 +255,51 @@ class McpSurfaceTests(unittest.TestCase):
             "SCHEDULER_LEGACY_STATE_UNSUPPORTED",
         )
 
+    def test_schema_v3_delivery_capability_state_is_incompatible(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+                now=at(0),
+            )
+            legacy = legacy_delivery_hierarchy_017()
+            database = Path(root, ".layered-delivery", "scheduler.db")
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    "UPDATE hierarchies "
+                    "SET hierarchy_json = ?, hierarchy_fingerprint = ? "
+                    "WHERE root_id = ?",
+                    (
+                        json.dumps(legacy, separators=(",", ":")),
+                        fingerprint(legacy),
+                        prepared["rootId"],
+                    ),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            operations = (
+                ("workspace_status", lambda: workspace_status(root=root)),
+                (
+                    "hierarchy_load",
+                    lambda: SchedulerRepository(root).hierarchy(
+                        prepared["rootId"]
+                    ),
+                ),
+            )
+            for name, operation in operations:
+                with self.subTest(operation=name):
+                    with self.assertRaises(GatedLoopError) as caught:
+                        operation()
+                    self.assertEqual(
+                        caught.exception.code,
+                        "SCHEDULER_STATE_INCOMPATIBLE",
+                    )
+
     def test_tampered_frozen_graph_is_rejected_by_runtime(self) -> None:
         with TemporaryDirectory() as root:
             prepared = prepare_hierarchy(
@@ -175,7 +318,6 @@ class McpSurfaceTests(unittest.TestCase):
                 now=at(1),
             )
             database = Path(root, ".layered-delivery", "scheduler.db")
-            import sqlite3
 
             connection = sqlite3.connect(database)
             try:
@@ -207,6 +349,114 @@ class McpSurfaceTests(unittest.TestCase):
             caught.exception.code,
             "SCHEDULER_STATE_INVALID",
         )
+
+    def test_schema_valid_graph_tamper_is_rejected_before_mutation(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+                now=at(0),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="human",
+                now=at(1),
+            )
+            database = Path(root, ".layered-delivery", "scheduler.db")
+            connection = sqlite3.connect(database)
+            try:
+                row = connection.execute(
+                    "SELECT graph_json FROM hierarchies WHERE root_id = ?",
+                    (prepared["rootId"],),
+                ).fetchone()
+                graph = json.loads(row[0])
+                task_loop = next(
+                    node
+                    for node in graph["nodes"]
+                    if node["kind"] == "TASK_LOOP"
+                )
+                task_loop["loop"]["payload"]["tampered"] = True
+                connection.execute(
+                    "UPDATE hierarchies SET graph_json = ?, "
+                    "graph_fingerprint = ? WHERE root_id = ?",
+                    (
+                        json.dumps(graph, separators=(",", ":")),
+                        fingerprint(graph),
+                        prepared["rootId"],
+                    ),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            with self.assertRaises(GatedLoopError) as caught:
+                call_tool(
+                    "dispatch_loop",
+                    {
+                        "root_id": prepared["rootId"],
+                        "node_id": "loop:t-service",
+                        "owner": "agent-integrity",
+                        "operation_id": "op-integrity",
+                    },
+                    root=root,
+                )
+            self.assertEqual(
+                caught.exception.code,
+                "SCHEDULER_STATE_INVALID",
+            )
+
+            connection = sqlite3.connect(database)
+            try:
+                status = connection.execute(
+                    "SELECT status FROM node_runs "
+                    "WHERE node_id = 'loop:t-service'"
+                ).fetchone()[0]
+                claimed_events = connection.execute(
+                    "SELECT COUNT(*) FROM graph_events "
+                    "WHERE event_type = 'LOOP_CLAIMED'"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            self.assertEqual(status, "READY")
+            self.assertEqual(claimed_events, 0)
+
+    def test_delivery_namespace_must_match_stored_root_id(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+                now=at(0),
+            )
+            database = Path(root, ".layered-delivery", "scheduler.db")
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    "UPDATE hierarchies SET root_id = 'd-alias' "
+                    "WHERE root_id = ?",
+                    (prepared["rootId"],),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            operations = (
+                lambda: workspace_status(root=root),
+                lambda: SchedulerRepository(root).hierarchy("d-alias"),
+            )
+            for operation in operations:
+                with self.assertRaises(GatedLoopError) as caught:
+                    operation()
+                self.assertEqual(
+                    caught.exception.code,
+                    "SCHEDULER_STATE_INVALID",
+                )
 
     def test_mcp_initialize_and_tool_call(self) -> None:
         with TemporaryDirectory() as root:

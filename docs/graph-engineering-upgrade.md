@@ -5,43 +5,72 @@
 `layered-delivery` 的职责是总览与调度，不是实现流程治理。
 
 ```text
-Outer Graph
-  ├─ Task Loop A
-  ├─ Task Loop B
-  ├─ Join
-  ├─ Review Loop
-  └─ User Confirmation
+Delivery 顶层交付需求
+└─ root: GROUP | TASK
+   ├─ TASK_LOOP
+   └─ GROUP
+      ├─ GROUP | TASK
+      ├─ GROUP_JOIN
+      └─ GROUP_REVIEW_LOOP
 
-Task Loop A
-  └─ 自己的理解 → 开发 → 测试 → Gate → 修正循环
-
-Task Loop B
-  └─ 另一套 Skill、规范和内部循环
+root terminal
+→ DELIVERY_REVIEW_LOOP
+→ USER_CONFIRMATION
 ```
 
-这比把 Task、development、test、Gate、Skill activation 全部展开在一张全局图中更符合 Graph Engineering：外层节点具有清晰自治边界，只通过稳定输入、资源声明和标准终态耦合。
+Delivery 是一次交付的身份、总目标和最终验收边界，不是 work item kind。工作项只有 `GROUP` 和 `TASK`：TASK 是执行叶子，GROUP 递归组织直接子 GROUP/TASK，并在子节点完成后执行自己的独立 Review。
+
+这比固定 Delivery / Capability / Task 三层，或把 development、test、Gate、Skill activation 全部展开在一张全局图中更符合 Graph Engineering：外层节点具有清晰自治边界，只通过稳定输入、资源声明和标准终态耦合。
 
 ## 分层职责
 
 | 层 | 负责 | 不负责 |
 |---|---|---|
-| Outer Graph | 依赖、并行、资源锁、租约、基础设施重试、Join、Review、用户确认 | 文件、实现、测试、Gate、Skill |
-| Task Loop | 完成一个独立结果，内部校验与修正 | 决定全局依赖或抢占其他资源 |
+| Delivery 顶层边界 | Graph/run 身份、交付摘要、最终 Review、用户确认 | 充当一种可递归 work item |
+| Outer Graph | GROUP/TASK 依赖、并行、资源锁、租约、基础设施重试、Join、Review | 文件、实现、测试、Gate、Skill |
+| TASK Loop | 完成一个独立结果，内部校验与修正 | 决定全局依赖或抢占其他资源 |
+| Review Loop | 审查一个已汇合的 GROUP 边界或完整 Delivery | 改写被冻结的层级或解释 Join |
 | Skill | 为某个 Loop 提供实现方法或领域规范 | 改写外层冻结 Graph |
 
 Graph 节点是自治工作单元，不是每一个内部动作。若某个 Java Loop 规定 Entity/Mapper/Service 的创建方式，它可以在 payload 和自身 Skill 中定义，不会与 layered-delivery 的文件 scope 冲突。
 
+## 递归 GROUP/TASK
+
+一个 GROUP 可以同时包含 GROUP 和 TASK，例如：
+
+```text
+Delivery: d-commerce
+└─ GROUP: g-release
+   ├─ GROUP: g-backend
+   │  ├─ TASK: t-order-api
+   │  └─ TASK: t-inventory
+   ├─ GROUP: g-frontend
+   │  ├─ TASK: t-admin-web
+   │  └─ TASK: t-customer-web
+   └─ TASK: t-release-notes
+```
+
+父子关系表达分解，`dependsOn` 表达同一 GROUP 下直接兄弟之间的启动屏障。依赖源可以是 TASK 或 GROUP，依赖目标也可以是 TASK 或 GROUP：
+
+- TASK 终态是该节点的 `TASK_LOOP` 终态；
+- GROUP 终态是该节点的 `GROUP_REVIEW_LOOP` 终态；
+- 依赖 GROUP 时，只有该 GROUP 的全部后代完成、Join 成功且 Review 通过后，依赖方入口才可运行。
+
+`GROUP_JOIN(g)` 是调度器生成的确定性屏障，不是工作项或 Loop。对 GROUP `g` 的每个直接子级 `c`，编译 `terminal(c) --ALL_OF--> GROUP_JOIN(g)`；Join 自动成功后再以 `REQUIRES_SUCCESS` 解锁 `GROUP_REVIEW_LOOP(g)`。它没有 payload、资源锁或业务 result。
+
+因此父 GROUP 不越级检查孙节点，也不会在子 GROUP 尚未审查时提前完成。
+
 ## Skill Hint 晚绑定
 
-需求阶段通常只能知道“希望优先使用哪些 Skill”，无法可靠知道未来哪个 Task/Review Loop 会适用。因此 hierarchy 只在顶层保存共享 `skillHints`，不把它们编译成节点，也不分配阶段：
+需求阶段通常只能知道“希望优先使用哪些 Skill”，无法可靠知道未来哪个 Task/Review Loop 会适用。因此 hierarchy 在 `root.skillHints` 保存一份共享提示，不把它们编译成节点，也不分配阶段：
 
 ```text
 用户 Skill Hint
        │
-       ├──────────┬──────────┐
-       ▼          ▼          ▼
- Task Loop A  Task Loop B  Review Loop
- 运行时选择    运行时选择    运行时选择
+       ├────────────┬────────────────┬──────────────────┐
+       ▼            ▼                ▼                  ▼
+ TASK Loop A   TASK Loop B   GROUP Review Loop   Delivery Review Loop
+ 运行时选择     运行时选择       运行时选择            运行时选择
 ```
 
 每个 Loop 读取当前任务、工作区和宿主 Skill catalog 后，优先原生触发适用提示。某个提示对 Loop 不适用或当前不可用时可以跳过；Loop 也可以发现并使用其他 Skill。外层 scheduler 只负责传递，不验证 Skill 激活、顺序或生命周期。
@@ -53,9 +82,9 @@ Graph 节点是自治工作单元，不是每一个内部动作。若某个 Java
 节点类型：
 
 - `TASK_LOOP`
-- `CAPABILITY_JOIN`
-- `DELIVERY_JOIN`
-- `REVIEW_LOOP`
+- `GROUP_JOIN`
+- `GROUP_REVIEW_LOOP`
+- `DELIVERY_REVIEW_LOOP`
 - `USER_CONFIRMATION`
 
 边类型：
@@ -63,7 +92,26 @@ Graph 节点是自治工作单元，不是每一个内部动作。若某个 Java
 - `REQUIRES_SUCCESS`
 - `ALL_OF`
 
-Task 依赖与层级 Join 构成 DAG。Loop 内部允许有受控循环，因此“整个系统支持循环”与“外层依赖图无环”并不矛盾。
+同级依赖与递归 GROUP Join/Review 构成 DAG。Loop 内部允许有受控循环，因此“整个系统支持循环”与“外层依赖图无环”并不矛盾。
+
+## Review 递归收敛
+
+Review 沿层级逐层向上收敛，但不会把同一个 Review 节点重复传播：
+
+```text
+直接子节点终态
+→ GROUP_JOIN
+→ GROUP_REVIEW_LOOP
+→ 父 GROUP 将其视为一个子节点终态
+→ 父 GROUP_JOIN
+→ 父 GROUP_REVIEW_LOOP
+→ …
+→ 根工作项终态
+→ DELIVERY_REVIEW_LOOP
+→ USER_CONFIRMATION
+```
+
+若根本身是 TASK，则其 Task Loop 成功后直接进入 Delivery Review。若根是 GROUP，则根 GROUP Review 成功后才进入 Delivery Review。最终用户确认只发生一次。
 
 ## Loop 边界
 
@@ -114,6 +162,29 @@ Task 依赖与层级 Join 构成 DAG。Loop 内部允许有受控循环，因此
 - Loop 主动取消。
 
 Gate 失败后的同任务修正由 Loop 内部继续；只有外层契约不再适用时才返回 `REPLAN_REQUIRED`。
+
+## 逻辑递归与物理布局
+
+GROUP/TASK 的递归只存在于冻结 hierarchy 和编译 Graph 中。工作区共享一份 SQLite 权威，并按稳定的 `delivery.id` 隔离各次需求交付的可重建投影：
+
+```text
+.layered-delivery/
+├── scheduler.db
+├── d-commerce/
+│   ├── hierarchy.json
+│   ├── graph.json
+│   ├── state.json
+│   └── overview.md
+└── d-maintenance/
+    ├── hierarchy.json
+    ├── graph.json
+    ├── state.json
+    └── overview.md
+```
+
+`scheduler.db` 是机器权威；Delivery 目录内的文件分别投影递归层级、编译图、当前状态和人类可读总览。目录名使用不可变 ID，不使用可修改标题；同一工作区可以保留多个 Delivery 目录。增加 GROUP 不会制造下一层目录，也不会重新引入文件 scope。
+
+人类总览必须足以完成冻结前评审和运行中跟踪：包含双指纹、状态、完整 GROUP/TASK 清单，以及 summary、`dependsOn`、Loop 引用、资源锁和原始 payload。展示使用中文和 UTC+8 时间，JSON/SQLite 继续保持机器 UTC。
 
 ## 可恢复性
 

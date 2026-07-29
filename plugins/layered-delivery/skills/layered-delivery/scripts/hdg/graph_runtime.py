@@ -13,7 +13,7 @@ from .loop_contracts import (
 )
 from .repository import (
     SchedulerRepository,
-    _validated_stored_graph,
+    _validated_stored_definition,
     timestamp,
 )
 
@@ -41,12 +41,21 @@ def _after(value: str, seconds: int) -> str:
     ).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _locked_timestamp(now: object, current: str) -> str:
+    """Resolve commit time under the scheduler lock without regression."""
+
+    candidate = timestamp(now)
+    if _parse_timestamp(candidate) < _parse_timestamp(current):
+        return current
+    return candidate
+
+
 def _loaded(
     connection: Any,
     root_id: str,
 ) -> tuple[dict[str, Any], Any, list[dict[str, Any]]]:
     hierarchy = connection.execute(
-        "SELECT graph_json, graph_fingerprint FROM hierarchies "
+        "SELECT * FROM hierarchies "
         "WHERE root_id = ? "
         "AND status = 'FROZEN'",
         (root_id,),
@@ -60,16 +69,11 @@ def _loaded(
             "SCHEDULER_RUN_MISSING",
             f"Frozen scheduler run is missing: {root_id}",
         )
+    _, graph = _validated_stored_definition(hierarchy)
     return (
-        _validated_stored_graph(
-            hierarchy["graph_json"],
-            hierarchy["graph_fingerprint"],
-        ),
+        graph,
         run,
-        SchedulerRepository.latest_nodes(
-            connection,
-            run["run_id"],
-        ),
+        SchedulerRepository.latest_nodes(connection, run["run_id"]),
     )
 
 
@@ -92,6 +96,26 @@ def _node(
             f"Scheduler node is missing: {node_id}",
         )
     return definition, state
+
+
+def _assert_graph_not_replanning(
+    nodes: list[dict[str, Any]],
+) -> None:
+    replan_nodes = sorted(
+        item["nodeId"]
+        for item in nodes
+        if (
+            item["status"] == "BLOCKED"
+            and item["failureClass"] == "REPLAN_REQUIRED"
+        )
+    )
+    if replan_nodes:
+        fail(
+            "SCHEDULER_REPLAN_REQUIRED",
+            "The frozen Graph requires replanning and cannot start "
+            "additional Loop work",
+            nodeIds=replan_nodes,
+        )
 
 
 def _active_claim(
@@ -219,9 +243,9 @@ def advance_graph(
 
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
-    at = timestamp(now)
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
         for node in nodes:
             if (
                 node["status"] != "CLAIMED"
@@ -337,7 +361,7 @@ def loop_context(
         "kind": definition["kind"],
         "workItemId": definition["workItemId"],
         "loop": definition["loop"],
-        "skillHints": stored["hierarchy"]["skillHints"],
+        "skillHints": stored["hierarchy"]["root"]["skillHints"],
         "attempt": state["attempt"],
         "status": state["status"],
         "predecessors": [
@@ -378,9 +402,10 @@ def dispatch_loop(
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     owner = _identity(owner, "owner")
     operation_id = _identity(operation_id, "operation_id")
-    at = timestamp(now)
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
+        _assert_graph_not_replanning(nodes)
         definition, state = _node(graph, nodes, node_id)
         if (
             definition["kind"] not in LOOP_NODE_KINDS
@@ -476,9 +501,9 @@ def heartbeat_loop(
 ) -> dict[str, Any]:
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
-    at = timestamp(now)
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
         _, state = _node(graph, nodes, node_id)
         if not _active_claim(
             state,
@@ -563,9 +588,9 @@ def _change_claimed_loop(
 ) -> dict[str, Any]:
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
-    at = timestamp(now)
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
         _, state = _node(graph, nodes, node_id)
         if not _active_claim(
             state,
@@ -622,9 +647,10 @@ def resume_loop(
 ) -> dict[str, Any]:
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
-    at = timestamp(now)
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
+        _assert_graph_not_replanning(nodes)
         definition, state = _node(graph, nodes, node_id)
         if (
             definition["kind"] not in LOOP_NODE_KINDS
@@ -692,7 +718,6 @@ def record_loop_result(
         )
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
-    at = timestamp(now)
     event_by_status = {
         "SUCCEEDED": "LOOP_SUCCEEDED",
         "BLOCKED": "LOOP_BLOCKED",
@@ -707,6 +732,7 @@ def record_loop_result(
     }
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
         definition, state = _node(graph, nodes, node_id)
         if (
             definition["kind"] not in LOOP_NODE_KINDS
@@ -815,9 +841,9 @@ def record_user_confirmation(
         )
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
-    at = timestamp(now)
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
         definition = next(
             node
             for node in graph["nodes"]
@@ -884,9 +910,9 @@ def cancel_graph_run(
         fail("SCHEDULER_CANCEL_INVALID", "reason must be non-empty")
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
-    at = timestamp(now)
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
         if run["status"] in {"COMPLETED", "CANCELLED"}:
             fail(
                 "SCHEDULER_RUN_TERMINAL",
@@ -956,16 +982,11 @@ def graph_events(
     }
 
 
-def rebuild_graph_run(
+def _rebuild_graph_run_locked(
     *,
-    root: str,
+    repository: SchedulerRepository,
     root_id: str,
-    explicit_dogfood: bool = False,
 ) -> dict[str, Any]:
-    """Rebuild mutable node projections from the verified event stream."""
-
-    repository = SchedulerRepository(root)
-    repository.assert_self_hosting_dogfood(explicit_dogfood)
     stored = repository.hierarchy(root_id)
     current_run = repository.run(root_id)
     events: list[dict[str, Any]] = []
@@ -1208,6 +1229,23 @@ def rebuild_graph_run(
         **repository.run(root_id),
         "rebuiltFromEvents": len(events),
     }
+
+
+def rebuild_graph_run(
+    *,
+    root: str,
+    root_id: str,
+    explicit_dogfood: bool = False,
+) -> dict[str, Any]:
+    """Rebuild materialized state from one locked event snapshot."""
+
+    repository = SchedulerRepository(root)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    with repository.scheduler_lock():
+        return _rebuild_graph_run_locked(
+            repository=repository,
+            root_id=root_id,
+        )
 
 
 __all__ = (

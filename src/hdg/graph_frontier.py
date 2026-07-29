@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .graph_model import LOOP_NODE_KINDS
 from .graph_runtime import advance_graph
 from .loop_contracts import resource_claims_overlap
 from .repository import SchedulerRepository
@@ -11,6 +12,16 @@ def build_graph_frontier(
     graph: dict[str, Any],
     run: dict[str, Any],
 ) -> dict[str, Any]:
+    if run["status"] in {"COMPLETED", "CANCELLED"}:
+        return {
+            "rootId": run["rootId"],
+            "runId": run["runId"],
+            "status": run["status"],
+            "readyLoops": [],
+            "activeLoops": [],
+            "blockedLoops": [],
+            "actions": [],
+        }
     definitions = {
         node["id"]: node
         for node in graph["nodes"]
@@ -24,22 +35,24 @@ def build_graph_frontier(
     ready_loops: list[dict[str, Any]] = []
     active_loops: list[dict[str, Any]] = []
     blocked: list[dict[str, Any]] = []
+    reserved_claims = [
+        (
+            state["nodeId"],
+            definitions[state["nodeId"]]["loop"]["resourceClaims"],
+        )
+        for state in claimed
+    ]
 
-    for state in run["nodes"]:
+    for state in sorted(run["nodes"], key=lambda item: item["nodeId"]):
         definition = definitions[state["nodeId"]]
         kind = definition["kind"]
-        if state["status"] == "READY" and kind in {
-            "TASK_LOOP",
-            "REVIEW_LOOP",
-        }:
+        if state["status"] == "READY" and kind in LOOP_NODE_KINDS:
             conflicts = sorted(
-                active["nodeId"]
-                for active in claimed
+                reserved_node_id
+                for reserved_node_id, claims in reserved_claims
                 if resource_claims_overlap(
                     definition["loop"]["resourceClaims"],
-                    definitions[active["nodeId"]]["loop"][
-                        "resourceClaims"
-                    ],
+                    claims,
                 )
             )
             record = {
@@ -52,6 +65,12 @@ def build_graph_frontier(
             }
             ready_loops.append(record)
             if not conflicts:
+                reserved_claims.append(
+                    (
+                        state["nodeId"],
+                        definition["loop"]["resourceClaims"],
+                    )
+                )
                 actions.append(
                     {
                         "action": "DISPATCH_LOOP",
@@ -109,6 +128,19 @@ def build_graph_frontier(
                     "nodeId": state["nodeId"],
                 }
             )
+    replan_nodes = sorted(
+        item["nodeId"]
+        for item in blocked
+        if item["failureClass"] == "REPLAN_REQUIRED"
+    )
+    if replan_nodes:
+        actions = [
+            {
+                "action": "REPLAN_HIERARCHY",
+                "nodeId": node_id,
+            }
+            for node_id in replan_nodes
+        ]
     return {
         "rootId": run["rootId"],
         "runId": run["runId"],

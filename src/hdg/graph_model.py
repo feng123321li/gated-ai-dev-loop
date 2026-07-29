@@ -7,18 +7,19 @@ from .constants import SCHEMA_VERSION
 from .errors import fail
 from .jsonio import fingerprint
 from .loop_contracts import validate_loop_descriptor
-from .model_core import safe_id
+from .model_core import safe_id, work_item_dependencies
 
 
 GRAPH_NODE_KINDS = (
     "TASK_LOOP",
-    "CAPABILITY_JOIN",
-    "DELIVERY_JOIN",
-    "REVIEW_LOOP",
+    "GROUP_JOIN",
+    "GROUP_REVIEW_LOOP",
+    "DELIVERY_REVIEW_LOOP",
     "USER_CONFIRMATION",
 )
-LOOP_NODE_KINDS = ("TASK_LOOP", "REVIEW_LOOP")
-JOIN_NODE_KINDS = ("CAPABILITY_JOIN", "DELIVERY_JOIN")
+REVIEW_NODE_KINDS = ("GROUP_REVIEW_LOOP", "DELIVERY_REVIEW_LOOP")
+LOOP_NODE_KINDS = ("TASK_LOOP", *REVIEW_NODE_KINDS)
+JOIN_NODE_KINDS = ("GROUP_JOIN",)
 GRAPH_EDGE_KINDS = ("REQUIRES_SUCCESS", "ALL_OF")
 GRAPH_PLANES = ("EXECUTION", "GOVERNANCE")
 RUNTIME_STATES = (
@@ -84,7 +85,11 @@ def join_node_id(work_item_id: str) -> str:
 
 
 def review_node_id(root_id: str) -> str:
-    return f"review:{safe_id(root_id)}"
+    return f"review:delivery:{safe_id(root_id)}"
+
+
+def group_review_node_id(group_id: str) -> str:
+    return f"review:group:{safe_id(group_id)}"
 
 
 def confirmation_node_id(root_id: str) -> str:
@@ -100,7 +105,7 @@ def _node(
 ) -> dict[str, Any]:
     planes = (
         ["GOVERNANCE"]
-        if kind in {"REVIEW_LOOP", "USER_CONFIRMATION"}
+        if kind in {*REVIEW_NODE_KINDS, "USER_CONFIRMATION"}
         else ["EXECUTION"]
     )
     return {
@@ -166,6 +171,14 @@ def compile_runtime_policy() -> dict[str, Any]:
             ["PENDING", "READY"],
             "ON_START",
             all_kinds,
+            automatic=True,
+        ),
+        _transition(
+            "NODE_READY",
+            ["PENDING"],
+            "READY",
+            "ON_PREDECESSORS_SUCCEEDED",
+            [*loops, "USER_CONFIRMATION"],
             automatic=True,
         ),
         _transition(
@@ -235,14 +248,14 @@ def compile_runtime_policy() -> dict[str, Any]:
         _transition(
             "NODE_RESUMED",
             ["PAUSED"],
-            ["PENDING", "READY"],
+            "PENDING",
             "ON_RESUME",
             loops,
             automatic=False,
         ),
         _transition(
             "JOIN_COMPLETED",
-            ["READY"],
+            ["PENDING"],
             "SUCCEEDED",
             "ON_ALL_SUCCESS",
             list(JOIN_NODE_KINDS),
@@ -329,22 +342,33 @@ def runtime_transition(
 
 def _walk_hierarchy(hierarchy: dict[str, Any]) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
-
-    def visit(node: dict[str, Any]) -> None:
+    pending = [hierarchy["root"]]
+    while pending:
+        node = pending.pop()
         result.append(node)
-        for child in node["children"]:
-            visit(child)
-
-    visit(hierarchy["root"])
+        pending.extend(reversed(node["children"]))
     return result
 
 
-def _terminal_node_id(definition: dict[str, Any]) -> str:
+def _terminal_node_id(hierarchy_node: dict[str, Any]) -> str:
+    definition = hierarchy_node["definition"]
     return (
         loop_node_id(definition["id"])
         if definition["kind"] == "TASK"
-        else join_node_id(definition["id"])
+        else group_review_node_id(definition["id"])
     )
+
+
+def _entry_node_ids(hierarchy_node: dict[str, Any]) -> list[str]:
+    definition = hierarchy_node["definition"]
+    if definition["kind"] == "TASK":
+        return [loop_node_id(definition["id"])]
+    entries: list[str] = []
+    for child in hierarchy_node["children"]:
+        if work_item_dependencies(child["definition"]):
+            continue
+        entries.extend(_entry_node_ids(child))
+    return sorted(set(entries))
 
 
 def compile_delivery_graph(
@@ -359,8 +383,8 @@ def compile_delivery_graph(
             "DELIVERY_GRAPH_FINGERPRINT_INVALID",
             "Hierarchy fingerprint is invalid",
         )
-    root_definition = hierarchy["root"]["definition"]
-    root_id = root_definition["id"]
+    delivery = hierarchy["delivery"]
+    root_id = delivery["id"]
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     hierarchy_nodes = _walk_hierarchy(hierarchy)
@@ -382,73 +406,70 @@ def compile_delivery_graph(
                     loop=definition["execution"]["loop"],
                 )
             )
-            for dependency_id in definition["execution"]["dependsOn"]:
-                edges.append(
-                    _edge(
-                        loop_node_id(dependency_id),
-                        loop_node_id(item_id),
-                        "REQUIRES_SUCCESS",
-                        plane="EXECUTION",
-                    )
-                )
             continue
 
-        join_kind = (
-            "CAPABILITY_JOIN"
-            if kind == "CAPABILITY"
-            else "DELIVERY_JOIN"
-        )
         nodes.append(
             _node(
                 join_node_id(item_id),
-                join_kind,
+                "GROUP_JOIN",
                 item_id,
+            )
+        )
+        nodes.append(
+            _node(
+                group_review_node_id(item_id),
+                "GROUP_REVIEW_LOOP",
+                item_id,
+                loop=hierarchy_node["reviewLoop"],
             )
         )
         join_group = f"join:{item_id}:children"
         for child in hierarchy_node["children"]:
             edges.append(
                 _edge(
-                    _terminal_node_id(child["definition"]),
+                    _terminal_node_id(child),
                     join_node_id(item_id),
                     "ALL_OF",
                     plane="EXECUTION",
                     join_group=join_group,
                 )
             )
+        edges.append(
+            _edge(
+                join_node_id(item_id),
+                group_review_node_id(item_id),
+                "REQUIRES_SUCCESS",
+                plane="GOVERNANCE",
+            )
+        )
 
     for hierarchy_node in hierarchy_nodes:
         definition = hierarchy_node["definition"]
-        if definition["kind"] != "CAPABILITY":
-            continue
-        for dependency_id in definition["decomposition"]["dependsOn"]:
+        for dependency_id in work_item_dependencies(definition):
             dependency = by_id.get(dependency_id)
-            if (
-                dependency is None
-                or dependency["definition"]["kind"] != "CAPABILITY"
-            ):
+            if dependency is None:
                 fail(
                     "DELIVERY_GRAPH_DEPENDENCY_INVALID",
-                    "Capability dependency is missing from the graph",
+                    "Sibling dependency is missing from the graph",
                 )
-            for child in hierarchy_node["children"]:
+            for entry_node_id in _entry_node_ids(hierarchy_node):
                 edges.append(
                     _edge(
-                        join_node_id(dependency_id),
-                        _terminal_node_id(child["definition"]),
+                        _terminal_node_id(dependency),
+                        entry_node_id,
                         "REQUIRES_SUCCESS",
                         plane="EXECUTION",
                     )
                 )
 
-    root_terminal = _terminal_node_id(root_definition)
+    root_terminal = _terminal_node_id(hierarchy["root"])
     nodes.extend(
         [
             _node(
                 review_node_id(root_id),
-                "REVIEW_LOOP",
+                "DELIVERY_REVIEW_LOOP",
                 root_id,
-                loop=hierarchy["reviewLoop"],
+                loop=delivery["reviewLoop"],
             ),
             _node(
                 confirmation_node_id(root_id),
@@ -522,7 +543,9 @@ def _expected_node_id(kind: str, work_item_id: str) -> str:
         return loop_node_id(work_item_id)
     if kind in JOIN_NODE_KINDS:
         return join_node_id(work_item_id)
-    if kind == "REVIEW_LOOP":
+    if kind == "GROUP_REVIEW_LOOP":
+        return group_review_node_id(work_item_id)
+    if kind == "DELIVERY_REVIEW_LOOP":
         return review_node_id(work_item_id)
     return confirmation_node_id(work_item_id)
 
@@ -696,7 +719,7 @@ def graph_summary(graph: dict[str, Any]) -> dict[str, int]:
             for node in normalized["nodes"]
         ),
         "reviewLoops": sum(
-            node["kind"] == "REVIEW_LOOP"
+            node["kind"] in REVIEW_NODE_KINDS
             for node in normalized["nodes"]
         ),
         "confirmationNodes": sum(

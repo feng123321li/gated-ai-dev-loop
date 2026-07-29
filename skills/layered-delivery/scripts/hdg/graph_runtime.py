@@ -8,9 +8,11 @@ from typing import Any
 from .errors import fail
 from .graph_model import FAILURE_CLASSES, LOOP_NODE_KINDS
 from .loop_contracts import (
+    loop_execution_policy,
     resource_claims_overlap,
     validate_loop_outcome,
 )
+from .model_rendering import task_baseline_relative_path
 from .repository import (
     SchedulerRepository,
     _validated_stored_definition,
@@ -377,6 +379,17 @@ def loop_context(
             states,
             node_id,
         ),
+        "humanArtifacts": (
+            {
+                "taskBaseline": (
+                    f".layered-delivery/{root_id}/"
+                    f"{task_baseline_relative_path(definition['workItemId'])}"
+                )
+            }
+            if definition["kind"] == "TASK_LOOP"
+            else {}
+        ),
+        "executionPolicy": loop_execution_policy(),
         "rules": {
             "payloadIsOpaqueToScheduler": True,
             "internalGateAndSkillPolicyOwnedByLoop": True,
@@ -384,6 +397,12 @@ def loop_context(
             "selectSkillsAtRuntime": True,
             "prioritizeApplicableSkillHints": True,
             "returnOnlyStandardLoopOutcome": True,
+            "coordinatorMustNotExecuteLoopInline": True,
+            "capacityPressureMustPauseAndHandoff": True,
+            "capacityPressureIsNotBlocked": True,
+            "capacityPressureIsNotWorkerLost": True,
+            "capacityPressureDoesNotRequireReplan": True,
+            "receivingSessionMustReuseFrozenGraph": True,
         },
     }
 
@@ -630,11 +649,32 @@ def _change_claimed_loop(
             at=at,
         )
     repository.write_projections(root_id)
-    return {
+    result = {
         "rootId": root_id,
         "nodeId": node_id,
         "status": target_status,
     }
+    if target_status == "PAUSED":
+        result.update(
+            {
+                "executionPolicy": loop_execution_policy(),
+                "handoff": {
+                    "rootId": root_id,
+                    "nodeId": node_id,
+                    "resumeSequence": [
+                        "graph_frontier",
+                        "resume_loop",
+                        "graph_frontier",
+                        "loop_context",
+                        "dispatch_loop",
+                    ],
+                    "reuseFrozenGraph": True,
+                    "reprepare": False,
+                    "refreeze": False,
+                },
+            }
+        )
+    return result
 
 
 def resume_loop(
@@ -689,6 +729,11 @@ def resume_loop(
         "rootId": root_id,
         "nodeId": node_id,
         "status": "READY",
+        "executionPolicy": loop_execution_policy(),
+        "nextAction": (
+            "READ_GRAPH_FRONTIER_AND_REDISPATCH_"
+            "IN_INDEPENDENT_CONTEXT"
+        ),
     }
 
 

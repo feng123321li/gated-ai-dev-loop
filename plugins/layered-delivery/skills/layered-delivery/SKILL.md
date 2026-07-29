@@ -21,6 +21,8 @@ description: "调度或恢复多项目、多模块的软件交付 Graph。用于
 - 仅对 `RETRYABLE_INFRA` 与 `WORKER_LOST` 自动重试。业务阻断、契约变化与外部权限交给 frontier。
 - 最终完成必须取得真实用户确认。Git、发布、迁移和新增外部权限继续单独授权。
 - 准备完成后向用户提供“自动执行 / 手动交接”两个确认开发选项，并保留“调整需求”的非确认分支。选择自动或手动本身就是完整冻结授权；任何其他反馈都继续需求交互并重新 prepare。确认后立即调用由宿主自动批准的 `freeze_hierarchy`，不要再请求通用 Yes/No，也不要向工具发送内部 `confirmed` 参数。
+- 总调度上下文只消费 frontier 和路由 Loop，不在自身上下文内实现 TASK 或 Review。每个 Loop 使用独立接收上下文；宿主支持 Agent 时优先自动派遣，无可用执行容量时才生成人工交接。
+- Hook 摩擦或上下文容量压力不是业务阻断，也不要求重规划。已 claim Loop 在容量不足时先 `pause_loop`，接收上下文沿用同一冻结 Graph，执行 `resume_loop` 后重新 dispatch；不要提交 `BLOCKED` 或 `REPLAN_REQUIRED`。
 
 ## 入口
 
@@ -33,17 +35,19 @@ description: "调度或恢复多项目、多模块的软件交付 Graph。用于
 ## 调度循环
 
 1. 持续调用 `graph_frontier`，按顺序消费所有 action。
-2. 对 `DISPATCH_LOOP`，读取 `loop_context`，在真实执行容量可用时调用 `dispatch_loop`。
-3. 将 `loop.ref`、不透明 `payload` 和共享 `skillHints` 交给该 Loop 的执行适配器。
-4. Loop 先识别当前任务和宿主可用 Skill，再优先原生触发适用提示；可以跳过不适用提示，也可以按实际需要使用其他 Skill。不同节点可以作出不同选择。
-5. TASK Loop 自主管理实现；GROUP Review 和 Delivery Review Loop 自主管理审查。`GROUP_JOIN` 由调度器在直接子节点终态齐备后推进，不派发实现工作。
-6. 长运行在租约到期前调用 `heartbeat_loop`。
-7. 只把 Loop 的标准终态提交给 `record_loop_result`；不要把内部步骤映射成外层节点。
-8. 继续消费 frontier。每个 GROUP Review 成功后才成为父 GROUP 可消费的终态；根终态再进入 Delivery Review 和最终用户确认。
+2. 对 `DISPATCH_LOOP`，优先用宿主原生 Agent 创建独立接收上下文，只交付 `rootId/nodeId`；接收方通过 MCP 调用 `loop_context` 和 `dispatch_loop`，不要复制规划会话或由总调度上下文内联执行。
+3. 无可用 Agent 容量时才输出人工交接；未 claim 的 Loop 由接收方直接读取 frontier 后 dispatch，已暂停的 Loop 按 `RESUME_LOOP_IN_INDEPENDENT_CONTEXT` 恢复。
+4. 接收方从 `loop_context` 获取 `loop.ref`、不透明 `payload`、共享 `skillHints`、TASK baseline 路径和固定 `executionPolicy`。
+5. Loop 先识别当前任务和宿主可用 Skill，再优先原生触发适用提示；可以跳过不适用提示，也可以按实际需要使用其他 Skill。不同节点可以作出不同选择。
+6. TASK Loop 自主管理实现；GROUP Review 和 Delivery Review Loop 自主管理审查。`GROUP_JOIN` 由调度器在直接子节点终态齐备后推进，不派发实现工作。
+7. 长运行在租约到期前调用 `heartbeat_loop`；出现上下文容量压力或高轮次 Hook 摩擦时先 pause，再自动派遣新 Agent 或人工交接。
+8. 只把 Loop 的真实业务终态提交给 `record_loop_result`；容量交接不产生 Loop outcome。
+9. 继续消费 frontier。每个 GROUP Review 成功后才成为父 GROUP 可消费的终态；根终态再进入 Delivery Review 和最终用户确认。
 
 ## 恢复
 
 - MCP 响应未知时先重新读取 `workspace_status`、`graph_status` 和 `graph_frontier`，不要盲目重放写操作。
+- `PAUSED` 或 `RESUME_LOOP_IN_INDEPENDENT_CONTEXT`：把 `rootId/nodeId` 路由给新的独立接收上下文；接收方调用 `resume_loop`，再从 frontier 取得新的 dispatch，不重新 prepare/freeze。
 - 租约过期与基础设施失败交给 `advance_graph`；不要手工改 attempt。
 - 物化状态损坏时用 `rebuild_graph_run` 从已校验事件链重建；不要改事件。
 - Loop 要求改变外层依赖、资源声明或拓扑时，记录 `REPLAN_REQUIRED` 并回到新的人工评审，不在原冻结图中暗改。

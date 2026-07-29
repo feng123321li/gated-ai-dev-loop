@@ -40,18 +40,19 @@ STATUS_TEXT = {
     "UNAVAILABLE": "不可用",
 }
 UTC_PLUS_8 = timezone(timedelta(hours=8))
-PROJECTION_TEMPLATE_VERSION = 1
+PROJECTION_TEMPLATE_VERSION = 2
+TASK_BASELINE_DIRECTORY = "task-baselines"
 JSON_PROJECTION_TEMPLATE = Template("${document}\n")
 OVERVIEW_PROJECTION_TEMPLATE = Template(
     """# 交付调度与进度总览
 
-## 评审基线
+## 交付状态
 
 - 投影模板版本：${template_version}
-${baseline}
+${delivery_status}
 
 实现规范、测试、门禁与 Skill 激活由各 Loop 内部负责。
-本投影完整展示调度基线和原始输入，但不解释其内部规范。
+TASK 调度基线和原始输入已拆分到固定的 `task-baselines/` 投影。
 Skill 提示在 Loop 启动后按真实上下文选择，不预先绑定节点。
 
 ## Skill 提示
@@ -60,19 +61,58 @@ ${skill_hints}
 
 ## GROUP/TASK 清单
 
-| 路径 | 类型 | 父级 | 同级依赖（dependsOn） | 当前状态 | 标题 |
-|---|---|---|---|---|---|
+| 路径 | 类型 | 父级 | 同级依赖（dependsOn） | 当前状态 | 标题 | TASK baseline |
+|---|---|---|---|---|---|---|
 ${checklist_rows}
 
-## 节点详情
+## TASK Loop 运行快照
 
-${node_details}
+${task_progress}
+## GROUP 协调与 Review
+
+${group_details}
 ## 交付最终审查 Loop
 
 ${delivery_review}
 ## 最终用户确认
 
 ${confirmation}
+"""
+)
+TASK_BASELINE_PROJECTION_TEMPLATE = Template(
+    """# TASK 调度基线
+
+## 基线标识
+
+- 投影模板版本：${template_version}
+- 交付 ID（delivery.id）：${delivery_id}
+- 交付标题：${delivery_title}
+- TASK ID：${task_id}
+- 层级状态（hierarchyStatus）：${hierarchy_status}
+- 层级指纹（hierarchyFingerprint）：${hierarchy_fingerprint}
+- 图指纹（graphFingerprint）：${graph_fingerprint}
+- 更新时间（UTC+8）：${updated_at}
+
+## TASK 定义
+
+- 标题：${task_title}
+- 摘要：${task_summary}
+- 父级：${parent_id}
+- 同级依赖（dependsOn）：${dependencies}
+
+## Task Loop
+
+- Loop 引用：${loop_ref}
+- 资源锁声明（resourceClaims）：${resource_claims}
+- 原始输入（payload）：
+${payload}
+
+## 共享 Skill 提示
+
+${skill_hints}
+
+实现方案、文件、测试、Gate、修正循环和实际 Skill 选择由本 TASK Loop
+在独立执行上下文中负责；本文件只投影控制器可见的冻结调度输入。
 """
 )
 PROJECTION_TEMPLATES = MappingProxyType(
@@ -107,63 +147,82 @@ def raw_definition(
     return dict(definition)
 
 
+def _json_block_lines(value: object) -> list[str]:
+    rendered = json.dumps(
+        value,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+    longest = max(
+        (
+            len(match.group(0))
+            for match in re.finditer(r"`+", rendered)
+        ),
+        default=0,
+    )
+    fence = "`" * max(3, longest + 1)
+    return [f"{fence}json", rendered, fence]
+
+
+def task_baseline_relative_path(task_id: str) -> str:
+    return f"{TASK_BASELINE_DIRECTORY}/{task_id}.md"
+
+
 def render_work_item_baseline(
     definition: dict[str, Any],
+    *,
+    delivery: dict[str, Any] | None = None,
+    skill_hints: list[dict[str, str]] | None = None,
+    hierarchy_fingerprint: str | None = None,
+    graph_fingerprint: str | None = None,
+    hierarchy_status: str | None = None,
+    updated_at: str | None = None,
 ) -> str:
-    """Render only scheduler-visible metadata.
+    """Render one TASK baseline from scheduler-visible metadata.
 
     Loop payloads remain opaque and are shown as JSON for auditability.
     """
 
-    lines = [
-        "# 调度基线",
-        "",
-        f"工作项：{definition['id']}",
-        f"类型：{KIND_TEXT[definition['kind']]}",
-        f"标题：{definition['title']}",
-        f"摘要：{definition['summary']}",
-    ]
-    if definition["kind"] == "TASK":
-        loop = definition["execution"]["loop"]
-        lines.extend(
-            [
-                f"父级：{definition['parentId'] or '无'}",
-                f"依赖：{', '.join(definition['execution']['dependsOn']) or '无'}",
-                "",
-                "## Task Loop",
-                "",
-                f"- 引用：{loop['ref']}",
-                f"- 资源声明：{', '.join(loop['resourceClaims']) or '无'}",
-                "- Payload：",
-                "```json",
-                json.dumps(
-                    loop["payload"],
-                    ensure_ascii=False,
-                    indent=2,
-                    sort_keys=True,
-                ),
-                "```",
-            ]
+    if definition["kind"] != "TASK":
+        raise ValueError("TASK baseline requires a TASK definition")
+    loop = definition["execution"]["loop"]
+    hints = skill_hints or []
+    rendered_hints = (
+        "\n".join(
+            f"- {hint['name']}：{hint['purpose']}"
+            for hint in hints
         )
-    else:
-        dependencies = definition["decomposition"].get(
-            "dependsOn",
-            [],
-        )
-        lines.extend(
-            [
-                f"父级：{definition.get('parentId') or '无'}",
-                f"依赖：{', '.join(dependencies) or '无'}",
-                "",
-                "## 子级调度单元",
-                "",
-            ]
-        )
-        lines.extend(
-            f"- {child['id']} [{KIND_TEXT[child['kind']]}] {child['title']}"
-            for child in definition["children"]
-        )
-    return "\n".join(lines) + "\n"
+        if hints
+        else "- 无"
+    )
+    delivery = delivery or {}
+    return TASK_BASELINE_PROJECTION_TEMPLATE.substitute(
+        template_version=str(PROJECTION_TEMPLATE_VERSION),
+        delivery_id=delivery.get("id", "UNAVAILABLE"),
+        delivery_title=delivery.get("title", "UNAVAILABLE"),
+        task_id=definition["id"],
+        hierarchy_status=_status_text(
+            hierarchy_status or "UNKNOWN"
+        ),
+        hierarchy_fingerprint=(
+            hierarchy_fingerprint or "UNAVAILABLE"
+        ),
+        graph_fingerprint=graph_fingerprint or "UNAVAILABLE",
+        updated_at=_utc_plus_8(updated_at),
+        task_title=definition["title"],
+        task_summary=definition["summary"],
+        parent_id=definition["parentId"] or "无",
+        dependencies=(
+            ", ".join(definition["execution"]["dependsOn"]) or "无"
+        ),
+        loop_ref=loop["ref"],
+        resource_claims=(
+            ", ".join(loop["resourceClaims"]) or "无"
+        ),
+        payload="\n".join(_json_block_lines(loop["payload"])),
+        skill_hints=rendered_hints,
+    )
 
 
 def render_scheduling_plan(
@@ -231,21 +290,7 @@ def render_scheduling_plan(
         return lines
 
     def json_block(value: object) -> list[str]:
-        rendered = json.dumps(
-            value,
-            ensure_ascii=False,
-            indent=2,
-            sort_keys=True,
-        )
-        longest = max(
-            (
-                len(match.group(0))
-                for match in re.finditer(r"`+", rendered)
-            ),
-            default=0,
-        )
-        fence = "`" * max(3, longest + 1)
-        return [f"{fence}json", rendered, fence]
+        return _json_block_lines(value)
 
     def loop_lines(
         label: str,
@@ -348,6 +393,12 @@ def render_scheduling_plan(
             ", ".join(dependencies) or "无",
             progress,
             definition["title"],
+            (
+                f"[{definition['id']}.md]"
+                f"({task_baseline_relative_path(definition['id'])})"
+                if definition["kind"] == "TASK"
+                else "无"
+            ),
         ]
         checklist_rows.append(
             "| " + " | ".join(
@@ -355,15 +406,23 @@ def render_scheduling_plan(
                 for cell in cells
             ) + " |"
         )
-    node_detail_lines: list[str] = []
+    task_progress_lines: list[str] = []
+    group_detail_lines: list[str] = []
     for node in iter_hierarchy_nodes(hierarchy):
         definition = node["definition"]
-        dependencies = (
-            definition["execution"]["dependsOn"]
-            if definition["kind"] == "TASK"
-            else definition["decomposition"]["dependsOn"]
-        )
-        node_detail_lines.extend(
+        if definition["kind"] == "TASK":
+            task_node_id = loop_node_id(definition["id"])
+            task_progress_lines.extend(
+                [
+                    f"### {task_node_id}",
+                    "",
+                    *state_lines(task_node_id),
+                    "",
+                ]
+            )
+            continue
+        dependencies = definition["decomposition"]["dependsOn"]
+        group_detail_lines.extend(
             [
                 (
                     f"### {definition['id']} "
@@ -379,42 +438,30 @@ def render_scheduling_plan(
                 ),
             ]
         )
-        if definition["kind"] == "GROUP":
-            node_detail_lines.extend(
-                [
-                    (
-                        "- 直接子级："
-                        + ", ".join(
-                            f"{child['id']} [{child['kind']}]"
-                            for child in definition["children"]
-                        )
-                    ),
-                    (
-                        "- 分组汇合节点（GROUP_JOIN）："
-                        f"{join_node_id(definition['id'])}"
-                    ),
-                    *state_lines(join_node_id(definition["id"])),
-                    "",
-                ]
+        group_detail_lines.extend(
+            [
+                (
+                    "- 直接子级："
+                    + ", ".join(
+                        f"{child['id']} [{child['kind']}]"
+                        for child in definition["children"]
+                    )
+                ),
+                (
+                    "- 分组汇合节点（GROUP_JOIN）："
+                    f"{join_node_id(definition['id'])}"
+                ),
+                *state_lines(join_node_id(definition["id"])),
+                "",
+            ]
+        )
+        group_detail_lines.extend(
+            loop_lines(
+                "分组审查 Loop",
+                node["reviewLoop"],
+                group_review_node_id(definition["id"]),
             )
-            node_detail_lines.extend(
-                loop_lines(
-                    "分组审查 Loop",
-                    node["reviewLoop"],
-                    group_review_node_id(definition["id"]),
-                )
-            )
-        else:
-            node_detail_lines.extend(
-                [
-                    "",
-                    *loop_lines(
-                        "任务执行 Loop",
-                        definition["execution"]["loop"],
-                        loop_node_id(definition["id"]),
-                    ),
-                ]
-            )
+        )
     delivery_review_id = review_node_id(delivery["id"])
     confirmation_id = confirmation_node_id(delivery["id"])
     delivery_review_lines = loop_lines(
@@ -428,10 +475,17 @@ def render_scheduling_plan(
     ]
     return OVERVIEW_PROJECTION_TEMPLATE.substitute(
         template_version=str(PROJECTION_TEMPLATE_VERSION),
-        baseline="\n".join(baseline_lines),
+        delivery_status="\n".join(baseline_lines),
         skill_hints="\n".join(skill_hint_lines),
         checklist_rows="\n".join(checklist_rows),
-        node_details="\n".join(node_detail_lines).rstrip() + "\n",
+        task_progress=(
+            "\n".join(task_progress_lines).rstrip() + "\n"
+        ),
+        group_details=(
+            "\n".join(group_detail_lines).rstrip() + "\n"
+            if group_detail_lines
+            else "- 根工作项为 TASK，无 GROUP 协调节点。\n"
+        ),
         delivery_review=(
             "\n".join(delivery_review_lines).rstrip() + "\n"
         ),
@@ -500,11 +554,42 @@ def render_projection_documents(
     }
 
 
+def render_task_baseline_documents(
+    stored_definition: dict[str, Any],
+) -> dict[str, str]:
+    """Render the exact TASK baseline file set from SQLite-loaded state."""
+
+    hierarchy = stored_definition["hierarchy"]
+    updated_at = stored_definition["updatedAt"]
+    return {
+        f"{definition['id']}.md": render_work_item_baseline(
+            definition,
+            delivery=hierarchy["delivery"],
+            skill_hints=hierarchy["root"]["skillHints"],
+            hierarchy_fingerprint=stored_definition[
+                "hierarchyFingerprint"
+            ],
+            graph_fingerprint=stored_definition[
+                "graphFingerprint"
+            ],
+            hierarchy_status=stored_definition["status"],
+            updated_at=updated_at,
+        )
+        for node in iter_hierarchy_nodes(hierarchy)
+        for definition in [node["definition"]]
+        if definition["kind"] == "TASK"
+    }
+
+
 __all__ = (
     "PROJECTION_TEMPLATES",
     "PROJECTION_TEMPLATE_VERSION",
+    "TASK_BASELINE_DIRECTORY",
+    "TASK_BASELINE_PROJECTION_TEMPLATE",
     "raw_definition",
     "render_projection_documents",
     "render_scheduling_plan",
+    "render_task_baseline_documents",
     "render_work_item_baseline",
+    "task_baseline_relative_path",
 )

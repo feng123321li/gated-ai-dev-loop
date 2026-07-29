@@ -238,7 +238,7 @@ TASK、GROUP Review 和 Delivery Review 使用相同 Loop 描述协议：
 
 1. 调用 `hierarchy_contract(root_kind=...)`。
 2. 按返回的 schema 和 example 创建完整 hierarchy。
-3. 调用 `prepare_hierarchy`，依据 MCP 响应和刚提交的 hierarchy 向用户概述双指纹、状态、完整 GROUP/TASK 清单、summary、依赖、Loop 引用、资源声明和原始 payload；同时提供 `humanArtifacts.overview` 路径，供用户直接检查控制器生成的中文、UTC+8 人类投影。不要读取投影来反推机器状态，也不要自行重演渲染器。
+3. 调用 `prepare_hierarchy`，依据 MCP 响应和刚提交的 hierarchy 向用户概述双指纹、状态和完整 GROUP/TASK 清单；同时提供 `humanArtifacts.overview` 及每个 `humanArtifacts.taskBaselines[taskId]` 路径。overview 只汇总 Delivery、清单和进度；每个 TASK 的 summary、依赖、Loop 引用、资源声明、原始 payload 与共享 Skill Hint 由控制器拆分到独立 baseline。不要读取投影来反推机器状态，也不要自行重演渲染器。
 4. 提供两个确认开发选项和一个非确认分支：
    - **自动执行**（确认开发）：用户选择后，立即以当前 `hierarchyFingerprint`、`execution_mode=active` 和真实确认人调用 `freeze_hierarchy`；冻结成功后直接进入 `graph_frontier` 调度循环。
    - **手动交接**（确认开发）：用户选择后，立即以当前 `hierarchyFingerprint`、`execution_mode=manual` 和真实确认人调用 `freeze_hierarchy`；冻结成功后只输出一次包含 `rootId` 的纯文本交接说明，接收会话从 `graph_frontier` 恢复，不重新 prepare 或 freeze。

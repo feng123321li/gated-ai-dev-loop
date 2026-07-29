@@ -10,8 +10,10 @@ from .graph_model import (
 )
 from .model_core import (
     hierarchy_fingerprint,
+    iter_hierarchy_nodes,
     validate_hierarchy_definition,
 )
+from .model_rendering import task_baseline_relative_path
 from .repository import SchedulerRepository
 
 
@@ -53,6 +55,14 @@ def prepare_hierarchy(
     projection_root = (
         f".layered-delivery/{normalized['delivery']['id']}"
     )
+    task_baselines = {
+        node["definition"]["id"]: (
+            f"{projection_root}/"
+            f"{task_baseline_relative_path(node['definition']['id'])}"
+        )
+        for node in iter_hierarchy_nodes(normalized)
+        if node["definition"]["kind"] == "TASK"
+    }
     return {
         **prepared,
         "graphSummary": graph_summary(graph),
@@ -61,6 +71,7 @@ def prepare_hierarchy(
             "hierarchy": f"{projection_root}/hierarchy.json",
             "graph": f"{projection_root}/graph.json",
             "state": f"{projection_root}/state.json",
+            "taskBaselines": task_baselines,
         },
         "nextAction": "FREEZE_HIERARCHY_AFTER_USER_CONFIRMATION",
     }

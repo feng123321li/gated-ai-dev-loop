@@ -11,7 +11,12 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .errors import fail
-from .fs_safe import atomic_write, exclusive_file_lock, safe_path
+from .fs_safe import (
+    atomic_replace_directory,
+    atomic_write,
+    exclusive_file_lock,
+    safe_path,
+)
 from .graph_model import (
     JOIN_NODE_KINDS,
     compile_delivery_graph,
@@ -20,11 +25,40 @@ from .graph_model import (
 )
 from .jsonio import canonical_json, fingerprint
 from .model_core import validate_hierarchy_definition
-from .model_rendering import render_projection_documents
+from .model_rendering import (
+    TASK_BASELINE_DIRECTORY,
+    render_projection_documents,
+    render_task_baseline_documents,
+)
 
 
 GOVERNANCE_DIRECTORY = ".layered-delivery"
 DATABASE_FILE = "scheduler.db"
+
+
+def _projection_directory_matches(
+    directory: Path,
+    documents: dict[str, str],
+) -> bool:
+    try:
+        entries = list(directory.iterdir())
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    if any(
+        entry.is_symlink() or not entry.is_file()
+        for entry in entries
+    ):
+        return False
+    if {entry.name for entry in entries} != set(documents):
+        return False
+    try:
+        return all(
+            (directory / filename).read_bytes()
+            == content.encode("utf-8")
+            for filename, content in documents.items()
+        )
+    except (FileNotFoundError, OSError):
+        return False
 
 
 def _validated_stored_graph(
@@ -869,6 +903,26 @@ class SchedulerRepository:
                 atomic_write(
                     projection_root / filename,
                     content,
+                )
+            task_baseline_root = safe_path(
+                projection_root,
+                TASK_BASELINE_DIRECTORY,
+            )
+            task_baselines = render_task_baseline_documents(
+                definition,
+            )
+
+            def populate_task_baselines(staging: Path) -> None:
+                for filename, content in task_baselines.items():
+                    atomic_write(staging / filename, content)
+
+            if not _projection_directory_matches(
+                task_baseline_root,
+                task_baselines,
+            ):
+                atomic_replace_directory(
+                    task_baseline_root,
+                    populate_task_baselines,
                 )
 
 

@@ -197,7 +197,8 @@ TOOLS = (
         "loop_context",
         (
             "Read one opaque Loop descriptor, shared late-bound Skill hints, "
-            "direct predecessors, and all transitive upstream Loop results."
+            "direct predecessors, transitive upstream results, TASK baseline "
+            "path, and the independent-context execution policy."
         ),
         _object(
             {"root_id": ROOT_ID, "node_id": NODE_ID},
@@ -208,7 +209,8 @@ TOOLS = (
         "dispatch_loop",
         (
             "Claim one ready TASK, GROUP Review, or Delivery Review Loop "
-            "subject to exact resource locks."
+            "for its receiving isolated executor, subject to exact resource "
+            "locks."
         ),
         _object(
             {
@@ -239,7 +241,10 @@ TOOLS = (
     ),
     _tool(
         "pause_loop",
-        "Pause one claimed Loop while preserving its current attempt.",
+        (
+            "Pause one claimed Loop for capacity handoff while preserving "
+            "its current attempt and frozen Graph."
+        ),
         _object(
             {
                 "root_id": ROOT_ID,
@@ -251,7 +256,10 @@ TOOLS = (
     ),
     _tool(
         "resume_loop",
-        "Resume one paused Loop and return it to Graph readiness.",
+        (
+            "Resume one paused Loop in a receiving independent context and "
+            "return it to Graph readiness."
+        ),
         _object(
             {"root_id": ROOT_ID, "node_id": NODE_ID},
             required=["root_id", "node_id"],

@@ -1,7 +1,7 @@
 {
   "name": "layered-delivery",
-  "version": "0.16.6",
-  "description": "面向 AI 辅助开发、可人工评审的分层交付治理插件",
+  "version": "0.17.0",
+  "description": "面向可插拔 Task Loop 的分层交付 Graph 调度插件",
   "author": {
     "name": "layered-delivery contributors",
     "url": "https://github.com/feng123321li/layered-delivery"
@@ -11,8 +11,8 @@
   "license": "MIT",
   "keywords": [
     "ai-development",
-    "delivery-governance",
-    "workflow"
+    "graph-scheduling",
+    "task-loop"
   ],
   "skills": "./skills/",
   "mcpServers": {
@@ -28,13 +28,13 @@
       "supports_parallel_tool_calls": false,
       "default_tools_approval_mode": "approve",
       "tools": {
+        "freeze_hierarchy": {
+          "approval_mode": "prompt"
+        },
         "rebuild_graph_run": {
           "approval_mode": "prompt"
         },
         "cancel_graph_run": {
-          "approval_mode": "prompt"
-        },
-        "record_human_review_acceptance": {
           "approval_mode": "prompt"
         },
         "record_user_confirmation": {
@@ -44,9 +44,9 @@
     }
   },
   "interface": {
-    "displayName": "分层交付",
-    "shortDescription": "治理可评审、可恢复的 AI 辅助软件交付",
-    "longDescription": "通过人工评审、一次冻结、图调度、分级门禁和本地持久状态，治理完整的 AI 辅助软件交付流程。",
+    "displayName": "分层交付调度",
+    "shortDescription": "调度多项目、多模块的 Task Loop 与交付 Graph",
+    "longDescription": "以外层 Graph 调度可插拔 Task Loop，只治理依赖、资源锁、租约、重试、Join、Review Loop 和最终确认。",
     "developerName": "layered-delivery contributors",
     "category": "Productivity",
     "capabilities": [
@@ -55,7 +55,7 @@
     ],
     "websiteURL": "https://github.com/feng123321li/layered-delivery",
     "defaultPrompt": [
-      "使用 layered-delivery 规划并治理当前开发需求。"
+      "使用 layered-delivery 检查调度状态，并恢复或创建最浅合法的交付 Graph。"
     ],
     "brandColor": "#2563EB"
   }

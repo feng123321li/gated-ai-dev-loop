@@ -4,6 +4,20 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.17.0 — 2026-07-29
+
+发布提交：`55b13ad`
+
+- 将 `layered-delivery` 收敛为外层 Graph Scheduler：Task 和最终审查统一为可插拔 Loop，Capability/Delivery 只保留 Join，最终仍由用户确认。
+- 删除外层 `scope`、`developmentPlan`、test command、Gate level、required Skill stage、文件授权、evidence hydration、remediation 和 Gate→development 路由；实现、测试、Gate、修正及 Skill 调用由各 Task Loop 内部协议负责。
+- schema v3 新增不透明 `loop.ref/payload/resourceClaims` 与标准 `SUCCEEDED/BLOCKED/REPLAN_REQUIRED/CANCELLED` outcome；资源声明改为多项目、多模块可用的精确排他锁键。
+- schema v3 在 hierarchy 顶层新增共享 `skillHints`：用户给出的 Skill 只作为建议性的运行时优先提示，需求阶段不分配到 Task/阶段、不编译进 Graph 节点；每个 Task/Review Loop 根据真实上下文与宿主可用 Skill 独立选择，调度器不校验激活或生命周期。
+- MCP 面收敛为 17 个调度工具，覆盖层级准备/冻结、frontier、Loop claim/heartbeat/pause/resume/result、租约推进、事件、重建、取消与最终确认。
+- SQLite 权威收敛为 scheduler hierarchy/run/node attempt/event；基础设施故障预算内自动重试，业务阻断不自动重跑；可从哈希事件链重建物化状态。
+- 强化 Loop 边界：过期 lease 的旧 operation 不得 pause 或提交结果；`loop_context` 额外返回传递上游 Task Loop 结果，使根 Join 后的 Review Loop 能审查实际 Loop evidence，而不要求 Join 解释业务内容。
+- 重写 Skill、references、Codex/Claude Plugin 描述和敏感工具策略；删除旧控制器模块与旧协议测试，不提供兼容入口。
+- 此版本是 schema v3 的破坏性语义替换：检测到旧 `governance.sqlite3` 时明确阻断，不迁移、不并存；创建新 Graph 前需要先归档旧运行包。
+
 ## 0.16.6 — 2026-07-29
 
 发布提交：`207046e`

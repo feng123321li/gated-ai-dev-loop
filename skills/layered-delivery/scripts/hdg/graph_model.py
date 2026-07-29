@@ -6,18 +6,20 @@ from typing import Any
 from .constants import SCHEMA_VERSION
 from .errors import fail
 from .jsonio import fingerprint
+from .loop_contracts import validate_loop_descriptor
 from .model_core import safe_id
 
 
 GRAPH_NODE_KINDS = (
-    "TASK_EXECUTION",
-    "TASK_GATE",
-    "CAPABILITY_GATE",
-    "DELIVERY_GATE",
-    "ROOT_REVIEW",
+    "TASK_LOOP",
+    "CAPABILITY_JOIN",
+    "DELIVERY_JOIN",
+    "REVIEW_LOOP",
     "USER_CONFIRMATION",
 )
-GRAPH_EDGE_KINDS = ("ON_SUCCESS", "REQUIRES_PASS", "ALL_OF")
+LOOP_NODE_KINDS = ("TASK_LOOP", "REVIEW_LOOP")
+JOIN_NODE_KINDS = ("CAPABILITY_JOIN", "DELIVERY_JOIN")
+GRAPH_EDGE_KINDS = ("REQUIRES_SUCCESS", "ALL_OF")
 GRAPH_PLANES = ("EXECUTION", "GOVERNANCE")
 RUNTIME_STATES = (
     "PENDING",
@@ -31,37 +33,54 @@ RUNTIME_STATES = (
 )
 RUNTIME_TERMINAL_STATES = ("CANCELLED", "COMPLETED")
 FAILURE_CLASSES = (
-    "RETRYABLE",
-    "REMEDIATION_REQUIRED",
-    "CONTRACT_CHANGE",
+    "RETRYABLE_INFRA",
+    "WORKER_LOST",
+    "LOOP_BLOCKED",
+    "REPLAN_REQUIRED",
     "EXTERNAL_AUTHORITY",
     "NON_RETRYABLE",
-    "WORKER_LOST",
-    "GATE_FAILURE",
 )
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_CLAIM_LEASE_SECONDS = 30 * 60
 DEFAULT_HEARTBEAT_SECONDS = 5 * 60
 DEFAULT_CLAIM_GRACE_SECONDS = 2 * 60
 GRAPH_FIELDS = {
-    "schemaVersion", "rootId", "hierarchyFingerprint", "nodes", "edges", "runtime",
+    "schemaVersion",
+    "rootId",
+    "hierarchyFingerprint",
+    "nodes",
+    "edges",
+    "runtime",
 }
-GRAPH_NODE_FIELDS = {"id", "kind", "planes", "workItemId"}
-GRAPH_EDGE_FIELDS = {"id", "source", "target", "kind", "plane", "joinGroup"}
+GRAPH_NODE_FIELDS = {"id", "kind", "planes", "workItemId", "loop"}
+GRAPH_EDGE_FIELDS = {
+    "id",
+    "source",
+    "target",
+    "kind",
+    "plane",
+    "joinGroup",
+}
 RUNTIME_TRANSITION_FIELDS = {
-    "id", "eventType", "fromStates", "toStates", "routeCondition", "nodeKinds",
-    "automatic", "createsAttempt",
+    "id",
+    "eventType",
+    "fromStates",
+    "toStates",
+    "routeCondition",
+    "nodeKinds",
+    "automatic",
+    "createsAttempt",
 }
 GRAPH_IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9:._-]*$")
 FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
 
 
-def execution_node_id(task_id: str) -> str:
-    return f"task:{safe_id(task_id)}:execute"
+def loop_node_id(task_id: str) -> str:
+    return f"loop:{safe_id(task_id)}"
 
 
-def gate_node_id(work_item_id: str) -> str:
-    return f"gate:{safe_id(work_item_id)}"
+def join_node_id(work_item_id: str) -> str:
+    return f"join:{safe_id(work_item_id)}"
 
 
 def review_node_id(root_id: str) -> str:
@@ -72,19 +91,24 @@ def confirmation_node_id(root_id: str) -> str:
     return f"confirm:{safe_id(root_id)}"
 
 
-def _node(node_id: str, kind: str, work_item_id: str) -> dict[str, Any]:
+def _node(
+    node_id: str,
+    kind: str,
+    work_item_id: str,
+    *,
+    loop: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     planes = (
-        ["EXECUTION"]
-        if kind == "TASK_EXECUTION"
-        else ["GOVERNANCE"]
-        if kind in {"ROOT_REVIEW", "USER_CONFIRMATION"}
-        else ["EXECUTION", "GOVERNANCE"]
+        ["GOVERNANCE"]
+        if kind in {"REVIEW_LOOP", "USER_CONFIRMATION"}
+        else ["EXECUTION"]
     )
     return {
         "id": node_id,
         "kind": kind,
         "planes": planes,
         "workItemId": work_item_id,
+        "loop": validate_loop_descriptor(loop) if loop is not None else None,
     }
 
 
@@ -120,7 +144,9 @@ def _transition(
         "id": f"transition:{event_type.lower().replace('_', '-')}",
         "eventType": event_type,
         "fromStates": sorted(from_states),
-        "toStates": sorted([to_states] if isinstance(to_states, str) else to_states),
+        "toStates": sorted(
+            [to_states] if isinstance(to_states, str) else to_states
+        ),
         "routeCondition": route_condition,
         "nodeKinds": sorted(node_kinds),
         "automatic": automatic,
@@ -129,78 +155,131 @@ def _transition(
 
 
 def compile_runtime_policy() -> dict[str, Any]:
-    """Return the controller-owned FSM and router policy frozen into every graph."""
+    """Return the scheduler-only FSM frozen into every delivery graph."""
+
     all_kinds = list(GRAPH_NODE_KINDS)
-    gate_kinds = [kind for kind in GRAPH_NODE_KINDS if kind.endswith("_GATE")]
-    retry_kinds = ["TASK_EXECUTION", *gate_kinds, "ROOT_REVIEW"]
+    loops = list(LOOP_NODE_KINDS)
     transitions = [
         _transition(
-            "GRAPH_RUN_STARTED", ["PENDING"], ["PENDING", "READY"], "ON_START", all_kinds,
+            "GRAPH_RUN_STARTED",
+            ["PENDING"],
+            ["PENDING", "READY"],
+            "ON_START",
+            all_kinds,
             automatic=True,
         ),
         _transition(
-            "TASK_CLAIMED", ["READY"], "CLAIMED", "ON_DISPATCH", ["TASK_EXECUTION"],
+            "LOOP_CLAIMED",
+            ["READY"],
+            "CLAIMED",
+            "ON_DISPATCH",
+            loops,
             automatic=False,
         ),
         _transition(
-            "TASK_HEARTBEAT", ["CLAIMED"], "CLAIMED", "ON_HEARTBEAT", ["TASK_EXECUTION"],
+            "LOOP_HEARTBEAT",
+            ["CLAIMED"],
+            "CLAIMED",
+            "ON_HEARTBEAT",
+            loops,
             automatic=False,
         ),
         _transition(
-            "TASK_IMPLEMENTED", ["CLAIMED"], "SUCCEEDED", "ON_SUCCESS", ["TASK_EXECUTION"],
+            "LOOP_SUCCEEDED",
+            ["CLAIMED"],
+            "SUCCEEDED",
+            "ON_SUCCESS",
+            loops,
             automatic=False,
         ),
         _transition(
-            "TASK_BLOCKED", ["CLAIMED"], "BLOCKED", "ON_FAILURE", ["TASK_EXECUTION"],
+            "LOOP_BLOCKED",
+            ["CLAIMED"],
+            "BLOCKED",
+            "ON_FAILURE",
+            loops,
             automatic=False,
         ),
         _transition(
-            "CLAIM_LEASE_EXPIRED", ["CLAIMED"], "BLOCKED", "ON_LEASE_EXPIRED",
-            ["TASK_EXECUTION"], automatic=True,
-        ),
-        _transition(
-            "NODE_PAUSED", ["CLAIMED"], "PAUSED", "ON_PAUSE", ["TASK_EXECUTION"],
+            "LOOP_REPLAN_REQUIRED",
+            ["CLAIMED"],
+            "BLOCKED",
+            "ON_REPLAN_REQUIRED",
+            loops,
             automatic=False,
         ),
         _transition(
-            "NODE_RESUMED", ["PAUSED"], ["PENDING", "READY"], "ON_RESUME", ["TASK_EXECUTION"],
+            "LOOP_CANCELLED",
+            ["CLAIMED"],
+            "CANCELLED",
+            "ON_LOOP_CANCELLED",
+            loops,
             automatic=False,
         ),
         _transition(
-            "GATE_PASSED", ["READY"], "SUCCEEDED", "ON_PASS", gate_kinds,
+            "CLAIM_LEASE_EXPIRED",
+            ["CLAIMED"],
+            "BLOCKED",
+            "ON_LEASE_EXPIRED",
+            loops,
+            automatic=True,
+        ),
+        _transition(
+            "NODE_PAUSED",
+            ["CLAIMED"],
+            "PAUSED",
+            "ON_PAUSE",
+            loops,
             automatic=False,
         ),
         _transition(
-            "GATE_FAILED", ["READY"], "BLOCKED", "ON_FAILURE", gate_kinds,
+            "NODE_RESUMED",
+            ["PAUSED"],
+            ["PENDING", "READY"],
+            "ON_RESUME",
+            loops,
             automatic=False,
         ),
         _transition(
-            "REVIEW_PASSED", ["READY"], "SUCCEEDED", "ON_PASS", ["ROOT_REVIEW"],
+            "JOIN_COMPLETED",
+            ["READY"],
+            "SUCCEEDED",
+            "ON_ALL_SUCCESS",
+            list(JOIN_NODE_KINDS),
+            automatic=True,
+        ),
+        _transition(
+            "USER_CONFIRMED",
+            ["READY"],
+            "COMPLETED",
+            "ON_CONFIRMATION",
+            ["USER_CONFIRMATION"],
             automatic=False,
         ),
         _transition(
-            "REVIEW_BLOCKED", ["READY"], "BLOCKED", "ON_FAILURE",
-            ["ROOT_REVIEW"], automatic=False,
+            "LOOP_RETRY_SCHEDULED",
+            ["BLOCKED"],
+            ["PENDING", "READY"],
+            "ON_INFRA_RETRY_ALLOWED",
+            loops,
+            automatic=True,
+            creates_attempt=True,
         ),
         _transition(
-            "USER_CONFIRMED", ["READY"], "COMPLETED", "ON_CONFIRMATION",
-            ["USER_CONFIRMATION"], automatic=False,
+            "RETRY_EXHAUSTED",
+            ["BLOCKED"],
+            "BLOCKED",
+            "ON_RETRY_EXHAUSTED",
+            loops,
+            automatic=True,
         ),
         _transition(
-            "NODE_RETRY_SCHEDULED", ["BLOCKED"], ["PENDING", "READY"], "ON_RETRY_ALLOWED",
-            retry_kinds, automatic=True, creates_attempt=True,
-        ),
-        _transition(
-            "GRAPH_INVALIDATED", ["BLOCKED", "COMPLETED", "SUCCEEDED"], ["PENDING", "READY"],
-            "ON_REMEDIATION", all_kinds, automatic=False, creates_attempt=True,
-        ),
-        _transition(
-            "RETRY_EXHAUSTED", ["BLOCKED"], "BLOCKED", "ON_RETRY_EXHAUSTED",
-            retry_kinds, automatic=True,
-        ),
-        _transition(
-            "GRAPH_RUN_CANCELLED", ["BLOCKED", "CLAIMED", "PAUSED", "PENDING", "READY"],
-            "CANCELLED", "ON_CANCEL", all_kinds, automatic=False,
+            "GRAPH_RUN_CANCELLED",
+            ["BLOCKED", "CLAIMED", "PAUSED", "PENDING", "READY"],
+            "CANCELLED",
+            "ON_CANCEL",
+            all_kinds,
+            automatic=False,
         ),
     ]
     return {
@@ -208,17 +287,23 @@ def compile_runtime_policy() -> dict[str, Any]:
         "terminalStates": list(RUNTIME_TERMINAL_STATES),
         "retryPolicy": {
             "maxAttempts": DEFAULT_MAX_ATTEMPTS,
-            "automaticFailureClasses": ["RETRYABLE", "WORKER_LOST"],
+            "automaticFailureClasses": [
+                "RETRYABLE_INFRA",
+                "WORKER_LOST",
+            ],
             "onExhausted": "BLOCK_RUN",
         },
         "claimPolicy": {
             "leaseSeconds": DEFAULT_CLAIM_LEASE_SECONDS,
             "heartbeatSeconds": DEFAULT_HEARTBEAT_SECONDS,
             "graceSeconds": DEFAULT_CLAIM_GRACE_SECONDS,
-            "claimMode": "JUST_IN_TIME_ON_WORKER_START",
-            "onExpired": "RETRY_NODE",
+            "claimMode": "JUST_IN_TIME_ON_LOOP_START",
+            "onExpired": "RETRY_LOOP",
         },
-        "transitions": sorted(transitions, key=lambda item: item["id"]),
+        "transitions": sorted(
+            transitions,
+            key=lambda item: item["id"],
+        ),
     }
 
 
@@ -254,97 +339,136 @@ def _walk_hierarchy(hierarchy: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
+def _terminal_node_id(definition: dict[str, Any]) -> str:
+    return (
+        loop_node_id(definition["id"])
+        if definition["kind"] == "TASK"
+        else join_node_id(definition["id"])
+    )
+
+
 def compile_delivery_graph(
     hierarchy: dict[str, Any],
     *,
     hierarchy_fingerprint: str,
 ) -> dict[str, Any]:
-    """Compile one validated Layered Delivery hierarchy into a deterministic graph."""
+    """Compile scheduling metadata without interpreting Loop payloads."""
+
     if not FINGERPRINT.fullmatch(hierarchy_fingerprint):
-        fail("DELIVERY_GRAPH_FINGERPRINT_INVALID", "Hierarchy fingerprint is invalid")
-    root_id = hierarchy["root"]["definition"]["id"]
+        fail(
+            "DELIVERY_GRAPH_FINGERPRINT_INVALID",
+            "Hierarchy fingerprint is invalid",
+        )
+    root_definition = hierarchy["root"]["definition"]
+    root_id = root_definition["id"]
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     hierarchy_nodes = _walk_hierarchy(hierarchy)
-    by_id = {node["definition"]["id"]: node for node in hierarchy_nodes}
+    by_id = {
+        item["definition"]["id"]: item
+        for item in hierarchy_nodes
+    }
 
     for hierarchy_node in hierarchy_nodes:
         definition = hierarchy_node["definition"]
         item_id = definition["id"]
         kind = definition["kind"]
         if kind == "TASK":
-            nodes.append(_node(execution_node_id(item_id), "TASK_EXECUTION", item_id))
-            nodes.append(_node(gate_node_id(item_id), "TASK_GATE", item_id))
-            edges.append(
-                _edge(
-                    execution_node_id(item_id),
-                    gate_node_id(item_id),
-                    "ON_SUCCESS",
-                    plane="EXECUTION",
+            nodes.append(
+                _node(
+                    loop_node_id(item_id),
+                    "TASK_LOOP",
+                    item_id,
+                    loop=definition["execution"]["loop"],
                 )
             )
             for dependency_id in definition["execution"]["dependsOn"]:
                 edges.append(
                     _edge(
-                        gate_node_id(dependency_id),
-                        execution_node_id(item_id),
-                        "REQUIRES_PASS",
+                        loop_node_id(dependency_id),
+                        loop_node_id(item_id),
+                        "REQUIRES_SUCCESS",
                         plane="EXECUTION",
                     )
                 )
-        elif kind == "CAPABILITY":
-            nodes.append(_node(gate_node_id(item_id), "CAPABILITY_GATE", item_id))
-        else:
-            nodes.append(_node(gate_node_id(item_id), "DELIVERY_GATE", item_id))
+            continue
 
-        if kind != "TASK":
-            join_group = f"join:{item_id}:children"
-            for child in hierarchy_node["children"]:
-                edges.append(
-                    _edge(
-                        gate_node_id(child["definition"]["id"]),
-                        gate_node_id(item_id),
-                        "ALL_OF",
-                        plane="EXECUTION",
-                        join_group=join_group,
-                    )
+        join_kind = (
+            "CAPABILITY_JOIN"
+            if kind == "CAPABILITY"
+            else "DELIVERY_JOIN"
+        )
+        nodes.append(
+            _node(
+                join_node_id(item_id),
+                join_kind,
+                item_id,
+            )
+        )
+        join_group = f"join:{item_id}:children"
+        for child in hierarchy_node["children"]:
+            edges.append(
+                _edge(
+                    _terminal_node_id(child["definition"]),
+                    join_node_id(item_id),
+                    "ALL_OF",
+                    plane="EXECUTION",
+                    join_group=join_group,
                 )
+            )
 
     for hierarchy_node in hierarchy_nodes:
         definition = hierarchy_node["definition"]
         if definition["kind"] != "CAPABILITY":
             continue
         for dependency_id in definition["decomposition"]["dependsOn"]:
-            if dependency_id not in by_id:
-                fail("DELIVERY_GRAPH_DEPENDENCY_INVALID", "Capability dependency is missing from the graph")
+            dependency = by_id.get(dependency_id)
+            if (
+                dependency is None
+                or dependency["definition"]["kind"] != "CAPABILITY"
+            ):
+                fail(
+                    "DELIVERY_GRAPH_DEPENDENCY_INVALID",
+                    "Capability dependency is missing from the graph",
+                )
             for child in hierarchy_node["children"]:
                 edges.append(
                     _edge(
-                        gate_node_id(dependency_id),
-                        execution_node_id(child["definition"]["id"]),
-                        "REQUIRES_PASS",
+                        join_node_id(dependency_id),
+                        _terminal_node_id(child["definition"]),
+                        "REQUIRES_SUCCESS",
                         plane="EXECUTION",
                     )
                 )
 
+    root_terminal = _terminal_node_id(root_definition)
     nodes.extend(
         [
-            _node(review_node_id(root_id), "ROOT_REVIEW", root_id),
-            _node(confirmation_node_id(root_id), "USER_CONFIRMATION", root_id),
+            _node(
+                review_node_id(root_id),
+                "REVIEW_LOOP",
+                root_id,
+                loop=hierarchy["reviewLoop"],
+            ),
+            _node(
+                confirmation_node_id(root_id),
+                "USER_CONFIRMATION",
+                root_id,
+            ),
         ]
     )
     edges.extend(
         [
             _edge(
-                gate_node_id(root_id),
+                root_terminal,
                 review_node_id(root_id),
-                "REQUIRES_PASS",
+                "REQUIRES_SUCCESS",
                 plane="GOVERNANCE",
             ),
             _edge(
                 review_node_id(root_id),
                 confirmation_node_id(root_id),
-                "REQUIRES_PASS",
+                "REQUIRES_SUCCESS",
                 plane="GOVERNANCE",
             ),
         ]
@@ -360,13 +484,23 @@ def compile_delivery_graph(
     return validate_delivery_graph(graph)
 
 
-def _validate_acyclic(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:
-    outgoing: dict[str, list[str]] = {node["id"]: [] for node in nodes}
+def _validate_acyclic(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+) -> None:
+    outgoing: dict[str, list[str]] = {
+        node["id"]: []
+        for node in nodes
+    }
     indegree = {node["id"]: 0 for node in nodes}
     for edge in edges:
         outgoing[edge["source"]].append(edge["target"])
         indegree[edge["target"]] += 1
-    ready = sorted(node_id for node_id, degree in indegree.items() if degree == 0)
+    ready = sorted(
+        node_id
+        for node_id, degree in indegree.items()
+        if degree == 0
+    )
     visited = 0
     while ready:
         node_id = ready.pop(0)
@@ -377,21 +511,54 @@ def _validate_acyclic(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) 
                 ready.append(target)
                 ready.sort()
     if visited != len(nodes):
-        fail("DELIVERY_GRAPH_CYCLE", "Delivery graph must be acyclic")
+        fail(
+            "DELIVERY_GRAPH_CYCLE",
+            "Delivery graph must be acyclic",
+        )
+
+
+def _expected_node_id(kind: str, work_item_id: str) -> str:
+    if kind == "TASK_LOOP":
+        return loop_node_id(work_item_id)
+    if kind in JOIN_NODE_KINDS:
+        return join_node_id(work_item_id)
+    if kind == "REVIEW_LOOP":
+        return review_node_id(work_item_id)
+    return confirmation_node_id(work_item_id)
 
 
 def validate_delivery_graph(value: object) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) != GRAPH_FIELDS:
-        fail("DELIVERY_GRAPH_INVALID", "Delivery graph fields are invalid")
+        fail(
+            "DELIVERY_GRAPH_INVALID",
+            "Delivery graph fields are invalid",
+        )
     if value.get("schemaVersion") != SCHEMA_VERSION:
-        fail("DELIVERY_GRAPH_INVALID", "Delivery graph schemaVersion is invalid")
+        fail(
+            "DELIVERY_GRAPH_INVALID",
+            "Delivery graph schemaVersion is invalid",
+        )
     root_id = safe_id(value.get("rootId"), "rootId")
-    if not FINGERPRINT.fullmatch(str(value.get("hierarchyFingerprint", ""))):
-        fail("DELIVERY_GRAPH_FINGERPRINT_INVALID", "Delivery graph hierarchy fingerprint is invalid")
-    if not isinstance(value.get("nodes"), list) or not isinstance(value.get("edges"), list):
-        fail("DELIVERY_GRAPH_INVALID", "Delivery graph nodes and edges must be arrays")
+    if not FINGERPRINT.fullmatch(
+        str(value.get("hierarchyFingerprint", ""))
+    ):
+        fail(
+            "DELIVERY_GRAPH_FINGERPRINT_INVALID",
+            "Delivery graph hierarchy fingerprint is invalid",
+        )
+    if (
+        not isinstance(value.get("nodes"), list)
+        or not isinstance(value.get("edges"), list)
+    ):
+        fail(
+            "DELIVERY_GRAPH_INVALID",
+            "Delivery graph nodes and edges must be arrays",
+        )
     if value.get("runtime") != compile_runtime_policy():
-        fail("DELIVERY_GRAPH_RUNTIME_INVALID", "Delivery graph runtime FSM or router policy is invalid")
+        fail(
+            "DELIVERY_GRAPH_RUNTIME_INVALID",
+            "Delivery graph runtime FSM or router policy is invalid",
+        )
 
     nodes: list[dict[str, Any]] = []
     node_ids: set[str] = set()
@@ -406,25 +573,49 @@ def validate_delivery_graph(value: object) -> dict[str, Any]:
             or not isinstance(entry.get("planes"), list)
             or entry["planes"] != sorted(set(entry["planes"]))
             or not entry["planes"]
-            or any(plane not in GRAPH_PLANES for plane in entry["planes"])
+            or any(
+                plane not in GRAPH_PLANES
+                for plane in entry["planes"]
+            )
         ):
-            fail("DELIVERY_GRAPH_NODE_INVALID", "Delivery graph node is invalid")
-        work_item_id = safe_id(entry.get("workItemId"), "workItemId")
-        expected_id = (
-            execution_node_id(work_item_id)
-            if entry["kind"] == "TASK_EXECUTION"
-            else review_node_id(work_item_id)
-            if entry["kind"] == "ROOT_REVIEW"
-            else confirmation_node_id(work_item_id)
-            if entry["kind"] == "USER_CONFIRMATION"
-            else gate_node_id(work_item_id)
+            fail(
+                "DELIVERY_GRAPH_NODE_INVALID",
+                "Delivery graph node is invalid",
+            )
+        work_item_id = safe_id(
+            entry.get("workItemId"),
+            "workItemId",
         )
-        if entry["id"] != expected_id:
-            fail("DELIVERY_GRAPH_NODE_INVALID", "Delivery graph node ID does not match its kind")
+        if entry["id"] != _expected_node_id(
+            entry["kind"],
+            work_item_id,
+        ):
+            fail(
+                "DELIVERY_GRAPH_NODE_INVALID",
+                "Delivery graph node ID does not match its kind",
+            )
+        if entry["kind"] in LOOP_NODE_KINDS:
+            normalized_loop = validate_loop_descriptor(entry.get("loop"))
+            if normalized_loop != entry["loop"]:
+                fail(
+                    "DELIVERY_GRAPH_NODE_INVALID",
+                    "Delivery graph Loop descriptor is not canonical",
+                )
+        elif entry.get("loop") is not None:
+            fail(
+                "DELIVERY_GRAPH_NODE_INVALID",
+                "Only Loop nodes may carry Loop descriptors",
+            )
         node_ids.add(entry["id"])
         nodes.append(entry)
-    if not nodes or nodes != sorted(nodes, key=lambda item: item["id"]):
-        fail("DELIVERY_GRAPH_NODE_INVALID", "Delivery graph nodes must use stable ordering")
+    if (
+        not nodes
+        or nodes != sorted(nodes, key=lambda item: item["id"])
+    ):
+        fail(
+            "DELIVERY_GRAPH_NODE_INVALID",
+            "Delivery graph nodes must use stable ordering",
+        )
 
     edges: list[dict[str, Any]] = []
     edge_ids: set[str] = set()
@@ -437,9 +628,17 @@ def validate_delivery_graph(value: object) -> dict[str, Any]:
         ) if isinstance(entry, dict) else (None, None, None)
         valid_join = (
             isinstance(entry.get("joinGroup"), str)
-            and bool(GRAPH_IDENTIFIER.fullmatch(entry["joinGroup"]))
-            if isinstance(entry, dict) and entry.get("kind") == "ALL_OF"
-            else isinstance(entry, dict) and entry.get("joinGroup") is None
+            and bool(
+                GRAPH_IDENTIFIER.fullmatch(entry["joinGroup"])
+            )
+            if (
+                isinstance(entry, dict)
+                and entry.get("kind") == "ALL_OF"
+            )
+            else (
+                isinstance(entry, dict)
+                and entry.get("joinGroup") is None
+            )
         )
         if (
             not isinstance(entry, dict)
@@ -455,14 +654,26 @@ def validate_delivery_graph(value: object) -> dict[str, Any]:
             or semantic in semantic_edges
             or not valid_join
         ):
-            fail("DELIVERY_GRAPH_EDGE_INVALID", "Delivery graph edge is invalid")
+            fail(
+                "DELIVERY_GRAPH_EDGE_INVALID",
+                "Delivery graph edge is invalid",
+            )
         edge_ids.add(entry["id"])
         semantic_edges.add(semantic)
         edges.append(entry)
     if edges != sorted(edges, key=lambda item: item["id"]):
-        fail("DELIVERY_GRAPH_EDGE_INVALID", "Delivery graph edges must use stable ordering")
-    if review_node_id(root_id) not in node_ids or confirmation_node_id(root_id) not in node_ids:
-        fail("DELIVERY_GRAPH_INVALID", "Delivery graph root review and confirmation nodes are required")
+        fail(
+            "DELIVERY_GRAPH_EDGE_INVALID",
+            "Delivery graph edges must use stable ordering",
+        )
+    if (
+        review_node_id(root_id) not in node_ids
+        or confirmation_node_id(root_id) not in node_ids
+    ):
+        fail(
+            "DELIVERY_GRAPH_INVALID",
+            "Delivery graph root review and confirmation nodes are required",
+        )
     _validate_acyclic(nodes, edges)
     return value
 
@@ -476,8 +687,23 @@ def graph_summary(graph: dict[str, Any]) -> dict[str, int]:
     return {
         "nodes": len(normalized["nodes"]),
         "edges": len(normalized["edges"]),
-        "taskExecutions": sum(node["kind"] == "TASK_EXECUTION" for node in normalized["nodes"]),
-        "gateNodes": sum(node["kind"].endswith("_GATE") for node in normalized["nodes"]),
-        "reviewNodes": sum(node["kind"] in {"ROOT_REVIEW", "USER_CONFIRMATION"} for node in normalized["nodes"]),
-        "runtimeTransitions": len(normalized["runtime"]["transitions"]),
+        "taskLoops": sum(
+            node["kind"] == "TASK_LOOP"
+            for node in normalized["nodes"]
+        ),
+        "joinNodes": sum(
+            node["kind"] in JOIN_NODE_KINDS
+            for node in normalized["nodes"]
+        ),
+        "reviewLoops": sum(
+            node["kind"] == "REVIEW_LOOP"
+            for node in normalized["nodes"]
+        ),
+        "confirmationNodes": sum(
+            node["kind"] == "USER_CONFIRMATION"
+            for node in normalized["nodes"]
+        ),
+        "runtimeTransitions": len(
+            normalized["runtime"]["transitions"]
+        ),
     }

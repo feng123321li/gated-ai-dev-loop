@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from .model_core import (
     safe_id,
-    scope_patterns_overlap,
     validate_work_item_definition,
     validate_hierarchy_definition,
     hierarchy_fingerprint,
@@ -14,17 +13,16 @@ from .model_core import (
 
 from .model_rendering import (
     render_work_item_baseline,
-    render_development_plan,
+    render_scheduling_plan,
 )
 
 
 __all__ = (
     "hierarchy_fingerprint",
-    "render_development_plan",
+    "render_scheduling_plan",
     "render_work_item_baseline",
     "resolve_self_hosting_policy",
     "safe_id",
-    "scope_patterns_overlap",
     "validate_hierarchy_definition",
     "validate_work_item_definition",
     "work_item_baseline_fingerprint",

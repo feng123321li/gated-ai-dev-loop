@@ -4,6 +4,14 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.23.1 — 2026-07-30
+
+发布提交：`e32ce33`
+
+- SQLite 与事件链保持唯一机器权威，不再生成 `hierarchy.json`、`graph.json` 或 `state.json`；`prepare_hierarchy.humanArtifacts` 同步移除这三个无效路径。
+- 状态刷新和 `workspace_status` 会清理 Delivery 目录中的旧机器 JSON，同时继续从 SQLite 重建中文 baseline、progress、acceptance 和节点投影；schema v3、Graph、指纹、事件链与恢复行为不变。
+- Python 全量 89 项测试、编译检查、Skill 校验和 Plugin 校验通过。
+
 ## 0.23.0 — 2026-07-30
 
 发布提交：`005d66e`

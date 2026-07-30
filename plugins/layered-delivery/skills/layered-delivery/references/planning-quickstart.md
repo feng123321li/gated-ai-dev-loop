@@ -229,6 +229,35 @@ TASK、GROUP Review 和 Delivery Review 使用相同 Loop 描述协议：
 
 不要把 `scope`、`developmentPlan`、`testCommands`、`gateLevel` 或 `requiredSkills` 放进外层 definition。Loop 需要这些内容时，由自己的 payload 规范定义和解释。资源声明是精确键；相同键互斥，不做 glob、目录包含或文件写授权判断。
 
+### 通用接口投影约定
+
+需求涉及接口契约时，在负责该接口的 TASK
+`definition.execution.loop.payload.interfaces` 中逐项显式声明：
+该列表也简称为 `payload.interfaces`。
+
+- 公共字段：`protocol`、`name`、`summary`、`changeType`、`before`、`after`；
+- `protocol` 是开放字符串；HTTP、Dubbo、gRPC、GraphQL、消息等只是示例；
+- `changeType` 使用 `CREATE`、`MODIFY` 或 `DELETE`；
+- 每个适用的 before/after 快照都包含完整入参 `request` 与出参 `response`；
+- 通用快照可用 `identifier` 保存稳定、可定位的调用标识；
+- HTTP 快照另带 `method` 与 `path`；
+- Dubbo 快照另带 `service` 与 `method`。
+
+需求分析时可以从真实代码、OpenAPI、Controller/DTO、IDL 或服务定义提取
+before 候选，并根据需求形成 after；确认 TASK 时必须把两者作为显式契约
+评审。每个适用快照的 `request` 和 `response` 都应给出完整契约，包括可
+核对的参数名称、类型、是否必填和简介，不得只列变化字段，也不得只写
+“参考代码”或“待实现”。`CREATE` 的 before、`DELETE` 的 after 使用空值。
+调用标识保持可定位：HTTP 可使用 `method + path`，Dubbo 可使用
+`service + method`，其他协议使用 `identifier`。规划时以 `hierarchy_contract` 返回的
+`projectionGuidance.interfaces` 为实时约定。
+
+控制器把每个 TASK 的声明确定性写入该 TASK 的
+`work-items/<task-id>/interfaces.md`，并从 TASK baseline 与 Delivery
+baseline 串联；完全没有声明的 TASK 不生成该文件、路径和导航。控制器不
+动态扫描实现代码或隐式推算契约；TASK/Review Loop 可用真实代码验证 after。
+字段仍是 Loop 的不透明输入，不参与依赖、资源锁或 Graph 调度。
+
 ## Skill Hint 晚绑定
 
 需求阶段若用户给出 Skill，只在 `root.skillHints` 登记一次：
@@ -246,7 +275,7 @@ TASK、GROUP Review 和 Delivery Review 使用相同 Loop 描述协议：
 
 1. 调用 `hierarchy_contract(root_kind=...)`。
 2. 按返回的 schema 和 example 创建完整 hierarchy。
-3. 调用 `prepare_hierarchy`，依据 MCP 响应和刚提交的 hierarchy 向用户概述双指纹、状态和完整 GROUP/TASK 清单；同时提供 `humanArtifacts.workspaceOverview`、`humanArtifacts.overview` 及每个 `humanArtifacts.taskBaselines[taskId]` 路径。根 overview 汇总全部 Delivery；Delivery overview 只展示该需求的清单和进度；每个 TASK 的摘要、依赖、Loop 引用、资源声明、结构化执行输入与共享 Skill Hint 由控制器拆分到独立 baseline。人类 Markdown 使用固定中文模板和递归字段列表，不展示 JSON 代码块或机器状态枚举。不要读取投影来反推机器状态，也不要自行重演渲染器。
+3. 调用 `prepare_hierarchy`，依据 MCP 响应和刚提交的 hierarchy 向用户概述双指纹、状态和完整 GROUP/TASK 清单；同时提供 Delivery 的 `humanArtifacts.workspaceOverview`、`overview`、`baseline`、`progress`、`acceptance`，以及 `humanArtifacts.workItems[nodeId]` 中每个 GROUP/TASK 的 `baseline`、`progress`、`acceptance` 路径；这些字段分别对应固定的 `overview.md`、`baseline.md`、`progress.md` 和 `acceptance.md`。TASK 的 `taskBaselines` 继续作为其 baseline 便捷映射。只有节点映射实际包含 `interfaces` 时才提供该 TASK 的 `interfaces.md` 路径。Delivery `overview.md` 只负责状态与导航；Delivery baseline 串联全部节点 baseline，GROUP baseline 串联直接子节点，TASK baseline 保存冻结 Loop 输入；progress 与 acceptance 按相同节点关系投影。人类 Markdown 使用固定中文模板和递归字段列表，不展示 JSON 代码块或机器状态枚举。不要读取投影来反推机器状态，也不要自行重演渲染器。
 4. 调用 `available_agents`，再以本次 `prepare_hierarchy` 返回的 `rootId` 调用 `recommend_executors`。在完整清单后展示每个 TASK、GROUP Review 和 Delivery Review 的建议 Agent、当前模型、置信度、备选及 `reasons`；若 Review 的 `independence.satisfied` 为 false，明确说明当前主机无法满足异构 Agent 审查。该结果不会启动、切换或派遣任何 Agent/模型，也不修改 fingerprint、hierarchy 或 Graph。
 5. 在建议后原样提供以下交互，不添加第三个选项，也不要用“其他内容”“其他反馈”等标签描述自由输入：
 

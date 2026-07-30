@@ -95,6 +95,26 @@ class PluginBundleTests(unittest.TestCase):
             "未明确选择这两项时继续需求交互并重新 prepare",
             main,
         )
+        for projection in (
+            "baseline.md",
+            "progress.md",
+            "acceptance.md",
+            "interfaces.md",
+        ):
+            with self.subTest(projection=projection):
+                self.assertIn(projection, planning)
+        self.assertIn(
+            "`payload.interfaces`",
+            planning,
+        )
+        self.assertIn("HTTP", planning)
+        self.assertIn("Dubbo", planning)
+        self.assertIn("before", planning)
+        self.assertIn("after", planning)
+        self.assertIn("入参", planning)
+        self.assertIn("出参", planning)
+        self.assertIn("humanArtifacts.workItems", planning)
+        self.assertIn("work-items/<node-id>/", main)
 
     def test_skill_keeps_agent_recommendations_advisory(self) -> None:
         main = (SKILL / "SKILL.md").read_text(encoding="utf-8")

@@ -13,7 +13,11 @@ from .model_core import (
     iter_hierarchy_nodes,
     validate_hierarchy_definition,
 )
-from .model_rendering import task_baseline_relative_path
+from .model_rendering import (
+    task_baseline_relative_path,
+    task_has_interface_projection,
+    work_item_projection_relative_path,
+)
 from .repository import SchedulerRepository
 
 
@@ -63,17 +67,47 @@ def prepare_hierarchy(
         for node in iter_hierarchy_nodes(normalized)
         if node["definition"]["kind"] == "TASK"
     }
+    work_items = {}
+    for node in iter_hierarchy_nodes(normalized):
+        definition = node["definition"]
+        item_id = definition["id"]
+        artifacts = {
+            "kind": definition["kind"],
+            "baseline": (
+                f"{projection_root}/"
+                f"{work_item_projection_relative_path(item_id, 'baseline.md')}"
+            ),
+            "progress": (
+                f"{projection_root}/"
+                f"{work_item_projection_relative_path(item_id, 'progress.md')}"
+            ),
+            "acceptance": (
+                f"{projection_root}/"
+                f"{work_item_projection_relative_path(item_id, 'acceptance.md')}"
+            ),
+        }
+        if task_has_interface_projection(definition):
+            artifacts["interfaces"] = (
+                f"{projection_root}/"
+                f"{work_item_projection_relative_path(item_id, 'interfaces.md')}"
+            )
+        work_items[item_id] = artifacts
+    human_artifacts = {
+        "workspaceOverview": ".layered-delivery/overview.md",
+        "overview": f"{projection_root}/overview.md",
+        "baseline": f"{projection_root}/baseline.md",
+        "progress": f"{projection_root}/progress.md",
+        "acceptance": f"{projection_root}/acceptance.md",
+        "hierarchy": f"{projection_root}/hierarchy.json",
+        "graph": f"{projection_root}/graph.json",
+        "state": f"{projection_root}/state.json",
+        "taskBaselines": task_baselines,
+        "workItems": work_items,
+    }
     return {
         **prepared,
         "graphSummary": graph_summary(graph),
-        "humanArtifacts": {
-            "workspaceOverview": ".layered-delivery/overview.md",
-            "overview": f"{projection_root}/overview.md",
-            "hierarchy": f"{projection_root}/hierarchy.json",
-            "graph": f"{projection_root}/graph.json",
-            "state": f"{projection_root}/state.json",
-            "taskBaselines": task_baselines,
-        },
+        "humanArtifacts": human_artifacts,
         "nextAction": "FREEZE_HIERARCHY_AFTER_USER_CONFIRMATION",
     }
 

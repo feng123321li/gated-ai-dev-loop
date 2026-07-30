@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -26,9 +27,9 @@ from .graph_model import (
 from .jsonio import canonical_json, fingerprint
 from .model_core import validate_hierarchy_definition
 from .model_rendering import (
-    TASK_BASELINE_DIRECTORY,
+    WORK_ITEM_DIRECTORY,
     render_projection_documents,
-    render_task_baseline_documents,
+    render_work_item_projection_documents,
     render_workspace_overview,
 )
 
@@ -37,20 +38,39 @@ GOVERNANCE_DIRECTORY = ".layered-delivery"
 DATABASE_FILE = "scheduler.db"
 
 
-def _projection_directory_matches(
+def _projection_tree_matches(
     directory: Path,
     documents: dict[str, str],
 ) -> bool:
     try:
-        entries = list(directory.iterdir())
+        entries = list(directory.rglob("*"))
     except (FileNotFoundError, NotADirectoryError):
         return False
+    if any(entry.is_symlink() for entry in entries):
+        return False
     if any(
-        entry.is_symlink() or not entry.is_file()
+        not entry.is_dir() and not entry.is_file()
         for entry in entries
     ):
         return False
-    if {entry.name for entry in entries} != set(documents):
+    relative_files = {
+        entry.relative_to(directory).as_posix()
+        for entry in entries
+        if entry.is_file()
+    }
+    if relative_files != set(documents):
+        return False
+    expected_directories = {
+        Path(filename).parent.as_posix()
+        for filename in documents
+        if Path(filename).parent != Path(".")
+    }
+    actual_directories = {
+        entry.relative_to(directory).as_posix()
+        for entry in entries
+        if entry.is_dir()
+    }
+    if actual_directories != expected_directories:
         return False
     try:
         return all(
@@ -384,6 +404,11 @@ class SchedulerRepository:
             if run is not None
             else latest["status"]
         )
+        # Projection templates are rebuildable views, not stored schema.
+        # Refresh every stored schema-v3 Delivery so workspaces created by an
+        # earlier plugin release receive the current fixed projection set.
+        for row in rows:
+            self.write_projections(row["root_id"])
         return {
             "status": (
                 "PREPARED"
@@ -900,31 +925,49 @@ class SchedulerRepository:
                     raise
             projection_root = safe_path(self.control_root, root_id)
             documents = render_projection_documents(definition, run)
+            optional_interface_projection = safe_path(
+                projection_root,
+                "interfaces.md",
+            )
+            if "interfaces.md" not in documents:
+                try:
+                    optional_interface_projection.unlink()
+                except FileNotFoundError:
+                    pass
             for filename, content in documents.items():
                 atomic_write(
                     projection_root / filename,
                     content,
                 )
-            task_baseline_root = safe_path(
+            work_item_root = safe_path(
                 projection_root,
-                TASK_BASELINE_DIRECTORY,
+                WORK_ITEM_DIRECTORY,
             )
-            task_baselines = render_task_baseline_documents(
+            work_item_documents = render_work_item_projection_documents(
                 definition,
+                run,
             )
 
-            def populate_task_baselines(staging: Path) -> None:
-                for filename, content in task_baselines.items():
+            def populate_work_items(staging: Path) -> None:
+                for filename, content in work_item_documents.items():
                     atomic_write(staging / filename, content)
 
-            if not _projection_directory_matches(
-                task_baseline_root,
-                task_baselines,
+            if not _projection_tree_matches(
+                work_item_root,
+                work_item_documents,
             ):
                 atomic_replace_directory(
-                    task_baseline_root,
-                    populate_task_baselines,
+                    work_item_root,
+                    populate_work_items,
                 )
+            legacy_task_baselines = safe_path(
+                projection_root,
+                "task-baselines",
+            )
+            if legacy_task_baselines.is_dir():
+                shutil.rmtree(legacy_task_baselines)
+            elif legacy_task_baselines.exists():
+                legacy_task_baselines.unlink()
             atomic_write(
                 safe_path(self.control_root, "overview.md"),
                 render_workspace_overview(

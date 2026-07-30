@@ -40,9 +40,13 @@ from hdg.model_rendering import (
     PROJECTION_TEMPLATES,
     PROJECTION_TEMPLATE_VERSION,
     STATUS_TEXT,
-    TASK_BASELINE_DIRECTORY,
+    WORK_ITEM_DIRECTORY,
 )
-from hdg.planning import freeze_hierarchy, prepare_hierarchy
+from hdg.planning import (
+    freeze_hierarchy,
+    prepare_hierarchy,
+    workspace_status,
+)
 from hdg.repository import SchedulerRepository
 
 from .test_loop_architecture import (
@@ -156,6 +160,103 @@ def auditable_recursive_hierarchy() -> dict:
         "reviewFocus": ["核对完整交付结果"],
         "nested": {"deliveryId": "d-recursive"},
     }
+    return source
+
+
+def interface_hierarchy() -> dict:
+    source = task_hierarchy()
+    source["root"]["definition"]["execution"]["loop"]["payload"].update(
+        {
+            "interfaces": [
+                {
+                    "protocol": "HTTP",
+                    "name": "创建订单",
+                    "summary": "调整创建订单接口及其字段。",
+                    "changeType": "MODIFY",
+                    "before": {
+                        "method": "POST",
+                        "path": "/api/v1/orders",
+                        "request": [
+                            {
+                                "name": "legacyCustomerNo",
+                                "type": "string",
+                                "required": True,
+                                "description": "原客户编号",
+                            }
+                        ],
+                        "response": [
+                            {
+                                "name": "orderNo",
+                                "type": "string",
+                                "description": "原订单编号",
+                            }
+                        ],
+                    },
+                    "after": {
+                        "method": "POST",
+                        "path": "/api/orders",
+                        "request": [
+                            {
+                                "name": "customerId",
+                                "type": "string",
+                                "required": True,
+                                "description": "客户标识",
+                            }
+                        ],
+                        "response": [
+                            {
+                                "name": "orderId",
+                                "type": "string",
+                                "description": "订单标识",
+                            }
+                        ],
+                    },
+                },
+                {
+                    "protocol": "DUBBO",
+                    "name": "创建订单服务",
+                    "summary": "供内部服务创建订单。",
+                    "changeType": "CREATE",
+                    "before": None,
+                    "after": {
+                        "service": "com.example.order.OrderService",
+                        "method": "createOrder",
+                        "request": {
+                            "type": "CreateOrderRequest",
+                            "fields": ["customerId"],
+                        },
+                        "response": {
+                            "type": "CreateOrderResponse",
+                            "fields": ["orderId"],
+                        },
+                    },
+                },
+                {
+                    "protocol": "GRPC",
+                    "name": "旧版订单查询服务",
+                    "summary": "删除不再使用的旧版 gRPC 接口。",
+                    "changeType": "DELETE",
+                    "before": {
+                        "identifier": (
+                            "order.v1.LegacyOrderService/GetOrder"
+                        ),
+                        "request": [
+                            {
+                                "name": "id",
+                                "type": "string",
+                                "required": True,
+                                "description": "订单标识",
+                            }
+                        ],
+                        "response": {
+                            "type": "LegacyOrderResponse",
+                        },
+                    },
+                    "after": None,
+                },
+            ]
+        }
+    )
     return source
 
 
@@ -294,12 +395,13 @@ class SchedulerRuntimeTests(unittest.TestCase):
             Path(self.root)
             / ".layered-delivery"
             / root_id
-            / "overview.md"
+            / "acceptance.md"
         ).read_text(encoding="utf-8")
         self.assertIn(
             "结果状态：已成功",
             completed_overview,
         )
+        self.assertIn("opaque-to-scheduler", completed_overview)
         self.assertNotIn("SUCCEEDED", completed_overview)
         workspace_overview = (
             Path(self.root)
@@ -630,11 +732,28 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "FIND_RESOLVE_VERIFY_AND_REREVIEW_UNTIL_TERMINAL",
         )
         self.assertEqual(
-            context["humanArtifacts"]["taskBaseline"],
-            (
-                f".layered-delivery/{root_id}/"
-                f"{TASK_BASELINE_DIRECTORY}/t-service.md"
-            ),
+            context["humanArtifacts"],
+            {
+                "taskBaseline": (
+                    f".layered-delivery/{root_id}/"
+                    f"{WORK_ITEM_DIRECTORY}/t-service/baseline.md"
+                ),
+                "workItem": {
+                    "kind": "TASK",
+                    "baseline": (
+                        f".layered-delivery/{root_id}/"
+                        f"{WORK_ITEM_DIRECTORY}/t-service/baseline.md"
+                    ),
+                    "progress": (
+                        f".layered-delivery/{root_id}/"
+                        f"{WORK_ITEM_DIRECTORY}/t-service/progress.md"
+                    ),
+                    "acceptance": (
+                        f".layered-delivery/{root_id}/"
+                        f"{WORK_ITEM_DIRECTORY}/t-service/acceptance.md"
+                    ),
+                },
+            },
         )
         self.assertEqual(
             context["rules"],
@@ -722,6 +841,91 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 for action in ready_frontier["actions"]
                 if action["action"] == "DISPATCH_LOOP"
             ],
+        )
+
+    def test_group_review_context_links_group_work_item_projections(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(group_hierarchy())
+        root_id = prepared["rootId"]
+
+        context = loop_context(
+            root=self.root,
+            root_id=root_id,
+            node_id=group_review_node_id("g-service"),
+        )
+
+        item_prefix = (
+            f".layered-delivery/{root_id}/"
+            f"{WORK_ITEM_DIRECTORY}/g-service"
+        )
+        self.assertEqual(
+            context["humanArtifacts"],
+            {
+                "workItem": {
+                    "kind": "GROUP",
+                    "baseline": f"{item_prefix}/baseline.md",
+                    "progress": f"{item_prefix}/progress.md",
+                    "acceptance": f"{item_prefix}/acceptance.md",
+                }
+            },
+        )
+
+    def test_task_work_item_progress_and_acceptance_follow_run_state(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        item_root = (
+            Path(self.root)
+            / ".layered-delivery"
+            / root_id
+            / WORK_ITEM_DIRECTORY
+            / "t-service"
+        )
+        baseline_before = (item_root / "baseline.md").read_bytes()
+
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="agent-task",
+            operation_id="op-task-projection",
+            now=at(2),
+        )
+
+        running_progress = (item_root / "progress.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("当前进度：执行中", running_progress)
+        self.assertIn("执行者：agent-task", running_progress)
+
+        record_loop_result(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id="op-task-projection",
+            outcome={
+                "status": "SUCCEEDED",
+                "summary": "任务实现与验证已完成。",
+                "result": {"evidence": "全部自动化检查通过"},
+            },
+            now=at(3),
+        )
+
+        completed_progress = (item_root / "progress.md").read_text(
+            encoding="utf-8"
+        )
+        acceptance = (item_root / "acceptance.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("当前进度：已成功", completed_progress)
+        self.assertIn("任务实现与验证已完成。", completed_progress)
+        self.assertIn("全部自动化检查通过", acceptance)
+        self.assertEqual(
+            (item_root / "baseline.md").read_bytes(),
+            baseline_before,
         )
 
     def test_infrastructure_failure_retries_but_loop_block_does_not(
@@ -1023,11 +1227,23 @@ class SchedulerRuntimeTests(unittest.TestCase):
             for current in nodes
             if current["definition"]["kind"] == "TASK"
         ]
-        expected_task_baselines = {
-            current["definition"]["id"]: (
-                f"{artifact_prefix}/{TASK_BASELINE_DIRECTORY}/"
-                f"{current['definition']['id']}.md"
+        expected_work_items = {}
+        for current in nodes:
+            definition = current["definition"]
+            item_prefix = (
+                f"{artifact_prefix}/{WORK_ITEM_DIRECTORY}/"
+                f"{definition['id']}"
             )
+            expected_work_items[definition["id"]] = {
+                "kind": definition["kind"],
+                "baseline": f"{item_prefix}/baseline.md",
+                "progress": f"{item_prefix}/progress.md",
+                "acceptance": f"{item_prefix}/acceptance.md",
+            }
+        expected_task_baselines = {
+            current["definition"]["id"]: expected_work_items[
+                current["definition"]["id"]
+            ]["baseline"]
             for current in task_nodes
         }
 
@@ -1036,15 +1252,26 @@ class SchedulerRuntimeTests(unittest.TestCase):
             {
                 "workspaceOverview": ".layered-delivery/overview.md",
                 "overview": f"{artifact_prefix}/overview.md",
+                "baseline": f"{artifact_prefix}/baseline.md",
+                "progress": f"{artifact_prefix}/progress.md",
+                "acceptance": f"{artifact_prefix}/acceptance.md",
                 "hierarchy": f"{artifact_prefix}/hierarchy.json",
                 "graph": f"{artifact_prefix}/graph.json",
                 "state": f"{artifact_prefix}/state.json",
                 "taskBaselines": expected_task_baselines,
+                "workItems": expected_work_items,
             },
         )
         self.assertTrue((control / "scheduler.db").is_file())
         self.assertTrue((control / "overview.md").is_file())
-        self.assertTrue((projections / "overview.md").is_file())
+        for filename in (
+            "overview.md",
+            "baseline.md",
+            "progress.md",
+            "acceptance.md",
+        ):
+            self.assertTrue((projections / filename).is_file())
+        self.assertFalse((projections / "interfaces.md").exists())
         self.assertTrue((projections / "hierarchy.json").is_file())
         self.assertTrue((projections / "graph.json").is_file())
         self.assertFalse((projections / "state.json").exists())
@@ -1055,6 +1282,12 @@ class SchedulerRuntimeTests(unittest.TestCase):
         ):
             self.assertFalse((control / filename).exists())
         overview = (projections / "overview.md").read_text(
+            encoding="utf-8"
+        )
+        delivery_baseline = (projections / "baseline.md").read_text(
+            encoding="utf-8"
+        )
+        acceptance = (projections / "acceptance.md").read_text(
             encoding="utf-8"
         )
         self.assertNotIn("hierarchyFingerprint", overview)
@@ -1069,16 +1302,23 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "运行状态：未启动",
             overview,
         )
-        self.assertIn("## GROUP/TASK 清单", overview)
+        self.assertIn("[需求基线](baseline.md)", overview)
+        self.assertIn("[执行进展](progress.md)", overview)
+        self.assertIn("[验收记录](acceptance.md)", overview)
+        self.assertNotIn("[接口契约](interfaces.md)", overview)
+        self.assertNotIn(
+            "[查看接口契约](interfaces.md)",
+            delivery_baseline,
+        )
+        self.assertIn("## GROUP/TASK 清单", delivery_baseline)
         self.assertIn(
             "| 层级路径 | 节点类型 | 上级 | 前置依赖 | "
-            "当前状态 | 标题 | 任务基线 |",
-            overview,
+            "标题 | 需求基线 | 执行进展 | 验收记录 | 接口契约 |",
+            delivery_baseline,
         )
-        self.assertIn("| 分组 |", overview)
-        self.assertIn("| 任务 |", overview)
-        self.assertIn("springboot-tdd", overview)
-        self.assertIn("不预先绑定节点", overview)
+        self.assertIn("| 分组 |", delivery_baseline)
+        self.assertIn("| 任务 |", delivery_baseline)
+        self.assertIn("springboot-tdd", delivery_baseline)
         self.assertIn(hierarchy["delivery"]["summary"], overview)
         self.assertNotIn("```json", overview)
         self.assertNotIn("（PREPARED）", overview)
@@ -1096,29 +1336,61 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertIn("待冻结", workspace_overview)
         self.assertNotIn("PREPARED", workspace_overview)
 
-        baseline_root = projections / TASK_BASELINE_DIRECTORY
-        self.assertTrue(baseline_root.is_dir())
+        work_item_root = projections / WORK_ITEM_DIRECTORY
+        self.assertTrue(work_item_root.is_dir())
         self.assertEqual(
             {
                 path.name
-                for path in baseline_root.iterdir()
-                if path.is_file()
+                for path in work_item_root.iterdir()
+                if path.is_dir()
             },
             {
-                f"{current['definition']['id']}.md"
-                for current in task_nodes
+                current["definition"]["id"]
+                for current in nodes
             },
         )
         for current in nodes:
             definition = current["definition"]
             item_id = definition["id"]
+            item_root = work_item_root / item_id
             with self.subTest(work_item_id=item_id):
-                self.assertIn(item_id, overview)
+                self.assertIn(item_id, delivery_baseline)
+                self.assertEqual(
+                    {
+                        path.name
+                        for path in item_root.iterdir()
+                        if path.is_file()
+                    },
+                    {
+                        "baseline.md",
+                        "progress.md",
+                        "acceptance.md",
+                    },
+                )
+                self.assertIn(
+                    f"{WORK_ITEM_DIRECTORY}/{item_id}/baseline.md",
+                    delivery_baseline,
+                )
+                item_progress = (item_root / "progress.md").read_text(
+                    encoding="utf-8"
+                )
+                item_acceptance = (
+                    item_root / "acceptance.md"
+                ).read_text(encoding="utf-8")
+                self.assertIn(
+                    f"投影模板版本：{PROJECTION_TEMPLATE_VERSION}",
+                    item_progress,
+                )
+                self.assertIn("当前进度：未启动", item_progress)
+                self.assertIn(
+                    f"投影模板版本：{PROJECTION_TEMPLATE_VERSION}",
+                    item_acceptance,
+                )
                 if definition["kind"] == "TASK":
                     loop = definition["execution"]["loop"]
-                    baseline = (
-                        baseline_root / f"{item_id}.md"
-                    ).read_text(encoding="utf-8")
+                    baseline = (item_root / "baseline.md").read_text(
+                        encoding="utf-8"
+                    )
                     self.assertIn(
                         f"投影模板版本：{PROJECTION_TEMPLATE_VERSION}",
                         baseline,
@@ -1156,42 +1428,63 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     self.assertNotIn('"acceptance"', baseline)
                     self.assertNotIn('"rawAuditMarker"', baseline)
                     self.assertIn("springboot-tdd", baseline)
-                    self.assertNotIn(definition["summary"], overview)
+                    self.assertNotIn("## 关联接口契约", baseline)
+                    self.assertNotIn(definition["summary"], delivery_baseline)
                     self.assertNotIn(loop["ref"], overview)
                     self.assertNotIn(
                         loop["payload"]["rawAuditMarker"],
                         overview,
                     )
                 else:
-                    self.assertIn(definition["summary"], overview)
+                    group_baseline = (
+                        item_root / "baseline.md"
+                    ).read_text(encoding="utf-8")
+                    self.assertIn(
+                        definition["summary"],
+                        group_baseline,
+                    )
                     for dependency in definition["decomposition"][
                         "dependsOn"
                     ]:
-                        self.assertIn(dependency, overview)
+                        self.assertIn(dependency, group_baseline)
                     review = current["reviewLoop"]
-                    self.assertIn(review["ref"], overview)
+                    self.assertIn(review["ref"], group_baseline)
                     self.assertIn(
                         review["resourceClaims"][0],
-                        overview,
+                        group_baseline,
                     )
                     self.assertIn(
                         review["payload"]["rawAuditMarker"],
-                        overview,
+                        group_baseline,
                     )
-                    self.assertIn("###### 审查重点", overview)
+                    self.assertIn("### 审查重点", group_baseline)
+                    for child in current["children"]:
+                        child_id = child["definition"]["id"]
+                        self.assertIn(
+                            f"../{child_id}/baseline.md",
+                            group_baseline,
+                        )
+                    self.assertNotIn(
+                        review["payload"]["rawAuditMarker"],
+                        delivery_baseline,
+                    )
 
         delivery_review = hierarchy["delivery"]["reviewLoop"]
-        self.assertIn(delivery_review["ref"], overview)
+        self.assertIn(delivery_review["ref"], delivery_baseline)
         self.assertIn(
             delivery_review["resourceClaims"][0],
-            overview,
+            delivery_baseline,
         )
         self.assertIn(
             delivery_review["payload"]["rawAuditMarker"],
-            overview,
+            delivery_baseline,
         )
-        self.assertIn("###### 原始审计标记", overview)
-        self.assertNotIn('"rawAuditMarker"', overview)
+        self.assertIn("##### 原始审计标记", delivery_baseline)
+        self.assertIn(
+            delivery_review["payload"]["rawAuditMarker"],
+            acceptance,
+        )
+        self.assertNotIn('"rawAuditMarker"', delivery_baseline)
 
         work_item_ids = {
             current["definition"]["id"]
@@ -1207,6 +1500,272 @@ class SchedulerRuntimeTests(unittest.TestCase):
             )
         )
 
+    def test_delivery_human_projections_separate_baseline_progress_and_acceptance(
+        self,
+    ) -> None:
+        hierarchy = interface_hierarchy()
+        prepared = prepare_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        projection_root = (
+            Path(self.root)
+            / ".layered-delivery"
+            / prepared["rootId"]
+        )
+
+        overview = (projection_root / "overview.md").read_text(
+            encoding="utf-8"
+        )
+        baseline = (projection_root / "baseline.md").read_text(
+            encoding="utf-8"
+        )
+        progress = (projection_root / "progress.md").read_text(
+            encoding="utf-8"
+        )
+        acceptance = (projection_root / "acceptance.md").read_text(
+            encoding="utf-8"
+        )
+        task_root = (
+            projection_root
+            / WORK_ITEM_DIRECTORY
+            / "t-service"
+        )
+        interfaces = (task_root / "interfaces.md").read_text(
+            encoding="utf-8"
+        )
+        task_baseline = (task_root / "baseline.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("[需求基线](baseline.md)", overview)
+        self.assertIn("[执行进展](progress.md)", overview)
+        self.assertIn("[验收记录](acceptance.md)", overview)
+        self.assertNotIn("[接口契约](interfaces.md)", overview)
+        self.assertEqual(
+            prepared["humanArtifacts"]["workItems"]["t-service"][
+                "interfaces"
+            ],
+            (
+                f".layered-delivery/{prepared['rootId']}/"
+                f"{WORK_ITEM_DIRECTORY}/t-service/interfaces.md"
+            ),
+        )
+        self.assertNotIn("interfaces", prepared["humanArtifacts"])
+        self.assertNotIn("## TASK 执行进度", overview)
+        self.assertNotIn("## GROUP 协调与审查", overview)
+
+        self.assertIn("# 交付需求基线", baseline)
+        self.assertIn(hierarchy["delivery"]["summary"], baseline)
+        self.assertIn(
+            f"{WORK_ITEM_DIRECTORY}/t-service/baseline.md",
+            baseline,
+        )
+        self.assertIn(
+            f"{WORK_ITEM_DIRECTORY}/t-service/interfaces.md",
+            baseline,
+        )
+
+        self.assertIn("# 交付执行进展", progress)
+        self.assertIn("t-service", progress)
+        self.assertIn("当前进度：未启动", progress)
+        self.assertNotIn("Deliver one observable result.", progress)
+
+        self.assertIn("# 交付验收记录", acceptance)
+        self.assertIn("The loop returns verified evidence.", acceptance)
+        self.assertIn("最终用户确认", acceptance)
+
+        self.assertIn("# TASK 接口契约", interfaces)
+        for label in (
+            "来源 TASK",
+            "协议",
+            "接口名称",
+            "变更类型",
+            "修改前调用标识",
+            "修改后调用标识",
+            "简介",
+            "入参",
+            "出参",
+        ):
+            with self.subTest(chinese_label=label):
+                self.assertIn(label, interfaces)
+        self.assertIn("创建订单", interfaces)
+        self.assertIn("修改", interfaces)
+        self.assertIn("POST /api/v1/orders", interfaces)
+        self.assertIn("POST /api/orders", interfaces)
+        self.assertIn("legacyCustomerNo", interfaces)
+        self.assertIn("customerId", interfaces)
+        self.assertIn("必填", interfaces)
+        self.assertIn("类型", interfaces)
+        self.assertIn("说明", interfaces)
+        self.assertIn("orderId", interfaces)
+        self.assertIn("创建订单服务", interfaces)
+        self.assertIn("新增", interfaces)
+        self.assertIn("不适用（新增接口）", interfaces)
+        self.assertIn(
+            "com.example.order.OrderService.createOrder",
+            interfaces,
+        )
+        self.assertIn("CreateOrderRequest", interfaces)
+        self.assertIn("CreateOrderResponse", interfaces)
+        self.assertIn("旧版订单查询服务", interfaces)
+        self.assertIn("GRPC", interfaces)
+        self.assertIn("删除", interfaces)
+        self.assertIn(
+            "order.v1.LegacyOrderService/GetOrder",
+            interfaces,
+        )
+        self.assertIn("LegacyOrderResponse", interfaces)
+        self.assertIn("不适用（删除接口）", interfaces)
+        self.assertIn("#### 修改前", interfaces)
+        self.assertIn("#### 修改后", interfaces)
+        self.assertNotIn("```json", interfaces)
+        self.assertNotIn("PREPARED", interfaces)
+        self.assertIn(
+            "[查看本 TASK 的接口契约](interfaces.md)",
+            task_baseline,
+        )
+        self.assertNotIn("创建订单", task_baseline)
+        self.assertNotIn("legacyCustomerNo", task_baseline)
+
+    def test_workspace_status_backfills_projection_files_for_stored_deliveries(
+        self,
+    ) -> None:
+        first = prepare_hierarchy(
+            root=self.root,
+            hierarchy=interface_hierarchy(),
+            now=at(0),
+        )
+        second_hierarchy = task_hierarchy()
+        second_hierarchy["delivery"].update(
+            {
+                "id": "d-older-projection",
+                "title": "另一个历史交付",
+                "summary": "验证全部已有 Delivery 都会补建投影。",
+            }
+        )
+        second = prepare_hierarchy(
+            root=self.root,
+            hierarchy=second_hierarchy,
+            now=at(1),
+        )
+        projection_roots = [
+            Path(self.root) / ".layered-delivery" / prepared["rootId"]
+            for prepared in (first, second)
+        ]
+        for projection_root in projection_roots:
+            for filename in (
+                "baseline.md",
+                "progress.md",
+                "acceptance.md",
+            ):
+                path = projection_root / filename
+                if path.exists():
+                    path.unlink()
+            work_items = projection_root / WORK_ITEM_DIRECTORY
+            if work_items.exists():
+                shutil.rmtree(work_items)
+            (projection_root / "overview.md").write_text(
+                "# 旧版总览\n",
+                encoding="utf-8",
+            )
+
+        status = workspace_status(root=self.root)
+
+        self.assertEqual(status["status"], "PREPARED")
+        self.assertEqual(status["rootId"], second["rootId"])
+        for index, projection_root in enumerate(projection_roots):
+            for filename in (
+                "overview.md",
+                "baseline.md",
+                "progress.md",
+                "acceptance.md",
+            ):
+                with self.subTest(
+                    root_id=projection_root.name,
+                    filename=filename,
+                ):
+                    content = (projection_root / filename).read_text(
+                        encoding="utf-8"
+                    )
+                    self.assertIn(
+                        f"投影模板版本：{PROJECTION_TEMPLATE_VERSION}",
+                        content,
+                    )
+            item_root = (
+                projection_root / WORK_ITEM_DIRECTORY / "t-service"
+            )
+            for filename in (
+                "baseline.md",
+                "progress.md",
+                "acceptance.md",
+            ):
+                with self.subTest(
+                    root_id=projection_root.name,
+                    work_item_file=filename,
+                ):
+                    content = (item_root / filename).read_text(
+                        encoding="utf-8"
+                    )
+                    self.assertIn(
+                        f"投影模板版本：{PROJECTION_TEMPLATE_VERSION}",
+                        content,
+                    )
+            interface_projection = item_root / "interfaces.md"
+            if index == 0:
+                self.assertIn(
+                    f"投影模板版本：{PROJECTION_TEMPLATE_VERSION}",
+                    interface_projection.read_text(encoding="utf-8"),
+                )
+            else:
+                self.assertFalse(interface_projection.exists())
+
+    def test_reprepare_without_interfaces_removes_optional_projection(
+        self,
+    ) -> None:
+        prepared = prepare_hierarchy(
+            root=self.root,
+            hierarchy=interface_hierarchy(),
+            now=at(0),
+        )
+        projection_root = (
+            Path(self.root)
+            / ".layered-delivery"
+            / prepared["rootId"]
+        )
+        task_root = (
+            projection_root / WORK_ITEM_DIRECTORY / "t-service"
+        )
+        self.assertTrue((task_root / "interfaces.md").is_file())
+
+        replacement = prepare_hierarchy(
+            root=self.root,
+            hierarchy=task_hierarchy(),
+            now=at(1),
+        )
+
+        self.assertNotIn(
+            "interfaces",
+            replacement["humanArtifacts"]["workItems"]["t-service"],
+        )
+        self.assertFalse((task_root / "interfaces.md").exists())
+        overview = (projection_root / "overview.md").read_text(
+            encoding="utf-8"
+        )
+        baseline = (projection_root / "baseline.md").read_text(
+            encoding="utf-8"
+        )
+        task_baseline = (task_root / "baseline.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("[接口契约](interfaces.md)", overview)
+        self.assertNotIn(
+            f"{WORK_ITEM_DIRECTORY}/t-service/interfaces.md",
+            baseline,
+        )
+        self.assertNotIn("## 关联接口契约", task_baseline)
+
     def test_projection_set_is_fixed_and_rebuilt_from_sqlite(
         self,
     ) -> None:
@@ -1217,12 +1776,15 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "graph.json",
                 "state.json",
                 "overview.md",
+                "baseline.md",
+                "progress.md",
+                "acceptance.md",
             },
         )
-        self.assertGreaterEqual(PROJECTION_TEMPLATE_VERSION, 3)
+        self.assertGreaterEqual(PROJECTION_TEMPLATE_VERSION, 4)
         prepared = prepare_hierarchy(
             root=self.root,
-            hierarchy=auditable_recursive_hierarchy(),
+            hierarchy=interface_hierarchy(),
             now=at(0),
         )
         freeze_hierarchy(
@@ -1251,10 +1813,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
             filename: (projection_root / filename).read_bytes()
             for filename in filenames
         }
-        baseline_root = projection_root / TASK_BASELINE_DIRECTORY
-        original_baselines = {
-            path.name: path.read_bytes()
-            for path in baseline_root.iterdir()
+        work_item_root = projection_root / WORK_ITEM_DIRECTORY
+        original_work_items = {
+            path.relative_to(work_item_root).as_posix(): path.read_bytes()
+            for path in work_item_root.rglob("*")
             if path.is_file()
         }
         for filename in filenames:
@@ -1262,12 +1824,12 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 f"agent-authored replacement: {filename}\n",
                 encoding="utf-8",
             )
-        for filename in original_baselines:
-            (baseline_root / filename).write_text(
+        for filename in original_work_items:
+            (work_item_root / filename).write_text(
                 f"agent-authored replacement: {filename}\n",
                 encoding="utf-8",
             )
-        (baseline_root / "stale-agent-file.md").write_text(
+        (work_item_root / "stale-agent-file.md").write_text(
             "not controller data\n",
             encoding="utf-8",
         )
@@ -1283,9 +1845,9 @@ class SchedulerRuntimeTests(unittest.TestCase):
             filename: (projection_root / filename).read_bytes()
             for filename in filenames
         }
-        rebuilt_baselines = {
-            path.name: path.read_bytes()
-            for path in baseline_root.iterdir()
+        rebuilt_work_items = {
+            path.relative_to(work_item_root).as_posix(): path.read_bytes()
+            for path in work_item_root.rglob("*")
             if path.is_file()
         }
         self.assertEqual(rebuilt, original)
@@ -1293,25 +1855,25 @@ class SchedulerRuntimeTests(unittest.TestCase):
             workspace_overview_path.read_bytes(),
             original_workspace_overview,
         )
-        self.assertEqual(rebuilt_baselines, original_baselines)
+        self.assertEqual(rebuilt_work_items, original_work_items)
         self.assertNotIn(
             "stale-agent-file.md",
-            rebuilt_baselines,
+            rebuilt_work_items,
         )
-        shutil.rmtree(baseline_root)
-        baseline_root.write_text(
+        shutil.rmtree(work_item_root)
+        work_item_root.write_text(
             "agent replaced the controller directory\n",
             encoding="utf-8",
         )
         repository.write_projections(prepared["rootId"])
-        self.assertTrue(baseline_root.is_dir())
+        self.assertTrue(work_item_root.is_dir())
         self.assertEqual(
             {
-                path.name: path.read_bytes()
-                for path in baseline_root.iterdir()
+                path.relative_to(work_item_root).as_posix(): path.read_bytes()
+                for path in work_item_root.rglob("*")
                 if path.is_file()
             },
-            original_baselines,
+            original_work_items,
         )
         stored = repository.hierarchy(prepared["rootId"])
         self.assertEqual(
@@ -1331,7 +1893,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             rebuilt["overview.md"].decode("utf-8"),
         )
 
-    def test_reprepare_replaces_the_exact_task_baseline_set(
+    def test_reprepare_replaces_the_exact_work_item_projection_set(
         self,
     ) -> None:
         original_hierarchy = task_hierarchy()
@@ -1340,13 +1902,15 @@ class SchedulerRuntimeTests(unittest.TestCase):
             hierarchy=original_hierarchy,
             now=at(0),
         )
-        baseline_root = (
+        work_item_root = (
             Path(self.root)
             / ".layered-delivery"
             / prepared["rootId"]
-            / TASK_BASELINE_DIRECTORY
+            / WORK_ITEM_DIRECTORY
         )
-        self.assertTrue((baseline_root / "t-service.md").is_file())
+        self.assertTrue(
+            (work_item_root / "t-service" / "baseline.md").is_file()
+        )
 
         replacement = task_hierarchy()
         replacement["root"]["definition"]["id"] = "t-replacement"
@@ -1361,9 +1925,21 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
 
         self.assertEqual(updated["rootId"], prepared["rootId"])
-        self.assertFalse((baseline_root / "t-service.md").exists())
-        replacement_baseline = baseline_root / "t-replacement.md"
+        self.assertFalse((work_item_root / "t-service").exists())
+        replacement_baseline = (
+            work_item_root / "t-replacement" / "baseline.md"
+        )
         self.assertTrue(replacement_baseline.is_file())
+        self.assertTrue(
+            (work_item_root / "t-replacement" / "progress.md").is_file()
+        )
+        self.assertTrue(
+            (
+                work_item_root
+                / "t-replacement"
+                / "acceptance.md"
+            ).is_file()
+        )
         self.assertIn(
             "Execute the replacement Task Loop.",
             replacement_baseline.read_text(encoding="utf-8"),
@@ -1607,20 +2183,31 @@ class SchedulerRuntimeTests(unittest.TestCase):
         overview = (projections / "overview.md").read_text(
             encoding="utf-8"
         )
+        progress = (projections / "progress.md").read_text(
+            encoding="utf-8"
+        )
+        acceptance = (projections / "acceptance.md").read_text(
+            encoding="utf-8"
+        )
 
         self.assertEqual(frozen["status"], "ACTIVE")
         self.assertTrue((projections / "state.json").is_file())
         self.assertIn("运行状态：运行中", overview)
         self.assertNotIn("ACTIVE", overview)
+        self.assertIn("运行状态：运行中", progress)
         statuses = {
             state["status"]
             for state in frozen["nodes"]
         }
         self.assertIn("READY", statuses)
         self.assertIn("PENDING", statuses)
-        lines = overview.splitlines()
         for state in frozen["nodes"]:
             with self.subTest(node_id=state["nodeId"]):
+                lines = (
+                    acceptance.splitlines()
+                    if state["nodeId"].startswith("confirm:")
+                    else progress.splitlines()
+                )
                 node_line = f"- 调度节点：{state['nodeId']}"
                 self.assertIn(node_line, lines)
                 node_index = lines.index(node_line)
@@ -1651,7 +2238,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
             / prepared["rootId"]
             / "overview.md"
         )
+        baseline_path = overview_path.with_name("baseline.md")
+        progress_path = overview_path.with_name("progress.md")
         prepared_overview = overview_path.read_text(encoding="utf-8")
+        prepared_baseline = baseline_path.read_text(encoding="utf-8")
 
         self.assertIn(
             "更新时间（UTC+8）：2026-01-01T08:00:00+08:00",
@@ -1665,7 +2255,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "层级状态：待冻结",
             prepared_overview,
         )
-        self.assertIn("| 任务 |", prepared_overview)
+        self.assertIn("| 任务 |", prepared_baseline)
         self.assertNotIn("PREPARED", prepared_overview)
 
         freeze_hierarchy(
@@ -1687,6 +2277,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             now=prepared_at + timedelta(minutes=2),
         )
         active_overview = overview_path.read_text(encoding="utf-8")
+        active_progress = progress_path.read_text(encoding="utf-8")
 
         self.assertIn(
             "层级状态：已冻结",
@@ -1696,17 +2287,18 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "运行状态：运行中",
             active_overview,
         )
-        self.assertIn("当前进度：执行中", active_overview)
+        self.assertIn("当前进度：执行中", active_progress)
         for machine_status in ("FROZEN", "ACTIVE", "CLAIMED"):
             self.assertNotIn(machine_status, active_overview)
+            self.assertNotIn(machine_status, active_progress)
         for expected in (
             "认领时间（UTC+8）：2026-01-01T08:02:00+08:00",
             "最近心跳（UTC+8）：2026-01-01T08:02:00+08:00",
             "租约到期（UTC+8）：2026-01-01T08:32:00+08:00",
         ):
-            self.assertIn(expected, active_overview)
+            self.assertIn(expected, active_progress)
         self.assertNotRegex(
-            active_overview,
+            active_progress,
             r"2026-01-01T\d{2}:\d{2}:\d{2}Z",
         )
 

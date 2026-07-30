@@ -391,6 +391,52 @@ def hierarchy_contract(
         "rootKind": root_kind,
         "inputSchema": input_schema,
         "example": _example(root_kind),
+        "projectionGuidance": {
+            "interfaces": {
+                "location": (
+                    "TASK definition.execution.loop.payload.interfaces"
+                ),
+                "protocolExamples": [
+                    "HTTP",
+                    "DUBBO",
+                    "GRPC",
+                    "GRAPHQL",
+                    "MESSAGE",
+                ],
+                "requiredFields": [
+                    "protocol",
+                    "name",
+                    "summary",
+                    "changeType",
+                    "before",
+                    "after",
+                ],
+                "changeTypes": ["CREATE", "MODIFY", "DELETE"],
+                "snapshotRequiredFields": ["request", "response"],
+                "genericSnapshotFields": [
+                    "identifier",
+                    "request",
+                    "response",
+                ],
+                "httpSnapshotFields": ["method", "path"],
+                "dubboSnapshotFields": ["service", "method"],
+                "description": (
+                    "When a TASK adds, changes, or deletes an interface, "
+                    "declare each concrete interface here with explicit "
+                    "before and after snapshots. protocol is an open string; "
+                    "protocolExamples are illustrative, not exhaustive. "
+                    "Each applicable snapshot contains the complete request "
+                    "and response contract plus a generic identifier or "
+                    "protocol-specific call fields. The controller projects "
+                    "the comparison into that TASK's interfaces.md. When a "
+                    "TASK declares no interfaces, its directory has no "
+                    "interface projection or link. Code inspection may help "
+                    "prepare or verify the declaration, but the controller "
+                    "does not infer it dynamically. The payload remains "
+                    "opaque to Graph scheduling."
+                ),
+            }
+        },
         "invariants": [
             "Delivery is the frozen Graph and final acceptance boundary.",
             "GROUP may recursively contain GROUP or TASK children.",

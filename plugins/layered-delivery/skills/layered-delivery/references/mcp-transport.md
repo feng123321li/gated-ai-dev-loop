@@ -24,18 +24,28 @@ Claude Plugin 通过启动环境固定项目协调根。Codex 的现代请求从
     ├── graph.json
     ├── state.json
     ├── overview.md
-    └── task-baselines/
-        ├── <task-id>.md
-        └── ...
+    ├── baseline.md
+    ├── progress.md
+    ├── acceptance.md
+    └── work-items/
+        ├── <group-id>/
+        │   ├── baseline.md
+        │   ├── progress.md
+        │   └── acceptance.md
+        └── <task-id>/
+            ├── baseline.md
+            ├── progress.md
+            ├── acceptance.md
+            └── interfaces.md  # 仅当本 TASK 声明接口
 ```
 
 不要把不同 Delivery 的投影写回 `.layered-delivery/` 根目录，也不要从标题临时生成或改写 `<delivery-id>`。
 
-SQLite 是唯一机器权威。每次合法状态变更提交后，控制器重新读取 SQLite，用内置的固定版本模板生成上述固定文件，并通过原子替换刷新投影。`task-baselines/` 是控制器拥有的平面目录，文件名只取已校验的稳定 TASK ID；重新 prepare 删除或改名 TASK 时，控制器整体替换目录并清除旧 baseline。Agent 通过合法 MCP 输入提交的 hierarchy、summary 和 payload 会按模板成为投影中的领域数据；模板结构、模板版本、固定相对文件名、序列化和文件写入不属于 MCP 输入，Agent 不得选择、拼接或执行它们。
+SQLite 是唯一机器权威。每次合法状态变更提交后，控制器重新读取 SQLite，用内置的固定版本模板生成上述固定文件，并通过原子替换刷新投影。`work-items/` 是控制器拥有的平面节点 namespace，目录名只取已校验的稳定 GROUP/TASK ID；重新 prepare 删除或改名节点、移除接口声明时，控制器整体替换目录并清除旧文件。Agent 通过合法 MCP 输入提交的 hierarchy、summary 和 payload 会按模板成为投影中的领域数据；模板结构、模板版本、固定相对文件名、序列化和文件写入不属于 MCP 输入，Agent 不得选择、拼接或执行它们。
 
-`overview.md` 用中文和 UTC+8 时间展示 Delivery 状态、完整 GROUP/TASK 清单及当前进度，不再聚合 TASK 的详细调度基线。每个 `task-baselines/<task-id>.md` 单独展示该 TASK 的 summary、dependsOn、Loop 引用、资源声明、原始 payload、共享 Skill Hint 和双指纹；`scheduler.db`、事件链和 JSON 中的机器时间继续保持 UTC。
+Delivery `overview.md` 用中文和 UTC+8 时间展示状态与导航；顶层 baseline/progress/acceptance 聚合并链接整棵节点投影树。每个 GROUP/TASK 的 baseline 单独展示 summary、dependsOn、Loop 引用、资源声明、不透明输入、共享 Skill Hint 和双指纹；progress 展示运行状态；acceptance 展示验收输入、结果和证据。只有 TASK payload 显式声明接口时，才在该 TASK 目录生成 `interfaces.md`，确定性展示 `changeType` 与完整 before/after 调用标识、入参和出参；`protocol` 是开放字符串，通用协议可用 `identifier`，HTTP/Dubbo 仍支持结构化调用字段。无声明时不生成。代码只可辅助准备和校验显式契约，不是动态投影源。`scheduler.db`、事件链和 JSON 中的机器时间继续保持 UTC。
 
-准备阶段先生成 hierarchy、graph、overview 和全部 TASK baseline；`state.json` 在冻结并启动 Graph 后生成。
+准备阶段先生成 hierarchy、graph、四份 Delivery 人类主投影和全部 GROUP/TASK 节点投影，有接口声明的 TASK 再生成自己的接口投影；`state.json` 在冻结并启动 Graph 后生成。`workspace_status` 会为早期 schema v3 Delivery 幂等补建当前模板版本中适用的投影树，不迁移 hierarchy、Graph、事件链或运行状态。
 
 投影只供人类检查和进度掌控，不反向成为调度输入。投影缺失或被篡改时保留 SQLite 权威并交给控制器重建；Agent 不要直接打开数据库推断状态，也不要自由补写 Markdown/JSON。
 

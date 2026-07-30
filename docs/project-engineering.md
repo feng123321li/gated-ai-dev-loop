@@ -76,17 +76,33 @@ Graph 编译遵循以下终态规则：
 │   ├── hierarchy.json
 │   ├── graph.json
 │   ├── state.json
-│   └── overview.md
+│   ├── overview.md
+│   ├── baseline.md
+│   ├── progress.md
+│   ├── acceptance.md
+│   └── work-items/
+│       ├── g-order/
+│       │   ├── baseline.md
+│       │   ├── progress.md
+│       │   └── acceptance.md
+│       └── t-api/
+│           ├── baseline.md
+│           ├── progress.md
+│           ├── acceptance.md
+│           └── interfaces.md  # 按需
 └── d-portal/
     ├── hierarchy.json
     ├── graph.json
     ├── state.json
-    └── overview.md
+    ├── overview.md
+    ├── baseline.md
+    ├── progress.md
+    └── acceptance.md
 ```
 
-`scheduler.db` 是机器权威；各 `<delivery-id>` 目录中的四个文件可从数据库状态重建。目录命名使用不可变的 `delivery.id`，不使用可修改标题；同一工作区可以保留多个 Delivery 需求目录。GROUP/TASK 的逻辑父子关系保存在 hierarchy 和 Graph 中，不通过下一层目录名或文件 scope 表达。
+`scheduler.db` 是机器权威；各 `<delivery-id>` 目录中的机器与人类投影都可从数据库状态重建。目录命名使用不可变的 `delivery.id`，不使用可修改标题；同一工作区可以保留多个 Delivery 需求目录。GROUP/TASK 的逻辑父子关系保存在 hierarchy 和 Graph 中，不通过下一层目录名或文件 scope 表达。
 
-`overview.md` 不是简化标题清单，而是冻结与运行状态的人类控制面：它绑定双指纹，提供完整 GROUP/TASK 清单和节点详情，并随状态变化刷新。所有人类时间显示为 UTC+8；机器权威仍使用 UTC。
+Delivery `overview.md` 是状态与导航入口；顶层 `baseline.md` 保存基线树和节点链接，`progress.md` 聚合运行进展，`acceptance.md` 聚合验收输入与结果。每个 GROUP/TASK 在 `work-items/<node-id>/` 下拥有自己的 baseline、progress 和 acceptance；GROUP baseline 链接直接子节点，TASK baseline 展示冻结 Loop 输入。只有 TASK payload 显式声明接口时，才在该 TASK 目录生成 `interfaces.md`，展示 `CREATE` / `MODIFY` / `DELETE` 的完整 before/after 契约；`protocol` 为开放字符串，HTTP、Dubbo、gRPC、GraphQL、消息等只是示例，通用协议可用 `identifier` 定位。无声明时不生成。代码可辅助提取和校验，但不是动态投影源。所有文件绑定双指纹并可随权威状态重建；`workspace_status` 会为早期 schema v3 Delivery 补建当前适用的投影树，但不迁移数据库或 Graph。所有固定文案和状态保持中文，人类时间显示 UTC+8；机器权威仍使用 UTC。
 
 ## MCP
 

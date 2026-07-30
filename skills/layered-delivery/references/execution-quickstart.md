@@ -31,7 +31,7 @@ Join 不需要 dispatch，也不包含实现内容。不要绕过某一级 GROUP
 
 1. 总调度上下文只读取 frontier 和路由 action，不直接执行 Loop。
 2. 对 `DISPATCH_LOOP`，宿主支持原生 Agent 时自动创建一个新的独立接收上下文；只传 `rootId/nodeId`，不要复制规划上下文、payload 或旧 operation。
-3. 接收方原生进入 layered-delivery，使用精确 `nodeId` 调用 `loop_context`。TASK Loop 同时取得控制器生成的 `humanArtifacts.taskBaseline` 路径；机器输入仍以 MCP 响应为准。
+3. 接收方原生进入 layered-delivery，使用精确 `nodeId` 调用 `loop_context`。TASK 与 GROUP Review Loop 同时取得控制器生成的 `humanArtifacts.workItem` baseline/progress/acceptance 路径；TASK 继续取得 `humanArtifacts.taskBaseline` 便捷路径，接口型 TASK 的 workItem 还包含自己的 `interfaces`。机器输入仍以 MCP 响应为准。
 4. 接收方创建全局唯一 `operation_id` 并调用 `dispatch_loop`。没有可用 Agent 容量时才把同样的 `rootId/nodeId` 作为人工交接，且在接收方存在前不要提前 claim。
 5. 按 `loop.ref` 启动对应内部 TASK、GROUP Review 或 Delivery Review Loop，并把 `payload` 和共享 `skillHints` 原样交给该 Loop。
 6. 内部 Loop 先识别当前任务与宿主可用 Skill，再优先原生触发适用的 Skill Hint；不要因为 hierarchy 提供了提示，就假定每条提示都适用于当前 Loop。

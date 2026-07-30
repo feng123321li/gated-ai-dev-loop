@@ -194,17 +194,33 @@ GROUP/TASK 的递归只存在于冻结 hierarchy 和编译 Graph 中。工作区
 │   ├── hierarchy.json
 │   ├── graph.json
 │   ├── state.json
-│   └── overview.md
+│   ├── overview.md
+│   ├── baseline.md
+│   ├── progress.md
+│   ├── acceptance.md
+│   └── work-items/
+│       ├── <group-id>/
+│       │   ├── baseline.md
+│       │   ├── progress.md
+│       │   └── acceptance.md
+│       └── <task-id>/
+│           ├── baseline.md
+│           ├── progress.md
+│           ├── acceptance.md
+│           └── interfaces.md  # 按需
 └── d-maintenance/
     ├── hierarchy.json
     ├── graph.json
     ├── state.json
-    └── overview.md
+    ├── overview.md
+    ├── baseline.md
+    ├── progress.md
+    └── acceptance.md
 ```
 
-`scheduler.db` 是机器权威；Delivery 目录内的文件分别投影递归层级、编译图、当前状态和人类可读总览。目录名使用不可变 ID，不使用可修改标题；同一工作区可以保留多个 Delivery 目录。增加 GROUP 不会制造下一层目录，也不会重新引入文件 scope。
+`scheduler.db` 是机器权威；Delivery 目录内的文件分别投影递归层级、编译图、当前状态，以及分离的需求基线、执行进展和验收记录。Delivery baseline 链接全部节点 baseline；每个 GROUP/TASK 在平面的 `work-items/<node-id>/` namespace 内拥有 baseline、progress 和 acceptance，GROUP 再链接直接子节点。只有 TASK 显式声明接口时才在自己的目录增加接口契约投影；协议字段保持开放，HTTP、Dubbo、gRPC、GraphQL、消息等均可表达。目录名使用不可变 ID，不使用可修改标题；同一工作区可以保留多个 Delivery 目录。逻辑递归不映射为递归物理目录，也不会重新引入文件 scope。
 
-人类总览必须足以完成冻结前评审和运行中跟踪：包含双指纹、状态、完整 GROUP/TASK 清单，以及 summary、`dependsOn`、Loop 引用、资源锁和原始 payload。展示使用中文和 UTC+8 时间，JSON/SQLite 继续保持机器 UTC。
+人类投影集合必须足以完成冻结前评审、运行中跟踪和最终验收：`overview.md` 只导航；Delivery 投影负责聚合与串联；节点投影覆盖双指纹、summary、`dependsOn`、Loop 引用、资源锁、不透明 payload、运行状态、Loop 结果和证据。新增、调整或删除接口的 TASK 通过 `payload.interfaces` 显式提供 `changeType`、协议、名称、简介以及完整 before/after 快照；控制器在该 TASK 的 `interfaces.md` 确定性展示。代码可辅助准备和验证契约，但不成为动态投影源，接口内容也不参与 Graph 决策。固定展示使用中文和 UTC+8 时间，JSON/SQLite 继续保持机器 UTC。
 
 ## 可恢复性
 

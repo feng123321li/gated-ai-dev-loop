@@ -13,7 +13,10 @@ from .loop_contracts import (
     resource_claims_overlap,
     validate_loop_outcome,
 )
-from .model_rendering import task_baseline_relative_path
+from .model_rendering import (
+    task_baseline_relative_path,
+    work_item_projection_relative_path,
+)
 from .repository import (
     SchedulerRepository,
     _validated_stored_definition,
@@ -357,6 +360,57 @@ def loop_context(
         node["nodeId"]: node
         for node in run["nodes"]
     }
+    human_artifacts: dict[str, Any] = {}
+    work_item_kind = {
+        "TASK_LOOP": "TASK",
+        "GROUP_REVIEW_LOOP": "GROUP",
+    }.get(definition["kind"])
+    if work_item_kind is not None:
+        item_id = definition["workItemId"]
+        projection_prefix = f".layered-delivery/{root_id}/"
+        work_item_artifacts = {
+            "kind": work_item_kind,
+            "baseline": (
+                projection_prefix
+                + work_item_projection_relative_path(
+                    item_id,
+                    "baseline.md",
+                )
+            ),
+            "progress": (
+                projection_prefix
+                + work_item_projection_relative_path(
+                    item_id,
+                    "progress.md",
+                )
+            ),
+            "acceptance": (
+                projection_prefix
+                + work_item_projection_relative_path(
+                    item_id,
+                    "acceptance.md",
+                )
+            ),
+        }
+        interfaces = definition["loop"]["payload"].get("interfaces")
+        if (
+            work_item_kind == "TASK"
+            and isinstance(interfaces, list)
+            and any(isinstance(item, dict) for item in interfaces)
+        ):
+            work_item_artifacts["interfaces"] = (
+                projection_prefix
+                + work_item_projection_relative_path(
+                    item_id,
+                    "interfaces.md",
+                )
+            )
+        human_artifacts["workItem"] = work_item_artifacts
+        if work_item_kind == "TASK":
+            human_artifacts["taskBaseline"] = (
+                projection_prefix
+                + task_baseline_relative_path(item_id)
+            )
     return {
         "rootId": root_id,
         "runId": run["runId"],
@@ -380,16 +434,7 @@ def loop_context(
             states,
             node_id,
         ),
-        "humanArtifacts": (
-            {
-                "taskBaseline": (
-                    f".layered-delivery/{root_id}/"
-                    f"{task_baseline_relative_path(definition['workItemId'])}"
-                )
-            }
-            if definition["kind"] == "TASK_LOOP"
-            else {}
-        ),
+        "humanArtifacts": human_artifacts,
         "executionPolicy": loop_execution_policy(),
         "completionPolicy": loop_completion_policy(),
         "rules": {

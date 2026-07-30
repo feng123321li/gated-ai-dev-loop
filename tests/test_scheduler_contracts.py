@@ -206,6 +206,62 @@ class HierarchyContractTests(unittest.TestCase):
             ],
             {"$ref": "#/$defs/loop"},
         )
+        interface_guidance = contract["projectionGuidance"]["interfaces"]
+        self.assertEqual(
+            interface_guidance["location"],
+            "TASK definition.execution.loop.payload.interfaces",
+        )
+        self.assertEqual(
+            interface_guidance["protocolExamples"],
+            ["HTTP", "DUBBO", "GRPC", "GRAPHQL", "MESSAGE"],
+        )
+        self.assertEqual(
+            interface_guidance["requiredFields"],
+            [
+                "protocol",
+                "name",
+                "summary",
+                "changeType",
+                "before",
+                "after",
+            ],
+        )
+        self.assertEqual(
+            interface_guidance["changeTypes"],
+            ["CREATE", "MODIFY", "DELETE"],
+        )
+        self.assertEqual(
+            interface_guidance["snapshotRequiredFields"],
+            ["request", "response"],
+        )
+        self.assertIn(
+            "identifier",
+            interface_guidance["genericSnapshotFields"],
+        )
+        self.assertIn(
+            "method",
+            interface_guidance["httpSnapshotFields"],
+        )
+        self.assertIn(
+            "path",
+            interface_guidance["httpSnapshotFields"],
+        )
+        self.assertIn(
+            "service",
+            interface_guidance["dubboSnapshotFields"],
+        )
+        self.assertIn(
+            "method",
+            interface_guidance["dubboSnapshotFields"],
+        )
+        self.assertIn(
+            "explicit before and after snapshots",
+            interface_guidance["description"],
+        )
+        self.assertIn(
+            "has no interface projection or link",
+            interface_guidance["description"],
+        )
 
 
 class McpSurfaceTests(unittest.TestCase):

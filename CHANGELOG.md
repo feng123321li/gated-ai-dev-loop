@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.21.0 — 2026-07-30
+
+发布提交：待发布
+
+- 将入口正式收口为共享 Python Controller、Host Policy、MCP Adapter 与 stdio Transport：Graph、schema v3、SQLite 和事件链不依赖 MCP/Codex/Claude，双宿主继续复用同一 Controller 与权威状态。
+- MCP 优先支持稳定版 `2026-07-28`：新增 `server/discover`，按请求校验协议版本与客户端能力，所有现代成功结果携带 `resultType` 和 server info，`tools/list`/discovery 携带缓存提示；不支持的版本返回标准 `-32022`。
+- 保留 `2025-11-25` 初始化式兼容，正式收口为 `2026-07-28` 与 `2025-11-25` 双栈双版本；legacy `initialize` 不会协商出无会话的 `2026-07-28` 语义。Codex 现代项目根按请求解析，Claude/Codex 的审批与兼容策略位于 Adapter 边界。
+- Tasks 保持为未声明的可选扩展；现有 Graph/Loop 长任务继续通过显式 `root_id`、`node_id`、`operation_id`、lease 和 SQLite 状态管理，不引入第二套异步状态。
+
 ## 0.20.1 — 2026-07-29
 
 发布提交：`a644bf1`

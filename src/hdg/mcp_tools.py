@@ -3,8 +3,13 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from .controller import (
+    CONTROLLER_OPERATIONS,
+    ControllerContext,
+    DEFAULT_CONTROLLER,
+    LayeredDeliveryController,
+)
 from .errors import fail
-from .operations import OPERATIONS, execute_operation
 
 
 def _object(
@@ -424,7 +429,7 @@ def validate_tool_arguments(
         (entry for entry in TOOLS if entry["name"] == name),
         None,
     )
-    if tool is None or name not in OPERATIONS:
+    if tool is None or name not in CONTROLLER_OPERATIONS:
         fail("MCP_TOOL_UNKNOWN", f"Unknown scheduler tool: {name}")
     _validate_schema(arguments, tool["inputSchema"], "arguments")
     return dict(arguments)
@@ -436,6 +441,7 @@ def call_tool(
     *,
     root: str,
     explicit_dogfood: bool = False,
+    controller: LayeredDeliveryController = DEFAULT_CONTROLLER,
     **_: Any,
 ) -> dict[str, Any]:
     validate_tool_arguments(name, arguments)
@@ -444,11 +450,13 @@ def call_tool(
     if name == "freeze_hierarchy":
         execution_mode = internal_arguments.pop("execution_mode")
         internal_arguments["confirmed"] = True
-    result = execute_operation(
+    result = controller.execute(
         name,
-        root=root,
-        explicit_dogfood=explicit_dogfood,
-        **internal_arguments,
+        internal_arguments,
+        context=ControllerContext(
+            project_root=root,
+            explicit_dogfood=explicit_dogfood,
+        ),
     )
     if name == "freeze_hierarchy":
         return {

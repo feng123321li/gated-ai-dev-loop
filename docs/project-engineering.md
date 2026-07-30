@@ -13,9 +13,12 @@ src/hdg/
 ├── graph_runtime.py    # claim、lease、结果、重试、恢复
 ├── hierarchy_contract.py
 ├── model_rendering.py  # Delivery/层级总览渲染
-├── operations.py
-├── mcp_tools.py
-└── mcp_server.py
+├── controller.py       # 协议无关的共享应用 Controller
+├── operations.py       # 旧 Python 公共导入面的薄兼容 façade
+├── host_policy.py      # Codex 项目根与 Claude 审批兼容策略
+├── mcp_tools.py        # MCP 工具 schema 与 Controller 参数适配
+├── mcp_adapter.py      # 2026-07-28 / legacy 双栈 JSON-RPC
+└── mcp_server.py       # stdio framing、输入限制与进程入口
 ```
 
 旧的 `acceptance.py`、`execution.py`、`remediation.py`、`skill_execution.py`、evidence hydration 和分拆 repository 模块已经删除，因为这些职责属于内部 Task Loop 或已收敛到外层 scheduler。
@@ -92,7 +95,16 @@ Graph 编译遵循以下终态规则：
 - 恢复：`advance_graph`、`rebuild_graph_run`
 - 终态：`record_user_confirmation`、`cancel_graph_run`
 
-Plugin MCP 固定项目根，不接收 root 参数。Python 应用层函数的 `root` 仅供 Server 注入和测试。
+Plugin MCP 工具不接收业务 `root` 参数。Adapter 从宿主配置或请求元数据解析项目根，再通过 `ControllerContext` 注入；Python 领域函数的 `root` 仅供 Controller 注入和测试。
+
+`controller.py` 是唯一共享应用入口；它只接受 `ControllerContext` 和 operation 参数，不导入 MCP、Codex 或 Claude 代码。`mcp_tools.py` 把 17 个工具 schema 映射到 Controller，`mcp_adapter.py` 负责协议结果、错误、版本协商和宿主策略，`mcp_server.py` 只处理 newline-delimited stdio 与进程生命周期。
+
+本地 Tools-over-stdio profile 的协议优先级为：
+
+1. `2026-07-28`：`server/discover`、每请求 `_meta`、无协议会话、`resultType`、`ttlMs/cacheScope`；
+2. `2025-11-25`：Claude Code 与旧 Codex 使用的 `initialize` 会话。
+
+现代请求必须包含 `io.modelcontextprotocol/protocolVersion` 和 `io.modelcontextprotocol/clientCapabilities`；不支持的版本返回 `-32022` 及有序支持列表。旧初始化只协商 `2025-11-25`。MCP Tasks 是可选扩展，当前不广告也不实现；Controller 的持久状态继续使用显式 Graph/Loop 标识。
 
 ## 构建
 

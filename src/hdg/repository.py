@@ -925,15 +925,21 @@ class SchedulerRepository:
                     raise
             projection_root = safe_path(self.control_root, root_id)
             documents = render_projection_documents(definition, run)
-            optional_interface_projection = safe_path(
-                projection_root,
+            for legacy_filename in (
+                "hierarchy.json",
+                "graph.json",
+                "state.json",
                 "interfaces.md",
-            )
-            if "interfaces.md" not in documents:
-                try:
-                    optional_interface_projection.unlink()
-                except FileNotFoundError:
-                    pass
+            ):
+                legacy_projection = safe_path(
+                    projection_root,
+                    legacy_filename,
+                )
+                if (
+                    legacy_projection.is_file()
+                    or legacy_projection.is_symlink()
+                ):
+                    legacy_projection.unlink()
             for filename, content in documents.items():
                 atomic_write(
                     projection_root / filename,

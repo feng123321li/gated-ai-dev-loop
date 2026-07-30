@@ -282,9 +282,6 @@ Claude Code 和旧 Codex 仍可走 `2025-11-25` 的 `initialize → notification
 ├── scheduler.db
 ├── overview.md
 ├── d-order/
-│   ├── hierarchy.json
-│   ├── graph.json
-│   ├── state.json
 │   ├── overview.md
 │   ├── baseline.md
 │   ├── progress.md
@@ -304,9 +301,6 @@ Claude Code 和旧 Codex 仍可走 `2025-11-25` 的 `initialize → notification
 │           ├── progress.md
 │           └── acceptance.md
 └── d-another-delivery/
-    ├── hierarchy.json
-    ├── graph.json
-    ├── state.json
     ├── overview.md
     ├── baseline.md
     ├── progress.md
@@ -317,9 +311,6 @@ Claude Code 和旧 Codex 仍可走 `2025-11-25` 的 `initialize → notification
 |---|---|
 | `.layered-delivery/scheduler.db` | SQLite 机器权威 |
 | `.layered-delivery/overview.md` | 工作区内全部 Delivery 的中文进度总览 |
-| `.layered-delivery/<delivery-id>/hierarchy.json` | Delivery 交付信息与递归 GROUP/TASK 层级投影 |
-| `.layered-delivery/<delivery-id>/graph.json` | 编译 Graph 投影 |
-| `.layered-delivery/<delivery-id>/state.json` | 冻结启动后生成的当前运行投影 |
 | `.layered-delivery/<delivery-id>/overview.md` | Delivery 状态与人类投影导航 |
 | `.layered-delivery/<delivery-id>/baseline.md` | 需求、GROUP/TASK 层级、依赖与 Review 输入基线 |
 | `.layered-delivery/<delivery-id>/progress.md` | TASK、GROUP 与 Delivery Review 的执行进展 |
@@ -337,9 +328,9 @@ Loop 输入是冻结后交给对应 TASK 或 Review 执行上下文的 `loop.ref
 
 人类 Markdown 不展示 JSON 代码块或原始状态枚举。控制器只对不透明 payload 做确定性的结构展开：固定栏目、状态、说明和空值提示保持中文；HTTP 方法、URL、Dubbo 服务名、gRPC 标识、字段名与类型名等技术标识保留原值。需求新增、修改或删除接口时，负责接口的 TASK 在 `payload.interfaces` 显式声明 `changeType`、协议、名称、简介以及完整 `before` / `after` 快照；`protocol` 是开放字符串，HTTP、Dubbo、gRPC、GraphQL、消息等只是示例。适用快照包含完整入参与出参，并使用通用 `identifier` 或协议专用调用字段定位接口；HTTP 可使用 `method + path`，Dubbo 可使用 `service + method`。控制器只在该 TASK 目录生成 `interfaces.md`，TASK baseline 与 Delivery baseline 分别链接它；无接口声明时不生成。Agent 可以从真实代码、OpenAPI、Controller/DTO、IDL 或服务定义提取候选 before 并校验 after，但控制器不动态扫描代码或隐式推算契约。
 
-根总览、Delivery 投影和整棵 `work-items/` 节点投影树使用控制器内置的固定版本模板。控制器在状态提交后重新读取 SQLite，原子更新根总览和主文件，并整体替换 `work-items/`，确保 GROUP/TASK 删除、改名或接口声明移除后不遗留旧文件；升级后也会清理旧 `task-baselines/`。`workspace_status` 会从 SQLite 为早期 schema v3 Delivery 补建当前模板版本中适用的投影树，不迁移或修改 hierarchy、Graph、事件链和运行状态；旧 hierarchy 没有接口声明时不会从代码反推接口契约。Agent 通过合法 MCP 输入提交的 hierarchy、summary 和 payload 会按模板成为投影中的领域数据；模板结构、固定相对文件名、序列化和落盘完全由控制器负责。Agent 只通过已注册的 MCP 工具读取调度状态，不直连 `scheduler.db`，也不自行创建、修补或重写投影。投影用于人类评审与进度掌控，不反向成为机器权威。
+根总览、Delivery 投影和整棵 `work-items/` 节点投影树使用控制器内置的固定版本模板。控制器在状态提交后重新读取 SQLite，原子更新根总览和主文件，并整体替换 `work-items/`，确保 GROUP/TASK 删除、改名或接口声明移除后不遗留旧文件；升级后也会清理旧 `hierarchy.json`、`graph.json`、`state.json` 和 `task-baselines/`。`workspace_status` 会从 SQLite 为早期 schema v3 Delivery 补建当前模板版本中适用的中文投影树，不迁移或修改 hierarchy、Graph、事件链和运行状态；旧 hierarchy 没有接口声明时不会从代码反推接口契约。Agent 通过合法 MCP 输入提交的 hierarchy、summary 和 payload 会按模板成为投影中的领域数据；模板结构、固定相对文件名、序列化和落盘完全由控制器负责。Agent 只通过已注册的 MCP 工具读取调度状态，不直连 `scheduler.db`，也不自行创建、修补或重写投影。投影用于人类评审与进度掌控，不反向成为机器权威。
 
-`prepare_hierarchy` 阶段已经生成根总览、Delivery 的 hierarchy/graph、四份人类主投影，以及所有 GROUP/TASK 的 baseline、progress 和 acceptance；接口型 TASK 再生成自己的 `interfaces.md`。`state.json` 在 `freeze_hierarchy` 启动 Graph 后出现并持续刷新。
+`prepare_hierarchy` 阶段生成根总览、四份 Delivery 人类主投影，以及所有 GROUP/TASK 的 baseline、progress 和 acceptance；接口型 TASK 再生成自己的 `interfaces.md`。冻结后的运行状态继续从 SQLite 确定性刷新 Markdown，不生成机器 JSON 副本。
 
 不再生成 `development-plan.md`、Task Gate 报告、Skill activation 记录或文件 scope 授权投影。
 

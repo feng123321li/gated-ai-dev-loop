@@ -115,6 +115,10 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("出参", planning)
         self.assertIn("humanArtifacts.workItems", planning)
         self.assertIn("work-items/<node-id>/", main)
+        self.assertIn(
+            "不生成 `hierarchy.json`、`graph.json` 或 `state.json` 副本",
+            main,
+        )
 
     def test_skill_keeps_agent_recommendations_advisory(self) -> None:
         main = (SKILL / "SKILL.md").read_text(encoding="utf-8")

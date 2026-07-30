@@ -98,9 +98,6 @@ def prepare_hierarchy(
         "baseline": f"{projection_root}/baseline.md",
         "progress": f"{projection_root}/progress.md",
         "acceptance": f"{projection_root}/acceptance.md",
-        "hierarchy": f"{projection_root}/hierarchy.json",
-        "graph": f"{projection_root}/graph.json",
-        "state": f"{projection_root}/state.json",
         "taskBaselines": task_baselines,
         "workItems": work_items,
     }

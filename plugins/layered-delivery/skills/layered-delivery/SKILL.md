@@ -11,7 +11,7 @@ description: "调度或恢复多项目、多模块的软件交付 Graph。用于
 
 - 只调用 Plugin 注册的 MCP 工具。MCP 不可用时报告 `PLUGIN_MCP_UNAVAILABLE` 并停止治理写入。
 - 只从 MCP 响应读取调度状态；不要通过 Shell、Python 或其他连接直接打开、查询或修改 `scheduler.db`。
-- 以 SQLite 与事件链为机器权威。`hierarchy.json`、`graph.json` 和 `state.json` 是机器投影；根级全部 Delivery 总览、每个 Delivery 的 overview/baseline/progress/acceptance，以及 `work-items/<node-id>/` 下每个 GROUP/TASK 的 baseline/progress/acceptance，是控制器用固定版本模板生成的中文人类投影。Delivery baseline 串联全部节点 baseline，GROUP baseline 串联直接子节点。只有 TASK 显式声明 `payload.interfaces` 时才在该 TASK 目录生成 before/after 接口投影；无声明时不扫描代码或自动推断。人类 Markdown 只对不透明 payload 做确定性的结构展开，不展示 JSON 代码块或原始状态枚举。MCP 提交的 hierarchy、summary 和 payload 会作为领域数据进入投影，但不要选择模板或投影文件名，也不要自行拼装、创建、修补或重写投影。
+- 以 SQLite 与事件链为唯一机器权威，不生成 `hierarchy.json`、`graph.json` 或 `state.json` 副本。根级全部 Delivery 总览、每个 Delivery 的 overview/baseline/progress/acceptance，以及 `work-items/<node-id>/` 下每个 GROUP/TASK 的 baseline/progress/acceptance，是控制器用固定版本模板生成的中文人类投影。Delivery baseline 串联全部节点 baseline，GROUP baseline 串联直接子节点。只有 TASK 显式声明 `payload.interfaces` 时才在该 TASK 目录生成 before/after 接口投影；无声明时不扫描代码或自动推断。人类 Markdown 只对不透明 payload 做确定性的结构展开，不展示 JSON 代码块或原始状态枚举。MCP 提交的 hierarchy、summary 和 payload 会作为领域数据进入投影，但不要选择模板或投影文件名，也不要自行拼装、创建、修补或重写投影。
 - 只使用 schema v3。调用 `hierarchy_contract` 取得当前精确结构，不从源码或旧会话猜 schema。
 - 把 Delivery 作为 Graph 与最终验收边界；递归 GROUP 只协调子图，TASK 是唯一执行叶子。
 - 不解释或约束 `loop.payload` 和 `loop.result`。实现方案、测试、Gate、修正循环及 Skill 调用属于相应 TASK 或 Review Loop。

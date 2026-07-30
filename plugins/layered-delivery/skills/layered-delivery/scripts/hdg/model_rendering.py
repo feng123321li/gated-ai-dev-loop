@@ -12,7 +12,6 @@ from .graph_model import (
     loop_node_id,
     review_node_id,
 )
-from .jsonio import pretty_json
 from .model_core import iter_hierarchy_nodes
 
 
@@ -144,7 +143,6 @@ PAYLOAD_FIELD_ORDER = MappingProxyType(
 UTC_PLUS_8 = timezone(timedelta(hours=8))
 PROJECTION_TEMPLATE_VERSION = 4
 WORK_ITEM_DIRECTORY = "work-items"
-JSON_PROJECTION_TEMPLATE = Template("${document}\n")
 WORKSPACE_OVERVIEW_PROJECTION_TEMPLATE = Template(
     """# 全部交付调度与进度总览
 
@@ -409,9 +407,6 @@ ${acceptance_sections}
 )
 PROJECTION_TEMPLATES = MappingProxyType(
     {
-        "hierarchy.json": JSON_PROJECTION_TEMPLATE,
-        "graph.json": JSON_PROJECTION_TEMPLATE,
-        "state.json": JSON_PROJECTION_TEMPLATE,
         "overview.md": OVERVIEW_PROJECTION_TEMPLATE,
         "baseline.md": BASELINE_PROJECTION_TEMPLATE,
         "progress.md": PROGRESS_PROJECTION_TEMPLATE,
@@ -1751,26 +1746,14 @@ def render_task_interfaces(
     )
 
 
-def _render_json_projection(
-    filename: str,
-    value: object,
-) -> str:
-    template = PROJECTION_TEMPLATES.get(filename)
-    if template is not JSON_PROJECTION_TEMPLATE:
-        raise ValueError(f"unsupported JSON projection: {filename}")
-    return template.substitute(
-        document=pretty_json(value).rstrip("\n")
-    )
-
-
 def render_projection_documents(
     stored_definition: dict[str, Any],
     run: dict[str, Any] | None,
 ) -> dict[str, str]:
-    """Render the complete controller-owned projection document set.
+    """Render the complete controller-owned human projection set.
 
-    The stored hierarchy, graph and optional run are already loaded from
-    SQLite by the repository. Callers cannot supply a template or filename.
+    The stored hierarchy and optional run are already loaded from SQLite by
+    the repository. Callers cannot supply a template or filename.
     """
 
     hierarchy = stored_definition["hierarchy"]
@@ -1787,15 +1770,7 @@ def render_projection_documents(
         "hierarchy_status": stored_definition["status"],
         "updated_at": updated_at,
     }
-    documents = {
-        "hierarchy.json": _render_json_projection(
-            "hierarchy.json",
-            hierarchy,
-        ),
-        "graph.json": _render_json_projection(
-            "graph.json",
-            stored_definition["graph"],
-        ),
+    return {
         "overview.md": render_scheduling_plan(
             hierarchy,
             **human_projection_arguments,
@@ -1815,16 +1790,6 @@ def render_projection_documents(
             **human_projection_arguments,
             run=run,
         ),
-    }
-    if run is not None:
-        documents["state.json"] = _render_json_projection(
-            "state.json",
-            run,
-        )
-    return {
-        filename: documents[filename]
-        for filename in PROJECTION_TEMPLATES
-        if filename in documents
     }
 
 

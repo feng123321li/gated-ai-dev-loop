@@ -3,7 +3,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
-import json
 from pathlib import Path
 import shutil
 from tempfile import TemporaryDirectory
@@ -1255,9 +1254,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "baseline": f"{artifact_prefix}/baseline.md",
                 "progress": f"{artifact_prefix}/progress.md",
                 "acceptance": f"{artifact_prefix}/acceptance.md",
-                "hierarchy": f"{artifact_prefix}/hierarchy.json",
-                "graph": f"{artifact_prefix}/graph.json",
-                "state": f"{artifact_prefix}/state.json",
                 "taskBaselines": expected_task_baselines,
                 "workItems": expected_work_items,
             },
@@ -1272,15 +1268,13 @@ class SchedulerRuntimeTests(unittest.TestCase):
         ):
             self.assertTrue((projections / filename).is_file())
         self.assertFalse((projections / "interfaces.md").exists())
-        self.assertTrue((projections / "hierarchy.json").is_file())
-        self.assertTrue((projections / "graph.json").is_file())
-        self.assertFalse((projections / "state.json").exists())
         for filename in (
             "hierarchy.json",
             "graph.json",
             "state.json",
         ):
             self.assertFalse((control / filename).exists())
+            self.assertFalse((projections / filename).exists())
         overview = (projections / "overview.md").read_text(
             encoding="utf-8"
         )
@@ -1772,9 +1766,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(
             set(PROJECTION_TEMPLATES),
             {
-                "hierarchy.json",
-                "graph.json",
-                "state.json",
                 "overview.md",
                 "baseline.md",
                 "progress.md",
@@ -1837,6 +1828,15 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "agent-authored workspace summary\n",
             encoding="utf-8",
         )
+        for filename in (
+            "hierarchy.json",
+            "graph.json",
+            "state.json",
+        ):
+            (projection_root / filename).write_text(
+                "legacy machine projection\n",
+                encoding="utf-8",
+            )
 
         repository = SchedulerRepository(self.root)
         repository.write_projections(prepared["rootId"])
@@ -1860,6 +1860,12 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "stale-agent-file.md",
             rebuilt_work_items,
         )
+        for filename in (
+            "hierarchy.json",
+            "graph.json",
+            "state.json",
+        ):
+            self.assertFalse((projection_root / filename).exists())
         shutil.rmtree(work_item_root)
         work_item_root.write_text(
             "agent replaced the controller directory\n",
@@ -1874,19 +1880,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 if path.is_file()
             },
             original_work_items,
-        )
-        stored = repository.hierarchy(prepared["rootId"])
-        self.assertEqual(
-            json.loads(rebuilt["hierarchy.json"]),
-            stored["hierarchy"],
-        )
-        self.assertEqual(
-            json.loads(rebuilt["graph.json"]),
-            stored["graph"],
-        )
-        self.assertEqual(
-            json.loads(rebuilt["state.json"]),
-            repository.run(prepared["rootId"]),
         )
         self.assertIn(
             f"投影模板版本：{PROJECTION_TEMPLATE_VERSION}",
@@ -2081,12 +2074,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             / ".layered-delivery"
             / root_id
         )
-        state = json.loads(
-            (projection_root / "state.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        self.assertEqual(state["updatedAt"], expected_machine_time)
+        self.assertFalse((projection_root / "state.json").exists())
         human_time = at(3).astimezone(
             timezone(timedelta(hours=8))
         ).isoformat(timespec="seconds")
@@ -2191,7 +2179,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
 
         self.assertEqual(frozen["status"], "ACTIVE")
-        self.assertTrue((projections / "state.json").is_file())
+        self.assertFalse((projections / "state.json").exists())
         self.assertIn("运行状态：运行中", overview)
         self.assertNotIn("ACTIVE", overview)
         self.assertIn("运行状态：运行中", progress)

@@ -10,6 +10,7 @@ from .controller import (
     LayeredDeliveryController,
 )
 from .errors import fail
+from .jsonio import canonical_json
 
 
 def _object(
@@ -29,6 +30,18 @@ def _string(description: str) -> dict[str, Any]:
     return {
         "type": "string",
         "minLength": 1,
+        "description": description,
+    }
+
+
+def _string_array(description: str) -> dict[str, Any]:
+    return {
+        "type": "array",
+        "items": {
+            "type": "string",
+            "minLength": 1,
+        },
+        "uniqueItems": True,
         "description": description,
     }
 
@@ -135,11 +148,19 @@ TOOLS = (
         (
             "Return non-binding local Agent and model recommendations, "
             "alternatives, confidence, and reasons for every TASK and "
-            "Review Loop in one prepared or frozen Graph. Never claim or "
+            "Review Loop in one prepared or frozen Graph. A refresh may "
+            "ephemerally exclude rate-limited Agent IDs. Never claim or "
             "dispatch a Loop."
         ),
         _object(
-            {"root_id": ROOT_ID},
+            {
+                "root_id": ROOT_ID,
+                "temporarily_unavailable_agent_ids": _string_array(
+                    "Ephemeral Agent IDs to exclude from this recommendation "
+                    "refresh, such as an executor whose provider token quota "
+                    "is unavailable until a known reset time."
+                ),
+            },
             required=["root_id"],
         ),
     ),
@@ -242,7 +263,8 @@ TOOLS = (
     _tool(
         "dispatch_loop",
         (
-            "Claim one ready TASK, GROUP Review, or Delivery Review Loop "
+            "Claim one ready TASK, TASK Review, GROUP Review, or Delivery "
+            "Review Loop "
             "for its receiving isolated executor, subject to exact resource "
             "locks."
         ),
@@ -276,14 +298,33 @@ TOOLS = (
     _tool(
         "pause_loop",
         (
-            "Pause one claimed Loop with a live lease for context handoff "
-            "while preserving its current attempt and frozen Graph."
+            "Pause one claimed Loop with a live lease while preserving its "
+            "current attempt and frozen Graph. Provide resume_at for a "
+            "provider rate limit and identify whether the limited capacity "
+            "belongs to the executor or the native host."
         ),
         _object(
             {
                 "root_id": ROOT_ID,
                 "node_id": NODE_ID,
                 "operation_id": OPERATION_ID,
+                "resume_at": _string(
+                    "Optional provider quota reset time as an ISO 8601 "
+                    "timestamp. Before it, refresh recommendations for an "
+                    "independent alternate executor or wait; at it, the "
+                    "controller automatically makes the same Loop attempt "
+                    "ready for redispatch."
+                ),
+                "capacity_scope": {
+                    "type": "string",
+                    "enum": ["EXECUTOR", "HOST"],
+                    "description": (
+                        "Required with resume_at. EXECUTOR allows immediate "
+                        "alternate-Agent recommendation; HOST means the "
+                        "native orchestrator itself is quota-limited and "
+                        "must wait for an out-of-model host timer to wake it."
+                    ),
+                },
             },
             required=["root_id", "node_id", "operation_id"],
         ),
@@ -444,6 +485,35 @@ def _validate_schema(
                 "MCP_TOOL_ARGUMENT_INVALID",
                 f"{field} must be a supported string",
             )
+        return
+    if expected_type == "array":
+        if (
+            not isinstance(value, list)
+            or len(value) < schema.get("minItems", 0)
+            or len(value) > schema.get("maxItems", len(value))
+        ):
+            fail(
+                "MCP_TOOL_ARGUMENT_INVALID",
+                f"{field} must be a supported array",
+            )
+        if schema.get("uniqueItems") and len(
+            {
+                canonical_json(item)
+                for item in value
+            }
+        ) != len(value):
+            fail(
+                "MCP_TOOL_ARGUMENT_INVALID",
+                f"{field} must contain unique items",
+            )
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                _validate_schema(
+                    item,
+                    item_schema,
+                    f"{field}[{index}]",
+                )
         return
     if expected_type == "integer":
         if (

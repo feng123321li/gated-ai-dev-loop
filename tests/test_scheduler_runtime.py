@@ -343,6 +343,32 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             [item["nodeId"] for item in frontier["readyLoops"]],
+            ["review:task:t-service"],
+        )
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id="review:task:t-service",
+            owner="task-reviewer-1",
+            operation_id="op-task-review-1",
+            now=at(6),
+        )
+        record_loop_result(
+            root=self.root,
+            root_id=root_id,
+            node_id="review:task:t-service",
+            operation_id="op-task-review-1",
+            outcome=success("Task review completed."),
+            now=at(7),
+        )
+
+        frontier = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(8),
+        )
+        self.assertEqual(
+            [item["nodeId"] for item in frontier["readyLoops"]],
             [review_node_id(root_id)],
         )
         dispatch_loop(
@@ -351,7 +377,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             node_id=review_node_id(root_id),
             owner="reviewer-1",
             operation_id="op-review-1",
-            now=at(6),
+            now=at(9),
         )
         record_loop_result(
             root=self.root,
@@ -359,13 +385,13 @@ class SchedulerRuntimeTests(unittest.TestCase):
             node_id=review_node_id(root_id),
             operation_id="op-review-1",
             outcome=success("Independent review completed."),
-            now=at(7),
+            now=at(10),
         )
 
         frontier = get_graph_frontier(
             root=self.root,
             root_id=root_id,
-            now=at(8),
+            now=at(11),
         )
         self.assertEqual(
             frontier["actions"],
@@ -382,7 +408,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             confirmed=True,
             confirmed_by="human",
             summary="Accepted.",
-            now=at(9),
+            now=at(12),
         )
         self.assertEqual(completed["status"], "COMPLETED")
         terminal_before = graph_status(
@@ -415,11 +441,30 @@ class SchedulerRuntimeTests(unittest.TestCase):
             / "acceptance.md"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            "| 已成功 | 1 | agent-1 |",
+            (
+                "| 任务 | t-service | Run t-service | 已成功 | "
+                "Task review completed. | "
+                "[查看](work-items/t-service/acceptance.md) |"
+            ),
             completed_overview,
         )
+        self.assertNotIn("agent-1", completed_overview)
+        self.assertIn("| 已成功 | 1 | reviewer-1 |", completed_overview)
         self.assertIn("opaque-to-scheduler", completed_overview)
         self.assertNotIn("SUCCEEDED", completed_overview)
+        task_acceptance = (
+            Path(self.root)
+            / ".layered-delivery"
+            / root_id
+            / WORK_ITEM_DIRECTORY
+            / "t-service"
+            / "acceptance.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("| 已成功 | 1 | agent-1 |", task_acceptance)
+        self.assertIn(
+            "| 已成功 | 1 | task-reviewer-1 |",
+            task_acceptance,
+        )
         workspace_overview = (
             Path(self.root)
             / ".layered-delivery"
@@ -441,6 +486,106 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertIn("USER_CONFIRMED", event_types)
         self.assertNotIn("TASK_IMPLEMENTED", event_types)
         self.assertNotIn("GATE_FAILED", event_types)
+
+    def test_root_task_review_runs_before_delivery_review(self) -> None:
+        hierarchy = task_hierarchy()
+        hierarchy["root"]["reviewLoop"] = loop_descriptor(
+            "task/independent-review-loop@1"
+        )
+        prepared = self.prepare_and_freeze(hierarchy)
+        root_id = prepared["rootId"]
+        task_id = loop_node_id("t-service")
+        task_review_id = "review:task:t-service"
+
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=task_id,
+            owner="task-agent",
+            operation_id="op-task-with-review",
+            now=at(2),
+        )
+        record_loop_result(
+            root=self.root,
+            root_id=root_id,
+            node_id=task_id,
+            operation_id="op-task-with-review",
+            outcome=success("Task implementation completed."),
+            now=at(3),
+        )
+
+        frontier = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(4),
+        )
+        self.assertEqual(
+            [item["nodeId"] for item in frontier["readyLoops"]],
+            [task_review_id],
+        )
+        context = loop_context(
+            root=self.root,
+            root_id=root_id,
+            node_id=task_review_id,
+        )
+        self.assertEqual(context["kind"], "TASK_REVIEW_LOOP")
+        self.assertEqual(context["workItemId"], "t-service")
+        self.assertEqual(context["humanArtifacts"]["workItem"]["kind"], "TASK")
+        self.assertEqual(
+            context["loop"]["ref"],
+            "task/independent-review-loop@1",
+        )
+
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=task_review_id,
+            owner="task-reviewer",
+            operation_id="op-task-review",
+            now=at(5),
+        )
+        record_loop_result(
+            root=self.root,
+            root_id=root_id,
+            node_id=task_review_id,
+            operation_id="op-task-review",
+            outcome=success("Task review completed."),
+            now=at(6),
+        )
+
+        frontier = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(7),
+        )
+        self.assertEqual(
+            [item["nodeId"] for item in frontier["readyLoops"]],
+            [review_node_id(root_id)],
+        )
+        projection_root = Path(self.root, ".layered-delivery", root_id)
+        task_root = projection_root / WORK_ITEM_DIRECTORY / "t-service"
+        baseline = (task_root / "baseline.md").read_text(encoding="utf-8")
+        progress = (task_root / "progress.md").read_text(encoding="utf-8")
+        acceptance = (task_root / "acceptance.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("task/independent-review-loop@1", baseline)
+        self.assertIn("TASK Review", progress)
+        self.assertIn("Task review completed.", acceptance)
+
+    def test_group_without_review_is_rejected_before_prepare(self) -> None:
+        hierarchy = group_hierarchy()
+        hierarchy["root"]["reviewLoop"] = None
+        with self.assertRaises(GatedLoopError) as caught:
+            prepare_hierarchy(
+                root=self.root,
+                hierarchy=hierarchy,
+                now=at(0),
+            )
+        self.assertEqual(
+            caught.exception.code,
+            "WORK_ITEM_GROUP_REVIEW_REQUIRED",
+        )
 
     def test_task_and_review_select_shared_skill_hints_at_runtime(
         self,
@@ -486,7 +631,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
     ) -> None:
         prepared = self.prepare_and_freeze(group_hierarchy())
         root_id = prepared["rootId"]
-        for minute, item_id in ((2, "t-api"), (4, "t-core")):
+        for minute, item_id in ((2, "t-api"), (6, "t-core")):
             node_id = loop_node_id(item_id)
             operation_id = f"op-{item_id}"
             dispatch_loop(
@@ -505,6 +650,24 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 outcome=success(f"{item_id} completed."),
                 now=at(minute + 1),
             )
+            review_id = f"review:task:{item_id}"
+            review_operation = f"op-review-{item_id}"
+            dispatch_loop(
+                root=self.root,
+                root_id=root_id,
+                node_id=review_id,
+                owner="task-reviewer",
+                operation_id=review_operation,
+                now=at(minute + 2),
+            )
+            record_loop_result(
+                root=self.root,
+                root_id=root_id,
+                node_id=review_id,
+                operation_id=review_operation,
+                outcome=success(f"{item_id} review completed."),
+                now=at(minute + 3),
+            )
 
         group_review_id = group_review_node_id("g-service")
         dispatch_loop(
@@ -513,7 +676,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             node_id=group_review_id,
             owner="group-reviewer",
             operation_id="op-group-review",
-            now=at(6),
+            now=at(10),
         )
         record_loop_result(
             root=self.root,
@@ -521,7 +684,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             node_id=group_review_id,
             operation_id="op-group-review",
             outcome=success("g-service review completed."),
-            now=at(7),
+            now=at(11),
         )
 
         context = loop_context(
@@ -539,6 +702,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 loop_node_id("t-api"),
                 loop_node_id("t-core"),
                 group_review_id,
+                "review:task:t-api",
+                "review:task:t-core",
             ],
         )
         self.assertEqual(
@@ -550,6 +715,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "t-api completed.",
                 "t-core completed.",
                 "g-service review completed.",
+                "t-api review completed.",
+                "t-core review completed.",
             ],
         )
 
@@ -592,14 +759,20 @@ class SchedulerRuntimeTests(unittest.TestCase):
 
         ordered_loops = [
             loop_node_id("t-bootstrap"),
+            "review:task:t-bootstrap",
             loop_node_id("t-model"),
+            "review:task:t-model",
             loop_node_id("t-repository"),
+            "review:task:t-repository",
             group_review_node_id("g-domain"),
             loop_node_id("t-api"),
+            "review:task:t-api",
             group_review_node_id("g-backend"),
             loop_node_id("t-e2e"),
+            "review:task:t-e2e",
             group_review_node_id("g-quality"),
             loop_node_id("t-docs"),
+            "review:task:t-docs",
             group_review_node_id("g-root"),
         ]
         for node_id in ordered_loops:
@@ -698,6 +871,18 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "trigger": "CONTEXT_OR_HOOK_PRESSURE",
                     "requiresLiveLease": True,
                     "action": "PAUSE_AND_HANDOFF",
+                    "loopOutcome": "NONE",
+                },
+                "providerRateLimit": {
+                    "trigger": "PROVIDER_RATE_LIMIT_DURING_CLAIM",
+                    "requiresLiveLease": True,
+                    "withResetAt": "PAUSE_UNTIL_RESET",
+                    "executorScopeBeforeReset": (
+                        "REFRESH_RECOMMENDATIONS_FOR_ALTERNATE_OR_WAIT"
+                    ),
+                    "hostScopeBeforeReset": "WAIT_FOR_HOST_TIMER",
+                    "atReset": "AUTO_RESUME_AND_REDISPATCH",
+                    "sameAttempt": True,
                     "loopOutcome": "NONE",
                 },
                 "expiredLeaseRecovery": {
@@ -871,6 +1056,310 @@ class SchedulerRuntimeTests(unittest.TestCase):
             ],
         )
 
+    def test_rate_limited_loop_waits_until_reset_then_redispatches(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        reset_at = at(20).isoformat().replace("+00:00", "Z")
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="agent-rate-limited",
+            operation_id="op-rate-limited",
+            now=at(3),
+        )
+
+        paused = pause_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id="op-rate-limited",
+            resume_at=reset_at,
+            capacity_scope="EXECUTOR",
+            now=at(4),
+        )
+
+        self.assertEqual(paused["status"], "PAUSED")
+        self.assertEqual(paused["resumeAt"], reset_at)
+        self.assertEqual(
+            paused["nextAction"],
+            "REFRESH_RECOMMENDATIONS_FOR_ALTERNATE_OR_WAIT",
+        )
+        progress = (
+            Path(self.root)
+            / ".layered-delivery"
+            / root_id
+            / WORK_ITEM_DIRECTORY
+            / "t-service"
+            / "progress.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "等待至 2026-07-29 16:20:00 自动重新派遣",
+            progress,
+        )
+        rebuilt = rebuild_graph_run(
+            root=self.root,
+            root_id=root_id,
+        )
+        rebuilt_node = next(
+            item
+            for item in rebuilt["nodes"]
+            if item["nodeId"] == node_id
+        )
+        self.assertEqual(rebuilt_node["status"], "PAUSED")
+        self.assertEqual(rebuilt_node["resumeAt"], reset_at)
+        self.assertIsNone(rebuilt_node["leaseExpiresAt"])
+        self.assertIsNone(rebuilt_node["finishedAt"])
+
+        waiting = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(10),
+        )
+        self.assertEqual(waiting["nextWakeAt"], reset_at)
+        self.assertEqual(
+            waiting["pausedLoops"],
+            [
+                {
+                    "nodeId": node_id,
+                    "kind": "TASK_LOOP",
+                    "workItemId": "t-service",
+                    "attempt": 1,
+                    "previousOwner": "agent-rate-limited",
+                    "previousOperationId": "op-rate-limited",
+                    "resumeAt": reset_at,
+                    "capacityScope": "EXECUTOR",
+                }
+            ],
+        )
+        self.assertEqual(
+            waiting["actions"],
+            [
+                {
+                    "action": "RECOMMEND_ALTERNATE_OR_WAIT",
+                    "nodeId": node_id,
+                    "excludedOwner": "agent-rate-limited",
+                    "resumeAt": reset_at,
+                    "executionPolicy": loop_execution_policy(),
+                }
+            ],
+        )
+
+        ready = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(20),
+        )
+        self.assertIsNone(ready["nextWakeAt"])
+        self.assertEqual(ready["pausedLoops"], [])
+        self.assertEqual(ready["readyLoops"][0]["attempt"], 1)
+        self.assertIn(
+            node_id,
+            [
+                action["nodeId"]
+                for action in ready["actions"]
+                if action["action"] == "DISPATCH_LOOP"
+            ],
+        )
+        auto_resumed = [
+            event
+            for event in graph_events(
+                root=self.root,
+                root_id=root_id,
+            )["events"]
+            if event["eventType"] == "NODE_AUTO_RESUMED"
+        ]
+        self.assertEqual(len(auto_resumed), 1)
+        self.assertEqual(
+            auto_resumed[0]["payload"],
+            {"resumeAt": reset_at},
+        )
+
+    def test_rate_limited_loop_can_resume_early_with_alternate_agent(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        reset_at = at(20).isoformat().replace("+00:00", "Z")
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="agent-rate-limited",
+            operation_id="op-rate-limited-alternate",
+            now=at(3),
+        )
+        pause_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id="op-rate-limited-alternate",
+            resume_at=reset_at,
+            capacity_scope="EXECUTOR",
+            now=at(4),
+        )
+
+        resumed = resume_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            now=at(6),
+        )
+        self.assertEqual(resumed["status"], "READY")
+        alternate = dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="agent-independent-alternate",
+            operation_id="op-independent-alternate",
+            now=at(7),
+        )
+        self.assertEqual(alternate["owner"], "agent-independent-alternate")
+        state = graph_status(root=self.root, root_id=root_id)
+        current = next(
+            item
+            for item in state["nodes"]
+            if item["nodeId"] == node_id
+        )
+        self.assertEqual(current["attempt"], 1)
+        self.assertIsNone(current["resumeAt"])
+
+    def test_rate_limit_pause_requires_a_future_reset_time(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="agent-rate-limited",
+            operation_id="op-invalid-reset",
+            now=at(3),
+        )
+
+        for invalid in (
+            "not-a-timestamp",
+            at(4).isoformat().replace("+00:00", "Z"),
+        ):
+            with self.subTest(resume_at=invalid):
+                with self.assertRaises(GatedLoopError) as caught:
+                    pause_loop(
+                        root=self.root,
+                        root_id=root_id,
+                        node_id=node_id,
+                        operation_id="op-invalid-reset",
+                        resume_at=invalid,
+                        capacity_scope="EXECUTOR",
+                        now=at(4),
+                    )
+                self.assertEqual(
+                    caught.exception.code,
+                    "SCHEDULER_RESUME_TIME_INVALID",
+                )
+
+        state = graph_status(root=self.root, root_id=root_id)
+        current = next(
+            item
+            for item in state["nodes"]
+            if item["nodeId"] == node_id
+        )
+        self.assertEqual(current["status"], "CLAIMED")
+
+    def test_host_rate_limit_waits_for_out_of_model_timer(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        reset_at = at(20).isoformat().replace("+00:00", "Z")
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="host-native-agent",
+            operation_id="op-host-rate-limit",
+            now=at(3),
+        )
+
+        paused = pause_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id="op-host-rate-limit",
+            resume_at=reset_at,
+            capacity_scope="HOST",
+            now=at(4),
+        )
+        self.assertEqual(paused["nextAction"], "WAIT_FOR_HOST_CAPACITY")
+        waiting = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(10),
+        )
+        self.assertEqual(
+            waiting["actions"],
+            [
+                {
+                    "action": "WAIT_FOR_HOST_CAPACITY",
+                    "nodeId": node_id,
+                    "resumeAt": reset_at,
+                    "executionPolicy": loop_execution_policy(),
+                }
+            ],
+        )
+        self.assertEqual(
+            waiting["pausedLoops"][0]["capacityScope"],
+            "HOST",
+        )
+        ready = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(20),
+        )
+        self.assertIn(
+            node_id,
+            [
+                action["nodeId"]
+                for action in ready["actions"]
+                if action["action"] == "DISPATCH_LOOP"
+            ],
+        )
+
+    def test_timed_pause_requires_explicit_capacity_scope(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="host-native-agent",
+            operation_id="op-missing-capacity-scope",
+            now=at(3),
+        )
+
+        with self.assertRaises(GatedLoopError) as caught:
+            pause_loop(
+                root=self.root,
+                root_id=root_id,
+                node_id=node_id,
+                operation_id="op-missing-capacity-scope",
+                resume_at=at(20).isoformat().replace("+00:00", "Z"),
+                now=at(4),
+            )
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_CAPACITY_SCOPE_INVALID",
+        )
+
     def test_group_review_context_links_group_work_item_projections(
         self,
     ) -> None:
@@ -982,7 +1471,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         hierarchy = group_hierarchy()
         prepared = self.prepare_and_freeze(hierarchy)
         root_id = prepared["rootId"]
-        for minute, item_id in ((2, "t-api"), (4, "t-core")):
+        for minute, item_id in ((2, "t-api"), (6, "t-core")):
             node_id = loop_node_id(item_id)
             operation_id = f"op-{item_id}-severity"
             dispatch_loop(
@@ -1001,6 +1490,24 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 outcome=success(f"{item_id} completed."),
                 now=at(minute + 1),
             )
+            task_review_id = f"review:task:{item_id}"
+            task_review_operation = f"op-{item_id}-task-review-severity"
+            dispatch_loop(
+                root=self.root,
+                root_id=root_id,
+                node_id=task_review_id,
+                owner="task-review-agent",
+                operation_id=task_review_operation,
+                now=at(minute + 2),
+            )
+            record_loop_result(
+                root=self.root,
+                root_id=root_id,
+                node_id=task_review_id,
+                operation_id=task_review_operation,
+                outcome=success(f"{item_id} task review completed."),
+                now=at(minute + 3),
+            )
 
         review_id = group_review_node_id("g-service")
         dispatch_loop(
@@ -1009,7 +1516,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             node_id=review_id,
             owner="review-agent",
             operation_id="op-review-severity",
-            now=at(6),
+            now=at(10),
         )
         record_loop_result(
             root=self.root,
@@ -1046,7 +1553,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "verification": {"tests": "passed"},
                 },
             },
-            now=at(7),
+            now=at(11),
         )
 
         group_acceptance = (
@@ -1064,21 +1571,48 @@ class SchedulerRuntimeTests(unittest.TestCase):
             / "acceptance.md"
         ).read_text(encoding="utf-8")
 
-        for report in (group_acceptance, delivery_acceptance):
-            self.assertIn("#### Review 问题分级", report)
-            self.assertIn("- P0：1 项，未关闭 0 项", report)
-            self.assertIn("- P1：1 项，未关闭 0 项", report)
-            self.assertIn("- P2：1 项（必须逐项列示）", report)
-            self.assertIn(
-                "| 级别 | 问题 | 状态 | 处置 | 证据 |",
-                report,
-            )
-            self.assertIn("关键数据可能丢失", report)
-            self.assertIn("异常分支缺少覆盖", report)
-            self.assertIn("导出任务日志不足", report)
-            self.assertIn("已修复", report)
-            self.assertIn("已接受", report)
-            self.assertEqual(report.count("导出任务日志不足"), 1)
+        self.assertIn("#### Review 问题分级", group_acceptance)
+        self.assertIn("- P0：1 项，未关闭 0 项", group_acceptance)
+        self.assertIn("- P1：1 项，未关闭 0 项", group_acceptance)
+        self.assertIn(
+            "- P2：1 项（必须逐项列示）",
+            group_acceptance,
+        )
+        self.assertIn(
+            "| 级别 | 问题 | 状态 | 处置 | 证据 |",
+            group_acceptance,
+        )
+        self.assertIn("关键数据可能丢失", group_acceptance)
+        self.assertIn("异常分支缺少覆盖", group_acceptance)
+        self.assertIn("导出任务日志不足", group_acceptance)
+        self.assertIn("已修复", group_acceptance)
+        self.assertIn("已接受", group_acceptance)
+        self.assertEqual(
+            group_acceptance.count("导出任务日志不足"),
+            1,
+        )
+        self.assertIn(
+            "[查看](children/t-api/acceptance.md)",
+            group_acceptance,
+        )
+        self.assertIn(
+            "[查看](children/t-core/acceptance.md)",
+            group_acceptance,
+        )
+        self.assertNotIn("opaque-to-scheduler", group_acceptance)
+
+        self.assertIn("## 根工作项验收", delivery_acceptance)
+        self.assertIn(
+            "P0/P1 已修复，P2 已记录。",
+            delivery_acceptance,
+        )
+        self.assertIn(
+            f"[查看]({WORK_ITEM_DIRECTORY}/g-service/acceptance.md)",
+            delivery_acceptance,
+        )
+        self.assertNotIn("关键数据可能丢失", delivery_acceptance)
+        self.assertNotIn("异常分支缺少覆盖", delivery_acceptance)
+        self.assertNotIn("导出任务日志不足", delivery_acceptance)
 
     def test_infrastructure_failure_retries_but_loop_block_does_not(
         self,
@@ -1663,6 +2197,33 @@ class SchedulerRuntimeTests(unittest.TestCase):
             delivery_review["payload"]["rawAuditMarker"],
             acceptance,
         )
+        root_item_id = hierarchy["root"]["definition"]["id"]
+        self.assertIn("## 根工作项验收", acceptance)
+        self.assertIn(
+            (
+                f"[查看]({WORK_ITEM_DIRECTORY}/{root_item_id}/"
+                "acceptance.md)"
+            ),
+            acceptance,
+        )
+        for current in nodes:
+            definition = current["definition"]
+            if definition["kind"] == "TASK":
+                self.assertNotIn(
+                    (
+                        definition["execution"]["loop"]["payload"][
+                            "acceptance"
+                        ][0]
+                    ),
+                    acceptance,
+                )
+            else:
+                self.assertNotIn(
+                    current["reviewLoop"]["payload"][
+                        "rawAuditMarker"
+                    ],
+                    acceptance,
+                )
         self.assertNotIn('"rawAuditMarker"', delivery_baseline)
 
         work_item_ids = {
@@ -1966,7 +2527,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "acceptance.md",
             },
         )
-        self.assertGreaterEqual(PROJECTION_TEMPLATE_VERSION, 4)
+        self.assertGreaterEqual(PROJECTION_TEMPLATE_VERSION, 7)
         prepared = prepare_hierarchy(
             root=self.root,
             hierarchy=interface_hierarchy(),
@@ -2399,7 +2960,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     ).replace("/children/", "/")
                 elif node_id.startswith("join:"):
                     item_id = node_id.removeprefix("join:")
-                    stage = "GROUP 汇合"
+                    stage = "GROUP 完成点"
                     path = item_paths[item_id].removeprefix(
                         f"{WORK_ITEM_DIRECTORY}/"
                     ).replace("/children/", "/")

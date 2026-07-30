@@ -206,6 +206,37 @@ class HierarchyContractTests(unittest.TestCase):
             ],
             {"$ref": "#/$defs/loop"},
         )
+        self.assertEqual(
+            contract["inputSchema"]["$defs"]["taskRootNode"]["properties"][
+                "reviewLoop"
+            ],
+            {"$ref": "#/$defs/loop"},
+        )
+        self.assertEqual(
+            contract["inputSchema"]["$defs"]["groupRootNode"]["properties"][
+                "reviewLoop"
+            ],
+            {"$ref": "#/$defs/loop"},
+        )
+        acceptance_guidance = contract["projectionGuidance"][
+            "acceptanceReports"
+        ]
+        self.assertEqual(
+            acceptance_guidance["scope"],
+            "CURRENT_LAYER",
+        )
+        self.assertEqual(
+            acceptance_guidance["groupReport"]["childReferences"],
+            ["status", "summary", "acceptanceLink"],
+        )
+        self.assertEqual(
+            acceptance_guidance["deliveryReport"]["rootReference"],
+            ["status", "summary", "acceptanceLink"],
+        )
+        self.assertEqual(
+            acceptance_guidance["nonDuplicatedFromLowerLayers"],
+            ["payload", "evidence", "reviewFindings"],
+        )
         interface_guidance = contract["projectionGuidance"]["interfaces"]
         self.assertEqual(
             interface_guidance["location"],
@@ -318,8 +349,55 @@ class McpSurfaceTests(unittest.TestCase):
             by_name["recommend_executors"]["inputSchema"]["required"],
             ["root_id"],
         )
+        self.assertEqual(
+            by_name["recommend_executors"]["inputSchema"]["properties"][
+                "temporarily_unavailable_agent_ids"
+            ],
+            {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "minLength": 1,
+                },
+                "uniqueItems": True,
+                "description": (
+                    "Ephemeral Agent IDs to exclude from this recommendation "
+                    "refresh, such as an executor whose provider token quota "
+                    "is unavailable until a known reset time."
+                ),
+            },
+        )
         self.assertNotIn("_meta", by_name["available_agents"])
         self.assertNotIn("_meta", by_name["recommend_executors"])
+        pause_schema = by_name["pause_loop"]["inputSchema"]
+        self.assertNotIn("resume_at", pause_schema["required"])
+        self.assertEqual(
+            pause_schema["properties"]["resume_at"],
+            {
+                "type": "string",
+                "minLength": 1,
+                "description": (
+                    "Optional provider quota reset time as an ISO 8601 "
+                    "timestamp. Before it, refresh recommendations for an "
+                    "independent alternate executor or wait; at it, the "
+                    "controller automatically makes the same Loop attempt "
+                    "ready for redispatch."
+                ),
+            },
+        )
+        self.assertEqual(
+            pause_schema["properties"]["capacity_scope"],
+            {
+                "type": "string",
+                "enum": ["EXECUTOR", "HOST"],
+                "description": (
+                    "Required with resume_at. EXECUTOR allows immediate "
+                    "alternate-Agent recommendation; HOST means the native "
+                    "orchestrator itself is quota-limited and must wait for "
+                    "an out-of-model host timer to wake it."
+                ),
+            },
+        )
         freeze = by_name["freeze_hierarchy"]
         self.assertNotIn("_meta", freeze)
         freeze_schema = freeze["inputSchema"]
@@ -355,6 +433,25 @@ class McpSurfaceTests(unittest.TestCase):
             )
         with self.assertRaises(GatedLoopError):
             validate_tool_arguments("missing_tool", {})
+        with self.assertRaises(GatedLoopError):
+            validate_tool_arguments(
+                "recommend_executors",
+                {
+                    "root_id": "d-service",
+                    "temporarily_unavailable_agent_ids": "codex",
+                },
+            )
+        with self.assertRaises(GatedLoopError):
+            validate_tool_arguments(
+                "recommend_executors",
+                {
+                    "root_id": "d-service",
+                    "temporarily_unavailable_agent_ids": [
+                        "codex",
+                        "codex",
+                    ],
+                },
+            )
         with self.assertRaises(GatedLoopError):
             validate_tool_arguments(
                 "record_user_confirmation",

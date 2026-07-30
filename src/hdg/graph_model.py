@@ -12,12 +12,17 @@ from .model_core import safe_id, work_item_dependencies
 
 GRAPH_NODE_KINDS = (
     "TASK_LOOP",
+    "TASK_REVIEW_LOOP",
     "GROUP_JOIN",
     "GROUP_REVIEW_LOOP",
     "DELIVERY_REVIEW_LOOP",
     "USER_CONFIRMATION",
 )
-REVIEW_NODE_KINDS = ("GROUP_REVIEW_LOOP", "DELIVERY_REVIEW_LOOP")
+REVIEW_NODE_KINDS = (
+    "TASK_REVIEW_LOOP",
+    "GROUP_REVIEW_LOOP",
+    "DELIVERY_REVIEW_LOOP",
+)
 LOOP_NODE_KINDS = ("TASK_LOOP", *REVIEW_NODE_KINDS)
 JOIN_NODE_KINDS = ("GROUP_JOIN",)
 GRAPH_EDGE_KINDS = ("REQUIRES_SUCCESS", "ALL_OF")
@@ -78,6 +83,10 @@ FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
 
 def loop_node_id(task_id: str) -> str:
     return f"loop:{safe_id(task_id)}"
+
+
+def task_review_node_id(task_id: str) -> str:
+    return f"review:task:{safe_id(task_id)}"
 
 
 def join_node_id(work_item_id: str) -> str:
@@ -254,6 +263,14 @@ def compile_runtime_policy() -> dict[str, Any]:
             automatic=False,
         ),
         _transition(
+            "NODE_AUTO_RESUMED",
+            ["PAUSED"],
+            "PENDING",
+            "ON_RESUME_AT_REACHED",
+            loops,
+            automatic=True,
+        ),
+        _transition(
             "JOIN_COMPLETED",
             ["PENDING"],
             "SUCCEEDED",
@@ -352,11 +369,9 @@ def _walk_hierarchy(hierarchy: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _terminal_node_id(hierarchy_node: dict[str, Any]) -> str:
     definition = hierarchy_node["definition"]
-    return (
-        loop_node_id(definition["id"])
-        if definition["kind"] == "TASK"
-        else group_review_node_id(definition["id"])
-    )
+    if definition["kind"] == "TASK":
+        return task_review_node_id(definition["id"])
+    return group_review_node_id(definition["id"])
 
 
 def _entry_node_ids(hierarchy_node: dict[str, Any]) -> list[str]:
@@ -404,6 +419,22 @@ def compile_delivery_graph(
                     "TASK_LOOP",
                     item_id,
                     loop=definition["execution"]["loop"],
+                )
+            )
+            nodes.append(
+                _node(
+                    task_review_node_id(item_id),
+                    "TASK_REVIEW_LOOP",
+                    item_id,
+                    loop=hierarchy_node["reviewLoop"],
+                )
+            )
+            edges.append(
+                _edge(
+                    loop_node_id(item_id),
+                    task_review_node_id(item_id),
+                    "REQUIRES_SUCCESS",
+                    plane="GOVERNANCE",
                 )
             )
             continue
@@ -541,6 +572,8 @@ def _validate_acyclic(
 def _expected_node_id(kind: str, work_item_id: str) -> str:
     if kind == "TASK_LOOP":
         return loop_node_id(work_item_id)
+    if kind == "TASK_REVIEW_LOOP":
+        return task_review_node_id(work_item_id)
     if kind in JOIN_NODE_KINDS:
         return join_node_id(work_item_id)
     if kind == "GROUP_REVIEW_LOOP":

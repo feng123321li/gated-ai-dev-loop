@@ -1,21 +1,23 @@
 # Agent 与模型建议
 
-用于在不改变 Graph 执行的前提下，发现当前主机可用的终端 Agent，并为每个 TASK、GROUP Review 和 Delivery Review 展示 Agent + 当前模型建议。
+用于在不改变 Graph 执行的前提下，发现当前主机可用的终端 Agent，并为每个 TASK、TASK Review、递归 GROUP Review 和 Delivery Review 展示 Agent + 当前模型建议。
 
 ## 调用
 
 1. 调用无参数 `available_agents`，取得当前主机快照。
-2. hierarchy 已 `PREPARED` 或 Graph 已冻结时，调用 `recommend_executors`，传入对应 `root_id`。
+2. hierarchy 已 `PREPARED` 或 Graph 已冻结时，调用 `recommend_executors`，传入对应 `root_id`。若当前刷新用于提供方限额转派，把已限额执行者 ID 放入 `temporarily_unavailable_agent_ids`。
 3. 按 `nodeId` 展示 `recommended`、`alternatives`、`confidence`、`reasons` 和 `independence`。
 
 每次调用都重新读取当前本机配置。Claude Code 经 CC-Switch 切换 GLM、DeepSeek 或其他模型后，下一次发现应展示新模型；不把旧模型清单写入 Frozen Graph。
 
+`temporarily_unavailable_agent_ids` 只影响当前一次排序，不持久化。开发中的执行 Agent 命中 Token 限额且总调度仍可运行时，总调度器用它排除原执行者；存在独立候选则通过宿主原生 Agent 自动接手同一 Loop attempt，没有候选则等待 frontier 的 `nextWakeAt`，到时重新发现和推荐。若限额使调度宿主自身也无法调用模型，frontier 返回 `WAIT_FOR_HOST_CAPACITY`；此时不能运行本推荐工具，必须由模型外宿主定时器唤醒后再发现和推荐。不要因为终端命令仍存在，就把已知处于限额窗口的 Agent 当作可立即执行。
+
 ## 强制边界
 
 - 返回值固定为建议性绑定，`binding=ADVISORY`、`dispatchAllowed=false`。
-- 不创建接收 Agent、不调用外部开发 CLI、不切换当前会话模型、不 claim Loop，也不改变 `dispatch_loop.owner`。
-- 建议不持久化到 schema v3、hierarchy、Graph、SQLite、事件链或人类投影；配置改变后重新发现。
-- 推荐器不解析 `loop.payload` 或 `loop.result`。TASK 只按开发角色匹配；Review 额外优先选择不同于上游开发建议的 Agent。
+- 推荐工具本身不创建接收 Agent、不调用外部开发 CLI、不切换当前会话模型、不 claim Loop，也不改变 `dispatch_loop.owner`。自动执行模式的总调度器可在工具返回后通过宿主原生 Agent 机制执行派遣。
+- 建议和临时不可用列表都不持久化到 schema v3、hierarchy、Graph、SQLite、事件链或人类投影；配置或容量改变后重新发现。
+- 推荐器不解析 `loop.payload` 或 `loop.result`。TASK Loop 只按开发角色匹配；TASK/GROUP/Delivery Review 额外优先选择不同于上游开发建议的 Agent。
 - 只有一个合格 Agent 时仍可展示它，但 Review 的 `independence.satisfied=false` 且置信度降低；独立上下文要求继续由实际 Loop 执行机制保证。
 - `model.id=null` 表示终端可用但无法安全确定当前模型，只能展示为 current/default，不能猜测模型。
 

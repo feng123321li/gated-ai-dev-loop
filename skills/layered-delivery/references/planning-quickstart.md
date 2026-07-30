@@ -52,7 +52,11 @@
         }
       }
     },
-    "reviewLoop": null,
+    "reviewLoop": {
+      "ref": "task/independent-review-loop@1",
+      "payload": {"goal": "独立审查订单 TASK 结果"},
+      "resourceClaims": []
+    },
     "children": []
   }
 }
@@ -69,14 +73,14 @@ TASK：
 - `definition.kind` 为 `TASK`，根的 `parentId` 为 `null`，子 TASK 的 `parentId` 为直接父 GROUP ID。
 - `definition.execution.dependsOn` 只引用直接同级 GROUP/TASK。
 - `definition.execution.loop` 描述唯一执行 Loop。
-- `reviewLoop` 必须为 `null`，`children` 必须为空。
+- `reviewLoop` 必填，描述该 TASK 实现完成后的独立 `TASK_REVIEW_LOOP`；`children` 必须为空。
 
 GROUP：
 
 - `definition.kind` 为 `GROUP`，并在 `definition.children` 中列出直接子节点的 `id`、`kind`、`title` 摘要。
 - `definition.decomposition.dependsOn` 只引用直接同级 GROUP/TASK。
 - 节点 `children` 递归包含与摘要一一对应的完整 GROUP/TASK 节点，且至少一个。
-- 节点 `reviewLoop` 必填。直接子节点终态全部成功后，调度器完成 `GROUP_JOIN`，再派发该 `GROUP_REVIEW_LOOP`；Review 成功才是 GROUP 的终态。
+- 节点 `reviewLoop` 必填。直接子节点终态全部成功后，调度器到达 `GROUP_JOIN`（人类文档称“GROUP 完成点”），再派发该层 `GROUP_REVIEW_LOOP`；Review 成功才是 GROUP 的终态。
 - 只有存在真实的同级协调、汇合或独立分层审查边界时才创建；单个可独立结果直接使用 TASK。
 
 递归示例：
@@ -157,7 +161,11 @@ GROUP：
                 }
               }
             },
-            "reviewLoop": null,
+            "reviewLoop": {
+              "ref": "task/independent-review-loop@1",
+              "payload": {"goal": "独立审查接口 TASK 结果"},
+              "resourceClaims": []
+            },
             "children": []
           },
           {
@@ -177,7 +185,11 @@ GROUP：
                 }
               }
             },
-            "reviewLoop": null,
+            "reviewLoop": {
+              "ref": "task/independent-review-loop@1",
+              "payload": {"goal": "独立审查核心逻辑 TASK 结果"},
+              "resourceClaims": []
+            },
             "children": []
           }
         ]
@@ -199,7 +211,11 @@ GROUP：
             }
           }
         },
-        "reviewLoop": null,
+        "reviewLoop": {
+          "ref": "task/independent-review-loop@1",
+          "payload": {"goal": "独立审查文档 TASK 结果"},
+          "resourceClaims": []
+        },
         "children": []
       }
     ]
@@ -213,7 +229,7 @@ GROUP：
 
 `dependsOn` 是直接同级之间的启动屏障，允许 TASK→TASK、TASK→GROUP、GROUP→TASK 和 GROUP→GROUP：
 
-- 来源 TASK 在 TASK Loop 成功后满足屏障。
+- 来源 TASK 在自己的 TASK Review 成功后满足屏障。
 - 来源 GROUP 在自己的 GROUP Review 成功后满足屏障。
 - 目标 TASK 的 TASK Loop 等待屏障。
 - 目标 GROUP 的子树入口 TASK Loops 等待屏障。
@@ -222,7 +238,7 @@ GROUP：
 
 ## Loop 描述
 
-TASK、GROUP Review 和 Delivery Review 使用相同 Loop 描述协议：
+TASK、TASK Review、GROUP Review 和 Delivery Review 使用相同 Loop 描述协议：
 
 - `loop.ref`：执行适配器或 Loop Skill 的稳定引用。
 - `loop.payload`：原样交给 Loop 的不透明 JSON。
@@ -264,8 +280,8 @@ baseline 串联；完全没有声明的 TASK 不生成该文件、路径和导�
 需求阶段若用户给出 Skill，只在 `root.skillHints` 登记一次：
 
 - 提示是共享、建议性的运行时偏好，不是 `requiredSkills`。
-- 不在需求阶段把提示分配到 TASK、GROUP Review、Delivery Review、开发阶段或 Gate 阶段，也不因提示新增 Graph 节点。
-- 每个 TASK/GROUP Review/Delivery Review Loop 启动后读取全部提示，结合真实任务和宿主可用 Skill 独立选择；可以跳过不适用提示，也可以使用其他 Skill。
+- 不在需求阶段把提示分配到 TASK、TASK Review、GROUP Review、Delivery Review、开发阶段或 Gate 阶段，也不因提示新增额外 Graph 节点。
+- 每个 TASK/TASK Review/GROUP Review/Delivery Review Loop 启动后读取全部提示，结合真实任务和宿主可用 Skill 独立选择；可以跳过不适用提示，也可以使用其他 Skill。
 - 调度器不查询 Skill catalog、不校验激活证据，也不因某条提示未使用而判定失败。
 
 无合适提示时使用空数组，不要猜测 Skill。业务硬条件由对应 Loop 的 payload/验收协议表达，不要伪装成 Skill Hint。
@@ -276,8 +292,8 @@ baseline 串联；完全没有声明的 TASK 不生成该文件、路径和导�
 
 1. 调用 `hierarchy_contract(root_kind=...)`。
 2. 按返回的 schema 和 example 创建完整 hierarchy。
-3. 调用 `prepare_hierarchy`，依据 MCP 响应和刚提交的 hierarchy 向用户概述双指纹、状态和完整 GROUP/TASK 清单；同时提供 Delivery 的 `humanArtifacts.workspaceOverview`、`overview`、`baseline`、`progress`、`acceptance`，以及 `humanArtifacts.workItems[nodeId]` 中每个 GROUP/TASK 的 `baseline`、`progress`、`acceptance` 路径；这些字段分别对应固定的 `overview.md`、`baseline.md`、`progress.md` 和 `acceptance.md`。TASK 的 `taskBaselines` 继续作为其 baseline 便捷映射。只有节点映射实际包含 `interfaces` 时才提供该 TASK 的 `interfaces.md` 路径。Delivery `overview.md` 只负责状态与导航；Delivery baseline 串联全部节点 baseline，GROUP baseline 串联直接子节点，TASK baseline 保存冻结 Loop 输入；progress 与 acceptance 按相同节点关系投影。人类 Markdown 使用固定中文模板和递归字段列表，不展示 JSON 代码块或机器状态枚举。不要读取投影来反推机器状态，也不要自行重演渲染器。
-4. 调用 `available_agents`，再以本次 `prepare_hierarchy` 返回的 `rootId` 调用 `recommend_executors`。在完整清单后展示每个 TASK、GROUP Review 和 Delivery Review 的建议 Agent、当前模型、置信度、备选及 `reasons`；若 Review 的 `independence.satisfied` 为 false，明确说明当前主机无法满足异构 Agent 审查。该结果不会启动、切换或派遣任何 Agent/模型，也不修改 fingerprint、hierarchy 或 Graph。
+3. 调用 `prepare_hierarchy`，依据 MCP 响应和刚提交的 hierarchy 向用户概述双指纹、状态和完整 GROUP/TASK 清单；同时提供 Delivery 的 `humanArtifacts.workspaceOverview`、`overview`、`baseline`、`progress`、`acceptance`，以及 `humanArtifacts.workItems[nodeId]` 中每个 GROUP/TASK 的 `baseline`、`progress`、`acceptance` 路径；这些字段分别对应固定的 `overview.md`、`baseline.md`、`progress.md` 和 `acceptance.md`。TASK 的 `taskBaselines` 继续作为其 baseline 便捷映射。只有节点映射实际包含 `interfaces` 时才提供该 TASK 的 `interfaces.md` 路径。Delivery `overview.md` 只负责状态与导航；Delivery baseline 串联全部节点 baseline，GROUP baseline 串联直接子节点，TASK baseline 保存冻结 Loop 输入。验收报告遵守 `projectionGuidance.acceptanceReports`：每份报告只完整展开当前层，GROUP 以摘要和链接串联直接子节点，Delivery 以摘要和链接串联根工作项，不向上复制下层 payload、evidence 或 reviewFindings。人类 Markdown 使用固定中文模板和递归字段列表，不展示 JSON 代码块或机器状态枚举。不要读取投影来反推机器状态，也不要自行重演渲染器。
+4. 调用 `available_agents`，再以本次 `prepare_hierarchy` 返回的 `rootId` 调用 `recommend_executors`。在完整清单后展示每个 TASK、TASK Review、GROUP Review 和 Delivery Review 的建议 Agent、当前模型、置信度、备选及 `reasons`；若 Review 的 `independence.satisfied` 为 false，明确说明当前主机无法满足异构 Agent 审查。该结果不会启动、切换或派遣任何 Agent/模型，也不修改 fingerprint、hierarchy 或 Graph。
 5. 在建议后原样提供以下交互，不添加第三个选项，也不要用“其他内容”“其他反馈”等标签描述自由输入：
 
    > 请选择下一步：

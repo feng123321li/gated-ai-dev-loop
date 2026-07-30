@@ -37,7 +37,7 @@ src/hdg/
 | `node_runs` | 每个节点的 attempt、claim、lease 和 outcome |
 | `graph_events` | 带前序哈希的不可变调度事件 |
 
-Loop payload/outcome 以不透明 JSON 保存。共享 `root.skillHints` 作为 hierarchy 输入原样持久化，并由 `loop_context` 在运行时交给各 TASK、GROUP Review 和 Delivery Review Loop；数据库没有 Task-Skill 分配、文件 scope、开发计划、Gate evidence 或 Skill activation 表。
+Loop payload/outcome 以不透明 JSON 保存。共享 `root.skillHints` 作为 hierarchy 输入原样持久化，并由 `loop_context` 在运行时交给各 TASK、TASK Review、递归 GROUP Review 和 Delivery Review Loop；数据库没有 Task-Skill 分配、文件 scope、开发计划、Gate evidence 或 Skill activation 表。
 
 ## Hierarchy 与 Graph
 
@@ -50,7 +50,7 @@ hierarchy
    ├─ schemaVersion
    ├─ skillHints
    ├─ definition       # GROUP 或 TASK
-   ├─ reviewLoop       # GROUP 必填，TASK 为 null
+   ├─ reviewLoop       # TASK/GROUP 均必填
    └─ children         # GROUP 可递归包含 GROUP/TASK，TASK 为空
 ```
 
@@ -58,8 +58,8 @@ hierarchy
 
 Graph 编译遵循以下终态规则：
 
-- TASK 终态是 `TASK_LOOP`；
-- GROUP 等待全部直接子节点终态，依次通过 `GROUP_JOIN` 和 `GROUP_REVIEW_LOOP`；
+- TASK 依次通过 `TASK_LOOP` 和 `TASK_REVIEW_LOOP`，Review 成功才是终态；
+- GROUP 等待全部直接子节点终态，依次通过 `GROUP_JOIN`（GROUP 完成点）和 `GROUP_REVIEW_LOOP`；
 - 父 GROUP 只消费子 GROUP Review 后的终态；
 - 根终态进入 `DELIVERY_REVIEW_LOOP`，最后进入一次 `USER_CONFIRMATION`。
 
@@ -97,7 +97,7 @@ Graph 编译遵循以下终态规则：
 
 `scheduler.db` 是唯一机器权威；各 `<delivery-id>` 目录只保存可从数据库状态重建的中文人类投影，不再复制 hierarchy、Graph 或运行状态 JSON。目录命名使用不可变的 `delivery.id` 和节点 ID，不使用可修改标题；同一工作区可以保留多个 Delivery 需求目录。`work-items/<root-id>/children/...` 镜像逻辑父子关系，但不表达 `dependsOn`、文件 scope 或调度授权；根 TASK 不增加 GROUP 目录。
 
-工作区根 `overview.md` 只列 Delivery 标识、标题、状态、更新时间和详情；Delivery `overview.md` 才展示本交付的 TASK 完成度、GROUP 数量与导航。顶层 `baseline.md` 保存基线树和节点链接，`progress.md` 聚合运行进展，`acceptance.md` 聚合验收输入与结果。每个 GROUP/TASK 在递归节点目录下拥有自己的 baseline、progress 和 acceptance；GROUP baseline 链接直接子节点，TASK baseline 展示冻结 Loop 输入。progress 状态、acceptance 摘要、子节点结果和 Review P0/P1/P2 问题使用表格。只有 TASK payload 显式声明接口时，才在该 TASK 目录生成 `interfaces.md`，展示 `CREATE` / `MODIFY` / `DELETE` 的完整 before/after 契约；`protocol` 为开放字符串，HTTP、Dubbo、gRPC、GraphQL、消息等只是示例，通用协议可用 `identifier` 定位。无声明时不生成。代码可辅助提取和校验，但不是动态投影源。所有文件绑定双指纹并可随权威状态重建；`workspace_status` 会为早期 schema v3 Delivery 补建当前适用的投影树，但不迁移数据库或 Graph。所有固定文案和状态保持中文，标明 UTC+8 的人类时间使用 `YYYY-MM-DD HH:mm:ss`；机器权威仍使用 UTC。
+工作区根 `overview.md` 只列 Delivery 标识、标题、状态、更新时间和详情；Delivery `overview.md` 才展示本交付的 TASK 完成度、GROUP 数量与导航。顶层 `baseline.md` 保存基线树和节点链接，`progress.md` 聚合运行进展，`acceptance.md` 只完整展示 Delivery 本层 Review 与用户确认，并以摘要和链接串联根工作项报告。每个 GROUP/TASK 在递归节点目录下拥有自己的 baseline、progress 和 acceptance；GROUP baseline 链接直接子节点，TASK baseline 展示冻结 Loop 输入。TASK 验收只展开本 TASK 与 TASK Review；GROUP 验收只展开本层完成点与 Review，对直接子节点只显示状态、简要结果和验收链接。任何下层输入、证据或 Review findings 都不向上重复复制。progress 状态、acceptance 摘要、子节点结果和 Review P0/P1/P2 问题使用表格。只有 TASK payload 显式声明接口时，才在该 TASK 目录生成 `interfaces.md`，展示 `CREATE` / `MODIFY` / `DELETE` 的完整 before/after 契约；`protocol` 为开放字符串，HTTP、Dubbo、gRPC、GraphQL、消息等只是示例，通用协议可用 `identifier` 定位。无声明时不生成。代码可辅助提取和校验，但不是动态投影源。所有文件绑定双指纹并可随权威状态重建；`workspace_status` 会为早期 schema v3 Delivery 补建当前适用的投影树，但不迁移数据库或 Graph。所有固定文案和状态保持中文，标明 UTC+8 的人类时间使用 `YYYY-MM-DD HH:mm:ss`；机器权威仍使用 UTC。
 
 ## MCP
 
@@ -117,6 +117,8 @@ Plugin MCP 工具不接收业务 `root` 参数。Adapter 从宿主配置或请�
 `controller.py` 是唯一共享应用入口；它只接受 `ControllerContext` 和 operation 参数，不导入 MCP、Codex 或 Claude 代码。`mcp_tools.py` 把 19 个工具 schema 映射到 Controller，`mcp_adapter.py` 负责协议结果、错误、版本协商和宿主策略，`mcp_server.py` 只处理 newline-delimited stdio 与进程生命周期。
 
 `agent_discovery.py` 只读取 PATH、终端 `--version`、非敏感模型字段和用户本地 Profile，不启动开发命令或返回绝对路径、凭据与服务地址。`agent_recommendation.py` 只按 `TASK_LOOP`/Review 角色、显式 Profile 优先级、可用性和上游开发 Agent 多样性排序；不读取 Loop payload，不持久化结果，也不调用 `dispatch_loop`。因此 CC-Switch 或本机配置变化无需重建 Frozen Graph。
+
+提供方限额按容量范围分流。单个执行 Agent 受限时，`pause_loop(..., capacity_scope=EXECUTOR)` 持久化真实 `resetAt`，frontier 允许临时排除该 Agent 后动态推荐其他执行者；调度宿主自身受限时，`capacity_scope=HOST` 只产生 `WAIT_FOR_HOST_CAPACITY` 和 `nextWakeAt`。后者必须由 MCP/模型之外的宿主适配器捕获限额、记录暂停并注册定时器，因为 Controller 只在被调用时推进 Graph，不能在模型已不可用时自行启动进程。
 
 本地 Tools-over-stdio profile 的协议优先级为：
 

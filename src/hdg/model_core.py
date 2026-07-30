@@ -489,6 +489,14 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
             parent=parent,
             field=f"{field}.definition",
         )
+        review_loop = (
+            None
+            if value["reviewLoop"] is None
+            else validate_loop_descriptor(
+                value["reviewLoop"],
+                field=f"{field}.reviewLoop",
+            )
+        )
         item_id = definition["id"]
         if item_id in seen:
             fail(
@@ -502,23 +510,25 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
                     "WORK_ITEM_TASK_NOT_LEAF",
                     "Task hierarchy nodes cannot contain children",
                 )
-            if value["reviewLoop"] is not None:
+            if review_loop is None:
                 fail(
-                    "WORK_ITEM_TASK_REVIEW_INVALID",
-                    "TASK hierarchy nodes cannot carry outer Review Loops",
+                    "WORK_ITEM_TASK_REVIEW_REQUIRED",
+                    "Every TASK hierarchy node requires a Review Loop",
                     field=f"{field}.reviewLoop",
                 )
             return {
                 **root_metadata,
                 "definition": definition,
-                "reviewLoop": None,
+                "reviewLoop": review_loop,
                 "children": [],
             }
 
-        review_loop = validate_loop_descriptor(
-            value["reviewLoop"],
-            field=f"{field}.reviewLoop",
-        )
+        if review_loop is None:
+            fail(
+                "WORK_ITEM_GROUP_REVIEW_REQUIRED",
+                "Every GROUP hierarchy node requires a Review Loop",
+                field=f"{field}.reviewLoop",
+            )
 
         expected_children = {
             (child["id"], child["kind"], child["title"])

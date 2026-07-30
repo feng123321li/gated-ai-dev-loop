@@ -103,7 +103,8 @@ def node(
     if definition["kind"] == "TASK":
         return {
             "definition": definition,
-            "reviewLoop": None,
+            "reviewLoop": review_loop
+            or loop_descriptor("task/independent-review-loop@1"),
             "children": children or [],
         }
     return {
@@ -315,6 +316,7 @@ class SchedulerGraphTests(unittest.TestCase):
             {item["id"] for item in graph["nodes"]},
             {
                 loop_node_id("t-service"),
+                "review:task:t-service",
                 review_node_id("d-service"),
                 confirmation_node_id("d-service"),
             },
@@ -322,17 +324,97 @@ class SchedulerGraphTests(unittest.TestCase):
         self.assertEqual(
             graph_summary(graph),
             {
-                "nodes": 3,
-                "edges": 2,
+                "nodes": 4,
+                "edges": 3,
                 "taskLoops": 1,
                 "joinNodes": 0,
-                "reviewLoops": 1,
+                "reviewLoops": 2,
                 "confirmationNodes": 1,
                 "runtimeTransitions": len(graph["runtime"]["transitions"]),
             },
         )
         self.assertEqual(validate_delivery_graph(graph), graph)
         self.assertRegex(graph_fingerprint(graph), r"^[0-9a-f]{64}$")
+
+    def test_root_task_may_add_review_without_a_group(self) -> None:
+        source = task_hierarchy()
+        source["root"]["reviewLoop"] = loop_descriptor(
+            "task/independent-review-loop@1"
+        )
+
+        graph = self.compile(source)
+        task_loop = loop_node_id("t-service")
+        task_review = "review:task:t-service"
+        delivery_review = review_node_id("d-service")
+        edges = {
+            (item["source"], item["target"], item["kind"])
+            for item in graph["edges"]
+        }
+
+        self.assertEqual(
+            {item["id"] for item in graph["nodes"]},
+            {
+                task_loop,
+                task_review,
+                delivery_review,
+                confirmation_node_id("d-service"),
+            },
+        )
+        self.assertLessEqual(
+            {
+                (task_loop, task_review, "REQUIRES_SUCCESS"),
+                (task_review, delivery_review, "REQUIRES_SUCCESS"),
+            },
+            edges,
+        )
+
+    def test_group_review_is_required(self) -> None:
+        source = group_hierarchy()
+        source["root"]["reviewLoop"] = None
+
+        with self.assertRaises(GatedLoopError) as caught:
+            self.compile(source)
+        self.assertEqual(
+            caught.exception.code,
+            "WORK_ITEM_GROUP_REVIEW_REQUIRED",
+        )
+
+    def test_task_dependency_waits_for_configured_task_review(self) -> None:
+        source = group_hierarchy()
+        source["root"]["children"][0]["reviewLoop"] = loop_descriptor(
+            "task/independent-review-loop@1"
+        )
+
+        graph = self.compile(source)
+        edges = {
+            (item["source"], item["target"], item["kind"])
+            for item in graph["edges"]
+        }
+
+        self.assertIn(
+            (
+                "review:task:t-api",
+                loop_node_id("t-core"),
+                "REQUIRES_SUCCESS",
+            ),
+            edges,
+        )
+        self.assertNotIn(
+            (
+                loop_node_id("t-api"),
+                loop_node_id("t-core"),
+                "REQUIRES_SUCCESS",
+            ),
+            edges,
+        )
+        self.assertIn(
+            (
+                "review:task:t-api",
+                join_node_id("g-service"),
+                "ALL_OF",
+            ),
+            edges,
+        )
 
     def test_group_compiles_to_join_then_recursive_review(self) -> None:
         graph = self.compile(group_hierarchy())
@@ -343,7 +425,7 @@ class SchedulerGraphTests(unittest.TestCase):
 
         self.assertIn(
             (
-                loop_node_id("t-api"),
+                "review:task:t-api",
                 loop_node_id("t-core"),
                 "REQUIRES_SUCCESS",
             ),
@@ -352,7 +434,7 @@ class SchedulerGraphTests(unittest.TestCase):
         for task_id in ("t-api", "t-core"):
             self.assertIn(
                 (
-                    loop_node_id(task_id),
+                    f"review:task:{task_id}",
                     join_node_id("g-service"),
                     "ALL_OF",
                 ),
@@ -384,7 +466,7 @@ class SchedulerGraphTests(unittest.TestCase):
 
         expected = {
             (
-                loop_node_id("t-model"),
+                "review:task:t-model",
                 loop_node_id("t-repository"),
                 "REQUIRES_SUCCESS",
             ),
@@ -394,7 +476,7 @@ class SchedulerGraphTests(unittest.TestCase):
                 "REQUIRES_SUCCESS",
             ),
             (
-                loop_node_id("t-bootstrap"),
+                "review:task:t-bootstrap",
                 loop_node_id("t-model"),
                 "REQUIRES_SUCCESS",
             ),
@@ -411,7 +493,77 @@ class SchedulerGraphTests(unittest.TestCase):
         }
         self.assertLessEqual(expected, edges)
         self.assertEqual(graph_summary(graph)["joinNodes"], 4)
-        self.assertEqual(graph_summary(graph)["reviewLoops"], 5)
+        self.assertEqual(graph_summary(graph)["reviewLoops"], 11)
+
+    def test_multi_group_multi_task_reviews_each_task_and_group(self) -> None:
+        source = recursive_hierarchy()
+        root = source["root"]
+        backend = root["children"][1]
+        domain = backend["children"][0]
+        quality = root["children"][2]
+
+        graph = self.compile(source)
+        node_ids = {item["id"] for item in graph["nodes"]}
+        edges = {
+            (item["source"], item["target"], item["kind"])
+            for item in graph["edges"]
+        }
+
+        self.assertLessEqual(
+            {
+                "review:task:t-model",
+                "review:task:t-repository",
+                "review:task:t-api",
+                "review:task:t-bootstrap",
+                "review:task:t-e2e",
+                "review:task:t-docs",
+                group_review_node_id("g-root"),
+                group_review_node_id("g-backend"),
+                group_review_node_id("g-domain"),
+                group_review_node_id("g-quality"),
+            },
+            node_ids,
+        )
+        self.assertLessEqual(
+            {
+                (
+                    loop_node_id("t-model"),
+                    "review:task:t-model",
+                    "REQUIRES_SUCCESS",
+                ),
+                (
+                    "review:task:t-model",
+                    loop_node_id("t-repository"),
+                    "REQUIRES_SUCCESS",
+                ),
+                (
+                    group_review_node_id("g-domain"),
+                    loop_node_id("t-api"),
+                    "REQUIRES_SUCCESS",
+                ),
+                (
+                    group_review_node_id("g-backend"),
+                    loop_node_id("t-e2e"),
+                    "REQUIRES_SUCCESS",
+                ),
+                (
+                    "review:task:t-e2e",
+                    join_node_id("g-quality"),
+                    "ALL_OF",
+                ),
+                (
+                    group_review_node_id("g-quality"),
+                    loop_node_id("t-docs"),
+                    "REQUIRES_SUCCESS",
+                ),
+                (
+                    group_review_node_id("g-root"),
+                    review_node_id("d-recursive"),
+                    "REQUIRES_SUCCESS",
+                ),
+            },
+            edges,
+        )
 
     def test_skill_hints_are_shared_late_bound_input_not_graph_nodes(
         self,
@@ -541,6 +693,14 @@ class SchedulerGraphTests(unittest.TestCase):
                 transitions["NODE_RESUMED"]["toStates"],
             ),
             (["PAUSED"], ["PENDING"]),
+        )
+        self.assertEqual(
+            (
+                transitions["NODE_AUTO_RESUMED"]["fromStates"],
+                transitions["NODE_AUTO_RESUMED"]["toStates"],
+                transitions["NODE_AUTO_RESUMED"]["automatic"],
+            ),
+            (["PAUSED"], ["PENDING"], True),
         )
 
 

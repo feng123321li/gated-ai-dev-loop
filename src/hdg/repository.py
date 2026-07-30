@@ -626,8 +626,20 @@ class SchedulerRepository:
             """,
             (run_id, run_id),
         ).fetchall()
-        return [
-            {
+        nodes: list[dict[str, Any]] = []
+        for row in rows:
+            stored_outcome = (
+                json.loads(row["outcome_json"])
+                if row["outcome_json"] is not None
+                else None
+            )
+            pause_metadata = (
+                stored_outcome.get("schedulerPause", {})
+                if row["status"] == "PAUSED"
+                and isinstance(stored_outcome, dict)
+                else {}
+            )
+            node = {
                 "nodeId": row["node_id"],
                 "attempt": row["attempt"],
                 "status": row["status"],
@@ -635,17 +647,33 @@ class SchedulerRepository:
                 "operationId": row["operation_id"],
                 "claimedAt": row["claimed_at"],
                 "lastHeartbeatAt": row["last_heartbeat_at"],
-                "leaseExpiresAt": row["lease_expires_at"],
-                "finishedAt": row["finished_at"],
-                "outcome": (
-                    json.loads(row["outcome_json"])
-                    if row["outcome_json"] is not None
+                "leaseExpiresAt": (
+                    row["lease_expires_at"]
+                    if row["status"] == "CLAIMED"
                     else None
+                ),
+                "resumeAt": (
+                    row["finished_at"]
+                    if row["status"] == "PAUSED"
+                    else None
+                ),
+                "finishedAt": (
+                    None
+                    if row["status"] == "PAUSED"
+                    else row["finished_at"]
+                ),
+                "outcome": (
+                    None
+                    if row["status"] == "PAUSED"
+                    else stored_outcome
                 ),
                 "failureClass": row["failure_class"],
             }
-            for row in rows
-        ]
+            capacity_scope = pause_metadata.get("capacityScope")
+            if capacity_scope in {"EXECUTOR", "HOST"}:
+                node["capacityScope"] = capacity_scope
+            nodes.append(node)
+        return nodes
 
     def _append_event(
         self,

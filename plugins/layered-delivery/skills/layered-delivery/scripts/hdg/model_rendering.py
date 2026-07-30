@@ -12,6 +12,7 @@ from .graph_model import (
     join_node_id,
     loop_node_id,
     review_node_id,
+    task_review_node_id,
 )
 from .model_core import iter_hierarchy_nodes
 
@@ -147,7 +148,7 @@ PAYLOAD_FIELD_ORDER = MappingProxyType(
     }
 )
 UTC_PLUS_8 = timezone(timedelta(hours=8))
-PROJECTION_TEMPLATE_VERSION = 5
+PROJECTION_TEMPLATE_VERSION = 7
 WORK_ITEM_DIRECTORY = "work-items"
 WORKSPACE_OVERVIEW_PROJECTION_TEMPLATE = Template(
     """# 全部交付调度与进度总览
@@ -178,7 +179,7 @@ ${delivery_status}
 | 投影 | 用途 |
 |---|---|
 | [需求基线](baseline.md) | 需求、层级、依赖、Loop 输入与 TASK baseline |
-| [执行进展](progress.md) | TASK、GROUP Review 与 Delivery Review 的运行状态 |
+| [执行进展](progress.md) | TASK、TASK Review、递归 GROUP Review 与 Delivery Review 的运行状态 |
 | [验收记录](acceptance.md) | 已知验收输入、执行结果、审查结果与用户确认 |
 
 实现规范、测试、门禁与 Skill 激活由各 Loop 内部负责。机器权威仍为
@@ -243,12 +244,9 @@ ACCEPTANCE_PROJECTION_TEMPLATE = Template(
 
 ${acceptance_status}
 
-## TASK 验收
+## 根工作项验收
 
-${task_acceptance}
-## GROUP 审查验收
-
-${group_acceptance}
+${root_acceptance}
 ## Delivery 审查验收
 
 ${delivery_acceptance}
@@ -315,6 +313,8 @@ ${payload}
 
 ${interface_section}
 
+${review_section}
+
 ## 共享 Skill 提示
 
 ${skill_hints}
@@ -356,14 +356,7 @@ ${parent_baseline}
 |---|---|---|---|---|---|
 ${child_rows}
 
-## GROUP Review Loop
-
-- Loop 引用：${loop_ref}
-- 资源锁：${resource_claims}
-
-## Review 输入
-
-${payload}
+${review_section}
 
 ## 共享 Skill 提示
 
@@ -727,7 +720,7 @@ def render_workspace_overview(
 
 
 def render_work_item_baseline(
-    definition: dict[str, Any],
+    node: dict[str, Any],
     *,
     delivery: dict[str, Any] | None = None,
     delivery_baseline: str = "../../baseline.md",
@@ -743,9 +736,11 @@ def render_work_item_baseline(
     through a fixed human-readable Markdown renderer.
     """
 
+    definition = node["definition"]
     if definition["kind"] != "TASK":
         raise ValueError("TASK baseline requires a TASK definition")
     loop = definition["execution"]["loop"]
+    review_loop = node["reviewLoop"]
     hints = skill_hints or []
     rendered_hints = (
         "\n".join(
@@ -811,6 +806,11 @@ def render_work_item_baseline(
             "[查看本 TASK 的接口契约](interfaces.md)"
             if interface_declarations
             else ""
+        ),
+        review_section=_render_loop_baseline(
+            "TASK Review Loop",
+            review_loop,
+            heading_level=2,
         ),
         skill_hints=rendered_hints,
     )
@@ -891,17 +891,10 @@ def render_group_baseline(
             or "无"
         ),
         child_rows="\n".join(child_rows),
-        loop_ref=_markdown_text(loop["ref"]),
-        resource_claims=(
-            "、".join(
-                _markdown_text(item)
-                for item in loop["resourceClaims"]
-            )
-            or "无"
-        ),
-        payload=_render_payload_markdown(
-            loop["payload"],
-            heading_level=3,
+        review_section=_render_loop_baseline(
+            "GROUP Review Loop",
+            loop,
+            heading_level=2,
         ),
         skill_hints=rendered_hints,
     )
@@ -937,7 +930,7 @@ def render_scheduling_plan(
         for node in (run or {}).get("nodes", [])
     }
     completed_tasks = sum(
-        states.get(loop_node_id(task["id"]))
+        states.get(task_review_node_id(task["id"]))
         in {"SUCCEEDED", "COMPLETED"}
         for task in tasks
     )
@@ -987,6 +980,13 @@ def _projection_states(
     }
 
 
+def _work_item_terminal_node_id(node: dict[str, Any]) -> str:
+    definition = node["definition"]
+    if definition["kind"] == "TASK":
+        return task_review_node_id(definition["id"])
+    return group_review_node_id(definition["id"])
+
+
 def _projection_state_values(
     states: dict[str, dict[str, Any]],
     node_id: str,
@@ -1009,6 +1009,14 @@ def _projection_state_values(
             summary = str(outcome["summary"])
         elif outcome.get("confirmedBy"):
             summary = f"确认人：{outcome['confirmedBy']}"
+    if (
+        summary == "无"
+        and state["status"] == "PAUSED"
+        and isinstance(state.get("resumeAt"), str)
+    ):
+        summary = (
+            f"等待至 {_utc_plus_8(state['resumeAt'])} 自动重新派遣"
+        )
     if summary == "无" and state["failureClass"]:
         summary = (
             "失败分类："
@@ -1307,30 +1315,38 @@ def render_delivery_progress(
             ")"
         )
         if definition["kind"] == "TASK":
-            task_rows.append(
-                _progress_state_row(
-                    states,
-                    loop_node_id(definition["id"]),
-                    prefix=[path, "TASK"],
-                    suffix=[progress_link],
-                )
+            task_rows.extend(
+                [
+                    _progress_state_row(
+                        states,
+                        loop_node_id(definition["id"]),
+                        prefix=[path, "TASK"],
+                        suffix=[progress_link],
+                    ),
+                    _progress_state_row(
+                        states,
+                        task_review_node_id(definition["id"]),
+                        prefix=[path, "TASK Review"],
+                        suffix=[progress_link],
+                    ),
+                ]
             )
             continue
-        group_rows.extend(
-            [
-                _progress_state_row(
-                    states,
-                    join_node_id(definition["id"]),
-                    prefix=[path, "GROUP 汇合"],
-                    suffix=[progress_link],
-                ),
-                _progress_state_row(
-                    states,
-                    group_review_node_id(definition["id"]),
-                    prefix=[path, "GROUP Review"],
-                    suffix=[progress_link],
-                ),
-            ]
+        group_rows.append(
+            _progress_state_row(
+                states,
+                join_node_id(definition["id"]),
+                prefix=[path, "GROUP 完成点"],
+                suffix=[progress_link],
+            )
+        )
+        group_rows.append(
+            _progress_state_row(
+                states,
+                group_review_node_id(definition["id"]),
+                prefix=[path, "GROUP Review"],
+                suffix=[progress_link],
+            )
         )
     table_header = (
         "| 层级路径 | 阶段 | 当前进度 | 尝试次数 | 执行者 | "
@@ -1498,64 +1514,40 @@ def render_delivery_acceptance(
     run: dict[str, Any] | None = None,
 ) -> str:
     states = _projection_states(run)
-    task_lines: list[str] = []
-    group_lines: list[str] = []
-    for node in iter_hierarchy_nodes(hierarchy):
-        definition = node["definition"]
-        if definition["kind"] == "TASK":
-            acceptance = _acceptance_payload(
-                definition["execution"]["loop"]["payload"]
-            )
-            task_lines.extend(
+    root_node = hierarchy["root"]
+    root_definition = root_node["definition"]
+    root_values = _projection_state_values(
+        states,
+        _work_item_terminal_node_id(root_node),
+    )
+    root_acceptance = "\n".join(
+        [
+            (
+                "| 节点类型 | 节点标识 | 标题 | 当前进度 | "
+                "结果摘要 | 验收记录 |"
+            ),
+            "|---|---|---|---|---|---|",
+            _table_row(
                 [
-                    f"### TASK：{_markdown_text(definition['title'])}",
-                    "",
-                    f"- 任务标识：{_markdown_text(definition['id'])}",
-                    "",
-                    "#### 已知验收输入",
-                    "",
+                    KIND_TEXT[root_definition["kind"]],
+                    root_definition["id"],
+                    root_definition["title"],
+                    root_values["status"],
+                    root_values["summary"],
                     (
-                        _render_payload_markdown(
-                            acceptance,
-                            heading_level=5,
-                        )
-                        if acceptance
-                        else "- 未显式提供"
+                        "[查看]("
+                        f"{work_item_projection_relative_path(
+                            hierarchy,
+                            root_definition['id'],
+                            'acceptance.md',
+                        )}"
+                        ")"
                     ),
-                    "",
-                    "#### TASK 结果",
-                    "",
-                    *_acceptance_result_lines(
-                        states,
-                        loop_node_id(definition["id"]),
-                    ),
-                    "",
-                ]
-            )
-            continue
-        group_lines.extend(
-            [
-                f"### GROUP：{_markdown_text(definition['title'])}",
-                "",
-                f"- 分组标识：{_markdown_text(definition['id'])}",
-                "",
-                "#### 审查输入",
-                "",
-                _render_payload_markdown(
-                    node["reviewLoop"]["payload"],
-                    heading_level=5,
-                ),
-                "",
-                "#### 审查结果",
-                "",
-                *_acceptance_result_lines(
-                    states,
-                    group_review_node_id(definition["id"]),
-                    include_review_findings=True,
-                ),
-                "",
-            ]
-        )
+                ],
+                raw_indices={5},
+            ),
+        ]
+    )
     delivery = hierarchy["delivery"]
     delivery_lines = [
         "### Delivery Review",
@@ -1591,12 +1583,7 @@ def render_delivery_acceptance(
                 run=run,
             )
         ),
-        task_acceptance="\n".join(task_lines).rstrip() + "\n",
-        group_acceptance=(
-            "\n".join(group_lines).rstrip() + "\n"
-            if group_lines
-            else "- 根工作项为 TASK，无 GROUP 审查。\n"
-        ),
+        root_acceptance=root_acceptance,
         delivery_acceptance="\n".join(delivery_lines).rstrip() + "\n",
         confirmation="\n".join(confirmation_lines),
     )
@@ -1650,6 +1637,11 @@ def render_work_item_progress(
                     loop_node_id(definition["id"]),
                     prefix=["TASK"],
                 ),
+                _progress_state_row(
+                    states,
+                    task_review_node_id(definition["id"]),
+                    prefix=["TASK Review"],
+                ),
             ]
         )
     else:
@@ -1657,11 +1649,7 @@ def render_work_item_progress(
         for child in node["children"]:
             child_definition = child["definition"]
             child_id = child_definition["id"]
-            terminal_id = (
-                loop_node_id(child_id)
-                if child_definition["kind"] == "TASK"
-                else group_review_node_id(child_id)
-            )
+            terminal_id = _work_item_terminal_node_id(child)
             values = _projection_state_values(states, terminal_id)
             child_rows.append(
                 _table_row(
@@ -1694,7 +1682,7 @@ def render_work_item_progress(
                 _progress_state_row(
                     states,
                     join_node_id(definition["id"]),
-                    prefix=["GROUP 汇合"],
+                    prefix=["GROUP 完成点"],
                 ),
                 _progress_state_row(
                     states,
@@ -1753,6 +1741,21 @@ def render_work_item_acceptance(
                     states,
                     loop_node_id(definition["id"]),
                 ),
+                "",
+                "## TASK Review 输入",
+                "",
+                _render_payload_markdown(
+                    node["reviewLoop"]["payload"],
+                    heading_level=3,
+                ),
+                "",
+                "## TASK Review 结果与证据",
+                "",
+                *_acceptance_result_lines(
+                    states,
+                    task_review_node_id(definition["id"]),
+                    include_review_findings=True,
+                ),
             ]
         )
     else:
@@ -1760,11 +1763,7 @@ def render_work_item_acceptance(
         for child in node["children"]:
             child_definition = child["definition"]
             child_id = child_definition["id"]
-            terminal_id = (
-                loop_node_id(child_id)
-                if child_definition["kind"] == "TASK"
-                else group_review_node_id(child_id)
-            )
+            terminal_id = _work_item_terminal_node_id(child)
             values = _projection_state_values(states, terminal_id)
             child_rows.append(
                 _table_row(
@@ -1779,17 +1778,26 @@ def render_work_item_acceptance(
                     raw_indices={5},
                 )
             )
-        sections = "\n".join(
+        group_sections = [
+            "## 直接子节点验收",
+            "",
+            (
+                "| 节点类型 | 节点标识 | 标题 | 当前进度 | "
+                "结果摘要 | 验收记录 |"
+            ),
+            "|---|---|---|---|---|---|",
+            *child_rows,
+            "",
+            "## GROUP 完成点结果",
+            "",
+            *_acceptance_result_lines(
+                states,
+                join_node_id(definition["id"]),
+            ),
+            "",
+        ]
+        group_sections.extend(
             [
-                "## 直接子节点验收",
-                "",
-                (
-                    "| 节点类型 | 节点标识 | 标题 | 当前进度 | "
-                    "结果摘要 | 验收记录 |"
-                ),
-                "|---|---|---|---|---|---|",
-                *child_rows,
-                "",
                 "## GROUP Review 输入",
                 "",
                 _render_payload_markdown(
@@ -1806,6 +1814,7 @@ def render_work_item_acceptance(
                 ),
             ]
         )
+        sections = "\n".join(group_sections)
     return WORK_ITEM_ACCEPTANCE_PROJECTION_TEMPLATE.substitute(
         kind_text=KIND_TEXT[definition["kind"]],
         template_version=str(PROJECTION_TEMPLATE_VERSION),
@@ -2096,7 +2105,7 @@ def render_work_item_projection_documents(
         )
         documents[f"{tree_directory}/baseline.md"] = (
             render_work_item_baseline(
-                definition,
+                node,
                 delivery_baseline=delivery_baseline,
                 **baseline_arguments,
             )

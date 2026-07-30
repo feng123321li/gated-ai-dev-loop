@@ -24,6 +24,7 @@ def build_graph_frontier(
             "activeLoops": [],
             "pausedLoops": [],
             "blockedLoops": [],
+            "nextWakeAt": None,
             "actions": [],
         }
     definitions = {
@@ -104,6 +105,8 @@ def build_graph_frontier(
                 }
             )
         elif state["status"] == "PAUSED" and kind in LOOP_NODE_KINDS:
+            resume_at = state.get("resumeAt")
+            capacity_scope = state.get("capacityScope")
             record = {
                 "nodeId": state["nodeId"],
                 "kind": kind,
@@ -112,14 +115,39 @@ def build_graph_frontier(
                 "previousOwner": state["owner"],
                 "previousOperationId": state["operationId"],
             }
+            if isinstance(resume_at, str):
+                record["resumeAt"] = resume_at
+            if capacity_scope in {"EXECUTOR", "HOST"}:
+                record["capacityScope"] = capacity_scope
             paused_loops.append(record)
-            actions.append(
-                {
-                    "action": "RESUME_LOOP_IN_INDEPENDENT_CONTEXT",
-                    "nodeId": state["nodeId"],
-                    "executionPolicy": loop_execution_policy(),
-                }
-            )
+            if isinstance(resume_at, str):
+                if capacity_scope == "HOST":
+                    actions.append(
+                        {
+                            "action": "WAIT_FOR_HOST_CAPACITY",
+                            "nodeId": state["nodeId"],
+                            "resumeAt": resume_at,
+                            "executionPolicy": loop_execution_policy(),
+                        }
+                    )
+                else:
+                    actions.append(
+                        {
+                            "action": "RECOMMEND_ALTERNATE_OR_WAIT",
+                            "nodeId": state["nodeId"],
+                            "excludedOwner": state["owner"],
+                            "resumeAt": resume_at,
+                            "executionPolicy": loop_execution_policy(),
+                        }
+                    )
+            else:
+                actions.append(
+                    {
+                        "action": "RESUME_LOOP_IN_INDEPENDENT_CONTEXT",
+                        "nodeId": state["nodeId"],
+                        "executionPolicy": loop_execution_policy(),
+                    }
+                )
         elif state["status"] in {"BLOCKED", "CANCELLED"}:
             record = {
                 "nodeId": state["nodeId"],
@@ -173,6 +201,14 @@ def build_graph_frontier(
         "activeLoops": active_loops,
         "pausedLoops": paused_loops,
         "blockedLoops": blocked,
+        "nextWakeAt": min(
+            (
+                item["resumeAt"]
+                for item in paused_loops
+                if "resumeAt" in item
+            ),
+            default=None,
+        ),
         "actions": actions,
     }
 

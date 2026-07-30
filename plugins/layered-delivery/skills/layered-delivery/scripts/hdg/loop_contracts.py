@@ -31,6 +31,18 @@ _LOOP_EXECUTION_POLICY = {
         "action": "PAUSE_AND_HANDOFF",
         "loopOutcome": "NONE",
     },
+    "providerRateLimit": {
+        "trigger": "PROVIDER_RATE_LIMIT_DURING_CLAIM",
+        "requiresLiveLease": True,
+        "withResetAt": "PAUSE_UNTIL_RESET",
+        "executorScopeBeforeReset": (
+            "REFRESH_RECOMMENDATIONS_FOR_ALTERNATE_OR_WAIT"
+        ),
+        "hostScopeBeforeReset": "WAIT_FOR_HOST_TIMER",
+        "atReset": "AUTO_RESUME_AND_REDISPATCH",
+        "sameAttempt": True,
+        "loopOutcome": "NONE",
+    },
     "expiredLeaseRecovery": {
         "action": "ADVANCE_GRAPH",
         "pauseAllowed": False,

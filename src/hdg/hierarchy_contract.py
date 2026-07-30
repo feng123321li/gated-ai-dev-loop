@@ -176,7 +176,7 @@ def _task_node(*, root: bool) -> dict[str, Any]:
         "definition": _ref(
             "taskRootDefinition" if root else "taskChildDefinition"
         ),
-        "reviewLoop": {"const": None},
+        "reviewLoop": _ref("loop"),
         "children": {"type": "array", "maxItems": 0},
     }
     if root:
@@ -272,7 +272,10 @@ def _task(
                 ),
             },
         },
-        "reviewLoop": None,
+        "reviewLoop": _loop(
+            "task/independent-review-loop@1",
+            f"Independently review the completed {item_id} TASK result.",
+        ),
         "children": [],
     }
 
@@ -291,7 +294,7 @@ def _group(
             "kind": "GROUP",
             "parentId": parent_id,
             "title": f"Coordinate {item_id}",
-            "summary": "Join and review every direct child result.",
+            "summary": "Join and review direct child results.",
             "decomposition": {"dependsOn": depends_on or []},
             "children": [
                 {
@@ -392,6 +395,49 @@ def hierarchy_contract(
         "inputSchema": input_schema,
         "example": _example(root_kind),
         "projectionGuidance": {
+            "acceptanceReports": {
+                "scope": "CURRENT_LAYER",
+                "taskReport": {
+                    "fullDetails": [
+                        "TASK_LOOP",
+                        "TASK_REVIEW_LOOP",
+                    ],
+                },
+                "groupReport": {
+                    "fullDetails": [
+                        "GROUP_JOIN",
+                        "GROUP_REVIEW_LOOP",
+                    ],
+                    "childReferences": [
+                        "status",
+                        "summary",
+                        "acceptanceLink",
+                    ],
+                },
+                "deliveryReport": {
+                    "fullDetails": [
+                        "DELIVERY_REVIEW_LOOP",
+                        "USER_CONFIRMATION",
+                    ],
+                    "rootReference": [
+                        "status",
+                        "summary",
+                        "acceptanceLink",
+                    ],
+                },
+                "nonDuplicatedFromLowerLayers": [
+                    "payload",
+                    "evidence",
+                    "reviewFindings",
+                ],
+                "description": (
+                    "Each acceptance report fully renders only its current "
+                    "layer. GROUP reports summarize and link direct child "
+                    "reports; the Delivery report summarizes and links the "
+                    "root work-item report. Lower-layer payloads, evidence, "
+                    "and review findings are not copied upward."
+                ),
+            },
             "interfaces": {
                 "location": (
                     "TASK definition.execution.loop.payload.interfaces"
@@ -442,7 +488,11 @@ def hierarchy_contract(
             "GROUP may recursively contain GROUP or TASK children.",
             "TASK is the only execution leaf and cannot contain children.",
             (
-                "Every GROUP compiles to GROUP_JOIN followed by an "
+                "Every TASK compiles to TASK_LOOP followed by its required "
+                "independent TASK_REVIEW_LOOP."
+            ),
+            (
+                "Every GROUP compiles to GROUP_JOIN followed by its required "
                 "independent GROUP_REVIEW_LOOP."
             ),
             (

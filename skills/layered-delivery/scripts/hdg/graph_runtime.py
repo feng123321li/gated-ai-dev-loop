@@ -17,6 +17,7 @@ from .model_rendering import (
     task_baseline_relative_path,
     work_item_projection_relative_path,
 )
+from .model_core import iter_hierarchy_nodes
 from .repository import (
     SchedulerRepository,
     _validated_stored_definition,
@@ -25,6 +26,7 @@ from .repository import (
 
 
 IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,191}$")
+CAPACITY_SCOPES = frozenset({"EXECUTOR", "HOST"})
 
 
 def _identity(value: object, field: str) -> str:
@@ -39,6 +41,49 @@ def _identity(value: object, field: str) -> str:
 
 def _parse_timestamp(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _future_timestamp(value: object, *, at: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        fail(
+            "SCHEDULER_RESUME_TIME_INVALID",
+            "resume_at must be a future ISO 8601 timestamp",
+        )
+    try:
+        parsed = _parse_timestamp(value.strip())
+        if parsed.tzinfo is None:
+            raise ValueError("timezone required")
+        normalized = parsed.astimezone(timezone.utc)
+    except (TypeError, ValueError, OverflowError):
+        fail(
+            "SCHEDULER_RESUME_TIME_INVALID",
+            "resume_at must be a future ISO 8601 timestamp",
+        )
+    if normalized <= _parse_timestamp(at):
+        fail(
+            "SCHEDULER_RESUME_TIME_INVALID",
+            "resume_at must be later than the current scheduler time",
+        )
+    return normalized.isoformat().replace("+00:00", "Z")
+
+
+def _capacity_scope(
+    value: object,
+    *,
+    has_resume_at: bool,
+) -> str | None:
+    if not has_resume_at and value is None:
+        return None
+    if (
+        not has_resume_at
+        or not isinstance(value, str)
+        or value not in CAPACITY_SCOPES
+    ):
+        fail(
+            "SCHEDULER_CAPACITY_SCOPE_INVALID",
+            "capacity_scope must be EXECUTOR or HOST when resume_at is set",
+        )
+    return str(value)
 
 
 def _after(value: str, seconds: int) -> str:
@@ -253,6 +298,38 @@ def advance_graph(
         graph, run, nodes = _loaded(connection, root_id)
         at = _locked_timestamp(now, run["updated_at"])
         for node in nodes:
+            resume_at = node.get("resumeAt")
+            if (
+                node["status"] != "PAUSED"
+                or not isinstance(resume_at, str)
+                or _parse_timestamp(resume_at) > _parse_timestamp(at)
+            ):
+                continue
+            connection.execute(
+                "UPDATE node_runs SET status = 'PENDING', owner = NULL, "
+                "operation_id = NULL, claimed_at = NULL, "
+                "last_heartbeat_at = NULL, lease_expires_at = NULL, "
+                "finished_at = NULL, outcome_json = NULL "
+                "WHERE run_id = ? AND node_id = ? "
+                "AND attempt = ?",
+                (
+                    run["run_id"],
+                    node["nodeId"],
+                    node["attempt"],
+                ),
+            )
+            repository.append_event(
+                connection,
+                run_id=run["run_id"],
+                node_id=node["nodeId"],
+                attempt=node["attempt"],
+                event_type="NODE_AUTO_RESUMED",
+                actor="CONTROLLER",
+                operation_id=None,
+                payload={"resumeAt": resume_at},
+                at=at,
+            )
+        for node in nodes:
             if (
                 node["status"] != "CLAIMED"
                 or node["leaseExpiresAt"] is None
@@ -363,6 +440,7 @@ def loop_context(
     human_artifacts: dict[str, Any] = {}
     work_item_kind = {
         "TASK_LOOP": "TASK",
+        "TASK_REVIEW_LOOP": "TASK",
         "GROUP_REVIEW_LOOP": "GROUP",
     }.get(definition["kind"])
     if work_item_kind is not None:
@@ -395,7 +473,18 @@ def loop_context(
                 )
             ),
         }
-        interfaces = definition["loop"]["payload"].get("interfaces")
+        work_item_definition = next(
+            node["definition"]
+            for node in iter_hierarchy_nodes(stored["hierarchy"])
+            if node["definition"]["id"] == item_id
+        )
+        interfaces = (
+            work_item_definition["execution"]["loop"]["payload"].get(
+                "interfaces"
+            )
+            if work_item_kind == "TASK"
+            else None
+        )
         if (
             work_item_kind == "TASK"
             and isinstance(interfaces, list)
@@ -630,6 +719,8 @@ def pause_loop(
     root_id: str,
     node_id: str,
     operation_id: str,
+    resume_at: str | None = None,
+    capacity_scope: str | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
@@ -640,6 +731,8 @@ def pause_loop(
         operation_id=operation_id,
         target_status="PAUSED",
         event_type="NODE_PAUSED",
+        resume_at=resume_at,
+        capacity_scope=capacity_scope,
         explicit_dogfood=explicit_dogfood,
         now=now,
     )
@@ -653,6 +746,8 @@ def _change_claimed_loop(
     operation_id: str,
     target_status: str,
     event_type: str,
+    resume_at: str | None,
+    capacity_scope: str | None,
     explicit_dogfood: bool,
     now: object,
 ) -> dict[str, Any]:
@@ -671,12 +766,37 @@ def _change_claimed_loop(
                 "SCHEDULER_OPERATION_INVALID",
                 "Loop does not have the supplied active operation",
             )
+        normalized_resume_at = (
+            _future_timestamp(resume_at, at=at)
+            if resume_at is not None
+            else None
+        )
+        normalized_capacity_scope = _capacity_scope(
+            capacity_scope,
+            has_resume_at=normalized_resume_at is not None,
+        )
+        pause_metadata = (
+            json.dumps(
+                {
+                    "schedulerPause": {
+                        "capacityScope": normalized_capacity_scope,
+                    }
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            if normalized_capacity_scope is not None
+            else None
+        )
         connection.execute(
-            "UPDATE node_runs SET status = ?, finished_at = ? "
+            "UPDATE node_runs SET status = ?, finished_at = ?, "
+            "lease_expires_at = NULL, outcome_json = ? "
             "WHERE run_id = ? AND node_id = ? AND attempt = ?",
             (
                 target_status,
-                at if target_status != "PAUSED" else None,
+                normalized_resume_at,
+                pause_metadata,
                 run["run_id"],
                 node_id,
                 state["attempt"],
@@ -690,7 +810,14 @@ def _change_claimed_loop(
             event_type=event_type,
             actor=state["owner"],
             operation_id=operation_id,
-            payload={},
+            payload=(
+                {
+                    "resumeAt": normalized_resume_at,
+                    "capacityScope": normalized_capacity_scope,
+                }
+                if normalized_resume_at is not None
+                else {}
+            ),
             at=at,
         )
         repository.refresh_ready(
@@ -725,6 +852,21 @@ def _change_claimed_loop(
                 },
             }
         )
+        if normalized_resume_at is not None:
+            result.update(
+                {
+                    "resumeAt": normalized_resume_at,
+                    "capacityScope": normalized_capacity_scope,
+                    "nextAction": (
+                        "WAIT_FOR_HOST_CAPACITY"
+                        if normalized_capacity_scope == "HOST"
+                        else (
+                            "REFRESH_RECOMMENDATIONS_FOR_"
+                            "ALTERNATE_OR_WAIT"
+                        )
+                    ),
+                }
+            )
     return result
 
 
@@ -754,7 +896,8 @@ def resume_loop(
         connection.execute(
             "UPDATE node_runs SET status = 'PENDING', owner = NULL, "
             "operation_id = NULL, claimed_at = NULL, "
-            "last_heartbeat_at = NULL, lease_expires_at = NULL "
+            "last_heartbeat_at = NULL, lease_expires_at = NULL, "
+            "finished_at = NULL, outcome_json = NULL "
             "WHERE run_id = ? AND node_id = ? AND attempt = ?",
             (run["run_id"], node_id, state["attempt"]),
         )
@@ -1115,6 +1258,8 @@ def _rebuild_graph_run_locked(
             "claimedAt": None,
             "lastHeartbeatAt": None,
             "leaseExpiresAt": None,
+            "resumeAt": None,
+            "capacityScope": None,
             "finishedAt": None,
             "outcome": None,
             "failureClass": None,
@@ -1162,6 +1307,8 @@ def _rebuild_graph_run_locked(
                 "claimedAt": None,
                 "lastHeartbeatAt": None,
                 "leaseExpiresAt": None,
+                "resumeAt": None,
+                "capacityScope": None,
                 "finishedAt": None,
                 "outcome": None,
                 "failureClass": None,
@@ -1200,8 +1347,15 @@ def _rebuild_graph_run_locked(
             state["lastHeartbeatAt"] = at
             state["leaseExpiresAt"] = payload["leaseExpiresAt"]
         elif event_type == "NODE_PAUSED":
-            state["status"] = "PAUSED"
-        elif event_type == "NODE_RESUMED":
+            state.update(
+                {
+                    "status": "PAUSED",
+                    "leaseExpiresAt": None,
+                    "resumeAt": payload.get("resumeAt"),
+                    "capacityScope": payload.get("capacityScope"),
+                }
+            )
+        elif event_type in {"NODE_RESUMED", "NODE_AUTO_RESUMED"}:
             state.update(
                 {
                     "status": "PENDING",
@@ -1210,6 +1364,8 @@ def _rebuild_graph_run_locked(
                     "claimedAt": None,
                     "lastHeartbeatAt": None,
                     "leaseExpiresAt": None,
+                    "resumeAt": None,
+                    "capacityScope": None,
                 }
             )
         elif event_type in {
@@ -1301,16 +1457,36 @@ def _rebuild_graph_run_locked(
                     state["claimedAt"],
                     state["lastHeartbeatAt"],
                     state["leaseExpiresAt"],
-                    state["finishedAt"],
+                    (
+                        state["resumeAt"]
+                        if state["status"] == "PAUSED"
+                        else state["finishedAt"]
+                    ),
                     (
                         json.dumps(
-                            state["outcome"],
+                            {
+                                "schedulerPause": {
+                                    "capacityScope": state[
+                                        "capacityScope"
+                                    ],
+                                }
+                            },
                             ensure_ascii=False,
                             sort_keys=True,
                             separators=(",", ":"),
                         )
-                        if state["outcome"] is not None
-                        else None
+                        if state["status"] == "PAUSED"
+                        and state["capacityScope"] is not None
+                        else (
+                            json.dumps(
+                                state["outcome"],
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            )
+                            if state["outcome"] is not None
+                            else None
+                        )
                     ),
                     state["failureClass"],
                 ),

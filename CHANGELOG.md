@@ -4,6 +4,17 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.24.0 — 2026-07-30
+
+发布提交：`a26b100`
+
+- `work-items/` 从根节点开始按 `children/<child-id>/` 递归镜像真实 GROUP/TASK 父子关系；GROUP 可多层、平行或不存在，根 TASK 不再需要形式化 GROUP。Delivery 与节点 baseline、progress、acceptance 和按需 `interfaces.md` 链接同步适配递归路径。
+- 精简工作区与 Delivery 总览：工作区只列 Delivery 标识、标题、状态、更新时间和详情入口，TASK 进度与 GROUP 数量留在单个 Delivery；删除人类正文中的投影模板版本，标明 UTC+8 的时间统一为 `YYYY-MM-DD HH:mm:ss`。
+- Delivery 和节点 progress 改用状态表格；acceptance 的状态摘要、直接子节点结果与 Review 问题改用表格，长验收输入和证据继续使用结构化列表。
+- `loop_context.completionPolicy.reviewFindings` 明确 P0/P1/P2：P0/P1 必须在当前 Review Loop 内修复、验证并独立复审后才可成功，P2 非阻断但必须通过 `result.reviewFindings` 逐项进入验收报告；问题不新增外层 Graph 节点或状态。
+- 规划规范明确 GROUP 是动态、可选的真实协调/审查边界，并增加并行 TASK 使用独立 Git worktree 的可选隔离建议；SQLite、事件链、schema v3 和接口显式契约来源保持不变。
+- Python 全量 90 项测试、编译检查、Skill 校验、Plugin 校验和 `git diff --check` 通过。
+
 ## 0.23.1 — 2026-07-30
 
 发布提交：`e32ce33`

@@ -6,7 +6,7 @@
 
 ## 0.21.2 — 2026-07-30
 
-发布提交：待发布
+发布提交：`3982935`
 
 - 明确 payload 只提供目标、约束和已知验收点，Loop 必须从真实代码、契约与数据链路推导 scope 内必要条件；冻结 Graph 不冻结 Loop 内部实现计划。
 - 新增 `loop_context.completionPolicy`，要求可修复的实现、测试、数据完整性、边界与 Review finding 留在当前 Loop 内完成方案调整、修正、验证和重新 Review，不再把“Review 未通过”提升为外层终态。

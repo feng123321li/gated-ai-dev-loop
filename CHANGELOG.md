@@ -6,7 +6,7 @@
 
 ## 0.25.0 — 2026-07-30
 
-发布提交：`37e7bc1`
+发布提交：`ef0042b`
 
 - 每个 TASK 现在都必须显式配置 `reviewLoop`，并编译为 `TASK_LOOP → TASK_REVIEW_LOOP`；兄弟依赖、GROUP 完成点和 Delivery Review 只消费 TASK Review 后的终态。GROUP 仍按实际协调需要创建、可完全省略或多层递归，但每个已创建 GROUP 都必须经过自己的 `GROUP_JOIN → GROUP_REVIEW_LOOP`，逐层审查整体集成结果。
 - 验收投影改为严格按层归属：TASK、GROUP、Delivery 只完整展开本层结果与 Review；GROUP 对直接子节点、Delivery 对根工作项仅保留状态、简要结果和报告链接，不再向上复制下层输入、证据或 Review findings。

@@ -6,12 +6,23 @@ import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
 
+from hdg.controller import (
+    ControllerContext,
+    LayeredDeliveryController,
+)
 from hdg.errors import GatedLoopError
 from hdg.hierarchy_contract import hierarchy_contract
+from hdg.host_policy import ProjectRootBinding
 from hdg.jsonio import fingerprint
-from hdg.mcp_server import (
-    ProjectRootBinding,
-    ServerSession,
+from hdg.mcp_adapter import (
+    CLIENT_CAPABILITIES_META_KEY,
+    CLIENT_INFO_META_KEY,
+    LEGACY_PREFERRED_PROTOCOL_VERSION,
+    LEGACY_PROTOCOL_VERSIONS,
+    MODERN_PROTOCOL_VERSION,
+    McpConnection,
+    PROTOCOL_VERSION_META_KEY,
+    SUPPORTED_PROTOCOL_VERSIONS,
     handle_message,
 )
 from hdg.mcp_tools import (
@@ -26,6 +37,24 @@ from hdg.repository import SchedulerRepository
 
 from .test_loop_architecture import loop_descriptor, task_hierarchy
 from .test_scheduler_runtime import at
+
+
+def modern_meta(
+    *,
+    version: str = MODERN_PROTOCOL_VERSION,
+    client_name: str = "test-modern-client",
+    client_version: str = "1.0.0",
+    **extra: object,
+) -> dict[str, object]:
+    return {
+        PROTOCOL_VERSION_META_KEY: version,
+        CLIENT_CAPABILITIES_META_KEY: {},
+        CLIENT_INFO_META_KEY: {
+            "name": client_name,
+            "version": client_version,
+        },
+        **extra,
+    }
 
 
 def legacy_delivery_hierarchy_017() -> dict:
@@ -180,6 +209,26 @@ class HierarchyContractTests(unittest.TestCase):
 
 
 class McpSurfaceTests(unittest.TestCase):
+    def test_shared_controller_executes_without_mcp_context(self) -> None:
+        with TemporaryDirectory() as root:
+            controller = LayeredDeliveryController()
+            result = controller.execute(
+                "workspace_status",
+                {},
+                context=ControllerContext(project_root=root),
+            )
+            self.assertEqual(result["status"], "ABSENT")
+            with self.assertRaises(GatedLoopError) as caught:
+                controller.execute(
+                    "missing",
+                    {},
+                    context=ControllerContext(project_root=root),
+                )
+            self.assertEqual(
+                caught.exception.code,
+                "CONTROLLER_OPERATION_UNKNOWN",
+            )
+
     def test_tool_schemas_are_closed_and_only_destructive_calls_prompt(
         self,
     ) -> None:
@@ -565,7 +614,7 @@ class McpSurfaceTests(unittest.TestCase):
 
     def test_mcp_initialize_and_tool_call(self) -> None:
         with TemporaryDirectory() as root:
-            session = ServerSession(
+            connection = McpConnection(
                 project_root=ProjectRootBinding.from_startup(root)
             )
             initialized = handle_message(
@@ -582,7 +631,7 @@ class McpSurfaceTests(unittest.TestCase):
                         },
                     },
                 },
-                session=session,
+                connection=connection,
             )
             self.assertIn(
                 "outer Graph scheduler",
@@ -598,7 +647,7 @@ class McpSurfaceTests(unittest.TestCase):
                     "method": "notifications/initialized",
                     "params": {},
                 },
-                session=session,
+                connection=connection,
             )
             response = handle_message(
                 {
@@ -610,7 +659,7 @@ class McpSurfaceTests(unittest.TestCase):
                         "arguments": {},
                     },
                 },
-                session=session,
+                connection=connection,
             )
             structured = response["result"]["structuredContent"]
             self.assertTrue(structured["ok"])
@@ -620,6 +669,209 @@ class McpSurfaceTests(unittest.TestCase):
             )
             rendered = response["result"]["content"][0]["text"]
             self.assertEqual(json.loads(rendered), structured)
+            self.assertNotIn("resultType", response["result"])
+
+    def test_mcp_supports_exactly_modern_and_claude_legacy_versions(
+        self,
+    ) -> None:
+        self.assertEqual(
+            LEGACY_PROTOCOL_VERSIONS,
+            (LEGACY_PREFERRED_PROTOCOL_VERSION,),
+        )
+        self.assertEqual(
+            SUPPORTED_PROTOCOL_VERSIONS,
+            (
+                MODERN_PROTOCOL_VERSION,
+                LEGACY_PREFERRED_PROTOCOL_VERSION,
+            ),
+        )
+
+    def test_mcp_modern_discovery_list_and_tool_call(self) -> None:
+        with TemporaryDirectory() as root:
+            connection = McpConnection(
+                project_root=ProjectRootBinding.from_startup(root)
+            )
+            discovery = handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "discover",
+                    "method": "server/discover",
+                    "params": {"_meta": modern_meta()},
+                },
+                connection=connection,
+            )
+            discovered = discovery["result"]
+            self.assertEqual(discovered["resultType"], "complete")
+            self.assertEqual(
+                discovered["supportedVersions"],
+                [
+                    MODERN_PROTOCOL_VERSION,
+                    LEGACY_PREFERRED_PROTOCOL_VERSION,
+                ],
+            )
+            self.assertEqual(discovered["cacheScope"], "private")
+            self.assertGreater(discovered["ttlMs"], 0)
+            self.assertEqual(
+                discovered["_meta"][
+                    "io.modelcontextprotocol/serverInfo"
+                ]["name"],
+                "layered-delivery",
+            )
+            self.assertFalse(connection.legacy_initialize_requested)
+
+            listed = handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "list",
+                    "method": "tools/list",
+                    "params": {"_meta": modern_meta()},
+                },
+                connection=connection,
+            )
+            self.assertEqual(
+                listed["result"]["resultType"],
+                "complete",
+            )
+            self.assertEqual(len(listed["result"]["tools"]), 17)
+            self.assertEqual(listed["result"]["cacheScope"], "private")
+
+            response = handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "call",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "workspace_status",
+                        "arguments": {},
+                        "_meta": modern_meta(
+                            client_version="1.0.1",
+                        ),
+                    },
+                },
+                connection=connection,
+            )
+            self.assertEqual(
+                response["result"]["resultType"],
+                "complete",
+            )
+            self.assertEqual(
+                response["result"]["structuredContent"]["result"][
+                    "status"
+                ],
+                "ABSENT",
+            )
+            self.assertFalse(connection.legacy_initialized)
+
+    def test_mcp_modern_rejects_missing_or_unsupported_metadata(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            connection = McpConnection(
+                project_root=ProjectRootBinding.from_startup(root)
+            )
+            missing = handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "server/discover",
+                    "params": {},
+                },
+                connection=connection,
+            )
+            self.assertEqual(missing["error"]["code"], -32602)
+
+            unsupported = handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "server/discover",
+                    "params": {
+                        "_meta": modern_meta(
+                            version="2099-01-01",
+                        )
+                    },
+                },
+                connection=connection,
+            )
+            self.assertEqual(
+                unsupported["error"]["code"],
+                -32022,
+            )
+            self.assertEqual(
+                unsupported["error"]["data"]["requested"],
+                "2099-01-01",
+            )
+            self.assertEqual(
+                unsupported["error"]["data"]["supported"][0],
+                MODERN_PROTOCOL_VERSION,
+            )
+
+    def test_legacy_initialize_never_negotiates_modern_semantics(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            connection = McpConnection(
+                project_root=ProjectRootBinding.from_startup(root)
+            )
+            response = handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": MODERN_PROTOCOL_VERSION,
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "legacy-client",
+                            "version": "1.0.0",
+                        },
+                    },
+                },
+                connection=connection,
+            )
+            self.assertEqual(
+                response["result"]["protocolVersion"],
+                LEGACY_PREFERRED_PROTOCOL_VERSION,
+            )
+
+    def test_modern_codex_project_root_is_per_request(self) -> None:
+        with (
+            TemporaryDirectory() as first,
+            TemporaryDirectory() as second,
+        ):
+            connection = McpConnection(
+                project_root=ProjectRootBinding.from_startup(
+                    None,
+                    from_sandbox_meta=True,
+                )
+            )
+            for request_id, root in enumerate((first, second), start=1):
+                response = handle_message(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "workspace_status",
+                            "arguments": {},
+                            "_meta": modern_meta(
+                                **{
+                                    "codex/sandbox-state-meta": {
+                                        "sandboxCwd": Path(root).as_uri(),
+                                    }
+                                }
+                            ),
+                        },
+                    },
+                    connection=connection,
+                )
+                self.assertEqual(
+                    response["result"]["structuredContent"]["result"][
+                        "status"
+                    ],
+                    "ABSENT",
+                )
+            self.assertIsNone(connection.project_root.bound_root)
 
 
 if __name__ == "__main__":

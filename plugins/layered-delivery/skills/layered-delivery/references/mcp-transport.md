@@ -8,9 +8,11 @@
 - 运行中断连：报告 `PLUGIN_MCP_DISCONNECTED`，保留最后已知 root、node 与 operation。
 - 响应未返回的写操作状态视为未知；重连后先调用 `workspace_status`、`graph_status`、`graph_frontier`，不要盲目重放。
 
-## 项目根
+## 协议与项目根
 
-MCP Server 在会话中绑定一个不可漂移的项目协调根。它是存放 `.layered-delivery/` 控制面的工作区位置，不等于 hierarchy 的 `delivery.id` 或递归 `root` 节点。
+Plugin 优先使用 MCP `2026-07-28`。现代客户端可先调用 `server/discover`，随后每次请求都携带协议版本、客户端能力和宿主提供的项目上下文，不依赖连接或初始化会话。旧客户端继续使用 `initialize`，最高协商到 `2025-11-25`。
+
+Claude Plugin 通过启动环境固定项目协调根。Codex 的现代请求从每次请求 `_meta` 解析项目根；旧版 Codex 会话则在首次合法元数据后绑定不可漂移的根。无论从哪种宿主取得，Controller 的单次 operation 都只接收一个已解析、已校验的项目根。它是存放 `.layered-delivery/` 控制面的工作区位置，不等于 hierarchy 的 `delivery.id` 或递归 `root` 节点。
 
 控制面根使用共享 `.layered-delivery/scheduler.db`。每个 `delivery.id` 是稳定的需求目录 namespace，其可读投影固定为：
 

@@ -2,7 +2,7 @@
 
 `layered-delivery` 是面向可插拔 Loop 的递归交付 Graph 调度器。
 
-当前版本：**0.20.1**
+当前版本：**0.21.0**
 
 它负责：
 
@@ -229,7 +229,28 @@ workspace_status
 → record_user_confirmation
 ```
 
-当前 Plugin 注册 17 个外层调度工具。MCP 绑定一个项目协调根；多仓库或多服务目标通过 Loop ref/payload 与资源声明表达。
+当前 Plugin 注册 17 个外层调度工具。每次 Controller operation 都绑定一个已校验的项目协调根；现代 MCP 从请求上下文取得，旧 MCP 从初始化式连接绑定取得。多仓库或多服务目标通过 Loop ref/payload 与资源声明表达。
+
+## Controller / Adapter 架构
+
+调度核心是共享的 Python Controller，协议和宿主差异不会进入 Graph、领域模型或 SQLite：
+
+```text
+Codex Plugin ──┐
+               ├─ MCP Adapter
+Claude Plugin ─┘  ├─ MCP 2026-07-28（优先）
+                  └─ MCP 2025-11-25（Claude Code / 旧客户端兼容）
+                         ↓
+             Shared Python Controller
+                         ↓
+       Planning / Graph Runtime / Repository
+                         ↓
+                  SQLite + 事件链
+```
+
+[MCP `2026-07-28`](https://modelcontextprotocol.io/specification/2026-07-28) 的本地 Tools-over-stdio profile 使用无会话请求：客户端可先调用 `server/discover`，后续每个请求都在 `_meta` 携带协议版本和客户端能力；所有成功结果包含 `resultType`，工具目录包含缓存提示。Plugin 把 `2026-07-28` 放在支持版本首位。
+
+Claude Code 和旧 Codex 仍可走 `2025-11-25` 的 `initialize → notifications/initialized`。Adapter 只维护 `2026-07-28` 与 `2025-11-25` 双版本，不会把新版无会话语义伪装成旧版会话。新版 Tasks 属于可选扩展；当前外层调度已使用显式 `root_id`、`node_id` 和 `operation_id` 保存长任务状态，因此本版本不声明 Tasks 扩展。
 
 `freeze_hierarchy` 对模型只暴露 `execution_mode=active|manual`，不暴露内部 `confirmed`。自动和手动都表示完整授权并确认开发，区别只在冻结后由当前会话继续调度还是生成交接；冻结工具在宿主权限层统一走自动批准，MCP 适配器在控制器边界内注入 Python `True`，不得再为同一次冻结追加通用 Yes/No 或其他弹窗。“调整需求”及任何其他反馈均表示未确认，不调用 freeze，而是继续交互并在修改 hierarchy 后重新 prepare。
 
@@ -300,7 +321,7 @@ python -X utf8 <plugin-creator>/scripts/validate_plugin.py plugins/layered-deliv
 git diff --check
 ```
 
-项目使用 Python 3.10+ 和标准库，不提供 CLI 入口，也不维护旧 schema 兼容层。
+项目使用 Python 3.10+ 和标准库，不提供 CLI 入口，也不维护旧 schema 兼容层。MCP wire protocol 保留双时代兼容不等于恢复旧业务 schema；Controller 始终只接受当前完整 schema v3。
 
 0.18.0 是 schema v3 的破坏性语义替换：固定 Delivery / Capability / Task 层级被顶层 Delivery 加递归 GROUP/TASK 模型取代。0.17.x 的 `scheduler.db` hierarchy 与更早的 `governance.sqlite3` 均不迁移；请先归档旧 `.layered-delivery` 运行包，再创建新的递归交付 Graph。
 

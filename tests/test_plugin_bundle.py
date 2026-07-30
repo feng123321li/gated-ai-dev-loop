@@ -10,6 +10,13 @@ import unittest
 
 import hdg
 from hdg.mcp_tools import tool_definitions
+from hdg.mcp_adapter import (
+    CLIENT_CAPABILITIES_META_KEY,
+    CLIENT_INFO_META_KEY,
+    LEGACY_PREFERRED_PROTOCOL_VERSION,
+    MODERN_PROTOCOL_VERSION,
+    PROTOCOL_VERSION_META_KEY,
+)
 from hdg.model_core import validate_hierarchy_definition
 
 
@@ -127,7 +134,78 @@ class PluginBundleTests(unittest.TestCase):
     def test_tool_count_is_the_scheduler_surface(self) -> None:
         self.assertEqual(len(tool_definitions()), 17)
 
-    def test_bundled_mcp_completes_a_real_stdio_handshake(self) -> None:
+    def test_bundled_mcp_prefers_modern_stdio_discovery(self) -> None:
+        entry = SKILL / "scripts" / "hdg_mcp.py"
+        request_meta = {
+            PROTOCOL_VERSION_META_KEY: MODERN_PROTOCOL_VERSION,
+            CLIENT_CAPABILITIES_META_KEY: {},
+            CLIENT_INFO_META_KEY: {
+                "name": "bundle-test",
+                "version": "1.0.0",
+            },
+        }
+        messages = [
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "server/discover",
+                "params": {"_meta": request_meta},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {"_meta": request_meta},
+            },
+        ]
+        request = "".join(
+            json.dumps(message, separators=(",", ":")) + "\n"
+            for message in messages
+        )
+        with TemporaryDirectory() as project_root:
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-X",
+                    "utf8",
+                    str(entry),
+                    "--project-root",
+                    project_root,
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+            )
+            stdout, stderr = process.communicate(
+                request,
+                timeout=10,
+            )
+        self.assertEqual(process.returncode, 0, stderr)
+        responses = [
+            json.loads(line)
+            for line in stdout.splitlines()
+            if line
+        ]
+        self.assertEqual(len(responses), 2)
+        self.assertEqual(
+            responses[0]["result"]["supportedVersions"],
+            [
+                MODERN_PROTOCOL_VERSION,
+                LEGACY_PREFERRED_PROTOCOL_VERSION,
+            ],
+        )
+        self.assertEqual(
+            responses[0]["result"]["resultType"],
+            "complete",
+        )
+        self.assertEqual(
+            len(responses[1]["result"]["tools"]),
+            17,
+        )
+
+    def test_bundled_mcp_keeps_legacy_initialize_fallback(self) -> None:
         entry = SKILL / "scripts" / "hdg_mcp.py"
         messages = [
             {
@@ -138,7 +216,7 @@ class PluginBundleTests(unittest.TestCase):
                     "protocolVersion": "2025-11-25",
                     "capabilities": {},
                     "clientInfo": {
-                        "name": "bundle-test",
+                        "name": "legacy-bundle-test",
                         "version": "1.0.0",
                     },
                 },
@@ -186,6 +264,11 @@ class PluginBundleTests(unittest.TestCase):
             if line
         ]
         self.assertEqual(len(responses), 2)
+        self.assertEqual(
+            responses[0]["result"]["protocolVersion"],
+            "2025-11-25",
+        )
+        self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
             17,

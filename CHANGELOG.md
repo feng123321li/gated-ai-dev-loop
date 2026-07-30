@@ -6,7 +6,7 @@
 
 ## 0.21.0 — 2026-07-30
 
-发布提交：待发布
+发布提交：`9c1e371`
 
 - 将入口正式收口为共享 Python Controller、Host Policy、MCP Adapter 与 stdio Transport：Graph、schema v3、SQLite 和事件链不依赖 MCP/Codex/Claude，双宿主继续复用同一 Controller 与权威状态。
 - MCP 优先支持稳定版 `2026-07-28`：新增 `server/discover`，按请求校验协议版本与客户端能力，所有现代成功结果携带 `resultType` 和 server info，`tools/list`/discovery 携带缓存提示；不支持的版本返回标准 `-32022`。

@@ -2,7 +2,7 @@
 
 `layered-delivery` 是面向可插拔 Loop 的递归交付 Graph 调度器。
 
-当前版本：**0.21.1**
+当前版本：**0.21.2**
 
 它负责：
 
@@ -210,7 +210,7 @@ Task 的调度定义只保留：
 - `REPLAN_REQUIRED`
 - `CANCELLED`
 
-只有 `RETRYABLE_INFRA` 和 `WORKER_LOST` 会触发外层自动重试。业务 Gate 失败若可在原任务内修正，应由 Task Loop 内部处理，不进入外层事件。
+只有 `RETRYABLE_INFRA` 和 `WORKER_LOST` 会触发外层自动重试。payload 提供目标、明确约束和已知验收点，不是完整实现规约；Loop 还要结合真实代码、契约和数据链路推导必要条件。冻结 Graph 只固定外层目标、依赖、资源声明和拓扑，不冻结 Loop 内部实现计划。当前目标内可修复的实现、测试、数据完整性、边界或 Review finding，必须由当前 TASK/Review Loop 调整方案、修正并重新验证，不进入外层事件。`BLOCKED` 仅表示当前 scope 和权限内没有继续路径，并要求显式 failure class；`REPLAN_REQUIRED` 仅用于必须改变冻结 Graph 契约的情况。
 
 ## MCP 流程
 
@@ -254,7 +254,7 @@ Claude Code 和旧 Codex 仍可走 `2025-11-25` 的 `initialize → notification
 
 `freeze_hierarchy` 对模型只暴露 `execution_mode=active|manual`，不暴露内部 `confirmed`。冻结前只展示“自动执行 / 手动交接”两个确认选项；自动和手动都表示完整授权并确认开发，区别只在冻结后由当前会话继续调度还是生成交接。需要调整时，用户直接回复修改意见，当前方案不冻结；只有需求实际变化才重新 prepare，单纯询问或其他未改变需求的回复保留当前 `PREPARED` 结果。冻结工具在宿主权限层统一走自动批准，MCP 适配器在控制器边界内注入 Python `True`，不得再为同一次冻结追加通用 Yes/No 或其他弹窗。
 
-总调度上下文只消费 frontier。每个 TASK、GROUP Review 和 Delivery Review Loop 默认路由到独立接收上下文；宿主支持原生 Agent 时优先自动派遣。未 claim 且没有 Agent 容量时只生成人工交接，不提前 claim；已 claim、租约有效且出现上下文压力或高轮次 Hook 摩擦时，使用 `pause_loop → 新上下文 resume_loop → 重新 dispatch`，不提交业务 outcome；租约过期时由 `advance_graph` 回收旧 attempt，禁止调用 `pause_loop`。接收方始终继续同一冻结 Graph。
+总调度上下文只消费 frontier。每个 TASK、GROUP Review 和 Delivery Review Loop 默认路由到独立接收上下文；宿主支持原生 Agent 时优先自动派遣。Review 的独立性用于独立发现与复核，不阻止它在同一 Loop 内自行修正或派遣内部修正上下文。未 claim 且没有 Agent 容量时只生成人工交接，不提前 claim；已 claim、租约有效且出现上下文压力或高轮次 Hook 摩擦时，使用 `pause_loop → 新上下文 resume_loop → 重新 dispatch`，不提交业务 outcome；租约过期时由 `advance_graph` 回收旧 attempt，禁止调用 `pause_loop`。接收方始终继续同一冻结 Graph。
 
 ## 主要投影
 

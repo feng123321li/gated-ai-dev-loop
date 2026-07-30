@@ -641,6 +641,11 @@ class McpSurfaceTests(unittest.TestCase):
                 "skillHints are advisory runtime preferences",
                 initialized["result"]["instructions"],
             )
+            self.assertIn(
+                "actionable implementation, test, or Review finding stays "
+                "inside the current Loop",
+                initialized["result"]["instructions"],
+            )
             handle_message(
                 {
                     "jsonrpc": "2.0",

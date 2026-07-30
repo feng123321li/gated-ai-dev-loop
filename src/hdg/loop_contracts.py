@@ -41,6 +41,19 @@ _LOOP_EXECUTION_POLICY = {
         "reloadViaMcp": True,
     },
 }
+_LOOP_COMPLETION_POLICY = {
+    "payloadRole": "GOALS_CONSTRAINTS_AND_KNOWN_ACCEPTANCE_INPUT",
+    "inScopeNecessaryConditions": "DERIVE_AND_VALIDATE_AT_RUNTIME",
+    "implementationPlanWithinLoop": "MAY_ADAPT_WITHOUT_REPLAN",
+    "actionableFinding": "RESOLVE_AND_REEVALUATE_IN_CURRENT_LOOP",
+    "reviewCycle": "FIND_RESOLVE_VERIFY_AND_REREVIEW_UNTIL_TERMINAL",
+    "blockedOutcome": (
+        "ONLY_IF_NO_IN_SCOPE_PATH_CAN_PROGRESS_WITH_CURRENT_AUTHORITY"
+    ),
+    "replanRequiredOutcome": (
+        "ONLY_IF_FROZEN_DEPENDENCIES_RESOURCES_OR_TOPOLOGY_MUST_CHANGE"
+    ),
+}
 
 
 def _non_empty_text(value: object, field: str) -> str:
@@ -164,8 +177,15 @@ def loop_execution_policy() -> dict[str, Any]:
     return deepcopy(_LOOP_EXECUTION_POLICY)
 
 
+def loop_completion_policy() -> dict[str, Any]:
+    """Return the boundary between internal rework and terminal outcomes."""
+
+    return deepcopy(_LOOP_COMPLETION_POLICY)
+
+
 __all__ = (
     "LOOP_TERMINAL_STATUSES",
+    "loop_completion_policy",
     "loop_execution_policy",
     "resource_claims_overlap",
     "validate_loop_descriptor",

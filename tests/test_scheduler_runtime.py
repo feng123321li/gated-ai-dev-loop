@@ -30,7 +30,10 @@ from hdg.graph_runtime import (
     record_user_confirmation,
     resume_loop,
 )
-from hdg.loop_contracts import loop_execution_policy
+from hdg.loop_contracts import (
+    loop_completion_policy,
+    loop_execution_policy,
+)
 from hdg.mcp_tools import tool_definitions
 from hdg.model_core import validate_hierarchy_definition
 from hdg.model_rendering import (
@@ -611,6 +614,22 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(context["executionPolicy"], policy)
         self.assertEqual(
+            context["completionPolicy"],
+            loop_completion_policy(),
+        )
+        self.assertEqual(
+            context["completionPolicy"]["actionableFinding"],
+            "RESOLVE_AND_REEVALUATE_IN_CURRENT_LOOP",
+        )
+        self.assertEqual(
+            context["completionPolicy"]["payloadRole"],
+            "GOALS_CONSTRAINTS_AND_KNOWN_ACCEPTANCE_INPUT",
+        )
+        self.assertEqual(
+            context["completionPolicy"]["reviewCycle"],
+            "FIND_RESOLVE_VERIFY_AND_REREVIEW_UNTIL_TERMINAL",
+        )
+        self.assertEqual(
             context["humanArtifacts"]["taskBaseline"],
             (
                 f".layered-delivery/{root_id}/"
@@ -622,6 +641,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
             {
                 "payloadIsOpaqueToScheduler": True,
                 "internalGateAndSkillPolicyOwnedByLoop": True,
+                "implementationPlanMayAdaptWithinLoop": True,
+                "actionableFindingsStayInsideLoop": True,
                 "skillHintsAreAdvisory": True,
                 "selectSkillsAtRuntime": True,
                 "prioritizeApplicableSkillHints": True,
@@ -764,6 +785,50 @@ class SchedulerRuntimeTests(unittest.TestCase):
             )["status"],
             "BLOCKED",
         )
+
+    def test_blocked_outcome_requires_explicit_failure_class(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="review-agent",
+            operation_id="op-premature-block",
+            now=at(2),
+        )
+
+        with self.assertRaises(GatedLoopError) as caught:
+            record_loop_result(
+                root=self.root,
+                root_id=root_id,
+                node_id=node_id,
+                operation_id="op-premature-block",
+                outcome={
+                    "status": "BLOCKED",
+                    "summary": "A correctable Review finding remains.",
+                    "result": {"finding": "implementation defect"},
+                },
+                now=at(3),
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_FAILURE_CLASS_REQUIRED",
+        )
+        self.assertIn(
+            "internal correction and reevaluation",
+            caught.exception.message,
+        )
+        context = loop_context(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+        )
+        self.assertEqual(context["status"], "CLAIMED")
 
     def test_resource_claims_serialize_independent_loops(self) -> None:
         prepared = self.prepare_and_freeze(parallel_hierarchy())
@@ -1897,6 +1962,23 @@ class RemovedCouplingTests(unittest.TestCase):
         self.assertIn(
             "expired-lease recovery",
             context_tool["description"],
+        )
+        self.assertIn(
+            "completion policy",
+            context_tool["description"],
+        )
+        result_tool = next(
+            tool for tool in tools if tool["name"] == "record_loop_result"
+        )
+        self.assertIn(
+            "correctable finding",
+            result_tool["description"],
+        )
+        self.assertIn(
+            "Required when outcome.status is BLOCKED",
+            result_tool["inputSchema"]["properties"]["failure_class"][
+                "description"
+            ],
         )
         self.assertTrue(
             {

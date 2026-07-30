@@ -54,6 +54,9 @@ class PluginBundleTests(unittest.TestCase):
         execution = (
             SKILL / "references" / "execution-quickstart.md"
         ).read_text(encoding="utf-8")
+        acceptance = (
+            SKILL / "references" / "acceptance.md"
+        ).read_text(encoding="utf-8")
         transport = (
             SKILL / "references" / "mcp-transport.md"
         ).read_text(encoding="utf-8")
@@ -73,6 +76,18 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("`cancel_graph_run`", main)
         self.assertIn("新的 `delivery.id`", main)
         self.assertIn("不要自动取消当前 run", execution)
+        self.assertIn(
+            "不要把“Review 未通过”提交成 `BLOCKED`",
+            execution,
+        )
+        self.assertIn(
+            "payload 只提供目标、明确约束和已知验收点",
+            acceptance,
+        )
+        self.assertIn(
+            "独立发现和重新验证",
+            acceptance,
+        )
         self.assertIn("重连后先调用 `workspace_status`", transport)
         self.assertNotIn(
             "未明确选择这两项时继续需求交互并重新 prepare",

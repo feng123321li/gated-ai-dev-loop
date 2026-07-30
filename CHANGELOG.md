@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.21.2 — 2026-07-30
+
+发布提交：待发布
+
+- 明确 payload 只提供目标、约束和已知验收点，Loop 必须从真实代码、契约与数据链路推导 scope 内必要条件；冻结 Graph 不冻结 Loop 内部实现计划。
+- 新增 `loop_context.completionPolicy`，要求可修复的实现、测试、数据完整性、边界与 Review finding 留在当前 Loop 内完成方案调整、修正、验证和重新 Review，不再把“Review 未通过”提升为外层终态。
+- 收紧 `BLOCKED` 终态：必须显式提供 failure class，并且只用于当前 scope 和权限内没有继续路径的具体条件；`REPLAN_REQUIRED` 继续只表示冻结依赖、资源声明或拓扑必须改变。
+- 同步更新 MCP Server instructions、工具描述、canonical Skill、双宿主 Plugin 载荷与回归测试；不改变 schema v3、SQLite 格式或 Graph 节点模型。
+
 ## 0.21.1 — 2026-07-30
 
 发布提交：`a74e934`

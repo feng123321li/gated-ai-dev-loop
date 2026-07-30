@@ -47,6 +47,11 @@ OUTCOME = _object(
                 "REPLAN_REQUIRED",
                 "CANCELLED",
             ],
+            "description": (
+                "Genuine terminal status. Correctable implementation, test, "
+                "Gate, or Review findings are not BLOCKED; resolve and "
+                "reevaluate them inside the current Loop."
+            ),
         },
         "summary": _string("Concise Loop-owned result summary."),
         "result": {
@@ -203,8 +208,9 @@ TOOLS = (
         (
             "Read one opaque Loop descriptor, shared late-bound Skill hints, "
             "direct predecessors, transitive upstream results, TASK baseline "
-            "path, and the execution policy separating pre-claim capacity, "
-            "live-lease handoff, and expired-lease recovery."
+            "path, completion policy for internal adaptation and rework, and "
+            "the execution policy separating pre-claim capacity, live-lease "
+            "handoff, and expired-lease recovery."
         ),
         _object(
             {"root_id": ROOT_ID, "node_id": NODE_ID},
@@ -273,7 +279,11 @@ TOOLS = (
     ),
     _tool(
         "record_loop_result",
-        "Record the standard outcome returned by a claimed Loop.",
+        (
+            "Record a genuine terminal outcome returned by a claimed Loop. "
+            "Do not call for a correctable finding or internal Gate failure; "
+            "adapt the Loop plan, resolve it, and reevaluate first."
+        ),
         _object(
             {
                 "root_id": ROOT_ID,
@@ -290,6 +300,11 @@ TOOLS = (
                         "EXTERNAL_AUTHORITY",
                         "NON_RETRYABLE",
                     ],
+                    "description": (
+                        "Required when outcome.status is BLOCKED. Select it "
+                        "only after the current Loop has no in-scope path to "
+                        "progress with its existing authority."
+                    ),
                 },
             },
             required=[

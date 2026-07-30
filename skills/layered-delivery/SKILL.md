@@ -15,9 +15,10 @@ description: "调度或恢复多项目、多模块的软件交付 Graph。用于
 - 只使用 schema v3。调用 `hierarchy_contract` 取得当前精确结构，不从源码或旧会话猜 schema。
 - 把 Delivery 作为 Graph 与最终验收边界；递归 GROUP 只协调子图，TASK 是唯一执行叶子。
 - 不解释或约束 `loop.payload` 和 `loop.result`。实现方案、测试、Gate、修正循环及 Skill 调用属于相应 TASK 或 Review Loop。
+- 冻结的是外层目标、依赖、资源声明和拓扑，不冻结 Loop 内部实现计划。payload 提供目标、明确约束和已知验收点，不是完整实现规约或工程正确性的穷举清单；Loop 必须结合真实代码、契约和数据链路推导当前 scope 的必要条件。可识别、可修复的正确性、数据完整性、边界与回归问题都由当前 Loop 自行调整方案并闭环。
 - 用户给出的 Skill 只登记为 `root.skillHints`。它们对整张 Graph 共享，是运行时优先提示，不是必选项、阶段门禁或 TASK 绑定；具体 Loop 在启动后根据真实上下文发现并优先触发适用提示。
 - 不使用文件 scope 做调度授权。`resourceClaims` 是精确排他锁键，可表达项目、模块、数据库或外部环境，例如 `project:erp/module:order`。
-- 不把内部 `GATE_FAILED`、`TASK_IMPLEMENTED` 或 Skill 生命周期事件提升为外层 Graph 事件。Loop 只返回 `SUCCEEDED`、`BLOCKED`、`REPLAN_REQUIRED` 或 `CANCELLED`。
+- 不把内部 `GATE_FAILED`、`TASK_IMPLEMENTED`、可修复 Review finding 或 Skill 生命周期事件提升为外层 Graph 事件。Loop 只返回 `SUCCEEDED`、`BLOCKED`、`REPLAN_REQUIRED` 或 `CANCELLED`；`BLOCKED` 仅表示在当前 scope 和权限内已经没有继续路径，不是“Review 未通过”。
 - 仅对 `RETRYABLE_INFRA` 与 `WORKER_LOST` 自动重试。业务阻断、契约变化与外部权限交给 frontier。
 - 最终完成必须取得真实用户确认。Git、发布、迁移和新增外部权限继续单独授权。
 - `owner`、`confirmed_by` 等调度身份使用控制器接受的可移植 ASCII 标识；具体字符约束以 MCP 契约和错误响应为准，不把运行经验写入宿主记忆来替代正式契约。
@@ -39,11 +40,11 @@ description: "调度或恢复多项目、多模块的软件交付 Graph。用于
 1. 持续调用 `graph_frontier`，完整消费当前批次的所有 action；容量允许时立即分别派遣同批互不冲突的 `DISPATCH_LOOP`，不等待前一个 Loop 完成。
 2. 对 `DISPATCH_LOOP`，优先用宿主原生 Agent 创建独立接收上下文，只交付 `rootId/nodeId`；接收方通过 MCP 调用 `loop_context` 和 `dispatch_loop`，不要复制规划会话或由总调度上下文内联执行。
 3. 无可用 Agent 容量时才输出人工交接，且不要提前 claim；未 claim 的 Loop 由接收方直接读取 frontier 后 dispatch，已暂停的 Loop 按 `RESUME_LOOP_IN_INDEPENDENT_CONTEXT` 恢复。
-4. 接收方从 `loop_context` 获取 `loop.ref`、不透明 `payload`、共享 `skillHints`、TASK baseline 路径和固定 `executionPolicy`。
+4. 接收方从 `loop_context` 获取 `loop.ref`、不透明 `payload`、共享 `skillHints`、TASK baseline 路径、固定 `completionPolicy` 和 `executionPolicy`。
 5. Loop 先识别当前任务和宿主可用 Skill，再优先原生触发适用提示；可以跳过不适用提示，也可以按实际需要使用其他 Skill。不同节点可以作出不同选择。
-6. TASK Loop 自主管理实现；GROUP Review 和 Delivery Review Loop 自主管理审查。`GROUP_JOIN` 由调度器在直接子节点终态齐备后推进，不派发实现工作。
+6. TASK Loop 自主管理实现；GROUP Review 和 Delivery Review Loop 自主管理独立发现、修正协调和复审。Review 发现当前冻结目标内可修复的问题时，留在同一 Loop 内调整实现方案、完成修正并重新验证；独立 Review 不等于 Reviewer 只能报告缺陷。`GROUP_JOIN` 由调度器在直接子节点终态齐备后推进，不派发实现工作。
 7. 长运行在租约到期前调用 `heartbeat_loop`；只有租约仍有效时，上下文容量压力或高轮次 Hook 摩擦才使用 pause/handoff。租约已过期时停止旧 operation，由 frontier/`advance_graph` 回收。
-8. 只把 Loop 的真实业务终态提交给 `record_loop_result`；容量交接不产生 Loop outcome。
+8. 只把 Loop 的真实业务终态提交给 `record_loop_result`；可修复 finding、内部 Gate 失败和容量交接都不产生 Loop outcome。`BLOCKED` 必须显式提供 failure class，并且只能用于当前 scope/权限内无继续路径的具体条件。
 9. 继续消费 frontier。每个 GROUP Review 成功后才成为父 GROUP 可消费的终态；根终态再进入 Delivery Review。出现 `RECORD_USER_CONFIRMATION` 时读取 [acceptance.md](references/acceptance.md)，等待真实用户最终确认。
 
 ## 恢复

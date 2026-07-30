@@ -33,10 +33,11 @@ Join 不需要 dispatch，也不包含实现内容。不要绕过某一级 GROUP
 4. 接收方创建全局唯一 `operation_id` 并调用 `dispatch_loop`。没有可用 Agent 容量时才把同样的 `rootId/nodeId` 作为人工交接，且在接收方存在前不要提前 claim。
 5. 按 `loop.ref` 启动对应内部 TASK、GROUP Review 或 Delivery Review Loop，并把 `payload` 和共享 `skillHints` 原样交给该 Loop。
 6. 内部 Loop 先识别当前任务与宿主可用 Skill，再优先原生触发适用的 Skill Hint；不要因为 hierarchy 提供了提示，就假定每条提示都适用于当前 Loop。
-7. 让内部 Loop 自己选择其他必要 Skill。TASK Loop 自主管理实现、文件、测试、Gate 和修正；Review Loop 自主管理检查项、隔离方式、Gate 和复审。
-8. 长任务持续调用 `heartbeat_loop`。检测到上下文容量压力或高轮次 Hook 摩擦且工作仍可继续时，不提交失败结果；在租约有效期内调用 `pause_loop`。
-9. `pause_loop` 返回固定 handoff 数据。优先自动派遣新的接收 Agent；没有容量时输出人工交接。接收方使用同一 `rootId/nodeId` 调用 `resume_loop`，重新读取 frontier 和 `loop_context`，再以新 owner/operation dispatch；不重新 prepare/freeze。
-10. 只有真实业务终态才用 `record_loop_result` 提交标准结果。
+7. 让内部 Loop 自己选择其他必要 Skill。payload 是目标、明确约束和已知验收点的输入，不是完整实现规约；Loop 要结合真实代码、契约和数据链路推导当前 scope 的必要条件。冻结 Graph 不冻结内部实现计划。TASK Loop 自主管理实现、文件、测试、Gate 和修正；Review Loop 自主管理独立发现、修正协调、Gate 和复审。
+8. 当前目标内可修复的实现缺陷、测试失败、数据完整性或边界问题都留在当前 Loop：调整内部计划，完成修正，再重新验证。Review 可以自行修正或使用宿主内部执行容量派遣修正上下文，但必须保留独立复核；不要把“Review 未通过”提交成 `BLOCKED`。
+9. 长任务持续调用 `heartbeat_loop`。检测到上下文容量压力或高轮次 Hook 摩擦且工作仍可继续时，不提交失败结果；在租约有效期内调用 `pause_loop`。
+10. `pause_loop` 返回固定 handoff 数据。优先自动派遣新的接收 Agent；没有容量时输出人工交接。接收方使用同一 `rootId/nodeId` 调用 `resume_loop`，重新读取 frontier 和 `loop_context`，再以新 owner/operation dispatch；不重新 prepare/freeze。
+11. 只有真实业务终态才用 `record_loop_result` 提交标准结果。
 
 不要合并以下恢复分支：
 
@@ -65,7 +66,7 @@ claim 超过 `leaseExpiresAt` 后，旧 operation 不能 heartbeat、pause 或�
 ## 失败和重试
 
 - `BLOCKED + RETRYABLE_INFRA` 与租约丢失 `WORKER_LOST`：调度器在预算内创建新 attempt。
-- 普通 `BLOCKED`：不自动重跑，避免把业务错误伪装成瞬时故障。
+- 普通 `BLOCKED`：必须显式提供 failure class，且只表示当前 scope 和权限内没有继续路径；不自动重跑。可修复 finding 或内部 Gate 失败不是 `BLOCKED`，必须在提交终态前由当前 Loop 继续修正和复验。
 - `REPLAN_REQUIRED`：冻结图的调度契约已不适用。记录结果后等待 `REPLAN_HIERARCHY`；不要自动取消当前 run，也不要复用其已冻结的 `delivery.id`。用户明确授权取消后，才创建新的替代图。
 - `CANCELLED`：结束当前 Loop，不自动重试。
 - 未 claim 且宿主 Agent 暂时不可用：人工交接，不提前 claim。

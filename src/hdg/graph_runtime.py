@@ -8,6 +8,7 @@ from typing import Any
 from .errors import fail
 from .graph_model import FAILURE_CLASSES, LOOP_NODE_KINDS
 from .loop_contracts import (
+    loop_completion_policy,
     loop_execution_policy,
     resource_claims_overlap,
     validate_loop_outcome,
@@ -390,9 +391,12 @@ def loop_context(
             else {}
         ),
         "executionPolicy": loop_execution_policy(),
+        "completionPolicy": loop_completion_policy(),
         "rules": {
             "payloadIsOpaqueToScheduler": True,
             "internalGateAndSkillPolicyOwnedByLoop": True,
+            "implementationPlanMayAdaptWithinLoop": True,
+            "actionableFindingsStayInsideLoop": True,
             "skillHintsAreAdvisory": True,
             "selectSkillsAtRuntime": True,
             "prioritizeApplicableSkillHints": True,
@@ -745,7 +749,13 @@ def record_loop_result(
 ) -> dict[str, Any]:
     normalized = validate_loop_outcome(outcome)
     if normalized["status"] == "BLOCKED":
-        failure_class = failure_class or "LOOP_BLOCKED"
+        if failure_class is None:
+            fail(
+                "SCHEDULER_FAILURE_CLASS_REQUIRED",
+                "BLOCKED is reserved for a concrete condition that leaves "
+                "no in-scope path to progress; provide failure_class only "
+                "after internal correction and reevaluation are exhausted",
+            )
         if failure_class not in FAILURE_CLASSES:
             fail(
                 "SCHEDULER_FAILURE_CLASS_INVALID",

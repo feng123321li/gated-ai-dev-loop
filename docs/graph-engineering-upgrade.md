@@ -185,7 +185,7 @@ Review 沿层级逐层向上收敛，但不会把同一个 Review 节点重复�
 
 ## 逻辑递归与物理布局
 
-GROUP/TASK 的递归只存在于冻结 hierarchy 和编译 Graph 中。工作区共享一份 SQLite 权威，并按稳定的 `delivery.id` 隔离各次需求交付的可重建投影：
+GROUP/TASK 的递归存在于冻结 hierarchy 和编译 Graph 中，并镜像到可重建的人类投影目录。GROUP 可多层、平行或不存在；根 TASK 不创建虚拟 GROUP。工作区共享一份 SQLite 权威，并按稳定的 `delivery.id` 隔离各次需求交付：
 
 ```text
 .layered-delivery/
@@ -196,15 +196,21 @@ GROUP/TASK 的递归只存在于冻结 hierarchy 和编译 Graph 中。工作区
 │   ├── progress.md
 │   ├── acceptance.md
 │   └── work-items/
-│       ├── <group-id>/
-│       │   ├── baseline.md
-│       │   ├── progress.md
-│       │   └── acceptance.md
-│       └── <task-id>/
+│       └── <root-id>/
 │           ├── baseline.md
 │           ├── progress.md
 │           ├── acceptance.md
-│           └── interfaces.md  # 按需
+│           └── children/
+│               ├── <group-id>/
+│               │   ├── baseline.md
+│               │   ├── progress.md
+│               │   ├── acceptance.md
+│               │   └── children/...
+│               └── <task-id>/
+│                   ├── baseline.md
+│                   ├── progress.md
+│                   ├── acceptance.md
+│                   └── interfaces.md  # 按需
 └── d-maintenance/
     ├── overview.md
     ├── baseline.md
@@ -212,9 +218,9 @@ GROUP/TASK 的递归只存在于冻结 hierarchy 和编译 Graph 中。工作区
     └── acceptance.md
 ```
 
-`scheduler.db` 是唯一机器权威；Delivery 目录只保留分离的需求基线、执行进展和验收记录，不再生成递归层级、编译 Graph 或当前状态 JSON 副本。Delivery baseline 链接全部节点 baseline；每个 GROUP/TASK 在平面的 `work-items/<node-id>/` namespace 内拥有 baseline、progress 和 acceptance，GROUP 再链接直接子节点。只有 TASK 显式声明接口时才在自己的目录增加接口契约投影；协议字段保持开放，HTTP、Dubbo、gRPC、GraphQL、消息等均可表达。目录名使用不可变 ID，不使用可修改标题；同一工作区可以保留多个 Delivery 目录。逻辑递归不映射为递归物理目录，也不会重新引入文件 scope。
+`scheduler.db` 是唯一机器权威；Delivery 目录只保留分离的需求基线、执行进展和验收记录，不再生成 hierarchy、编译 Graph 或当前状态 JSON 副本。Delivery baseline 链接全部节点 baseline；每个 GROUP/TASK 在 `work-items/<root-id>/children/...` 的对应节点目录拥有 baseline、progress 和 acceptance。只有 TASK 显式声明接口时才在自己的目录增加接口契约投影；协议字段保持开放，HTTP、Dubbo、gRPC、GraphQL、消息等均可表达。目录名使用不可变 ID，不使用可修改标题；物理递归只镜像父子关系，不重新引入文件 scope，兄弟执行顺序仍由 `dependsOn` 控制。
 
-人类投影集合必须足以完成冻结前评审、运行中跟踪和最终验收：`overview.md` 只导航；Delivery 投影负责聚合与串联；节点投影覆盖双指纹、summary、`dependsOn`、Loop 引用、资源锁、不透明 payload、运行状态、Loop 结果和证据。新增、调整或删除接口的 TASK 通过 `payload.interfaces` 显式提供 `changeType`、协议、名称、简介以及完整 before/after 快照；控制器在该 TASK 的 `interfaces.md` 确定性展示。代码可辅助准备和验证契约，但不成为动态投影源，接口内容也不参与 Graph 决策。固定展示使用中文和 UTC+8 时间，SQLite 继续保持机器 UTC。
+人类投影集合必须足以完成冻结前评审、运行中跟踪和最终验收：工作区 `overview.md` 只列 Delivery 入口，Delivery `overview.md` 展示本交付状态与内部统计；Delivery 投影负责聚合与串联；节点投影覆盖双指纹、summary、`dependsOn`、Loop 引用、资源锁、不透明 payload、运行状态、Loop 结果和证据。进度、验收摘要、子节点结果和 P0/P1/P2 问题使用表格；P0/P1 只在修复、验证和独立复审后关闭，P2 非阻断但必须列示。新增、调整或删除接口的 TASK 通过 `payload.interfaces` 显式提供 `changeType`、协议、名称、简介以及完整 before/after 快照；控制器在该 TASK 的 `interfaces.md` 确定性展示。代码可辅助准备和验证契约，但不成为动态投影源，接口内容也不参与 Graph 决策。固定展示使用中文，标明 UTC+8 的时间使用 `YYYY-MM-DD HH:mm:ss`；SQLite 继续保持机器 UTC。
 
 ## 可恢复性
 

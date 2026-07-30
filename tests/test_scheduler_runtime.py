@@ -109,6 +109,24 @@ def hierarchy_nodes(hierarchy: dict) -> list[dict]:
     return result
 
 
+def hierarchical_work_item_paths(hierarchy: dict) -> dict[str, str]:
+    paths: dict[str, str] = {}
+
+    def visit(current: dict, parent_path: str | None) -> None:
+        item_id = current["definition"]["id"]
+        item_path = (
+            f"{WORK_ITEM_DIRECTORY}/{item_id}"
+            if parent_path is None
+            else f"{parent_path}/children/{item_id}"
+        )
+        paths[item_id] = item_path
+        for child in current["children"]:
+            visit(child, item_path)
+
+    visit(hierarchy["root"], None)
+    return paths
+
+
 def auditable_recursive_hierarchy() -> dict:
     source = recursive_hierarchy()
     for current in hierarchy_nodes(source):
@@ -397,7 +415,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             / "acceptance.md"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            "结果状态：已成功",
+            "| 已成功 | 1 | agent-1 |",
             completed_overview,
         )
         self.assertIn("opaque-to-scheduler", completed_overview)
@@ -407,7 +425,9 @@ class SchedulerRuntimeTests(unittest.TestCase):
             / ".layered-delivery"
             / "overview.md"
         ).read_text(encoding="utf-8")
-        self.assertIn("| 已完成 | 已完成 1/1 |", workspace_overview)
+        self.assertIn("| 已完成 |", workspace_overview)
+        self.assertNotIn("TASK 进度", workspace_overview)
+        self.assertNotIn("GROUP 数量", workspace_overview)
         self.assertNotIn("COMPLETED", workspace_overview)
 
         event_types = [
@@ -731,6 +751,15 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "FIND_RESOLVE_VERIFY_AND_REREVIEW_UNTIL_TERMINAL",
         )
         self.assertEqual(
+            context["completionPolicy"]["reviewFindings"],
+            {
+                "resultField": "reviewFindings",
+                "severities": ["P0", "P1", "P2"],
+                "p0p1": "RESOLVE_AND_REREVIEW_BEFORE_SUCCEEDED",
+                "p2": "ALWAYS_LIST_IN_ACCEPTANCE_REPORT",
+            },
+        )
+        self.assertEqual(
             context["humanArtifacts"],
             {
                 "taskBaseline": (
@@ -897,8 +926,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
         running_progress = (item_root / "progress.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("当前进度：执行中", running_progress)
-        self.assertIn("执行者：agent-task", running_progress)
+        self.assertIn(
+            "| TASK | 执行中 | 1 | agent-task |",
+            running_progress,
+        )
 
         record_loop_result(
             root=self.root,
@@ -919,13 +950,135 @@ class SchedulerRuntimeTests(unittest.TestCase):
         acceptance = (item_root / "acceptance.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("当前进度：已成功", completed_progress)
+        self.assertIn(
+            (
+                "| 阶段 | 当前进度 | 尝试次数 | 执行者 | "
+                "最近更新时间（UTC+8） | 结果摘要 |"
+            ),
+            completed_progress,
+        )
+        self.assertIn(
+            "| TASK | 已成功 | 1 | agent-task |",
+            completed_progress,
+        )
+        self.assertNotIn("\n- 当前进度：", completed_progress)
         self.assertIn("任务实现与验证已完成。", completed_progress)
+        self.assertIn(
+            (
+                "| 当前进度 | 尝试次数 | 执行者 | "
+                "结束时间（UTC+8） | 结果摘要 |"
+            ),
+            acceptance,
+        )
         self.assertIn("全部自动化检查通过", acceptance)
         self.assertEqual(
             (item_root / "baseline.md").read_bytes(),
             baseline_before,
         )
+
+    def test_review_findings_are_classified_in_acceptance_reports(
+        self,
+    ) -> None:
+        hierarchy = group_hierarchy()
+        prepared = self.prepare_and_freeze(hierarchy)
+        root_id = prepared["rootId"]
+        for minute, item_id in ((2, "t-api"), (4, "t-core")):
+            node_id = loop_node_id(item_id)
+            operation_id = f"op-{item_id}-severity"
+            dispatch_loop(
+                root=self.root,
+                root_id=root_id,
+                node_id=node_id,
+                owner="task-agent",
+                operation_id=operation_id,
+                now=at(minute),
+            )
+            record_loop_result(
+                root=self.root,
+                root_id=root_id,
+                node_id=node_id,
+                operation_id=operation_id,
+                outcome=success(f"{item_id} completed."),
+                now=at(minute + 1),
+            )
+
+        review_id = group_review_node_id("g-service")
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=review_id,
+            owner="review-agent",
+            operation_id="op-review-severity",
+            now=at(6),
+        )
+        record_loop_result(
+            root=self.root,
+            root_id=root_id,
+            node_id=review_id,
+            operation_id="op-review-severity",
+            outcome={
+                "status": "SUCCEEDED",
+                "summary": "P0/P1 已修复，P2 已记录。",
+                "result": {
+                    "reviewFindings": [
+                        {
+                            "severity": "P0",
+                            "summary": "关键数据可能丢失",
+                            "status": "RESOLVED",
+                            "resolution": "修复字段映射并完成回归。",
+                            "evidence": "数据链路测试通过",
+                        },
+                        {
+                            "severity": "P1",
+                            "summary": "异常分支缺少覆盖",
+                            "status": "RESOLVED",
+                            "resolution": "补充异常测试并复审。",
+                            "evidence": "新增测试通过",
+                        },
+                        {
+                            "severity": "P2",
+                            "summary": "导出任务日志不足",
+                            "status": "ACCEPTED",
+                            "resolution": "作为非阻断改进项保留。",
+                            "evidence": "不影响本次验收",
+                        },
+                    ],
+                    "verification": {"tests": "passed"},
+                },
+            },
+            now=at(7),
+        )
+
+        group_acceptance = (
+            Path(self.root)
+            / ".layered-delivery"
+            / root_id
+            / WORK_ITEM_DIRECTORY
+            / "g-service"
+            / "acceptance.md"
+        ).read_text(encoding="utf-8")
+        delivery_acceptance = (
+            Path(self.root)
+            / ".layered-delivery"
+            / root_id
+            / "acceptance.md"
+        ).read_text(encoding="utf-8")
+
+        for report in (group_acceptance, delivery_acceptance):
+            self.assertIn("#### Review 问题分级", report)
+            self.assertIn("- P0：1 项，未关闭 0 项", report)
+            self.assertIn("- P1：1 项，未关闭 0 项", report)
+            self.assertIn("- P2：1 项（必须逐项列示）", report)
+            self.assertIn(
+                "| 级别 | 问题 | 状态 | 处置 | 证据 |",
+                report,
+            )
+            self.assertIn("关键数据可能丢失", report)
+            self.assertIn("异常分支缺少覆盖", report)
+            self.assertIn("导出任务日志不足", report)
+            self.assertIn("已修复", report)
+            self.assertIn("已接受", report)
+            self.assertEqual(report.count("导出任务日志不足"), 1)
 
     def test_infrastructure_failure_retries_but_loop_block_does_not(
         self,
@@ -1226,13 +1379,11 @@ class SchedulerRuntimeTests(unittest.TestCase):
             for current in nodes
             if current["definition"]["kind"] == "TASK"
         ]
+        item_paths = hierarchical_work_item_paths(hierarchy)
         expected_work_items = {}
         for current in nodes:
             definition = current["definition"]
-            item_prefix = (
-                f"{artifact_prefix}/{WORK_ITEM_DIRECTORY}/"
-                f"{definition['id']}"
-            )
+            item_prefix = f"{artifact_prefix}/{item_paths[definition['id']]}"
             expected_work_items[definition["id"]] = {
                 "kind": definition["kind"],
                 "baseline": f"{item_prefix}/baseline.md",
@@ -1285,15 +1436,26 @@ class SchedulerRuntimeTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertNotIn("hierarchyFingerprint", overview)
-        self.assertIn(prepared["hierarchyFingerprint"], overview)
-        self.assertNotIn("graphFingerprint", overview)
-        self.assertIn(prepared["graphFingerprint"], overview)
+        self.assertNotIn(prepared["hierarchyFingerprint"], overview)
         self.assertIn(
-            "层级状态：待冻结",
+            prepared["hierarchyFingerprint"],
+            delivery_baseline,
+        )
+        self.assertNotIn("graphFingerprint", overview)
+        self.assertNotIn(prepared["graphFingerprint"], overview)
+        self.assertIn(prepared["graphFingerprint"], delivery_baseline)
+        self.assertIn(
+            (
+                "| 交付标识 | 标题 | 当前状态 | TASK 进度 | "
+                "GROUP 数量 | 最近更新（UTC+8） |"
+            ),
             overview,
         )
         self.assertIn(
-            "运行状态：未启动",
+            (
+                f"| {prepared['rootId']} | {hierarchy['delivery']['title']} "
+                "| 待冻结 | 已完成 0/6 | 4 |"
+            ),
             overview,
         )
         self.assertIn("[需求基线](baseline.md)", overview)
@@ -1313,7 +1475,11 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertIn("| 分组 |", delivery_baseline)
         self.assertIn("| 任务 |", delivery_baseline)
         self.assertIn("springboot-tdd", delivery_baseline)
-        self.assertIn(hierarchy["delivery"]["summary"], overview)
+        self.assertNotIn(hierarchy["delivery"]["summary"], overview)
+        self.assertIn(
+            hierarchy["delivery"]["summary"],
+            delivery_baseline,
+        )
         self.assertNotIn("```json", overview)
         self.assertNotIn("（PREPARED）", overview)
 
@@ -1322,6 +1488,17 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertIn("# 全部交付调度与进度总览", workspace_overview)
         self.assertIn("交付数量：1", workspace_overview)
+        self.assertIn(
+            (
+                "| 交付标识 | 需求标题 | 当前状态 | "
+                "最近更新（UTC+8） | 交付详情 |"
+            ),
+            workspace_overview,
+        )
+        self.assertNotIn("需求摘要", workspace_overview)
+        self.assertNotIn("TASK 进度", workspace_overview)
+        self.assertNotIn("GROUP 数量", workspace_overview)
+        self.assertNotIn(hierarchy["delivery"]["summary"], workspace_overview)
         self.assertIn(prepared["rootId"], workspace_overview)
         self.assertIn(
             f"({prepared['rootId']}/overview.md)",
@@ -1338,15 +1515,30 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 for path in work_item_root.iterdir()
                 if path.is_dir()
             },
+            {hierarchy["root"]["definition"]["id"]},
+        )
+        root_item = work_item_root / hierarchy["root"]["definition"]["id"]
+        self.assertEqual(
             {
-                current["definition"]["id"]
-                for current in nodes
+                path.name
+                for path in (root_item / "children").iterdir()
+                if path.is_dir()
             },
+            {
+                child["definition"]["id"]
+                for child in hierarchy["root"]["children"]
+            },
+        )
+        self.assertTrue(
+            (root_item / "children" / "g-backend").is_dir()
+        )
+        self.assertTrue(
+            (root_item / "children" / "g-quality").is_dir()
         )
         for current in nodes:
             definition = current["definition"]
             item_id = definition["id"]
-            item_root = work_item_root / item_id
+            item_root = projections / item_paths[item_id]
             with self.subTest(work_item_id=item_id):
                 self.assertIn(item_id, delivery_baseline)
                 self.assertEqual(
@@ -1362,7 +1554,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     },
                 )
                 self.assertIn(
-                    f"{WORK_ITEM_DIRECTORY}/{item_id}/baseline.md",
+                    f"{item_paths[item_id]}/baseline.md",
                     delivery_baseline,
                 )
                 item_progress = (item_root / "progress.md").read_text(
@@ -1371,24 +1563,17 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 item_acceptance = (
                     item_root / "acceptance.md"
                 ).read_text(encoding="utf-8")
-                self.assertIn(
-                    f"投影模板版本：{PROJECTION_TEMPLATE_VERSION}",
-                    item_progress,
-                )
-                self.assertIn("当前进度：未启动", item_progress)
-                self.assertIn(
-                    f"投影模板版本：{PROJECTION_TEMPLATE_VERSION}",
-                    item_acceptance,
-                )
+                self.assertNotIn("投影模板版本", item_progress)
+                self.assertIn("|", item_progress)
+                self.assertIn("未启动", item_progress)
+                self.assertNotIn("\n- 当前进度：", item_progress)
+                self.assertNotIn("投影模板版本", item_acceptance)
                 if definition["kind"] == "TASK":
                     loop = definition["execution"]["loop"]
                     baseline = (item_root / "baseline.md").read_text(
                         encoding="utf-8"
                     )
-                    self.assertIn(
-                        f"投影模板版本：{PROJECTION_TEMPLATE_VERSION}",
-                        baseline,
-                    )
+                    self.assertNotIn("投影模板版本", baseline)
                     self.assertIn(
                         prepared["hierarchyFingerprint"],
                         baseline,
@@ -1455,7 +1640,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     for child in current["children"]:
                         child_id = child["definition"]["id"]
                         self.assertIn(
-                            f"../{child_id}/baseline.md",
+                            f"children/{child_id}/baseline.md",
                             group_baseline,
                         )
                     self.assertNotIn(
@@ -1563,10 +1748,25 @@ class SchedulerRuntimeTests(unittest.TestCase):
 
         self.assertIn("# 交付执行进展", progress)
         self.assertIn("t-service", progress)
-        self.assertIn("当前进度：未启动", progress)
+        self.assertIn(
+            (
+                "| 层级路径 | 阶段 | 当前进度 | 尝试次数 | 执行者 | "
+                "最近更新时间（UTC+8） | 结果摘要 | 节点进展 |"
+            ),
+            progress,
+        )
+        self.assertIn("| t-service | TASK | 未启动 |", progress)
+        self.assertNotIn("\n- 当前进度：", progress)
         self.assertNotIn("Deliver one observable result.", progress)
 
         self.assertIn("# 交付验收记录", acceptance)
+        self.assertIn(
+            (
+                "| 当前进度 | 尝试次数 | 执行者 | "
+                "结束时间（UTC+8） | 结果摘要 |"
+            ),
+            acceptance,
+        )
         self.assertIn("The loop returns verified evidence.", acceptance)
         self.assertIn("最终用户确认", acceptance)
 
@@ -1683,10 +1883,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     content = (projection_root / filename).read_text(
                         encoding="utf-8"
                     )
-                    self.assertIn(
-                        f"投影模板版本：{PROJECTION_TEMPLATE_VERSION}",
-                        content,
-                    )
+                    self.assertNotIn("投影模板版本", content)
             item_root = (
                 projection_root / WORK_ITEM_DIRECTORY / "t-service"
             )
@@ -1702,14 +1899,11 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     content = (item_root / filename).read_text(
                         encoding="utf-8"
                     )
-                    self.assertIn(
-                        f"投影模板版本：{PROJECTION_TEMPLATE_VERSION}",
-                        content,
-                    )
+                    self.assertNotIn("投影模板版本", content)
             interface_projection = item_root / "interfaces.md"
             if index == 0:
-                self.assertIn(
-                    f"投影模板版本：{PROJECTION_TEMPLATE_VERSION}",
+                self.assertNotIn(
+                    "投影模板版本",
                     interface_projection.read_text(encoding="utf-8"),
                 )
             else:
@@ -1881,8 +2075,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
             },
             original_work_items,
         )
-        self.assertIn(
-            f"投影模板版本：{PROJECTION_TEMPLATE_VERSION}",
+        self.assertNotIn(
+            "投影模板版本",
             rebuilt["overview.md"].decode("utf-8"),
         )
 
@@ -2077,18 +2271,12 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertFalse((projection_root / "state.json").exists())
         human_time = at(3).astimezone(
             timezone(timedelta(hours=8))
-        ).isoformat(timespec="seconds")
+        ).strftime("%Y-%m-%d %H:%M:%S")
         overview = (projection_root / "overview.md").read_text(
             encoding="utf-8"
         )
-        self.assertEqual(
-            [
-                line
-                for line in overview.splitlines()
-                if line.startswith("- 更新时间（UTC+8）：")
-            ],
-            [f"- 更新时间（UTC+8）：{human_time}"],
-        )
+        self.assertIn(human_time, overview)
+        self.assertNotIn("T08:03:00+08:00", overview)
 
     def test_delivery_ids_retain_separate_requirement_projections(
         self,
@@ -2180,7 +2368,13 @@ class SchedulerRuntimeTests(unittest.TestCase):
 
         self.assertEqual(frozen["status"], "ACTIVE")
         self.assertFalse((projections / "state.json").exists())
-        self.assertIn("运行状态：运行中", overview)
+        self.assertIn(
+            (
+                f"| {prepared['rootId']} | "
+                f"{hierarchy['delivery']['title']} | 运行中 |"
+            ),
+            overview,
+        )
         self.assertNotIn("ACTIVE", overview)
         self.assertIn("运行状态：运行中", progress)
         statuses = {
@@ -2189,19 +2383,38 @@ class SchedulerRuntimeTests(unittest.TestCase):
         }
         self.assertIn("READY", statuses)
         self.assertIn("PENDING", statuses)
+        item_paths = hierarchical_work_item_paths(hierarchy)
         for state in frozen["nodes"]:
             with self.subTest(node_id=state["nodeId"]):
-                lines = (
-                    acceptance.splitlines()
-                    if state["nodeId"].startswith("confirm:")
-                    else progress.splitlines()
-                )
-                node_line = f"- 调度节点：{state['nodeId']}"
-                self.assertIn(node_line, lines)
-                node_index = lines.index(node_line)
-                self.assertEqual(
-                    lines[node_index + 1],
-                    f"- 当前进度：{STATUS_TEXT[state['status']]}",
+                node_id = state["nodeId"]
+                status = STATUS_TEXT[state["status"]]
+                if node_id.startswith("confirm:"):
+                    self.assertIn(f"| {status} | 1 |", acceptance)
+                    continue
+                if node_id.startswith("loop:"):
+                    item_id = node_id.removeprefix("loop:")
+                    stage = "TASK"
+                    path = item_paths[item_id].removeprefix(
+                        f"{WORK_ITEM_DIRECTORY}/"
+                    ).replace("/children/", "/")
+                elif node_id.startswith("join:"):
+                    item_id = node_id.removeprefix("join:")
+                    stage = "GROUP 汇合"
+                    path = item_paths[item_id].removeprefix(
+                        f"{WORK_ITEM_DIRECTORY}/"
+                    ).replace("/children/", "/")
+                elif node_id.startswith("review:group:"):
+                    item_id = node_id.removeprefix("review:group:")
+                    stage = "GROUP Review"
+                    path = item_paths[item_id].removeprefix(
+                        f"{WORK_ITEM_DIRECTORY}/"
+                    ).replace("/children/", "/")
+                else:
+                    path = hierarchy["delivery"]["id"]
+                    stage = "Delivery Review"
+                self.assertIn(
+                    f"| {path} | {stage} | {status} | 1 |",
+                    progress,
                 )
 
     def test_projection_labels_statuses_and_times_are_localized(
@@ -2232,15 +2445,15 @@ class SchedulerRuntimeTests(unittest.TestCase):
         prepared_baseline = baseline_path.read_text(encoding="utf-8")
 
         self.assertIn(
-            "更新时间（UTC+8）：2026-01-01T08:00:00+08:00",
+            "2026-01-01 08:00:00",
             prepared_overview,
         )
         self.assertNotIn(
-            "更新时间（UTC+8）：2026-01-01T00:00:00Z",
+            "2026-01-01T08:00:00+08:00",
             prepared_overview,
         )
         self.assertIn(
-            "层级状态：待冻结",
+            "| d-service | Deliver d-service | 待冻结 |",
             prepared_overview,
         )
         self.assertIn("| 任务 |", prepared_baseline)
@@ -2268,26 +2481,22 @@ class SchedulerRuntimeTests(unittest.TestCase):
         active_progress = progress_path.read_text(encoding="utf-8")
 
         self.assertIn(
-            "层级状态：已冻结",
+            "| d-service | Deliver d-service | 运行中 |",
             active_overview,
         )
         self.assertIn(
-            "运行状态：运行中",
-            active_overview,
+            (
+                "| t-service | TASK | 执行中 | 1 | agent-local-time | "
+                "2026-01-01 08:02:00 |"
+            ),
+            active_progress,
         )
-        self.assertIn("当前进度：执行中", active_progress)
         for machine_status in ("FROZEN", "ACTIVE", "CLAIMED"):
             self.assertNotIn(machine_status, active_overview)
             self.assertNotIn(machine_status, active_progress)
-        for expected in (
-            "认领时间（UTC+8）：2026-01-01T08:02:00+08:00",
-            "最近心跳（UTC+8）：2026-01-01T08:02:00+08:00",
-            "租约到期（UTC+8）：2026-01-01T08:32:00+08:00",
-        ):
-            self.assertIn(expected, active_progress)
         self.assertNotRegex(
             active_progress,
-            r"2026-01-01T\d{2}:\d{2}:\d{2}Z",
+            r"2026-01-01T\d{2}:\d{2}:\d{2}(?:Z|\+08:00)",
         )
 
     def test_materialized_state_can_be_rebuilt_from_events(self) -> None:

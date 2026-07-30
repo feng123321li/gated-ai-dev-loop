@@ -11,9 +11,9 @@ description: "调度或恢复多项目、多模块的软件交付 Graph。用于
 
 - 只调用 Plugin 注册的 MCP 工具。MCP 不可用时报告 `PLUGIN_MCP_UNAVAILABLE` 并停止治理写入。
 - 只从 MCP 响应读取调度状态；不要通过 Shell、Python 或其他连接直接打开、查询或修改 `scheduler.db`。
-- 以 SQLite 与事件链为唯一机器权威，不生成 `hierarchy.json`、`graph.json` 或 `state.json` 副本。根级全部 Delivery 总览、每个 Delivery 的 overview/baseline/progress/acceptance，以及 `work-items/<node-id>/` 下每个 GROUP/TASK 的 baseline/progress/acceptance，是控制器用固定版本模板生成的中文人类投影。Delivery baseline 串联全部节点 baseline，GROUP baseline 串联直接子节点。只有 TASK 显式声明 `payload.interfaces` 时才在该 TASK 目录生成 before/after 接口投影；无声明时不扫描代码或自动推断。人类 Markdown 只对不透明 payload 做确定性的结构展开，不展示 JSON 代码块或原始状态枚举。MCP 提交的 hierarchy、summary 和 payload 会作为领域数据进入投影，但不要选择模板或投影文件名，也不要自行拼装、创建、修补或重写投影。
+- 以 SQLite 与事件链为唯一机器权威，不生成 `hierarchy.json`、`graph.json` 或 `state.json` 副本。根级全部 Delivery 总览、每个 Delivery 的 overview/baseline/progress/acceptance，以及从 `work-items/<root-id>/` 开始按 `children/<child-id>/` 递归展开的每个 GROUP/TASK 投影，是控制器生成的中文人类视图。GROUP 可多层、平行或完全省略；根为 TASK 时直接使用 `work-items/<task-id>/`。Delivery baseline 串联全部节点 baseline，GROUP baseline 串联直接子节点。只有 TASK 显式声明 `payload.interfaces` 时才在该 TASK 目录生成 before/after 接口投影；无声明时不扫描代码或自动推断。进度、状态摘要、子节点验收和 Review 问题使用表格，长输入与证据保持结构化列表；所有标明 UTC+8 的时间使用 `YYYY-MM-DD HH:mm:ss`。MCP 提交的 hierarchy、summary 和 payload 会作为领域数据进入投影，但不要选择模板或投影文件名，也不要自行拼装、创建、修补或重写投影。
 - 只使用 schema v3。调用 `hierarchy_contract` 取得当前精确结构，不从源码或旧会话猜 schema。
-- 把 Delivery 作为 Graph 与最终验收边界；递归 GROUP 只协调子图，TASK 是唯一执行叶子。
+- 把 Delivery 作为 Graph 与最终验收边界；GROUP 只在存在真实的依赖、并行汇合或分层审查边界时使用，可递归也可省略；TASK 是唯一执行叶子，不要用只有一个 TASK 的 GROUP 制造形式层级。
 - 不解释或约束 `loop.payload` 和 `loop.result`。实现方案、测试、Gate、修正循环及 Skill 调用属于相应 TASK 或 Review Loop。
 - 需求包含接口契约时，按 `hierarchy_contract.projectionGuidance.interfaces` 在负责该接口的 TASK `payload.interfaces` 中显式提供协议、接口名、简介、调用标识、入参与出参；`protocol` 是开放字符串，HTTP、Dubbo、gRPC、GraphQL、消息等仅为示例。这只驱动固定的人类接口投影，不参与 Graph 调度判断。
 - 冻结的是外层目标、依赖、资源声明和拓扑，不冻结 Loop 内部实现计划。payload 提供目标、明确约束和已知验收点，不是完整实现规约或工程正确性的穷举清单；Loop 必须结合真实代码、契约和数据链路推导当前 scope 的必要条件。可识别、可修复的正确性、数据完整性、边界与回归问题都由当前 Loop 自行调整方案并闭环。
@@ -45,7 +45,7 @@ description: "调度或恢复多项目、多模块的软件交付 Graph。用于
 4. 无可用 Agent 容量时才输出人工交接，且不要提前 claim；未 claim 的 Loop 由接收方直接读取 frontier 后 dispatch，已暂停的 Loop 按 `RESUME_LOOP_IN_INDEPENDENT_CONTEXT` 恢复。
 5. 接收方从 `loop_context` 获取 `loop.ref`、不透明 `payload`、共享 `skillHints`、TASK baseline 路径、固定 `completionPolicy` 和 `executionPolicy`。
 6. Loop 先识别当前任务和宿主可用 Skill，再优先原生触发适用提示；可以跳过不适用提示，也可以按实际需要使用其他 Skill。不同节点可以作出不同选择。
-7. TASK Loop 自主管理实现；GROUP Review 和 Delivery Review Loop 自主管理独立发现、修正协调和复审。Review 发现当前冻结目标内可修复的问题时，留在同一 Loop 内调整实现方案、完成修正并重新验证；独立 Review 不等于 Reviewer 只能报告缺陷。`GROUP_JOIN` 由调度器在直接子节点终态齐备后推进，不派发实现工作。
+7. TASK Loop 自主管理实现；GROUP Review 和 Delivery Review Loop 自主管理独立发现、修正协调和复审。Review 把每项问题分类为 P0/P1/P2；P0、P1 必须留在同一 Review Loop 内完成修正、验证和独立复审，全部关闭后才可返回 `SUCCEEDED`；P2 不阻断成功，但必须逐项保留在 `result.reviewFindings` 并进入验收投影。`GROUP_JOIN` 由调度器在直接子节点终态齐备后推进，不派发实现工作。
 8. 长运行在租约到期前调用 `heartbeat_loop`；只有租约仍有效时，上下文容量压力或高轮次 Hook 摩擦才使用 pause/handoff。租约已过期时停止旧 operation，由 frontier/`advance_graph` 回收。
 9. 只把 Loop 的真实业务终态提交给 `record_loop_result`；可修复 finding、内部 Gate 失败和容量交接都不产生 Loop outcome。`BLOCKED` 必须显式提供 failure class，并且只能用于当前 scope/权限内无继续路径的具体条件。
 10. 继续消费 frontier。每个 GROUP Review 成功后才成为父 GROUP 可消费的终态；根终态再进入 Delivery Review。出现 `RECORD_USER_CONFIRMATION` 时读取 [acceptance.md](references/acceptance.md)，等待真实用户最终确认。

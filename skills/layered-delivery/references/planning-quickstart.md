@@ -15,7 +15,7 @@
 
 工作项类型只有 `GROUP` 和 `TASK`。Delivery 不作为工作项层级，而是整个 Graph、最终 Review 和用户验收的顶层边界。GROUP 可递归混合包含 GROUP/TASK；TASK 是唯一执行叶子。
 
-按调度关系拆分，不按文件数量拆分。一个 TASK Loop 可以覆盖一个模块、多个模块或多个项目，只要它能作为整体返回标准终态。不要为表现项目或模块目录而强制增加 GROUP。
+按调度关系拆分，不按文件数量拆分。一个 TASK Loop 可以覆盖一个模块、多个模块或多个项目，只要它能作为整体返回标准终态。GROUP 是动态、可选的协调与 Review 边界，可以多层、平行，也可以完全不存在；不要为表现项目/模块目录，或只包裹一个 TASK，而强制增加 GROUP。
 
 ## Delivery 与 root wrapper
 
@@ -58,7 +58,7 @@
 }
 ```
 
-`delivery.id` 是稳定的 Delivery/Graph 标识，也是需求投影目录的 namespace。工作区全部 Delivery 的进度入口位于 `.layered-delivery/overview.md`，该 Delivery 的可读投影位于 `.layered-delivery/<delivery-id>/`；`delivery.reviewLoop` 在根终态之后执行。
+`delivery.id` 是稳定的 Delivery/Graph 标识，也是需求投影目录的 namespace。工作区全部 Delivery 的入口位于 `.layered-delivery/overview.md`，这里只列 Delivery 标识、标题、状态、更新时间和详情链接；该 Delivery 自己的 TASK 进度与 GROUP 数量位于 `.layered-delivery/<delivery-id>/overview.md`。`delivery.reviewLoop` 在根终态之后执行。
 
 ## 定义递归节点
 
@@ -77,6 +77,7 @@ GROUP：
 - `definition.decomposition.dependsOn` 只引用直接同级 GROUP/TASK。
 - 节点 `children` 递归包含与摘要一一对应的完整 GROUP/TASK 节点，且至少一个。
 - 节点 `reviewLoop` 必填。直接子节点终态全部成功后，调度器完成 `GROUP_JOIN`，再派发该 `GROUP_REVIEW_LOOP`；Review 成功才是 GROUP 的终态。
+- 只有存在真实的同级协调、汇合或独立分层审查边界时才创建；单个可独立结果直接使用 TASK。
 
 递归示例：
 

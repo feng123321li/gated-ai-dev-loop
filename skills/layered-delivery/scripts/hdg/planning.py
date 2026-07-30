@@ -60,9 +60,10 @@ def prepare_hierarchy(
         f".layered-delivery/{normalized['delivery']['id']}"
     )
     task_baselines = {
-        node["definition"]["id"]: (
-            f"{projection_root}/"
-            f"{task_baseline_relative_path(node['definition']['id'])}"
+        node["definition"]["id"]: f"{projection_root}/"
+        + task_baseline_relative_path(
+            normalized,
+            node["definition"]["id"],
         )
         for node in iter_hierarchy_nodes(normalized)
         if node["definition"]["kind"] == "TASK"
@@ -75,21 +76,37 @@ def prepare_hierarchy(
             "kind": definition["kind"],
             "baseline": (
                 f"{projection_root}/"
-                f"{work_item_projection_relative_path(item_id, 'baseline.md')}"
+                + work_item_projection_relative_path(
+                    normalized,
+                    item_id,
+                    "baseline.md",
+                )
             ),
             "progress": (
                 f"{projection_root}/"
-                f"{work_item_projection_relative_path(item_id, 'progress.md')}"
+                + work_item_projection_relative_path(
+                    normalized,
+                    item_id,
+                    "progress.md",
+                )
             ),
             "acceptance": (
                 f"{projection_root}/"
-                f"{work_item_projection_relative_path(item_id, 'acceptance.md')}"
+                + work_item_projection_relative_path(
+                    normalized,
+                    item_id,
+                    "acceptance.md",
+                )
             ),
         }
         if task_has_interface_projection(definition):
             artifacts["interfaces"] = (
                 f"{projection_root}/"
-                f"{work_item_projection_relative_path(item_id, 'interfaces.md')}"
+                + work_item_projection_relative_path(
+                    normalized,
+                    item_id,
+                    "interfaces.md",
+                )
             )
         work_items[item_id] = artifacts
     human_artifacts = {

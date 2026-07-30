@@ -34,6 +34,8 @@ Join 不需要 dispatch，也不包含实现内容。不要绕过某一级 GROUP
 3. 接收方原生进入 layered-delivery，使用精确 `nodeId` 调用 `loop_context`。TASK 与 GROUP Review Loop 同时取得控制器生成的 `humanArtifacts.workItem` baseline/progress/acceptance 路径；TASK 继续取得 `humanArtifacts.taskBaseline` 便捷路径，接口型 TASK 的 workItem 还包含自己的 `interfaces`。机器输入仍以 MCP 响应为准。
 4. 接收方创建全局唯一 `operation_id` 并调用 `dispatch_loop`。没有可用 Agent 容量时才把同样的 `rootId/nodeId` 作为人工交接，且在接收方存在前不要提前 claim。
 5. 按 `loop.ref` 启动对应内部 TASK、GROUP Review 或 Delivery Review Loop，并把 `payload` 和共享 `skillHints` 原样交给该 Loop。
+   - 开发型 TASK 可在宿主和仓库支持时使用独立 Git worktree，尤其适合并行 TASK 隔离未提交改动；这是 Loop 内部实现选择，不进入 hierarchy、Graph 或 baseline 契约。
+   - 每个并行 TASK 使用独立 worktree 与分支，仍遵守 `resourceClaims`。MCP 协调根保持原工作区，不要在每个 worktree 启动独立 scheduler 或复制 `.layered-delivery`；合并、删除 worktree、提交、推送和发布仍按各自授权边界执行。
 6. 内部 Loop 先识别当前任务与宿主可用 Skill，再优先原生触发适用的 Skill Hint；不要因为 hierarchy 提供了提示，就假定每条提示都适用于当前 Loop。
 7. 让内部 Loop 自己选择其他必要 Skill。payload 是目标、明确约束和已知验收点的输入，不是完整实现规约；Loop 要结合真实代码、契约和数据链路推导当前 scope 的必要条件。冻结 Graph 不冻结内部实现计划。TASK Loop 自主管理实现、文件、测试、Gate 和修正；Review Loop 自主管理独立发现、修正协调、Gate 和复审。
 8. 当前目标内可修复的实现缺陷、测试失败、数据完整性或边界问题都留在当前 Loop：调整内部计划，完成修正，再重新验证。Review 可以自行修正或使用宿主内部执行容量派遣修正上下文，但必须保留独立复核；不要把“Review 未通过”提交成 `BLOCKED`。

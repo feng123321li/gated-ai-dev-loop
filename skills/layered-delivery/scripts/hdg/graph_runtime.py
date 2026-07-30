@@ -373,6 +373,7 @@ def loop_context(
             "baseline": (
                 projection_prefix
                 + work_item_projection_relative_path(
+                    stored["hierarchy"],
                     item_id,
                     "baseline.md",
                 )
@@ -380,6 +381,7 @@ def loop_context(
             "progress": (
                 projection_prefix
                 + work_item_projection_relative_path(
+                    stored["hierarchy"],
                     item_id,
                     "progress.md",
                 )
@@ -387,6 +389,7 @@ def loop_context(
             "acceptance": (
                 projection_prefix
                 + work_item_projection_relative_path(
+                    stored["hierarchy"],
                     item_id,
                     "acceptance.md",
                 )
@@ -401,6 +404,7 @@ def loop_context(
             work_item_artifacts["interfaces"] = (
                 projection_prefix
                 + work_item_projection_relative_path(
+                    stored["hierarchy"],
                     item_id,
                     "interfaces.md",
                 )
@@ -409,7 +413,10 @@ def loop_context(
         if work_item_kind == "TASK":
             human_artifacts["taskBaseline"] = (
                 projection_prefix
-                + task_baseline_relative_path(item_id)
+                + task_baseline_relative_path(
+                    stored["hierarchy"],
+                    item_id,
+                )
             )
     return {
         "rootId": root_id,

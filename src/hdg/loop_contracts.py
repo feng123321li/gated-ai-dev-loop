@@ -47,6 +47,12 @@ _LOOP_COMPLETION_POLICY = {
     "implementationPlanWithinLoop": "MAY_ADAPT_WITHOUT_REPLAN",
     "actionableFinding": "RESOLVE_AND_REEVALUATE_IN_CURRENT_LOOP",
     "reviewCycle": "FIND_RESOLVE_VERIFY_AND_REREVIEW_UNTIL_TERMINAL",
+    "reviewFindings": {
+        "resultField": "reviewFindings",
+        "severities": ["P0", "P1", "P2"],
+        "p0p1": "RESOLVE_AND_REREVIEW_BEFORE_SUCCEEDED",
+        "p2": "ALWAYS_LIST_IN_ACCEPTANCE_REPORT",
+    },
     "blockedOutcome": (
         "ONLY_IF_NO_IN_SCOPE_PATH_CAN_PROGRESS_WITH_CURRENT_AUTHORITY"
     ),

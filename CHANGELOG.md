@@ -6,7 +6,7 @@
 
 ## 0.22.0 — 2026-07-30
 
-发布提交：待发布
+发布提交：`c613946`
 
 - 新增只读 `available_agents`，从当前 PATH、常见终端 `--version`、Codex/Claude Code 非敏感模型字段和用户本地 Agent Profile 动态发现 Agent + 当前模型；兼容 CC-Switch 对 GLM、DeepSeek 等任意模型的即时切换，不返回凭据、Base URL 或绝对路径。
 - 新增只读 `recommend_executors`，为已准备或冻结 Graph 的全部 TASK、GROUP Review 和 Delivery Review 返回建议 Agent + Model、最多三个备选、置信度、结构化原因与 Review 异构 Agent 独立性状态。

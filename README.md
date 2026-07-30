@@ -4,6 +4,8 @@
 
 当前版本：**0.25.0**
 
+同一仓库可以由多个对话窗口并行维护多个 Delivery。每个 Active Delivery 绑定独立对话工作区；Git 场景采用“一 Delivery、一 linked worktree、一最终 feature 分支”，共享主 checkout 的统一 `scheduler.db`，但使用不同 `workspaceKey` 隔离开发文件和控制面写入。同一 Delivery 的所有 TASK 共享这一个 worktree 和 feature 分支；TASK 是调度单元，不创建、绑定或切换内部 Git 分支，但可按各自 scope 在该 Delivery 分支上分别 `git add` 和 `git commit`，形成独立 TASK commit。每个 hierarchy 可冻结 `branchRef/baseRef/baseCommit/integrationTarget`：主线优先 `main`，不存在时回退 `master`；新 Delivery 从主线创建，不隐式继承当前 feature 分支。跨 Delivery 的 `resourceClaims` 仍在共享数据库中全局互斥，因此 worktree 不会掩盖数据库、端口或部署环境冲突。
+
 它负责：
 
 - 用 `GROUP` / `TASK` 递归组织多项目、多模块交付；
@@ -227,7 +229,7 @@ Task 的调度定义只保留：
 - `REPLAN_REQUIRED`
 - `CANCELLED`
 
-只有 `RETRYABLE_INFRA` 和 `WORKER_LOST` 会触发外层自动重试。payload 提供目标、明确约束和已知验收点，不是完整实现规约；Loop 还要结合真实代码、契约和数据链路推导必要条件。冻结 Graph 只固定外层目标、依赖、资源声明和拓扑，不冻结 Loop 内部实现计划。当前目标内可修复的实现、测试、数据完整性、边界或 Review finding，必须由当前 TASK/Review Loop 调整方案、修正并重新验证，不进入外层事件。`BLOCKED` 仅表示当前 scope 和权限内没有继续路径，并要求显式 failure class；`REPLAN_REQUIRED` 仅用于必须改变冻结 Graph 契约的情况。
+只有 `RETRYABLE_INFRA` 和 `WORKER_LOST` 会触发外层自动重试。payload 提供目标、明确约束和已知验收点，不是完整实现规约；Loop 还要结合真实代码、契约和数据链路推导必要条件。初次冻结把全部 TASK 需求设为 revision 1 冻结态，并固定依赖、资源声明和拓扑；用户可在开发期间单独解冻尚未开始的 TASK，只替换标题、摘要和 payload，再冻结成新 revision，编辑期间该 TASK 不会被派遣。已开始 TASK 或依赖、资源、拓扑变化仍必须走 `REPLAN_REQUIRED`。Loop 内部实现计划不被冻结；当前目标内可修复的实现、测试、数据完整性、边界或 Review finding，必须由当前 TASK/Review Loop 调整方案、修正并重新验证，不进入外层事件。`BLOCKED` 仅表示当前 scope 和权限内没有继续路径，并要求显式 failure class。
 
 ## MCP 流程
 
@@ -240,6 +242,8 @@ workspace_status
 → 用户选择：自动执行 / 手动交接（也可直接回复修改意见，不冻结）
 → freeze_hierarchy（自动或手动选择即为唯一一次冻结确认）
 → graph_frontier
+→ 未开始 TASK 需求变化时：
+  unfreeze_task_requirement → refreeze_task_requirement → graph_frontier
 → 独立 Agent：loop_context / dispatch_loop / heartbeat_loop
 → 租约有效且上下文压力：pause_loop / 新 Agent resume_loop / 重新 dispatch
 → 宿主报告剩余额度不高于 5%：
@@ -255,7 +259,7 @@ workspace_status
 → record_user_confirmation
 ```
 
-当前 Plugin 注册 19 个工具：17 个既有外层调度工具，加上只读的 `available_agents` 与 `recommend_executors`。每次 Graph Controller operation 都绑定一个已校验的项目协调根；现代 MCP 从请求上下文取得，旧 MCP 从初始化式连接绑定取得。多仓库或多服务目标通过 Loop ref/payload 与资源声明表达。
+当前 Plugin 注册 21 个工具：外层调度与恢复工具、只读的 `available_agents` / `recommend_executors`，以及显式人机授权的 `unfreeze_task_requirement` / `refreeze_task_requirement`。每次 Graph Controller operation 都绑定一个已校验的共享控制根和当前对话工作区；Git Delivery 还校验当前 worktree、feature 分支及冻结 fork commit。现代 MCP 从请求上下文取得，旧 MCP 从初始化式连接绑定取得。控制器只读 Git，不创建、切换、提交、合并或推送分支。
 
 ## Agent 与模型建议
 
@@ -286,7 +290,7 @@ Claude Plugin ─┘  ├─ MCP 2026-07-28（优先）
 
 Claude Code 和旧 Codex 仍可走 `2025-11-25` 的 `initialize → notifications/initialized`。Adapter 只维护 `2026-07-28` 与 `2025-11-25` 双版本，不会把新版无会话语义伪装成旧版会话。新版 Tasks 属于可选扩展；当前外层调度已使用显式 `root_id`、`node_id` 和 `operation_id` 保存长任务状态，因此本版本不声明 Tasks 扩展。
 
-`freeze_hierarchy` 对模型只暴露 `execution_mode=active|manual`，不暴露内部 `confirmed`。冻结前只展示“自动执行 / 手动交接”两个确认选项；自动和手动都表示完整授权并确认开发，区别只在冻结后由当前会话继续调度还是生成交接。需要调整时，用户直接回复修改意见，当前方案不冻结；只有需求实际变化才重新 prepare，单纯询问或其他未改变需求的回复保留当前 `PREPARED` 结果。冻结工具在宿主权限层统一走自动批准，MCP 适配器在控制器边界内注入 Python `True`，不得再为同一次冻结追加通用 Yes/No 或其他弹窗。
+`freeze_hierarchy` 对模型只暴露 `execution_mode=active|manual`，不暴露内部 `confirmed`。冻结前只展示“自动执行 / 手动交接”两个确认选项；自动和手动都表示完整授权并确认开发，区别只在冻结后由当前会话继续调度还是生成交接。需要调整时，用户直接回复修改意见，当前方案不冻结；只有需求实际变化才重新 prepare，单纯询问或其他未改变需求的回复保留当前 `PREPARED` 结果。冻结工具在宿主权限层统一走自动批准。冻结后若用户调整尚未开始的 TASK，`unfreeze_task_requirement` 与 `refreeze_task_requirement` 分别执行显式的人机授权；解冻只开放 `title`、`summary`、`payload`，不开放拓扑与资源契约。
 
 总调度上下文只消费 frontier。每个 TASK、TASK Review、GROUP Review 和 Delivery Review Loop 默认路由到独立接收上下文；宿主支持原生 Agent 时优先自动派遣。Review 的独立性用于独立发现与复核，不阻止它在同一 Loop 内自行修正或派遣内部修正上下文。未 claim 且没有 Agent 容量时只生成人工交接，不提前 claim；已 claim、租约有效且出现上下文压力或高轮次 Hook 摩擦时，使用 `pause_loop → 新上下文 resume_loop → 重新 dispatch`，不提交业务 outcome。宿主明确报告剩余额度不高于 5% 且提供真实未来 `resetAt` 时，当前 Agent 在额度耗尽前用对应 `capacity_scope` 定时 pause：单个执行 Agent 使用 `EXECUTOR`，总调度宿主使用 `HOST`。随后由 Claude Code 当前会话的一次性 Cron 或 Codex Desktop 当前任务计划在恢复窗口后唤醒原 Agent；Agent 重新调用 frontier 时，控制器恢复同一 attempt 并产生派遣动作。直接收到 429、宿主原生计划不可用或宿主被关闭时不补建定时任务，恢复额度后由人工 resume Agent。控制器不会自行启动进程；限额恢复也不调用推荐器或自动换 Agent。租约过期时由 `advance_graph` 回收旧 attempt，禁止调用 `pause_loop`。接收方始终继续同一冻结 Graph。
 

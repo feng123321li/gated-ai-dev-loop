@@ -3,6 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from .errors import fail
+from .git_binding import (
+    inspect_delivery_git_workspace,
+    verify_delivery_git_binding,
+)
 from .graph_model import (
     compile_delivery_graph,
     graph_fingerprint,
@@ -24,17 +28,43 @@ from .repository import SchedulerRepository
 def workspace_status(
     *,
     root: str,
+    root_id: str | None = None,
+    workspace_root: str | None = None,
     explicit_dogfood: bool = False,
 ) -> dict[str, Any]:
     repository = SchedulerRepository(root)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
-    return repository.workspace_status()
+    result = repository.workspace_status(
+        root_id=root_id,
+        workspace_root=workspace_root,
+    )
+    selected_root_id = result.get("rootId")
+    if isinstance(selected_root_id, str):
+        stored = repository.hierarchy(selected_root_id)
+        git_binding = stored["hierarchy"]["delivery"].get("gitBinding")
+        git_workspace = verify_delivery_git_binding(
+            workspace_root or root,
+            git_binding,
+            preparing=False,
+        )
+        if git_binding is not None:
+            result["gitBinding"] = git_binding
+        if git_workspace is not None:
+            result["gitWorkspace"] = git_workspace
+    else:
+        discovery = inspect_delivery_git_workspace(
+            workspace_root or root,
+        )
+        if discovery is not None:
+            result.update(discovery)
+    return result
 
 
 def prepare_hierarchy(
     *,
     root: str,
     hierarchy: object,
+    workspace_root: str | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
     **_: Any,
@@ -44,6 +74,12 @@ def prepare_hierarchy(
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     normalized = validate_hierarchy_definition(hierarchy)
+    git_binding = normalized["delivery"].get("gitBinding")
+    git_workspace = verify_delivery_git_binding(
+        workspace_root or root,
+        git_binding,
+        preparing=True,
+    )
     hierarchy_value = hierarchy_fingerprint(normalized)
     graph = compile_delivery_graph(
         normalized,
@@ -55,6 +91,7 @@ def prepare_hierarchy(
         graph,
         hierarchy_fingerprint=hierarchy_value,
         graph_fingerprint=graph_value,
+        workspace_root=workspace_root or root,
     )
     projection_root = (
         f".layered-delivery/{normalized['delivery']['id']}"
@@ -118,12 +155,17 @@ def prepare_hierarchy(
         "taskBaselines": task_baselines,
         "workItems": work_items,
     }
-    return {
+    result = {
         **prepared,
         "graphSummary": graph_summary(graph),
         "humanArtifacts": human_artifacts,
         "nextAction": "FREEZE_HIERARCHY_AFTER_USER_CONFIRMATION",
     }
+    if git_binding is not None:
+        result["gitBinding"] = git_binding
+    if git_workspace is not None:
+        result["gitWorkspace"] = git_workspace
+    return result
 
 
 def freeze_hierarchy(

@@ -9,6 +9,7 @@ src/hdg/
 │                      # TASK/Review 非绑定 Agent + Model 建议
 ├── loop_contracts.py   # Loop descriptor、outcome、资源锁
 ├── model_core.py       # schema v3 Delivery 与递归 GROUP/TASK 校验
+├── git_binding.py      # Git worktree/feature/mainline 只读发现与校验
 ├── graph_model.py      # GROUP Join/Review、Delivery Review、DAG 与 FSM
 ├── repository.py       # SQLite、事件链、投影
 ├── planning.py         # prepare / freeze / workspace status
@@ -32,9 +33,11 @@ src/hdg/
 
 | 表 | 内容 |
 |---|---|
-| `hierarchies` | Delivery 交付信息、递归 GROUP/TASK hierarchy、graph、指纹与冻结状态 |
+| `hierarchies` | Delivery 交付信息（含可选冻结 Git binding）、递归 GROUP/TASK hierarchy、graph、指纹与冻结状态 |
+| `delivery_workspaces` | Delivery 与对话工作区 `workspaceKey` 的绑定；linked worktree 共享主控制根但保持身份隔离 |
 | `runs` | 整体运行状态 |
 | `node_runs` | 每个节点的 attempt、claim、lease 和 outcome |
+| `task_requirement_states` | 每个 TASK 当前 requirement revision、冻结/解冻状态与更新时间 |
 | `graph_events` | 带前序哈希的不可变调度事件 |
 
 Loop payload/outcome 以不透明 JSON 保存。共享 `root.skillHints` 作为 hierarchy 输入原样持久化，并由 `loop_context` 在运行时交给各 TASK、TASK Review、递归 GROUP Review 和 Delivery Review Loop；数据库没有 Task-Skill 分配、文件 scope、开发计划、Gate evidence 或 Skill activation 表。
@@ -45,7 +48,8 @@ Hierarchy 最外层只有两个入口：
 
 ```text
 hierarchy
-├─ delivery            # Graph/run 身份、交付摘要、最终 Review Loop
+├─ delivery            # Graph/run 身份、交付摘要、Git binding、最终 Review
+│  └─ gitBinding?      # feature/base/fork commit/integration target
 └─ root
    ├─ schemaVersion
    ├─ skillHints
@@ -95,7 +99,7 @@ Graph 编译遵循以下终态规则：
     └── acceptance.md
 ```
 
-`scheduler.db` 是唯一机器权威；各 `<delivery-id>` 目录只保存可从数据库状态重建的中文人类投影，不再复制 hierarchy、Graph 或运行状态 JSON。目录命名使用不可变的 `delivery.id` 和节点 ID，不使用可修改标题；同一工作区可以保留多个 Delivery 需求目录。`work-items/<root-id>/children/...` 镜像逻辑父子关系，但不表达 `dependsOn`、文件 scope 或调度授权；根 TASK 不增加 GROUP 目录。
+`scheduler.db` 是唯一机器权威；各 `<delivery-id>` 目录只保存可从数据库状态重建的中文人类投影，不再复制 hierarchy、Graph 或运行状态 JSON。目录命名使用不可变的 `delivery.id` 和节点 ID，不使用可修改标题；同一控制根可以保留并并发运行多个 Delivery。每个 Active Delivery 必须绑定不同对话工作区；linked Git worktree 通过 `.git/worktrees/*/commondir` 映射到主 checkout 的共享控制根。Git hierarchy 的 `delivery.gitBinding` 冻结最终 feature 分支、本地主线（优先 `main`，否则 `master`）、不可变 fork commit 与最终集成目标；同一 Delivery 的全部 TASK 共享该 worktree/feature 分支，不存在 TASK 级 Git binding，也不允许 TASK Agent 创建或切换内部分支。获得相应 Git 写入授权后，每个 TASK 可只暂存并提交自身 scope 的变更，在 Delivery 分支上形成独立 commit；共享 Git index 的写入临界区必须串行，提交前必须检查并避免带入其他 TASK 的 staged 或 working-tree 变更。运行入口通过只读 Git 命令验证 worktree/branch/祖先关系，不保存动态 HEAD，控制器本身也不执行 Git 写操作。`work-items/<root-id>/children/...` 镜像逻辑父子关系，但不表达 `dependsOn`、文件 scope 或调度授权；根 TASK 不增加 GROUP 目录。
 
 工作区根 `overview.md` 只列 Delivery 标识、标题、状态、更新时间和详情；Delivery `overview.md` 才展示本交付的 TASK 完成度、GROUP 数量与导航。顶层 `baseline.md` 保存基线树和节点链接，`progress.md` 聚合运行进展，`acceptance.md` 只完整展示 Delivery 本层 Review 与用户确认，并以摘要和链接串联根工作项报告。每个 GROUP/TASK 在递归节点目录下拥有自己的 baseline、progress 和 acceptance；GROUP baseline 链接直接子节点，TASK baseline 展示冻结 Loop 输入。TASK 验收只展开本 TASK 与 TASK Review；GROUP 验收只展开本层完成点与 Review，对直接子节点只显示状态、简要结果和验收链接。任何下层输入、证据或 Review findings 都不向上重复复制。progress 状态、acceptance 摘要、子节点结果和 Review P0/P1/P2 问题使用表格。只有 TASK payload 显式声明接口时，才在该 TASK 目录生成 `interfaces.md`，展示 `CREATE` / `MODIFY` / `DELETE` 的完整 before/after 契约；`protocol` 为开放字符串，HTTP、Dubbo、gRPC、GraphQL、消息等只是示例，通用协议可用 `identifier` 定位。无声明时不生成。代码可辅助提取和校验，但不是动态投影源。所有文件绑定双指纹并可随权威状态重建；`workspace_status` 会为早期 schema v3 Delivery 补建当前适用的投影树，但不迁移数据库或 Graph。所有固定文案和状态保持中文，标明 UTC+8 的人类时间使用 `YYYY-MM-DD HH:mm:ss`；机器权威仍使用 UTC。
 
@@ -105,6 +109,7 @@ Graph 编译遵循以下终态规则：
 
 - 发现与建议：`available_agents`、`recommend_executors`
 - 规划：`workspace_status`、`hierarchy_contract`、`prepare_hierarchy`、`freeze_hierarchy`
+- 需求修订：`unfreeze_task_requirement`、`refreeze_task_requirement`
 - 查询：`graph_frontier`、`graph_status`、`graph_events`、`loop_context`
 - Loop 控制：`dispatch_loop`、`heartbeat_loop`、`pause_loop`、`resume_loop`、`record_loop_result`
 - 恢复：`advance_graph`、`rebuild_graph_run`
@@ -112,9 +117,9 @@ Graph 编译遵循以下终态规则：
 
 Plugin MCP 工具不接收业务 `root` 参数。Adapter 从宿主配置或请求元数据解析项目根，再通过 `ControllerContext` 注入；Python 领域函数的 `root` 仅供 Controller 注入和测试。
 
-`loop_context.completionPolicy` 明确输入和终态边界：payload 是目标、明确约束和已知验收点的输入，Loop 在运行时从真实代码、契约和数据链路推导 scope 内必要条件；冻结 Graph 不冻结内部实现计划，可修复 finding 必须在当前 Loop 内调整方案、修正并复验。`record_loop_result` 的 `BLOCKED` 要求显式 failure class，只用于当前 scope 和权限内没有继续路径的真实终态；调度器仍不解释不透明 finding，也不为返工创建 Graph 环。
+`loop_context.completionPolicy` 明确输入和终态边界：payload 是目标、明确约束和已知验收点的输入，Loop 在运行时从真实代码、契约和数据链路推导 scope 内必要条件；冻结 Graph 不冻结内部实现计划，可修复 finding 必须在当前 Loop 内调整方案、修正并复验。初始 freeze 同时为所有 TASK 建立 revision 1 冻结记录；`unfreeze_task_requirement` 只接受未开始 TASK，`refreeze_task_requirement` 只替换标题、摘要和 payload，并原子更新 hierarchy/graph 双指纹、事件链和人类投影。`record_loop_result` 的 `BLOCKED` 要求显式 failure class，只用于当前 scope 和权限内没有继续路径的真实终态；调度器仍不解释不透明 finding，也不为返工创建 Graph 环。
 
-`controller.py` 是唯一共享应用入口；它只接受 `ControllerContext` 和 operation 参数，不导入 MCP、Codex 或 Claude 代码。`mcp_tools.py` 把 19 个工具 schema 映射到 Controller，`mcp_adapter.py` 负责协议结果、错误、版本协商和宿主策略，`mcp_server.py` 只处理 newline-delimited stdio 与进程生命周期。
+`controller.py` 是唯一共享应用入口；它只接受 `ControllerContext` 和 operation 参数，不导入 MCP、Codex 或 Claude 代码。`mcp_tools.py` 把 21 个工具 schema 映射到 Controller，`mcp_adapter.py` 负责协议结果、错误、版本协商和宿主策略，`mcp_server.py` 只处理 newline-delimited stdio 与进程生命周期。
 
 `agent_discovery.py` 只读取 PATH、终端 `--version`、非敏感模型字段和用户本地 Profile，不启动开发命令或返回绝对路径、凭据与服务地址。`agent_recommendation.py` 只按 `TASK_LOOP`/Review 角色、显式 Profile 优先级、可用性和上游开发 Agent 多样性排序；不读取 Loop payload，不持久化结果，也不调用 `dispatch_loop`。因此 CC-Switch 或本机配置变化无需重建 Frozen Graph。
 

@@ -339,6 +339,24 @@ class SchedulerRepository:
                 event_hash TEXT NOT NULL UNIQUE,
                 FOREIGN KEY(run_id) REFERENCES runs(run_id)
             );
+            CREATE TABLE IF NOT EXISTS delivery_workspaces (
+                root_id TEXT PRIMARY KEY,
+                workspace_key TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
+            );
+            CREATE INDEX IF NOT EXISTS delivery_workspaces_by_key
+            ON delivery_workspaces(workspace_key);
+            CREATE TABLE IF NOT EXISTS task_requirement_states (
+                run_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(run_id, task_id),
+                FOREIGN KEY(run_id) REFERENCES runs(run_id)
+            );
             """
         )
 
@@ -376,7 +394,55 @@ class SchedulerRepository:
         finally:
             connection.close()
 
-    def workspace_status(self) -> dict[str, Any]:
+    @staticmethod
+    def workspace_key(workspace_root: str | os.PathLike[str]) -> str:
+        workspace = Path(workspace_root).absolute().resolve(strict=True)
+        normalized = os.path.normcase(str(workspace))
+        return fingerprint({"workspace": normalized})
+
+    def workspace_binding(self, root_id: str) -> dict[str, Any]:
+        with self.read() as connection:
+            row = connection.execute(
+                "SELECT workspace_key FROM delivery_workspaces "
+                "WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+        if row is None:
+            fail(
+                "SCHEDULER_DELIVERY_WORKSPACE_MISSING",
+                f"Delivery workspace binding is missing: {root_id}",
+            )
+        return {
+            "mode": "DEDICATED_CONVERSATION_WORKSPACE",
+            "workspaceKey": row["workspace_key"],
+        }
+
+    def assert_delivery_workspace(
+        self,
+        root_id: str,
+        workspace_root: str | os.PathLike[str],
+    ) -> None:
+        if not self.database_path.is_file():
+            fail(
+                "SCHEDULER_STATE_ABSENT",
+                "No layered-delivery scheduler state exists",
+            )
+        expected = self.workspace_key(workspace_root)
+        binding = self.workspace_binding(root_id)
+        if binding["workspaceKey"] != expected:
+            fail(
+                "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH",
+                "This Delivery belongs to another conversation workspace",
+                rootId=root_id,
+                workspaceKey=binding["workspaceKey"],
+            )
+
+    def workspace_status(
+        self,
+        *,
+        root_id: str | None = None,
+        workspace_root: str | os.PathLike[str] | None = None,
+    ) -> dict[str, Any]:
         self._assert_no_legacy_state()
         if not self.database_path.is_file():
             return {
@@ -393,8 +459,58 @@ class SchedulerRepository:
                     "status": "ABSENT",
                     "controlRoot": GOVERNANCE_DIRECTORY,
                 }
-            latest = rows[0]
-            _validated_stored_definition(latest)
+            workspace_key = (
+                self.workspace_key(workspace_root)
+                if workspace_root is not None
+                else None
+            )
+            candidates = rows
+            if workspace_key is not None:
+                bound_ids = {
+                    row["root_id"]
+                    for row in connection.execute(
+                        "SELECT root_id FROM delivery_workspaces "
+                        "WHERE workspace_key = ?",
+                        (workspace_key,),
+                    ).fetchall()
+                }
+                candidates = [
+                    row for row in rows if row["root_id"] in bound_ids
+                ]
+            if root_id is not None:
+                candidates = [
+                    row for row in candidates if row["root_id"] == root_id
+                ]
+            else:
+                active_ids = {
+                    row["root_id"]
+                    for row in connection.execute(
+                        "SELECT root_id FROM runs "
+                        "WHERE status NOT IN ('COMPLETED', 'CANCELLED')"
+                    ).fetchall()
+                }
+                active_candidates = [
+                    row
+                    for row in candidates
+                    if row["root_id"] in active_ids
+                ]
+                if active_candidates:
+                    candidates = active_candidates
+            if not candidates:
+                return {
+                    "status": "ABSENT",
+                    "controlRoot": GOVERNANCE_DIRECTORY,
+                    "workspaceIsolation": (
+                        {
+                            "mode": "DEDICATED_CONVERSATION_WORKSPACE",
+                            "workspaceKey": workspace_key,
+                        }
+                        if workspace_key is not None
+                        else None
+                    ),
+                }
+            latest = candidates[0]
+            latest_hierarchy, _ = _validated_stored_definition(latest)
             run = connection.execute(
                 "SELECT status FROM runs WHERE root_id = ?",
                 (latest["root_id"],),
@@ -409,7 +525,7 @@ class SchedulerRepository:
         # earlier plugin release receive the current fixed projection set.
         for row in rows:
             self.write_projections(row["root_id"])
-        return {
+        result = {
             "status": (
                 "PREPARED"
                 if state == "PREPARED"
@@ -418,6 +534,14 @@ class SchedulerRepository:
             "rootId": latest["root_id"],
             "controlRoot": GOVERNANCE_DIRECTORY,
         }
+        if workspace_root is not None:
+            result["workspaceIsolation"] = self.workspace_binding(
+                latest["root_id"]
+            )
+        git_binding = latest_hierarchy["delivery"].get("gitBinding")
+        if git_binding is not None:
+            result["gitBinding"] = git_binding
+        return result
 
     def prepare(
         self,
@@ -426,22 +550,24 @@ class SchedulerRepository:
         *,
         hierarchy_fingerprint: str,
         graph_fingerprint: str,
+        workspace_root: str | os.PathLike[str],
     ) -> dict[str, Any]:
         root_id = graph["rootId"]
+        workspace_key = self.workspace_key(workspace_root)
         with self.transaction() as connection:
-            active = connection.execute(
-                "SELECT h.root_id FROM hierarchies h "
-                "JOIN runs r ON r.root_id = h.root_id "
-                "WHERE h.status = 'FROZEN' "
-                "AND r.status NOT IN ('COMPLETED', 'CANCELLED') "
-                "AND h.root_id != ?",
+            existing_binding = connection.execute(
+                "SELECT workspace_key FROM delivery_workspaces "
+                "WHERE root_id = ?",
                 (root_id,),
             ).fetchone()
-            if active is not None:
+            if (
+                existing_binding is not None
+                and existing_binding["workspace_key"] != workspace_key
+            ):
                 fail(
-                    "SCHEDULER_ACTIVE_HIERARCHY_EXISTS",
-                    "Only one frozen hierarchy may be active",
-                    rootId=active["root_id"],
+                    "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH",
+                    "A prepared Delivery cannot move to another workspace",
+                    rootId=root_id,
                 )
             frozen = connection.execute(
                 "SELECT status, updated_at FROM hierarchies "
@@ -481,13 +607,30 @@ class SchedulerRepository:
                     at,
                 ),
             )
+            connection.execute(
+                "INSERT INTO delivery_workspaces("
+                "root_id, workspace_key, created_at, updated_at"
+                ") VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(root_id) DO UPDATE SET "
+                "workspace_key = excluded.workspace_key, "
+                "updated_at = excluded.updated_at",
+                (root_id, workspace_key, at, at),
+            )
         self.write_projections(root_id)
-        return {
+        result = {
             "rootId": root_id,
             "status": "PREPARED",
             "hierarchyFingerprint": hierarchy_fingerprint,
             "graphFingerprint": graph_fingerprint,
+            "workspaceIsolation": {
+                "mode": "DEDICATED_CONVERSATION_WORKSPACE",
+                "workspaceKey": workspace_key,
+            },
         }
+        git_binding = hierarchy["delivery"].get("gitBinding")
+        if git_binding is not None:
+            result["gitBinding"] = git_binding
+        return result
 
     def hierarchy(
         self,
@@ -537,6 +680,31 @@ class SchedulerRepository:
                     "SCHEDULER_HIERARCHY_MISSING",
                     f"Scheduler hierarchy is missing: {root_id}",
                 )
+            binding = connection.execute(
+                "SELECT workspace_key FROM delivery_workspaces "
+                "WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if binding is None:
+                fail(
+                    "SCHEDULER_DELIVERY_WORKSPACE_MISSING",
+                    f"Delivery workspace binding is missing: {root_id}",
+                )
+            occupied = connection.execute(
+                "SELECT r.root_id FROM delivery_workspaces w "
+                "JOIN runs r ON r.root_id = w.root_id "
+                "WHERE w.workspace_key = ? AND r.root_id != ? "
+                "AND r.status NOT IN ('COMPLETED', 'CANCELLED') "
+                "LIMIT 1",
+                (binding["workspace_key"], root_id),
+            ).fetchone()
+            if occupied is not None:
+                fail(
+                    "SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED",
+                    "A second active Delivery requires another conversation "
+                    "worktree",
+                    rootId=occupied["root_id"],
+                )
             if (
                 row["hierarchy_fingerprint"]
                 != expected_hierarchy_fingerprint
@@ -566,6 +734,13 @@ class SchedulerRepository:
                     "VALUES (?, ?, 1, 'PENDING')",
                     (run_id, node["id"]),
                 )
+                if node["kind"] == "TASK_LOOP":
+                    connection.execute(
+                        "INSERT INTO task_requirement_states("
+                        "run_id, task_id, revision, status, updated_at"
+                        ") VALUES (?, ?, 1, 'FROZEN', ?)",
+                        (run_id, node["workItemId"], at),
+                    )
             self._append_event(
                 connection,
                 run_id=run_id,
@@ -596,7 +771,31 @@ class SchedulerRepository:
                     f"Scheduler run is missing: {root_id}",
                 )
             nodes = self.latest_nodes(connection, row["run_id"])
-        return {
+            task_requirements = self.task_requirement_states(
+                connection,
+                row["run_id"],
+            )
+            workspace = connection.execute(
+                "SELECT workspace_key FROM delivery_workspaces "
+                "WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if workspace is None:
+                fail(
+                    "SCHEDULER_DELIVERY_WORKSPACE_MISSING",
+                    f"Delivery workspace binding is missing: {root_id}",
+                )
+            hierarchy_row = connection.execute(
+                "SELECT * FROM hierarchies WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if hierarchy_row is None:
+                fail(
+                    "SCHEDULER_HIERARCHY_MISSING",
+                    f"Scheduler hierarchy is missing: {root_id}",
+                )
+            hierarchy, _ = _validated_stored_definition(hierarchy_row)
+        result = {
             "runId": row["run_id"],
             "rootId": row["root_id"],
             "status": row["status"],
@@ -605,7 +804,98 @@ class SchedulerRepository:
             "completedAt": row["completed_at"],
             "cancelledAt": row["cancelled_at"],
             "nodes": nodes,
+            "taskRequirements": task_requirements,
+            "workspaceIsolation": {
+                "mode": "DEDICATED_CONVERSATION_WORKSPACE",
+                "workspaceKey": workspace["workspace_key"],
+            },
         }
+        git_binding = hierarchy["delivery"].get("gitBinding")
+        if git_binding is not None:
+            result["gitBinding"] = git_binding
+        return result
+
+    @staticmethod
+    def task_requirement_states(
+        connection: sqlite3.Connection,
+        run_id: str,
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            "SELECT task_id, revision, status, updated_at "
+            "FROM task_requirement_states WHERE run_id = ? "
+            "ORDER BY task_id",
+            (run_id,),
+        ).fetchall()
+        return [
+            {
+                "taskId": row["task_id"],
+                "revision": row["revision"],
+                "status": row["status"],
+                "updatedAt": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    def claimed_resource_reservations(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        at: str,
+        exclude_root_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return live exact resource locks across every active Delivery."""
+
+        parameters: tuple[object, ...] = ()
+        exclusion = ""
+        if exclude_root_id is not None:
+            exclusion = "AND r.root_id != ? "
+            parameters = (exclude_root_id,)
+        rows = connection.execute(
+            "SELECT h.*, r.root_id AS reservation_root_id, "
+            "n.node_id AS reservation_node_id "
+            "FROM node_runs n "
+            "JOIN runs r ON r.run_id = n.run_id "
+            "JOIN hierarchies h ON h.root_id = r.root_id "
+            "WHERE n.status = 'CLAIMED' "
+            "AND r.status NOT IN ('COMPLETED', 'CANCELLED') "
+            "AND n.lease_expires_at IS NOT NULL "
+            "AND n.lease_expires_at >= ? "
+            + exclusion
+            + "ORDER BY r.root_id, n.node_id",
+            (at, *parameters),
+        ).fetchall()
+        reservations: list[dict[str, Any]] = []
+        graph_cache: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            root_id = row["reservation_root_id"]
+            graph = graph_cache.get(root_id)
+            if graph is None:
+                _, graph = _validated_stored_definition(row)
+                graph_cache[root_id] = graph
+            node_id = row["reservation_node_id"]
+            definition = next(
+                (
+                    node
+                    for node in graph["nodes"]
+                    if node["id"] == node_id
+                ),
+                None,
+            )
+            if definition is None or definition["loop"] is None:
+                fail(
+                    "SCHEDULER_STATE_INVALID",
+                    "Claimed Loop is missing from its stored Graph",
+                )
+            reservations.append(
+                {
+                    "rootId": root_id,
+                    "nodeId": node_id,
+                    "resourceClaims": definition["loop"][
+                        "resourceClaims"
+                    ],
+                }
+            )
+        return reservations
 
     @staticmethod
     def latest_nodes(

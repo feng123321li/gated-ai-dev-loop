@@ -87,8 +87,12 @@ def _tool(
 TOOLS = (
     _tool(
         "workspace_status",
-        "Inspect whether this project has a prepared or active scheduler graph.",
-        _object({}),
+        (
+            "Inspect the Delivery bound to this conversation workspace, or "
+            "select it by root ID. An unbound Git feature worktree also "
+            "returns a suggested immutable Delivery Git binding."
+        ),
+        _object({"root_id": ROOT_ID}),
     ),
     _tool(
         "available_agents",
@@ -116,7 +120,8 @@ TOOLS = (
         "prepare_hierarchy",
         (
             "Validate and prepare an outer scheduling graph; shared Skill "
-            "hints remain advisory and Loop payloads stay opaque."
+            "hints remain advisory, Loop payloads stay opaque, and a Git "
+            "Delivery feature-branch binding is verified read-only."
         ),
         _object(
             {
@@ -183,6 +188,72 @@ TOOLS = (
             {"root_id": ROOT_ID},
             required=["root_id"],
         ),
+    ),
+    _tool(
+        "unfreeze_task_requirement",
+        (
+            "Unfreeze one not-yet-started TASK requirement so it can be "
+            "revised without changing Delivery topology, dependencies, or "
+            "resource locks."
+        ),
+        _object(
+            {
+                "root_id": ROOT_ID,
+                "task_id": _string("Exact TASK work-item ID."),
+                "expected_revision": {
+                    "type": "integer",
+                    "minimum": 1,
+                },
+                "authorized_by": _string("Human authorizer identity."),
+                "reason": _string("Reason for revising the TASK requirement."),
+            },
+            required=[
+                "root_id",
+                "task_id",
+                "expected_revision",
+                "authorized_by",
+                "reason",
+            ],
+        ),
+        human=True,
+    ),
+    _tool(
+        "refreeze_task_requirement",
+        (
+            "Replace and refreeze one previously unfrozen, unstarted TASK "
+            "requirement. The replacement may change only title, summary, "
+            "and opaque Loop payload."
+        ),
+        _object(
+            {
+                "root_id": ROOT_ID,
+                "task_id": _string("Exact TASK work-item ID."),
+                "expected_revision": {
+                    "type": "integer",
+                    "minimum": 1,
+                },
+                "requirement": _object(
+                    {
+                        "title": _string("Revised TASK title."),
+                        "summary": _string("Revised TASK summary."),
+                        "payload": {
+                            "type": "object",
+                            "additionalProperties": True,
+                        },
+                    },
+                    required=["title", "summary", "payload"],
+                ),
+                "confirmed_by": _string("Human confirmer identity."),
+            },
+            required=[
+                "root_id",
+                "task_id",
+                "expected_revision",
+                "requirement",
+                "confirmed_by",
+            ],
+        ),
+        human=True,
     ),
     _tool(
         "graph_status",
@@ -529,6 +600,7 @@ def call_tool(
     arguments: dict[str, Any],
     *,
     root: str,
+    workspace_root: str | None = None,
     explicit_dogfood: bool = False,
     controller: LayeredDeliveryController = DEFAULT_CONTROLLER,
     **_: Any,
@@ -544,6 +616,7 @@ def call_tool(
         internal_arguments,
         context=ControllerContext(
             project_root=root,
+            workspace_root=workspace_root or root,
             explicit_dogfood=explicit_dogfood,
         ),
     )

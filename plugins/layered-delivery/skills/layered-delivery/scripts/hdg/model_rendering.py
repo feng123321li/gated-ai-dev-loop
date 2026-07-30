@@ -148,7 +148,7 @@ PAYLOAD_FIELD_ORDER = MappingProxyType(
     }
 )
 UTC_PLUS_8 = timezone(timedelta(hours=8))
-PROJECTION_TEMPLATE_VERSION = 7
+PROJECTION_TEMPLATE_VERSION = 9
 WORK_ITEM_DIRECTORY = "work-items"
 WORKSPACE_OVERVIEW_PROJECTION_TEMPLATE = Template(
     """# 全部交付调度与进度总览
@@ -198,6 +198,10 @@ ${baseline_status}
 
 - [查看执行进展](progress.md)
 - [查看验收记录](acceptance.md)
+
+## Git 分支绑定
+
+${git_binding}
 
 ## Skill 提示
 
@@ -283,6 +287,8 @@ TASK_BASELINE_PROJECTION_TEMPLATE = Template(
 - 交付标识：${delivery_id}
 - 交付标题：${delivery_title}
 - 任务标识：${task_id}
+- 需求版本：${requirement_revision}
+- 需求状态：${requirement_status}
 - 层级状态：${hierarchy_status}
 - 层级指纹：${hierarchy_fingerprint}
 - 调度图指纹：${graph_fingerprint}
@@ -729,6 +735,7 @@ def render_work_item_baseline(
     graph_fingerprint: str | None = None,
     hierarchy_status: str | None = None,
     updated_at: str | None = None,
+    task_requirement: dict[str, Any] | None = None,
 ) -> str:
     """Render one TASK baseline from scheduler-visible metadata.
 
@@ -765,6 +772,19 @@ def render_work_item_baseline(
             delivery.get("title", "不可用")
         ),
         task_id=_markdown_text(definition["id"]),
+        requirement_revision=(
+            str(task_requirement["revision"])
+            if task_requirement is not None
+            else "未冻结"
+        ),
+        requirement_status=(
+            {
+                "FROZEN": "已冻结",
+                "UNFROZEN": "已解冻，禁止派遣",
+            }.get(task_requirement["status"], "未知")
+            if task_requirement is not None
+            else "待 Delivery 冻结"
+        ),
         hierarchy_status=_status_text(
             hierarchy_status or "UNKNOWN"
         ),
@@ -1150,15 +1170,19 @@ def _delivery_projection_status(
         f"- 交付标识：{_markdown_text(delivery['id'])}",
         f"- 标题：{_markdown_text(delivery['title'])}",
         f"- 摘要：{_markdown_text(delivery['summary'])}",
-        f"- 数据结构版本：{hierarchy['root']['schemaVersion']}",
-        f"- 层级状态：{_status_text(hierarchy_status or 'UNKNOWN')}",
-        (
-            "- 运行状态："
-            f"{_status_text((run or {}).get('status', 'NOT_STARTED'))}"
-        ),
-        f"- 层级指纹：{hierarchy_fingerprint or '不可用'}",
-        f"- 调度图指纹：{graph_fingerprint or '不可用'}",
     ]
+    lines.extend(
+        [
+            f"- 数据结构版本：{hierarchy['root']['schemaVersion']}",
+            f"- 层级状态：{_status_text(hierarchy_status or 'UNKNOWN')}",
+            (
+                "- 运行状态："
+                f"{_status_text((run or {}).get('status', 'NOT_STARTED'))}"
+            ),
+            f"- 层级指纹：{hierarchy_fingerprint or '不可用'}",
+            f"- 调度图指纹：{graph_fingerprint or '不可用'}",
+        ]
+    )
     if run is not None:
         lines.extend(
             [
@@ -1168,6 +1192,37 @@ def _delivery_projection_status(
         )
     lines.append(f"- 更新时间（UTC+8）：{_utc_plus_8(updated_at)}")
     return lines
+
+
+def _render_git_binding_baseline(
+    delivery: dict[str, Any],
+) -> str:
+    binding = delivery.get("gitBinding")
+    if binding is None:
+        return "本 Delivery 未声明 Git 分支绑定。"
+    branch_ref = _markdown_text(binding["branchRef"])
+    base_ref = _markdown_text(binding["baseRef"])
+    base_commit = _markdown_text(binding["baseCommit"])
+    integration_target = _markdown_text(
+        binding["integrationTarget"]
+    )
+    return "\n".join(
+        [
+            f"- Delivery feature 分支：{branch_ref}",
+            f"- 创建来源分支：{base_ref}",
+            f"- 创建基线提交：{base_commit}",
+            f"- 最终集成目标：{integration_target}",
+            (
+                "- 分支关系："
+                f"{base_ref}@{base_commit} → {branch_ref} → "
+                f"{integration_target}"
+            ),
+            (
+                "- 约束：feature HEAD 可随本 Delivery 提交前进，但必须"
+                "继承创建基线；最终合入目标不随运行自动改变。"
+            ),
+        ]
+    )
 
 
 def render_delivery_baseline(
@@ -1271,6 +1326,9 @@ def render_delivery_baseline(
                 hierarchy_status=hierarchy_status,
                 updated_at=updated_at,
             )
+        ),
+        git_binding=_render_git_binding_baseline(
+            hierarchy["delivery"]
         ),
         skill_hints="\n".join(skill_hint_lines),
         checklist_rows="\n".join(checklist_rows),
@@ -2078,6 +2136,14 @@ def render_work_item_projection_documents(
         "hierarchy_status": stored_definition["status"],
         "updated_at": stored_definition["updatedAt"],
     }
+    task_requirements = {
+        item["taskId"]: item
+        for item in (
+            run.get("taskRequirements", [])
+            if run is not None
+            else []
+        )
+    }
     dynamic_arguments = {
         "hierarchy_fingerprint": stored_definition[
             "hierarchyFingerprint"
@@ -2107,6 +2173,7 @@ def render_work_item_projection_documents(
             render_work_item_baseline(
                 node,
                 delivery_baseline=delivery_baseline,
+                task_requirement=task_requirements.get(item_id),
                 **baseline_arguments,
             )
             if definition["kind"] == "TASK"

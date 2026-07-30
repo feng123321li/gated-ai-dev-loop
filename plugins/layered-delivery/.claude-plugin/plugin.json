@@ -1,7 +1,7 @@
 {
   "name": "layered-delivery",
   "version": "0.25.0",
-  "description": "调度递归 GROUP/TASK 工作树，并提供本机 Agent/模型发现与建议的 Graph 插件",
+  "description": "调度带 Git worktree/feature 分支绑定的递归 GROUP/TASK 交付 Graph，并提供本机 Agent/模型建议",
   "author": {
     "name": "layered-delivery contributors",
     "url": "https://github.com/feng123321li/layered-delivery"
@@ -15,6 +15,7 @@
     "recursive-graph",
     "agent-discovery",
     "model-recommendation",
+    "git-worktree",
     "group-task",
     "task-loop"
   ]

@@ -42,7 +42,21 @@ TOOLS_TTL_MS = 5 * 60 * 1000
 CACHE_SCOPE = "private"
 
 SERVER_INSTRUCTIONS = (
-    "Use these tools as an outer Graph scheduler for one Delivery. "
+    "Use these tools as an outer Graph scheduler for isolated Deliveries. "
+    "Each conversation workspace owns at most one active Delivery; linked "
+    "Git worktrees share the primary checkout scheduler while retaining "
+    "distinct Delivery workspace identities. workspace_status discovers "
+    "the current Git feature branch and suggests its frozen gitBinding, "
+    "preferring main and falling back to master. Each independent Git "
+    "Delivery uses one feature branch created from that mainline in another "
+    "worktree, never implicitly from the current Delivery feature branch. "
+    "All TASKs in that Delivery share its feature worktree and branch; TASK "
+    "agents never create, bind, or switch internal Git branches. "
+    "Each TASK may stage and commit only its own changes on that Delivery "
+    "branch when separately authorized; Git index and commit writes in the "
+    "shared worktree must not overlap. "
+    "Runtime calls verify the worktree, branch, and immutable fork commit "
+    "without mutating Git. "
     "Its decomposition is a recursive GROUP/TASK hierarchy: TASK is "
     "the execution leaf, while every GROUP joins and reviews its child "
     "subtree before succeeding. Start with workspace_status. Prepare "
@@ -66,7 +80,11 @@ SERVER_INSTRUCTIONS = (
     "start a CLI, switch a model, claim a Loop, dispatch work, or persist "
     "an assignment. The scheduler treats Loop payload and result "
     "as opaque and accepts only standard Loop outcomes. resourceClaims "
-    "are exact scheduling locks, not file scopes. Final completion still "
+    "are exact cross-Delivery scheduling locks, not file scopes. Every TASK "
+    "requirement starts frozen. An explicitly authorized, not-yet-started "
+    "TASK may be unfrozen and refrozen with a revised title, summary, and "
+    "opaque payload; topology, dependencies, and resource claims remain "
+    "Delivery-frozen. Final completion still "
     "requires explicit user confirmation. External Git and publication "
     "actions remain outside this server."
 )
@@ -410,14 +428,15 @@ def _call_scheduler_tool(
                 requires_user_interaction=name in _USER_INTERACTION_TOOLS,
                 client_info=client_info,
             )
-        root = connection.project_root.resolve(
+        root_resolution = connection.project_root.resolve_request(
             params.get("_meta"),
             stateless=modern,
         )
         business_result = call_tool(
             name,
             arguments,
-            root=root,
+            root=root_resolution.project_root,
+            workspace_root=root_resolution.workspace_root,
             explicit_dogfood=explicit_dogfood,
         )
         payload = {

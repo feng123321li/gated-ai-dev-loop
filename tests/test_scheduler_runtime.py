@@ -874,16 +874,29 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "loopOutcome": "NONE",
                 },
                 "providerRateLimit": {
-                    "trigger": "PROVIDER_RATE_LIMIT_DURING_CLAIM",
+                    "softStopTrigger": (
+                        "KNOWN_REMAINING_CAPACITY_AT_OR_BELOW_5_PERCENT"
+                    ),
                     "requiresLiveLease": True,
+                    "requiresKnownResetAt": True,
                     "withResetAt": "PAUSE_UNTIL_RESET",
                     "executorScopeBeforeReset": (
-                        "REFRESH_RECOMMENDATIONS_FOR_ALTERNATE_OR_WAIT"
+                        "WAIT_FOR_EXECUTOR_NATIVE_WAKE"
                     ),
-                    "hostScopeBeforeReset": "WAIT_FOR_HOST_TIMER",
-                    "atReset": "AUTO_RESUME_AND_REDISPATCH",
+                    "hostScopeBeforeReset": "WAIT_FOR_HOST_NATIVE_WAKE",
+                    "nativeWake": {
+                        "claudeCode": "SESSION_ONE_SHOT_CRON",
+                        "codexDesktop": "THREAD_SCHEDULED_TASK",
+                    },
+                    "atReset": (
+                        "AGENT_RELOADS_FRONTIER_AND_REDISPATCHES"
+                    ),
                     "sameAttempt": True,
                     "loopOutcome": "NONE",
+                    "hard429": {
+                        "action": "MANUAL_AGENT_RESUME",
+                        "scheduleWake": False,
+                    },
                 },
                 "expiredLeaseRecovery": {
                     "action": "ADVANCE_GRAPH",
@@ -1086,7 +1099,16 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(paused["resumeAt"], reset_at)
         self.assertEqual(
             paused["nextAction"],
-            "REFRESH_RECOMMENDATIONS_FOR_ALTERNATE_OR_WAIT",
+            "WAIT_FOR_EXECUTOR_CAPACITY",
+        )
+        self.assertEqual(
+            paused["handoff"]["resumeSequence"],
+            [
+                "workspace_status",
+                "graph_frontier",
+                "loop_context",
+                "dispatch_loop",
+            ],
         )
         progress = (
             Path(self.root)
@@ -1097,7 +1119,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             / "progress.md"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            "等待至 2026-07-29 16:20:00 自动重新派遣",
+            "等待至 2026-07-29 16:20:00 由 Agent 恢复派遣",
             progress,
         )
         rebuilt = rebuild_graph_run(
@@ -1139,9 +1161,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
             waiting["actions"],
             [
                 {
-                    "action": "RECOMMEND_ALTERNATE_OR_WAIT",
+                    "action": "WAIT_FOR_EXECUTOR_CAPACITY",
                     "nodeId": node_id,
-                    "excludedOwner": "agent-rate-limited",
                     "resumeAt": reset_at,
                     "executionPolicy": loop_execution_policy(),
                 }
@@ -1271,7 +1292,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(current["status"], "CLAIMED")
 
-    def test_host_rate_limit_waits_for_out_of_model_timer(
+    def test_host_rate_limit_waits_for_host_native_wake(
         self,
     ) -> None:
         prepared = self.prepare_and_freeze(task_hierarchy())

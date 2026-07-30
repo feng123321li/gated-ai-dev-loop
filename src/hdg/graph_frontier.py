@@ -133,9 +133,8 @@ def build_graph_frontier(
                 else:
                     actions.append(
                         {
-                            "action": "RECOMMEND_ALTERNATE_OR_WAIT",
+                            "action": "WAIT_FOR_EXECUTOR_CAPACITY",
                             "nodeId": state["nodeId"],
-                            "excludedOwner": state["owner"],
                             "resumeAt": resume_at,
                             "executionPolicy": loop_execution_policy(),
                         }

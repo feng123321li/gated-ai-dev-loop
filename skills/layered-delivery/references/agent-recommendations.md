@@ -5,12 +5,12 @@
 ## 调用
 
 1. 调用无参数 `available_agents`，取得当前主机快照。
-2. hierarchy 已 `PREPARED` 或 Graph 已冻结时，调用 `recommend_executors`，传入对应 `root_id`。若当前刷新用于提供方限额转派，把已限额执行者 ID 放入 `temporarily_unavailable_agent_ids`。
+2. hierarchy 已 `PREPARED` 或 Graph 已冻结时，调用 `recommend_executors`，传入对应 `root_id`。
 3. 按 `nodeId` 展示 `recommended`、`alternatives`、`confidence`、`reasons` 和 `independence`。
 
 每次调用都重新读取当前本机配置。Claude Code 经 CC-Switch 切换 GLM、DeepSeek 或其他模型后，下一次发现应展示新模型；不把旧模型清单写入 Frozen Graph。
 
-`temporarily_unavailable_agent_ids` 只影响当前一次排序，不持久化。开发中的执行 Agent 命中 Token 限额且总调度仍可运行时，总调度器用它排除原执行者；存在独立候选则通过宿主原生 Agent 自动接手同一 Loop attempt，没有候选则等待 frontier 的 `nextWakeAt`，到时重新发现和推荐。若限额使调度宿主自身也无法调用模型，frontier 返回 `WAIT_FOR_HOST_CAPACITY`；此时不能运行本推荐工具，必须由模型外宿主定时器唤醒后再发现和推荐。不要因为终端命令仍存在，就把已知处于限额窗口的 Agent 当作可立即执行。
+推荐器不参与提供方限额恢复。软阈值暂停后由原 Agent 等待宿主原生计划提示，直接收到 429 时由人工恢复；两种情况都不临时改写推荐、不自动换 Agent。
 
 ## 强制边界
 

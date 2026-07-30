@@ -346,92 +346,6 @@ class AgentRecommendationTests(unittest.TestCase):
             )
         )
 
-    def test_temporarily_unavailable_agent_is_excluded_for_failover(
-        self,
-    ) -> None:
-        result = recommend_graph_executors(
-            self.graph(),
-            [
-                discovered_agent(
-                    "codex",
-                    model_id="gpt-5.6-sol",
-                    priority=100,
-                ),
-                discovered_agent(
-                    "claude-code",
-                    model_id="claude-sonnet-4-5",
-                    priority=10,
-                ),
-            ],
-            temporarily_unavailable_agent_ids=["codex"],
-        )
-        tasks = [
-            recommendation
-            for recommendation in result["recommendations"]
-            if recommendation["role"] == "DEVELOPMENT"
-        ]
-
-        self.assertTrue(tasks)
-        self.assertTrue(
-            all(
-                recommendation["recommended"]["agentId"]
-                == "claude-code"
-                for recommendation in tasks
-            )
-        )
-        self.assertTrue(
-            all(
-                "TEMPORARY_UNAVAILABLE_EXCLUDED"
-                in {
-                    reason["code"]
-                    for reason in recommendation["reasons"]
-                }
-                for recommendation in tasks
-            )
-        )
-        self.assertEqual(
-            result["temporaryAvailability"],
-            {
-                "excludedAgentIds": ["codex"],
-                "matchedAvailableAgents": ["codex"],
-            },
-        )
-
-    def test_all_development_agents_temporarily_unavailable_waits(
-        self,
-    ) -> None:
-        result = recommend_graph_executors(
-            self.graph(),
-            [
-                discovered_agent(
-                    "codex",
-                    model_id="gpt-5.6-sol",
-                    capabilities=("development",),
-                )
-            ],
-            temporarily_unavailable_agent_ids=["codex"],
-        )
-        tasks = [
-            recommendation
-            for recommendation in result["recommendations"]
-            if recommendation["role"] == "DEVELOPMENT"
-        ]
-
-        self.assertTrue(tasks)
-        self.assertTrue(
-            all(
-                recommendation["recommended"] is None
-                for recommendation in tasks
-            )
-        )
-        self.assertTrue(
-            all(
-                recommendation["reasons"][0]["code"]
-                == "NO_CURRENTLY_AVAILABLE_AGENT"
-                for recommendation in tasks
-            )
-        )
-
     def test_recommendation_does_not_interpret_or_expose_loop_payload(self) -> None:
         graph = self.graph()
         changed = deepcopy(graph)
@@ -474,7 +388,6 @@ class AgentRecommendationTests(unittest.TestCase):
                 result = recommend_executors(
                     root=root,
                     root_id=prepared["rootId"],
-                    temporarily_unavailable_agent_ids=["other-agent"],
                 )
 
         self.assertEqual(
@@ -488,12 +401,7 @@ class AgentRecommendationTests(unittest.TestCase):
                 "dispatchAllowed": False,
                 "persisted": False,
                 "payloadInterpreted": False,
-                "temporaryAvailabilityPersisted": False,
             },
-        )
-        self.assertEqual(
-            result["temporaryAvailability"]["excludedAgentIds"],
-            ["other-agent"],
         )
         self.assertTrue(result["recommendations"])
         self.assertRegex(graph_fingerprint(self.graph()), r"^[0-9a-f]{64}$")
@@ -526,10 +434,7 @@ class AgentRecommendationTests(unittest.TestCase):
                 )
                 advice = call_tool(
                     "recommend_executors",
-                    {
-                        "root_id": prepared["rootId"],
-                        "temporarily_unavailable_agent_ids": ["codex"],
-                    },
+                    {"root_id": prepared["rootId"]},
                     root=root,
                 )
 
@@ -537,7 +442,7 @@ class AgentRecommendationTests(unittest.TestCase):
         self.assertTrue(advice["recommendations"])
         self.assertTrue(
             all(
-                item["recommended"] is None
+                item["recommended"]["agentId"] == "codex"
                 and not item["dispatchAllowed"]
                 for item in advice["recommendations"]
             )

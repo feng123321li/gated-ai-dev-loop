@@ -34,18 +34,6 @@ def _string(description: str) -> dict[str, Any]:
     }
 
 
-def _string_array(description: str) -> dict[str, Any]:
-    return {
-        "type": "array",
-        "items": {
-            "type": "string",
-            "minLength": 1,
-        },
-        "uniqueItems": True,
-        "description": description,
-    }
-
-
 ROOT_ID = _string("Frozen Delivery and Graph run ID.")
 NODE_ID = _string("Exact graph node ID from graph_frontier.")
 OPERATION_ID = _string("Globally unique Loop operation ID.")
@@ -148,19 +136,12 @@ TOOLS = (
         (
             "Return non-binding local Agent and model recommendations, "
             "alternatives, confidence, and reasons for every TASK and "
-            "Review Loop in one prepared or frozen Graph. A refresh may "
-            "ephemerally exclude rate-limited Agent IDs. Never claim or "
-            "dispatch a Loop."
+            "Review Loop in one prepared or frozen Graph. Never claim or "
+            "dispatch a Loop, and do not use recommendations for quota "
+            "recovery."
         ),
         _object(
-            {
-                "root_id": ROOT_ID,
-                "temporarily_unavailable_agent_ids": _string_array(
-                    "Ephemeral Agent IDs to exclude from this recommendation "
-                    "refresh, such as an executor whose provider token quota "
-                    "is unavailable until a known reset time."
-                ),
-            },
+            {"root_id": ROOT_ID},
             required=["root_id"],
         ),
     ),
@@ -300,8 +281,9 @@ TOOLS = (
         (
             "Pause one claimed Loop with a live lease while preserving its "
             "current attempt and frozen Graph. Provide resume_at for a "
-            "provider rate limit and identify whether the limited capacity "
-            "belongs to the executor or the native host."
+            "known provider soft-stop window and identify whether the "
+            "limited capacity belongs to the executor or the native host. "
+            "Do not create a timed pause after an unhandled 429."
         ),
         _object(
             {
@@ -309,20 +291,20 @@ TOOLS = (
                 "node_id": NODE_ID,
                 "operation_id": OPERATION_ID,
                 "resume_at": _string(
-                    "Optional provider quota reset time as an ISO 8601 "
-                    "timestamp. Before it, refresh recommendations for an "
-                    "independent alternate executor or wait; at it, the "
-                    "controller automatically makes the same Loop attempt "
-                    "ready for redispatch."
+                    "Optional known provider quota reset time as an ISO "
+                    "8601 timestamp. Before it, the same Agent waits for a "
+                    "host-native scheduled prompt or manual resume. The "
+                    "first frontier call at or after it makes the same Loop "
+                    "attempt ready for redispatch."
                 ),
                 "capacity_scope": {
                     "type": "string",
                     "enum": ["EXECUTOR", "HOST"],
                     "description": (
-                        "Required with resume_at. EXECUTOR allows immediate "
-                        "alternate-Agent recommendation; HOST means the "
-                        "native orchestrator itself is quota-limited and "
-                        "must wait for an out-of-model host timer to wake it."
+                        "Required with resume_at. EXECUTOR waits for the "
+                        "same Loop Agent; HOST means the native orchestrator "
+                        "itself is quota-limited. Both wait for a host-native "
+                        "scheduled prompt or manual Agent resume."
                     ),
                 },
             },

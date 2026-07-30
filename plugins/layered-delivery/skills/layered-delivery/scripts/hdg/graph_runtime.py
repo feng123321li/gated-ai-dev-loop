@@ -853,6 +853,12 @@ def _change_claimed_loop(
             }
         )
         if normalized_resume_at is not None:
+            result["handoff"]["resumeSequence"] = [
+                "workspace_status",
+                "graph_frontier",
+                "loop_context",
+                "dispatch_loop",
+            ]
             result.update(
                 {
                     "resumeAt": normalized_resume_at,
@@ -860,10 +866,7 @@ def _change_claimed_loop(
                     "nextAction": (
                         "WAIT_FOR_HOST_CAPACITY"
                         if normalized_capacity_scope == "HOST"
-                        else (
-                            "REFRESH_RECOMMENDATIONS_FOR_"
-                            "ALTERNATE_OR_WAIT"
-                        )
+                        else "WAIT_FOR_EXECUTOR_CAPACITY"
                     ),
                 }
             )

@@ -62,16 +62,12 @@ def _ranked_agents(
     *,
     role: str,
     avoid: list[str],
-    temporarily_unavailable: set[str],
 ) -> list[dict[str, Any]]:
     avoid_ids = set(avoid)
     eligible = [
         agent
         for agent in agents
-        if (
-            _supports(agent, role)
-            and agent["id"] not in temporarily_unavailable
-        )
+        if _supports(agent, role)
     ]
     return sorted(
         eligible,
@@ -90,24 +86,14 @@ def _reasons(
     role: str,
     avoid: list[str],
     independence_satisfied: bool | None,
-    temporarily_excluded: list[str],
 ) -> list[dict[str, str]]:
     if selected is None:
         return [
             {
-                "code": (
-                    "NO_CURRENTLY_AVAILABLE_AGENT"
-                    if temporarily_excluded
-                    else "NO_ELIGIBLE_AGENT"
-                ),
+                "code": "NO_ELIGIBLE_AGENT",
                 "message": (
-                    "Every eligible local Agent is temporarily unavailable "
-                    "for this recommendation refresh."
-                    if temporarily_excluded
-                    else (
-                        "No discovered local Agent advertises the required "
-                        f"{role.lower()} capability."
-                    )
+                    "No discovered local Agent advertises the required "
+                    f"{role.lower()} capability."
                 ),
             }
         ]
@@ -126,18 +112,6 @@ def _reasons(
             ),
         },
     ]
-    if temporarily_excluded:
-        reasons.append(
-            {
-                "code": "TEMPORARY_UNAVAILABLE_EXCLUDED",
-                "message": (
-                    "Temporarily unavailable Agent IDs were excluded from "
-                    "this refresh: "
-                    + ", ".join(temporarily_excluded)
-                    + "."
-                ),
-            }
-        )
     model_id = selected["model"]["id"]
     reasons.append(
         {
@@ -235,14 +209,9 @@ def _selection_ambiguous(
 def recommend_graph_executors(
     graph: dict[str, Any],
     agents: list[dict[str, Any]],
-    *,
-    temporarily_unavailable_agent_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Return non-binding executor advice without reading Loop payloads."""
 
-    temporarily_unavailable = set(
-        temporarily_unavailable_agent_ids or []
-    )
     loop_nodes = [
         node
         for node in graph["nodes"]
@@ -287,19 +256,10 @@ def recommend_graph_executors(
             if role == "INDEPENDENT_REVIEW"
             else []
         )
-        temporarily_excluded = sorted(
-            agent["id"]
-            for agent in agents
-            if (
-                agent["id"] in temporarily_unavailable
-                and _supports(agent, role)
-            )
-        )
         ranked = _ranked_agents(
             agents,
             role=role,
             avoid=avoid,
-            temporarily_unavailable=temporarily_unavailable,
         )
         selected = ranked[0] if ranked else None
         independence_satisfied = (
@@ -336,7 +296,6 @@ def recommend_graph_executors(
                 role=role,
                 avoid=avoid,
                 independence_satisfied=independence_satisfied,
-                temporarily_excluded=temporarily_excluded,
             ),
             "independence": (
                 {
@@ -371,14 +330,6 @@ def recommend_graph_executors(
                 for recommendation in recommendations
             ),
         },
-        "temporaryAvailability": {
-            "excludedAgentIds": sorted(temporarily_unavailable),
-            "matchedAvailableAgents": sorted(
-                agent["id"]
-                for agent in agents
-                if agent["id"] in temporarily_unavailable
-            ),
-        },
     }
 
 
@@ -398,7 +349,6 @@ def recommend_executors(
     *,
     root: str,
     root_id: str,
-    temporarily_unavailable_agent_ids: list[str] | None = None,
     explicit_dogfood: bool = False,
     **_: Any,
 ) -> dict[str, Any]:
@@ -411,9 +361,6 @@ def recommend_executors(
     recommendation = recommend_graph_executors(
         stored["graph"],
         discovery["agents"],
-        temporarily_unavailable_agent_ids=(
-            temporarily_unavailable_agent_ids
-        ),
     )
     return {
         "rootId": root_id,
@@ -427,7 +374,6 @@ def recommend_executors(
             "dispatchAllowed": False,
             "persisted": False,
             "payloadInterpreted": False,
-            "temporaryAvailabilityPersisted": False,
         },
     }
 

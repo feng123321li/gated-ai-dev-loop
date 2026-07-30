@@ -10,10 +10,10 @@
 
 - 每个 TASK 现在都必须显式配置 `reviewLoop`，并编译为 `TASK_LOOP → TASK_REVIEW_LOOP`；兄弟依赖、GROUP 完成点和 Delivery Review 只消费 TASK Review 后的终态。GROUP 仍按实际协调需要创建、可完全省略或多层递归，但每个已创建 GROUP 都必须经过自己的 `GROUP_JOIN → GROUP_REVIEW_LOOP`，逐层审查整体集成结果。
 - 验收投影改为严格按层归属：TASK、GROUP、Delivery 只完整展开本层结果与 Review；GROUP 对直接子节点、Delivery 对根工作项仅保留状态、简要结果和报告链接，不再向上复制下层输入、证据或 Review findings。
-- Loop 开发中命中提供方 Token 限额时，可携带真实 `resetAt` 定时暂停同一 attempt，并显式区分 `EXECUTOR` 与 `HOST` 容量范围。执行 Agent 受限时，frontier 优先触发临时排除后的动态推荐，有独立候选立即转派；调度宿主自身受限时只返回 `WAIT_FOR_HOST_CAPACITY` 和 `nextWakeAt`，由模型外宿主定时器唤醒。两者到时都自动恢复为可派遣状态。
-- `recommend_executors.temporarily_unavailable_agent_ids` 只影响当前一次建议，不写入 hierarchy、Frozen Graph、SQLite、事件链、claim 或 owner；推荐继续保持 `ADVISORY`，实际派遣仍由宿主原生 Agent 机制完成。
+- 宿主明确报告剩余额度不高于 5% 且提供真实 `resetAt` 时，可定时暂停同一 attempt，并显式区分 `EXECUTOR` 与 `HOST` 容量范围。Claude Code 使用当前会话一次性 Cron，Codex Desktop 使用当前任务计划，在恢复窗口后唤醒原 Agent；控制器由下一次 frontier 调用恢复同一 attempt，不实现 Python Supervisor、操作系统定时器或自动换 Agent。
+- 直接收到 429、宿主原生计划不可用或宿主被关闭时只做人工恢复，不补建定时任务、不猜测恢复时间。`recommend_executors` 继续保持纯 `ADVISORY`，不参与限额恢复。
 - 当前完整 schema v3 契约要求 TASK 与已创建 GROUP 都具有 Review。版本不增加旧结构迁移或兼容入口；仍在运行且不满足新契约的旧冻结 Graph 应在升级前完成。
-- Python 全量 103 项测试、编译检查、Skill 校验、Plugin 校验和 `git diff --check` 通过。
+- Python 全量 102 项测试、编译检查、Skill 校验、Plugin 校验和 `git diff --check` 通过。
 
 ## 0.24.0 — 2026-07-30
 

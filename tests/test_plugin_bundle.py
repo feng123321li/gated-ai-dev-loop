@@ -149,6 +149,22 @@ class PluginBundleTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("Agent + Model", metadata)
 
+    def test_skill_uses_native_soft_stop_and_manual_429_recovery(
+        self,
+    ) -> None:
+        execution = (
+            SKILL / "references" / "execution-quickstart.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("剩余额度不高于 5%", execution)
+        self.assertIn("Claude Code", execution)
+        self.assertIn("一次性 Cron", execution)
+        self.assertIn("Codex Desktop", execution)
+        self.assertIn("当前任务计划", execution)
+        self.assertIn("直接收到 429", execution)
+        self.assertIn("只做人工恢复", execution)
+        self.assertNotIn("模型外宿主定时器", execution)
+        self.assertNotIn("RECOMMEND_ALTERNATE_OR_WAIT", execution)
+
     def test_documented_hierarchy_examples_are_valid(self) -> None:
         documents = (
             ROOT / "README.md",

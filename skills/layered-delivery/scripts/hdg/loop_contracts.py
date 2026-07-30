@@ -32,16 +32,25 @@ _LOOP_EXECUTION_POLICY = {
         "loopOutcome": "NONE",
     },
     "providerRateLimit": {
-        "trigger": "PROVIDER_RATE_LIMIT_DURING_CLAIM",
-        "requiresLiveLease": True,
-        "withResetAt": "PAUSE_UNTIL_RESET",
-        "executorScopeBeforeReset": (
-            "REFRESH_RECOMMENDATIONS_FOR_ALTERNATE_OR_WAIT"
+        "softStopTrigger": (
+            "KNOWN_REMAINING_CAPACITY_AT_OR_BELOW_5_PERCENT"
         ),
-        "hostScopeBeforeReset": "WAIT_FOR_HOST_TIMER",
-        "atReset": "AUTO_RESUME_AND_REDISPATCH",
+        "requiresLiveLease": True,
+        "requiresKnownResetAt": True,
+        "withResetAt": "PAUSE_UNTIL_RESET",
+        "executorScopeBeforeReset": "WAIT_FOR_EXECUTOR_NATIVE_WAKE",
+        "hostScopeBeforeReset": "WAIT_FOR_HOST_NATIVE_WAKE",
+        "nativeWake": {
+            "claudeCode": "SESSION_ONE_SHOT_CRON",
+            "codexDesktop": "THREAD_SCHEDULED_TASK",
+        },
+        "atReset": "AGENT_RELOADS_FRONTIER_AND_REDISPATCHES",
         "sameAttempt": True,
         "loopOutcome": "NONE",
+        "hard429": {
+            "action": "MANUAL_AGENT_RESUME",
+            "scheduleWake": False,
+        },
     },
     "expiredLeaseRecovery": {
         "action": "ADVANCE_GRAPH",

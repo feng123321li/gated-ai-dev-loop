@@ -350,22 +350,12 @@ class McpSurfaceTests(unittest.TestCase):
             ["root_id"],
         )
         self.assertEqual(
-            by_name["recommend_executors"]["inputSchema"]["properties"][
-                "temporarily_unavailable_agent_ids"
-            ],
-            {
-                "type": "array",
-                "items": {
-                    "type": "string",
-                    "minLength": 1,
-                },
-                "uniqueItems": True,
-                "description": (
-                    "Ephemeral Agent IDs to exclude from this recommendation "
-                    "refresh, such as an executor whose provider token quota "
-                    "is unavailable until a known reset time."
-                ),
-            },
+            set(
+                by_name["recommend_executors"]["inputSchema"][
+                    "properties"
+                ]
+            ),
+            {"root_id"},
         )
         self.assertNotIn("_meta", by_name["available_agents"])
         self.assertNotIn("_meta", by_name["recommend_executors"])
@@ -377,11 +367,11 @@ class McpSurfaceTests(unittest.TestCase):
                 "type": "string",
                 "minLength": 1,
                 "description": (
-                    "Optional provider quota reset time as an ISO 8601 "
-                    "timestamp. Before it, refresh recommendations for an "
-                    "independent alternate executor or wait; at it, the "
-                    "controller automatically makes the same Loop attempt "
-                    "ready for redispatch."
+                    "Optional known provider quota reset time as an ISO "
+                    "8601 timestamp. Before it, the same Agent waits for a "
+                    "host-native scheduled prompt or manual resume. The "
+                    "first frontier call at or after it makes the same Loop "
+                    "attempt ready for redispatch."
                 ),
             },
         )
@@ -391,10 +381,10 @@ class McpSurfaceTests(unittest.TestCase):
                 "type": "string",
                 "enum": ["EXECUTOR", "HOST"],
                 "description": (
-                    "Required with resume_at. EXECUTOR allows immediate "
-                    "alternate-Agent recommendation; HOST means the native "
-                    "orchestrator itself is quota-limited and must wait for "
-                    "an out-of-model host timer to wake it."
+                    "Required with resume_at. EXECUTOR waits for the "
+                    "same Loop Agent; HOST means the native "
+                    "orchestrator itself is quota-limited. Both wait for a "
+                    "host-native scheduled prompt or manual Agent resume."
                 ),
             },
         )
@@ -438,18 +428,7 @@ class McpSurfaceTests(unittest.TestCase):
                 "recommend_executors",
                 {
                     "root_id": "d-service",
-                    "temporarily_unavailable_agent_ids": "codex",
-                },
-            )
-        with self.assertRaises(GatedLoopError):
-            validate_tool_arguments(
-                "recommend_executors",
-                {
-                    "root_id": "d-service",
-                    "temporarily_unavailable_agent_ids": [
-                        "codex",
-                        "codex",
-                    ],
+                    "temporarily_unavailable_agent_ids": ["codex"],
                 },
             )
         with self.assertRaises(GatedLoopError):

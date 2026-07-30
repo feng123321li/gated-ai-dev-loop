@@ -242,15 +242,13 @@ workspace_status
 → graph_frontier
 → 独立 Agent：loop_context / dispatch_loop / heartbeat_loop
 → 租约有效且上下文压力：pause_loop / 新 Agent resume_loop / 重新 dispatch
-→ 执行 Agent 命中提供方限额：
+→ 宿主报告剩余额度不高于 5%：
   pause_loop(resume_at, capacity_scope=EXECUTOR)
-  / 临时排除限额 Agent 后重新推荐
-  / 有独立候选则立即 resume + dispatch
-  / 无候选则按 nextWakeAt 到时自动恢复并重新推荐、派遣
-→ 调度宿主自身命中提供方限额：
-  宿主适配器 pause_loop(resume_at, capacity_scope=HOST)
-  / 不调用模型推荐器
-  / 由模型外宿主定时器按 nextWakeAt 唤醒并重新派遣
+  或 pause_loop(resume_at, capacity_scope=HOST)
+  / Claude Code 当前会话一次性 Cron
+  / Codex Desktop 当前任务计划
+  / 到时由原 Agent 重新读取 frontier 并派遣
+→ 直接收到 429：不建计划任务，恢复额度后人工 resume Agent
 → 租约过期：advance_graph 回收旧 attempt
 → record_loop_result
 → TASK Review / 递归 GROUP Review / Delivery Review
@@ -265,7 +263,7 @@ workspace_status
 
 未知终端可通过用户本地 Agent Profile 扩展。设置 `LAYERED_DELIVERY_AGENT_PROFILES` 指向 JSON 文件，或使用平台用户配置目录下的 `layered-delivery/agent-profiles.json`；Profile 可定义任意安全 ID、裸命令名、模型名、能力和优先级。Plugin 不创建该文件，也不读取或返回 Token、Base URL 与认证字段。
 
-推荐器只消费 Graph 节点角色和发现元数据，不解释 `loop.payload`。TASK Loop 匹配开发能力；TASK/GROUP/Delivery Review 优先选择不同于上游开发建议的 Agent。开发中的执行 Agent 命中提供方 Token 限额时，`recommend_executors.temporarily_unavailable_agent_ids` 可在本次刷新中排除已限额执行者；该限制只用于当前推荐调用，不进入 Graph 或持久化状态。若受限的是调度宿主自身，则模型推荐器此时也不可运行，必须等待模型外宿主定时器唤醒后再刷新。只有一个合格 Agent 时，Review 仍展示可用组合，但明确标记异构 Agent 独立性未满足。所有结果固定为 `binding=ADVISORY`、`dispatchAllowed=false`，不进入 schema v3、Frozen Graph、SQLite、事件链、claim 或 owner。
+推荐器只消费 Graph 节点角色和发现元数据，不解释 `loop.payload`。TASK Loop 匹配开发能力；TASK/GROUP/Delivery Review 优先选择不同于上游开发建议的 Agent。推荐器不参与提供方限额恢复，也不会自动换 Agent。只有一个合格 Agent 时，Review 仍展示可用组合，但明确标记异构 Agent 独立性未满足。所有结果固定为 `binding=ADVISORY`、`dispatchAllowed=false`，不进入 schema v3、Frozen Graph、SQLite、事件链、claim 或 owner。
 
 ## Controller / Adapter 架构
 
@@ -290,7 +288,7 @@ Claude Code 和旧 Codex 仍可走 `2025-11-25` 的 `initialize → notification
 
 `freeze_hierarchy` 对模型只暴露 `execution_mode=active|manual`，不暴露内部 `confirmed`。冻结前只展示“自动执行 / 手动交接”两个确认选项；自动和手动都表示完整授权并确认开发，区别只在冻结后由当前会话继续调度还是生成交接。需要调整时，用户直接回复修改意见，当前方案不冻结；只有需求实际变化才重新 prepare，单纯询问或其他未改变需求的回复保留当前 `PREPARED` 结果。冻结工具在宿主权限层统一走自动批准，MCP 适配器在控制器边界内注入 Python `True`，不得再为同一次冻结追加通用 Yes/No 或其他弹窗。
 
-总调度上下文只消费 frontier。每个 TASK、TASK Review、GROUP Review 和 Delivery Review Loop 默认路由到独立接收上下文；宿主支持原生 Agent 时优先自动派遣。Review 的独立性用于独立发现与复核，不阻止它在同一 Loop 内自行修正或派遣内部修正上下文。未 claim 且没有 Agent 容量时只生成人工交接，不提前 claim；已 claim、租约有效且出现上下文压力或高轮次 Hook 摩擦时，使用 `pause_loop → 新上下文 resume_loop → 重新 dispatch`，不提交业务 outcome。开发中命中提供方限额且取得 `resetAt` 时必须显式区分容量范围：单个执行 Agent 受限用 `capacity_scope=EXECUTOR`，frontier 先要求临时排除原执行者并刷新推荐，有独立候选就提前恢复同一 attempt；调度宿主本身受限用 `capacity_scope=HOST`，frontier 不再要求模型推荐，只等待模型外宿主定时器按 `nextWakeAt` 唤醒。控制器在下一次 frontier 调用时自动恢复同一 attempt 并重新产生派遣动作，但不会自行启动进程。宿主必须在模型调用失败的适配器边界捕获真实 `resetAt`、记录暂停并注册定时器；如果只是一名由宿主派出的原生 Agent 受限而协调器仍可运行，它仍属于 `EXECUTOR`。租约过期时由 `advance_graph` 回收旧 attempt，禁止调用 `pause_loop`。接收方始终继续同一冻结 Graph。
+总调度上下文只消费 frontier。每个 TASK、TASK Review、GROUP Review 和 Delivery Review Loop 默认路由到独立接收上下文；宿主支持原生 Agent 时优先自动派遣。Review 的独立性用于独立发现与复核，不阻止它在同一 Loop 内自行修正或派遣内部修正上下文。未 claim 且没有 Agent 容量时只生成人工交接，不提前 claim；已 claim、租约有效且出现上下文压力或高轮次 Hook 摩擦时，使用 `pause_loop → 新上下文 resume_loop → 重新 dispatch`，不提交业务 outcome。宿主明确报告剩余额度不高于 5% 且提供真实未来 `resetAt` 时，当前 Agent 在额度耗尽前用对应 `capacity_scope` 定时 pause：单个执行 Agent 使用 `EXECUTOR`，总调度宿主使用 `HOST`。随后由 Claude Code 当前会话的一次性 Cron 或 Codex Desktop 当前任务计划在恢复窗口后唤醒原 Agent；Agent 重新调用 frontier 时，控制器恢复同一 attempt 并产生派遣动作。直接收到 429、宿主原生计划不可用或宿主被关闭时不补建定时任务，恢复额度后由人工 resume Agent。控制器不会自行启动进程；限额恢复也不调用推荐器或自动换 Agent。租约过期时由 `advance_graph` 回收旧 attempt，禁止调用 `pause_loop`。接收方始终继续同一冻结 Graph。
 
 `recommend_executors` 自身仍不启动 CLI、不切换模型、不 claim，也不派遣。自动执行模式下，总调度器可以消费它的动态结果，通过宿主原生 Agent 机制创建接收上下文；这属于宿主派遣，不把建议写入 Graph。
 

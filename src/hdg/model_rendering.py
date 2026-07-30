@@ -1015,7 +1015,7 @@ def _projection_state_values(
         and isinstance(state.get("resumeAt"), str)
     ):
         summary = (
-            f"等待至 {_utc_plus_8(state['resumeAt'])} 自动重新派遣"
+            f"等待至 {_utc_plus_8(state['resumeAt'])} 由 Agent 恢复派遣"
         )
     if summary == "无" and state["failureClass"]:
         summary = (

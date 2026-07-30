@@ -4,12 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
-## 未发布
+## 0.23.0 — 2026-07-30
+
+发布提交：`005d66e`
 
 - 将 Delivery 的人类控制面从集中式 `overview.md` 拆分为导航总览、`baseline.md` 需求基线、`progress.md` 执行进展和 `acceptance.md` 验收记录；Delivery baseline 作为基线树入口，串联所有 GROUP/TASK 节点但不重复其 Loop 输入。
 - 新增 `work-items/<node-id>/` 节点投影树：每个 GROUP/TASK 都有独立 baseline、progress 和 acceptance，GROUP baseline 链接直接子节点；`prepare_hierarchy.humanArtifacts.workItems` 与 `loop_context.humanArtifacts.workItem` 返回对应路径，TASK 的既有 baseline 便捷字段继续指向新位置。
 - 新增 TASK 级通用接口投影约定：`protocol` 使用开放字符串，HTTP、Dubbo、gRPC、GraphQL、消息等协议均可通过 `payload.interfaces` 显式提交 `CREATE` / `MODIFY` / `DELETE`、接口信息及完整 before/after 快照；控制器只在该 TASK 目录生成中文 `interfaces.md`，代码可辅助提取与校验但不成为动态投影源，接口内容也不影响 Graph 调度。
 - 重新 prepare 会原子替换完整 `work-items/` 并清理旧 `task-baselines/`、删除节点或失效接口文件；`workspace_status` 会从 SQLite 为早期 schema v3 Delivery 补建当前投影树，不迁移 hierarchy、Graph、事件链或运行状态。
+- schema v3、Graph 节点和 SQLite 格式保持不变；Python 全量 89 项测试、编译检查、Skill 校验和 Plugin 校验通过。
 
 ## 0.22.0 — 2026-07-30
 

@@ -2,7 +2,7 @@
 
 `layered-delivery` 是面向可插拔 Loop 的递归交付 Graph 调度器。
 
-当前版本：**0.21.0**
+当前版本：**0.21.1**
 
 它负责：
 
@@ -218,7 +218,7 @@ Task 的调度定义只保留：
 workspace_status
 → hierarchy_contract
 → prepare_hierarchy
-→ 用户选择：自动执行 / 手动交接 / 调整需求
+→ 用户选择：自动执行 / 手动交接（也可直接回复修改意见，不冻结）
 → freeze_hierarchy（自动或手动选择即为唯一一次冻结确认）
 → graph_frontier
 → 独立 Agent：loop_context / dispatch_loop / heartbeat_loop
@@ -252,7 +252,7 @@ Claude Plugin ─┘  ├─ MCP 2026-07-28（优先）
 
 Claude Code 和旧 Codex 仍可走 `2025-11-25` 的 `initialize → notifications/initialized`。Adapter 只维护 `2026-07-28` 与 `2025-11-25` 双版本，不会把新版无会话语义伪装成旧版会话。新版 Tasks 属于可选扩展；当前外层调度已使用显式 `root_id`、`node_id` 和 `operation_id` 保存长任务状态，因此本版本不声明 Tasks 扩展。
 
-`freeze_hierarchy` 对模型只暴露 `execution_mode=active|manual`，不暴露内部 `confirmed`。自动和手动都表示完整授权并确认开发，区别只在冻结后由当前会话继续调度还是生成交接；冻结工具在宿主权限层统一走自动批准，MCP 适配器在控制器边界内注入 Python `True`，不得再为同一次冻结追加通用 Yes/No 或其他弹窗。“调整需求”及任何其他反馈均表示未确认，不调用 freeze，而是继续交互并在修改 hierarchy 后重新 prepare。
+`freeze_hierarchy` 对模型只暴露 `execution_mode=active|manual`，不暴露内部 `confirmed`。冻结前只展示“自动执行 / 手动交接”两个确认选项；自动和手动都表示完整授权并确认开发，区别只在冻结后由当前会话继续调度还是生成交接。需要调整时，用户直接回复修改意见，当前方案不冻结；只有需求实际变化才重新 prepare，单纯询问或其他未改变需求的回复保留当前 `PREPARED` 结果。冻结工具在宿主权限层统一走自动批准，MCP 适配器在控制器边界内注入 Python `True`，不得再为同一次冻结追加通用 Yes/No 或其他弹窗。
 
 总调度上下文只消费 frontier。每个 TASK、GROUP Review 和 Delivery Review Loop 默认路由到独立接收上下文；宿主支持原生 Agent 时优先自动派遣。未 claim 且没有 Agent 容量时只生成人工交接，不提前 claim；已 claim、租约有效且出现上下文压力或高轮次 Hook 摩擦时，使用 `pause_loop → 新上下文 resume_loop → 重新 dispatch`，不提交业务 outcome；租约过期时由 `advance_graph` 回收旧 attempt，禁止调用 `pause_loop`。接收方始终继续同一冻结 Graph。
 

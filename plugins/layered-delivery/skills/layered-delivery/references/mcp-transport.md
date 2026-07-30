@@ -6,7 +6,7 @@
 
 - Plugin 未安装、工具未注册或 MCP 未连接：报告 `PLUGIN_MCP_UNAVAILABLE` 并停止治理写入。
 - 运行中断连：报告 `PLUGIN_MCP_DISCONNECTED`，保留最后已知 root、node 与 operation。
-- 响应未返回的写操作状态视为未知；重连后先调用 `workspace_status`、`graph_status`、`graph_frontier`，不要盲目重放。
+- 响应未返回的写操作状态视为未知；重连后先调用 `workspace_status`。仅当返回 `ACTIVE`、`BLOCKED`、`PAUSED`、`COMPLETED` 或 `CANCELLED` 且存在 `rootId` 时，再调用 `graph_status` 和 `graph_frontier`；`ABSENT` 或 `PREPARED` 按规划说明恢复，不调用尚不存在 run 的工具，也不盲目重放写操作。
 
 ## 协议与项目根
 

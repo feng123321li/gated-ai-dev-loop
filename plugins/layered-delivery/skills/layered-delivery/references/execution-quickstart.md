@@ -10,8 +10,8 @@
 - `CONTINUE_OR_HEARTBEAT_LOOP`：继续当前 Loop，并在租约到期前 heartbeat。
 - `RESUME_LOOP_IN_INDEPENDENT_CONTEXT`：把暂停节点路由给新的接收上下文；接收方 resume 后重新读取 frontier 并 dispatch。
 - `RESOLVE_LOOP_BLOCK`：展示 Loop 返回的摘要和不透明 result，等待外部条件或人工决定。
-- `REPLAN_HIERARCHY`：外层依赖、资源或拓扑需要变化；停止原图并创建新的人工评审版本。
-- `RECORD_USER_CONFIRMATION`：Review Loop 已成功，等待用户最终接受。
+- `REPLAN_HIERARCHY`：展示外层契约变化及原图无法继续的原因，等待用户决定。只有用户明确授权后才调用 `cancel_graph_run`；取消成功后使用新的 `delivery.id` prepare 替代图并重新评审、冻结。
+- `RECORD_USER_CONFIRMATION`：Review Loop 已成功；读取 [acceptance.md](acceptance.md)，等待用户最终接受。
 
 不要自行增加 TASK/Gate 节点，也不要根据 payload 内容改变 frontier 顺序。
 
@@ -66,7 +66,7 @@ claim 超过 `leaseExpiresAt` 后，旧 operation 不能 heartbeat、pause 或�
 
 - `BLOCKED + RETRYABLE_INFRA` 与租约丢失 `WORKER_LOST`：调度器在预算内创建新 attempt。
 - 普通 `BLOCKED`：不自动重跑，避免把业务错误伪装成瞬时故障。
-- `REPLAN_REQUIRED`：冻结图的调度契约已不适用，回到人工规划。
+- `REPLAN_REQUIRED`：冻结图的调度契约已不适用。记录结果后等待 `REPLAN_HIERARCHY`；不要自动取消当前 run，也不要复用其已冻结的 `delivery.id`。用户明确授权取消后，才创建新的替代图。
 - `CANCELLED`：结束当前 Loop，不自动重试。
 - 未 claim 且宿主 Agent 暂时不可用：人工交接，不提前 claim。
 - 已 claim 且租约有效时的上下文容量不足或 Hook 高轮次消耗：使用 pause/handoff，不是 `BLOCKED`、`WORKER_LOST` 或 `REPLAN_REQUIRED`。

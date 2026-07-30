@@ -29,6 +29,56 @@ PLUGIN_SKILL = PLUGIN / "skills" / "layered-delivery"
 
 
 class PluginBundleTests(unittest.TestCase):
+    def test_freeze_confirmation_copy_has_only_two_options(self) -> None:
+        text = (
+            SKILL / "references" / "planning-quickstart.md"
+        ).read_text(encoding="utf-8")
+        expected_copy = (
+            "请选择下一步：",
+            "**自动执行**：立即冻结并开始实现、测试和独立审查",
+            "**手动交接**：冻结后生成交接信息",
+            "如需继续调整需求，请直接回复修改意见；当前方案不会冻结。",
+        )
+        for line in expected_copy:
+            with self.subTest(line=line):
+                self.assertIn(line, text)
+        self.assertNotIn("**其他内容**", text)
+        self.assertNotIn("**其他反馈**", text)
+        self.assertNotIn("**调整需求", text)
+
+    def test_skill_routes_prepared_and_replan_safely(self) -> None:
+        main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        planning = (
+            SKILL / "references" / "planning-quickstart.md"
+        ).read_text(encoding="utf-8")
+        execution = (
+            SKILL / "references" / "execution-quickstart.md"
+        ).read_text(encoding="utf-8")
+        transport = (
+            SKILL / "references" / "mcp-transport.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "需求未变时保留当前准备结果，不重复 prepare",
+            main,
+        )
+        self.assertIn(
+            "只有需求实际变化时才重新 prepare",
+            main,
+        )
+        self.assertIn(
+            "回答后保留当前 fingerprint",
+            planning,
+        )
+        self.assertIn("`cancel_graph_run`", main)
+        self.assertIn("新的 `delivery.id`", main)
+        self.assertIn("不要自动取消当前 run", execution)
+        self.assertIn("重连后先调用 `workspace_status`", transport)
+        self.assertNotIn(
+            "未明确选择这两项时继续需求交互并重新 prepare",
+            main,
+        )
+
     def test_documented_hierarchy_examples_are_valid(self) -> None:
         documents = (
             ROOT / "README.md",

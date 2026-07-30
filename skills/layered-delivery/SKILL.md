@@ -21,7 +21,7 @@ description: "调度或恢复多项目、多模块的软件交付 Graph。用于
 - 仅对 `RETRYABLE_INFRA` 与 `WORKER_LOST` 自动重试。业务阻断、契约变化与外部权限交给 frontier。
 - 最终完成必须取得真实用户确认。Git、发布、迁移和新增外部权限继续单独授权。
 - `owner`、`confirmed_by` 等调度身份使用控制器接受的可移植 ASCII 标识；具体字符约束以 MCP 契约和错误响应为准，不把运行经验写入宿主记忆来替代正式契约。
-- 准备完成后向用户提供“自动执行 / 手动交接”两个确认开发选项，并保留“调整需求”的非确认分支。选择自动或手动本身就是完整冻结授权；任何其他反馈都继续需求交互并重新 prepare。确认后立即调用由宿主自动批准的 `freeze_hierarchy`，不要再请求通用 Yes/No，也不要向工具发送内部 `confirmed` 参数。
+- 准备完成后只展示“自动执行 / 手动交接”两个确认开发选项，并提示用户可直接回复修改意见；不要把自由输入呈现为第三个选项。只有明确选择自动或手动才构成完整冻结授权；其他回复不冻结，只有需求实际变化时才重新 prepare。确认后立即调用由宿主自动批准的 `freeze_hierarchy`，不要追加通用 Yes/No，也不要发送内部 `confirmed` 参数。
 - 总调度上下文只消费 frontier 和路由 Loop，不在自身上下文内实现 TASK 或 Review。每个 Loop 使用独立接收上下文；宿主支持 Agent 时优先自动派遣，无可用执行容量时才生成人工交接。
 - 严格区分三类执行容量状态：未 claim 且无 Agent 容量时只生成人工交接；已 claim、租约有效且出现上下文或 Hook 压力时才调用 `pause_loop`；租约过期时调用 `advance_graph`，禁止 pause。前两类都不提交 Loop outcome，不要把 Capacity 与 lease 合并成同一恢复动作。
 
@@ -29,13 +29,14 @@ description: "调度或恢复多项目、多模块的软件交付 Graph。用于
 
 1. 调用 `workspace_status`。
 2. `ACTIVE`、`BLOCKED` 或 `PAUSED`：读取 [execution-quickstart.md](references/execution-quickstart.md)，从 `graph_frontier` 恢复。
-3. `ABSENT` 或 `PREPARED` 且用户要求新交付：读取 [planning-quickstart.md](references/planning-quickstart.md)。
-4. `COMPLETED` 或 `CANCELLED`：用户要求新 Delivery 时读取规划说明；否则只报告终态，不写入新的调度状态，不触发宿主记忆、持续学习或任何文件更新。
-5. 只读分析、代码审查或问答不创建调度状态。
+3. `PREPARED`：读取 [planning-quickstart.md](references/planning-quickstart.md) 的准备结果续接规则；需求未变时保留当前准备结果，不重复 prepare。
+4. `ABSENT`：用户要求新交付时读取规划说明；否则不创建调度状态。
+5. `COMPLETED` 或 `CANCELLED`：用户要求新 Delivery 时读取规划说明；否则只报告终态，不写入新的调度状态，不触发宿主记忆、持续学习或任何文件更新。
+6. 只读分析、代码审查或问答不创建调度状态。
 
 ## 调度循环
 
-1. 持续调用 `graph_frontier`，按顺序消费所有 action。
+1. 持续调用 `graph_frontier`，完整消费当前批次的所有 action；容量允许时立即分别派遣同批互不冲突的 `DISPATCH_LOOP`，不等待前一个 Loop 完成。
 2. 对 `DISPATCH_LOOP`，优先用宿主原生 Agent 创建独立接收上下文，只交付 `rootId/nodeId`；接收方通过 MCP 调用 `loop_context` 和 `dispatch_loop`，不要复制规划会话或由总调度上下文内联执行。
 3. 无可用 Agent 容量时才输出人工交接，且不要提前 claim；未 claim 的 Loop 由接收方直接读取 frontier 后 dispatch，已暂停的 Loop 按 `RESUME_LOOP_IN_INDEPENDENT_CONTEXT` 恢复。
 4. 接收方从 `loop_context` 获取 `loop.ref`、不透明 `payload`、共享 `skillHints`、TASK baseline 路径和固定 `executionPolicy`。
@@ -43,15 +44,15 @@ description: "调度或恢复多项目、多模块的软件交付 Graph。用于
 6. TASK Loop 自主管理实现；GROUP Review 和 Delivery Review Loop 自主管理审查。`GROUP_JOIN` 由调度器在直接子节点终态齐备后推进，不派发实现工作。
 7. 长运行在租约到期前调用 `heartbeat_loop`；只有租约仍有效时，上下文容量压力或高轮次 Hook 摩擦才使用 pause/handoff。租约已过期时停止旧 operation，由 frontier/`advance_graph` 回收。
 8. 只把 Loop 的真实业务终态提交给 `record_loop_result`；容量交接不产生 Loop outcome。
-9. 继续消费 frontier。每个 GROUP Review 成功后才成为父 GROUP 可消费的终态；根终态再进入 Delivery Review 和最终用户确认。
+9. 继续消费 frontier。每个 GROUP Review 成功后才成为父 GROUP 可消费的终态；根终态再进入 Delivery Review。出现 `RECORD_USER_CONFIRMATION` 时读取 [acceptance.md](references/acceptance.md)，等待真实用户最终确认。
 
 ## 恢复
 
-- MCP 响应未知时先重新读取 `workspace_status`、`graph_status` 和 `graph_frontier`，不要盲目重放写操作。
+- MCP 写响应未知时先读取 `workspace_status`；仅当状态表明冻结 run 已存在时再读取 `graph_status` 和 `graph_frontier`。`ABSENT` 或 `PREPARED` 按规划恢复，不要调用尚不可用的运行工具或盲目重放写操作。
 - `PAUSED` 或 `RESUME_LOOP_IN_INDEPENDENT_CONTEXT`：把 `rootId/nodeId` 路由给新的独立接收上下文；接收方调用 `resume_loop`，再从 frontier 取得新的 dispatch，不重新 prepare/freeze。
 - 租约过期与基础设施失败交给 `advance_graph`；过期 operation 不得 heartbeat、pause 或提交结果，也不要手工改 attempt。
 - 物化状态损坏时用 `rebuild_graph_run` 从已校验事件链重建；不要改事件。
-- Loop 要求改变外层依赖、资源声明或拓扑时，记录 `REPLAN_REQUIRED` 并回到新的人工评审，不在原冻结图中暗改。
+- Loop 要求改变外层依赖、资源声明或拓扑时，记录 `REPLAN_REQUIRED`，不在原冻结图中暗改。frontier 返回 `REPLAN_HIERARCHY` 后先展示原因并等待用户决定；只有用户明确授权取消当前 run，才调用 `cancel_graph_run`，再使用新的 `delivery.id` prepare 替代图并重新评审、冻结。
 
 ## 按需参考
 

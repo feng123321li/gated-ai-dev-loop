@@ -90,6 +90,15 @@ TOOLS = (
         _object({}),
     ),
     _tool(
+        "available_agents",
+        (
+            "Discover local terminal Agents and their current configured "
+            "models without starting development commands or changing "
+            "execution."
+        ),
+        _object({}),
+    ),
+    _tool(
         "hierarchy_contract",
         "Return the exact schema-v3 outer Graph contract and one example.",
         _object(
@@ -119,6 +128,19 @@ TOOLS = (
                 }
             },
             required=["hierarchy"],
+        ),
+    ),
+    _tool(
+        "recommend_executors",
+        (
+            "Return non-binding local Agent and model recommendations, "
+            "alternatives, confidence, and reasons for every TASK and "
+            "Review Loop in one prepared or frozen Graph. Never claim or "
+            "dispatch a Loop."
+        ),
+        _object(
+            {"root_id": ROOT_ID},
+            required=["root_id"],
         ),
     ),
     _tool(

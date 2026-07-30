@@ -19,6 +19,8 @@ from hdg.mcp_adapter import (
 )
 from hdg.model_core import validate_hierarchy_definition
 
+from .test_loop_architecture import group_hierarchy
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src" / "hdg"
@@ -93,6 +95,35 @@ class PluginBundleTests(unittest.TestCase):
             "未明确选择这两项时继续需求交互并重新 prepare",
             main,
         )
+
+    def test_skill_keeps_agent_recommendations_advisory(self) -> None:
+        main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        planning = (
+            SKILL / "references" / "planning-quickstart.md"
+        ).read_text(encoding="utf-8")
+        execution = (
+            SKILL / "references" / "execution-quickstart.md"
+        ).read_text(encoding="utf-8")
+        recommendations = (
+            SKILL / "references" / "agent-recommendations.md"
+        ).read_text(encoding="utf-8")
+
+        for tool_name in ("available_agents", "recommend_executors"):
+            with self.subTest(tool_name=tool_name):
+                self.assertIn(f"`{tool_name}`", main)
+                self.assertIn(f"`{tool_name}`", recommendations)
+        self.assertIn("不会启动、切换或派遣", planning)
+        self.assertIn("不得据此启动外部 CLI", execution)
+        self.assertIn("dispatchAllowed=false", recommendations)
+        self.assertIn("不解析 `loop.payload`", recommendations)
+        self.assertIn(
+            "LAYERED_DELIVERY_AGENT_PROFILES",
+            recommendations,
+        )
+        metadata = (
+            SKILL / "agents" / "openai.yaml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Agent + Model", metadata)
 
     def test_documented_hierarchy_examples_are_valid(self) -> None:
         documents = (
@@ -197,7 +228,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("record_user_confirmation", approvals)
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
-        self.assertEqual(len(tool_definitions()), 17)
+        self.assertEqual(len(tool_definitions()), 19)
 
     def test_bundled_mcp_prefers_modern_stdio_discovery(self) -> None:
         entry = SKILL / "scripts" / "hdg_mcp.py"
@@ -221,6 +252,36 @@ class PluginBundleTests(unittest.TestCase):
                 "id": 2,
                 "method": "tools/list",
                 "params": {"_meta": request_meta},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "available_agents",
+                    "arguments": {},
+                    "_meta": request_meta,
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {
+                    "name": "prepare_hierarchy",
+                    "arguments": {"hierarchy": group_hierarchy()},
+                    "_meta": request_meta,
+                },
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "tools/call",
+                "params": {
+                    "name": "recommend_executors",
+                    "arguments": {"root_id": "d-service"},
+                    "_meta": request_meta,
+                },
             },
         ]
         request = "".join(
@@ -253,7 +314,7 @@ class PluginBundleTests(unittest.TestCase):
             for line in stdout.splitlines()
             if line
         ]
-        self.assertEqual(len(responses), 2)
+        self.assertEqual(len(responses), 5)
         self.assertEqual(
             responses[0]["result"]["supportedVersions"],
             [
@@ -267,7 +328,19 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            17,
+            19,
+        )
+        discovery = responses[2]["result"]["structuredContent"]["result"]
+        self.assertFalse(
+            discovery["rules"]["developmentCommandsStarted"]
+        )
+        advice = responses[4]["result"]["structuredContent"]["result"]
+        self.assertTrue(advice["recommendations"])
+        self.assertTrue(
+            all(
+                not item["dispatchAllowed"]
+                for item in advice["recommendations"]
+            )
         )
 
     def test_bundled_mcp_keeps_legacy_initialize_fallback(self) -> None:
@@ -336,7 +409,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            17,
+            19,
         )
 
 

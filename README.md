@@ -2,7 +2,7 @@
 
 `layered-delivery` 是面向可插拔 Loop 的递归交付 Graph 调度器。
 
-当前版本：**0.21.2**
+当前版本：**0.22.0**
 
 它负责：
 
@@ -13,6 +13,8 @@
 - 多项目、多模块的精确资源声明与互斥；
 - claim、heartbeat、lease 和失联恢复；
 - 仅针对基础设施故障的预算内自动重试；
+- 当前主机终端 Agent 与配置模型的动态发现；
+- 为每个 TASK、GROUP Review 和 Delivery Review 提供带原因的非绑定 Agent + Model 建议；
 - SQLite 状态、哈希事件链和可重建投影。
 
 它不负责：
@@ -21,9 +23,12 @@
 - 解释文件 `scope` 或授权具体文件修改；
 - 内置测试、Gate、Gate→development 修正循环；
 - 规定开发 Skill、Gate Skill 或 Skill lifecycle evidence；
+- 根据建议自动启动外部 Agent CLI、切换模型或派遣 Loop；
 - 解析各 Loop 的 payload/result 内容。
 
 这些实现细节都属于对应 TASK 或 Review Loop。不同节点可以使用不同的 Loop 和 Skill。用户在需求阶段给出的 Skill 只作为共享的运行时优先提示，不会预先绑定到某个工作项或阶段。
+
+Agent/模型建议同样晚绑定：Frozen Graph 只保存工作项、依赖、资源和 Loop，不保存某台主机的 Codex、Claude Code、Cursor、OpenCode 或模型配置。`available_agents` 每次读取当前主机状态，`recommend_executors` 为已准备或冻结 Graph 的所有 TASK/Review 返回建议、备选、置信度与原因；两者都不会启动、切换或派遣。
 
 ## 运行模型
 
@@ -216,8 +221,10 @@ Task 的调度定义只保留：
 
 ```text
 workspace_status
+→ available_agents（当前主机只读发现）
 → hierarchy_contract
 → prepare_hierarchy
+→ recommend_executors（逐 TASK/Review 建议与原因；不派遣）
 → 用户选择：自动执行 / 手动交接（也可直接回复修改意见，不冻结）
 → freeze_hierarchy（自动或手动选择即为唯一一次冻结确认）
 → graph_frontier
@@ -229,7 +236,15 @@ workspace_status
 → record_user_confirmation
 ```
 
-当前 Plugin 注册 17 个外层调度工具。每次 Controller operation 都绑定一个已校验的项目协调根；现代 MCP 从请求上下文取得，旧 MCP 从初始化式连接绑定取得。多仓库或多服务目标通过 Loop ref/payload 与资源声明表达。
+当前 Plugin 注册 19 个工具：17 个既有外层调度工具，加上只读的 `available_agents` 与 `recommend_executors`。每次 Graph Controller operation 都绑定一个已校验的项目协调根；现代 MCP 从请求上下文取得，旧 MCP 从初始化式连接绑定取得。多仓库或多服务目标通过 Loop ref/payload 与资源声明表达。
+
+## Agent 与模型建议
+
+内置发现适配器覆盖 Codex、Claude Code、Cursor、OpenCode、Aider、Gemini CLI、Grok CLI、GLM CLI、DeepSeek CLI 和 Qwen CLI。只有对应终端命令真实存在时才返回 Agent；不把产品或模型名称伪装成可用执行者。Codex 和 Claude Code 会读取非敏感的当前模型字段，因此 CC-Switch 把 Claude Code 改为 GLM、DeepSeek 或其他模型后，下一次调用即可看到新值。
+
+未知终端可通过用户本地 Agent Profile 扩展。设置 `LAYERED_DELIVERY_AGENT_PROFILES` 指向 JSON 文件，或使用平台用户配置目录下的 `layered-delivery/agent-profiles.json`；Profile 可定义任意安全 ID、裸命令名、模型名、能力和优先级。Plugin 不创建该文件，也不读取或返回 Token、Base URL 与认证字段。
+
+推荐器只消费 Graph 节点角色和发现元数据，不解释 `loop.payload`。TASK 匹配开发能力；GROUP/Delivery Review 优先选择不同于上游开发建议的 Agent。只有一个合格 Agent 时，Review 仍展示可用组合，但明确标记异构 Agent 独立性未满足。所有结果固定为 `binding=ADVISORY`、`dispatchAllowed=false`，不进入 schema v3、Frozen Graph、SQLite、事件链、claim 或 owner。
 
 ## Controller / Adapter 架构
 
@@ -255,6 +270,8 @@ Claude Code 和旧 Codex 仍可走 `2025-11-25` 的 `initialize → notification
 `freeze_hierarchy` 对模型只暴露 `execution_mode=active|manual`，不暴露内部 `confirmed`。冻结前只展示“自动执行 / 手动交接”两个确认选项；自动和手动都表示完整授权并确认开发，区别只在冻结后由当前会话继续调度还是生成交接。需要调整时，用户直接回复修改意见，当前方案不冻结；只有需求实际变化才重新 prepare，单纯询问或其他未改变需求的回复保留当前 `PREPARED` 结果。冻结工具在宿主权限层统一走自动批准，MCP 适配器在控制器边界内注入 Python `True`，不得再为同一次冻结追加通用 Yes/No 或其他弹窗。
 
 总调度上下文只消费 frontier。每个 TASK、GROUP Review 和 Delivery Review Loop 默认路由到独立接收上下文；宿主支持原生 Agent 时优先自动派遣。Review 的独立性用于独立发现与复核，不阻止它在同一 Loop 内自行修正或派遣内部修正上下文。未 claim 且没有 Agent 容量时只生成人工交接，不提前 claim；已 claim、租约有效且出现上下文压力或高轮次 Hook 摩擦时，使用 `pause_loop → 新上下文 resume_loop → 重新 dispatch`，不提交业务 outcome；租约过期时由 `advance_graph` 回收旧 attempt，禁止调用 `pause_loop`。接收方始终继续同一冻结 Graph。
+
+`recommend_executors` 不改变上述执行机制。即使建议显示另一个外部 Agent/模型，v0.22.0 也不会据此调用其 CLI、切换当前宿主模型或改变实际接收上下文；它只提供人类可审查的运行时建议。
 
 ## 主要投影
 

@@ -1,7 +1,7 @@
 interface:
   display_name: "递归交付调度"
-  short_description: "调度递归 GROUP/TASK、Review Loop 与交付 Graph"
-  default_prompt: "使用 $layered-delivery 检查当前状态，并恢复或创建递归 GROUP/TASK 交付 Graph。"
+  short_description: "调度递归 Graph，并展示本机 Agent + Model 建议"
+  default_prompt: "使用 $layered-delivery 恢复或创建递归交付 Graph，并展示每个 TASK/Review 的本机 Agent + Model 建议。"
 
 policy:
   allow_implicit_invocation: true

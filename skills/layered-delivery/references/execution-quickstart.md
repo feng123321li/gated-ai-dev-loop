@@ -15,6 +15,8 @@
 
 不要自行增加 TASK/Gate 节点，也不要根据 payload 内容改变 frontier 顺序。
 
+需要展示当前节点的执行建议时，调用 `available_agents` 和 `recommend_executors`，按 `nodeId` 选择对应建议。建议只用于解释本机当前可用组合；不得据此启动外部 CLI、切换模型、改变 owner、提前 claim 或绕过宿主原生 Agent 容量。CC-Switch 或配置变化后可以重新调用以刷新结果，旧建议不作为缓存权威。
+
 ## 节点推进
 
 - `TASK_LOOP` 是唯一实现执行节点。

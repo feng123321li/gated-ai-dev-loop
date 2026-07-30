@@ -254,6 +254,16 @@ class McpSurfaceTests(unittest.TestCase):
             },
         )
         by_name = {tool["name"]: tool for tool in tools}
+        self.assertEqual(
+            by_name["available_agents"]["inputSchema"]["required"],
+            [],
+        )
+        self.assertEqual(
+            by_name["recommend_executors"]["inputSchema"]["required"],
+            ["root_id"],
+        )
+        self.assertNotIn("_meta", by_name["available_agents"])
+        self.assertNotIn("_meta", by_name["recommend_executors"])
         freeze = by_name["freeze_hierarchy"]
         self.assertNotIn("_meta", freeze)
         freeze_schema = freeze["inputSchema"]
@@ -646,6 +656,11 @@ class McpSurfaceTests(unittest.TestCase):
                 "inside the current Loop",
                 initialized["result"]["instructions"],
             )
+            self.assertIn(
+                "available_agents and recommend_executors expose live, "
+                "non-binding",
+                initialized["result"]["instructions"],
+            )
             handle_message(
                 {
                     "jsonrpc": "2.0",
@@ -737,7 +752,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 17)
+            self.assertEqual(len(listed["result"]["tools"]), 19)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

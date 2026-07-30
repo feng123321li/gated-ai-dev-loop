@@ -77,6 +77,26 @@ Delivery: d-commerce
 
 这保持了两个边界：用户偏好不会丢失，Loop 自治也不会被 requirement 阶段的错误猜测锁死。
 
+## Agent 与模型晚绑定
+
+Frozen Graph 表达“哪个 TASK/Review 何时可运行”，不表达“某台主机上的哪个 Agent/模型必须运行”。v0.22.0 在 Graph 外提供动态建议：
+
+```text
+Frozen Graph Loop 角色
+        +
+当前主机 available_agents
+        +
+用户本地 Profile 优先级
+        ↓
+recommend_executors
+        ↓
+Agent + 当前模型 + 备选 + 原因
+```
+
+建议不修改 hierarchy、Graph、SQLite、事件链、claim 或 owner。TASK 只匹配开发能力；Review 优先避开上游开发建议中的 Agent，并在无法满足异构 Agent 独立性时明确降级置信度。推荐器不解析不透明 payload，因此不会把模型路由策略重新塞进外层业务 schema。
+
+CC-Switch、PATH 或用户 Profile 改变后重新发现即可；同一 Frozen Graph 可在不同主机得到不同建议。v0.22.0 不消费建议执行派遣，真正的跨 CLI 启动与模型切换仍属于后续本地 Dispatcher 边界。
+
 ## 图模型
 
 节点类型：

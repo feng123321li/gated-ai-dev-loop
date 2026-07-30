@@ -247,7 +247,8 @@ TASK、GROUP Review 和 Delivery Review 使用相同 Loop 描述协议：
 1. 调用 `hierarchy_contract(root_kind=...)`。
 2. 按返回的 schema 和 example 创建完整 hierarchy。
 3. 调用 `prepare_hierarchy`，依据 MCP 响应和刚提交的 hierarchy 向用户概述双指纹、状态和完整 GROUP/TASK 清单；同时提供 `humanArtifacts.workspaceOverview`、`humanArtifacts.overview` 及每个 `humanArtifacts.taskBaselines[taskId]` 路径。根 overview 汇总全部 Delivery；Delivery overview 只展示该需求的清单和进度；每个 TASK 的摘要、依赖、Loop 引用、资源声明、结构化执行输入与共享 Skill Hint 由控制器拆分到独立 baseline。人类 Markdown 使用固定中文模板和递归字段列表，不展示 JSON 代码块或机器状态枚举。不要读取投影来反推机器状态，也不要自行重演渲染器。
-4. 在清单后原样提供以下交互，不添加第三个选项，也不要用“其他内容”“其他反馈”等标签描述自由输入：
+4. 调用 `available_agents`，再以本次 `prepare_hierarchy` 返回的 `rootId` 调用 `recommend_executors`。在完整清单后展示每个 TASK、GROUP Review 和 Delivery Review 的建议 Agent、当前模型、置信度、备选及 `reasons`；若 Review 的 `independence.satisfied` 为 false，明确说明当前主机无法满足异构 Agent 审查。该结果不会启动、切换或派遣任何 Agent/模型，也不修改 fingerprint、hierarchy 或 Graph。
+5. 在建议后原样提供以下交互，不添加第三个选项，也不要用“其他内容”“其他反馈”等标签描述自由输入：
 
    > 请选择下一步：
    >
@@ -257,7 +258,7 @@ TASK、GROUP Review 和 Delivery Review 使用相同 Loop 描述协议：
    >
    > 如需继续调整需求，请直接回复修改意见；当前方案不会冻结。
 
-5. 按用户回复执行：
+6. 按用户回复执行：
    - 用户选择**自动执行**后，立即以当前 `hierarchyFingerprint`、`execution_mode=active` 和真实确认人调用 `freeze_hierarchy`；冻结成功后直接进入 `graph_frontier` 调度循环。
    - 用户选择**手动交接**后，立即以当前 `hierarchyFingerprint`、`execution_mode=manual` 和真实确认人调用 `freeze_hierarchy`；冻结成功后只输出一次包含 `rootId` 的纯文本交接说明，接收会话从 `graph_frontier` 恢复，不重新 prepare 或 freeze。
    - 用户直接回复修改意见时，不调用 freeze；仅在需求实际变化后重新 prepare，并只使用新 fingerprint。

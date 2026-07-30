@@ -4,6 +4,9 @@
 
 ```text
 src/hdg/
+├── agent_discovery.py # 本机终端 Agent、当前模型与用户 Profile 只读发现
+├── agent_recommendation.py
+│                      # TASK/Review 非绑定 Agent + Model 建议
 ├── loop_contracts.py   # Loop descriptor、outcome、资源锁
 ├── model_core.py       # schema v3 Delivery 与递归 GROUP/TASK 校验
 ├── graph_model.py      # GROUP Join/Review、Delivery Review、DAG 与 FSM
@@ -87,8 +90,9 @@ Graph 编译遵循以下终态规则：
 
 ## MCP
 
-工具分为五组：
+工具分为六组：
 
+- 发现与建议：`available_agents`、`recommend_executors`
 - 规划：`workspace_status`、`hierarchy_contract`、`prepare_hierarchy`、`freeze_hierarchy`
 - 查询：`graph_frontier`、`graph_status`、`graph_events`、`loop_context`
 - Loop 控制：`dispatch_loop`、`heartbeat_loop`、`pause_loop`、`resume_loop`、`record_loop_result`
@@ -99,7 +103,9 @@ Plugin MCP 工具不接收业务 `root` 参数。Adapter 从宿主配置或请�
 
 `loop_context.completionPolicy` 明确输入和终态边界：payload 是目标、明确约束和已知验收点的输入，Loop 在运行时从真实代码、契约和数据链路推导 scope 内必要条件；冻结 Graph 不冻结内部实现计划，可修复 finding 必须在当前 Loop 内调整方案、修正并复验。`record_loop_result` 的 `BLOCKED` 要求显式 failure class，只用于当前 scope 和权限内没有继续路径的真实终态；调度器仍不解释不透明 finding，也不为返工创建 Graph 环。
 
-`controller.py` 是唯一共享应用入口；它只接受 `ControllerContext` 和 operation 参数，不导入 MCP、Codex 或 Claude 代码。`mcp_tools.py` 把 17 个工具 schema 映射到 Controller，`mcp_adapter.py` 负责协议结果、错误、版本协商和宿主策略，`mcp_server.py` 只处理 newline-delimited stdio 与进程生命周期。
+`controller.py` 是唯一共享应用入口；它只接受 `ControllerContext` 和 operation 参数，不导入 MCP、Codex 或 Claude 代码。`mcp_tools.py` 把 19 个工具 schema 映射到 Controller，`mcp_adapter.py` 负责协议结果、错误、版本协商和宿主策略，`mcp_server.py` 只处理 newline-delimited stdio 与进程生命周期。
+
+`agent_discovery.py` 只读取 PATH、终端 `--version`、非敏感模型字段和用户本地 Profile，不启动开发命令或返回绝对路径、凭据与服务地址。`agent_recommendation.py` 只按 `TASK_LOOP`/Review 角色、显式 Profile 优先级、可用性和上游开发 Agent 多样性排序；不读取 Loop payload，不持久化结果，也不调用 `dispatch_loop`。因此 CC-Switch 或本机配置变化无需重建 Frozen Graph。
 
 本地 Tools-over-stdio profile 的协议优先级为：
 

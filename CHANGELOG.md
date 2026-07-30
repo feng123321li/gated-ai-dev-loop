@@ -4,6 +4,17 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.22.0 — 2026-07-30
+
+发布提交：待发布
+
+- 新增只读 `available_agents`，从当前 PATH、常见终端 `--version`、Codex/Claude Code 非敏感模型字段和用户本地 Agent Profile 动态发现 Agent + 当前模型；兼容 CC-Switch 对 GLM、DeepSeek 等任意模型的即时切换，不返回凭据、Base URL 或绝对路径。
+- 新增只读 `recommend_executors`，为已准备或冻结 Graph 的全部 TASK、GROUP Review 和 Delivery Review 返回建议 Agent + Model、最多三个备选、置信度、结构化原因与 Review 异构 Agent 独立性状态。
+- 所有建议固定为 `ADVISORY` 且 `dispatchAllowed=false`：不启动外部 CLI、不切换模型、不 claim/派遣、不修改 owner，也不写入 schema v3、Frozen Graph、SQLite、事件链或投影；推荐器继续不解析不透明 Loop payload/result。
+- Plugin 保持通用：内置可移植探针覆盖常见开发终端，未知终端通过用户本地 JSON Profile 扩展，允许任意安全 Agent/模型 ID，不硬编码个人路径或配置。
+- schema v3、Graph 节点模型、SQLite 格式、既有自动开发/人工交接/独立上下文 Review 行为均不改变；MCP 工具面由 17 个增至 19 个。
+- 新增单元、Controller/MCP 集成与真实 bundled stdio 回归；Python 全量 84 项测试、编译检查、Skill 校验和 Plugin 校验通过。
+
 ## 0.21.2 — 2026-07-30
 
 发布提交：`3982935`

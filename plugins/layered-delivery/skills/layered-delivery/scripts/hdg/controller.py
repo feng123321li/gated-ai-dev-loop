@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+from .agent_recommendation import available_agents, recommend_executors
 from .errors import fail
 from .graph_frontier import get_graph_frontier
 from .graph_runtime import (
@@ -31,8 +32,10 @@ ControllerOperation = Callable[..., dict[str, Any]]
 
 CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "workspace_status": workspace_status,
+    "available_agents": available_agents,
     "hierarchy_contract": hierarchy_contract,
     "prepare_hierarchy": prepare_hierarchy,
+    "recommend_executors": recommend_executors,
     "freeze_hierarchy": freeze_hierarchy,
     "graph_frontier": get_graph_frontier,
     "graph_status": graph_status,

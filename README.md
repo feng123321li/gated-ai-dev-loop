@@ -2,7 +2,7 @@
 
 `layered-delivery` 是面向可插拔 Loop 的递归交付 Graph 调度器。
 
-当前版本：**0.26.0**
+当前版本：**0.27.0**
 
 同一仓库可以由多个对话窗口并行维护多个 Delivery。每个 Active Delivery 绑定独立对话工作区；Git 场景采用“一 Delivery、一 linked worktree、一最终 feature 分支”，共享主 checkout 的统一 `scheduler.db`，但使用不同 `workspaceKey` 隔离开发文件和控制面写入。同一 Delivery 的所有 TASK 共享这一个 worktree 和 feature 分支；TASK 是调度单元，不创建、绑定或切换内部 Git 分支，但可按各自 scope 在该 Delivery 分支上分别 `git add` 和 `git commit`，形成独立 TASK commit。每个 hierarchy 可冻结 `branchRef/baseRef/baseCommit/integrationTarget`：主线优先 `main`，不存在时回退 `master`；新 Delivery 从主线创建，不隐式继承当前 feature 分支。跨 Delivery 的 `resourceClaims` 仍在共享数据库中全局互斥，因此 worktree 不会掩盖数据库、端口或部署环境冲突。
 

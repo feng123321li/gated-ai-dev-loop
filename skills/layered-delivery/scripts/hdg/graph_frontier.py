@@ -17,7 +17,7 @@ def build_graph_frontier(
     *,
     external_reservations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    if run["status"] in {"COMPLETED", "CANCELLED"}:
+    if run["status"] in {"COMPLETED", "CANCELLED", "SUPERSEDED"}:
         result = {
             "rootId": run["rootId"],
             "runId": run["runId"],

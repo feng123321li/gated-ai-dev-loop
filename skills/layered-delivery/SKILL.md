@@ -14,12 +14,12 @@ description: "调度或恢复多项目、多模块的软件交付 Graph。用于
 - 以 SQLite 与事件链为唯一机器权威，不生成 `hierarchy.json`、`graph.json` 或 `state.json` 副本。根级全部 Delivery 总览、每个 Delivery 的 overview/baseline/progress/acceptance，以及从 `work-items/<root-id>/` 开始按 `children/<child-id>/` 递归展开的每个 GROUP/TASK 投影，是控制器生成的中文人类视图。GROUP 可多层、平行或完全省略；根为 TASK 时直接使用 `work-items/<task-id>/`。Delivery baseline 串联全部节点 baseline，GROUP baseline 串联直接子节点。验收投影严格分层：TASK 只报告本 TASK 与 TASK Review；GROUP 只完整报告本层完成点与 GROUP Review，对直接子节点仅给出状态、简要结果和报告链接；Delivery 只完整报告 Delivery Review 与用户确认，对根工作项仅给出状态、简要结果和报告链接。下层输入、证据和 Review findings 不向上复制。只有 TASK 显式声明 `payload.interfaces` 时才在该 TASK 目录生成 before/after 接口投影；无声明时不扫描代码或自动推断。progress 状态表展示实际执行代理、执行模型、认领身份和执行轮次；接口详情直接在完整入参与出参表中逐字段标记新增、修改、删除或未变。状态摘要、子节点验收和 Review 问题使用表格，长输入与证据保持结构化列表；所有标明 UTC+8 的时间使用 `YYYY-MM-DD HH:mm:ss`。MCP 提交的 hierarchy、summary 和 payload 会作为领域数据进入投影，但不要选择模板或投影文件名，也不要自行拼装、创建、修补或重写投影。
 - 只使用 schema v3。调用 `hierarchy_contract` 取得当前精确结构，不从源码或旧会话猜 schema。
 - 每个对话工作区最多绑定一个未结束的 Active Delivery；多个对话窗口要并行开发多个 Delivery 时，每个窗口使用独立宿主工作区，Git 仓库优先使用独立 worktree。linked worktree 自动共享主 checkout 的 `.layered-delivery/scheduler.db`，但保留不同 `workspaceKey`，因此每个窗口只恢复和写入自己绑定的 Delivery。不要复制调度数据库或在每个 worktree 启动独立控制面。
-- Git 工作区先从 `workspace_status` 读取当前 `gitWorkspace`。位于 feature 分支时，把控制器给出的 `suggestedGitBinding` 原样写入 `delivery.gitBinding`：一个 Delivery 固定一个最终 feature 分支、一个不可变创建基线提交，以及相同的 `baseRef` / `integrationTarget`。默认主线优先 `main`，不存在时回退 `master`。当前位于主线或另一个 Delivery feature 分支时，必须先由宿主在独立 worktree 中从主线创建新的 feature 分支；新 Delivery 不得隐式继承当前 Delivery feature HEAD。
-- Git binding 进入 hierarchy 指纹并随 Delivery 冻结。运行工具只读校验当前 worktree 根、绑定分支、feature HEAD 对创建基线的继承关系，以及主线仍包含该基线；临时切走分支期间拒绝该 Delivery 的运行操作，切回后可继续。控制器不创建或切换分支，也不执行 commit、merge、push。TASK 共享 Delivery feature worktree 和绑定分支；TASK 是调度单元而不是 Git 分支单元，不创建、不绑定也不切换内部 TASK 分支。获得相应 Git 写入授权后，TASK 可按各自 scope 单独执行 `git add` 和 `git commit`，但只能纳入本 TASK 变更；同一 worktree 的 Git index/commit 写入不可并发。
+- Git 工作区先从 `workspace_status` 读取当前 `gitWorkspace`。位于 feature 分支时，把控制器给出的 `suggestedGitBinding` 原样写入 `delivery.gitBinding`。一个业务需求始终使用一个稳定 `delivery.id`；它可以在 `delivery.projectScopes` 中冻结多个本地仓库及各自 `READ_ONLY` / `READ_WRITE` 上限。所有可写 Git 项目必须使用同名 `branchRef`，但各仓库分别冻结自己的不可变 `baseCommit`、`baseRef` 和 `integrationTarget`。默认主线优先 `main`，不存在时回退 `master`。当前位于主线或另一个 Delivery feature 分支时，必须先由宿主在相关仓库中从主线创建该 Delivery 的同名 feature 分支；新 Delivery 不得隐式继承当前 Delivery feature HEAD。
+- Git binding 与项目范围进入 hierarchy 指纹并随 Delivery Revision 冻结。prepare 会只读校验每个项目根、绑定分支、feature HEAD 对本仓库创建基线的继承关系，以及主线仍包含该基线；freeze 必须携带与 `requiredProjectAuthorizations` 完全一致的 `authorized_project_ids`。控制器不创建或切换分支，也不执行 commit、merge、push；项目授权只是调度 scope，不替代这些外部写操作的单独授权。TASK 共享同一 Delivery 在各参与仓库中的同名分支；TASK 是调度单元而不是 Git 分支单元，不创建、不绑定也不切换内部 TASK 分支。获得相应 Git 写入授权后，TASK 可按各自 scope 单独执行 `git add` 和 `git commit`，但只能纳入本 TASK 变更；同一仓库 worktree 的 Git index/commit 写入不可并发。
 - 把 Delivery 作为 Graph 与最终验收边界；GROUP 只在存在真实的依赖、并行汇合或分层整体审查边界时使用，可递归也可完全省略；TASK 是唯一执行叶子，每个 TASK 必须配置 `reviewLoop` 并在 TASK Loop 后独立审查。每个已创建 GROUP 也必须配置 `reviewLoop`，在子结果齐备后完成本层整体审查；不要用只有一个 TASK 的 GROUP 制造形式层级。
 - 不解释或约束 `loop.payload` 和 `loop.result`。实现方案、测试、Gate、修正循环及 Skill 调用属于相应 TASK 或 Review Loop。
 - 需求包含接口契约时，按 `hierarchy_contract.projectionGuidance.interfaces` 在负责该接口的 TASK `payload.interfaces` 中显式提供协议、接口名、简介、调用标识、入参与出参；`protocol` 是开放字符串，HTTP、Dubbo、gRPC、GraphQL、消息等仅为示例。这只驱动固定的人类接口投影，不参与 Graph 调度判断。
-- 初次 `freeze_hierarchy` 把所有 TASK 需求置为 revision 1 冻结态，并冻结依赖、资源声明和拓扑。开发期间只有尚未开始的 TASK 可在用户明确授权后调用 `unfreeze_task_requirement`，修改该 TASK 的 `title`、`summary` 和不透明 `payload`，再调用 `refreeze_task_requirement` 形成新 revision；解冻期间 frontier 禁止派遣该 TASK。曾经 claim（包括进入自动重试）、暂停或终态的 TASK 不可解冻，依赖、`resourceClaims`、Loop ref、Review、层级和拓扑也不可局部修改，需要改变时仍返回 `REPLAN_REQUIRED`。冻结不约束 Loop 内部实现计划；payload 是目标、明确约束和已知验收点，不是完整实现规约，Loop 必须结合真实代码、契约和数据链路推导并闭环必要条件。
+- 初次 `freeze_hierarchy` 创建 Delivery Revision 1，把所有 TASK 需求置为 revision 1 冻结态，并冻结依赖、资源声明、项目范围和拓扑。开发期间只有尚未开始的 TASK 可在用户明确授权后调用 `unfreeze_task_requirement`，修改该 TASK 的 `title`、`summary` 和不透明 `payload`，再调用 `refreeze_task_requirement` 形成 TASK requirement 新 revision；解冻期间 frontier 禁止派遣该 TASK。曾经 claim（包括进入自动重试）、暂停或终态的 TASK 不可解冻。用户最终验收前若依赖、`resourceClaims`、项目范围、Loop ref、Review、层级或拓扑必须改变，保持同一 `delivery.id` 调用 `prepare_delivery_revision`，评审完整新范围后以返回的 `deliveryRevision`、fingerprint 和精确项目授权重新 `freeze_hierarchy`。旧 Revision 只读保留，未受影响且实现与 TASK Review 均已成功、完整契约未变化的 TASK 结果可由控制器携带到新 Revision；GROUP/Delivery Review 重新执行。因旧 replan 流程而取消、但未最终验收的 run 也可由用户明确恢复为下一 Revision；只有已 `COMPLETED` 的 Delivery 不再修订。冻结不约束 Loop 内部实现计划；payload 是目标、明确约束和已知验收点，不是完整实现规约，Loop 必须结合真实代码、契约和数据链路推导并闭环必要条件。
 - 用户给出的 Skill 只登记为 `root.skillHints`。它们对整张 Graph 共享，是运行时优先提示，不是必选项、阶段门禁或 TASK 绑定；具体 Loop 在启动后根据真实上下文发现并优先触发适用提示。
 - `available_agents` 与 `recommend_executors` 只提供当前主机的动态发现和建议。建议不进入 schema v3、Frozen Graph、SQLite、claim 或 owner，工具自身不启动 CLI、切换模型或派遣 Loop；自动执行模式的总调度器可以消费建议并通过宿主原生 Agent 创建接收上下文。提供方限额恢复不调用推荐器，也不自动换 Agent。
 - 不使用文件 scope 做调度授权。`resourceClaims` 是同一共享控制根内跨 Delivery 生效的精确排他锁键，可表达项目、模块、数据库或外部环境，例如 `project:erp/module:order`；worktree 只隔离文件、Git index 和未提交改动，不能替代外部资源锁。
@@ -37,7 +37,7 @@ description: "调度或恢复多项目、多模块的软件交付 Graph。用于
 2. `ACTIVE`、`BLOCKED` 或 `PAUSED`：读取 [execution-quickstart.md](references/execution-quickstart.md)，从 `graph_frontier` 恢复；需要展示当前执行建议时同时读取 [agent-recommendations.md](references/agent-recommendations.md)。
 3. `PREPARED`：读取 [planning-quickstart.md](references/planning-quickstart.md) 的准备结果续接规则；需求未变时保留当前准备结果，不重复 prepare，并可刷新 `available_agents` 与 `recommend_executors`，但不得据此改变已准备的 hierarchy。
 4. `ABSENT`：用户要求新交付时读取规划说明；否则不创建调度状态。
-5. `COMPLETED` 或 `CANCELLED`：用户要求新 Delivery 时读取规划说明；否则只报告终态，不写入新的调度状态，不触发宿主记忆、持续学习或项目文件更新。`workspace_status` 可由控制器幂等补建缺失的固定人类投影；这不改变 SQLite、事件链或 Graph 终态。
+5. `COMPLETED`：用户要求新 Delivery 时读取规划说明；否则只报告终态。`CANCELLED`：默认只报告终态；若用户明确说明该需求尚未最终验收并要求继续同一需求，可保持原 `delivery.id` 创建下一 Revision。`workspace_status` 可由控制器幂等补建缺失的固定人类投影；这不改变 SQLite、事件链或 Graph 终态。
 6. 只读分析、代码审查或问答不创建调度状态。
 
 ## 调度循环
@@ -63,7 +63,7 @@ description: "调度或恢复多项目、多模块的软件交付 Graph。用于
 - `WAIT_FOR_HOST_CAPACITY`：总调度 Agent 等待宿主原生一次性恢复提示；到时重新消费 frontier。宿主原生计划不可用或已经直接收到 429 时，等待人工恢复。
 - 租约过期与基础设施失败交给 `advance_graph`；过期 operation 不得 heartbeat、pause 或提交结果，也不要手工改 attempt。
 - 物化状态损坏时用 `rebuild_graph_run` 从已校验事件链重建；不要改事件。
-- Loop 要求改变外层依赖、资源声明或拓扑时，记录 `REPLAN_REQUIRED`，不在原冻结图中暗改。frontier 返回 `REPLAN_HIERARCHY` 后先展示原因并等待用户决定；只有用户明确授权取消当前 run，才调用 `cancel_graph_run`，再使用新的 `delivery.id` prepare 替代图并重新评审、冻结。
+- Loop 要求改变外层依赖、资源声明、项目范围或拓扑时，记录 `REPLAN_REQUIRED`，不在原冻结 Revision 中暗改。frontier 返回 `REPLAN_HIERARCHY` 后先展示原因并等待用户决定；用户明确要求修改且 Delivery 尚未最终验收时，保持原 `delivery.id` 调用 `prepare_delivery_revision`，再评审、精确授权项目并冻结新 Revision。新 Revision 冻结时原 run 自动成为 `SUPERSEDED`，不要先调用 `cancel_graph_run`，也不要为同一需求制造新的 Delivery ID。
 
 ## 按需参考
 

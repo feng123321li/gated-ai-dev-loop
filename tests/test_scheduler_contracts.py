@@ -543,6 +543,7 @@ class McpSurfaceTests(unittest.TestCase):
             human,
             {
                 "cancel_graph_run",
+                "prepare_delivery_revision",
                 "refreeze_task_requirement",
                 "unfreeze_task_requirement",
             },
@@ -647,6 +648,30 @@ class McpSurfaceTests(unittest.TestCase):
             },
         )
         self.assertIn("execution_mode", freeze_schema["required"])
+        self.assertIn(
+            "expected_delivery_revision",
+            freeze_schema["required"],
+        )
+        self.assertIn(
+            "authorized_project_ids",
+            freeze_schema["required"],
+        )
+        self.assertTrue(
+            freeze_schema["properties"]["authorized_project_ids"][
+                "uniqueItems"
+            ]
+        )
+        revision_prepare = by_name["prepare_delivery_revision"]
+        self.assertIn(
+            "hierarchy",
+            revision_prepare["inputSchema"]["required"],
+        )
+        self.assertEqual(
+            by_name["delivery_revision_history"]["inputSchema"][
+                "required"
+            ],
+            ["root_id"],
+        )
         final_confirmation = by_name["record_user_confirmation"][
             "inputSchema"
         ]["properties"]["confirmed"]
@@ -716,6 +741,14 @@ class McpSurfaceTests(unittest.TestCase):
             prepare_schema["$defs"]["loop"]["properties"]["payload"][
                 "additionalProperties"
             ]
+        )
+        project_scopes = hierarchy_schema["properties"]["delivery"][
+            "properties"
+        ]["projectScopes"]
+        self.assertEqual(project_scopes["minItems"], 1)
+        self.assertEqual(
+            project_scopes["items"]["properties"]["access"]["enum"],
+            ["READ_ONLY", "READ_WRITE"],
         )
 
     def test_prepare_hierarchy_rejects_invalid_schema_before_controller(
@@ -893,9 +926,11 @@ class McpSurfaceTests(unittest.TestCase):
                         "freeze_hierarchy",
                         {
                             "root_id": prepared["rootId"],
+                            "expected_delivery_revision": 1,
                             "expected_hierarchy_fingerprint": (
                                 prepared["hierarchyFingerprint"]
                             ),
+                            "authorized_project_ids": [],
                             "execution_mode": execution_mode,
                             "confirmed_by": "human",
                         },
@@ -953,9 +988,11 @@ class McpSurfaceTests(unittest.TestCase):
                     "freeze_hierarchy",
                     {
                         "root_id": prepared["rootId"],
+                        "expected_delivery_revision": 1,
                         "expected_hierarchy_fingerprint": (
                             prepared["hierarchyFingerprint"]
                         ),
+                        "authorized_project_ids": [],
                         "execution_mode": "active",
                         "confirmed_by": "human",
                     },
@@ -1024,9 +1061,11 @@ class McpSurfaceTests(unittest.TestCase):
                 "freeze_hierarchy",
                 {
                     "root_id": first["rootId"],
+                    "expected_delivery_revision": 1,
                     "expected_hierarchy_fingerprint": (
                         first["hierarchyFingerprint"]
                     ),
+                    "authorized_project_ids": [],
                     "execution_mode": "active",
                     "confirmed_by": "human",
                 },
@@ -1064,9 +1103,11 @@ class McpSurfaceTests(unittest.TestCase):
                     "freeze_hierarchy",
                     {
                         "root_id": second["rootId"],
+                        "expected_delivery_revision": 1,
                         "expected_hierarchy_fingerprint": (
                             second["hierarchyFingerprint"]
                         ),
+                        "authorized_project_ids": [],
                         "execution_mode": "active",
                         "confirmed_by": "human",
                     },
@@ -1177,9 +1218,11 @@ class McpSurfaceTests(unittest.TestCase):
                 "freeze_hierarchy",
                 {
                     "root_id": prepared["rootId"],
+                    "expected_delivery_revision": 1,
                     "expected_hierarchy_fingerprint": (
                         prepared["hierarchyFingerprint"]
                     ),
+                    "authorized_project_ids": [],
                     "execution_mode": "active",
                     "confirmed_by": "human",
                 },
@@ -1386,9 +1429,11 @@ class McpSurfaceTests(unittest.TestCase):
                     "freeze_hierarchy",
                     {
                         "root_id": delivery_id,
+                        "expected_delivery_revision": 1,
                         "expected_hierarchy_fingerprint": (
                             prepared["hierarchyFingerprint"]
                         ),
+                        "authorized_project_ids": [],
                         "execution_mode": "active",
                         "confirmed_by": "human",
                     },
@@ -1797,8 +1842,7 @@ class McpSurfaceTests(unittest.TestCase):
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "All TASKs in that Delivery share its feature worktree and "
-                "branch",
+                "All TASKs in that Delivery share those project branches",
                 initialized["result"]["instructions"],
             )
             self.assertIn(
@@ -1897,7 +1941,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 21)
+            self.assertEqual(len(listed["result"]["tools"]), 23)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

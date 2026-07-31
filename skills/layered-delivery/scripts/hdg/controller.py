@@ -6,7 +6,10 @@ from typing import Any, Callable, Mapping
 from .agent_recommendation import available_agents, recommend_executors
 from .errors import fail
 from .graph_frontier import get_graph_frontier
-from .git_binding import verify_delivery_git_binding
+from .git_binding import (
+    verify_delivery_git_binding,
+    verify_delivery_project_scopes,
+)
 from .graph_runtime import (
     advance_graph,
     cancel_graph_run,
@@ -25,7 +28,9 @@ from .graph_runtime import (
 )
 from .hierarchy_contract import hierarchy_contract
 from .planning import (
+    delivery_revision_history,
     freeze_hierarchy,
+    prepare_delivery_revision,
     prepare_hierarchy,
     workspace_status,
 )
@@ -39,6 +44,8 @@ CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "available_agents": available_agents,
     "hierarchy_contract": hierarchy_contract,
     "prepare_hierarchy": prepare_hierarchy,
+    "prepare_delivery_revision": prepare_delivery_revision,
+    "delivery_revision_history": delivery_revision_history,
     "recommend_executors": recommend_executors,
     "freeze_hierarchy": freeze_hierarchy,
     "graph_frontier": get_graph_frontier,
@@ -105,17 +112,46 @@ class LayeredDeliveryController:
                 root_id,
                 workspace_root,
             )
-            if name != "workspace_status":
+            if name not in {
+                "workspace_status",
+                "prepare_delivery_revision",
+            }:
                 stored = repository.hierarchy(root_id)
                 git_binding = stored["hierarchy"]["delivery"].get(
                     "gitBinding"
                 )
-                git_workspace = verify_delivery_git_binding(
+                project_scopes = stored["hierarchy"]["delivery"].get(
+                    "projectScopes"
+                )
+                verified_projects = verify_delivery_project_scopes(
                     workspace_root,
-                    git_binding,
+                    stored["hierarchy"]["delivery"],
                     preparing=False,
                 )
-        if name in {"workspace_status", "prepare_hierarchy"}:
+                git_workspace = (
+                    verify_delivery_git_binding(
+                        workspace_root,
+                        git_binding,
+                        preparing=False,
+                    )
+                    if project_scopes is None
+                    else next(
+                        (
+                            item.get("gitWorkspace")
+                            for item in verified_projects
+                            if repository.workspace_key(
+                                item["workspaceRoot"]
+                            )
+                            == repository.workspace_key(workspace_root)
+                        ),
+                        None,
+                    )
+                )
+        if name in {
+            "workspace_status",
+            "prepare_hierarchy",
+            "prepare_delivery_revision",
+        }:
             arguments_value["workspace_root"] = workspace_root
         result = operation(
             root=context.project_root,

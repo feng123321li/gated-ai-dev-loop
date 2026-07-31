@@ -33,6 +33,7 @@ STATUS_TEXT = {
     "REPLAN_REQUIRED": "需要重新规划",
     "PAUSED": "已暂停",
     "CANCELLED": "已取消",
+    "SUPERSEDED": "已被新修订取代",
     "COMPLETED": "已完成",
     "NOT_STARTED": "未启动",
     "UNKNOWN": "未知",
@@ -181,6 +182,7 @@ ${delivery_status}
 | [需求基线](baseline.md) | 需求、层级、依赖、Loop 输入与 TASK baseline |
 | [执行进展](progress.md) | TASK、TASK Review、递归 GROUP Review 与 Delivery Review 的运行状态 |
 | [验收记录](acceptance.md) | 已知验收输入、执行结果、审查结果与用户确认 |
+| [修订历史](revisions.md) | 同一 Delivery 的历次冻结范围、授权与运行状态 |
 
 实现规范、测试、门禁与 Skill 激活由各 Loop 内部负责。机器权威仍为
 SQLite 与事件链；本目录中的 Markdown 仅为控制器生成的人类投影。
@@ -202,6 +204,10 @@ ${baseline_status}
 ## Git 分支绑定
 
 ${git_binding}
+
+## 跨项目授权范围
+
+${project_scopes}
 
 ## Skill 提示
 
@@ -408,6 +414,7 @@ PROJECTION_TEMPLATES = MappingProxyType(
         "baseline.md": BASELINE_PROJECTION_TEMPLATE,
         "progress.md": PROGRESS_PROJECTION_TEMPLATE,
         "acceptance.md": ACCEPTANCE_PROJECTION_TEMPLATE,
+        "revisions.md": None,
     }
 )
 
@@ -1467,6 +1474,10 @@ def _delivery_projection_status(
         lines.extend(
             [
                 f"- 运行标识：{_markdown_text(run['runId'])}",
+                (
+                    "- Delivery 修订："
+                    f"{run.get('deliveryRevision', 1)}"
+                ),
                 f"- 启动时间（UTC+8）：{_utc_plus_8(run['startedAt'])}",
             ]
         )
@@ -1501,6 +1512,41 @@ def _render_git_binding_baseline(
                 "- 约束：feature HEAD 可随本 Delivery 提交前进，但必须"
                 "继承创建基线；最终合入目标不随运行自动改变。"
             ),
+        ]
+    )
+
+
+def _render_project_scopes(
+    delivery: dict[str, Any],
+) -> str:
+    scopes = delivery.get("projectScopes", [])
+    if not scopes:
+        return "未声明跨项目范围；仅使用当前 Delivery 工作区。"
+    rows = []
+    for scope in scopes:
+        binding = scope.get("gitBinding") or {}
+        rows.append(
+            "| "
+            + " | ".join(
+                _markdown_text(value)
+                for value in (
+                    scope["id"],
+                    scope["workspaceRoot"],
+                    scope["access"],
+                    binding.get("branchRef", "非 Git"),
+                    binding.get("baseCommit", "不适用"),
+                    binding.get("integrationTarget", "不适用"),
+                )
+            )
+            + " |"
+        )
+    return "\n".join(
+        [
+            "| 项目标识 | 本地仓库 | 访问上限 | Delivery 分支 | 基线提交 | 集成目标 |",
+            "|---|---|---|---|---|---|",
+            *rows,
+            "",
+            "冻结要求：必须精确授权以上全部项目；所有可写 Git 项目使用同名分支。",
         ]
     )
 
@@ -1608,6 +1654,9 @@ def render_delivery_baseline(
             )
         ),
         git_binding=_render_git_binding_baseline(
+            hierarchy["delivery"]
+        ),
+        project_scopes=_render_project_scopes(
             hierarchy["delivery"]
         ),
         skill_hints="\n".join(skill_hint_lines),
@@ -2316,6 +2365,7 @@ def render_task_interfaces(
 def render_projection_documents(
     stored_definition: dict[str, Any],
     run: dict[str, Any] | None,
+    revision_history: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     """Render the complete controller-owned human projection set.
 
@@ -2337,7 +2387,7 @@ def render_projection_documents(
         "hierarchy_status": stored_definition["status"],
         "updated_at": updated_at,
     }
-    return {
+    documents = {
         "overview.md": render_scheduling_plan(
             hierarchy,
             **human_projection_arguments,
@@ -2358,6 +2408,54 @@ def render_projection_documents(
             run=run,
         ),
     }
+    history = revision_history or {
+        "currentRevision": stored_definition.get(
+            "deliveryRevision",
+            1,
+        ),
+        "revisions": [],
+    }
+    rows = []
+    for item in history["revisions"]:
+        rows.append(
+            "| "
+            + " | ".join(
+                [
+                    str(item["revision"]),
+                    _markdown_text(item["status"]),
+                    _markdown_text(item["runStatus"] or "NOT_STARTED"),
+                    _markdown_text(item["reason"] or "初始范围"),
+                    _markdown_text(
+                        "、".join(item["authorizedProjectIds"]) or "无"
+                    ),
+                    _utc_plus_8(item["updatedAt"]),
+                ]
+            )
+            + " |"
+        )
+    documents["revisions.md"] = "\n".join(
+        [
+            "# Delivery 修订历史",
+            "",
+            f"- 交付标识：{_markdown_text(stored_definition['rootId'])}",
+            f"- 当前修订：{history['currentRevision']}",
+            "",
+            "每个修订的 Graph 与需求指纹均保存在 SQLite；旧修订只读保留。",
+            "",
+            "| 修订 | 范围状态 | 运行状态 | 变更原因 | 已授权项目 | 最近更新（UTC+8） |",
+            "|---|---|---|---|---|---|",
+            *(
+                rows
+                or [
+                    "| 1 | PREPARED | NOT_STARTED | 初始范围 | 无 | "
+                    + _utc_plus_8(stored_definition["updatedAt"])
+                    + " |"
+                ]
+            ),
+            "",
+        ]
+    )
+    return documents
 
 
 def render_work_item_projection_documents(

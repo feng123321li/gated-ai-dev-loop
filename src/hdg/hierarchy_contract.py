@@ -141,6 +141,45 @@ def _git_binding_schema() -> dict[str, Any]:
     )
 
 
+def _project_scope_schema() -> dict[str, Any]:
+    return _object(
+        {
+            "id": _identifier(
+                "Stable project ID within this Delivery."
+            ),
+            "workspaceRoot": {
+                "type": "string",
+                "minLength": 1,
+                "description": (
+                    "Absolute local workspace root authorized for this "
+                    "Delivery revision."
+                ),
+            },
+            "access": {
+                "type": "string",
+                "enum": ["READ_ONLY", "READ_WRITE"],
+                "description": (
+                    "Maximum scheduler-visible access for this project."
+                ),
+            },
+            "gitBinding": _git_binding_schema(),
+        },
+        required=["id", "workspaceRoot", "access"],
+    )
+
+
+def _project_scopes_schema() -> dict[str, Any]:
+    return {
+        "type": "array",
+        "items": _project_scope_schema(),
+        "minItems": 1,
+        "description": (
+            "Exact cross-project scope for this Delivery revision. Freeze "
+            "requires explicit authorization of every listed project ID."
+        ),
+    }
+
+
 def _depends_on_schema() -> dict[str, Any]:
     return {
         "type": "array",
@@ -433,6 +472,7 @@ def hierarchy_input_schema(
                     "title": _text("Delivery title."),
                     "summary": _text("Delivery outcome summary."),
                     "gitBinding": _git_binding_schema(),
+                    "projectScopes": _project_scopes_schema(),
                     "reviewLoop": _ref("loop"),
                 },
                 required=["id", "title", "summary", "reviewLoop"],
@@ -480,16 +520,31 @@ def hierarchy_contract(
                 ],
                 "description": (
                     "For a Git workspace, copy workspace_status."
-                    "suggestedGitBinding into delivery.gitBinding. One "
-                    "independent Delivery uses one feature branch created "
-                    "from main, falling back to master when main is absent. "
-                    "All TASKs share that Delivery worktree and branch; TASK "
+                    "suggestedGitBinding into delivery.gitBinding. Each "
+                    "writable repository in one Delivery uses the same "
+                    "feature branch name, created from that repository's "
+                    "mainline (main, falling back to master). All TASKs "
+                    "share those Delivery branches; TASK "
                     "agents do not create, bind, or switch internal branches. "
                     "When separately authorized, each TASK may stage and "
                     "commit only its own changes on the Delivery branch; "
                     "shared Git index writes must be serialized. "
                     "The scheduler verifies but never creates, switches, "
                     "commits, merges, or pushes Git branches."
+                ),
+            },
+            "projectScopes": {
+                "freezeAuthorization": "EXACT_PROJECT_ID_SET",
+                "writableGitBranchPolicy": (
+                    "SAME_BRANCH_REF_ACROSS_PROJECTS"
+                ),
+                "description": (
+                    "One logical Delivery may authorize multiple local "
+                    "repositories. Every writable Git project uses the same "
+                    "feature branch name, while each repository freezes its "
+                    "own base commit and integration target. Adding a "
+                    "project requires a new Delivery revision and a new "
+                    "exact project authorization at freeze."
                 ),
             },
             "acceptanceReports": {
@@ -599,8 +654,13 @@ def hierarchy_contract(
         "invariants": [
             "Delivery is the frozen Graph and final acceptance boundary.",
             (
-                "A Git Delivery freezes one feature branch, its immutable "
-                "mainline fork commit, and the same base/integration target."
+                "Each writable Git project freezes the Delivery's shared "
+                "feature branch name, its own immutable mainline fork "
+                "commit, and the same per-project base/integration target."
+            ),
+            (
+                "One Delivery may span multiple local repositories; every "
+                "writable Git project uses the same feature branch name."
             ),
             "GROUP may recursively contain GROUP or TASK children.",
             "TASK is the only execution leaf and cannot contain children.",

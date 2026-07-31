@@ -147,8 +147,9 @@ def _loaded(
         (root_id,),
     ).fetchone()
     run = connection.execute(
-        "SELECT * FROM runs WHERE root_id = ?",
-        (root_id,),
+        "SELECT * FROM runs WHERE root_id = ? "
+        "AND revision = ?",
+        (root_id, hierarchy["revision"]),
     ).fetchone()
     if hierarchy is None or run is None:
         fail(
@@ -544,6 +545,7 @@ def loop_context(
             )
     context = {
         "rootId": root_id,
+        "deliveryRevision": run["deliveryRevision"],
         "runId": run["runId"],
         "nodeId": node_id,
         "kind": definition["kind"],
@@ -567,6 +569,10 @@ def loop_context(
         ),
         "humanArtifacts": human_artifacts,
         "workspaceIsolation": run["workspaceIsolation"],
+        "projectScopes": stored["hierarchy"]["delivery"].get(
+            "projectScopes",
+            [],
+        ),
         "executionPolicy": loop_execution_policy(),
         "completionPolicy": loop_completion_policy(),
         "rules": {
@@ -579,6 +585,7 @@ def loop_context(
             "prioritizeApplicableSkillHints": True,
             "returnOnlyStandardLoopOutcome": True,
             "coordinatorMustNotExecuteLoopInline": True,
+            "accessOnlyAuthorizedProjectScopes": True,
         },
     }
     git_binding = stored["hierarchy"]["delivery"].get("gitBinding")
@@ -1649,7 +1656,11 @@ def cancel_graph_run(
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
         at = _locked_timestamp(now, run["updated_at"])
-        if run["status"] in {"COMPLETED", "CANCELLED"}:
+        if run["status"] in {
+            "COMPLETED",
+            "CANCELLED",
+            "SUPERSEDED",
+        }:
             fail(
                 "SCHEDULER_RUN_TERMINAL",
                 "A terminal scheduler run cannot be cancelled",
@@ -1828,6 +1839,25 @@ def _rebuild_graph_run_locked(
                 "SCHEDULER_EVENT_REPLAY_INVALID",
                 "Event does not reference the latest Loop attempt",
             )
+        if event_type == "NODE_RESULT_CARRIED_FORWARD":
+            if state["status"] != "PENDING":
+                fail(
+                    "SCHEDULER_EVENT_REPLAY_INVALID",
+                    "Only a pending node can receive a carried result",
+                )
+            state["status"] = "SUCCEEDED"
+            state["finishedAt"] = at
+            state["outcome"] = payload.get("outcome")
+            state["failureClass"] = payload.get("failureClass")
+            task_id = payload.get("taskId")
+            requirement = requirement_states.get(task_id)
+            if requirement is not None:
+                requirement["revision"] = payload.get(
+                    "requirementRevision",
+                    1,
+                )
+                requirement["updatedAt"] = at
+            continue
         if event_type == "TASK_REQUIREMENT_UNFROZEN":
             task_id = payload.get("taskId")
             requirement = requirement_states.get(task_id)

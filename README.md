@@ -4,7 +4,7 @@
 
 当前版本：**0.27.0**
 
-同一仓库可以由多个对话窗口并行维护多个 Delivery。每个 Active Delivery 绑定独立对话工作区；Git 场景采用“一 Delivery、一 linked worktree、一最终 feature 分支”，共享主 checkout 的统一 `scheduler.db`，但使用不同 `workspaceKey` 隔离开发文件和控制面写入。同一 Delivery 的所有 TASK 共享这一个 worktree 和 feature 分支；TASK 是调度单元，不创建、绑定或切换内部 Git 分支，但可按各自 scope 在该 Delivery 分支上分别 `git add` 和 `git commit`，形成独立 TASK commit。每个 hierarchy 可冻结 `branchRef/baseRef/baseCommit/integrationTarget`：主线优先 `main`，不存在时回退 `master`；新 Delivery 从主线创建，不隐式继承当前 feature 分支。跨 Delivery 的 `resourceClaims` 仍在共享数据库中全局互斥，因此 worktree 不会掩盖数据库、端口或部署环境冲突。
+同一仓库可以由多个对话窗口并行维护多个 Delivery。每个 Active Delivery 绑定独立对话工作区；一个业务需求使用稳定的 `delivery.id`，在最终用户验收前可形成多个不可变 Revision。一个 Delivery 还可以通过 `projectScopes` 覆盖多个本地仓库，例如主需求位于 `erp-pm`，同时修改 `erp-order` 与 `erp-supplier`。所有可写 Git 项目必须使用同名 feature 分支，但分别冻结各仓库自己的 `baseCommit` 和主线目标；冻结前用户必须精确授权完整项目 ID 集合。同一 Delivery 的 TASK 共享这些项目分支，不创建 TASK 分支。跨 Delivery 的 `resourceClaims` 仍在共享数据库中全局互斥，因此 worktree 不会掩盖数据库、端口或部署环境冲突。
 
 它负责：
 
@@ -18,6 +18,7 @@
 - 当前主机终端 Agent 与配置模型的动态发现；
 - 为每个 TASK、TASK Review、GROUP Review 和 Delivery Review 提供带原因的非绑定 Agent + Model 建议；
 - SQLite 状态、哈希事件链和可重建投影。
+- 同一 Delivery 的不可变 Revision、结果携带和跨项目冻结授权。
 
 它不负责：
 
@@ -229,7 +230,7 @@ Task 的调度定义只保留：
 - `REPLAN_REQUIRED`
 - `CANCELLED`
 
-只有 `RETRYABLE_INFRA` 和 `WORKER_LOST` 会触发外层自动重试。payload 提供目标、明确约束和已知验收点，不是完整实现规约；Loop 还要结合真实代码、契约和数据链路推导必要条件。初次冻结把全部 TASK 需求设为 revision 1 冻结态，并固定依赖、资源声明和拓扑；用户可在开发期间单独解冻尚未开始的 TASK，只替换标题、摘要和 payload，再冻结成新 revision，编辑期间该 TASK 不会被派遣。已开始 TASK 或依赖、资源、拓扑变化仍必须走 `REPLAN_REQUIRED`。Loop 内部实现计划不被冻结；当前目标内可修复的实现、测试、数据完整性、边界或 Review finding，必须由当前 TASK/Review Loop 调整方案、修正并重新验证，不进入外层事件。`BLOCKED` 仅表示当前 scope 和权限内没有继续路径，并要求显式 failure class。
+只有 `RETRYABLE_INFRA` 和 `WORKER_LOST` 会触发外层自动重试。payload 提供目标、明确约束和已知验收点，不是完整实现规约；Loop 还要结合真实代码、契约和数据链路推导必要条件。初次冻结创建 Delivery Revision 1，并把全部 TASK requirement 设为 revision 1 冻结态。用户可单独修订尚未开始的 TASK；已开始 TASK，或依赖、资源、项目范围、Review 和拓扑发生变化时，使用相同 `delivery.id` 准备下一 Delivery Revision。新 Revision 冻结时旧 run 标记为 `SUPERSEDED`；完整契约未变且实现与 TASK Review 都成功的 TASK 可携带，GROUP/Delivery Review 重新执行。Loop 内部实现计划不被冻结；当前目标内可修复问题仍在当前 Loop 闭环。
 
 ## MCP 流程
 
@@ -244,6 +245,11 @@ workspace_status
 → graph_frontier
 → 未开始 TASK 需求变化时：
   unfreeze_task_requirement → refreeze_task_requirement → graph_frontier
+→ 最终用户验收前的外层范围变化时：
+  delivery_revision_history
+  → prepare_delivery_revision（保持同一 delivery.id）
+  → 用户重新确认范围与项目授权
+  → freeze_hierarchy（旧 run 自动 SUPERSEDED）
 → 独立 Agent：loop_context / dispatch_loop / heartbeat_loop
 → 租约有效且上下文压力：pause_loop / 新 Agent resume_loop / 重新 dispatch
 → 宿主报告剩余额度不高于 5%：
@@ -259,7 +265,7 @@ workspace_status
 → record_user_confirmation
 ```
 
-当前 Plugin 注册 21 个工具：外层调度与恢复工具、只读的 `available_agents` / `recommend_executors`，以及显式人机授权的 `unfreeze_task_requirement` / `refreeze_task_requirement`。每次 Graph Controller operation 都绑定一个已校验的共享控制根和当前对话工作区；Git Delivery 还校验当前 worktree、feature 分支及冻结 fork commit。现代 MCP 从请求上下文取得，旧 MCP 从初始化式连接绑定取得。控制器只读 Git，不创建、切换、提交、合并或推送分支。
+当前 Plugin 注册 23 个工具：外层调度与恢复工具、只读的 `available_agents` / `recommend_executors`、Delivery Revision 查询/准备，以及 TASK requirement 修订工具。每次 Graph Controller operation 都绑定一个已校验的共享控制根和当前对话工作区；跨项目 Git Delivery 逐仓校验同名 feature 分支及各自冻结 fork commit。控制器只读 Git，不创建、切换、提交、合并或推送分支。
 
 `prepare_hierarchy` 的 MCP 工具定义直接暴露完整 schema v3，并用 `oneOf`
 覆盖 GROUP/TASK 根节点。宿主可在调用前拒绝非法结构；Adapter 在进入

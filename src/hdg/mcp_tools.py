@@ -97,6 +97,34 @@ def _prepare_hierarchy_tool_schema() -> dict[str, Any]:
     return tool_schema
 
 
+def _prepare_revision_tool_schema() -> dict[str, Any]:
+    hierarchy_schema = hierarchy_input_schema()
+    definitions = hierarchy_schema.pop("$defs")
+    tool_schema = _object(
+        {
+            "root_id": ROOT_ID,
+            "expected_current_revision": {
+                "type": "integer",
+                "minimum": 1,
+            },
+            "hierarchy": hierarchy_schema,
+            "reason": _string(
+                "Why the active, not-yet-accepted Delivery scope changed."
+            ),
+            "requested_by": _string("Human requester identity."),
+        },
+        required=[
+            "root_id",
+            "expected_current_revision",
+            "hierarchy",
+            "reason",
+            "requested_by",
+        ],
+    )
+    tool_schema["$defs"] = definitions
+    return tool_schema
+
+
 TOOLS = (
     _tool(
         "workspace_status",
@@ -139,6 +167,29 @@ TOOLS = (
         _prepare_hierarchy_tool_schema(),
     ),
     _tool(
+        "prepare_delivery_revision",
+        (
+            "Prepare the next immutable revision of the same active "
+            "Delivery after its frozen scope changes. The Delivery ID stays "
+            "stable, completed unchanged TASKs are candidates for "
+            "carry-forward, and every project scope is reauthorized at "
+            "freeze."
+        ),
+        _prepare_revision_tool_schema(),
+        human=True,
+    ),
+    _tool(
+        "delivery_revision_history",
+        (
+            "Read every immutable revision and run status for one logical "
+            "Delivery."
+        ),
+        _object(
+            {"root_id": ROOT_ID},
+            required=["root_id"],
+        ),
+    ),
+    _tool(
         "recommend_executors",
         (
             "Return non-binding local Agent and model recommendations, "
@@ -161,9 +212,26 @@ TOOLS = (
         _object(
             {
                 "root_id": ROOT_ID,
+                "expected_delivery_revision": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": (
+                        "Exact Delivery revision returned by prepare."
+                    ),
+                },
                 "expected_hierarchy_fingerprint": _string(
                     "Fingerprint returned by prepare_hierarchy."
                 ),
+                "authorized_project_ids": {
+                    "type": "array",
+                    "items": ROOT_ID,
+                    "uniqueItems": True,
+                    "description": (
+                        "Exact project IDs explicitly authorized by the "
+                        "user for this revision; use an empty array when "
+                        "projectScopes is absent."
+                    ),
+                },
                 "execution_mode": {
                     "type": "string",
                     "enum": ["active", "manual"],
@@ -177,7 +245,9 @@ TOOLS = (
             },
             required=[
                 "root_id",
+                "expected_delivery_revision",
                 "expected_hierarchy_fingerprint",
+                "authorized_project_ids",
                 "execution_mode",
                 "confirmed_by",
             ],
@@ -618,7 +688,7 @@ def validate_tool_arguments(
         fail("MCP_TOOL_UNKNOWN", f"Unknown scheduler tool: {name}")
     _validate_schema(arguments, tool["inputSchema"], "arguments")
     validated = dict(arguments)
-    if name == "prepare_hierarchy":
+    if name in {"prepare_hierarchy", "prepare_delivery_revision"}:
         try:
             validate_hierarchy_definition(validated["hierarchy"])
         except GatedLoopError as error:

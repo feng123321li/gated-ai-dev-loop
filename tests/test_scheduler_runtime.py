@@ -1034,6 +1034,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "prioritizeApplicableSkillHints": True,
                 "returnOnlyStandardLoopOutcome": True,
                 "coordinatorMustNotExecuteLoopInline": True,
+                "accessOnlyAuthorizedProjectScopes": True,
             },
         )
 
@@ -1879,9 +1880,11 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "freeze_hierarchy",
                 {
                     "root_id": current["rootId"],
+                    "expected_delivery_revision": 1,
                     "expected_hierarchy_fingerprint": (
                         current["hierarchyFingerprint"]
                     ),
+                    "authorized_project_ids": [],
                     "execution_mode": "active",
                     "confirmed_by": "human",
                 },
@@ -2408,6 +2411,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "baseline": f"{artifact_prefix}/baseline.md",
                 "progress": f"{artifact_prefix}/progress.md",
                 "acceptance": f"{artifact_prefix}/acceptance.md",
+                "revisions": f"{artifact_prefix}/revisions.md",
                 "taskBaselines": expected_task_baselines,
                 "workItems": expected_work_items,
             },
@@ -3025,6 +3029,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "baseline.md",
                 "progress.md",
                 "acceptance.md",
+                "revisions.md",
             },
         )
         self.assertGreaterEqual(PROJECTION_TEMPLATE_VERSION, 7)

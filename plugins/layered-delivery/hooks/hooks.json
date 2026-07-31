@@ -2,6 +2,21 @@
   "hooks": {
     "PreToolUse": [
       {
+        "matcher": "mcp__plugin_layered-delivery_layered-delivery__dispatch_loop",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "-X",
+              "utf8",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/attest_claude_dispatch_receiver.py"
+            ],
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "mcp__plugin_layered-delivery_layered-delivery__rebuild_graph_run",
         "hooks": [
           {
@@ -56,6 +71,23 @@
               "-X",
               "utf8",
               "${CLAUDE_PLUGIN_ROOT}/hooks/require_sensitive_tool_approval.py"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "matcher": "rate_limit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "-X",
+              "utf8",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/handle_claude_rate_limit.py"
             ],
             "timeout": 10
           }

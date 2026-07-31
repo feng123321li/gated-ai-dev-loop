@@ -8,8 +8,8 @@
 - 不得仅因 `workspace_status` 返回旧 Delivery 就进入 Revision。只有用户明确要求修改或继续该 Delivery 时，才允许调用 `unfreeze_task_requirement` 或 `prepare_delivery_revision`；Agent 的语义判断不能替代这项用户连续性授权。
 - 当前上下文仍保留最近一次 `prepare_hierarchy` 响应和原始 hierarchy 时，复用其中的 `hierarchyFingerprint`、完整清单与人类投影路径；需求未变时不要重复 prepare，回答用户问题后重新展示同一组冻结选项。
 - 初次冻结前用户修改需求时，更新 hierarchy 并重新调用 `prepare_hierarchy`；只使用新响应的 fingerprint，不复用旧值。
-- 初次冻结后、最终用户验收前用户修改依赖、项目范围、资源或拓扑时，保持相同 `delivery.id` 调用 `prepare_delivery_revision`，不得重新调用初始 prepare，也不得创建另一个 Delivery ID。
-- `prepare_delivery_revision` 只生成待确认候选，不激活执行，不应触发宿主通用确认弹窗；用户在完整范围和授权清单上选择自动执行或手动交接，才是该 Revision 唯一一次业务确认。
+- 初次冻结后、最终用户验收前用户修改依赖、项目范围、资源或拓扑时，保持相同 `delivery.id` 调用 `prepare_delivery_revision`，不得重新调用初始 prepare，也不得创建另一个 Delivery ID。用户明确要求继续同一 Delivery 时提交 `continuity_basis=USER_EXPLICIT_SAME_DELIVERY`；只有当前 Graph 已记录 `REPLAN_REQUIRED` 时提交 `ACTIVE_LOOP_REPLAN`。路径、分支和旧 Delivery 状态都不是连续性依据。
+- `prepare_delivery_revision` 只生成待确认候选，不替换当前 hierarchy 或旧 run，不应触发宿主通用确认弹窗；用户在完整范围和授权清单上选择自动执行或手动交接，才是该 Revision 唯一一次业务确认。
 - 当前上下文不再持有精确 fingerprint 或原始 hierarchy 时，不从 JSON/Markdown 投影反推机器输入，也不猜测旧值；重新收集需求并 prepare 后再请求冻结确认。
 
 ## 选择根节点

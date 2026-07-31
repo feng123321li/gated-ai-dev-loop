@@ -10,13 +10,13 @@
 
 每次调用都重新读取当前本机配置。Claude Code 经 CC-Switch 切换 GLM、DeepSeek 或其他模型后，下一次发现应展示新模型；不把旧模型清单写入 Frozen Graph。
 
-推荐器不参与提供方限额恢复。软阈值暂停后由原 Agent 等待宿主原生计划提示，直接收到 429 时由人工恢复；两种情况都不临时改写推荐、不自动换 Agent。
+推荐器不参与提供方限额恢复。软阈值暂停后由原 Agent 等待宿主原生计划提示；硬 429 由宿主适配器持久化容量熔断、取消周期监控并只安排一次 reset 后唤醒。两种情况都不临时改写推荐、不自动换 Agent。
 
 ## 自动派遣计划
 
-普通推荐仍是 `ADVISORY`。`available_agents` / `recommend_executors` 从 PATH 和本机设置发现的候选固定标记为 `availabilityScope=LOCAL_TERMINAL`、`dispatchTransport=EXTERNAL_PROCESS`、`hostDispatchEligible=false`；这表示“本机终端可见”，不表示“当前宿主原生 Agent 槽位可派遣”。用户选择自动执行后，总调度器另外从宿主原生 Agent catalog 构造临时 `executor_inventory`，以当前 Graph fingerprint 调用 `plan_dispatch_batch`。只有宿主明确报告可用槽位和模型、且 `dispatchTransport=HOST_NATIVE` 的原生 Agent 才能进入自动 assignment；分析路由还要求 `modelOverrideSupported=true`，当前执行器回退不要求模型切换能力。
+普通推荐仍是 `ADVISORY`。`available_agents` / `recommend_executors` 从 PATH 和本机设置发现的候选固定标记为 `LOCAL_TERMINAL / EXTERNAL_PROCESS / hostDispatchEligible=false`。自动 assignment 只接受宿主原生 catalog；MCP Server 启动配置中的精确宿主适配器会拒绝其他 Agent，协议 `clientInfo` 不参与授权，缺失配置时 fail closed。
 
-返回的 `binding=HOST_NATIVE_DISPATCH_PLAN`。`assignments` 为当前无资源冲突的 `DISPATCH_LOOP` 原子签发短租约 `dispatchReservationId`，并选择 Agent、模型选择方式、reasoning effort、`dispatchTransport` 和 `decisionFingerprint`；`concurrentDispatchGroups` 表示取得预留后可以同时创建的接收 Agent。第二个调度器看到 `WAIT_FOR_DISPATCH_RECEIVER / DISPATCH_ALREADY_RESERVED`，不会重复创建；`deferred` 节点保持未 claim。兼容执行器仅能通过外部 CLI、exec、subprocess 或 companion bridge 使用时，节点返回 `UNSAFE_EXECUTOR_TRANSPORT`。计划工具本身不启动 Agent、不切换当前会话模型、不 claim，也不保存完整 inventory。总调度器对分析路由显式覆盖模型，对回退路由在独立上下文沿用当前宿主默认；接收方再以实际 Agent/模型、`dispatch_transport=HOST_NATIVE`、预留 ID 与决策指纹调用 `dispatch_loop`。
+返回的 `binding=HOST_NATIVE_DISPATCH_PLAN`。预留与已 claim Loop 都占用跨 Delivery Agent 槽位；宿主创建原生子 Agent 后必须签发一次性接收凭证。接收方以实际 Agent/模型、attested context、HOST_NATIVE、预留 ID 与决策指纹调用 `dispatch_loop`。外部进程仍以 `UNSAFE_EXECUTOR_TRANSPORT` deferred；计划工具本身不启动 Agent、不切换当前会话模型、不 claim。
 
 ### 计算顺序
 
@@ -27,7 +27,7 @@
 3. 推理等级：总调度 Agent 在派遣前从 `loop_context` 按固定风险规则为当前 Ready TASK/Review 自动判为 `STANDARD`/`HIGH`，并通过临时 `node_requirements` 提交来源与原因。Controller 不做本地语义识别，也不接受 payload 自带的模型路由指令。回退节点保持 `UNCLASSIFIED`。
 4. 模型匹配：`STANDARD` 目标为 `BALANCED`；`HIGH` 必须存在 `FRONTIER` 模型，否则节点以 `NO_HIGH_REASONING_MODEL` deferred。候选内再按 tier 距离、较高 tier、模型优先级、稳定模型 ID 排序；回退节点直接使用当前模型。
 5. Agent 匹配：Review 先避开上游实际 Agent，再避开上游实际模型家族，然后按 Agent 优先级、模型优先级与稳定 ID 排序；TASK 直接按优先级和稳定 ID。回退节点不改换 Agent。
-6. 容量分配：每选中一个 assignment 就扣减对应 Agent 的临时槽位；槽位耗尽的后续节点保持未 claim。
+6. 容量分配：每选中一个 assignment 就扣减对应 Agent 的临时槽位；写预留时再次在 SQLite 事务内扣减跨 Delivery 共享槽位，槽位耗尽的后续节点保持未 claim。
 
 因此“高推理 Agent”不是另一个隐藏 Agent 类型，而是“具备所需角色能力的宿主原生 Agent + 可显式覆盖的 `FRONTIER` 模型 + `HIGH` 推理决策”。控制器只认识 tier，不认识厂商默认模型：Codex inventory 可以把 terra 标为 `BALANCED`、sol 标为 `FRONTIER`；Claude inventory 可以把 Sonnet 标为 `BALANCED`、Opus 标为 `FRONTIER`。
 

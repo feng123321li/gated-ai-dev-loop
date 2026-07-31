@@ -117,6 +117,7 @@ def serve(
             root,
             from_sandbox_meta=project_root_from_meta,
         ),
+        trusted_host_adapter=os.environ.get("HDG_HOST_ADAPTER"),
     )
     while True:
         try:

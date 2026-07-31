@@ -91,23 +91,33 @@ SERVER_INSTRUCTIONS = (
     "an assignment. For automatic execution, plan_dispatch_batch consumes "
     "ephemeral host-native capacity, dispatchTransport, and selectable-"
     "model facts, then "
-    "atomically reserves each selected Loop and returns analyzed model "
+    "atomically reserves each selected Loop and its cross-Delivery host "
+    "Agent slot, then returns analyzed model "
     "overrides or an explicitly reported current-executor fallback, plus "
     "concurrent assignments. A second dispatcher sees "
     "WAIT_FOR_DISPATCH_RECEIVER and cannot reserve or launch the same Loop. "
     "The fallback remains "
     "UNCLASSIFIED; the controller never analyzes Loop payloads. It never "
-    "starts Agents or claims Loops; the native host creates each receiving "
+    "starts Agents or claims Loops. The server launch adapter limits HOST_NATIVE "
+    "inventory to Agents that client can actually create; a locally "
+    "installed CLI remains external advice. The native host creates each receiving "
     "Agent only after reservation; that Agent claims with its actual "
-    "Agent/model IDs, HOST_NATIVE transport, reservation ID, and the "
+    "Agent/model IDs, host-attested receiving context ID, one-time "
+    "receiver attestation, HOST_NATIVE transport, reservation ID, and the "
     "verified decision fingerprint. Local "
     "terminal discovery is EXTERNAL_PROCESS advice only. Never spawn an "
     "autonomous CLI, subprocess, or companion script such as codex-companion "
     "to satisfy an assignment. Such a route stays unclaimed and is handed "
-    "off manually. prepare_delivery_revision only stages a candidate and "
+    "off manually. prepare_delivery_revision requires explicit same-"
+    "Delivery or recorded replan continuity, only stages a candidate, "
+    "and leaves the current run active until freeze. It "
     "does not require a generic host approval prompt; the user's active or "
     "manual freeze choice is the single business confirmation for that "
-    "revision. The scheduler treats Loop payload and result "
+    "revision. A model-external host adapter observing hard 429 quota "
+    "exhaustion invokes the private capacity callback with the structured "
+    "provider reset time, cancels "
+    "recurring monitors, and keeps only one native wake after reset. The "
+    "scheduler treats Loop payload and result "
     "as opaque and accepts only standard Loop outcomes. resourceClaims "
     "are exact cross-Delivery scheduling locks, not file scopes. Every TASK "
     "requirement starts frozen. An explicitly authorized, not-yet-started "
@@ -134,6 +144,7 @@ class McpConnection:
     legacy_initialize_requested: bool = False
     legacy_initialized: bool = False
     legacy_client_info: dict[str, object] | None = None
+    trusted_host_adapter: str | None = None
 
 
 @dataclass(frozen=True)
@@ -467,6 +478,8 @@ def _call_scheduler_tool(
             root=root_resolution.project_root,
             workspace_root=root_resolution.workspace_root,
             explicit_dogfood=explicit_dogfood,
+            client_info=(dict(client_info) if client_info else None),
+            trusted_host_adapter=connection.trusted_host_adapter,
         )
         payload = {
             "ok": True,

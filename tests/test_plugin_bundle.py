@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import re
 import subprocess
@@ -9,7 +10,9 @@ from tempfile import TemporaryDirectory
 import unittest
 
 import hdg
-from hdg.mcp_tools import tool_definitions
+from hdg.graph_model import loop_node_id
+from hdg.graph_runtime import dispatch_loop, graph_status
+from hdg.mcp_tools import call_tool, tool_definitions
 from hdg.mcp_adapter import (
     CLIENT_CAPABILITIES_META_KEY,
     CLIENT_INFO_META_KEY,
@@ -18,8 +21,9 @@ from hdg.mcp_adapter import (
     PROTOCOL_VERSION_META_KEY,
 )
 from hdg.model_core import validate_hierarchy_definition
+from hdg.planning import freeze_hierarchy, prepare_hierarchy
 
-from .test_loop_architecture import group_hierarchy
+from .test_loop_architecture import group_hierarchy, task_hierarchy
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -181,7 +185,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("UNSAFE_EXECUTOR_TRANSPORT", recommendations)
         self.assertIn("diversityLevel=CONTEXT_ONLY", main + recommendations)
 
-    def test_skill_uses_native_soft_stop_and_manual_429_recovery(
+    def test_skill_uses_native_soft_stop_and_hard_429_breaker(
         self,
     ) -> None:
         execution = (
@@ -193,8 +197,9 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("Codex Desktop", execution)
         self.assertIn("当前任务计划", execution)
         self.assertIn("直接收到 429", execution)
-        self.assertIn("只做人工恢复", execution)
-        self.assertNotIn("模型外宿主定时器", execution)
+        self.assertIn("模型外宿主适配器私有回调", execution)
+        self.assertIn("cancelRecurringMonitors=true", execution)
+        self.assertIn("HOST_NATIVE_ONE_SHOT", execution)
         self.assertNotIn("RECOMMEND_ALTERNATE_OR_WAIT", execution)
 
     def test_skill_isolates_deliveries_and_versions_task_requirements(
@@ -327,6 +332,9 @@ class PluginBundleTests(unittest.TestCase):
         matchers = {
             entry["matcher"].rsplit("__", 1)[-1]
             for entry in hooks["hooks"]["PreToolUse"]
+            if entry["hooks"][0]["args"][-1].endswith(
+                "require_sensitive_tool_approval.py"
+            )
         }
         names = {tool["name"] for tool in tool_definitions()}
         self.assertEqual(
@@ -340,6 +348,288 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertLessEqual(matchers, names)
 
+    def test_every_sensitive_claude_hook_returns_an_approval_prompt(
+        self,
+    ) -> None:
+        hooks = json.loads(
+            (PLUGIN / "hooks" / "hooks.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        script = PLUGIN / "hooks" / "require_sensitive_tool_approval.py"
+        for entry in hooks["hooks"]["PreToolUse"]:
+            if not entry["hooks"][0]["args"][-1].endswith(
+                "require_sensitive_tool_approval.py"
+            ):
+                continue
+            with self.subTest(matcher=entry["matcher"]):
+                completed = subprocess.run(
+                    [sys.executable, "-X", "utf8", str(script)],
+                    input=json.dumps(
+                        {
+                            "hook_event_name": "PreToolUse",
+                            "tool_name": entry["matcher"],
+                        }
+                    ),
+                    text=True,
+                    encoding="utf-8",
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                output = json.loads(completed.stdout)
+                decision = output["hookSpecificOutput"]
+                self.assertEqual(decision["permissionDecision"], "ask")
+
+    def test_claude_rate_limit_hook_uses_stop_failure(self) -> None:
+        hooks = json.loads(
+            (PLUGIN / "hooks" / "hooks.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        stop_failure = hooks["hooks"]["StopFailure"]
+        self.assertEqual(len(stop_failure), 1)
+        self.assertEqual(stop_failure[0]["matcher"], "rate_limit")
+        command = stop_failure[0]["hooks"][0]
+        self.assertIn(
+            "handle_claude_rate_limit.py",
+            command["args"][-1],
+        )
+
+    def test_claude_dispatch_hook_attests_spawned_subagent(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                execution_mode="manual",
+                confirmed=True,
+                confirmed_by="human",
+            )
+            tool_input = {
+                "root_id": prepared["rootId"],
+                "node_id": loop_node_id("t-service"),
+                "owner": "claude-child",
+                "agent_id": "untrusted-model-claim",
+                "model_id": "claude-sonnet",
+                "dispatch_mode": "MANUAL",
+                "receiver_context_id": "untrusted-context",
+                "operation_id": "op-claude-hook-attested",
+            }
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-X",
+                    "utf8",
+                    str(
+                        PLUGIN
+                        / "hooks"
+                        / "attest_claude_dispatch_receiver.py"
+                    ),
+                ],
+                input=json.dumps(
+                    {
+                        "hook_event_name": "PreToolUse",
+                        "tool_input": tool_input,
+                        "agent_id": "claude-agent-child-1",
+                        "session_id": "claude-parent-session",
+                        "cwd": root,
+                    }
+                ),
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            updated = json.loads(completed.stdout)[
+                "hookSpecificOutput"
+            ]["updatedInput"]
+            claimed = call_tool(
+                "dispatch_loop",
+                updated,
+                root=root,
+                trusted_host_adapter="claude-code",
+            )
+
+        self.assertEqual(updated["agent_id"], "claude-code")
+        self.assertEqual(
+            updated["receiver_context_id"],
+            "claude-agent-child-1",
+        )
+        self.assertTrue(claimed["receiverAttested"])
+
+    def test_claude_dispatch_hook_blocks_parent_context_claim(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-X",
+                "utf8",
+                str(
+                    PLUGIN
+                    / "hooks"
+                    / "attest_claude_dispatch_receiver.py"
+                ),
+            ],
+            input=json.dumps(
+                {
+                    "hook_event_name": "PreToolUse",
+                    "tool_input": {},
+                    "session_id": "claude-parent-session",
+                    "cwd": str(ROOT),
+                }
+            ),
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 2)
+
+    def test_claude_rate_limit_hook_pauses_without_agent_feedback(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="human",
+            )
+            node_id = loop_node_id("t-service")
+            dispatch_loop(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=node_id,
+                owner="claude-worker",
+                agent_id="claude-code",
+                model_id="claude-opus",
+                receiver_context_id="claude-session",
+                operation_id="op-claude-rate-limit-hook",
+            )
+            reset_at = (
+                datetime.now(timezone.utc) + timedelta(hours=2)
+            ).isoformat().replace("+00:00", "Z")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-X",
+                    "utf8",
+                    str(
+                        PLUGIN
+                        / "hooks"
+                        / "handle_claude_rate_limit.py"
+                    ),
+                ],
+                input=json.dumps(
+                    {
+                        "hook_event_name": "StopFailure",
+                        "error": "rate_limit",
+                        "error_details": f"429 resetAt={reset_at}",
+                        "session_id": "claude-session",
+                        "cwd": root,
+                    }
+                ),
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+            state = graph_status(
+                root=root,
+                root_id=prepared["rootId"],
+            )
+            current = next(
+                item for item in state["nodes"] if item["nodeId"] == node_id
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(current["status"], "PAUSED")
+        self.assertEqual(state["hostCapacity"]["resetAt"], reset_at)
+
+    def test_claude_rate_limit_hook_ignores_rendered_message_reset(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="human",
+            )
+            node_id = loop_node_id("t-service")
+            dispatch_loop(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=node_id,
+                owner="claude-worker",
+                agent_id="claude-code",
+                model_id="claude-opus",
+                receiver_context_id="claude-session",
+                operation_id="op-ignore-rendered-rate-limit",
+            )
+            rendered_reset = (
+                datetime.now(timezone.utc) + timedelta(hours=2)
+            ).isoformat().replace("+00:00", "Z")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-X",
+                    "utf8",
+                    str(
+                        PLUGIN
+                        / "hooks"
+                        / "handle_claude_rate_limit.py"
+                    ),
+                ],
+                input=json.dumps(
+                    {
+                        "hook_event_name": "StopFailure",
+                        "error": "rate_limit",
+                        "error_details": {
+                            "requestLoggedAt": rendered_reset,
+                            "message": "429 without structured reset",
+                        },
+                        "last_assistant_message": rendered_reset,
+                        "session_id": "claude-session",
+                        "cwd": root,
+                    }
+                ),
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+            state = graph_status(
+                root=root,
+                root_id=prepared["rootId"],
+            )
+            current = next(
+                item for item in state["nodes"] if item["nodeId"] == node_id
+            )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertNotIn("hostCapacity", state)
+        self.assertEqual(current["status"], "PAUSED")
+
     def test_explicit_user_choices_do_not_trigger_host_reapproval(
         self,
     ) -> None:
@@ -349,6 +639,14 @@ class PluginBundleTests(unittest.TestCase):
             )
         )
         server = manifest["mcpServers"]["layered-delivery"]
+        self.assertNotIn("env", server)
+        claude_server = json.loads(
+            (PLUGIN / ".mcp.json").read_text(encoding="utf-8")
+        )["mcpServers"]["layered-delivery"]
+        self.assertEqual(
+            claude_server["env"]["HDG_HOST_ADAPTER"],
+            "claude-code",
+        )
         self.assertEqual(
             server["default_tools_approval_mode"],
             "approve",
@@ -367,6 +665,10 @@ class PluginBundleTests(unittest.TestCase):
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
         self.assertEqual(len(tool_definitions()), 24)
+        self.assertNotIn(
+            "report_host_capacity_exhausted",
+            {tool["name"] for tool in tool_definitions()},
+        )
 
     def test_bundled_mcp_prefers_modern_stdio_discovery(self) -> None:
         entry = SKILL / "scripts" / "hdg_mcp.py"
@@ -466,7 +768,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            24,
+                24,
         )
         discovery = responses[2]["result"]["structuredContent"]["result"]
         self.assertFalse(
@@ -547,7 +849,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            24,
+                24,
         )
 
 

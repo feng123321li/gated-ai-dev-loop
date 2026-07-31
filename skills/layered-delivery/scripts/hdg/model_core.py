@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -491,7 +492,9 @@ def _project_scopes(value: object) -> list[dict[str, Any]]:
                 field=f"{entry_field}.workspaceRoot",
             )
         workspace_root = str(raw_workspace_root.absolute())
-        normalized_root = str(Path(workspace_root)).casefold()
+        normalized_root = os.path.normcase(
+            os.path.normpath(str(Path(workspace_root)))
+        )
         if normalized_root in workspace_roots:
             fail(
                 "DELIVERY_PROJECT_SCOPE_INVALID",

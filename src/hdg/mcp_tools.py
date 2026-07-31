@@ -233,6 +233,17 @@ def _prepare_revision_tool_schema() -> dict[str, Any]:
             "reason": _string(
                 "Why the active, not-yet-accepted Delivery scope changed."
             ),
+            "continuity_basis": {
+                "type": "string",
+                "enum": [
+                    "USER_EXPLICIT_SAME_DELIVERY",
+                    "ACTIVE_LOOP_REPLAN",
+                ],
+                "description": (
+                    "Explicit evidence that this is the same logical "
+                    "Delivery. Workspace/path reuse is never continuity."
+                ),
+            },
             "requested_by": _string("Human requester identity."),
         },
         required=[
@@ -240,6 +251,7 @@ def _prepare_revision_tool_schema() -> dict[str, Any]:
             "expected_current_revision",
             "hierarchy",
             "reason",
+            "continuity_basis",
             "requested_by",
         ],
     )
@@ -594,10 +606,18 @@ TOOLS = (
                     "type": "string",
                     "enum": ["AUTO", "MANUAL"],
                     "description": (
-                        "Optional dispatch provenance. AUTO requires the "
+                        "Required dispatch provenance. AUTO requires the "
                         "exact decision fingerprint returned for this node."
                     ),
                 },
+                "receiver_context_id": _string(
+                    "Host-native receiving Agent context ID. Review Loops "
+                    "must differ from every upstream receiving context."
+                ),
+                "receiver_attestation_id": _string(
+                    "One-time receiver grant issued by the model-external "
+                    "host adapter after it creates this native context."
+                ),
                 "dispatch_transport": {
                     "type": "string",
                     "enum": ["HOST_NATIVE"],
@@ -635,6 +655,9 @@ TOOLS = (
                 "owner",
                 "agent_id",
                 "model_id",
+                "dispatch_mode",
+                "receiver_context_id",
+                "receiver_attestation_id",
                 "operation_id",
             ],
         ),
@@ -658,7 +681,8 @@ TOOLS = (
             "current attempt and frozen Graph. Provide resume_at for a "
             "known provider soft-stop window and identify whether the "
             "limited capacity belongs to the executor or the native host. "
-            "Do not create a timed pause after an unhandled 429."
+            "A native host observing hard 429 uses its model-external "
+            "capacity callback instead."
         ),
         _object(
             {
@@ -922,12 +946,12 @@ def call_tool(
     workspace_root: str | None = None,
     explicit_dogfood: bool = False,
     controller: LayeredDeliveryController = DEFAULT_CONTROLLER,
+    client_info: dict[str, Any] | None = None,
+    trusted_host_adapter: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
     internal_arguments = validate_tool_arguments(name, arguments)
-    execution_mode = None
     if name == "freeze_hierarchy":
-        execution_mode = internal_arguments.pop("execution_mode")
         internal_arguments["confirmed"] = True
     result = controller.execute(
         name,
@@ -936,14 +960,23 @@ def call_tool(
             project_root=root,
             workspace_root=workspace_root or root,
             explicit_dogfood=explicit_dogfood,
+            host_native_agent_ids=_host_native_agent_ids(
+                trusted_host_adapter
+            ),
+            host_adapter_id=trusted_host_adapter,
         ),
     )
-    if name == "freeze_hierarchy":
-        return {
-            **result,
-            "executionMode": execution_mode,
-        }
     return result
+
+
+def _host_native_agent_ids(
+    trusted_host_adapter: str | None,
+) -> tuple[str, ...]:
+    if trusted_host_adapter == "claude-code":
+        return ("claude-code",)
+    if trusted_host_adapter == "codex":
+        return ("codex",)
+    return ()
 
 
 __all__ = (

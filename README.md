@@ -233,7 +233,7 @@ Task 的调度定义只保留：
 - `REPLAN_REQUIRED`
 - `CANCELLED`
 
-只有 `RETRYABLE_INFRA` 和 `WORKER_LOST` 会触发外层自动重试。payload 提供目标、明确约束和已知验收点，不是完整实现规约；Loop 还要结合真实代码、契约和数据链路推导必要条件。初次冻结创建 Delivery Revision 1，并把全部 TASK requirement 设为 revision 1 冻结态。用户可单独修订尚未开始的 TASK；已开始 TASK，或依赖、资源、项目范围、Review 和拓扑发生变化时，使用相同 `delivery.id` 准备下一 Delivery Revision。新 Revision 冻结时旧 run 标记为 `SUPERSEDED`；完整契约未变且实现与 TASK Review 都成功的 TASK 可携带，GROUP/Delivery Review 重新执行。Loop 内部实现计划不被冻结；当前目标内可修复问题仍在当前 Loop 闭环。
+只有 `RETRYABLE_INFRA` 和 `WORKER_LOST` 会触发外层自动重试。payload 提供目标、明确约束和已知验收点，不是完整实现规约；Loop 还要结合真实代码、契约和数据链路推导必要条件。初次冻结创建 Delivery Revision 1，并把全部 TASK requirement 设为 revision 1 冻结态。用户可单独修订尚未开始的 TASK；已开始 TASK，或依赖、资源、项目范围、Review 和拓扑发生变化时，只有在 `USER_EXPLICIT_SAME_DELIVERY` 或已记录 `ACTIVE_LOOP_REPLAN` 的连续性依据下，才使用相同 `delivery.id` 准备下一 Delivery Revision。候选 Revision 不替换当前 hierarchy/run；新 Revision 冻结时才原子切换并把旧 run 标记为 `SUPERSEDED`。完整契约未变且实现与 TASK Review 都成功的 TASK 可携带，GROUP/Delivery Review 重新执行。Loop 内部实现计划不被冻结；当前目标内可修复问题仍在当前 Loop 闭环。
 
 ## MCP 流程
 
@@ -265,14 +265,15 @@ workspace_status
   / Claude Code 当前会话一次性 Cron
   / Codex Desktop 当前任务计划
   / 到时由原 Agent 重新读取 frontier 并派遣
-→ 直接收到 429：不建计划任务，恢复额度后人工 resume Agent
+→ 直接收到 429：模型外宿主适配器私有回调
+  → 取消周期监控 / resetAt 后只唤醒一次 / frontier 自动恢复
 → 租约过期：advance_graph 回收旧 attempt
 → record_loop_result
 → TASK Review / 递归 GROUP Review / Delivery Review
 → record_user_confirmation
 ```
 
-当前 Plugin 注册 24 个工具：外层调度与恢复工具、只读的 `available_agents` / `recommend_executors`、宿主原生 `plan_dispatch_batch`、Delivery Revision 查询/准备，以及 TASK requirement 修订工具。每次 Graph Controller operation 都绑定一个已校验的共享控制根和当前对话工作区；跨项目 Git Delivery 逐仓校验同名 feature 分支及各自冻结 fork commit。控制器只读 Git，不创建、切换、提交、合并或推送分支。
+当前 Plugin 注册 24 个模型可调用工具。硬额度熔断与接收上下文签发属于模型外宿主回调，不暴露为 MCP 工具。每次 Graph Controller operation 都绑定一个已校验的共享控制根和当前对话工作区；跨项目 Git Delivery 逐仓校验同名 feature 分支及各自冻结 fork commit。控制器只读 Git，不创建、切换、提交、合并或推送分支。
 
 `prepare_hierarchy` 的 MCP 工具定义直接暴露完整 schema v3，并用 `oneOf`
 覆盖 GROUP/TASK 根节点。宿主可在调用前拒绝非法结构；Adapter 在进入
@@ -288,7 +289,7 @@ Controller 前复用领域校验，继续拦截父子关系、依赖和子节点
 
 推荐器只消费 Graph 节点角色和发现元数据，不解释 `loop.payload`。TASK Loop 匹配开发能力；TASK/GROUP/Delivery Review 优先选择不同于上游开发建议的 Agent。推荐器不参与提供方限额恢复，也不会自动换 Agent。只有一个合格 Agent 时，Review 仍展示可用组合，但明确标记 `diversityLevel=CONTEXT_ONLY`，不宣称异构审查。所有结果固定为 `binding=ADVISORY`、`dispatchAllowed=false`、`dispatchTransport=EXTERNAL_PROCESS`，不进入 schema v3、Frozen Graph、claim 或 owner。真正接收 Loop 的宿主在 `dispatch_loop` 中提交实际 `agent_id` 与 `model_id`；控制器把这份执行事实写入 claim 事件，并与认领身份和执行轮次一起投影到 `progress.md`。
 
-自动派遣与普通建议分离。`plan_dispatch_batch` 只接受宿主明确提供且 `dispatchTransport=HOST_NATIVE` 的原生 Agent inventory，不把 PATH 中存在的 CLI 当成启动授权。inventory 为每个 Agent 声明真实 `availableSlots`、开发/审查能力、可显式覆盖的模型、模型 tier、reasoning effort 和优先级；完整 inventory 不持久化。总调度 Agent 在派遣前优先为当前 Ready TASK/Review 读取 `loop_context`，使用自身分析能力按固定风险规则判为 `STANDARD → BALANCED` 或 `HIGH → FRONTIER`，完成分析但不确定时使用 `HIGH`。已有判级通过临时 `node_requirements` 提交；若某节点缺少分析，可提交与 inventory 精确匹配的宿主 `current_executor`，Controller 仅对缺失节点沿用当前 Agent/模型，并标记 `UNCLASSIFIED / CURRENT_EXECUTOR_FALLBACK / CURRENT_HOST_DEFAULT`。没有当前执行器事实时仍拒绝缺失节点。Controller 不做本地语义分析，也不把 payload 自带的模型名当路由配置。Review 还会优先避开上游实际 Agent/模型家族；回退路径则忠实沿用当前执行器。返回的 `HOST_NATIVE_DISPATCH_PLAN` 先在 SQLite 中为 assignment 原子签发短租约 `dispatchReservationId`，再按宿主槽位形成 `concurrentDispatchGroups`；另一个监控器只能看到 `WAIT_FOR_DISPATCH_RECEIVER`，不会重复创建同一节点。容量不足或缺少高推理模型的节点留在 `deferred` 且不 claim。每个 assignment 的 `decisionFingerprint` 精确绑定当前 Graph、节点、Agent、模型、推理等级与派遣通道。
+自动派遣与普通建议分离。`plan_dispatch_batch` 只接受宿主明确提供且 `dispatchTransport=HOST_NATIVE` 的原生 Agent inventory，不把 PATH 中存在的 CLI 当成启动授权；MCP Server 启动配置中的精确 `HDG_HOST_ADAPTER` 会拒绝当前宿主无法原生创建的 Agent，协议 `clientInfo` 只用于兼容展示，不参与授权。inventory 为每个 Agent 声明容量上界、开发/审查能力、可显式覆盖的模型、模型 tier、reasoning effort 和优先级；完整 inventory 不持久化。总调度 Agent 在派遣前优先为当前 Ready TASK/Review 读取 `loop_context`，使用自身分析能力按固定风险规则判为 `STANDARD → BALANCED` 或 `HIGH → FRONTIER`，完成分析但不确定时使用 `HIGH`。已有判级通过临时 `node_requirements` 提交；若某节点缺少分析，可提交与 inventory 精确匹配的宿主 `current_executor`，Controller 仅对缺失节点沿用当前 Agent/模型，并标记 `UNCLASSIFIED / CURRENT_EXECUTOR_FALLBACK / CURRENT_HOST_DEFAULT`。没有当前执行器事实时仍拒绝缺失节点。Controller 不做本地语义分析，也不把 payload 自带的模型名当路由配置。Review 还会优先避开上游实际 Agent/模型家族；回退路径则忠实沿用当前执行器。返回的 `HOST_NATIVE_DISPATCH_PLAN` 先在 SQLite 中为 assignment 原子签发短租约 `dispatchReservationId`，同时原子扣减共享控制根中跨 Delivery 的宿主 Agent 槽位；预留转为 claim 后，槽位持续占用到该 Loop 暂停或终态，再形成 `concurrentDispatchGroups`。另一个监控器不会重复创建同一节点或超卖最后槽位。
 
 ## Controller / Adapter 架构
 
@@ -313,9 +314,11 @@ Claude Code 和旧 Codex 仍可走 `2025-11-25` 的 `initialize → notification
 
 `freeze_hierarchy` 对模型只暴露 `execution_mode=active|manual`，不暴露内部 `confirmed`。冻结前只展示“自动执行 / 手动交接”两个确认选项；自动和手动都表示完整授权并确认开发，区别只在冻结后由当前会话继续调度还是生成交接。需要调整时，用户直接回复修改意见，当前方案不冻结；只有需求实际变化才重新 prepare，单纯询问或其他未改变需求的回复保留当前 `PREPARED` 结果。初始 prepare 和 `prepare_delivery_revision` 都只准备候选，不应触发宿主通用确认弹窗；用户对自动执行或手动交接的选择是每个 Revision 唯一一次业务确认。冻结工具在宿主权限层统一走自动批准。冻结后若用户调整尚未开始的 TASK，`unfreeze_task_requirement` 与 `refreeze_task_requirement` 分别执行显式的人机授权；解冻只开放 `title`、`summary`、`payload`，不开放拓扑与资源契约。
 
-总调度上下文只消费 frontier。每个 TASK、TASK Review、GROUP Review 和 Delivery Review Loop 默认路由到独立接收上下文；宿主支持原生 Agent 时优先自动派遣。Review 的独立性用于独立发现与复核，不阻止它在同一 Loop 内自行修正或派遣内部修正上下文。未 claim 且没有 Agent 容量时只生成人工交接，不提前 claim；已 claim、租约有效且出现上下文压力或高轮次 Hook 摩擦时，使用 `pause_loop → 新上下文 resume_loop → 重新 dispatch`，不提交业务 outcome。宿主明确报告剩余额度不高于 5% 且提供真实未来 `resetAt` 时，当前 Agent 在额度耗尽前用对应 `capacity_scope` 定时 pause：单个执行 Agent 使用 `EXECUTOR`，总调度宿主使用 `HOST`。随后由 Claude Code 当前会话的一次性 Cron 或 Codex Desktop 当前任务计划在恢复窗口后唤醒原 Agent；Agent 重新调用 frontier 时，控制器恢复同一 attempt 并产生派遣动作。直接收到 429、宿主原生计划不可用或宿主被关闭时不补建定时任务，恢复额度后由人工 resume Agent。控制器不会自行启动进程；限额恢复也不调用推荐器或自动换 Agent。租约过期时由 `advance_graph` 回收旧 attempt，禁止调用 `pause_loop`。接收方始终继续同一冻结 Graph。
+总调度上下文只消费 frontier。每个 Loop 默认路由到独立接收上下文；MCP `dispatch_loop` 除 `receiver_context_id` 外还必须消费宿主创建子 Agent 后签发的一次性 `receiver_attestation_id`。Claude Code 由 PreToolUse Hook 使用真实 `agent_id` 自动签发；每个 run 的首个签发会固定宿主证明的编排根，后续直接、多级子上下文或新平台适配器均不能另建信任根，跨平台派遣只有提交同一宿主编排根时才可继续，否则 fail closed；伪造 ID 与重放凭证同样被拒绝。Review 复用任一上游上下文也会被拒绝。宿主提供结构化剩余额度和真实 `resetAt` 时，可在额度耗尽前用对应 `capacity_scope` 定时 pause；标准 Claude CLI Hook 目前只暴露失败事件，不能凭文本猜测提前阈值。宿主直接观察到硬 429 时，Claude `StopFailure(rate_limit)` 或等价模型外适配器只信任结构化错误详情，调用私有容量回调；该回调校验实际接收上下文、限制 24 小时恢复窗口、幂等防重放，并按共享容量域暂停所有同 Agent claimed Loop。宿主取消旧周期监控，只保留 reset 后一次唤醒。硬额度熔断不依赖失败模型反馈，也不暴露给模型主动调用；事件重建仅能按原 `reportId` 恢复或按更晚 `reportedAt` 更新共享断路器，旧 Delivery 重建不能覆盖新报告。
 
-`recommend_executors` 自身仍不启动 CLI、不切换模型、不 claim，也不派遣。自动执行模式下，总调度器构造宿主真实 inventory 并调用 `plan_dispatch_batch`；计划工具原子预留节点但不启动或 claim，宿主随后按 assignment 显式覆盖模型、并发创建接收上下文。接收方使用真实 Agent/模型、`dispatch_mode=AUTO`、`dispatch_transport=HOST_NATIVE`、预留 ID 与决策指纹调用 `dispatch_loop`，控制器重新计算绑定后才写入 claim 事件；请求 `gpt-5.6-sol` 而实际报告 `gpt-5` 会被拒绝。手动交接不带预留或决策指纹。
+`recommend_executors` 自身仍不启动 CLI、不切换模型、不 claim，也不派遣。自动执行模式下，总调度器构造宿主真实 inventory 并调用 `plan_dispatch_batch`；宿主随后按 assignment 显式覆盖模型、并发创建接收上下文。接收方使用真实 Agent/模型、宿主一次性接收凭证、`dispatch_mode=AUTO`、`HOST_NATIVE`、预留 ID 与决策指纹调用 `dispatch_loop`，控制器重新计算绑定后才写入 claim 事件；请求 `gpt-5.6-sol` 而实际报告 `gpt-5` 会被拒绝。冻结时选择的 `execution_mode` 持久化到 run：`active` 只接受 AUTO claim，`manual` 只接受 MANUAL claim。
+
+当前 Claude Code Plugin 已通过 PreToolUse Hook 实现真实接收凭证注入。标准 Codex Plugin manifest 暂无同等宿主生命周期回调，因此默认不设置 `HDG_HOST_ADAPTER`，自动计划和 MCP claim 会 fail closed 并转人工交接；只有 Codex 宿主原生实现私有签发回调后，才能在启动 MCP Server 时显式启用 `HDG_HOST_ADAPTER=codex`。模型或 shell 直接调用私有 Python issuer 不算宿主证明。
 
 ## 主要投影
 

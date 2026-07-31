@@ -75,6 +75,8 @@ class ControllerContext:
     project_root: str
     workspace_root: str | None = None
     explicit_dogfood: bool = False
+    host_native_agent_ids: tuple[str, ...] | None = None
+    host_adapter_id: str | None = None
 
 
 class LayeredDeliveryController:
@@ -155,6 +157,13 @@ class LayeredDeliveryController:
             "prepare_delivery_revision",
         }:
             arguments_value["workspace_root"] = workspace_root
+        if name in {"plan_dispatch_batch", "dispatch_loop"}:
+            arguments_value["host_native_agent_ids"] = (
+                context.host_native_agent_ids
+            )
+        if name == "dispatch_loop":
+            arguments_value["host_adapter_id"] = context.host_adapter_id
+            arguments_value["require_receiver_attestation"] = True
         result = operation(
             root=context.project_root,
             explicit_dogfood=context.explicit_dogfood,

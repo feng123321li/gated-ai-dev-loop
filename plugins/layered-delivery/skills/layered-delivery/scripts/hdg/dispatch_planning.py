@@ -14,7 +14,7 @@ from .dispatch_contracts import (
 from .errors import fail
 from .graph_frontier import get_graph_frontier
 from .jsonio import fingerprint
-from .repository import SchedulerRepository
+from .repository import SchedulerRepository, timestamp
 
 
 DISPATCH_RESERVATION_SECONDS = 300
@@ -651,6 +651,7 @@ def plan_dispatch_batch(
     executor_inventory: list[dict[str, Any]],
     node_requirements: list[dict[str, Any]],
     current_executor: dict[str, str] | None = None,
+    host_native_agent_ids: tuple[str, ...] | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
     **_: Any,
@@ -668,6 +669,25 @@ def plan_dispatch_batch(
             actualGraphFingerprint=stored["graphFingerprint"],
         )
     executors = _validate_inventory(executor_inventory)
+    if host_native_agent_ids is not None:
+        allowed_native_agents = set(host_native_agent_ids)
+        unsupported_native_agents = sorted(
+            executor["agentId"]
+            for executor in executors
+            if (
+                executor["dispatchTransport"]
+                == HOST_NATIVE_DISPATCH_TRANSPORT
+                and executor["agentId"] not in allowed_native_agents
+            )
+        )
+        if unsupported_native_agents:
+            fail(
+                "SCHEDULER_HOST_NATIVE_INVENTORY_MISMATCH",
+                "Host-native inventory contains Agents this MCP client "
+                "cannot create through its native Agent API",
+                supportedAgentIds=sorted(allowed_native_agents),
+                unsupportedAgentIds=unsupported_native_agents,
+            )
     requirements = _validate_node_requirements(node_requirements)
     fallback_executor = _validate_current_executor(
         current_executor,
@@ -680,6 +700,37 @@ def plan_dispatch_batch(
         now=now,
     )
     run = repository.run(root_id)
+    if run["executionMode"] != "active":
+        fail(
+            "SCHEDULER_AUTO_DISPATCH_DISABLED",
+            "Host-native automatic dispatch requires active execution mode",
+            executionMode=run["executionMode"],
+        )
+    if run.get("hostCapacity") is not None:
+        fail(
+            "SCHEDULER_HOST_CAPACITY_EXHAUSTED",
+            "Automatic dispatch is paused by the host capacity breaker",
+            **run["hostCapacity"],
+        )
+    observation_at = max(timestamp(now), run["updatedAt"])
+    with repository.read() as connection:
+        for executor in executors:
+            if (
+                executor["dispatchTransport"]
+                != HOST_NATIVE_DISPATCH_TRANSPORT
+            ):
+                continue
+            shared_breaker = repository.open_host_capacity_breaker(
+                connection,
+                agent_id=executor["agentId"],
+                at=observation_at,
+            )
+            if shared_breaker is not None:
+                fail(
+                    "SCHEDULER_HOST_CAPACITY_EXHAUSTED",
+                    "Automatic dispatch is paused by a shared host capacity breaker",
+                    **shared_breaker,
+                )
     graph = stored["graph"]
     definitions = {node["id"]: node for node in graph["nodes"]}
     states = {node["nodeId"]: node for node in run["nodes"]}
@@ -886,6 +937,10 @@ def plan_dispatch_batch(
         root_id=root_id,
         graph_fingerprint=stored["graphFingerprint"],
         assignments=assignments,
+        agent_slot_limits={
+            executor["agentId"]: executor["availableSlots"]
+            for executor in executors
+        },
         reservation_seconds=DISPATCH_RESERVATION_SECONDS,
     )
     reserved_assignments: list[dict[str, Any]] = []

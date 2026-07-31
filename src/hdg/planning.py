@@ -233,6 +233,7 @@ def prepare_delivery_revision(
     expected_current_revision: int,
     hierarchy: object,
     reason: str,
+    continuity_basis: str,
     requested_by: str,
     workspace_root: str | None = None,
     explicit_dogfood: bool = False,
@@ -250,6 +251,15 @@ def prepare_delivery_revision(
         fail(
             "SCHEDULER_USER_CONFIRMATION_REQUIRED",
             "requested_by must identify the requesting human",
+        )
+    if continuity_basis not in {
+        "USER_EXPLICIT_SAME_DELIVERY",
+        "ACTIVE_LOOP_REPLAN",
+    }:
+        fail(
+            "SCHEDULER_REVISION_CONTINUITY_REQUIRED",
+            "Revision continuity must come from explicit same-Delivery "
+            "intent or an active Loop replan",
         )
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
@@ -285,6 +295,7 @@ def prepare_delivery_revision(
         hierarchy_fingerprint=hierarchy_value,
         graph_fingerprint=graph_value,
         reason=reason.strip(),
+        continuity_basis=continuity_basis,
         requested_by=requested_by.strip(),
         workspace_root=workspace_root or root,
     )
@@ -319,6 +330,7 @@ def freeze_hierarchy(
     expected_delivery_revision: int = 1,
     expected_hierarchy_fingerprint: str,
     authorized_project_ids: list[str] | None = None,
+    execution_mode: str = "manual",
     confirmed: bool,
     confirmed_by: str,
     explicit_dogfood: bool = False,
@@ -346,6 +358,7 @@ def freeze_hierarchy(
             expected_hierarchy_fingerprint
         ),
         authorized_project_ids=authorized_project_ids or [],
+        execution_mode=execution_mode,
         confirmed_by=confirmed_by.strip(),
     )
     return {

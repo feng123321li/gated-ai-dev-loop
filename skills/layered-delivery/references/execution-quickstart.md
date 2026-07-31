@@ -47,10 +47,10 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。不要绕过 TASK
 ## 执行 Loop
 
 1. 总调度上下文只读取 frontier 和路由 action，不直接执行 Loop。
-2. 对当前批次的 `DISPATCH_LOOP`，以宿主真实 inventory 调用 `plan_dispatch_batch`。该调用先为每个返回 assignment 原子签发短租约 `dispatchReservationId`；另一个监控或对话此时只能看到 `WAIT_FOR_DISPATCH_RECEIVER`。取得预留后按 `concurrentDispatchGroups` 并发创建所有 assignments 的独立宿主原生 Agent。`modelSelection=EXPLICIT_OVERRIDE` 时必须显式传入 assignment 的 `model.id`，不能继承总调度 Agent 的模型，支持时同时传 `reasoningEffort`；例如 Codex 总调度使用 `gpt-5.6-sol` 时，分析计划为 `gpt-5.6-terra` 的 TASK 仍必须显式使用 terra。`modelSelection=CURRENT_HOST_DEFAULT` 时在独立子上下文中沿用宿主报告的当前 Agent/模型。Claude 和其他宿主同样只使用自身 inventory 中的真实模型。创建动作必须来自对应宿主的正式原生 Agent API；禁止执行 `codex --write`、`codex-companion` 或等价外部自治命令。
+2. 对当前批次调用 `plan_dispatch_batch`，取得短租约后按 `concurrentDispatchGroups` 并发创建独立宿主原生 Agent。预留转为 claim 后仍占用跨 Delivery 槽位，直到 Loop 暂停或终态。`HOST_NATIVE` 集合由 MCP Server 启动配置中的精确适配器限制，协议 `clientInfo` 和本机 CLI 发现不参与授权；缺失配置时自动派遣 fail closed。显式模型 assignment 必须覆盖子 Agent 模型，不能继承总调度 Agent 的模型。
 3. 每个 assignment 都遵守先预留、再创建接收 Agent、最后 claim。只向接收方传 `rootId`、`nodeId`、`dispatchReservationId` 与 `decisionFingerprint`，不要复制规划上下文、payload 或旧 operation。单个创建失败不影响已创建的同批 Agent，也不 claim 失败节点；等待预留过期后刷新 frontier 与 inventory，最多重算一次，仍失败则生成该节点的人工交接。
 4. 接收方原生进入 layered-delivery，使用精确 `nodeId` 调用 `loop_context`。TASK、TASK Review 与 GROUP Review Loop 同时取得控制器生成的 `humanArtifacts.workItem` baseline/progress/acceptance 路径；TASK 与 TASK Review 继续取得 `humanArtifacts.taskBaseline` 便捷路径，接口型 TASK 的 workItem 还包含自己的 `interfaces`。机器输入仍以 MCP 响应为准。
-5. 接收方创建全局唯一 `operation_id`，并以自身实际 Agent ID、实际模型 ID、assignment 的 `dispatch_reasoning_class=reasoningClass`、`dispatch_mode=AUTO`、`dispatch_transport=HOST_NATIVE`、`dispatch_reservation_id=dispatchReservationId` 和 `dispatch_decision_fingerprint=decisionFingerprint` 调用 `dispatch_loop`。控制器重新计算并校验有效预留及 Graph、节点、attempt、Agent、模型、推理等级和派遣通道的绑定后才建立 claim；若宿主创建请求为 `gpt-5.6-sol` 而接收方实际报告 `gpt-5`，指纹不匹配，节点保持 Ready，不能把请求配置写成执行事实。回退 assignment 使用 `UNCLASSIFIED`，这些字段和决策来源写入 `LOOP_CLAIMED`。手动交接使用 `dispatch_mode=MANUAL`，且不提交推理等级、派遣通道、预留或决策指纹。没有可用 Agent 容量或宿主无法兑现 assignment 时才人工交接，且在接收方存在前不要提前 claim。
+5. 宿主创建子 Agent 后签发一次性 `receiver_attestation_id`，绑定真实 `receiver_context_id`、node/attempt、adapter 和自动预留。首次签发同时固定该 run 唯一的宿主编排根；后续直接父会话、套多级子上下文或首次切到另一平台时都不能另建根。跨平台 adapter 只有能证明同一宿主编排根时才继续，否则 fail closed。Claude dispatch PreToolUse Hook 自动注入；标准 Codex Plugin 当前没有宿主签发回调，默认 fail closed 并人工交接，禁止模型或 shell 直接调用私有 issuer 冒充宿主。接收方连同实际 Agent/模型、AUTO、HOST_NATIVE、推理等级、预留和决策指纹调用 `dispatch_loop`。
 6. 按 `loop.ref` 启动对应内部 TASK、TASK Review、GROUP Review 或 Delivery Review Loop，并把 `payload` 和共享 `skillHints` 原样交给该 Loop。
    - 并行 Active Delivery 必须使用不同对话工作区；每个 Git Delivery 使用独立 linked worktree 和最终 feature 分支。控制器把 linked worktree 映射到主 checkout 的共享调度根，同时以不同 `workspaceKey` 隔离 Delivery，并校验各自 `gitBinding.branchRef`，禁止一个工作区或 feature 分支冒充另一个 Delivery。
    - 新的独立 Delivery 一律从 `main`（不存在时 `master`）创建 feature worktree，不从当前 Delivery feature HEAD 创建。主线在创建后继续前进不改变已冻结 `baseCommit`；最终集成前由 Delivery 自己解决与最新主线的差异。
@@ -61,7 +61,7 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。不要绕过 TASK
 10. 长任务持续调用 `heartbeat_loop`。检测到上下文容量压力或高轮次 Hook 摩擦且工作仍可继续时，不提交失败结果；在租约有效期内调用普通 `pause_loop`。
 11. 宿主明确报告剩余额度不高于 5% 且提供真实未来 `resetAt` 时，停止启动新 Loop，并在额度耗尽前保存当前工作。已 claim 的执行 Agent 在租约有效期内调用 `pause_loop(resume_at=resetAt, capacity_scope=EXECUTOR)`；总调度宿主受限时使用 `capacity_scope=HOST` 暂停其正在承载的 claimed Loop。两者都释放租约和资源占用、保留同一 attempt；不得估算剩余额度或猜测 `resetAt`。
 12. 软阈值 pause 成功后，使用当前宿主的原生计划能力创建一次性恢复提示。Claude Code 2.1.72+ 使用当前会话的一次性 Cron，CLI 必须保持运行；Codex Desktop 使用当前任务计划，电脑和应用必须保持运行。为避免恢复窗口边界抖动，计划时间应晚于 `resetAt` 一小段安全余量。提示只要求原 Agent 调用 `workspace_status → graph_frontier → loop_context` 并重新 dispatch；不调用推荐器、不自动换 Agent。
-13. 直接收到 429 时只做人工恢复：不补建定时任务、不猜测恢复时间、不调用推荐器。用户恢复额度后重新打开或 resume 原 Agent，由它调用 `workspace_status → graph_frontier`；若原 lease 已过期，交给 `advance_graph` 回收。
+13. 宿主直接观察到硬 429 且结构化响应提供真实未来 `resetAt` 时，由模型外宿主适配器私有回调处理，不等待失败 Loop。Claude `StopFailure` 只读取 `error_details`，不读取渲染消息或模型输出；回调精确匹配 claimed receiver、限制 reset 最远 24 小时、用 report ID 幂等防重放，并暂停共享容量域内跨 Delivery 的同 Agent Loop。该回调不是 MCP 工具。宿主消费 `cancelRecurringMonitors=true`，按 `wakeMode=HOST_NATIVE_ONE_SHOT` 只建立 reset 后一次唤醒。
 14. 普通 `pause_loop` 返回固定 handoff 数据。优先自动派遣新的接收 Agent；没有容量时输出人工交接。接收方使用同一 `rootId/nodeId` 调用 `resume_loop`，重新读取 frontier 和 `loop_context`，再以新 owner/operation dispatch；不重新 prepare/freeze。
 15. 只有真实业务终态才用 `record_loop_result` 提交标准结果。
 
@@ -70,7 +70,7 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。不要绕过 TASK
 - 未 claim 且无 Agent 容量：人工交接，不调用 `dispatch_loop` 或 `pause_loop`。
 - 已 claim、租约有效且上下文/Hook 压力升高：`pause_loop`，不提交 Loop outcome。
 - 已 claim、租约有效且宿主报告剩余额度不高于 5%：使用真实 `resetAt` 和对应 `capacity_scope` 定时 pause，再创建宿主原生一次性恢复提示。不是 `BLOCKED` 或新的 retry attempt。
-- 直接收到 429：不建立计划任务，等待人工恢复；控制器不会自行启动进程。
+- 直接收到 429：模型外宿主适配器私有回调用真实 `resetAt` 打开共享熔断，取消周期监控并只建立一次恢复唤醒；缺少结构化 resetAt 时不猜测。
 - 租约已经过期：停止使用旧 operation，调用 `graph_frontier`/`advance_graph`，禁止 `pause_loop`。
 
 `predecessors` 表示 Graph 直接前驱；`upstreamLoopResults` 提供所有传递上游 Loop 的不透明结果，供依赖 TASK 和各级 Review 消费。GROUP 完成点自身没有业务 result，不能用它的空 outcome 替代 TASK 或下层 Review 的结果。
@@ -100,7 +100,7 @@ claim 超过 `leaseExpiresAt` 后，旧 operation 不能 heartbeat、pause 或�
 - 未 claim 且宿主 Agent 暂时不可用：人工交接，不提前 claim。
 - 已 claim 且租约有效时的上下文容量不足或 Hook 高轮次消耗：使用 pause/handoff，不是 `BLOCKED`、`WORKER_LOST` 或 `REPLAN_REQUIRED`。
 - 已 claim 且租约有效时的软阈值暂停：使用对应 capacity scope、真实 `resetAt` 和宿主原生计划提示；保持同一 attempt，不消耗基础设施自动重试预算。
-- 宿主原生计划不可用、宿主被关闭、计划创建失败或直接收到 429：只在下一次人工唤醒时恢复，不能宣称自动激活。
+- 宿主原生计划不可用、宿主被关闭或计划创建失败：只在下一次人工唤醒时恢复，不能宣称自动激活。硬 429 已有真实 resetAt 时必须先持久化宿主容量熔断。
 - 租约过期：由 `advance_graph` 记录失联并按预算恢复；不是 pause/handoff。
 
 MCP 写响应未知时先读状态。operation ID 永不复用。
@@ -123,7 +123,7 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 用户最终确认之前的需求扩展仍属于同一个 Delivery：
 
 1. 读取 `delivery_revision_history` 与当前 hierarchy，保留原 `delivery.id`。
-2. 将完整新范围传给 `prepare_delivery_revision`，同时提交当前 revision、变更原因和真实请求人。该调用只准备候选 Revision、不激活执行，因此不应触发宿主通用确认弹窗；可重复 prepare 尚未冻结的同一新 Revision，但不能修改旧 Revision。
+2. 将完整新范围传给 `prepare_delivery_revision`，同时提交当前 revision、变更原因、真实请求人和连续性依据。用户明确要求继续同一 Delivery 时传 `continuity_basis=USER_EXPLICIT_SAME_DELIVERY`；只有当前 Graph 已记录 `REPLAN_REQUIRED` 才传 `ACTIVE_LOOP_REPLAN`。工作区、路径、分支或旧 Delivery 仍处于 Active 都不能充当连续性。该调用只写候选 Revision，不替换当前 hierarchy/run，也不应触发宿主通用确认弹窗；可重复 prepare 尚未冻结的同一新 Revision，但不能修改旧 Revision。
 3. 检查响应中的 `carryForwardTaskIds`。只有 TASK definition、依赖、Loop、资源声明与 TASK Review 完全未变，而且旧 Revision 的实现及 Review 都成功，才会成为携带候选；GROUP 与 Delivery Review 不携带。
 4. 展示完整新范围、Revision 编号、携带候选和 `requiredProjectAuthorizations`。跨项目 scope 必须包含当前工作区，所有可写 Git 项目使用同名 feature 分支。
 5. 用户选择自动执行或手动交接是本 Revision 唯一一次业务确认。确认后调用 `freeze_hierarchy`，同时提交精确 `expected_delivery_revision`、新 fingerprint 和与准备结果完全一致的 `authorized_project_ids`。缺项目、额外项目或重复项目都应在 MCP/Controller 边界拒绝。
@@ -132,7 +132,7 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 ## 恢复
 
 - 调用 `advance_graph` 处理租约和自动重试。
-- frontier 返回 `nextWakeAt` 时，宿主只在软阈值路径安排一次原生计划提示并重新消费 frontier；直接 429 不安排。控制器不会在没有 Agent 调用的情况下自行推进。
+- frontier 返回 `nextWakeAt` 时，宿主只安排一次原生计划提示并重新消费 frontier；硬 429 路径必须先取消旧周期监控。控制器不会在没有 Agent 调用的情况下自行推进。
 - 调用 `graph_events` 检查事件链。
 - 物化 node 状态不可信时调用 `rebuild_graph_run`；它只从事件链重建快照，不改变 Loop 内容或事件历史。
 - 恢复时继续遵守递归终态：TASK Review 或下层 GROUP Review 未成功时，不得手工推进父 GROUP 完成点/Review。

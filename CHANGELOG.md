@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.28.1 — 2026-07-31
+
+发布提交：`1dffd62`
+
+- 自动派遣新增宿主通道边界：终端发现候选固定为 `LOCAL_TERMINAL / EXTERNAL_PROCESS`，只有宿主明确提供的 `HOST_NATIVE` 槽位才能进入 assignment；禁止通过 CLI、subprocess 或 `codex-companion` 绕过宿主权限创建自治 Agent。
+- `plan_dispatch_batch` 在宿主创建 Agent 前为每个 assignment 原子签发短租约 `dispatchReservationId`；其他调度器看到 `WAIT_FOR_DISPATCH_RECEIVER`，无法重复派遣同一 node/attempt。预留同时占用精确资源声明，接收方凭票 claim 或等待过期后重新计划。
+- 自动决策指纹绑定 Graph、节点、Agent、实际模型、推理等级与派遣通道；计划模型与接收方实际模型不一致时保持 Ready 并拒绝 claim。Review 无法实现异构 Agent/模型时明确降级为 `diversityLevel=CONTEXT_ONLY`。
+- 新用户需求默认建立独立 Delivery；工作区已有未结束 Delivery 时在写入前要求新的 linked worktree 任务，不再误生成旧 Delivery Revision。`prepare_delivery_revision` 只准备候选且不触发通用宿主确认，自动执行/手动交接仍是每个 Revision 唯一一次业务确认。
+- MCP 工具面保持 24 个，schema 继续只维护完整 v3。Python 全量 153 项测试、编译检查、Skill/Plugin 校验和 `git diff --check` 通过。
+
 ## 0.28.0 — 2026-07-31
 
 发布提交：`ab4e6bc`

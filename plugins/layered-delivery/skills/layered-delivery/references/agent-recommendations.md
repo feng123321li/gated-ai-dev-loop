@@ -12,13 +12,71 @@
 
 推荐器不参与提供方限额恢复。软阈值暂停后由原 Agent 等待宿主原生计划提示，直接收到 429 时由人工恢复；两种情况都不临时改写推荐、不自动换 Agent。
 
+## 自动派遣计划
+
+普通推荐仍是 `ADVISORY`。`available_agents` / `recommend_executors` 从 PATH 和本机设置发现的候选固定标记为 `availabilityScope=LOCAL_TERMINAL`、`dispatchTransport=EXTERNAL_PROCESS`、`hostDispatchEligible=false`；这表示“本机终端可见”，不表示“当前宿主原生 Agent 槽位可派遣”。用户选择自动执行后，总调度器另外从宿主原生 Agent catalog 构造临时 `executor_inventory`，以当前 Graph fingerprint 调用 `plan_dispatch_batch`。只有宿主明确报告可用槽位和模型、且 `dispatchTransport=HOST_NATIVE` 的原生 Agent 才能进入自动 assignment；分析路由还要求 `modelOverrideSupported=true`，当前执行器回退不要求模型切换能力。
+
+返回的 `binding=HOST_NATIVE_DISPATCH_PLAN`。`assignments` 为当前无资源冲突的 `DISPATCH_LOOP` 原子签发短租约 `dispatchReservationId`，并选择 Agent、模型选择方式、reasoning effort、`dispatchTransport` 和 `decisionFingerprint`；`concurrentDispatchGroups` 表示取得预留后可以同时创建的接收 Agent。第二个调度器看到 `WAIT_FOR_DISPATCH_RECEIVER / DISPATCH_ALREADY_RESERVED`，不会重复创建；`deferred` 节点保持未 claim。兼容执行器仅能通过外部 CLI、exec、subprocess 或 companion bridge 使用时，节点返回 `UNSAFE_EXECUTOR_TRANSPORT`。计划工具本身不启动 Agent、不切换当前会话模型、不 claim，也不保存完整 inventory。总调度器对分析路由显式覆盖模型，对回退路由在独立上下文沿用当前宿主默认；接收方再以实际 Agent/模型、`dispatch_transport=HOST_NATIVE`、预留 ID 与决策指纹调用 `dispatch_loop`。
+
+### 计算顺序
+
+派遣计划不用模型自由打分，而是执行可复现的字典序路由：
+
+1. 路由基准：存在节点 Agent 分析时使用 `AGENT_ANALYSIS`；缺失分析且宿主报告当前执行器时，只为缺失节点使用 `CURRENT_EXECUTOR_FALLBACK`，不进行候选 Agent/模型排名。
+2. 硬过滤：两条路径都要求 `dispatchTransport=HOST_NATIVE`、角色能力匹配和 `availableSlots > 0`；`AGENT_ANALYSIS` 另要求 `modelOverrideSupported=true`，回退路径要求当前 Agent/模型与 inventory 精确匹配。终端发现结果不能直接复制为宿主 inventory。
+3. 推理等级：总调度 Agent 在派遣前从 `loop_context` 按固定风险规则为当前 Ready TASK/Review 自动判为 `STANDARD`/`HIGH`，并通过临时 `node_requirements` 提交来源与原因。Controller 不做本地语义识别，也不接受 payload 自带的模型路由指令。回退节点保持 `UNCLASSIFIED`。
+4. 模型匹配：`STANDARD` 目标为 `BALANCED`；`HIGH` 必须存在 `FRONTIER` 模型，否则节点以 `NO_HIGH_REASONING_MODEL` deferred。候选内再按 tier 距离、较高 tier、模型优先级、稳定模型 ID 排序；回退节点直接使用当前模型。
+5. Agent 匹配：Review 先避开上游实际 Agent，再避开上游实际模型家族，然后按 Agent 优先级、模型优先级与稳定 ID 排序；TASK 直接按优先级和稳定 ID。回退节点不改换 Agent。
+6. 容量分配：每选中一个 assignment 就扣减对应 Agent 的临时槽位；槽位耗尽的后续节点保持未 claim。
+
+因此“高推理 Agent”不是另一个隐藏 Agent 类型，而是“具备所需角色能力的宿主原生 Agent + 可显式覆盖的 `FRONTIER` 模型 + `HIGH` 推理决策”。控制器只认识 tier，不认识厂商默认模型：Codex inventory 可以把 terra 标为 `BALANCED`、sol 标为 `FRONTIER`；Claude inventory 可以把 Sonnet 标为 `BALANCED`、Opus 标为 `FRONTIER`。
+
+例如总调度 Agent 当前使用 `gpt-5.6-sol`，但宿主允许子 Agent 显式选择 sol/terra，且有两个空闲槽：
+
+```json
+{
+  "root_id": "d-service",
+  "expected_graph_fingerprint": "<graphFingerprint>",
+  "executor_inventory": [
+    {
+      "agentId": "codex",
+      "displayName": "Codex",
+      "dispatchTransport": "HOST_NATIVE",
+      "capabilities": ["development", "review"],
+      "availableSlots": 2,
+      "priority": 20,
+      "modelOverrideSupported": true,
+      "models": [
+        {
+          "id": "gpt-5.6-terra",
+          "family": "gpt-5.6",
+          "tier": "BALANCED",
+          "reasoningEffort": "medium",
+          "priority": 20
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "family": "gpt-5.6",
+          "tier": "FRONTIER",
+          "reasoningEffort": "high",
+          "priority": 10
+        }
+      ]
+    }
+  ]
+}
+```
+
+在上述 Codex inventory 示例中，Ready TASK 优先得到 terra，Review 优先得到 sol；换成 Claude inventory 时会选择对应 tier 的 Claude 模型。存在不同 Agent/模型家族时进一步满足异构审查。只有同一 Agent/模型可安全派遣时，Review 仍进入新的独立上下文，但显式报告 `diversityLevel=CONTEXT_ONLY`，不能宣称已经实现异构审查。两个无资源冲突 TASK 且仍有两个槽时会进入同一个并发组。模型 ID 只是宿主 inventory 示例，控制器不内置厂商 allowlist，也不会猜测当前宿主是否真的支持这些模型。
+
 ## 强制边界
 
 - 返回值固定为建议性绑定，`binding=ADVISORY`、`dispatchAllowed=false`。
-- 推荐工具本身不创建接收 Agent、不调用外部开发 CLI、不切换当前会话模型、不 claim Loop，也不改变 `dispatch_loop.owner`。自动执行模式的总调度器可在工具返回后通过宿主原生 Agent 机制执行派遣；真正的接收方必须把实际 `agent_id` / `model_id` 交给 `dispatch_loop`，未被采用的建议不得写成执行事实。
+- 推荐工具本身不创建接收 Agent、不调用外部开发 CLI、不切换当前会话模型、不 claim Loop，也不改变 `dispatch_loop.owner`。自动执行模式的总调度器只能通过宿主原生 Agent 机制执行派遣，禁止调用 `codex --write`、`codex-companion` 或等价外部自治命令；真正的接收方必须把实际 `agent_id` / `model_id` 与 `dispatch_transport=HOST_NATIVE` 交给 `dispatch_loop`，未被采用的建议不得写成执行事实。
+- 自动决策指纹同时绑定 Graph、节点、Agent、模型、推理等级和派遣通道。宿主请求 `gpt-5.6-sol` 而接收方实际报告 `gpt-5` 时，AUTO claim 必须以 `SCHEDULER_DISPATCH_DECISION_MISMATCH` 拒绝并保持 Ready；不得用请求配置替代执行事实。
 - 建议和临时不可用列表都不持久化到 schema v3、hierarchy、Graph、SQLite、事件链或人类投影；配置或容量改变后重新发现。
 - 推荐器不解析 `loop.payload` 或 `loop.result`。TASK Loop 只按开发角色匹配；TASK/GROUP/Delivery Review 额外优先选择不同于上游开发建议的 Agent。
-- 只有一个合格 Agent 时仍可展示它，但 Review 的 `independence.satisfied=false` 且置信度降低；独立上下文要求继续由实际 Loop 执行机制保证。
+- 只有一个合格 Agent 时仍可展示它，但 Review 的 `independence.satisfied=false` 且置信度降低；实际派遣结果使用 `diversityLevel=CONTEXT_ONLY`，独立上下文要求继续由实际 Loop 执行机制保证。
 - `model.id=null` 表示终端可用但无法安全确定当前模型，只能展示为 current/default，不能猜测模型。
 
 ## 通用发现

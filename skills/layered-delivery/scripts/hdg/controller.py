@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from .agent_recommendation import available_agents, recommend_executors
+from .dispatch_planning import plan_dispatch_batch
 from .errors import fail
 from .graph_frontier import get_graph_frontier
 from .git_binding import (
@@ -47,6 +48,7 @@ CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "prepare_delivery_revision": prepare_delivery_revision,
     "delivery_revision_history": delivery_revision_history,
     "recommend_executors": recommend_executors,
+    "plan_dispatch_batch": plan_dispatch_batch,
     "freeze_hierarchy": freeze_hierarchy,
     "graph_frontier": get_graph_frontier,
     "graph_status": graph_status,

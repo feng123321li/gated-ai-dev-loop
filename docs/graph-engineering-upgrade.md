@@ -95,9 +95,9 @@ Agent + 当前模型 + 备选 + 原因
 
 建议不修改 hierarchy、Graph、SQLite、事件链、claim 或 owner。TASK 只匹配开发能力；Review 优先避开上游开发建议中的 Agent，并在无法满足异构 Agent 独立性时明确降级置信度。推荐器不解析不透明 payload，因此不会把模型路由策略重新塞进外层业务 schema。
 
-CC-Switch、PATH 或用户 Profile 改变后重新发现即可；同一 Frozen Graph 可在不同主机得到不同建议。v0.22.0 不消费建议执行派遣，真正的跨 CLI 启动与模型切换仍属于后续本地 Dispatcher 边界。
+CC-Switch、PATH 或用户 Profile 改变后重新发现即可；同一 Frozen Graph 可在不同主机得到不同建议。普通建议继续保持 `ADVISORY / EXTERNAL_PROCESS`。自动模式另行由 `plan_dispatch_batch` 消费宿主明确提供且 `dispatchTransport=HOST_NATIVE` 的原生 Agent 容量、可选模型与模型覆盖能力，为当前 frontier 生成 `HOST_NATIVE_DISPATCH_PLAN`；Agent 分析完整时按 tier 显式覆盖子 Agent 模型，缺少节点分析时可在独立子上下文沿用宿主明确报告的当前 Agent/模型并标记 `UNCLASSIFIED`。计划先原子签发短租约派遣预留，再按槽位并发创建接收上下文；第二个调度器只能等待接收方 claim 或预留过期。PATH 中发现的 CLI 不自动取得启动授权，计划工具也不启动 Agent 或 claim。
 
-运行中的容量故障不写回 Frozen Graph。执行 Agent 限额使用 `EXECUTOR` 暂停：本次推荐临时排除原 Agent，有独立候选即可提前接管同一 attempt；调度宿主自身限额使用 `HOST` 暂停：frontier 不调用模型推荐，只暴露 `nextWakeAt` 给模型外宿主定时器。Controller 在下一次调用时自动恢复节点，但不承担常驻定时或进程启动。
+运行中的容量故障不写回 Frozen Graph。执行 Agent 限额使用 `EXECUTOR` 暂停并等待原 Agent 的宿主原生一次性恢复提示；调度宿主自身限额使用 `HOST` 暂停。两种限额等待都不调用建议或派遣计划，也不自动换 Agent。Controller 在下一次调用时自动恢复节点，但不承担常驻定时或进程启动。
 
 ## 图模型
 
@@ -185,6 +185,8 @@ Review 沿层级逐层向上收敛，但不会把同一个 Review 节点重复�
 - Loop 主动取消。
 
 冻结 Revision 只固定当前外层目标、依赖、资源声明、项目范围和拓扑，不固定 Loop 内部实现计划；显式 payload 也不是工程正确性的穷举清单。Gate 失败、普通实现缺陷或 Review finding 只要能在当前 scope 和权限内修正，就由当前 Loop 调整方案、修正并重新验证。`BLOCKED` 仅用于当前 Loop 已无可行的 scope 内路径，并要求显式 failure class；只有冻结的依赖、资源、项目范围或拓扑必须改变时才返回 `REPLAN_REQUIRED`。最终用户验收前的 replan 保持同一 `delivery.id` 并生成下一不可变 Revision，不再用取消旧 run 加新 Delivery ID 表达同一需求。
+
+Revision 连续性必须来自用户明确说明，而不是来自工作区恰好恢复了哪个 Active Delivery。不同工单或独立业务目标默认建立新 Delivery；同一物理工作区已有未结束 Delivery 时，新的初始 prepare 在持久化前返回 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED / CREATE_INDEPENDENT_WORKTREE_TASK`。Codex 宿主据此直接创建 `environment=worktree` 的项目任务，从主线建立新 feature 分支后重新取得 `ABSENT` 工作区；same-directory/local 新任务不视为隔离。`prepare_delivery_revision` 只准备候选，不触发宿主通用确认；用户选择自动执行或手动交接是该 Revision 唯一一次业务确认。
 
 ## 逻辑递归与物理布局
 

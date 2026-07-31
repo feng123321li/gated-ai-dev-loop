@@ -543,7 +543,6 @@ class McpSurfaceTests(unittest.TestCase):
             human,
             {
                 "cancel_graph_run",
-                "prepare_delivery_revision",
                 "refreeze_task_requirement",
                 "unfreeze_task_requirement",
             },
@@ -579,6 +578,43 @@ class McpSurfaceTests(unittest.TestCase):
         )
         self.assertNotIn("_meta", by_name["available_agents"])
         self.assertNotIn("_meta", by_name["recommend_executors"])
+        dispatch_plan_schema = by_name[
+            "plan_dispatch_batch"
+        ]["inputSchema"]
+        self.assertEqual(
+            dispatch_plan_schema["required"],
+            [
+                "root_id",
+                "expected_graph_fingerprint",
+                "executor_inventory",
+                "node_requirements",
+            ],
+        )
+        self.assertEqual(
+            set(dispatch_plan_schema["properties"]),
+            {
+                "root_id",
+                "expected_graph_fingerprint",
+                "executor_inventory",
+                "node_requirements",
+                "current_executor",
+            },
+        )
+        self.assertEqual(
+            dispatch_plan_schema["properties"]["node_requirements"].get(
+                "minItems"
+            ),
+            None,
+        )
+        executor_schema = dispatch_plan_schema["properties"][
+            "executor_inventory"
+        ]["items"]
+        self.assertIn("dispatchTransport", executor_schema["required"])
+        self.assertEqual(
+            executor_schema["properties"]["dispatchTransport"]["enum"],
+            ["HOST_NATIVE", "EXTERNAL_PROCESS"],
+        )
+        self.assertNotIn("_meta", by_name["plan_dispatch_batch"])
         dispatch_schema = by_name["dispatch_loop"]["inputSchema"]
         self.assertEqual(
             dispatch_schema["required"],
@@ -599,8 +635,19 @@ class McpSurfaceTests(unittest.TestCase):
                 "owner",
                 "agent_id",
                 "model_id",
+                "dispatch_mode",
+                "dispatch_transport",
+                "dispatch_reservation_id",
+                "dispatch_reasoning_class",
+                "dispatch_decision_fingerprint",
                 "operation_id",
             },
+        )
+        self.assertEqual(
+            dispatch_schema["properties"]["dispatch_reasoning_class"][
+                "enum"
+            ],
+            ["STANDARD", "HIGH", "UNCLASSIFIED"],
         )
         pause_schema = by_name["pause_loop"]["inputSchema"]
         self.assertNotIn("resume_at", pause_schema["required"])
@@ -662,6 +709,7 @@ class McpSurfaceTests(unittest.TestCase):
             ]
         )
         revision_prepare = by_name["prepare_delivery_revision"]
+        self.assertNotIn("_meta", revision_prepare)
         self.assertIn(
             "hierarchy",
             revision_prepare["inputSchema"]["required"],
@@ -1040,7 +1088,7 @@ class McpSurfaceTests(unittest.TestCase):
                 "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH",
             )
 
-    def test_one_workspace_cannot_run_two_active_deliveries(
+    def test_active_workspace_rejects_preparing_another_delivery(
         self,
     ) -> None:
         with TemporaryDirectory() as root:
@@ -1072,17 +1120,18 @@ class McpSurfaceTests(unittest.TestCase):
                 root=root,
                 workspace_root=str(workspace),
             )
-            second = call_tool(
-                "prepare_hierarchy",
-                {
-                    "hierarchy": isolated_task_hierarchy(
-                        "d-second",
-                        "t-second",
-                    )
-                },
-                root=root,
-                workspace_root=str(workspace),
-            )
+            with self.assertRaises(GatedLoopError) as caught:
+                call_tool(
+                    "prepare_hierarchy",
+                    {
+                        "hierarchy": isolated_task_hierarchy(
+                            "d-second",
+                            "t-second",
+                        )
+                    },
+                    root=root,
+                    workspace_root=str(workspace),
+                )
             active_status = call_tool(
                 "workspace_status",
                 {},
@@ -1091,32 +1140,29 @@ class McpSurfaceTests(unittest.TestCase):
             )
             self.assertEqual(active_status["rootId"], "d-first")
             self.assertEqual(active_status["status"], "ACTIVE")
-            prepared_status = call_tool(
-                "workspace_status",
-                {"root_id": "d-second"},
-                root=root,
+            absent_status = SchedulerRepository(root).workspace_status(
+                root_id="d-second",
                 workspace_root=str(workspace),
             )
-            self.assertEqual(prepared_status["status"], "PREPARED")
-            with self.assertRaises(GatedLoopError) as caught:
-                call_tool(
-                    "freeze_hierarchy",
-                    {
-                        "root_id": second["rootId"],
-                        "expected_delivery_revision": 1,
-                        "expected_hierarchy_fingerprint": (
-                            second["hierarchyFingerprint"]
-                        ),
-                        "authorized_project_ids": [],
-                        "execution_mode": "active",
-                        "confirmed_by": "human",
-                    },
-                    root=root,
-                    workspace_root=str(workspace),
-                )
+            self.assertEqual(absent_status["status"], "ABSENT")
+            self.assertFalse(
+                (
+                    Path(root)
+                    / ".layered-delivery"
+                    / "d-second"
+                ).exists()
+            )
         self.assertEqual(
             caught.exception.code,
             "SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED",
+        )
+        self.assertEqual(
+            caught.exception.details["occupiedRootId"],
+            "d-first",
+        )
+        self.assertEqual(
+            caught.exception.details["nextAction"],
+            "CREATE_INDEPENDENT_WORKTREE_TASK",
         )
 
     def test_linked_git_worktrees_share_control_root_but_keep_identity(
@@ -1842,6 +1888,19 @@ class McpSurfaceTests(unittest.TestCase):
                 initialized["result"]["instructions"],
             )
             self.assertIn(
+                "plan_dispatch_batch consumes ephemeral host-native "
+                "capacity",
+                initialized["result"]["instructions"],
+            )
+            self.assertIn(
+                "A new user requirement defaults to a new Delivery",
+                initialized["result"]["instructions"],
+            )
+            self.assertIn(
+                "never infer Revision continuity",
+                initialized["result"]["instructions"],
+            )
+            self.assertIn(
                 "All TASKs in that Delivery share those project branches",
                 initialized["result"]["instructions"],
             )
@@ -1941,7 +2000,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 23)
+            self.assertEqual(len(listed["result"]["tools"]), 24)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

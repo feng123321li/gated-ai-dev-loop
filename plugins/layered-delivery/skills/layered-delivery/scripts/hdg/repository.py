@@ -7,7 +7,7 @@ import shutil
 import sqlite3
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -27,6 +27,7 @@ from .graph_model import (
     validate_delivery_graph,
 )
 from .jsonio import canonical_json, fingerprint
+from .loop_contracts import resource_claims_overlap
 from .model_core import (
     iter_hierarchy_nodes,
     validate_hierarchy_definition,
@@ -386,6 +387,25 @@ class SchedulerRepository:
                 PRIMARY KEY(root_id, revision),
                 FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
             );
+            CREATE TABLE IF NOT EXISTS dispatch_reservations (
+                reservation_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                root_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                graph_fingerprint TEXT NOT NULL,
+                decision_fingerprint TEXT NOT NULL,
+                status TEXT NOT NULL,
+                reserved_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                claimed_at TEXT,
+                operation_id TEXT,
+                FOREIGN KEY(run_id) REFERENCES runs(run_id)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS
+            active_dispatch_reservation_by_node
+            ON dispatch_reservations(run_id, node_id, attempt)
+            WHERE status = 'RESERVED';
             """
         )
         SchedulerRepository._upgrade_revision_storage(connection)
@@ -769,6 +789,28 @@ class SchedulerRepository:
                     "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH",
                     "A prepared Delivery cannot move to another workspace",
                     rootId=root_id,
+                )
+            occupied = connection.execute(
+                "SELECT r.root_id, r.status "
+                "FROM delivery_workspaces w "
+                "JOIN runs r ON r.root_id = w.root_id "
+                "WHERE w.workspace_key = ? AND r.root_id != ? "
+                "AND r.status NOT IN "
+                "('COMPLETED', 'CANCELLED', 'SUPERSEDED') "
+                "LIMIT 1",
+                (workspace_key, root_id),
+            ).fetchone()
+            if occupied is not None:
+                fail(
+                    "SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED",
+                    (
+                        "An unfinished Delivery already owns this "
+                        "workspace; prepare the new Delivery in an "
+                        "independent worktree task"
+                    ),
+                    occupiedRootId=occupied["root_id"],
+                    occupiedStatus=occupied["status"],
+                    nextAction="CREATE_INDEPENDENT_WORKTREE_TASK",
                 )
             frozen = connection.execute(
                 "SELECT status, revision, updated_at FROM hierarchies "
@@ -1666,6 +1708,295 @@ class SchedulerRepository:
         return reservations
 
     @staticmethod
+    def expire_dispatch_reservations(
+        connection: sqlite3.Connection,
+        *,
+        at: str,
+    ) -> None:
+        connection.execute(
+            "UPDATE dispatch_reservations SET status = 'EXPIRED' "
+            "WHERE status = 'RESERVED' AND expires_at < ?",
+            (at,),
+        )
+
+    def active_dispatch_reservations(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        at: str,
+    ) -> list[dict[str, Any]]:
+        rows = connection.execute(
+            """
+            SELECT d.*, h.hierarchy_json, h.graph_json,
+                   h.hierarchy_fingerprint,
+                   h.graph_fingerprint AS stored_graph_fingerprint
+            FROM dispatch_reservations d
+            JOIN runs r ON r.run_id = d.run_id
+            JOIN delivery_revisions h ON h.root_id = r.root_id
+                AND h.revision = r.revision
+            WHERE d.status = 'RESERVED'
+                AND d.expires_at >= ?
+                AND r.status NOT IN
+                    ('COMPLETED', 'CANCELLED', 'SUPERSEDED')
+            ORDER BY d.root_id, d.node_id
+            """,
+            (at,),
+        ).fetchall()
+        result: list[dict[str, Any]] = []
+        graph_cache: dict[tuple[str, str], dict[str, Any]] = {}
+        for row in rows:
+            cache_key = (row["root_id"], row["run_id"])
+            graph = graph_cache.get(cache_key)
+            if graph is None:
+                _, graph = _validated_stored_definition(row)
+                graph_cache[cache_key] = graph
+            definition = next(
+                (
+                    node
+                    for node in graph["nodes"]
+                    if node["id"] == row["node_id"]
+                ),
+                None,
+            )
+            if definition is None or definition["loop"] is None:
+                fail(
+                    "SCHEDULER_STATE_INVALID",
+                    "Reserved dispatch Loop is missing from its Graph",
+                )
+            result.append(
+                {
+                    "dispatchReservationId": row["reservation_id"],
+                    "runId": row["run_id"],
+                    "rootId": row["root_id"],
+                    "nodeId": row["node_id"],
+                    "attempt": row["attempt"],
+                    "graphFingerprint": row["graph_fingerprint"],
+                    "decisionFingerprint": row[
+                        "decision_fingerprint"
+                    ],
+                    "reservedAt": row["reserved_at"],
+                    "reservationExpiresAt": row["expires_at"],
+                    "resourceClaims": definition["loop"][
+                        "resourceClaims"
+                    ],
+                }
+            )
+        return result
+
+    def reserve_dispatch_assignments(
+        self,
+        *,
+        root_id: str,
+        graph_fingerprint: str,
+        assignments: list[dict[str, Any]],
+        reservation_seconds: int,
+    ) -> dict[str, Any]:
+        with self.transaction() as connection:
+            hierarchy_row = connection.execute(
+                "SELECT * FROM hierarchies WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if hierarchy_row is None:
+                fail(
+                    "SCHEDULER_HIERARCHY_MISSING",
+                    f"Scheduler hierarchy is missing: {root_id}",
+                )
+            if hierarchy_row["graph_fingerprint"] != graph_fingerprint:
+                fail(
+                    "SCHEDULER_GRAPH_FINGERPRINT_MISMATCH",
+                    "The expected Graph fingerprint is stale",
+                )
+            _, graph = _validated_stored_definition(hierarchy_row)
+            run = connection.execute(
+                "SELECT * FROM runs WHERE root_id = ? AND revision = ?",
+                (root_id, hierarchy_row["revision"]),
+            ).fetchone()
+            if run is None:
+                fail(
+                    "SCHEDULER_RUN_MISSING",
+                    f"Scheduler run is missing: {root_id}",
+                )
+            at = _commit_timestamp(self.now, run["updated_at"])
+            expires_at = (
+                datetime.fromisoformat(at.replace("Z", "+00:00"))
+                + timedelta(seconds=reservation_seconds)
+            ).isoformat().replace("+00:00", "Z")
+            self.expire_dispatch_reservations(connection, at=at)
+            active = self.active_dispatch_reservations(
+                connection,
+                at=at,
+            )
+            active_by_node = {
+                (
+                    item["runId"],
+                    item["nodeId"],
+                    item["attempt"],
+                ): item
+                for item in active
+            }
+            occupied = [
+                *self.claimed_resource_reservations(
+                    connection,
+                    at=at,
+                ),
+                *active,
+            ]
+            states = {
+                item["nodeId"]: item
+                for item in self.latest_nodes(
+                    connection,
+                    run["run_id"],
+                )
+            }
+            definitions = {
+                item["id"]: item
+                for item in graph["nodes"]
+            }
+            accepted: dict[str, dict[str, Any]] = {}
+            rejected: dict[str, dict[str, Any]] = {}
+            for assignment in assignments:
+                node_id = assignment["nodeId"]
+                state = states.get(node_id)
+                definition = definitions.get(node_id)
+                key = (
+                    run["run_id"],
+                    node_id,
+                    state["attempt"] if state is not None else -1,
+                )
+                existing = active_by_node.get(key)
+                if existing is not None:
+                    rejected[node_id] = {
+                        "code": "DISPATCH_ALREADY_RESERVED",
+                        "message": (
+                            "Another dispatcher already reserved this "
+                            "Loop for host Agent creation."
+                        ),
+                        **existing,
+                    }
+                    continue
+                if (
+                    state is None
+                    or state["status"] != "READY"
+                    or definition is None
+                    or definition["loop"] is None
+                ):
+                    rejected[node_id] = {
+                        "code": "DISPATCH_RESERVATION_NOT_READY",
+                        "message": (
+                            "The Loop is no longer ready for dispatch."
+                        ),
+                    }
+                    continue
+                conflict = next(
+                    (
+                        item
+                        for item in occupied
+                        if resource_claims_overlap(
+                            definition["loop"]["resourceClaims"],
+                            item["resourceClaims"],
+                        )
+                    ),
+                    None,
+                )
+                if conflict is not None:
+                    rejected[node_id] = {
+                        "code": "DISPATCH_RESERVATION_CONFLICT",
+                        "message": (
+                            "A claimed or dispatch-reserved Loop already "
+                            "holds an overlapping resource."
+                        ),
+                        "conflictingRootId": conflict["rootId"],
+                        "conflictingNodeId": conflict["nodeId"],
+                    }
+                    continue
+                reservation_id = str(uuid.uuid4())
+                connection.execute(
+                    """
+                    INSERT INTO dispatch_reservations(
+                        reservation_id, run_id, root_id, node_id, attempt,
+                        graph_fingerprint, decision_fingerprint, status,
+                        reserved_at, expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'RESERVED', ?, ?)
+                    """,
+                    (
+                        reservation_id,
+                        run["run_id"],
+                        root_id,
+                        node_id,
+                        state["attempt"],
+                        graph_fingerprint,
+                        assignment["decisionFingerprint"],
+                        at,
+                        expires_at,
+                    ),
+                )
+                reservation = {
+                    "dispatchReservationId": reservation_id,
+                    "reservationExpiresAt": expires_at,
+                }
+                accepted[node_id] = reservation
+                occupied.append(
+                    {
+                        "rootId": root_id,
+                        "nodeId": node_id,
+                        "resourceClaims": definition["loop"][
+                            "resourceClaims"
+                        ],
+                    }
+                )
+        return {
+            "accepted": accepted,
+            "rejected": rejected,
+        }
+
+    def consume_dispatch_reservation(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        reservation_id: str,
+        run_id: str,
+        node_id: str,
+        attempt: int,
+        graph_fingerprint: str,
+        decision_fingerprint: str,
+        operation_id: str,
+        at: str,
+    ) -> None:
+        row = connection.execute(
+            "SELECT * FROM dispatch_reservations "
+            "WHERE reservation_id = ?",
+            (reservation_id,),
+        ).fetchone()
+        if row is None:
+            fail(
+                "SCHEDULER_DISPATCH_RESERVATION_MISSING",
+                "The automatic dispatch reservation does not exist",
+            )
+        if row["status"] != "RESERVED" or row["expires_at"] < at:
+            fail(
+                "SCHEDULER_DISPATCH_RESERVATION_EXPIRED",
+                "The automatic dispatch reservation is no longer active",
+                reservationExpiresAt=row["expires_at"],
+            )
+        if (
+            row["run_id"] != run_id
+            or row["node_id"] != node_id
+            or row["attempt"] != attempt
+            or row["graph_fingerprint"] != graph_fingerprint
+            or row["decision_fingerprint"] != decision_fingerprint
+        ):
+            fail(
+                "SCHEDULER_DISPATCH_RESERVATION_MISMATCH",
+                "The reservation is not bound to this dispatch decision",
+            )
+        connection.execute(
+            "UPDATE dispatch_reservations SET status = 'CLAIMED', "
+            "claimed_at = ?, operation_id = ? "
+            "WHERE reservation_id = ? AND status = 'RESERVED'",
+            (at, operation_id, reservation_id),
+        )
+
+    @staticmethod
     def latest_nodes(
         connection: sqlite3.Connection,
         run_id: str,
@@ -1727,6 +2058,19 @@ class SchedulerRepository:
                 "owner": row["owner"],
                 "agentId": executor.get("agentId"),
                 "modelId": executor.get("modelId"),
+                "dispatchMode": executor.get("dispatchMode"),
+                "dispatchTransport": executor.get(
+                    "dispatchTransport"
+                ),
+                "dispatchReservationId": executor.get(
+                    "dispatchReservationId"
+                ),
+                "dispatchReasoningClass": executor.get(
+                    "dispatchReasoningClass"
+                ),
+                "dispatchDecisionFingerprint": executor.get(
+                    "dispatchDecisionFingerprint"
+                ),
                 "operationId": row["operation_id"],
                 "claimedAt": row["claimed_at"],
                 "lastHeartbeatAt": row["last_heartbeat_at"],

@@ -151,6 +151,36 @@ class PluginBundleTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("Agent + Model", metadata)
 
+    def test_skill_auto_dispatches_planned_models_in_parallel(self) -> None:
+        main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        execution = (
+            SKILL / "references" / "execution-quickstart.md"
+        ).read_text(encoding="utf-8")
+        recommendations = (
+            SKILL / "references" / "agent-recommendations.md"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("`plan_dispatch_batch`", main)
+        self.assertIn("显式模型覆盖", main)
+        self.assertIn("并发创建", main)
+        self.assertIn(
+            "先预留、再创建接收 Agent、最后 claim",
+            execution,
+        )
+        self.assertIn("WAIT_FOR_DISPATCH_RECEIVER", main + execution)
+        self.assertIn("dispatchReservationId", main + execution)
+        self.assertIn("decisionFingerprint", execution)
+        self.assertIn("不能继承总调度 Agent 的模型", execution)
+        self.assertIn("派遣前自动判级", execution)
+        self.assertIn("不确定时使用 `HIGH`", execution)
+        self.assertIn("只用于路由判级", execution)
+        self.assertIn("HOST_NATIVE_DISPATCH_PLAN", recommendations)
+        self.assertIn("dispatchTransport=HOST_NATIVE", main + execution)
+        self.assertIn("EXTERNAL_PROCESS", main + execution + recommendations)
+        self.assertIn("codex-companion", main + execution)
+        self.assertIn("UNSAFE_EXECUTOR_TRANSPORT", recommendations)
+        self.assertIn("diversityLevel=CONTEXT_ONLY", main + recommendations)
+
     def test_skill_uses_native_soft_stop_and_manual_429_recovery(
         self,
     ) -> None:
@@ -196,6 +226,20 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn(
             "不得从当前 feature HEAD 分叉",
             planning,
+        )
+        self.assertIn("新用户需求默认属于新 Delivery", planning)
+        self.assertIn(
+            "不得仅因 `workspace_status` 返回旧 Delivery 就进入 Revision",
+            planning,
+        )
+        self.assertIn("`environment=worktree`", planning)
+        self.assertIn(
+            "不得再次要求用户回复一次",
+            planning,
+        )
+        self.assertIn(
+            "不应触发宿主通用确认弹窗",
+            planning + execution,
         )
         self.assertIn(
             "TASK 共享同一 Delivery",
@@ -322,7 +366,7 @@ class PluginBundleTests(unittest.TestCase):
         )
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
-        self.assertEqual(len(tool_definitions()), 23)
+        self.assertEqual(len(tool_definitions()), 24)
 
     def test_bundled_mcp_prefers_modern_stdio_discovery(self) -> None:
         entry = SKILL / "scripts" / "hdg_mcp.py"
@@ -422,7 +466,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            23,
+            24,
         )
         discovery = responses[2]["result"]["structuredContent"]["result"]
         self.assertFalse(
@@ -503,7 +547,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            23,
+            24,
         )
 
 

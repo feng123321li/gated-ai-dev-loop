@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.28.0 — 2026-07-31
+
+发布提交：`ab4e6bc`
+
+- 一个业务需求现在保持稳定的 `delivery.id`，用户最终验收前通过不可变 Delivery Revision 继续调整范围；`prepare_delivery_revision` 与 `delivery_revision_history` 显式准备、冻结和追溯各 Revision，新 Revision 冻结后旧运行进入 `SUPERSEDED`，不再为同一需求创建无关 Delivery。
+- Revision 会继承定义与 Review Loop 均未改变且已经通过 TASK Loop 和 TASK Review 的任务结果；受影响 TASK、全部 GROUP Review 与 Delivery Review 重新执行。已经误取消但尚未最终验收的运行也可以显式进入下一 Revision。
+- `delivery.projectScopes` 支持一个 Delivery 精确授权多个本地仓库。所有可写 Git 项目必须使用同名 feature 分支，同时分别冻结各仓库自己的 `baseRef`、`baseCommit` 与 `integrationTarget`；冻结调用必须提交与准备结果完全一致的项目 ID 集合，项目范围不会隐式授予提交、推送、合并或发布权限。
+- SQLite 当前调度库增加 Revision 历史、旧运行升级和携带结果事件；新增 `revisions.md` 与跨项目授权投影，MCP 工具面增至 23 个。schema 继续只维护完整 v3。Python 全量 128 项测试、编译检查、Skill/Plugin 校验和 `git diff --check` 通过。
+
 ## 0.27.0 — 2026-07-31
 
 发布提交：`195d50a`

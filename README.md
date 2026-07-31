@@ -343,7 +343,9 @@ Claude Code 和旧 Codex 仍可走 `2025-11-25` 的 `initialize → notification
 │               │   ├── baseline.md
 │               │   ├── progress.md
 │               │   ├── acceptance.md
-│               │   └── interfaces.md  # 仅当本 TASK 声明接口
+│               │   ├── interfaces.md  # 接口索引；按需
+│               │   └── interfaces/
+│               │       └── 001-<接口标识>.md  # 每接口一份详情
 │               └── g-core/
 │                   ├── baseline.md
 │                   ├── progress.md
@@ -371,19 +373,20 @@ Claude Code 和旧 Codex 仍可走 `2025-11-25` 的 `initialize → notification
 | `.layered-delivery/<delivery-id>/work-items/<root-id>/children/.../<node-id>/baseline.md` | 单个 GROUP/TASK 的冻结需求与 Loop 输入基线 |
 | `.layered-delivery/<delivery-id>/work-items/<root-id>/children/.../<node-id>/progress.md` | 单个 GROUP/TASK 的执行、汇合或 Review 进展 |
 | `.layered-delivery/<delivery-id>/work-items/<root-id>/children/.../<node-id>/acceptance.md` | 当前 GROUP/TASK 的验收结果；GROUP 只摘要并链接直接子节点报告 |
-| `.layered-delivery/<delivery-id>/work-items/<root-id>/children/.../<task-id>/interfaces.md` | 接口型 TASK 按需生成的请求/响应字段级变更表 |
+| `.layered-delivery/<delivery-id>/work-items/<root-id>/children/.../<task-id>/interfaces.md` | 接口型 TASK 按需生成的接口索引 |
+| `.layered-delivery/<delivery-id>/work-items/<root-id>/children/.../<task-id>/interfaces/*.md` | 每个接口独立的请求/响应字段级变更表 |
 
 目录使用不可变的 Delivery ID 和节点 ID，不使用可修改的标题。同一工作区可以保留多个 Delivery 需求目录；`work-items/<root-id>/children/...` 只镜像父子关系，兄弟 `dependsOn` 仍由 Graph 控制执行顺序。根为 TASK 时直接生成 `work-items/<task-id>/`，不创建虚拟 GROUP。
 
-根级 `overview.md` 只汇总全部 Delivery 的标识、标题、中文状态、最近更新时间和详情链接。每个 Delivery 自己的 `overview.md` 展示该交付的 TASK 完成度、GROUP 数量、状态与导航；需求、执行和验收分别进入顶层 `baseline.md`、`progress.md` 与 `acceptance.md`。Delivery baseline 是整棵基线树的入口，链接所有 GROUP/TASK 节点投影但不复制其 Loop 输入；GROUP baseline 保存自身需求与 Review 输入并链接直接子节点；TASK baseline 保存执行叶子的冻结输入。验收报告同样保持层级边界：TASK 报告完整展示本 TASK 与 TASK Review，GROUP 报告完整展示本层完成点与 GROUP Review、只摘要并链接直接子节点报告，Delivery 报告完整展示本层 Delivery Review 与用户确认、只摘要并链接根工作项报告，不向上复制下层输入、证据或 Review findings。progress 的节点状态表显示实际执行代理、执行模型、认领身份和执行轮次；acceptance 的状态摘要、子节点结果和 P0/P1/P2 问题同样使用表格，长输入与证据保留结构化列表。接口详情不再拆成重复的修改前/修改后清单，而是在完整入参与出参表中逐字段标记新增、修改、删除和未变，并用“修改前 → 修改后”展示类型、必填性与说明。
+根级 `overview.md` 只汇总全部 Delivery 的标识、标题、中文状态、最近更新时间和详情链接。每个 Delivery 自己的 `overview.md` 展示该交付的 TASK 完成度、GROUP 数量、状态与导航；需求、执行和验收分别进入顶层 `baseline.md`、`progress.md` 与 `acceptance.md`。Delivery baseline 是整棵基线树的入口，链接所有 GROUP/TASK 节点投影但不复制其 Loop 输入；GROUP baseline 保存自身需求与 Review 输入并链接直接子节点；TASK baseline 保存执行叶子的冻结输入。验收报告同样保持层级边界：TASK 报告完整展示本 TASK 与 TASK Review，GROUP 报告完整展示本层完成点与 GROUP Review、只摘要并链接直接子节点报告，Delivery 报告完整展示本层 Delivery Review 与用户确认、只摘要并链接根工作项报告，不向上复制下层输入、证据或 Review findings。progress 的节点状态表显示实际执行代理、执行模型、认领身份和执行轮次；acceptance 的状态摘要、子节点结果和 P0/P1/P2 问题同样使用表格，长输入与证据保留结构化列表。`interfaces.md` 只保留接口索引，每个接口的详情单独进入 `interfaces/`。入参表展示类型、必填和说明，出参表不展示必填；新增或删除字段只显示存在的一侧，删除值使用 Markdown 删除线，真正修改的属性才使用“修改前 → 修改后”。
 
 Loop 输入是冻结后交给对应 TASK 或 Review 执行上下文的 `loop.ref`、不透明 `payload` 与精确 `resourceClaims`。它属于执行前确认的契约，因此只展开在对应节点 baseline；运行状态、attempt 和结果分别进入 progress 与 acceptance。
 
-人类 Markdown 不展示 JSON 代码块或原始状态枚举。控制器只对不透明 payload 做确定性的结构展开：固定栏目、状态、说明和空值提示保持中文；HTTP 方法、URL、Dubbo 服务名、gRPC 标识、字段名与类型名等技术标识保留原值。需求新增、修改或删除接口时，负责接口的 TASK 在 `payload.interfaces` 显式声明 `changeType`、协议、名称、简介以及完整 `before` / `after` 快照；`protocol` 是开放字符串，HTTP、Dubbo、gRPC、GraphQL、消息等只是示例。适用快照包含完整入参与出参，并使用通用 `identifier` 或协议专用调用字段定位接口；HTTP 可使用 `method + path`，Dubbo 可使用 `service + method`。控制器只在该 TASK 目录生成 `interfaces.md`，TASK baseline 与 Delivery baseline 分别链接它；无接口声明时不生成。Agent 可以从真实代码、OpenAPI、Controller/DTO、IDL 或服务定义提取候选 before 并校验 after，但控制器不动态扫描代码或隐式推算契约。
+人类 Markdown 不展示 JSON 代码块或原始状态枚举。控制器只对不透明 payload 做确定性的结构展开：固定栏目、状态、说明和空值提示保持中文；HTTP 方法、URL、Dubbo 服务名、gRPC 标识、字段名与类型名等技术标识保留原值。需求新增、修改或删除接口时，负责接口的 TASK 在 `payload.interfaces` 显式声明 `changeType`、协议、名称、简介以及完整 `before` / `after` 快照；`protocol` 是开放字符串，HTTP、Dubbo、gRPC、GraphQL、消息等只是示例。适用快照包含完整入参与出参，并使用通用 `identifier` 或协议专用调用字段定位接口；HTTP 可使用 `method + path`，Dubbo 可使用 `service + method`。控制器在该 TASK 目录生成 `interfaces.md` 索引和 `interfaces/` 详情目录，TASK baseline 与 Delivery baseline 只链接索引；无接口声明时不生成。Agent 可以从真实代码、OpenAPI、Controller/DTO、IDL 或服务定义提取候选 before 并校验 after，但控制器不动态扫描代码或隐式推算契约。
 
 根总览、Delivery 投影和整棵 `work-items/` 节点投影树使用控制器内置模板，内部修订号不写入人类正文。控制器在状态提交后重新读取 SQLite，原子更新根总览和主文件，并整体替换 `work-items/`，确保 GROUP/TASK 删除、改名或接口声明移除后不遗留旧文件；升级后也会清理旧 `hierarchy.json`、`graph.json`、`state.json` 和 `task-baselines/`。`workspace_status` 会从 SQLite 为早期 schema v3 Delivery 补建当前适用的中文投影树，不迁移或修改 hierarchy、Graph、事件链和运行状态；旧 hierarchy 没有接口声明时不会从代码反推接口契约。所有标明 UTC+8 的人类时间使用 `YYYY-MM-DD HH:mm:ss`，机器权威时间仍保持 ISO 8601 UTC。Agent 通过合法 MCP 输入提交的 hierarchy、summary 和 payload 会按模板成为投影中的领域数据；模板结构、固定相对文件名、序列化和落盘完全由控制器负责。Agent 只通过已注册的 MCP 工具读取调度状态，不直连 `scheduler.db`，也不自行创建、修补或重写投影。投影用于人类评审与进度掌控，不反向成为机器权威。
 
-`prepare_hierarchy` 阶段生成根总览、四份 Delivery 人类主投影，以及所有 GROUP/TASK 的 baseline、progress 和 acceptance；接口型 TASK 再生成自己的 `interfaces.md`。冻结后的运行状态继续从 SQLite 确定性刷新 Markdown，不生成机器 JSON 副本。
+`prepare_hierarchy` 阶段生成根总览、四份 Delivery 人类主投影，以及所有 GROUP/TASK 的 baseline、progress 和 acceptance；接口型 TASK 再生成 `interfaces.md` 索引和 `interfaces/` 详情目录。冻结后的运行状态继续从 SQLite 确定性刷新 Markdown，不生成机器 JSON 副本。
 
 不再生成 `development-plan.md`、Task Gate 报告、Skill activation 记录或文件 scope 授权投影。
 

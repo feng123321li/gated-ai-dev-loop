@@ -99,7 +99,9 @@ Graph 编译遵循以下终态规则：
 │                   ├── baseline.md
 │                   ├── progress.md
 │                   ├── acceptance.md
-│                   └── interfaces.md  # 按需
+│                   ├── interfaces.md  # 接口索引；按需
+│                   └── interfaces/
+│                       └── 001-<接口标识>.md  # 每接口一份详情
 └── d-portal/
     ├── overview.md
     ├── baseline.md
@@ -109,7 +111,7 @@ Graph 编译遵循以下终态规则：
 
 `scheduler.db` 是唯一机器权威；各 `<delivery-id>` 目录只保存可重建的人类投影。稳定 `delivery.id` 下可以有多个不可变 Revision；`revisions.md` 默认展示当前 Revision 并串联旧 run 的 `SUPERSEDED` 审计状态。新用户需求不能因为当前路径恢复了旧 Delivery 就隐式进入其 Revision；`prepare_delivery_revision` 必须提交 `USER_EXPLICIT_SAME_DELIVERY`，或在已有 `REPLAN_REQUIRED` 事件时提交 `ACTIVE_LOOP_REPLAN`。候选只写 `delivery_revisions`，不会移动 `hierarchies` 当前指针，旧 run 直到候选 freeze 时才被原子取代。同一 `workspaceKey` 已有未结束 run 时，第二个 Delivery 在 `prepare` 写入前即被拒绝并返回 `CREATE_INDEPENDENT_WORKTREE_TASK`，避免留下无法冻结或迁移的 PREPARED 状态。`projectScopes` 允许一个需求覆盖多个本地仓库，冻结时要求精确项目 ID 授权；所有可写 Git 项目使用同名 feature 分支，但分别绑定自己的主线与 `baseCommit`。TASK Agent 不创建内部分支；Git stage/commit/push 仍需各自授权。`work-items/<root-id>/children/...` 镜像逻辑父子关系，但不表达文件授权。
 
-工作区根 `overview.md` 只列 Delivery 标识、标题、状态、更新时间和详情；Delivery `overview.md` 才展示本交付的 TASK 完成度、GROUP 数量与导航。顶层 `baseline.md` 保存基线树和节点链接，`progress.md` 聚合运行进展，`acceptance.md` 只完整展示 Delivery 本层 Review 与用户确认，并以摘要和链接串联根工作项报告。每个 GROUP/TASK 在递归节点目录下拥有自己的 baseline、progress 和 acceptance；GROUP baseline 链接直接子节点，TASK baseline 展示冻结 Loop 输入。TASK 验收只展开本 TASK 与 TASK Review；GROUP 验收只展开本层完成点与 Review，对直接子节点只显示状态、简要结果和验收链接。任何下层输入、证据或 Review findings 都不向上重复复制。progress 状态表显示 claim 事件记录的实际执行代理、执行模型、认领身份和执行轮次；acceptance 摘要、子节点结果和 Review P0/P1/P2 问题使用表格。只有 TASK payload 显式声明接口时，才在该 TASK 目录生成 `interfaces.md`；完整 before/after 契约会被确定性比较，并直接在入参与出参表中逐字段标记新增、修改、删除或未变，类型、必填性和说明使用“修改前 → 修改后”展示。`protocol` 为开放字符串，HTTP、Dubbo、gRPC、GraphQL、消息等只是示例，通用协议可用 `identifier` 定位。无声明时不生成。代码可辅助提取和校验，但不是动态投影源。所有文件绑定双指纹并可随权威状态重建；`workspace_status` 会为早期 schema v3 Delivery 补建当前适用的投影树，但不迁移数据库或 Graph。所有固定文案和状态保持中文，标明 UTC+8 的人类时间使用 `YYYY-MM-DD HH:mm:ss`；机器权威仍使用 UTC。
+工作区根 `overview.md` 只列 Delivery 标识、标题、状态、更新时间和详情；Delivery `overview.md` 才展示本交付的 TASK 完成度、GROUP 数量与导航。顶层 `baseline.md` 保存基线树和节点链接，`progress.md` 聚合运行进展，`acceptance.md` 只完整展示 Delivery 本层 Review 与用户确认，并以摘要和链接串联根工作项报告。每个 GROUP/TASK 在递归节点目录下拥有自己的 baseline、progress 和 acceptance；GROUP baseline 链接直接子节点，TASK baseline 展示冻结 Loop 输入。TASK 验收只展开本 TASK 与 TASK Review；GROUP 验收只展开本层完成点与 Review，对直接子节点只显示状态、简要结果和验收链接。任何下层输入、证据或 Review findings 都不向上重复复制。progress 状态表显示 claim 事件记录的实际执行代理、执行模型、认领身份和执行轮次；acceptance 摘要、子节点结果和 Review P0/P1/P2 问题使用表格。只有 TASK payload 显式声明接口时，才在该 TASK 目录生成 `interfaces.md` 索引和 `interfaces/` 下每接口一份详情。完整 before/after 契约会被确定性比较：入参表展示类型、必填和说明，出参表不展示必填；删除值使用 Markdown 删除线，新增或删除字段只显示存在的一侧，真正修改的属性才使用“修改前 → 修改后”。`protocol` 为开放字符串，HTTP、Dubbo、gRPC、GraphQL、消息等只是示例，通用协议可用 `identifier` 定位。无声明时不生成。代码可辅助提取和校验，但不是动态投影源。所有文件绑定双指纹并可随权威状态重建；`workspace_status` 会为早期 schema v3 Delivery 补建当前适用的投影树，但不迁移数据库或 Graph。所有固定文案和状态保持中文，标明 UTC+8 的人类时间使用 `YYYY-MM-DD HH:mm:ss`；机器权威仍使用 UTC。
 
 ## MCP
 

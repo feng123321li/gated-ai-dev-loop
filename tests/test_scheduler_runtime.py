@@ -3104,6 +3104,30 @@ class SchedulerRuntimeTests(unittest.TestCase):
         interfaces = (task_root / "interfaces.md").read_text(
             encoding="utf-8"
         )
+        interface_directory = task_root / "interfaces"
+        interface_documents = sorted(interface_directory.glob("*.md"))
+        self.assertEqual(
+            [path.name for path in interface_documents],
+            [
+                "001-http-post-api-orders.md",
+                (
+                    "002-dubbo-com-example-order-orderservice-"
+                    "createorder.md"
+                ),
+                (
+                    "003-grpc-order-v1-legacyorderservice-"
+                    "getorder.md"
+                ),
+            ],
+        )
+        interface_details = {
+            path.name: path.read_text(encoding="utf-8")
+            for path in interface_documents
+        }
+        all_interface_details = "\n".join(interface_details.values())
+        create_order_detail = interface_details[
+            "001-http-post-api-orders.md"
+        ]
         task_baseline = (task_root / "baseline.md").read_text(
             encoding="utf-8"
         )
@@ -3170,72 +3194,96 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "修改前调用标识",
             "修改后调用标识",
             "简介",
-            "入参",
-            "出参",
         ):
             with self.subTest(chinese_label=label):
                 self.assertIn(label, interfaces)
+        self.assertNotIn("## 接口详情", interfaces)
+        self.assertNotIn("legacyCustomerNo", interfaces)
         self.assertIn("创建订单", interfaces)
         self.assertIn("修改", interfaces)
         self.assertIn("POST /api/v1/orders", interfaces)
         self.assertIn("POST /api/orders", interfaces)
-        self.assertIn("legacyCustomerNo", interfaces)
-        self.assertIn("customerId", interfaces)
-        self.assertIn("必填", interfaces)
-        self.assertIn("类型", interfaces)
-        self.assertIn("说明", interfaces)
-        self.assertIn("字段路径", interfaces)
+        self.assertIn(
+            "[创建订单](interfaces/001-http-post-api-orders.md)",
+            interfaces,
+        )
+        self.assertIn("legacyCustomerNo", all_interface_details)
+        self.assertIn("customerId", all_interface_details)
+        self.assertIn("必填", create_order_detail)
+        self.assertIn("类型", create_order_detail)
+        self.assertIn("说明", create_order_detail)
+        self.assertIn("字段路径", create_order_detail)
+        self.assertIn("[返回接口清单](../interfaces.md)", create_order_detail)
         self.assertIn(
             (
-                "| legacyCustomerNo | 删除 | string → — | "
-                "是 → — | 原客户编号 → — |"
+                "| ~~legacyCustomerNo~~ | 删除 | ~~string~~ | "
+                "~~是~~ | ~~原客户编号~~ |"
             ),
-            interfaces,
+            create_order_detail,
         )
         self.assertIn(
             (
-                "| customerId | 新增 | — → string | "
-                "— → 是 | — → 客户标识 |"
+                "| customerId | 新增 | string | "
+                "是 | 客户标识 |"
             ),
-            interfaces,
+            create_order_detail,
         )
         self.assertIn(
             (
                 "| quantity | 修改 | integer | 否 → 是 | "
                 "商品数量 → 必须大于零的商品数量 |"
             ),
-            interfaces,
+            create_order_detail,
         )
         self.assertIn(
             (
                 "| channel | 未变 | string | 否 | 下单渠道 |"
             ),
-            interfaces,
+            create_order_detail,
         )
-        self.assertIn("orderId", interfaces)
+        response_section = create_order_detail.split("## 出参", 1)[1]
+        self.assertNotIn("必填", response_section)
+        self.assertIn(
+            "| ~~orderNo~~ | 删除 | ~~string~~ | ~~原订单编号~~ |",
+            response_section,
+        )
+        self.assertIn(
+            "| orderId | 新增 | string | 订单标识 |",
+            response_section,
+        )
+        self.assertNotIn("— →", all_interface_details)
+        self.assertNotIn("→ —", all_interface_details)
+        self.assertIn("orderId", all_interface_details)
         self.assertIn("创建订单服务", interfaces)
         self.assertIn("新增", interfaces)
-        self.assertIn("不适用 →", interfaces)
+        self.assertIn("不适用 →", all_interface_details)
         self.assertIn(
             "com.example.order.OrderService.createOrder",
             interfaces,
         )
-        self.assertIn("CreateOrderRequest", interfaces)
-        self.assertIn("CreateOrderResponse", interfaces)
+        self.assertIn("CreateOrderRequest", all_interface_details)
+        self.assertIn("CreateOrderResponse", all_interface_details)
         self.assertIn("旧版订单查询服务", interfaces)
         self.assertIn("GRPC", interfaces)
         self.assertIn("删除", interfaces)
         self.assertIn(
+            (
+                "~~[旧版订单查询服务](interfaces/"
+                "003-grpc-order-v1-legacyorderservice-getorder.md)~~"
+            ),
+            interfaces,
+        )
+        self.assertIn(
             "order.v1.LegacyOrderService/GetOrder",
             interfaces,
         )
-        self.assertIn("LegacyOrderResponse", interfaces)
-        self.assertIn("→ 不适用", interfaces)
-        self.assertNotIn("#### 修改前", interfaces)
-        self.assertNotIn("#### 修改后", interfaces)
-        self.assertIn("#### 入参", interfaces)
-        self.assertIn("#### 出参", interfaces)
-        self.assertNotIn("```json", interfaces)
+        self.assertIn("LegacyOrderResponse", all_interface_details)
+        self.assertIn("→ 不适用", all_interface_details)
+        self.assertNotIn("#### 修改前", all_interface_details)
+        self.assertNotIn("#### 修改后", all_interface_details)
+        self.assertIn("## 入参", all_interface_details)
+        self.assertIn("## 出参", all_interface_details)
+        self.assertNotIn("```json", all_interface_details)
         self.assertNotIn("PREPARED", interfaces)
         self.assertIn(
             "[查看本 TASK 的接口契约](interfaces.md)",
@@ -3327,8 +3375,13 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "投影模板版本",
                     interface_projection.read_text(encoding="utf-8"),
                 )
+                self.assertEqual(
+                    len(list((item_root / "interfaces").glob("*.md"))),
+                    3,
+                )
             else:
                 self.assertFalse(interface_projection.exists())
+                self.assertFalse((item_root / "interfaces").exists())
 
     def test_reprepare_without_interfaces_removes_optional_projection(
         self,
@@ -3347,6 +3400,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             projection_root / WORK_ITEM_DIRECTORY / "t-service"
         )
         self.assertTrue((task_root / "interfaces.md").is_file())
+        self.assertTrue((task_root / "interfaces").is_dir())
 
         replacement = prepare_hierarchy(
             root=self.root,
@@ -3359,6 +3413,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             replacement["humanArtifacts"]["workItems"]["t-service"],
         )
         self.assertFalse((task_root / "interfaces.md").exists())
+        self.assertFalse((task_root / "interfaces").exists())
         overview = (projection_root / "overview.md").read_text(
             encoding="utf-8"
         )

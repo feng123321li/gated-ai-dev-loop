@@ -284,12 +284,14 @@ before 候选，并根据需求形成 after；确认 TASK 时必须把两者作�
 `projectionGuidance.interfaces` 为实时约定。
 
 控制器把每个 TASK 的声明确定性写入该 TASK 的
-`work-items/<task-id>/interfaces.md`，并从 TASK baseline 与 Delivery
-baseline 串联；完全没有声明的 TASK 不生成该文件、路径和导航。控制器不
-动态扫描实现代码或隐式推算契约；TASK/Review Loop 可用真实代码验证 after。
-接口详情直接在完整请求和响应表中逐字段比较 before/after，标记新增、修改、
-删除或未变；类型、必填性和简介使用“修改前 → 修改后”展示，不再拆成两份
-重复清单。字段仍是 Loop 的不透明输入，不参与依赖、资源锁或 Graph 调度。
+`work-items/<task-id>/interfaces.md` 索引，并在相邻 `interfaces/` 目录中为
+每个接口生成一份字段级详情；TASK baseline 与 Delivery baseline 只串联索引。
+完全没有声明的 TASK 不生成这些文件、目录和导航。控制器不动态扫描实现代码
+或隐式推算契约；TASK/Review Loop 可用真实代码验证 after。接口详情在完整
+请求和响应表中逐字段比较 before/after，标记新增、修改、删除或未变。入参表
+展示类型、必填性和说明，出参表不展示必填性；只有真正修改的属性使用“修改前
+→ 修改后”，新增或删除字段只显示存在的一侧，删除值使用 Markdown 删除线。
+字段仍是 Loop 的不透明输入，不参与依赖、资源锁或 Graph 调度。
 
 ## Skill Hint 晚绑定
 

@@ -419,17 +419,28 @@ class HierarchyContractTests(unittest.TestCase):
             interface_guidance["fieldProjection"],
             {
                 "layout": "REQUEST_RESPONSE_TABLES",
+                "documents": {
+                    "index": "interfaces.md",
+                    "detailsDirectory": "interfaces/",
+                    "oneDocumentPerInterface": True,
+                },
                 "changeStates": [
                     "CREATE",
                     "MODIFY",
                     "DELETE",
                     "UNCHANGED",
                 ],
-                "comparisonColumns": [
+                "requestComparisonColumns": [
                     "type",
                     "required",
                     "description",
                 ],
+                "responseComparisonColumns": [
+                    "type",
+                    "description",
+                ],
+                "deletedValueStyle": "MARKDOWN_STRIKETHROUGH",
+                "singleSidedChangeStyle": "PRESENT_VALUE_ONLY",
                 "transitionFormat": "BEFORE_TO_AFTER",
             },
         )

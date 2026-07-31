@@ -620,17 +620,28 @@ def hierarchy_contract(
                 "dubboSnapshotFields": ["service", "method"],
                 "fieldProjection": {
                     "layout": "REQUEST_RESPONSE_TABLES",
+                    "documents": {
+                        "index": "interfaces.md",
+                        "detailsDirectory": "interfaces/",
+                        "oneDocumentPerInterface": True,
+                    },
                     "changeStates": [
                         "CREATE",
                         "MODIFY",
                         "DELETE",
                         "UNCHANGED",
                     ],
-                    "comparisonColumns": [
+                    "requestComparisonColumns": [
                         "type",
                         "required",
                         "description",
                     ],
+                    "responseComparisonColumns": [
+                        "type",
+                        "description",
+                    ],
+                    "deletedValueStyle": "MARKDOWN_STRIKETHROUGH",
+                    "singleSidedChangeStyle": "PRESENT_VALUE_ONLY",
                     "transitionFormat": "BEFORE_TO_AFTER",
                 },
                 "description": (
@@ -640,10 +651,13 @@ def hierarchy_contract(
                     "protocolExamples are illustrative, not exhaustive. "
                     "Each applicable snapshot contains the complete request "
                     "and response contract plus a generic identifier or "
-                    "protocol-specific call fields. The controller projects "
-                    "request and response field changes directly into "
-                    "tables in that TASK's interfaces.md. When a "
-                    "TASK declares no interfaces, its directory has no "
+                    "protocol-specific call fields. The controller writes "
+                    "an index to that TASK's interfaces.md and one field-level "
+                    "document per interface under interfaces/. Request tables "
+                    "compare type, required, and description; response tables "
+                    "omit required. Deleted values use Markdown strikethrough, "
+                    "and added or deleted fields show only the present side. "
+                    "When a TASK declares no interfaces, its directory has no "
                     "interface projection or link. Code inspection may help "
                     "prepare or verify the declaration, but the controller "
                     "does not infer it dynamically. The payload remains "

@@ -50,6 +50,30 @@ def _identity(value: object, field: str) -> str:
     return value
 
 
+def _executor_descriptor(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        fail(
+            "SCHEDULER_EXECUTOR_METADATA_INVALID",
+            f"{field} must identify the actual Loop executor",
+            field=field,
+        )
+    normalized = value.strip()
+    if (
+        not normalized
+        or len(normalized) > 256
+        or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in normalized
+        )
+    ):
+        fail(
+            "SCHEDULER_EXECUTOR_METADATA_INVALID",
+            f"{field} must identify the actual Loop executor",
+            field=field,
+        )
+    return normalized
+
+
 def _parse_timestamp(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
@@ -585,6 +609,8 @@ def dispatch_loop(
     node_id: str,
     owner: str,
     operation_id: str,
+    agent_id: str | None = None,
+    model_id: str | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
@@ -592,6 +618,21 @@ def dispatch_loop(
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     owner = _identity(owner, "owner")
     operation_id = _identity(operation_id, "operation_id")
+    if (agent_id is None) != (model_id is None):
+        fail(
+            "SCHEDULER_EXECUTOR_METADATA_INVALID",
+            "agent_id and model_id must be supplied together",
+        )
+    actual_agent_id = (
+        _executor_descriptor(agent_id, "agent_id")
+        if agent_id is not None
+        else None
+    )
+    actual_model_id = (
+        _executor_descriptor(model_id, "model_id")
+        if model_id is not None
+        else None
+    )
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
         at = _locked_timestamp(now, run["updated_at"])
@@ -692,7 +733,17 @@ def dispatch_loop(
             event_type="LOOP_CLAIMED",
             actor=owner,
             operation_id=operation_id,
-            payload={"leaseExpiresAt": expires},
+            payload={
+                "leaseExpiresAt": expires,
+                **(
+                    {
+                        "agentId": actual_agent_id,
+                        "modelId": actual_model_id,
+                    }
+                    if actual_agent_id is not None
+                    else {}
+                ),
+            },
             at=at,
         )
         connection.execute(
@@ -709,6 +760,8 @@ def dispatch_loop(
             explicit_dogfood=explicit_dogfood,
         ),
         "owner": owner,
+        "agentId": actual_agent_id,
+        "modelId": actual_model_id,
         "operationId": operation_id,
         "leaseExpiresAt": expires,
     }

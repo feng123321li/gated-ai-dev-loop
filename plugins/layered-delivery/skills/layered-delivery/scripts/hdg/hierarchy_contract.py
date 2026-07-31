@@ -401,15 +401,29 @@ def _example(root_kind: str) -> dict[str, Any]:
     }
 
 
-def hierarchy_contract(
+def hierarchy_input_schema(
     *,
-    root_kind: str,
-    **_: Any,
+    root_kind: str | None = None,
 ) -> dict[str, Any]:
-    if root_kind not in {"GROUP", "TASK"}:
+    """Return the shared schema-v3 hierarchy input contract."""
+
+    if root_kind not in {None, "GROUP", "TASK"}:
         fail(
             "WORK_ITEM_HIERARCHY_CONTRACT_INVALID",
             "root_kind must be GROUP or TASK",
+        )
+    if root_kind is None:
+        root_schema: dict[str, Any] = {
+            "oneOf": [
+                _ref("groupRootNode"),
+                _ref("taskRootNode"),
+            ]
+        }
+    else:
+        root_schema = _ref(
+            "groupRootNode"
+            if root_kind == "GROUP"
+            else "taskRootNode"
         )
     input_schema = _object(
         {
@@ -423,14 +437,19 @@ def hierarchy_contract(
                 },
                 required=["id", "title", "summary", "reviewLoop"],
             ),
-            "root": _ref(
-                "groupRootNode"
-                if root_kind == "GROUP"
-                else "taskRootNode"
-            ),
+            "root": root_schema,
         }
     )
     input_schema["$defs"] = _definitions()
+    return input_schema
+
+
+def hierarchy_contract(
+    *,
+    root_kind: str,
+    **_: Any,
+) -> dict[str, Any]:
+    input_schema = hierarchy_input_schema(root_kind=root_kind)
     return {
         "schemaVersion": SCHEMA_VERSION,
         "rootKind": root_kind,
@@ -544,6 +563,21 @@ def hierarchy_contract(
                 ],
                 "httpSnapshotFields": ["method", "path"],
                 "dubboSnapshotFields": ["service", "method"],
+                "fieldProjection": {
+                    "layout": "REQUEST_RESPONSE_TABLES",
+                    "changeStates": [
+                        "CREATE",
+                        "MODIFY",
+                        "DELETE",
+                        "UNCHANGED",
+                    ],
+                    "comparisonColumns": [
+                        "type",
+                        "required",
+                        "description",
+                    ],
+                    "transitionFormat": "BEFORE_TO_AFTER",
+                },
                 "description": (
                     "When a TASK adds, changes, or deletes an interface, "
                     "declare each concrete interface here with explicit "
@@ -552,7 +586,8 @@ def hierarchy_contract(
                     "Each applicable snapshot contains the complete request "
                     "and response contract plus a generic identifier or "
                     "protocol-specific call fields. The controller projects "
-                    "the comparison into that TASK's interfaces.md. When a "
+                    "request and response field changes directly into "
+                    "tables in that TASK's interfaces.md. When a "
                     "TASK declares no interfaces, its directory has no "
                     "interface projection or link. Code inspection may help "
                     "prepare or verify the declaration, but the controller "
@@ -596,4 +631,4 @@ def hierarchy_contract(
     }
 
 
-__all__ = ("hierarchy_contract",)
+__all__ = ("hierarchy_contract", "hierarchy_input_schema")

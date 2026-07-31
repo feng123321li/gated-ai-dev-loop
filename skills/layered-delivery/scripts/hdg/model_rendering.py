@@ -148,7 +148,7 @@ PAYLOAD_FIELD_ORDER = MappingProxyType(
     }
 )
 UTC_PLUS_8 = timezone(timedelta(hours=8))
-PROJECTION_TEMPLATE_VERSION = 9
+PROJECTION_TEMPLATE_VERSION = 10
 WORK_ITEM_DIRECTORY = "work-items"
 WORKSPACE_OVERVIEW_PROJECTION_TEMPLATE = Template(
     """# 全部交付调度与进度总览
@@ -651,6 +651,280 @@ def _interface_call_identifier(
     )
 
 
+def _interface_required_text(value: object) -> str:
+    if value is True:
+        return "是"
+    if value is False:
+        return "否"
+    return "未声明"
+
+
+def _interface_field_rows(value: object) -> list[dict[str, str]]:
+    """Normalize common interface field declarations for table rendering."""
+
+    rows: list[dict[str, str]] = []
+    used_paths: set[str] = set()
+
+    def unique_path(path: str) -> str:
+        candidate = path or "（整体）"
+        if candidate not in used_paths:
+            used_paths.add(candidate)
+            return candidate
+        index = 2
+        while f"{candidate}（{index}）" in used_paths:
+            index += 1
+        resolved = f"{candidate}（{index}）"
+        used_paths.add(resolved)
+        return resolved
+
+    def add_row(
+        path: str,
+        *,
+        field_type: object = None,
+        required: object = None,
+        description: object = None,
+    ) -> None:
+        rows.append(
+            {
+                "path": unique_path(path),
+                "type": _interface_scalar(
+                    field_type,
+                    fallback="未声明",
+                ),
+                "required": _interface_required_text(required),
+                "description": _interface_scalar(
+                    description,
+                    fallback="未声明",
+                ),
+            }
+        )
+
+    def joined_path(prefix: str, name: object) -> str:
+        normalized = _interface_scalar(name, fallback="未命名字段")
+        return f"{prefix}.{normalized}" if prefix else normalized
+
+    def parse_named(
+        name: object,
+        specification: object,
+        *,
+        prefix: str,
+        required_override: bool | None = None,
+    ) -> None:
+        path = joined_path(prefix, name)
+        if not isinstance(specification, dict):
+            add_row(
+                path,
+                field_type=specification,
+                required=required_override,
+            )
+            return
+        nested = specification.get(
+            "properties",
+            specification.get("fields"),
+        )
+        nested_required = specification.get("required")
+        add_row(
+            path,
+            field_type=specification.get(
+                "type",
+                "object" if nested is not None else None,
+            ),
+            required=(
+                nested_required
+                if isinstance(nested_required, bool)
+                else required_override
+            ),
+            description=specification.get(
+                "description",
+                specification.get("summary"),
+            ),
+        )
+        if nested is not None:
+            required_names = (
+                {
+                    str(item)
+                    for item in nested_required
+                    if isinstance(item, str)
+                }
+                if isinstance(nested_required, list)
+                else None
+            )
+            parse_collection(
+                nested,
+                prefix=path,
+                required_names=required_names,
+            )
+
+    def parse_collection(
+        collection: object,
+        *,
+        prefix: str,
+        required_names: set[str] | None = None,
+    ) -> None:
+        has_required_declaration = required_names is not None
+        required_names = required_names or set()
+        if isinstance(collection, list):
+            for index, item in enumerate(collection, start=1):
+                if isinstance(item, dict):
+                    name = item.get("name", f"第 {index} 项")
+                    parse_named(
+                        name,
+                        item,
+                        prefix=prefix,
+                        required_override=(
+                            str(name) in required_names
+                            if has_required_declaration
+                            else None
+                        ),
+                    )
+                else:
+                    parse_named(
+                        item,
+                        None,
+                        prefix=prefix,
+                        required_override=(
+                            str(item) in required_names
+                            if has_required_declaration
+                            else None
+                        ),
+                    )
+            return
+        if isinstance(collection, dict):
+            for name in sorted(collection):
+                parse_named(
+                    name,
+                    collection[name],
+                    prefix=prefix,
+                    required_override=(
+                        str(name) in required_names
+                        if has_required_declaration
+                        else None
+                    ),
+                )
+            return
+        add_row(
+            prefix or "（整体）",
+            description=collection,
+        )
+
+    if isinstance(value, list):
+        parse_collection(value, prefix="")
+    elif isinstance(value, dict):
+        nested = value.get("properties", value.get("fields"))
+        looks_like_schema = nested is not None or any(
+            key in value
+            for key in ("name", "type", "required", "description", "summary")
+        )
+        if value.get("name") is not None:
+            parse_named(value["name"], value, prefix="")
+        elif looks_like_schema:
+            add_row(
+                "（整体）",
+                field_type=value.get(
+                    "type",
+                    "object" if nested is not None else None,
+                ),
+                description=value.get(
+                    "description",
+                    value.get("summary"),
+                ),
+            )
+            if nested is not None:
+                required_names = (
+                    {
+                        str(item)
+                        for item in value.get("required", [])
+                        if isinstance(item, str)
+                    }
+                    if isinstance(value.get("required"), list)
+                    else None
+                )
+                parse_collection(
+                    nested,
+                    prefix="",
+                    required_names=required_names,
+                )
+        else:
+            parse_collection(value, prefix="")
+    else:
+        add_row("（整体）", description=value)
+    return rows
+
+
+def _interface_transition(
+    before: dict[str, str] | None,
+    after: dict[str, str] | None,
+    field: str,
+) -> str:
+    before_value = before[field] if before is not None else "—"
+    after_value = after[field] if after is not None else "—"
+    if before is not None and after is not None and before_value == after_value:
+        return before_value
+    return f"{before_value} → {after_value}"
+
+
+def _interface_change_table(
+    before: object,
+    after: object,
+) -> list[str]:
+    before_rows = _interface_field_rows(before) if before is not None else []
+    after_rows = _interface_field_rows(after) if after is not None else []
+    before_by_path = {row["path"]: row for row in before_rows}
+    after_by_path = {row["path"]: row for row in after_rows}
+    paths = [
+        *(row["path"] for row in before_rows),
+        *(
+            row["path"]
+            for row in after_rows
+            if row["path"] not in before_by_path
+        ),
+    ]
+    rendered_rows: list[str] = []
+    for path in paths:
+        before_row = before_by_path.get(path)
+        after_row = after_by_path.get(path)
+        if before_row is None:
+            change = "新增"
+        elif after_row is None:
+            change = "删除"
+        elif before_row != after_row:
+            change = "修改"
+        else:
+            change = "未变"
+        rendered_rows.append(
+            _table_row(
+                [
+                    path,
+                    change,
+                    _interface_transition(before_row, after_row, "type"),
+                    _interface_transition(
+                        before_row,
+                        after_row,
+                        "required",
+                    ),
+                    _interface_transition(
+                        before_row,
+                        after_row,
+                        "description",
+                    ),
+                ]
+            )
+        )
+    return [
+        (
+            "| 字段路径 | 变更 | 类型（修改前 → 修改后） | "
+            "必填（修改前 → 修改后） | 说明（修改前 → 修改后） |"
+        ),
+        "|---|---|---|---|---|",
+        *(
+            rendered_rows
+            or [
+                "| （整体） | 未声明 | 未声明 | 未声明 | 未声明 |"
+            ]
+        ),
+    ]
+
+
 def render_workspace_overview(
     deliveries: list[dict[str, Any]],
 ) -> str:
@@ -1016,8 +1290,10 @@ def _projection_state_values(
         return {
             "nodeId": node_id,
             "status": _status_text("NOT_STARTED"),
-            "attempt": "0",
+            "agent": "无",
+            "model": "无",
             "owner": "无",
+            "attempt": "0",
             "updatedAt": "无",
             "finishedAt": "无",
             "summary": "无",
@@ -1050,8 +1326,10 @@ def _projection_state_values(
     return {
         "nodeId": node_id,
         "status": _status_text(state["status"]),
-        "attempt": str(state["attempt"]),
+        "agent": state.get("agentId") or "无",
+        "model": state.get("modelId") or "无",
         "owner": state["owner"] or "无",
+        "attempt": str(state["attempt"]),
         "updatedAt": _utc_plus_8(latest) if latest else "无",
         "finishedAt": (
             _utc_plus_8(state["finishedAt"])
@@ -1088,13 +1366,15 @@ def _progress_state_row(
     row_values = [
         *prefix_values,
         values["status"],
-        values["attempt"],
+        values["agent"],
+        values["model"],
         values["owner"],
+        values["attempt"],
         values["updatedAt"],
         values["summary"],
         *suffix_values,
     ]
-    suffix_start = len(prefix_values) + 5
+    suffix_start = len(prefix_values) + 7
     return _table_row(
         row_values,
         raw_indices=set(range(suffix_start, len(row_values))),
@@ -1108,15 +1388,15 @@ def _acceptance_state_table(
     values = _projection_state_values(states, node_id)
     return [
         (
-            "| 当前进度 | 尝试次数 | 执行者 | "
+            "| 当前进度 | 认领身份 | 执行轮次 | "
             "结束时间（UTC+8） | 结果摘要 |"
         ),
-        "|---|---:|---|---|---|",
+        "|---|---|---:|---|---|",
         _table_row(
             [
                 values["status"],
-                values["attempt"],
                 values["owner"],
+                values["attempt"],
                 values["finishedAt"],
                 values["summary"],
             ]
@@ -1407,10 +1687,13 @@ def render_delivery_progress(
             )
         )
     table_header = (
-        "| 层级路径 | 阶段 | 当前进度 | 尝试次数 | 执行者 | "
+        "| 层级路径 | 阶段 | 当前进度 | 执行代理 | 执行模型 | "
+        "认领身份 | 执行轮次 | "
         "最近更新时间（UTC+8） | 结果摘要 | 节点进展 |"
     )
-    table_separator = "|---|---|---|---:|---|---|---|---|"
+    table_separator = (
+        "|---|---|---|---|---|---|---:|---|---|---|"
+    )
     delivery_review_lines = [
         table_header,
         table_separator,
@@ -1679,10 +1962,11 @@ def render_work_item_progress(
     definition = node["definition"]
     states = _projection_states(run)
     progress_header = (
-        "| 阶段 | 当前进度 | 尝试次数 | 执行者 | "
+        "| 阶段 | 当前进度 | 执行代理 | 执行模型 | "
+        "认领身份 | 执行轮次 | "
         "最近更新时间（UTC+8） | 结果摘要 |"
     )
-    progress_separator = "|---|---|---:|---|---|---|"
+    progress_separator = "|---|---|---|---|---|---:|---|---|"
     if definition["kind"] == "TASK":
         sections = "\n".join(
             [
@@ -1963,78 +2247,36 @@ def render_task_interfaces(
                 f"- 接口名称：{_markdown_text(name)}",
                 f"- 变更类型：{_markdown_text(change_text)}",
                 f"- 简介：{_markdown_text(summary)}",
+                (
+                    "- 调用标识（修改前 → 修改后）："
+                    f"{_markdown_text(before_identifier)} → "
+                    f"{_markdown_text(after_identifier)}"
+                ),
                 "",
-                "#### 修改前",
+                "#### 入参",
+                "",
+                *_interface_change_table(
+                    before.get("request", "未声明")
+                    if before is not None
+                    else None,
+                    after.get("request", "未声明")
+                    if after is not None
+                    else None,
+                ),
+                "",
+                "#### 出参",
+                "",
+                *_interface_change_table(
+                    before.get("response", "未声明")
+                    if before is not None
+                    else None,
+                    after.get("response", "未声明")
+                    if after is not None
+                    else None,
+                ),
                 "",
             ]
         )
-        if before is None:
-            details.extend(
-                [
-                    (
-                        "- 不适用（新增接口）"
-                        if change_type == "CREATE"
-                        else "- 未声明修改前契约"
-                    ),
-                    "",
-                ]
-            )
-        else:
-            details.extend(
-                [
-                    (
-                        "- 调用标识："
-                        f"{_markdown_text(before_identifier)}"
-                    ),
-                    "",
-                    "##### 入参",
-                    "",
-                    *_payload_value_lines(
-                        before.get("request", "未声明")
-                    ),
-                    "",
-                    "##### 出参",
-                    "",
-                    *_payload_value_lines(
-                        before.get("response", "未声明")
-                    ),
-                    "",
-                ]
-            )
-        details.extend(["#### 修改后", ""])
-        if after is None:
-            details.extend(
-                [
-                    (
-                        "- 不适用（删除接口）"
-                        if change_type == "DELETE"
-                        else "- 未声明修改后契约"
-                    ),
-                    "",
-                ]
-            )
-        else:
-            details.extend(
-                [
-                    (
-                        "- 调用标识："
-                        f"{_markdown_text(after_identifier)}"
-                    ),
-                    "",
-                    "##### 入参",
-                    "",
-                    *_payload_value_lines(
-                        after.get("request", "未声明")
-                    ),
-                    "",
-                    "##### 出参",
-                    "",
-                    *_payload_value_lines(
-                        after.get("response", "未声明")
-                    ),
-                    "",
-                ]
-            )
     interface_rows = (
         "\n".join(
             [

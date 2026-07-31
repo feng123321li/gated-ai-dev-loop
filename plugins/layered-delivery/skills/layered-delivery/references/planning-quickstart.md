@@ -225,6 +225,14 @@ GROUP：
 
 先调用 `hierarchy_contract(root_kind="GROUP")` 或 `hierarchy_contract(root_kind="TASK")`，并以返回的实时 schema/example 为最终字段依据。
 
+`prepare_hierarchy` 的 MCP `inputSchema` 复用同一份 schema v3 定义，并以
+`oneOf` 同时约束 GROUP/TASK 根节点。宿主应在工具调用前据此拒绝未知字段、
+缺失字段和错误节点结构；`loop.payload` 继续保持开放。MCP Adapter 还会在
+进入 Controller 前复用完整领域校验，拦截父子关系、同级依赖和子节点摘要
+等 JSON Schema 无法完整表达的契约错误。此类错误统一返回
+`MCP_TOOL_ARGUMENT_INVALID`，不会创建或替换 `PREPARED` 结果；不要依赖
+Controller 事后修正无效 hierarchy。
+
 ## 同级启动依赖
 
 `dependsOn` 是直接同级之间的启动屏障，允许 TASK→TASK、TASK→GROUP、GROUP→TASK 和 GROUP→GROUP：
@@ -273,7 +281,9 @@ before 候选，并根据需求形成 after；确认 TASK 时必须把两者作�
 `work-items/<task-id>/interfaces.md`，并从 TASK baseline 与 Delivery
 baseline 串联；完全没有声明的 TASK 不生成该文件、路径和导航。控制器不
 动态扫描实现代码或隐式推算契约；TASK/Review Loop 可用真实代码验证 after。
-字段仍是 Loop 的不透明输入，不参与依赖、资源锁或 Graph 调度。
+接口详情直接在完整请求和响应表中逐字段比较 before/after，标记新增、修改、
+删除或未变；类型、必填性和简介使用“修改前 → 修改后”展示，不再拆成两份
+重复清单。字段仍是 Loop 的不透明输入，不参与依赖、资源锁或 Graph 调度。
 
 ## Skill Hint 晚绑定
 

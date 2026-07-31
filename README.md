@@ -261,13 +261,19 @@ workspace_status
 
 当前 Plugin 注册 21 个工具：外层调度与恢复工具、只读的 `available_agents` / `recommend_executors`，以及显式人机授权的 `unfreeze_task_requirement` / `refreeze_task_requirement`。每次 Graph Controller operation 都绑定一个已校验的共享控制根和当前对话工作区；Git Delivery 还校验当前 worktree、feature 分支及冻结 fork commit。现代 MCP 从请求上下文取得，旧 MCP 从初始化式连接绑定取得。控制器只读 Git，不创建、切换、提交、合并或推送分支。
 
+`prepare_hierarchy` 的 MCP 工具定义直接暴露完整 schema v3，并用 `oneOf`
+覆盖 GROUP/TASK 根节点。宿主可在调用前拒绝非法结构；Adapter 在进入
+Controller 前复用领域校验，继续拦截父子关系、依赖和子节点摘要等跨字段
+错误。无效 hierarchy 统一以 `MCP_TOOL_ARGUMENT_INVALID` 返回，不会形成
+`PREPARED` 结果；只有 `loop.payload` 按协议保持开放。
+
 ## Agent 与模型建议
 
 内置发现适配器覆盖 Codex、Claude Code、Cursor、OpenCode、Aider、Gemini CLI、Grok CLI、GLM CLI、DeepSeek CLI 和 Qwen CLI。只有对应终端命令真实存在时才返回 Agent；不把产品或模型名称伪装成可用执行者。Codex 和 Claude Code 会读取非敏感的当前模型字段，因此 CC-Switch 把 Claude Code 改为 GLM、DeepSeek 或其他模型后，下一次调用即可看到新值。
 
 未知终端可通过用户本地 Agent Profile 扩展。设置 `LAYERED_DELIVERY_AGENT_PROFILES` 指向 JSON 文件，或使用平台用户配置目录下的 `layered-delivery/agent-profiles.json`；Profile 可定义任意安全 ID、裸命令名、模型名、能力和优先级。Plugin 不创建该文件，也不读取或返回 Token、Base URL 与认证字段。
 
-推荐器只消费 Graph 节点角色和发现元数据，不解释 `loop.payload`。TASK Loop 匹配开发能力；TASK/GROUP/Delivery Review 优先选择不同于上游开发建议的 Agent。推荐器不参与提供方限额恢复，也不会自动换 Agent。只有一个合格 Agent 时，Review 仍展示可用组合，但明确标记异构 Agent 独立性未满足。所有结果固定为 `binding=ADVISORY`、`dispatchAllowed=false`，不进入 schema v3、Frozen Graph、SQLite、事件链、claim 或 owner。
+推荐器只消费 Graph 节点角色和发现元数据，不解释 `loop.payload`。TASK Loop 匹配开发能力；TASK/GROUP/Delivery Review 优先选择不同于上游开发建议的 Agent。推荐器不参与提供方限额恢复，也不会自动换 Agent。只有一个合格 Agent 时，Review 仍展示可用组合，但明确标记异构 Agent 独立性未满足。所有结果固定为 `binding=ADVISORY`、`dispatchAllowed=false`，不进入 schema v3、Frozen Graph、SQLite、事件链、claim 或 owner。真正接收 Loop 的宿主在 `dispatch_loop` 中提交实际 `agent_id` 与 `model_id`；控制器把这份执行事实写入 claim 事件，并与认领身份和执行轮次一起投影到 `progress.md`。
 
 ## Controller / Adapter 架构
 
@@ -347,11 +353,11 @@ Claude Code 和旧 Codex 仍可走 `2025-11-25` 的 `initialize → notification
 | `.layered-delivery/<delivery-id>/work-items/<root-id>/children/.../<node-id>/baseline.md` | 单个 GROUP/TASK 的冻结需求与 Loop 输入基线 |
 | `.layered-delivery/<delivery-id>/work-items/<root-id>/children/.../<node-id>/progress.md` | 单个 GROUP/TASK 的执行、汇合或 Review 进展 |
 | `.layered-delivery/<delivery-id>/work-items/<root-id>/children/.../<node-id>/acceptance.md` | 当前 GROUP/TASK 的验收结果；GROUP 只摘要并链接直接子节点报告 |
-| `.layered-delivery/<delivery-id>/work-items/<root-id>/children/.../<task-id>/interfaces.md` | 接口型 TASK 按需生成的修改前后完整契约 |
+| `.layered-delivery/<delivery-id>/work-items/<root-id>/children/.../<task-id>/interfaces.md` | 接口型 TASK 按需生成的请求/响应字段级变更表 |
 
 目录使用不可变的 Delivery ID 和节点 ID，不使用可修改的标题。同一工作区可以保留多个 Delivery 需求目录；`work-items/<root-id>/children/...` 只镜像父子关系，兄弟 `dependsOn` 仍由 Graph 控制执行顺序。根为 TASK 时直接生成 `work-items/<task-id>/`，不创建虚拟 GROUP。
 
-根级 `overview.md` 只汇总全部 Delivery 的标识、标题、中文状态、最近更新时间和详情链接。每个 Delivery 自己的 `overview.md` 展示该交付的 TASK 完成度、GROUP 数量、状态与导航；需求、执行和验收分别进入顶层 `baseline.md`、`progress.md` 与 `acceptance.md`。Delivery baseline 是整棵基线树的入口，链接所有 GROUP/TASK 节点投影但不复制其 Loop 输入；GROUP baseline 保存自身需求与 Review 输入并链接直接子节点；TASK baseline 保存执行叶子的冻结输入。验收报告同样保持层级边界：TASK 报告完整展示本 TASK 与 TASK Review，GROUP 报告完整展示本层完成点与 GROUP Review、只摘要并链接直接子节点报告，Delivery 报告完整展示本层 Delivery Review 与用户确认、只摘要并链接根工作项报告，不向上复制下层输入、证据或 Review findings。progress 的节点状态以及 acceptance 的状态摘要、子节点结果和 P0/P1/P2 问题使用表格，长输入与证据保留结构化列表。
+根级 `overview.md` 只汇总全部 Delivery 的标识、标题、中文状态、最近更新时间和详情链接。每个 Delivery 自己的 `overview.md` 展示该交付的 TASK 完成度、GROUP 数量、状态与导航；需求、执行和验收分别进入顶层 `baseline.md`、`progress.md` 与 `acceptance.md`。Delivery baseline 是整棵基线树的入口，链接所有 GROUP/TASK 节点投影但不复制其 Loop 输入；GROUP baseline 保存自身需求与 Review 输入并链接直接子节点；TASK baseline 保存执行叶子的冻结输入。验收报告同样保持层级边界：TASK 报告完整展示本 TASK 与 TASK Review，GROUP 报告完整展示本层完成点与 GROUP Review、只摘要并链接直接子节点报告，Delivery 报告完整展示本层 Delivery Review 与用户确认、只摘要并链接根工作项报告，不向上复制下层输入、证据或 Review findings。progress 的节点状态表显示实际执行代理、执行模型、认领身份和执行轮次；acceptance 的状态摘要、子节点结果和 P0/P1/P2 问题同样使用表格，长输入与证据保留结构化列表。接口详情不再拆成重复的修改前/修改后清单，而是在完整入参与出参表中逐字段标记新增、修改、删除和未变，并用“修改前 → 修改后”展示类型、必填性与说明。
 
 Loop 输入是冻结后交给对应 TASK 或 Review 执行上下文的 `loop.ref`、不透明 `payload` 与精确 `resourceClaims`。它属于执行前确认的契约，因此只展开在对应节点 baseline；运行状态、attempt 和结果分别进入 progress 与 acceptance。
 

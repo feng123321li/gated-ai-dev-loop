@@ -902,6 +902,21 @@ class SchedulerRepository:
         connection: sqlite3.Connection,
         run_id: str,
     ) -> list[dict[str, Any]]:
+        executor_metadata: dict[tuple[str, int], dict[str, Any]] = {}
+        claim_rows = connection.execute(
+            """
+            SELECT node_id, attempt, payload_json
+            FROM graph_events
+            WHERE run_id = ? AND event_type = 'LOOP_CLAIMED'
+            ORDER BY event_id
+            """,
+            (run_id,),
+        ).fetchall()
+        for claim_row in claim_rows:
+            payload = json.loads(claim_row["payload_json"])
+            executor_metadata[
+                (claim_row["node_id"], claim_row["attempt"])
+            ] = payload if isinstance(payload, dict) else {}
         rows = connection.execute(
             """
             SELECT n.* FROM node_runs n
@@ -918,6 +933,14 @@ class SchedulerRepository:
         ).fetchall()
         nodes: list[dict[str, Any]] = []
         for row in rows:
+            executor = (
+                executor_metadata.get(
+                    (row["node_id"], row["attempt"]),
+                    {},
+                )
+                if row["operation_id"] is not None
+                else {}
+            )
             stored_outcome = (
                 json.loads(row["outcome_json"])
                 if row["outcome_json"] is not None
@@ -934,6 +957,8 @@ class SchedulerRepository:
                 "attempt": row["attempt"],
                 "status": row["status"],
                 "owner": row["owner"],
+                "agentId": executor.get("agentId"),
+                "modelId": executor.get("modelId"),
                 "operationId": row["operation_id"],
                 "claimedAt": row["claimed_at"],
                 "lastHeartbeatAt": row["last_heartbeat_at"],

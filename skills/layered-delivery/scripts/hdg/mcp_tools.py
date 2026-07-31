@@ -9,8 +9,10 @@ from .controller import (
     DEFAULT_CONTROLLER,
     LayeredDeliveryController,
 )
-from .errors import fail
+from .errors import GatedLoopError, fail
+from .hierarchy_contract import hierarchy_input_schema
 from .jsonio import canonical_json
+from .model_core import validate_hierarchy_definition
 
 
 def _object(
@@ -84,6 +86,17 @@ def _tool(
     return result
 
 
+def _prepare_hierarchy_tool_schema() -> dict[str, Any]:
+    hierarchy_schema = hierarchy_input_schema()
+    definitions = hierarchy_schema.pop("$defs")
+    tool_schema = _object(
+        {"hierarchy": hierarchy_schema},
+        required=["hierarchy"],
+    )
+    tool_schema["$defs"] = definitions
+    return tool_schema
+
+
 TOOLS = (
     _tool(
         "workspace_status",
@@ -123,18 +136,7 @@ TOOLS = (
             "hints remain advisory, Loop payloads stay opaque, and a Git "
             "Delivery feature-branch binding is verified read-only."
         ),
-        _object(
-            {
-                "hierarchy": {
-                    "type": "object",
-                    "description": (
-                        "Hierarchy matching hierarchy_contract.inputSchema."
-                    ),
-                    "additionalProperties": True,
-                }
-            },
-            required=["hierarchy"],
-        ),
+        _prepare_hierarchy_tool_schema(),
     ),
     _tool(
         "recommend_executors",
@@ -317,20 +319,42 @@ TOOLS = (
         (
             "Claim one ready TASK, TASK Review, GROUP Review, or Delivery "
             "Review Loop "
-            "for its receiving isolated executor, subject to exact resource "
-            "locks."
+            "for its receiving isolated executor, recording the actual "
+            "Agent and model used by that executor and subject to exact "
+            "resource locks."
         ),
         _object(
             {
                 "root_id": ROOT_ID,
                 "node_id": NODE_ID,
                 "owner": _string("Current Loop executor identity."),
+                "agent_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "description": (
+                        "Actual receiving Agent ID, such as codex or "
+                        "claude-code. This is execution evidence, not an "
+                        "executor recommendation."
+                    ),
+                },
+                "model_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "description": (
+                        "Actual model ID used by the receiving Agent. This "
+                        "is execution evidence, not a recommended model."
+                    ),
+                },
                 "operation_id": OPERATION_ID,
             },
             required=[
                 "root_id",
                 "node_id",
                 "owner",
+                "agent_id",
+                "model_id",
                 "operation_id",
             ],
         ),
@@ -529,6 +553,7 @@ def _validate_schema(
         if (
             not isinstance(value, str)
             or len(value) < schema.get("minLength", 0)
+            or len(value) > schema.get("maxLength", len(value))
             or (
                 "enum" in schema
                 and value not in schema["enum"]
@@ -592,7 +617,21 @@ def validate_tool_arguments(
     if tool is None or name not in CONTROLLER_OPERATIONS:
         fail("MCP_TOOL_UNKNOWN", f"Unknown scheduler tool: {name}")
     _validate_schema(arguments, tool["inputSchema"], "arguments")
-    return dict(arguments)
+    validated = dict(arguments)
+    if name == "prepare_hierarchy":
+        try:
+            validate_hierarchy_definition(validated["hierarchy"])
+        except GatedLoopError as error:
+            fail(
+                "MCP_TOOL_ARGUMENT_INVALID",
+                "arguments.hierarchy does not match schema v3",
+                schemaError={
+                    "code": error.code,
+                    "message": error.message,
+                    "details": error.details,
+                },
+            )
+    return validated
 
 
 def call_tool(
@@ -605,8 +644,7 @@ def call_tool(
     controller: LayeredDeliveryController = DEFAULT_CONTROLLER,
     **_: Any,
 ) -> dict[str, Any]:
-    validate_tool_arguments(name, arguments)
-    internal_arguments = dict(arguments)
+    internal_arguments = validate_tool_arguments(name, arguments)
     execution_mode = None
     if name == "freeze_hierarchy":
         execution_mode = internal_arguments.pop("execution_mode")

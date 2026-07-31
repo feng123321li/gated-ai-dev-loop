@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.28.2 — 2026-07-31
+
+发布提交：`52a1961`
+
+- 自动派遣改为逐 Loop 消费 Agent 推理分析，并按 TASK、Review 与高推理等级选择宿主原生 Agent/模型；任一节点缺少分析时回退当前执行 Agent/模型。派遣预留和已 claim Loop 共同占用跨 Delivery 并发槽位，实际接收 Agent/模型继续以调度器落库事实为准。
+- 新增宿主签发的一次性 receiver attestation。每个 run 固定唯一编排根，多级子上下文及首次切换另一平台 adapter 都不能另建信任根；标准 Codex Plugin 没有原生生命周期签发回调时 fail closed，Claude Code 由 PreToolUse Hook 注入真实子 Agent 身份。
+- Claude `unfreeze_task_requirement` / `refreeze_task_requirement` 恢复敏感操作确认。`StopFailure(rate_limit)` 在模型无法反馈时由宿主按结构化错误暂停，可信 reset 到点自动恢复；共享额度断路器覆盖同 Agent 的跨 Delivery Loop，旧 run 重建不能覆盖更新的 report。
+- Delivery/Revision 继续按独立对话工作区与 linked worktree 隔离，新需求不会因恢复旧 Delivery 而误生成 Revision；Revision 迭代只保留冻结时的一次业务确认。
+- MCP 工具面保持 24 个，schema 继续只维护完整 v3。Python 全量 173 项测试、编译检查、Skill/Plugin 校验、`git diff --check` 与独立上下文复核通过，无 CRITICAL/HIGH finding。
+
 ## 0.28.1 — 2026-07-31
 
 发布提交：`1dffd62`

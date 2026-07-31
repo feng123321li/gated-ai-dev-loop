@@ -28,6 +28,9 @@ def _candidate(
         "agentDisplayName": agent["displayName"],
         "command": agent["command"],
         "model": dict(agent["model"]),
+        "availabilityScope": "LOCAL_TERMINAL",
+        "dispatchTransport": "EXTERNAL_PROCESS",
+        "hostDispatchEligible": False,
     }
 
 
@@ -372,6 +375,9 @@ def recommend_executors(
         "recommendationPolicy": {
             "binding": "ADVISORY",
             "dispatchAllowed": False,
+            "availabilityScope": "LOCAL_TERMINAL",
+            "hostInventoryEligible": False,
+            "dispatchTransport": "EXTERNAL_PROCESS",
             "persisted": False,
             "payloadInterpreted": False,
         },

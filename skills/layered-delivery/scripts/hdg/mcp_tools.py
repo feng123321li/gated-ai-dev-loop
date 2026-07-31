@@ -72,6 +72,17 @@ HOST_EXECUTOR = _object(
     {
         "agentId": _string("Host-native Agent ID."),
         "displayName": _string("Host-native Agent display name."),
+        "dispatchTransport": {
+            "type": "string",
+            "enum": ["HOST_NATIVE", "EXTERNAL_PROCESS"],
+            "description": (
+                "HOST_NATIVE means the current host creates the child "
+                "through its built-in Agent API with normal sandbox and "
+                "approval enforcement. EXTERNAL_PROCESS includes CLI, "
+                "exec, subprocess, and companion-script bridges and is "
+                "never eligible for automatic dispatch."
+            ),
+        },
         "capabilities": {
             "type": "array",
             "items": {
@@ -108,6 +119,7 @@ HOST_EXECUTOR = _object(
     required=[
         "agentId",
         "displayName",
+        "dispatchTransport",
         "capabilities",
         "availableSlots",
         "priority",
@@ -272,7 +284,9 @@ TOOLS = (
         (
             "Validate and prepare an outer scheduling graph; shared Skill "
             "hints remain advisory, Loop payloads stay opaque, and a Git "
-            "Delivery feature-branch binding is verified read-only."
+            "Delivery feature-branch binding is verified read-only. Reject "
+            "a different Delivery before writing when this workspace "
+            "already owns an unfinished Delivery."
         ),
         _prepare_hierarchy_tool_schema(),
     ),
@@ -286,7 +300,6 @@ TOOLS = (
             "freeze."
         ),
         _prepare_revision_tool_schema(),
-        human=True,
     ),
     _tool(
         "delivery_revision_history",
@@ -320,8 +333,10 @@ TOOLS = (
             "frontier using ephemeral host-native Agent capacity and "
             "selectable models. Missing host Agent analysis may use the "
             "exact current Agent/model reported by the host and remains "
-            "UNCLASSIFIED. Returns model-selection instructions and "
-            "decision fingerprints; never starts Agents or claims Loops."
+            "UNCLASSIFIED. Atomically reserves every returned assignment "
+            "before host Agent creation and returns model-selection "
+            "instructions and decision fingerprints; never starts Agents "
+            "or claims Loops."
         ),
         _object(
             {
@@ -583,6 +598,20 @@ TOOLS = (
                         "exact decision fingerprint returned for this node."
                     ),
                 },
+                "dispatch_transport": {
+                    "type": "string",
+                    "enum": ["HOST_NATIVE"],
+                    "description": (
+                        "Required with dispatch_mode=AUTO. It certifies "
+                        "that the receiver was created through the current "
+                        "host's native Agent API, never through a CLI, "
+                        "subprocess, or companion script."
+                    ),
+                },
+                "dispatch_reservation_id": _string(
+                    "Required with dispatch_mode=AUTO. Use the exact "
+                    "dispatchReservationId returned for this assignment."
+                ),
                 "dispatch_reasoning_class": {
                     "type": "string",
                     "enum": ["STANDARD", "HIGH", "UNCLASSIFIED"],

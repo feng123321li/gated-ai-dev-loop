@@ -256,6 +256,17 @@ class AgentRecommendationTests(unittest.TestCase):
             self.assertEqual(recommendation["binding"], "ADVISORY")
             self.assertFalse(recommendation["dispatchAllowed"])
             self.assertTrue(recommendation["reasons"])
+            self.assertEqual(
+                recommendation["recommended"]["availabilityScope"],
+                "LOCAL_TERMINAL",
+            )
+            self.assertEqual(
+                recommendation["recommended"]["dispatchTransport"],
+                "EXTERNAL_PROCESS",
+            )
+            self.assertFalse(
+                recommendation["recommended"]["hostDispatchEligible"]
+            )
 
         task_agents = {
             recommendation["recommended"]["agentId"]
@@ -399,6 +410,9 @@ class AgentRecommendationTests(unittest.TestCase):
             {
                 "binding": "ADVISORY",
                 "dispatchAllowed": False,
+                "availabilityScope": "LOCAL_TERMINAL",
+                "hostInventoryEligible": False,
+                "dispatchTransport": "EXTERNAL_PROCESS",
                 "persisted": False,
                 "payloadInterpreted": False,
             },

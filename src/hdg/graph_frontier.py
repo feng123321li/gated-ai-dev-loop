@@ -8,7 +8,7 @@ from .loop_contracts import (
     loop_execution_policy,
     resource_claims_overlap,
 )
-from .repository import SchedulerRepository
+from .repository import SchedulerRepository, timestamp
 
 
 def build_graph_frontier(
@@ -16,6 +16,7 @@ def build_graph_frontier(
     run: dict[str, Any],
     *,
     external_reservations: list[dict[str, Any]] | None = None,
+    dispatch_reservations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if run["status"] in {"COMPLETED", "CANCELLED", "SUPERSEDED"}:
         result = {
@@ -65,6 +66,18 @@ def build_graph_frontier(
         )
         for reservation in (external_reservations or [])
     )
+    reserved_claims.extend(
+        (
+            f"{reservation['rootId']}/{reservation['nodeId']}",
+            reservation["resourceClaims"],
+        )
+        for reservation in (dispatch_reservations or [])
+    )
+    local_dispatch_reservations = {
+        reservation["nodeId"]: reservation
+        for reservation in (dispatch_reservations or [])
+        if reservation["rootId"] == run["rootId"]
+    }
 
     for state in sorted(run["nodes"], key=lambda item: item["nodeId"]):
         definition = definitions[state["nodeId"]]
@@ -96,6 +109,49 @@ def build_graph_frontier(
                         "nodeId": state["nodeId"],
                         "taskId": definition["workItemId"],
                         "revision": task_requirement["revision"],
+                    }
+                )
+                continue
+            dispatch_reservation = local_dispatch_reservations.get(
+                state["nodeId"]
+            )
+            if dispatch_reservation is not None:
+                ready_loops.append(
+                    {
+                        "nodeId": state["nodeId"],
+                        "kind": kind,
+                        "workItemId": definition["workItemId"],
+                        "attempt": state["attempt"],
+                        "loop": definition["loop"],
+                        "resourceConflicts": [],
+                        "dispatchReservation": {
+                            "dispatchReservationId": (
+                                dispatch_reservation[
+                                    "dispatchReservationId"
+                                ]
+                            ),
+                            "reservationExpiresAt": (
+                                dispatch_reservation[
+                                    "reservationExpiresAt"
+                                ]
+                            ),
+                        },
+                    }
+                )
+                actions.append(
+                    {
+                        "action": "WAIT_FOR_DISPATCH_RECEIVER",
+                        "nodeId": state["nodeId"],
+                        "dispatchReservationId": (
+                            dispatch_reservation[
+                                "dispatchReservationId"
+                            ]
+                        ),
+                        "reservationExpiresAt": (
+                            dispatch_reservation[
+                                "reservationExpiresAt"
+                            ]
+                        ),
                     }
                 )
                 continue
@@ -249,11 +305,16 @@ def build_graph_frontier(
         "pausedLoops": paused_loops,
         "blockedLoops": blocked,
         "nextWakeAt": min(
-            (
+            [
                 item["resumeAt"]
                 for item in paused_loops
                 if "resumeAt" in item
-            ),
+            ]
+            + [
+                reservation["reservationExpiresAt"]
+                for reservation in (dispatch_reservations or [])
+                if reservation["rootId"] == run["rootId"]
+            ],
             default=None,
         ),
         "workspaceIsolation": run.get("workspaceIsolation"),
@@ -277,20 +338,28 @@ def get_graph_frontier(
         explicit_dogfood=explicit_dogfood,
         now=now,
     )
-    repository = SchedulerRepository(root)
+    repository = SchedulerRepository(root, now=now)
     graph = repository.hierarchy(root_id)["graph"]
+    observation_at = max(timestamp(now), run["updatedAt"])
     with repository.read() as connection:
         external_reservations = (
             repository.claimed_resource_reservations(
                 connection,
-                at=run["updatedAt"],
+                at=observation_at,
                 exclude_root_id=root_id,
+            )
+        )
+        dispatch_reservations = (
+            repository.active_dispatch_reservations(
+                connection,
+                at=observation_at,
             )
         )
     return build_graph_frontier(
         graph,
         run,
         external_reservations=external_reservations,
+        dispatch_reservations=dispatch_reservations,
     )
 
 

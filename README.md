@@ -32,7 +32,9 @@
 
 这些实现细节都属于对应 TASK 或 Review Loop。不同节点可以使用不同的 Loop 和 Skill。用户在需求阶段给出的 Skill 只作为共享的运行时优先提示，不会预先绑定到某个工作项或阶段。
 
-Agent/模型路由同样晚绑定：Frozen Graph 只保存工作项、依赖、资源和 Loop，不保存某台主机的 Codex、Claude Code、Cursor、OpenCode 或模型配置。`available_agents` 每次读取当前主机状态，`recommend_executors` 为已准备或冻结 Graph 的所有 TASK/Review 返回建议、备选、置信度与原因；两者都不会启动、切换或派遣。自动模式下，`plan_dispatch_batch` 另行消费宿主明确提供的原生 Agent 可用槽位、可选模型和模型覆盖能力，为当前无资源冲突的 frontier 返回批量 assignment；宿主按 assignment 显式选择子 Agent 模型并并发创建接收上下文。
+Agent/模型路由同样晚绑定：Frozen Graph 只保存工作项、依赖、资源和 Loop，不保存某台主机的 Codex、Claude Code、Cursor、OpenCode 或模型配置。`available_agents` 每次读取当前主机状态，`recommend_executors` 为已准备或冻结 Graph 的所有 TASK/Review 返回建议、备选、置信度与原因；终端候选固定是 `LOCAL_TERMINAL / EXTERNAL_PROCESS` 建议，两者都不会启动、切换或派遣。自动模式下，`plan_dispatch_batch` 另行消费宿主明确提供且标为 `HOST_NATIVE` 的原生 Agent 可用槽位、可选模型和模型覆盖能力，为当前无资源冲突的 frontier 原子预留并返回批量 assignment；宿主取得 `dispatchReservationId` 后按 assignment 显式选择子 Agent 模型并并发创建接收上下文。
+
+新用户需求默认使用新的 Delivery。工作区已有未结束 Delivery 时，`prepare_hierarchy` 会在写入任何新 PREPARED 状态前返回 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED / CREATE_INDEPENDENT_WORKTREE_TASK`；不能仅凭 `workspace_status` 返回旧 Delivery 就把新工单改写成旧 TASK/Delivery Revision。Codex 中应直接创建 `environment=worktree` 的独立项目任务，不能用 same-directory/local 任务冒充隔离。
 
 ## 运行模型
 
@@ -284,9 +286,9 @@ Controller 前复用领域校验，继续拦截父子关系、依赖和子节点
 
 未知终端可通过用户本地 Agent Profile 扩展。设置 `LAYERED_DELIVERY_AGENT_PROFILES` 指向 JSON 文件，或使用平台用户配置目录下的 `layered-delivery/agent-profiles.json`；Profile 可定义任意安全 ID、裸命令名、模型名、能力和优先级。Plugin 不创建该文件，也不读取或返回 Token、Base URL 与认证字段。
 
-推荐器只消费 Graph 节点角色和发现元数据，不解释 `loop.payload`。TASK Loop 匹配开发能力；TASK/GROUP/Delivery Review 优先选择不同于上游开发建议的 Agent。推荐器不参与提供方限额恢复，也不会自动换 Agent。只有一个合格 Agent 时，Review 仍展示可用组合，但明确标记异构 Agent 独立性未满足。所有结果固定为 `binding=ADVISORY`、`dispatchAllowed=false`，不进入 schema v3、Frozen Graph、SQLite、事件链、claim 或 owner。真正接收 Loop 的宿主在 `dispatch_loop` 中提交实际 `agent_id` 与 `model_id`；控制器把这份执行事实写入 claim 事件，并与认领身份和执行轮次一起投影到 `progress.md`。
+推荐器只消费 Graph 节点角色和发现元数据，不解释 `loop.payload`。TASK Loop 匹配开发能力；TASK/GROUP/Delivery Review 优先选择不同于上游开发建议的 Agent。推荐器不参与提供方限额恢复，也不会自动换 Agent。只有一个合格 Agent 时，Review 仍展示可用组合，但明确标记 `diversityLevel=CONTEXT_ONLY`，不宣称异构审查。所有结果固定为 `binding=ADVISORY`、`dispatchAllowed=false`、`dispatchTransport=EXTERNAL_PROCESS`，不进入 schema v3、Frozen Graph、claim 或 owner。真正接收 Loop 的宿主在 `dispatch_loop` 中提交实际 `agent_id` 与 `model_id`；控制器把这份执行事实写入 claim 事件，并与认领身份和执行轮次一起投影到 `progress.md`。
 
-自动派遣与普通建议分离。`plan_dispatch_batch` 只接受宿主明确提供的原生 Agent inventory，不把 PATH 中存在的 CLI 当成启动授权。inventory 为每个 Agent 声明真实 `availableSlots`、开发/审查能力、可显式覆盖的模型、模型 tier、reasoning effort 和优先级；完整 inventory 不持久化。总调度 Agent 在派遣前优先为当前 Ready TASK/Review 读取 `loop_context`，使用自身分析能力按固定风险规则判为 `STANDARD → BALANCED` 或 `HIGH → FRONTIER`，完成分析但不确定时使用 `HIGH`。已有判级通过临时 `node_requirements` 提交；若某节点缺少分析，可提交与 inventory 精确匹配的宿主 `current_executor`，Controller 仅对缺失节点沿用当前 Agent/模型，并标记 `UNCLASSIFIED / CURRENT_EXECUTOR_FALLBACK / CURRENT_HOST_DEFAULT`。没有当前执行器事实时仍拒绝缺失节点。Controller 不做本地语义分析，也不把 payload 自带的模型名当路由配置。Review 还会优先避开上游实际 Agent/模型家族；回退路径则忠实沿用当前执行器。返回的 `HOST_NATIVE_DISPATCH_PLAN` 按宿主槽位分配当前 frontier，`concurrentDispatchGroups` 可并发创建，容量不足或缺少高推理模型的节点留在 `deferred` 且不 claim。每个 assignment 的 `decisionFingerprint` 精确绑定当前 Graph、节点、Agent、模型与推理等级。
+自动派遣与普通建议分离。`plan_dispatch_batch` 只接受宿主明确提供且 `dispatchTransport=HOST_NATIVE` 的原生 Agent inventory，不把 PATH 中存在的 CLI 当成启动授权。inventory 为每个 Agent 声明真实 `availableSlots`、开发/审查能力、可显式覆盖的模型、模型 tier、reasoning effort 和优先级；完整 inventory 不持久化。总调度 Agent 在派遣前优先为当前 Ready TASK/Review 读取 `loop_context`，使用自身分析能力按固定风险规则判为 `STANDARD → BALANCED` 或 `HIGH → FRONTIER`，完成分析但不确定时使用 `HIGH`。已有判级通过临时 `node_requirements` 提交；若某节点缺少分析，可提交与 inventory 精确匹配的宿主 `current_executor`，Controller 仅对缺失节点沿用当前 Agent/模型，并标记 `UNCLASSIFIED / CURRENT_EXECUTOR_FALLBACK / CURRENT_HOST_DEFAULT`。没有当前执行器事实时仍拒绝缺失节点。Controller 不做本地语义分析，也不把 payload 自带的模型名当路由配置。Review 还会优先避开上游实际 Agent/模型家族；回退路径则忠实沿用当前执行器。返回的 `HOST_NATIVE_DISPATCH_PLAN` 先在 SQLite 中为 assignment 原子签发短租约 `dispatchReservationId`，再按宿主槽位形成 `concurrentDispatchGroups`；另一个监控器只能看到 `WAIT_FOR_DISPATCH_RECEIVER`，不会重复创建同一节点。容量不足或缺少高推理模型的节点留在 `deferred` 且不 claim。每个 assignment 的 `decisionFingerprint` 精确绑定当前 Graph、节点、Agent、模型、推理等级与派遣通道。
 
 ## Controller / Adapter 架构
 
@@ -309,11 +311,11 @@ Claude Plugin ─┘  ├─ MCP 2026-07-28（优先）
 
 Claude Code 和旧 Codex 仍可走 `2025-11-25` 的 `initialize → notifications/initialized`。Adapter 只维护 `2026-07-28` 与 `2025-11-25` 双版本，不会把新版无会话语义伪装成旧版会话。新版 Tasks 属于可选扩展；当前外层调度已使用显式 `root_id`、`node_id` 和 `operation_id` 保存长任务状态，因此本版本不声明 Tasks 扩展。
 
-`freeze_hierarchy` 对模型只暴露 `execution_mode=active|manual`，不暴露内部 `confirmed`。冻结前只展示“自动执行 / 手动交接”两个确认选项；自动和手动都表示完整授权并确认开发，区别只在冻结后由当前会话继续调度还是生成交接。需要调整时，用户直接回复修改意见，当前方案不冻结；只有需求实际变化才重新 prepare，单纯询问或其他未改变需求的回复保留当前 `PREPARED` 结果。冻结工具在宿主权限层统一走自动批准。冻结后若用户调整尚未开始的 TASK，`unfreeze_task_requirement` 与 `refreeze_task_requirement` 分别执行显式的人机授权；解冻只开放 `title`、`summary`、`payload`，不开放拓扑与资源契约。
+`freeze_hierarchy` 对模型只暴露 `execution_mode=active|manual`，不暴露内部 `confirmed`。冻结前只展示“自动执行 / 手动交接”两个确认选项；自动和手动都表示完整授权并确认开发，区别只在冻结后由当前会话继续调度还是生成交接。需要调整时，用户直接回复修改意见，当前方案不冻结；只有需求实际变化才重新 prepare，单纯询问或其他未改变需求的回复保留当前 `PREPARED` 结果。初始 prepare 和 `prepare_delivery_revision` 都只准备候选，不应触发宿主通用确认弹窗；用户对自动执行或手动交接的选择是每个 Revision 唯一一次业务确认。冻结工具在宿主权限层统一走自动批准。冻结后若用户调整尚未开始的 TASK，`unfreeze_task_requirement` 与 `refreeze_task_requirement` 分别执行显式的人机授权；解冻只开放 `title`、`summary`、`payload`，不开放拓扑与资源契约。
 
 总调度上下文只消费 frontier。每个 TASK、TASK Review、GROUP Review 和 Delivery Review Loop 默认路由到独立接收上下文；宿主支持原生 Agent 时优先自动派遣。Review 的独立性用于独立发现与复核，不阻止它在同一 Loop 内自行修正或派遣内部修正上下文。未 claim 且没有 Agent 容量时只生成人工交接，不提前 claim；已 claim、租约有效且出现上下文压力或高轮次 Hook 摩擦时，使用 `pause_loop → 新上下文 resume_loop → 重新 dispatch`，不提交业务 outcome。宿主明确报告剩余额度不高于 5% 且提供真实未来 `resetAt` 时，当前 Agent 在额度耗尽前用对应 `capacity_scope` 定时 pause：单个执行 Agent 使用 `EXECUTOR`，总调度宿主使用 `HOST`。随后由 Claude Code 当前会话的一次性 Cron 或 Codex Desktop 当前任务计划在恢复窗口后唤醒原 Agent；Agent 重新调用 frontier 时，控制器恢复同一 attempt 并产生派遣动作。直接收到 429、宿主原生计划不可用或宿主被关闭时不补建定时任务，恢复额度后由人工 resume Agent。控制器不会自行启动进程；限额恢复也不调用推荐器或自动换 Agent。租约过期时由 `advance_graph` 回收旧 attempt，禁止调用 `pause_loop`。接收方始终继续同一冻结 Graph。
 
-`recommend_executors` 自身仍不启动 CLI、不切换模型、不 claim，也不派遣。自动执行模式下，总调度器构造宿主真实 inventory 并调用 `plan_dispatch_batch`；随后使用宿主原生 Agent 机制按 assignment 显式覆盖模型、并发创建接收上下文。计划工具本身仍不启动或 claim。接收方使用真实 Agent/模型、`dispatch_mode=AUTO` 与决策指纹调用 `dispatch_loop`，控制器重新计算绑定后才写入 claim 事件；手动交接不带决策指纹。
+`recommend_executors` 自身仍不启动 CLI、不切换模型、不 claim，也不派遣。自动执行模式下，总调度器构造宿主真实 inventory 并调用 `plan_dispatch_batch`；计划工具原子预留节点但不启动或 claim，宿主随后按 assignment 显式覆盖模型、并发创建接收上下文。接收方使用真实 Agent/模型、`dispatch_mode=AUTO`、`dispatch_transport=HOST_NATIVE`、预留 ID 与决策指纹调用 `dispatch_loop`，控制器重新计算绑定后才写入 claim 事件；请求 `gpt-5.6-sol` 而实际报告 `gpt-5` 会被拒绝。手动交接不带预留或决策指纹。
 
 ## 主要投影
 

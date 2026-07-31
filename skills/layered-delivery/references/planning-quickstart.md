@@ -4,9 +4,12 @@
 
 ## 准备结果续接
 
+- 每次收到新的用户需求，先判断它是否明确要求继续、修改或恢复当前 `delivery.id`。**新用户需求默认属于新 Delivery**；不同工单、不同业务目标、用户明确称为“新需求/独立需求”，或没有明确引用当前 Delivery，均不得修改当前 Delivery。
+- 不得仅因 `workspace_status` 返回旧 Delivery 就进入 Revision。只有用户明确要求修改或继续该 Delivery 时，才允许调用 `unfreeze_task_requirement` 或 `prepare_delivery_revision`；Agent 的语义判断不能替代这项用户连续性授权。
 - 当前上下文仍保留最近一次 `prepare_hierarchy` 响应和原始 hierarchy 时，复用其中的 `hierarchyFingerprint`、完整清单与人类投影路径；需求未变时不要重复 prepare，回答用户问题后重新展示同一组冻结选项。
 - 初次冻结前用户修改需求时，更新 hierarchy 并重新调用 `prepare_hierarchy`；只使用新响应的 fingerprint，不复用旧值。
 - 初次冻结后、最终用户验收前用户修改依赖、项目范围、资源或拓扑时，保持相同 `delivery.id` 调用 `prepare_delivery_revision`，不得重新调用初始 prepare，也不得创建另一个 Delivery ID。
+- `prepare_delivery_revision` 只生成待确认候选，不激活执行，不应触发宿主通用确认弹窗；用户在完整范围和授权清单上选择自动执行或手动交接，才是该 Revision 唯一一次业务确认。
 - 当前上下文不再持有精确 fingerprint 或原始 hierarchy 时，不从 JSON/Markdown 投影反推机器输入，也不猜测旧值；重新收集需求并 prepare 后再请求冻结确认。
 
 ## 选择根节点
@@ -301,7 +304,7 @@ baseline 串联；完全没有声明的 TASK 不生成该文件、路径和导�
 
 ## 准备与冻结
 
-每个对话窗口通过当前宿主工作区绑定自己的 Delivery。多个窗口要同时开发多个 Delivery 时，必须使用不同工作区；Git 场景使用“一 Delivery、一 linked worktree、一最终 feature 分支”。linked worktree 共享主 checkout 的调度数据库，但 `workspaceKey` 不同。一个工作区可以保存多个 PREPARED 方案，却只能运行一个未结束的 Active Delivery；默认 `workspace_status` 优先恢复该 Active Delivery，查看其他 PREPARED 方案时显式传 `root_id`。第二个 Delivery 冻结前必须切换到独立工作区。
+每个对话窗口通过当前宿主工作区绑定自己的 Delivery。多个窗口要同时开发多个 Delivery 时，必须使用不同工作区；Git 场景使用“一 Delivery、一 linked worktree、一最终 feature 分支”。linked worktree 共享主 checkout 的调度数据库，但 `workspaceKey` 不同。没有未结束 Delivery 时，一个工作区可以保存多个 PREPARED 方案；一旦工作区已有未结束 Delivery，新的 `prepare_hierarchy` 就以 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED` 在写入前拒绝，并返回 `CREATE_INDEPENDENT_WORKTREE_TASK`。默认 `workspace_status` 只恢复该工作区自己的 Active Delivery。
 
 Git 场景先检查首次 `workspace_status`：
 
@@ -309,6 +312,7 @@ Git 场景先检查首次 `workspace_status`：
 - `gitBinding` 只属于 Delivery。同一 Delivery 的全部 TASK 共享该 feature worktree 和分支；不要为 TASK 创建、声明或切换内部 Git 分支。获得相应 Git 写入授权后，各 TASK 可以只 `git add` 并 `git commit` 自身 scope 的变更，在同一 Delivery 分支上形成独立 commit；Git index/commit 写入必须串行。
 - 当前 worktree 位于 `main` / `master` 时，不在这里 prepare Delivery。先由宿主从该主线当前提交创建新的 feature 分支和 linked worktree，再在新对话工作区重新调用 `workspace_status`。
 - 在某个 Active Delivery 的 feature worktree 中要求启动另一个独立 Delivery 时，也先从主线创建另一个 worktree；不得从当前 feature HEAD 分叉。只有用户明确要求 stacked delivery 时才允许建立真实的 Delivery 间 Git 依赖，而当前 Graph 不把它伪装成两个独立 Delivery。
+- 用户已明确要求“新建独立 Codex 任务”或“新建独立 Delivery”时，立即使用宿主任务工具创建 Git 项目的 worktree 任务，Codex 目标必须使用 `environment=worktree`，并把新 Delivery ID、主线、目标 feature 分支和范围放入新任务输入；不得再次要求用户回复一次相同确认。不得使用 same-directory/local 任务冒充隔离。新 worktree 若初始为 detached HEAD，先只读确认主线与干净状态，再从 `main`（不存在时 `master`）创建目标 feature 分支，随后重新调用 `workspace_status`，其状态必须为 `ABSENT` 才能 prepare。
 - Git worktree 缺少 `gitBinding`、当前分支不匹配、HEAD 不继承 `baseCommit`，或主线不再包含该基线时，`prepare_hierarchy` / 运行工具必须停止。控制器不代替宿主运行 `git worktree add`、`switch`、`commit`、`merge` 或 `push`。
 
 ### 跨本地仓库的同一 Delivery
@@ -366,7 +370,7 @@ Git 场景先检查首次 `workspace_status`：
 1. 调用 `hierarchy_contract(root_kind=...)`。
 2. 按返回的 schema 和 example 创建完整 hierarchy。
 3. 调用 `prepare_hierarchy`，依据 MCP 响应和刚提交的 hierarchy 向用户概述双指纹、`workspaceIsolation.workspaceKey`、`gitBinding`、当前 `gitWorkspace.headCommit`、状态和完整 GROUP/TASK 清单；同时提供 Delivery 的 `humanArtifacts.workspaceOverview`、`overview`、`baseline`、`progress`、`acceptance`，以及 `humanArtifacts.workItems[nodeId]` 中每个 GROUP/TASK 的 `baseline`、`progress`、`acceptance` 路径；这些字段分别对应固定的 `overview.md`、`baseline.md`、`progress.md` 和 `acceptance.md`。TASK 的 `taskBaselines` 继续作为其 baseline 便捷映射。只有节点映射实际包含 `interfaces` 时才提供该 TASK 的 `interfaces.md` 路径。Delivery `overview.md` 只负责状态与导航；Delivery baseline 串联 Git binding 与全部节点 baseline，GROUP baseline 串联直接子节点，TASK baseline 保存当前冻结 requirement revision 和 Loop 输入。验收报告遵守 `projectionGuidance.acceptanceReports`：每份报告只完整展开当前层，GROUP 以摘要和链接串联直接子节点，Delivery 以摘要和链接串联根工作项，不向上复制下层 payload、evidence 或 reviewFindings。人类 Markdown 使用固定中文模板和递归字段列表，不展示 JSON 代码块或机器状态枚举。不要读取投影来反推机器状态，也不要自行重演渲染器。
-4. 调用 `available_agents`，再以本次 `prepare_hierarchy` 返回的 `rootId` 调用 `recommend_executors`。在完整清单后展示每个 TASK、TASK Review、GROUP Review 和 Delivery Review 的建议 Agent、当前模型、置信度、备选及 `reasons`；若 Review 的 `independence.satisfied` 为 false，明确说明当前主机无法满足异构 Agent 审查。该结果不会启动、切换或派遣任何 Agent/模型，也不修改 fingerprint、hierarchy 或 Graph。
+4. 调用 `available_agents`，再以本次 `prepare_hierarchy` 返回的 `rootId` 调用 `recommend_executors`。在完整清单后展示每个 TASK、TASK Review、GROUP Review 和 Delivery Review 的建议 Agent、当前模型、置信度、备选及 `reasons`；若 Review 的 `independence.satisfied` 为 false，明确说明当前主机无法满足异构 Agent 审查。终端候选的 `availabilityScope=LOCAL_TERMINAL`、`dispatchTransport=EXTERNAL_PROCESS`、`hostDispatchEligible=false` 只表示本机可见，不能据此断言当前宿主可原生派遣。该结果不会启动、切换或派遣任何 Agent/模型，也不修改 fingerprint、hierarchy 或 Graph。
 5. 在建议后原样提供以下交互，不添加第三个选项，也不要用“其他内容”“其他反馈”等标签描述自由输入：
 
    > 请选择下一步：

@@ -3,7 +3,11 @@ from __future__ import annotations
 from .jsonio import fingerprint
 
 
-DISPATCH_POLICY_VERSION = "HOST_NATIVE_MODEL_ROUTING_V1"
+DISPATCH_POLICY_VERSION = "HOST_NATIVE_MODEL_ROUTING_V2"
+HOST_NATIVE_DISPATCH_TRANSPORT = "HOST_NATIVE"
+DISPATCH_TRANSPORTS = frozenset(
+    {HOST_NATIVE_DISPATCH_TRANSPORT, "EXTERNAL_PROCESS"}
+)
 ANALYZED_DISPATCH_REASONING_CLASSES = frozenset({"STANDARD", "HIGH"})
 DISPATCH_REASONING_CLASSES = frozenset(
     {*ANALYZED_DISPATCH_REASONING_CLASSES, "UNCLASSIFIED"}
@@ -27,8 +31,9 @@ def automatic_dispatch_decision_fingerprint(
     agent_id: str,
     model_id: str,
     reasoning_class: str,
+    dispatch_transport: str,
 ) -> str:
-    """Bind one automatic route to its Graph, Loop, Agent, and model."""
+    """Bind one automatic route to its Graph, executor, and transport."""
 
     return fingerprint(
         {
@@ -39,12 +44,15 @@ def automatic_dispatch_decision_fingerprint(
             "modelId": model_id,
             "reasoningClass": reasoning_class,
             "modelSelection": dispatch_model_selection(reasoning_class),
+            "dispatchTransport": dispatch_transport,
         }
     )
 
 
 __all__ = (
     "DISPATCH_POLICY_VERSION",
+    "DISPATCH_TRANSPORTS",
+    "HOST_NATIVE_DISPATCH_TRANSPORT",
     "ANALYZED_DISPATCH_REASONING_CLASSES",
     "DISPATCH_REASONING_CLASSES",
     "automatic_dispatch_decision_fingerprint",

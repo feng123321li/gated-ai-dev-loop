@@ -8,6 +8,7 @@ from typing import Any
 
 from .dispatch_contracts import (
     DISPATCH_REASONING_CLASSES,
+    HOST_NATIVE_DISPATCH_TRANSPORT,
     automatic_dispatch_decision_fingerprint,
 )
 from .errors import fail
@@ -625,6 +626,8 @@ def dispatch_loop(
     agent_id: str | None = None,
     model_id: str | None = None,
     dispatch_mode: str | None = None,
+    dispatch_transport: str | None = None,
+    dispatch_reservation_id: str | None = None,
     dispatch_reasoning_class: str | None = None,
     dispatch_decision_fingerprint: str | None = None,
     explicit_dogfood: bool = False,
@@ -653,6 +656,22 @@ def dispatch_loop(
         fail(
             "SCHEDULER_DISPATCH_MODE_INVALID",
             "dispatch_mode must be AUTO or MANUAL",
+        )
+    if dispatch_mode == "AUTO" and (
+        dispatch_transport != HOST_NATIVE_DISPATCH_TRANSPORT
+    ):
+        fail(
+            "SCHEDULER_DISPATCH_TRANSPORT_REQUIRED",
+            (
+                "Automatic dispatch requires HOST_NATIVE transport; "
+                "external processes, CLI commands, and companion scripts "
+                "cannot claim an automatic assignment"
+            ),
+        )
+    if dispatch_transport is not None and dispatch_mode != "AUTO":
+        fail(
+            "SCHEDULER_DISPATCH_TRANSPORT_INVALID",
+            "dispatch_transport is only valid for automatic dispatch",
         )
     if dispatch_mode == "AUTO" and (
         not isinstance(dispatch_decision_fingerprint, str)
@@ -695,6 +714,30 @@ def dispatch_loop(
             "SCHEDULER_DISPATCH_REASONING_INVALID",
             "dispatch_reasoning_class is only valid for automatic dispatch",
         )
+    if dispatch_mode == "AUTO" and dispatch_reservation_id is None:
+        fail(
+            "SCHEDULER_DISPATCH_RESERVATION_REQUIRED",
+            (
+                "Automatic dispatch requires the reservation issued before "
+                "the host created the receiving Agent"
+            ),
+        )
+    if dispatch_reservation_id is not None and dispatch_mode != "AUTO":
+        fail(
+            "SCHEDULER_DISPATCH_RESERVATION_INVALID",
+            (
+                "dispatch_reservation_id is only valid for automatic "
+                "dispatch"
+            ),
+        )
+    actual_reservation_id = (
+        _identity(
+            dispatch_reservation_id,
+            "dispatch_reservation_id",
+        )
+        if dispatch_reservation_id is not None
+        else None
+    )
     if dispatch_mode == "AUTO" and actual_agent_id is None:
         fail(
             "SCHEDULER_EXECUTOR_METADATA_INVALID",
@@ -710,6 +753,7 @@ def dispatch_loop(
                     agent_id=actual_agent_id,
                     model_id=actual_model_id,
                     reasoning_class=dispatch_reasoning_class,
+                    dispatch_transport=dispatch_transport,
                 )
             )
             if (
@@ -781,6 +825,30 @@ def dispatch_loop(
                     conflictingRootId=reservation["rootId"],
                     conflictingNodeId=reservation["nodeId"],
                 )
+        for reservation in repository.active_dispatch_reservations(
+            connection,
+            at=at,
+        ):
+            if (
+                reservation["dispatchReservationId"]
+                == actual_reservation_id
+            ):
+                continue
+            if resource_claims_overlap(
+                definition["loop"]["resourceClaims"],
+                reservation["resourceClaims"],
+            ):
+                fail(
+                    "SCHEDULER_RESOURCE_CONFLICT",
+                    f"{node_id} conflicts with dispatch-reserved Loop "
+                    f"{reservation['nodeId']} in Delivery "
+                    f"{reservation['rootId']}",
+                    conflictingRootId=reservation["rootId"],
+                    conflictingNodeId=reservation["nodeId"],
+                    conflictingDispatchReservationId=reservation[
+                        "dispatchReservationId"
+                    ],
+                )
         for active in nodes:
             if active["status"] != "CLAIMED":
                 continue
@@ -795,6 +863,18 @@ def dispatch_loop(
                     f"{active['nodeId']}",
                     conflictingNodeId=active["nodeId"],
                 )
+        if dispatch_mode == "AUTO":
+            repository.consume_dispatch_reservation(
+                connection,
+                reservation_id=actual_reservation_id,
+                run_id=run["run_id"],
+                node_id=node_id,
+                attempt=state["attempt"],
+                graph_fingerprint=graph_fingerprint(graph),
+                decision_fingerprint=dispatch_decision_fingerprint,
+                operation_id=operation_id,
+                at=at,
+            )
         lease = graph["runtime"]["claimPolicy"]["leaseSeconds"]
         expires = _after(at, lease)
         connection.execute(
@@ -834,6 +914,10 @@ def dispatch_loop(
                 **(
                     {
                         "dispatchMode": dispatch_mode,
+                        "dispatchTransport": dispatch_transport,
+                        "dispatchReservationId": (
+                            actual_reservation_id
+                        ),
                         "dispatchReasoningClass": (
                             dispatch_reasoning_class
                         ),
@@ -864,6 +948,8 @@ def dispatch_loop(
         "agentId": actual_agent_id,
         "modelId": actual_model_id,
         "dispatchMode": dispatch_mode,
+        "dispatchTransport": dispatch_transport,
+        "dispatchReservationId": actual_reservation_id,
         "dispatchReasoningClass": dispatch_reasoning_class,
         "dispatchDecisionFingerprint": (
             dispatch_decision_fingerprint

@@ -6,7 +6,8 @@
 
 调用 `graph_frontier` 并执行全部 action：
 
-- `DISPATCH_LOOP`：自动模式下先用宿主真实 inventory 调用 `plan_dispatch_batch`，按计划创建接收 Agent；接收方读取 `loop_context` 后 claim。
+- `DISPATCH_LOOP`：自动模式下先用宿主真实 inventory 调用 `plan_dispatch_batch`，原子预留后按计划创建接收 Agent；接收方读取 `loop_context` 后凭预留 claim。
+- `WAIT_FOR_DISPATCH_RECEIVER`：另一个调度器已为该 Ready Loop 取得短租约派遣预留；不得重复创建 Agent，等待接收方 claim 或预留过期。
 - `CONTINUE_OR_HEARTBEAT_LOOP`：继续当前 Loop，并在租约到期前 heartbeat。
 - `RESUME_LOOP_IN_INDEPENDENT_CONTEXT`：把暂停节点路由给新的接收上下文；接收方 resume 后重新读取 frontier 并 dispatch。
 - `WAIT_FOR_EXECUTOR_CAPACITY`：执行 Agent 在软阈值暂停后等待宿主原生的一次性恢复提示；到时由原 Agent 重新消费 frontier。
@@ -20,7 +21,7 @@
 
 需要展示当前节点的执行建议时，调用 `available_agents` 和 `recommend_executors`，按 `nodeId` 选择对应建议。推荐工具不得据此启动外部 CLI、切换模型、改变 owner、提前 claim、绕过宿主原生 Agent 容量或接管限额恢复；自动执行由总调度器在工具返回后使用宿主原生 Agent 完成。CC-Switch、配置或容量变化后可以重新调用，旧建议不作为缓存权威。
 
-自动模式不直接消费终端建议来启动进程。总调度器从宿主明确暴露的原生 Agent catalog 构造 `executor_inventory`：只登记真实 `availableSlots`、`development`/`review` 能力、可显式选择的模型、模型 tier、reasoning effort 与优先级；不包含 Token、Base URL、命令参数，也不把 PATH 中存在的 CLI 当成自动启动授权。以当前 `graphFingerprint` 调用 `plan_dispatch_batch` 后，只消费 `binding=HOST_NATIVE_DISPATCH_PLAN` 的 assignments。计划工具不启动 Agent、不 claim、不保存完整 inventory/requirements；提供方限额恢复也不调用它。
+自动模式不直接消费终端建议来启动进程。总调度器从宿主明确暴露的原生 Agent catalog 构造 `executor_inventory`：每项必须包含宿主证明的 `dispatchTransport=HOST_NATIVE`，并只登记真实 `availableSlots`、`development`/`review` 能力、可显式选择的模型、模型 tier、reasoning effort 与优先级；不包含 Token、Base URL、命令参数，也不把 PATH 中存在的 CLI 当成自动启动授权。PATH、CLI、exec、subprocess 或 companion bridge 必须标为 `EXTERNAL_PROCESS`，只会得到安全 deferred，不能进入 assignment。以当前 `graphFingerprint` 调用 `plan_dispatch_batch` 后，只消费 `binding=HOST_NATIVE_DISPATCH_PLAN` 的 assignments。计划工具不启动 Agent、不 claim、不保存完整 inventory/requirements；提供方限额恢复也不调用它。
 
 ### 派遣前自动判级
 
@@ -46,10 +47,10 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。不要绕过 TASK
 ## 执行 Loop
 
 1. 总调度上下文只读取 frontier 和路由 action，不直接执行 Loop。
-2. 对当前批次的 `DISPATCH_LOOP`，以宿主真实 inventory 调用 `plan_dispatch_batch`。按 `concurrentDispatchGroups` 并发创建所有 assignments 的独立宿主原生 Agent。`modelSelection=EXPLICIT_OVERRIDE` 时必须显式传入 assignment 的 `model.id`，不能继承总调度 Agent 的模型，支持时同时传 `reasoningEffort`；例如 Codex 总调度使用 `gpt-5.6-sol` 时，分析计划为 `gpt-5.6-terra` 的 TASK 仍必须显式使用 terra。`modelSelection=CURRENT_HOST_DEFAULT` 时在独立子上下文中沿用宿主报告的当前 Agent/模型。Claude 和其他宿主同样只使用自身 inventory 中的真实模型。
-3. 每个 assignment 都遵守先创建接收 Agent、后 claim。只向接收方传 `rootId`、`nodeId` 与 `decisionFingerprint`，不要复制规划上下文、payload 或旧 operation。单个创建失败不影响已创建的同批 Agent，也不 claim 失败节点；刷新 frontier 与 inventory 后最多重算一次，仍失败则生成该节点的人工交接。
+2. 对当前批次的 `DISPATCH_LOOP`，以宿主真实 inventory 调用 `plan_dispatch_batch`。该调用先为每个返回 assignment 原子签发短租约 `dispatchReservationId`；另一个监控或对话此时只能看到 `WAIT_FOR_DISPATCH_RECEIVER`。取得预留后按 `concurrentDispatchGroups` 并发创建所有 assignments 的独立宿主原生 Agent。`modelSelection=EXPLICIT_OVERRIDE` 时必须显式传入 assignment 的 `model.id`，不能继承总调度 Agent 的模型，支持时同时传 `reasoningEffort`；例如 Codex 总调度使用 `gpt-5.6-sol` 时，分析计划为 `gpt-5.6-terra` 的 TASK 仍必须显式使用 terra。`modelSelection=CURRENT_HOST_DEFAULT` 时在独立子上下文中沿用宿主报告的当前 Agent/模型。Claude 和其他宿主同样只使用自身 inventory 中的真实模型。创建动作必须来自对应宿主的正式原生 Agent API；禁止执行 `codex --write`、`codex-companion` 或等价外部自治命令。
+3. 每个 assignment 都遵守先预留、再创建接收 Agent、最后 claim。只向接收方传 `rootId`、`nodeId`、`dispatchReservationId` 与 `decisionFingerprint`，不要复制规划上下文、payload 或旧 operation。单个创建失败不影响已创建的同批 Agent，也不 claim 失败节点；等待预留过期后刷新 frontier 与 inventory，最多重算一次，仍失败则生成该节点的人工交接。
 4. 接收方原生进入 layered-delivery，使用精确 `nodeId` 调用 `loop_context`。TASK、TASK Review 与 GROUP Review Loop 同时取得控制器生成的 `humanArtifacts.workItem` baseline/progress/acceptance 路径；TASK 与 TASK Review 继续取得 `humanArtifacts.taskBaseline` 便捷路径，接口型 TASK 的 workItem 还包含自己的 `interfaces`。机器输入仍以 MCP 响应为准。
-5. 接收方创建全局唯一 `operation_id`，并以自身实际 Agent ID、实际模型 ID、assignment 的 `dispatch_reasoning_class=reasoningClass`、`dispatch_mode=AUTO` 和 `dispatch_decision_fingerprint=decisionFingerprint` 调用 `dispatch_loop`。控制器重新计算并校验 Graph、节点、Agent、模型和推理等级的绑定后才建立 claim；回退 assignment 使用 `UNCLASSIFIED`，这些字段和决策来源写入 `LOOP_CLAIMED`。手动交接使用 `dispatch_mode=MANUAL`，且不提交推理等级或决策指纹。没有可用 Agent 容量或宿主无法兑现 assignment 时才人工交接，且在接收方存在前不要提前 claim。
+5. 接收方创建全局唯一 `operation_id`，并以自身实际 Agent ID、实际模型 ID、assignment 的 `dispatch_reasoning_class=reasoningClass`、`dispatch_mode=AUTO`、`dispatch_transport=HOST_NATIVE`、`dispatch_reservation_id=dispatchReservationId` 和 `dispatch_decision_fingerprint=decisionFingerprint` 调用 `dispatch_loop`。控制器重新计算并校验有效预留及 Graph、节点、attempt、Agent、模型、推理等级和派遣通道的绑定后才建立 claim；若宿主创建请求为 `gpt-5.6-sol` 而接收方实际报告 `gpt-5`，指纹不匹配，节点保持 Ready，不能把请求配置写成执行事实。回退 assignment 使用 `UNCLASSIFIED`，这些字段和决策来源写入 `LOOP_CLAIMED`。手动交接使用 `dispatch_mode=MANUAL`，且不提交推理等级、派遣通道、预留或决策指纹。没有可用 Agent 容量或宿主无法兑现 assignment 时才人工交接，且在接收方存在前不要提前 claim。
 6. 按 `loop.ref` 启动对应内部 TASK、TASK Review、GROUP Review 或 Delivery Review Loop，并把 `payload` 和共享 `skillHints` 原样交给该 Loop。
    - 并行 Active Delivery 必须使用不同对话工作区；每个 Git Delivery 使用独立 linked worktree 和最终 feature 分支。控制器把 linked worktree 映射到主 checkout 的共享调度根，同时以不同 `workspaceKey` 隔离 Delivery，并校验各自 `gitBinding.branchRef`，禁止一个工作区或 feature 分支冒充另一个 Delivery。
    - 新的独立 Delivery 一律从 `main`（不存在时 `master`）创建 feature worktree，不从当前 Delivery feature HEAD 创建。主线在创建后继续前进不改变已冻结 `baseCommit`；最终集成前由 Delivery 自己解决与最新主线的差异。
@@ -122,10 +123,10 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 用户最终确认之前的需求扩展仍属于同一个 Delivery：
 
 1. 读取 `delivery_revision_history` 与当前 hierarchy，保留原 `delivery.id`。
-2. 将完整新范围传给 `prepare_delivery_revision`，同时提交当前 revision、变更原因和真实请求人。可重复 prepare 尚未冻结的同一新 Revision，但不能修改旧 Revision。
+2. 将完整新范围传给 `prepare_delivery_revision`，同时提交当前 revision、变更原因和真实请求人。该调用只准备候选 Revision、不激活执行，因此不应触发宿主通用确认弹窗；可重复 prepare 尚未冻结的同一新 Revision，但不能修改旧 Revision。
 3. 检查响应中的 `carryForwardTaskIds`。只有 TASK definition、依赖、Loop、资源声明与 TASK Review 完全未变，而且旧 Revision 的实现及 Review 都成功，才会成为携带候选；GROUP 与 Delivery Review 不携带。
 4. 展示完整新范围、Revision 编号、携带候选和 `requiredProjectAuthorizations`。跨项目 scope 必须包含当前工作区，所有可写 Git 项目使用同名 feature 分支。
-5. 用户选择自动执行或手动交接后，调用 `freeze_hierarchy`，同时提交精确 `expected_delivery_revision`、新 fingerprint 和与准备结果完全一致的 `authorized_project_ids`。缺项目、额外项目或重复项目都应在 MCP/Controller 边界拒绝。
+5. 用户选择自动执行或手动交接是本 Revision 唯一一次业务确认。确认后调用 `freeze_hierarchy`，同时提交精确 `expected_delivery_revision`、新 fingerprint 和与准备结果完全一致的 `authorized_project_ids`。缺项目、额外项目或重复项目都应在 MCP/Controller 边界拒绝。
 6. 冻结成功后旧 run 标记为 `SUPERSEDED`，新 run 继续同一 Delivery 的验收；`revisions.md` 与 `delivery_revision_history` 保留审计链。
 
 ## 恢复

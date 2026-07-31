@@ -6,6 +6,8 @@ from typing import Any
 from .dispatch_contracts import (
     ANALYZED_DISPATCH_REASONING_CLASSES,
     DISPATCH_POLICY_VERSION,
+    DISPATCH_TRANSPORTS,
+    HOST_NATIVE_DISPATCH_TRANSPORT,
     automatic_dispatch_decision_fingerprint,
     dispatch_model_selection,
 )
@@ -13,6 +15,9 @@ from .errors import fail
 from .graph_frontier import get_graph_frontier
 from .jsonio import fingerprint
 from .repository import SchedulerRepository
+
+
+DISPATCH_RESERVATION_SECONDS = 300
 
 
 MODEL_TIERS = ("EFFICIENT", "BALANCED", "FRONTIER")
@@ -126,6 +131,7 @@ def _validate_executor(
     allowed = {
         "agentId",
         "displayName",
+        "dispatchTransport",
         "capabilities",
         "availableSlots",
         "priority",
@@ -136,6 +142,12 @@ def _validate_executor(
         fail(
             "SCHEDULER_EXECUTOR_INVENTORY_INVALID",
             f"{field} fields are invalid",
+        )
+    dispatch_transport = value["dispatchTransport"]
+    if dispatch_transport not in DISPATCH_TRANSPORTS:
+        fail(
+            "SCHEDULER_EXECUTOR_INVENTORY_INVALID",
+            f"{field}.dispatchTransport is invalid",
         )
     capabilities = value["capabilities"]
     if (
@@ -190,6 +202,7 @@ def _validate_executor(
             value["displayName"],
             f"{field}.displayName",
         ),
+        "dispatchTransport": dispatch_transport,
         "capabilities": sorted(capabilities),
         "availableSlots": available_slots,
         "priority": _priority(value["priority"], f"{field}.priority"),
@@ -412,12 +425,29 @@ def _deferred_code(
     remaining_slots: dict[str, int],
     reasoning_class: str,
 ) -> tuple[str, str]:
-    capable = [
+    capable_any_transport = [
         executor
         for executor in executors
         if capability in executor["capabilities"]
     ]
+    capable = [
+        executor
+        for executor in capable_any_transport
+        if (
+            executor["dispatchTransport"]
+            == HOST_NATIVE_DISPATCH_TRANSPORT
+        )
+    ]
     if not capable:
+        if capable_any_transport:
+            return (
+                "UNSAFE_EXECUTOR_TRANSPORT",
+                (
+                    "Compatible Agents are available only through an "
+                    "external process, CLI, or companion bridge; automatic "
+                    "dispatch requires the host-native Agent API."
+                ),
+            )
         return (
             "NO_COMPATIBLE_HOST_EXECUTOR",
             "No host-native Agent advertises the required capability.",
@@ -488,6 +518,16 @@ def _assignment(
             else None
         )
     )
+    if role != "INDEPENDENT_REVIEW":
+        diversity_level = "NOT_APPLICABLE"
+    elif agent_diverse is True and model_diverse is True:
+        diversity_level = "AGENT_AND_MODEL_DIVERSE"
+    elif agent_diverse is True:
+        diversity_level = "AGENT_DIVERSE"
+    elif model_diverse is True:
+        diversity_level = "MODEL_DIVERSE"
+    else:
+        diversity_level = "CONTEXT_ONLY"
     reasoning_class = reasoning_requirement["reasoningClass"]
     model_selection = dispatch_model_selection(reasoning_class)
     if routing_basis == "CURRENT_EXECUTOR_FALLBACK":
@@ -538,6 +578,7 @@ def _assignment(
             "id": executor["agentId"],
             "displayName": executor["displayName"],
         },
+        "dispatchTransport": executor["dispatchTransport"],
         "model": {
             "id": model["id"],
             "family": model["family"],
@@ -557,6 +598,7 @@ def _assignment(
                 agent_id=executor["agentId"],
                 model_id=model["id"],
                 reasoning_class=reasoning_class,
+                dispatch_transport=executor["dispatchTransport"],
             )
         ),
         "reasons": [
@@ -568,11 +610,32 @@ def _assignment(
                 ),
             },
             *routing_reasons,
+            *(
+                [
+                    {
+                        "code": (
+                            "REVIEW_HETEROGENEOUS_INDEPENDENCE_"
+                            "UNSATISFIED"
+                        ),
+                        "message": (
+                            "The safe host-native route provides an "
+                            "isolated Review context but not both a "
+                            "different Agent and model family."
+                        ),
+                    }
+                ]
+                if (
+                    role == "INDEPENDENT_REVIEW"
+                    and diversity_level != "AGENT_AND_MODEL_DIVERSE"
+                )
+                else []
+            ),
         ],
         "independence": {
             "required": role == "INDEPENDENT_REVIEW",
             "agentDiverse": agent_diverse,
             "modelDiverse": model_diverse,
+            "diversityLevel": diversity_level,
             "upstreamAgentIds": upstream_agents,
             "upstreamModelIds": upstream_models,
             "upstreamModelFamilies": upstream_model_families,
@@ -592,9 +655,9 @@ def plan_dispatch_batch(
     now: object = None,
     **_: Any,
 ) -> dict[str, Any]:
-    """Plan one concurrent host-native dispatch batch without claiming."""
+    """Plan and reserve one concurrent host-native dispatch batch."""
 
-    repository = SchedulerRepository(root)
+    repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     stored = repository.hierarchy(root_id)
     if expected_graph_fingerprint != stored["graphFingerprint"]:
@@ -626,7 +689,15 @@ def plan_dispatch_batch(
         for action in frontier["actions"]
         if action["action"] == "DISPATCH_LOOP"
     )
-    stale_requirements = set(requirements) - set(dispatch_node_ids)
+    reserved_actions = {
+        action["nodeId"]: action
+        for action in frontier["actions"]
+        if action["action"] == "WAIT_FOR_DISPATCH_RECEIVER"
+    }
+    eligible_requirement_ids = (
+        set(dispatch_node_ids) | set(reserved_actions)
+    )
+    stale_requirements = set(requirements) - eligible_requirement_ids
     if stale_requirements:
         fail(
             "SCHEDULER_DISPATCH_REQUIREMENT_STALE",
@@ -648,7 +719,22 @@ def plan_dispatch_batch(
         for executor in executors
     }
     assignments: list[dict[str, Any]] = []
-    deferred: list[dict[str, Any]] = []
+    deferred: list[dict[str, Any]] = [
+        {
+            "nodeId": node_id,
+            "code": "DISPATCH_ALREADY_RESERVED",
+            "message": (
+                "Another dispatcher already reserved this Loop for host "
+                "Agent creation."
+            ),
+            "dispatchReservationId": action[
+                "dispatchReservationId"
+            ],
+            "reservationExpiresAt": action["reservationExpiresAt"],
+            "claimCreated": False,
+        }
+        for node_id, action in sorted(reserved_actions.items())
+    ]
     routing_node_ids = sorted(
         dispatch_node_ids,
         key=lambda node_id: (
@@ -687,14 +773,18 @@ def plan_dispatch_batch(
         if routing_basis == "CURRENT_EXECUTOR_FALLBACK":
             executor, model = fallback_executor
             if (
-                capability in executor["capabilities"]
+                executor["dispatchTransport"]
+                == HOST_NATIVE_DISPATCH_TRANSPORT
+                and capability in executor["capabilities"]
                 and remaining_slots[executor["agentId"]] > 0
             ):
                 candidates.append((executor, model))
         else:
             for executor in executors:
                 if (
-                    capability not in executor["capabilities"]
+                    executor["dispatchTransport"]
+                    != HOST_NATIVE_DISPATCH_TRANSPORT
+                    or capability not in executor["capabilities"]
                     or not executor["modelOverrideSupported"]
                     or remaining_slots[executor["agentId"]] <= 0
                     or (
@@ -714,7 +804,17 @@ def plan_dispatch_batch(
         if not candidates:
             if routing_basis == "CURRENT_EXECUTOR_FALLBACK":
                 executor, _ = fallback_executor
-                if capability not in executor["capabilities"]:
+                if (
+                    executor["dispatchTransport"]
+                    != HOST_NATIVE_DISPATCH_TRANSPORT
+                ):
+                    code = "CURRENT_EXECUTOR_UNSAFE_TRANSPORT"
+                    message = (
+                        "The current Agent was reported through an "
+                        "external process transport; automatic fallback "
+                        "requires the host-native Agent API."
+                    )
+                elif capability not in executor["capabilities"]:
                     code = "CURRENT_EXECUTOR_CAPABILITY_MISMATCH"
                     message = (
                         "The current host Agent does not advertise the "
@@ -782,6 +882,34 @@ def plan_dispatch_batch(
         )
         assignment["contextInput"]["rootId"] = root_id
         assignments.append(assignment)
+    reservations = repository.reserve_dispatch_assignments(
+        root_id=root_id,
+        graph_fingerprint=stored["graphFingerprint"],
+        assignments=assignments,
+        reservation_seconds=DISPATCH_RESERVATION_SECONDS,
+    )
+    reserved_assignments: list[dict[str, Any]] = []
+    for assignment in assignments:
+        node_id = assignment["nodeId"]
+        reservation = reservations["accepted"].get(node_id)
+        if reservation is not None:
+            assignment.update(reservation)
+            assignment["contextInput"]["dispatchReservationId"] = (
+                reservation["dispatchReservationId"]
+            )
+            reserved_assignments.append(assignment)
+            continue
+        rejection = reservations["rejected"][node_id]
+        deferred.append(
+            {
+                "nodeId": node_id,
+                "kind": assignment["kind"],
+                "workItemId": assignment["workItemId"],
+                **rejection,
+                "claimCreated": False,
+            }
+        )
+    assignments = reserved_assignments
     plan_material = {
         "policyVersion": DISPATCH_POLICY_VERSION,
         "rootId": root_id,
@@ -824,11 +952,15 @@ def plan_dispatch_batch(
         },
         "dispatchPolicy": {
             "hostNativeOnly": True,
+            "externalProcessLaunchAllowed": False,
+            "companionScriptLaunchAllowed": False,
             "analyzedRoutesRequireExplicitModelOverride": True,
             "currentExecutorFallbackAllowed": True,
             "fallbackModelSelection": "CURRENT_HOST_DEFAULT",
             "fallbackReasoningClass": "UNCLASSIFIED",
             "spawnBeforeClaim": True,
+            "reserveBeforeSpawn": True,
+            "reservationSeconds": DISPATCH_RESERVATION_SECONDS,
             "toolStartsAgents": False,
             "toolClaimsLoops": False,
             "parallelizeCurrentGroup": True,

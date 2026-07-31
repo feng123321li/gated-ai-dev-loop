@@ -6,6 +6,7 @@ import unittest
 
 from hdg.dispatch_planning import plan_dispatch_batch
 from hdg.errors import GatedLoopError
+from hdg.graph_frontier import get_graph_frontier
 from hdg.graph_model import loop_node_id, task_review_node_id
 from hdg.graph_runtime import (
     dispatch_loop,
@@ -23,11 +24,13 @@ def host_executor_inventory(
     *,
     slots: int = 2,
     model_override_supported: bool = True,
+    dispatch_transport: str = "HOST_NATIVE",
 ) -> list[dict]:
     return [
         {
             "agentId": "codex",
             "displayName": "Codex",
+            "dispatchTransport": dispatch_transport,
             "capabilities": ["development", "review"],
             "availableSlots": slots,
             "priority": 20,
@@ -58,6 +61,7 @@ def diverse_host_executor_inventory() -> list[dict]:
         {
             "agentId": "claude-code",
             "displayName": "Claude Code",
+            "dispatchTransport": "HOST_NATIVE",
             "capabilities": ["review"],
             "availableSlots": 1,
             "priority": 10,
@@ -80,6 +84,7 @@ def claude_host_executor_inventory() -> list[dict]:
         {
             "agentId": "claude-code",
             "displayName": "Claude Code",
+            "dispatchTransport": "HOST_NATIVE",
             "capabilities": ["development", "review"],
             "availableSlots": 2,
             "priority": 20,
@@ -175,6 +180,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
             all(
                 assignment["agent"]["id"] == "codex"
                 and assignment["model"]["id"] == "gpt-5.6-terra"
+                and assignment["dispatchTransport"] == "HOST_NATIVE"
                 and assignment["modelSelection"] == "EXPLICIT_OVERRIDE"
                 and assignment["hostDispatchAllowed"]
                 for assignment in plan["assignments"]
@@ -276,6 +282,10 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 agent_id="codex",
                 model_id="gpt-5.6-sol",
                 dispatch_mode="AUTO",
+                dispatch_transport=assignment["dispatchTransport"],
+                dispatch_reservation_id=assignment[
+                    "dispatchReservationId"
+                ],
                 dispatch_reasoning_class="UNCLASSIFIED",
                 dispatch_decision_fingerprint=(
                     assignment["decisionFingerprint"]
@@ -391,6 +401,203 @@ class HostDispatchPlanningTests(unittest.TestCase):
             "MODEL_OVERRIDE_UNAVAILABLE",
         )
         self.assertFalse(plan["summary"]["concurrent"])
+
+    def test_external_process_executor_is_deferred_without_claim(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+
+            plan = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(
+                    dispatch_transport="EXTERNAL_PROCESS",
+                ),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-service"))
+                ],
+            )
+            state = graph_status(root=root, root_id=prepared["rootId"])
+
+        self.assertEqual(plan["assignments"], [])
+        self.assertEqual(
+            plan["deferred"][0]["code"],
+            "UNSAFE_EXECUTOR_TRANSPORT",
+        )
+        self.assertFalse(plan["deferred"][0]["claimCreated"])
+        self.assertFalse(
+            plan["dispatchPolicy"]["externalProcessLaunchAllowed"]
+        )
+        task = next(
+            node
+            for node in state["nodes"]
+            if node["nodeId"] == loop_node_id("t-service")
+        )
+        self.assertEqual(task["status"], "READY")
+
+    def test_dispatch_plan_reserves_before_host_agent_creation(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            requirements = [
+                agent_requirement(loop_node_id("t-service"))
+            ]
+
+            first = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=requirements,
+            )
+            frontier = get_graph_frontier(
+                root=root,
+                root_id=prepared["rootId"],
+            )
+            second = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=requirements,
+            )
+
+        assignment = first["assignments"][0]
+        self.assertRegex(
+            assignment["dispatchReservationId"],
+            r"^[0-9a-f-]{36}$",
+        )
+        self.assertTrue(assignment["reservationExpiresAt"])
+        wait = next(
+            action
+            for action in frontier["actions"]
+            if action["nodeId"] == assignment["nodeId"]
+        )
+        self.assertEqual(wait["action"], "WAIT_FOR_DISPATCH_RECEIVER")
+        self.assertEqual(
+            wait["dispatchReservationId"],
+            assignment["dispatchReservationId"],
+        )
+        self.assertEqual(second["assignments"], [])
+        self.assertEqual(
+            second["deferred"][0]["code"],
+            "DISPATCH_ALREADY_RESERVED",
+        )
+
+    def test_dispatch_reservation_holds_resource_before_claim(self) -> None:
+        hierarchy = parallel_group_hierarchy()
+        for child in hierarchy["root"]["children"]:
+            child["definition"]["execution"]["loop"][
+                "resourceClaims"
+            ] = ["database:shared"]
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, hierarchy)
+            first = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-api"))
+                ],
+            )["assignments"][0]
+            other_node = (
+                loop_node_id("t-core")
+                if first["nodeId"] == loop_node_id("t-api")
+                else loop_node_id("t-api")
+            )
+
+            with self.assertRaises(GatedLoopError) as caught:
+                dispatch_loop(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    node_id=other_node,
+                    owner="manual-competing-receiver",
+                    agent_id="codex",
+                    model_id="gpt-5.6-terra",
+                    dispatch_mode="MANUAL",
+                    operation_id="op-manual-competing-reservation",
+                )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_RESOURCE_CONFLICT",
+        )
+
+    def test_review_ignores_external_codex_and_reports_context_only(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            task_assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=claude_host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-service"))
+                ],
+            )["assignments"][0]
+            dispatch_loop(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=task_assignment["nodeId"],
+                owner="claude-task-receiver",
+                agent_id=task_assignment["agent"]["id"],
+                model_id=task_assignment["model"]["id"],
+                dispatch_mode="AUTO",
+                dispatch_transport=task_assignment[
+                    "dispatchTransport"
+                ],
+                dispatch_reservation_id=task_assignment[
+                    "dispatchReservationId"
+                ],
+                dispatch_reasoning_class=(
+                    task_assignment["reasoningClass"]
+                ),
+                dispatch_decision_fingerprint=(
+                    task_assignment["decisionFingerprint"]
+                ),
+                operation_id="op-claude-native-task",
+            )
+            record_loop_result(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=task_assignment["nodeId"],
+                operation_id="op-claude-native-task",
+                outcome=success("TASK completed by native Claude."),
+            )
+            review_plan = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=[
+                    *claude_host_executor_inventory(),
+                    *host_executor_inventory(
+                        dispatch_transport="EXTERNAL_PROCESS",
+                    ),
+                ],
+                node_requirements=[
+                    agent_requirement(
+                        task_review_node_id("t-service"),
+                        reasoning_class="HIGH",
+                    )
+                ],
+            )
+
+        self.assertEqual(len(review_plan["assignments"]), 1)
+        review = review_plan["assignments"][0]
+        self.assertEqual(review["agent"]["id"], "claude-code")
+        self.assertEqual(review["dispatchTransport"], "HOST_NATIVE")
+        self.assertFalse(review["independence"]["agentDiverse"])
+        self.assertFalse(review["independence"]["modelDiverse"])
+        self.assertEqual(
+            review["independence"]["diversityLevel"],
+            "CONTEXT_ONLY",
+        )
+        self.assertIn(
+            "REVIEW_HETEROGENEOUS_INDEPENDENCE_UNSATISFIED",
+            {reason["code"] for reason in review["reasons"]},
+        )
 
     def test_high_reasoning_task_uses_frontier_model(self) -> None:
         with TemporaryDirectory() as root:
@@ -528,6 +735,12 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 agent_id=task_assignment["agent"]["id"],
                 model_id=task_assignment["model"]["id"],
                 dispatch_mode="AUTO",
+                dispatch_transport=task_assignment[
+                    "dispatchTransport"
+                ],
+                dispatch_reservation_id=task_assignment[
+                    "dispatchReservationId"
+                ],
                 dispatch_reasoning_class=(
                     task_assignment["reasoningClass"]
                 ),
@@ -598,6 +811,10 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 agent_id=assignment["agent"]["id"],
                 model_id=assignment["model"]["id"],
                 dispatch_mode="AUTO",
+                dispatch_transport=assignment["dispatchTransport"],
+                dispatch_reservation_id=assignment[
+                    "dispatchReservationId"
+                ],
                 dispatch_reasoning_class=assignment["reasoningClass"],
                 dispatch_decision_fingerprint=(
                     assignment["decisionFingerprint"]
@@ -615,6 +832,11 @@ class HostDispatchPlanningTests(unittest.TestCase):
         self.assertEqual(claimed["agentId"], "codex")
         self.assertEqual(claimed["modelId"], "gpt-5.6-terra")
         self.assertEqual(claimed["dispatchMode"], "AUTO")
+        self.assertEqual(claimed["dispatchTransport"], "HOST_NATIVE")
+        self.assertEqual(
+            claimed["dispatchReservationId"],
+            assignment["dispatchReservationId"],
+        )
         self.assertEqual(claimed["dispatchReasoningClass"], "STANDARD")
         self.assertEqual(
             claimed["dispatchDecisionFingerprint"],
@@ -626,6 +848,14 @@ class HostDispatchPlanningTests(unittest.TestCase):
             if event["eventType"] == "LOOP_CLAIMED"
         )
         self.assertEqual(event["payload"]["dispatchMode"], "AUTO")
+        self.assertEqual(
+            event["payload"]["dispatchTransport"],
+            "HOST_NATIVE",
+        )
+        self.assertEqual(
+            event["payload"]["dispatchReservationId"],
+            assignment["dispatchReservationId"],
+        )
         self.assertEqual(
             event["payload"]["dispatchReasoningClass"],
             "STANDARD",
@@ -650,6 +880,8 @@ class HostDispatchPlanningTests(unittest.TestCase):
                     agent_id="codex",
                     model_id="gpt-5.6-terra",
                     dispatch_mode="AUTO",
+                    dispatch_transport="HOST_NATIVE",
+                    dispatch_reservation_id="wrong-route-reservation",
                     dispatch_reasoning_class="STANDARD",
                     operation_id="op-auto-missing-decision",
                 )
@@ -658,6 +890,77 @@ class HostDispatchPlanningTests(unittest.TestCase):
             caught.exception.code,
             "SCHEDULER_DISPATCH_DECISION_REQUIRED",
         )
+
+    def test_auto_claim_requires_the_planned_reservation(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-service"))
+                ],
+            )["assignments"][0]
+
+            with self.assertRaises(GatedLoopError) as caught:
+                dispatch_loop(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    node_id=assignment["nodeId"],
+                    owner="codex-terra-without-ticket",
+                    agent_id=assignment["agent"]["id"],
+                    model_id=assignment["model"]["id"],
+                    dispatch_mode="AUTO",
+                    dispatch_transport=assignment[
+                        "dispatchTransport"
+                    ],
+                    dispatch_reasoning_class=assignment[
+                        "reasoningClass"
+                    ],
+                    dispatch_decision_fingerprint=assignment[
+                        "decisionFingerprint"
+                    ],
+                    operation_id="op-auto-missing-reservation",
+                )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_DISPATCH_RESERVATION_REQUIRED",
+        )
+
+    def test_auto_claim_rejects_external_process_transport(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+
+            with self.assertRaises(GatedLoopError) as caught:
+                dispatch_loop(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    node_id=loop_node_id("t-service"),
+                    owner="external-codex-receiver",
+                    agent_id="codex",
+                    model_id="gpt-5.6-sol",
+                    dispatch_mode="AUTO",
+                    dispatch_transport="EXTERNAL_PROCESS",
+                    dispatch_reasoning_class="HIGH",
+                    dispatch_decision_fingerprint="f" * 64,
+                    operation_id="op-auto-external-process",
+                )
+
+            state = graph_status(root=root, root_id=prepared["rootId"])
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_DISPATCH_TRANSPORT_REQUIRED",
+        )
+        task = next(
+            node
+            for node in state["nodes"]
+            if node["nodeId"] == loop_node_id("t-service")
+        )
+        self.assertEqual(task["status"], "READY")
 
     def test_auto_claim_rejects_a_decision_for_another_route(self) -> None:
         with TemporaryDirectory() as root:
@@ -672,6 +975,8 @@ class HostDispatchPlanningTests(unittest.TestCase):
                     agent_id="codex",
                     model_id="gpt-5.6-terra",
                     dispatch_mode="AUTO",
+                    dispatch_transport="HOST_NATIVE",
+                    dispatch_reservation_id="wrong-route-reservation",
                     dispatch_reasoning_class="STANDARD",
                     dispatch_decision_fingerprint="f" * 64,
                     operation_id="op-auto-wrong-decision",
@@ -687,6 +992,58 @@ class HostDispatchPlanningTests(unittest.TestCase):
             node
             for node in state["nodes"]
             if node["nodeId"] == loop_node_id("t-service")
+        )
+        self.assertEqual(task["status"], "READY")
+
+    def test_auto_claim_rejects_effective_model_mismatch(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(
+                        loop_node_id("t-service"),
+                        reasoning_class="HIGH",
+                    )
+                ],
+            )["assignments"][0]
+
+            with self.assertRaises(GatedLoopError) as caught:
+                dispatch_loop(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    node_id=assignment["nodeId"],
+                    owner="codex-effective-gpt-5",
+                    agent_id=assignment["agent"]["id"],
+                    model_id="gpt-5",
+                    dispatch_mode="AUTO",
+                    dispatch_transport=assignment[
+                        "dispatchTransport"
+                    ],
+                    dispatch_reservation_id=assignment[
+                        "dispatchReservationId"
+                    ],
+                    dispatch_reasoning_class=assignment[
+                        "reasoningClass"
+                    ],
+                    dispatch_decision_fingerprint=assignment[
+                        "decisionFingerprint"
+                    ],
+                    operation_id="op-auto-effective-model-mismatch",
+                )
+            state = graph_status(root=root, root_id=prepared["rootId"])
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_DISPATCH_DECISION_MISMATCH",
+        )
+        task = next(
+            node
+            for node in state["nodes"]
+            if node["nodeId"] == assignment["nodeId"]
         )
         self.assertEqual(task["status"], "READY")
 
@@ -712,6 +1069,12 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 agent_id=task_assignment["agent"]["id"],
                 model_id=task_assignment["model"]["id"],
                 dispatch_mode="AUTO",
+                dispatch_transport=task_assignment[
+                    "dispatchTransport"
+                ],
+                dispatch_reservation_id=task_assignment[
+                    "dispatchReservationId"
+                ],
                 dispatch_reasoning_class=(
                     task_assignment["reasoningClass"]
                 ),

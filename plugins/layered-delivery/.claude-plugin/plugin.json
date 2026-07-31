@@ -1,6 +1,6 @@
 {
   "name": "layered-delivery",
-  "version": "0.25.0",
+  "version": "0.26.0",
   "description": "调度带 Git worktree/feature 分支绑定的递归 GROUP/TASK 交付 Graph，并提供本机 Agent/模型建议",
   "author": {
     "name": "layered-delivery contributors",

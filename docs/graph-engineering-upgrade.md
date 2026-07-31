@@ -95,9 +95,9 @@ Agent + 当前模型 + 备选 + 原因
 
 建议不修改 hierarchy、Graph、SQLite、事件链、claim 或 owner。TASK 只匹配开发能力；Review 优先避开上游开发建议中的 Agent，并在无法满足异构 Agent 独立性时明确降级置信度。推荐器不解析不透明 payload，因此不会把模型路由策略重新塞进外层业务 schema。
 
-CC-Switch、PATH 或用户 Profile 改变后重新发现即可；同一 Frozen Graph 可在不同主机得到不同建议。v0.22.0 不消费建议执行派遣，真正的跨 CLI 启动与模型切换仍属于后续本地 Dispatcher 边界。
+CC-Switch、PATH 或用户 Profile 改变后重新发现即可；同一 Frozen Graph 可在不同主机得到不同建议。普通建议继续保持 `ADVISORY`。自动模式另行由 `plan_dispatch_batch` 消费宿主明确提供的原生 Agent 容量、可选模型与模型覆盖能力，为当前 frontier 生成 `HOST_NATIVE_DISPATCH_PLAN`；Agent 分析完整时按 tier 显式覆盖子 Agent 模型，缺少节点分析时可在独立子上下文沿用宿主明确报告的当前 Agent/模型并标记 `UNCLASSIFIED`。两条路径都按槽位并发创建接收上下文。PATH 中发现的 CLI 不自动取得启动授权，计划工具也不启动 Agent 或 claim。
 
-运行中的容量故障不写回 Frozen Graph。执行 Agent 限额使用 `EXECUTOR` 暂停：本次推荐临时排除原 Agent，有独立候选即可提前接管同一 attempt；调度宿主自身限额使用 `HOST` 暂停：frontier 不调用模型推荐，只暴露 `nextWakeAt` 给模型外宿主定时器。Controller 在下一次调用时自动恢复节点，但不承担常驻定时或进程启动。
+运行中的容量故障不写回 Frozen Graph。执行 Agent 限额使用 `EXECUTOR` 暂停并等待原 Agent 的宿主原生一次性恢复提示；调度宿主自身限额使用 `HOST` 暂停。两种限额等待都不调用建议或派遣计划，也不自动换 Agent。Controller 在下一次调用时自动恢复节点，但不承担常驻定时或进程启动。
 
 ## 图模型
 

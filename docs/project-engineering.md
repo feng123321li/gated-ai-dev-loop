@@ -7,6 +7,10 @@ src/hdg/
 ├── agent_discovery.py # 本机终端 Agent、当前模型与用户 Profile 只读发现
 ├── agent_recommendation.py
 │                      # TASK/Review 非绑定 Agent + Model 建议
+├── dispatch_contracts.py
+│                      # 自动派遣决策指纹与策略版本
+├── dispatch_planning.py
+│                      # 宿主原生容量、模型覆盖与并发批次规划
 ├── loop_contracts.py   # Loop descriptor、outcome、资源锁
 ├── model_core.py       # schema v3 Delivery 与递归 GROUP/TASK 校验
 ├── git_binding.py      # Git worktree/feature/mainline 只读发现与校验
@@ -110,7 +114,7 @@ Graph 编译遵循以下终态规则：
 
 工具分为六组：
 
-- 发现与建议：`available_agents`、`recommend_executors`
+- 发现、建议与派遣计划：`available_agents`、`recommend_executors`、`plan_dispatch_batch`
 - 规划：`workspace_status`、`hierarchy_contract`、`prepare_hierarchy`、`freeze_hierarchy`
 - Delivery 修订：`delivery_revision_history`、`prepare_delivery_revision`
 - 需求修订：`unfreeze_task_requirement`、`refreeze_task_requirement`
@@ -125,9 +129,11 @@ Plugin MCP 工具不接收业务 `root` 参数。Adapter 从宿主配置或请�
 
 `loop_context.completionPolicy` 明确输入和终态边界：payload 是目标、明确约束和已知验收点的输入，Loop 在运行时从真实代码、契约和数据链路推导 scope 内必要条件；冻结 Graph 不冻结内部实现计划，可修复 finding 必须在当前 Loop 内调整方案、修正并复验。初始 freeze 同时为所有 TASK 建立 revision 1 冻结记录；`unfreeze_task_requirement` 只接受未开始 TASK，`refreeze_task_requirement` 只替换标题、摘要和 payload，并原子更新 hierarchy/graph 双指纹、事件链和人类投影。`record_loop_result` 的 `BLOCKED` 要求显式 failure class，只用于当前 scope 和权限内没有继续路径的真实终态；调度器仍不解释不透明 finding，也不为返工创建 Graph 环。
 
-`controller.py` 是唯一共享应用入口；它只接受 `ControllerContext` 和 operation 参数，不导入 MCP、Codex 或 Claude 代码。`mcp_tools.py` 把 23 个工具 schema 映射到 Controller，`mcp_adapter.py` 负责协议结果、错误、版本协商和宿主策略，`mcp_server.py` 只处理 newline-delimited stdio 与进程生命周期。
+`controller.py` 是唯一共享应用入口；它只接受 `ControllerContext` 和 operation 参数，不导入 MCP、Codex 或 Claude 代码。`mcp_tools.py` 把 24 个工具 schema 映射到 Controller，`mcp_adapter.py` 负责协议结果、错误、版本协商和宿主策略，`mcp_server.py` 只处理 newline-delimited stdio 与进程生命周期。
 
-`agent_discovery.py` 只读取 PATH、终端 `--version`、非敏感模型字段和用户本地 Profile，不启动开发命令或返回绝对路径、凭据与服务地址。`agent_recommendation.py` 只按 `TASK_LOOP`/Review 角色、显式 Profile 优先级、可用性和上游开发 Agent 多样性排序；不读取 Loop payload，不持久化结果，也不调用 `dispatch_loop`。因此 CC-Switch 或本机配置变化无需重建 Frozen Graph。`dispatch_loop` 单独要求接收方提交实际 `agent_id` / `model_id`，并把它们写入 `LOOP_CLAIMED` 事件；推荐值不会被当成执行事实。
+`agent_discovery.py` 只读取 PATH、终端 `--version`、非敏感模型字段和用户本地 Profile，不启动开发命令或返回绝对路径、凭据与服务地址。`agent_recommendation.py` 只按 `TASK_LOOP`/Review 角色、显式 Profile 优先级、可用性和上游开发 Agent 多样性排序；不读取 Loop payload，不持久化结果，也不调用 `dispatch_loop`。因此 CC-Switch 或本机配置变化无需重建 Frozen Graph。
+
+`dispatch_planning.py` 与终端发现分离：它只消费宿主显式提交的原生 Agent inventory、当前 frontier、临时 `node_requirements` 和可选的宿主当前执行器事实。总调度 Agent 在派遣前只为路由读取当前 Ready TASK/Review 的 `loop_context`，用自身分析能力按固定风险规则判为 `STANDARD → BALANCED` 或 `HIGH → FRONTIER`，完成分析但不确定时取 `HIGH`。Controller 不做本地语义分析，也不接受 payload 自带的模型路由指令；缺少节点判级时，如果宿主提交了与 inventory 精确匹配的 `current_executor`，仅让缺失节点沿用当前 Agent/模型并标记 `UNCLASSIFIED / CURRENT_EXECUTOR_FALLBACK`，否则拒绝计划。计划按真实槽位生成并发 assignment，分析路径优先避开上游实际 Agent/模型家族；inventory、node requirements、current executor 与未采用建议不持久化。`dispatch_contracts.py` 为每个 assignment 计算绑定 Graph fingerprint、节点、Agent、模型、推理等级、模型选择方式与策略版本的决策指纹。接收方以实际 `agent_id` / `model_id`、`dispatch_reasoning_class`、`dispatch_mode=AUTO` 和指纹调用 `dispatch_loop`；控制器重新计算一致后才把执行事实与自动派遣来源写入 `LOOP_CLAIMED`。计划、创建 Agent、claim 三者保持分离，创建失败不会产生幽灵 claim。
 
 提供方限额按容量范围分流。单个执行 Agent 受限时，`pause_loop(..., capacity_scope=EXECUTOR)` 持久化真实 `resetAt`，frontier 允许临时排除该 Agent 后动态推荐其他执行者；调度宿主自身受限时，`capacity_scope=HOST` 只产生 `WAIT_FOR_HOST_CAPACITY` 和 `nextWakeAt`。后者必须由 MCP/模型之外的宿主适配器捕获限额、记录暂停并注册定时器，因为 Controller 只在被调用时推进 Graph，不能在模型已不可用时自行启动进程。
 

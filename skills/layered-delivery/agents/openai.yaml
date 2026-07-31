@@ -1,7 +1,7 @@
 interface:
   display_name: "递归交付调度"
-  short_description: "调度带 Git 分支绑定的递归 Graph，并展示 Agent + Model 建议"
-  default_prompt: "使用 $layered-delivery 在独立 Delivery worktree/feature 分支中恢复或创建递归交付 Graph，并展示每个 TASK/Review 的本机 Agent + Model 建议。"
+  short_description: "调度递归 Graph，并按计划自动派遣 Agent + Model"
+  default_prompt: "使用 $layered-delivery 在独立 Delivery worktree/feature 分支中恢复或创建递归交付 Graph；自动模式按宿主容量与 Agent 分析选择模型并发派遣，缺少节点分析时在独立上下文沿用宿主当前 Agent/模型并标记未分类。"
 
 policy:
   allow_implicit_invocation: true

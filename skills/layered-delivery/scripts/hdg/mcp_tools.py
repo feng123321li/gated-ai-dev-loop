@@ -39,6 +39,116 @@ def _string(description: str) -> dict[str, Any]:
 ROOT_ID = _string("Frozen Delivery and Graph run ID.")
 NODE_ID = _string("Exact graph node ID from graph_frontier.")
 OPERATION_ID = _string("Globally unique Loop operation ID.")
+FINGERPRINT = {
+    "type": "string",
+    "minLength": 64,
+    "maxLength": 64,
+    "description": "Exact SHA-256 fingerprint returned by the controller.",
+}
+
+HOST_MODEL = _object(
+    {
+        "id": _string("Model ID accepted by the host-native Agent."),
+        "family": _string(
+            "Optional model family used for Review diversity."
+        ),
+        "tier": {
+            "type": "string",
+            "enum": ["EFFICIENT", "BALANCED", "FRONTIER"],
+        },
+        "reasoningEffort": _string(
+            "Optional host-native reasoning effort override."
+        ),
+        "priority": {
+            "type": "integer",
+            "minimum": -100,
+            "maximum": 100,
+        },
+    },
+    required=["id", "tier", "priority"],
+)
+
+HOST_EXECUTOR = _object(
+    {
+        "agentId": _string("Host-native Agent ID."),
+        "displayName": _string("Host-native Agent display name."),
+        "capabilities": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": ["development", "review"],
+            },
+            "minItems": 1,
+            "uniqueItems": True,
+        },
+        "availableSlots": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 64,
+        },
+        "priority": {
+            "type": "integer",
+            "minimum": -100,
+            "maximum": 100,
+        },
+        "modelOverrideSupported": {
+            "type": "boolean",
+            "description": (
+                "Whether child Agent creation can explicitly select one "
+                "advertised model instead of inheriting the orchestrator."
+            ),
+        },
+        "models": {
+            "type": "array",
+            "items": HOST_MODEL,
+            "minItems": 1,
+            "maxItems": 64,
+        },
+    },
+    required=[
+        "agentId",
+        "displayName",
+        "capabilities",
+        "availableSlots",
+        "priority",
+        "modelOverrideSupported",
+        "models",
+    ],
+)
+
+CURRENT_EXECUTOR = _object(
+    {
+        "agentId": _string(
+            "Exact current host-native Agent ID from executor inventory."
+        ),
+        "modelId": _string(
+            "Exact current model ID advertised by that Agent."
+        ),
+    },
+    required=["agentId", "modelId"],
+)
+
+DISPATCH_NODE_REQUIREMENT = _object(
+    {
+        "nodeId": NODE_ID,
+        "reasoningClass": {
+            "type": "string",
+            "enum": ["STANDARD", "HIGH"],
+            "description": (
+                "Host Agent analysis: STANDARD targets a balanced model; "
+                "HIGH requires a frontier model."
+            ),
+        },
+        "source": {
+            "type": "string",
+            "enum": ["PLANNING", "USER_POLICY", "LOOP_POLICY"],
+        },
+        "reason": _string(
+            "Why this current frontier node needs the reasoning class."
+        ),
+    },
+    required=["nodeId", "reasoningClass", "source", "reason"],
+)
 
 OUTCOME = _object(
     {
@@ -201,6 +311,54 @@ TOOLS = (
         _object(
             {"root_id": ROOT_ID},
             required=["root_id"],
+        ),
+    ),
+    _tool(
+        "plan_dispatch_batch",
+        (
+            "Plan one concurrent batch for the current DISPATCH_LOOP "
+            "frontier using ephemeral host-native Agent capacity and "
+            "selectable models. Missing host Agent analysis may use the "
+            "exact current Agent/model reported by the host and remains "
+            "UNCLASSIFIED. Returns model-selection instructions and "
+            "decision fingerprints; never starts Agents or claims Loops."
+        ),
+        _object(
+            {
+                "root_id": ROOT_ID,
+                "expected_graph_fingerprint": FINGERPRINT,
+                "executor_inventory": {
+                    "type": "array",
+                    "items": HOST_EXECUTOR,
+                    "minItems": 1,
+                    "maxItems": 64,
+                },
+                "node_requirements": {
+                    "type": "array",
+                    "items": DISPATCH_NODE_REQUIREMENT,
+                    "maxItems": 256,
+                    "description": (
+                        "Available Host Agent reasoning analyses for current "
+                        "dispatch Loops. Missing nodes require "
+                        "current_executor fallback; the controller never "
+                        "analyzes Loop payloads."
+                    ),
+                },
+                "current_executor": {
+                    **CURRENT_EXECUTOR,
+                    "description": (
+                        "Exact current host Agent/model used only for "
+                        "nodes lacking Agent analysis. It must match "
+                        "executor_inventory."
+                    ),
+                },
+            },
+            required=[
+                "root_id",
+                "expected_graph_fingerprint",
+                "executor_inventory",
+                "node_requirements",
+            ],
         ),
     ),
     _tool(
@@ -415,6 +573,29 @@ TOOLS = (
                     "description": (
                         "Actual model ID used by the receiving Agent. This "
                         "is execution evidence, not a recommended model."
+                    ),
+                },
+                "dispatch_mode": {
+                    "type": "string",
+                    "enum": ["AUTO", "MANUAL"],
+                    "description": (
+                        "Optional dispatch provenance. AUTO requires the "
+                        "exact decision fingerprint returned for this node."
+                    ),
+                },
+                "dispatch_reasoning_class": {
+                    "type": "string",
+                    "enum": ["STANDARD", "HIGH", "UNCLASSIFIED"],
+                    "description": (
+                        "Reasoning class bound into an AUTO decision. "
+                        "UNCLASSIFIED identifies current-executor fallback."
+                    ),
+                },
+                "dispatch_decision_fingerprint": {
+                    **FINGERPRINT,
+                    "description": (
+                        "Exact automatic dispatch decision fingerprint. "
+                        "Only valid with dispatch_mode=AUTO."
                     ),
                 },
                 "operation_id": OPERATION_ID,

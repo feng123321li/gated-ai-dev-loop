@@ -12,6 +12,62 @@
 
 推荐器不参与提供方限额恢复。软阈值暂停后由原 Agent 等待宿主原生计划提示，直接收到 429 时由人工恢复；两种情况都不临时改写推荐、不自动换 Agent。
 
+## 自动派遣计划
+
+普通推荐仍是 `ADVISORY`。用户选择自动执行后，总调度器另外从宿主原生 Agent catalog 构造临时 `executor_inventory`，以当前 Graph fingerprint 调用 `plan_dispatch_batch`。只有宿主明确报告可用槽位和模型的原生 Agent 才能进入 inventory；分析路由还要求 `modelOverrideSupported=true`，当前执行器回退不要求模型切换能力。本地 PATH 中发现的终端 Agent 不自动取得启动权限。
+
+返回的 `binding=HOST_NATIVE_DISPATCH_PLAN`。`assignments` 为当前无资源冲突的 `DISPATCH_LOOP` 选择 Agent、模型选择方式、reasoning effort 和 `decisionFingerprint`，`concurrentDispatchGroups` 表示可以同时创建的接收 Agent；`deferred` 节点保持未 claim。计划工具本身不启动 Agent、不切换当前会话模型、不 claim，也不保存完整 inventory。总调度器对分析路由显式覆盖模型，对回退路由在独立上下文沿用当前宿主默认；接收方再以实际 Agent/模型与决策指纹调用 `dispatch_loop`。
+
+### 计算顺序
+
+派遣计划不用模型自由打分，而是执行可复现的字典序路由：
+
+1. 路由基准：存在节点 Agent 分析时使用 `AGENT_ANALYSIS`；缺失分析且宿主报告当前执行器时，只为缺失节点使用 `CURRENT_EXECUTOR_FALLBACK`，不进行候选 Agent/模型排名。
+2. 硬过滤：两条路径都要求角色能力匹配和 `availableSlots > 0`；`AGENT_ANALYSIS` 另要求 `modelOverrideSupported=true`，回退路径要求当前 Agent/模型与 inventory 精确匹配。
+3. 推理等级：总调度 Agent 在派遣前从 `loop_context` 按固定风险规则为当前 Ready TASK/Review 自动判为 `STANDARD`/`HIGH`，并通过临时 `node_requirements` 提交来源与原因。Controller 不做本地语义识别，也不接受 payload 自带的模型路由指令。回退节点保持 `UNCLASSIFIED`。
+4. 模型匹配：`STANDARD` 目标为 `BALANCED`；`HIGH` 必须存在 `FRONTIER` 模型，否则节点以 `NO_HIGH_REASONING_MODEL` deferred。候选内再按 tier 距离、较高 tier、模型优先级、稳定模型 ID 排序；回退节点直接使用当前模型。
+5. Agent 匹配：Review 先避开上游实际 Agent，再避开上游实际模型家族，然后按 Agent 优先级、模型优先级与稳定 ID 排序；TASK 直接按优先级和稳定 ID。回退节点不改换 Agent。
+6. 容量分配：每选中一个 assignment 就扣减对应 Agent 的临时槽位；槽位耗尽的后续节点保持未 claim。
+
+因此“高推理 Agent”不是另一个隐藏 Agent 类型，而是“具备所需角色能力的宿主原生 Agent + 可显式覆盖的 `FRONTIER` 模型 + `HIGH` 推理决策”。控制器只认识 tier，不认识厂商默认模型：Codex inventory 可以把 terra 标为 `BALANCED`、sol 标为 `FRONTIER`；Claude inventory 可以把 Sonnet 标为 `BALANCED`、Opus 标为 `FRONTIER`。
+
+例如总调度 Agent 当前使用 `gpt-5.6-sol`，但宿主允许子 Agent 显式选择 sol/terra，且有两个空闲槽：
+
+```json
+{
+  "root_id": "d-service",
+  "expected_graph_fingerprint": "<graphFingerprint>",
+  "executor_inventory": [
+    {
+      "agentId": "codex",
+      "displayName": "Codex",
+      "capabilities": ["development", "review"],
+      "availableSlots": 2,
+      "priority": 20,
+      "modelOverrideSupported": true,
+      "models": [
+        {
+          "id": "gpt-5.6-terra",
+          "family": "gpt-5.6",
+          "tier": "BALANCED",
+          "reasoningEffort": "medium",
+          "priority": 20
+        },
+        {
+          "id": "gpt-5.6-sol",
+          "family": "gpt-5.6",
+          "tier": "FRONTIER",
+          "reasoningEffort": "high",
+          "priority": 10
+        }
+      ]
+    }
+  ]
+}
+```
+
+在上述 Codex inventory 示例中，Ready TASK 优先得到 terra，Review 优先得到 sol；换成 Claude inventory 时会选择对应 tier 的 Claude 模型。存在不同 Agent/模型家族时进一步满足异构审查。两个无资源冲突 TASK 且仍有两个槽时会进入同一个并发组。模型 ID 只是宿主 inventory 示例，控制器不内置厂商 allowlist，也不会猜测当前宿主是否真的支持这些模型。
+
 ## 强制边界
 
 - 返回值固定为建议性绑定，`binding=ADVISORY`、`dispatchAllowed=false`。

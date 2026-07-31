@@ -1727,6 +1727,13 @@ class SchedulerRepository:
                 "owner": row["owner"],
                 "agentId": executor.get("agentId"),
                 "modelId": executor.get("modelId"),
+                "dispatchMode": executor.get("dispatchMode"),
+                "dispatchReasoningClass": executor.get(
+                    "dispatchReasoningClass"
+                ),
+                "dispatchDecisionFingerprint": executor.get(
+                    "dispatchDecisionFingerprint"
+                ),
                 "operationId": row["operation_id"],
                 "claimedAt": row["claimed_at"],
                 "lastHeartbeatAt": row["last_heartbeat_at"],

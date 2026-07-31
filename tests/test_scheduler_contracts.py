@@ -579,6 +579,35 @@ class McpSurfaceTests(unittest.TestCase):
         )
         self.assertNotIn("_meta", by_name["available_agents"])
         self.assertNotIn("_meta", by_name["recommend_executors"])
+        dispatch_plan_schema = by_name[
+            "plan_dispatch_batch"
+        ]["inputSchema"]
+        self.assertEqual(
+            dispatch_plan_schema["required"],
+            [
+                "root_id",
+                "expected_graph_fingerprint",
+                "executor_inventory",
+                "node_requirements",
+            ],
+        )
+        self.assertEqual(
+            set(dispatch_plan_schema["properties"]),
+            {
+                "root_id",
+                "expected_graph_fingerprint",
+                "executor_inventory",
+                "node_requirements",
+                "current_executor",
+            },
+        )
+        self.assertEqual(
+            dispatch_plan_schema["properties"]["node_requirements"].get(
+                "minItems"
+            ),
+            None,
+        )
+        self.assertNotIn("_meta", by_name["plan_dispatch_batch"])
         dispatch_schema = by_name["dispatch_loop"]["inputSchema"]
         self.assertEqual(
             dispatch_schema["required"],
@@ -599,8 +628,17 @@ class McpSurfaceTests(unittest.TestCase):
                 "owner",
                 "agent_id",
                 "model_id",
+                "dispatch_mode",
+                "dispatch_reasoning_class",
+                "dispatch_decision_fingerprint",
                 "operation_id",
             },
+        )
+        self.assertEqual(
+            dispatch_schema["properties"]["dispatch_reasoning_class"][
+                "enum"
+            ],
+            ["STANDARD", "HIGH", "UNCLASSIFIED"],
         )
         pause_schema = by_name["pause_loop"]["inputSchema"]
         self.assertNotIn("resume_at", pause_schema["required"])
@@ -1842,6 +1880,11 @@ class McpSurfaceTests(unittest.TestCase):
                 initialized["result"]["instructions"],
             )
             self.assertIn(
+                "plan_dispatch_batch consumes ephemeral host-native "
+                "capacity",
+                initialized["result"]["instructions"],
+            )
+            self.assertIn(
                 "All TASKs in that Delivery share those project branches",
                 initialized["result"]["instructions"],
             )
@@ -1941,7 +1984,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 23)
+            self.assertEqual(len(listed["result"]["tools"]), 24)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

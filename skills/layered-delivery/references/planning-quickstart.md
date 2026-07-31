@@ -378,7 +378,7 @@ Git 场景先检查首次 `workspace_status`：
    > 如需继续调整需求，请直接回复修改意见；当前方案不会冻结。
 
 6. 按用户回复执行：
-   - 用户选择**自动执行**后，立即以当前 `deliveryRevision`、`hierarchyFingerprint`、`requiredProjectAuthorizations` 的精确项目 ID 集合、`execution_mode=active` 和真实确认人调用 `freeze_hierarchy`；冻结成功后直接进入 `graph_frontier` 调度循环。
+   - 用户选择**自动执行**后，立即以当前 `deliveryRevision`、`hierarchyFingerprint`、`requiredProjectAuthorizations` 的精确项目 ID 集合、`execution_mode=active` 和真实确认人调用 `freeze_hierarchy`；冻结成功后直接进入 `graph_frontier` 调度循环，并按执行说明用宿主真实 inventory 调用 `plan_dispatch_batch`，显式选择模型并并发创建同批接收 Agent。
    - 用户选择**手动交接**后，立即以当前 `deliveryRevision`、`hierarchyFingerprint`、精确 `authorized_project_ids`、`execution_mode=manual` 和真实确认人调用 `freeze_hierarchy`；冻结成功后只输出一次包含 `rootId` 的纯文本交接说明，接收会话从 `graph_frontier` 恢复，不重新 prepare 或 freeze。
    - 用户直接回复修改意见时，不调用 freeze；仅在需求实际变化后重新 prepare，并只使用新 fingerprint。
    - 用户询问问题或给出未改变需求的其他回复时，不调用 freeze、不重新 prepare；回答后保留当前 fingerprint 并重新展示上述两个选项。

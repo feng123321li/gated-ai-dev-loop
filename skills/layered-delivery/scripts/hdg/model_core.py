@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from .constants import MAX_IDENTIFIER_LENGTH, SCHEMA_VERSION
@@ -382,7 +383,7 @@ def work_item_dependencies(definition: dict[str, Any]) -> list[str]:
 
 def _delivery_definition(value: object) -> dict[str, Any]:
     required = {"id", "title", "summary", "reviewLoop"}
-    expected = required | {"gitBinding"}
+    expected = required | {"gitBinding", "projectScopes"}
     if (
         not isinstance(value, dict)
         or not required.issubset(value)
@@ -409,7 +410,115 @@ def _delivery_definition(value: object) -> dict[str, Any]:
             value["gitBinding"],
             field="hierarchy.delivery.gitBinding",
         )
+    if "projectScopes" in value:
+        normalized["projectScopes"] = _project_scopes(
+            value["projectScopes"],
+        )
+        branch_refs = {
+            binding["branchRef"]
+            for binding in (
+                [normalized["gitBinding"]]
+                if "gitBinding" in normalized
+                else []
+            )
+            + [
+                scope["gitBinding"]
+                for scope in normalized["projectScopes"]
+                if "gitBinding" in scope
+                and scope["access"] == "READ_WRITE"
+            ]
+        }
+        if len(branch_refs) > 1:
+            fail(
+                "DELIVERY_PROJECT_BRANCH_MISMATCH",
+                "Every writable Git project in one Delivery must use the "
+                "same feature branch name",
+                branchRefs=sorted(branch_refs),
+            )
     return normalized
+
+
+def _project_scopes(value: object) -> list[dict[str, Any]]:
+    field = "hierarchy.delivery.projectScopes"
+    if not isinstance(value, list) or not value:
+        fail(
+            "DELIVERY_PROJECT_SCOPE_INVALID",
+            "projectScopes must be a nonempty array when supplied",
+            field=field,
+        )
+    normalized: list[dict[str, Any]] = []
+    project_ids: set[str] = set()
+    workspace_roots: set[str] = set()
+    required = {"id", "workspaceRoot", "access"}
+    allowed = required | {"gitBinding"}
+    for index, entry in enumerate(value):
+        entry_field = f"{field}[{index}]"
+        if (
+            not isinstance(entry, dict)
+            or not required.issubset(entry)
+            or not set(entry).issubset(allowed)
+        ):
+            _shape_error(
+                "DELIVERY_PROJECT_SCOPE_INVALID",
+                "Project scope fields are invalid",
+                entry,
+                field=entry_field,
+                expected=allowed,
+            )
+        project_id = safe_id(entry["id"], f"{entry_field}.id")
+        if project_id in project_ids:
+            fail(
+                "DELIVERY_PROJECT_SCOPE_INVALID",
+                f"Duplicate project scope ID: {project_id}",
+                field=f"{entry_field}.id",
+            )
+        workspace_root_value = entry["workspaceRoot"]
+        if (
+            not isinstance(workspace_root_value, str)
+            or not workspace_root_value.strip()
+            or CONTROL.search(workspace_root_value)
+        ):
+            fail(
+                "DELIVERY_PROJECT_SCOPE_INVALID",
+                "workspaceRoot must be an absolute filesystem path",
+                field=f"{entry_field}.workspaceRoot",
+            )
+        raw_workspace_root = Path(workspace_root_value.strip())
+        if not raw_workspace_root.is_absolute():
+            fail(
+                "DELIVERY_PROJECT_SCOPE_INVALID",
+                "workspaceRoot must be an absolute filesystem path",
+                field=f"{entry_field}.workspaceRoot",
+            )
+        workspace_root = str(raw_workspace_root.absolute())
+        normalized_root = str(Path(workspace_root)).casefold()
+        if normalized_root in workspace_roots:
+            fail(
+                "DELIVERY_PROJECT_SCOPE_INVALID",
+                "Project workspace roots must be unique",
+                field=f"{entry_field}.workspaceRoot",
+            )
+        access = entry["access"]
+        if access not in {"READ_ONLY", "READ_WRITE"}:
+            fail(
+                "DELIVERY_PROJECT_SCOPE_INVALID",
+                "Project access must be READ_ONLY or READ_WRITE",
+                field=f"{entry_field}.access",
+            )
+        project_scope: dict[str, Any] = {
+            "id": project_id,
+            "workspaceRoot": workspace_root,
+            "access": access,
+        }
+        if "gitBinding" in entry:
+            project_scope["gitBinding"] = _git_binding(
+                entry["gitBinding"],
+                field=f"{entry_field}.gitBinding",
+            )
+        normalized.append(project_scope)
+        project_ids.add(project_id)
+        workspace_roots.add(normalized_root)
+    return sorted(normalized, key=lambda item: item["id"])
 
 
 def _git_branch_ref(value: object, field: str) -> str:

@@ -5,7 +5,8 @@
 ## 准备结果续接
 
 - 当前上下文仍保留最近一次 `prepare_hierarchy` 响应和原始 hierarchy 时，复用其中的 `hierarchyFingerprint`、完整清单与人类投影路径；需求未变时不要重复 prepare，回答用户问题后重新展示同一组冻结选项。
-- 用户修改需求时，更新 hierarchy 并重新调用 `prepare_hierarchy`；只使用新响应的 fingerprint，不复用旧值。
+- 初次冻结前用户修改需求时，更新 hierarchy 并重新调用 `prepare_hierarchy`；只使用新响应的 fingerprint，不复用旧值。
+- 初次冻结后、最终用户验收前用户修改依赖、项目范围、资源或拓扑时，保持相同 `delivery.id` 调用 `prepare_delivery_revision`，不得重新调用初始 prepare，也不得创建另一个 Delivery ID。
 - 当前上下文不再持有精确 fingerprint 或原始 hierarchy 时，不从 JSON/Markdown 投影反推机器输入，也不猜测旧值；重新收集需求并 prepare 后再请求冻结确认。
 
 ## 选择根节点
@@ -63,6 +64,8 @@
 ```
 
 `delivery.id` 是稳定的 Delivery/Graph 标识，也是需求投影目录的 namespace。工作区全部 Delivery 的入口位于 `.layered-delivery/overview.md`，这里只列 Delivery 标识、标题、状态、更新时间和详情链接；该 Delivery 自己的 TASK 进度与 GROUP 数量位于 `.layered-delivery/<delivery-id>/overview.md`。`delivery.reviewLoop` 在根终态之后执行。
+
+一个 `delivery.id` 可以拥有多个不可变 Delivery Revision。Revision 1 是初次冻结范围；用户最终验收前的外层范围调整形成 Revision 2、3……，仍位于同一投影目录并通过 `revisions.md` 串联。旧 Revision 及其 run/event 不覆盖、不删除；新 Revision 冻结时，旧 run 变为 `SUPERSEDED`。
 
 ## 定义递归节点
 
@@ -225,6 +228,14 @@ GROUP：
 
 先调用 `hierarchy_contract(root_kind="GROUP")` 或 `hierarchy_contract(root_kind="TASK")`，并以返回的实时 schema/example 为最终字段依据。
 
+`prepare_hierarchy` 的 MCP `inputSchema` 复用同一份 schema v3 定义，并以
+`oneOf` 同时约束 GROUP/TASK 根节点。宿主应在工具调用前据此拒绝未知字段、
+缺失字段和错误节点结构；`loop.payload` 继续保持开放。MCP Adapter 还会在
+进入 Controller 前复用完整领域校验，拦截父子关系、同级依赖和子节点摘要
+等 JSON Schema 无法完整表达的契约错误。此类错误统一返回
+`MCP_TOOL_ARGUMENT_INVALID`，不会创建或替换 `PREPARED` 结果；不要依赖
+Controller 事后修正无效 hierarchy。
+
 ## 同级启动依赖
 
 `dependsOn` 是直接同级之间的启动屏障，允许 TASK→TASK、TASK→GROUP、GROUP→TASK 和 GROUP→GROUP：
@@ -273,7 +284,9 @@ before 候选，并根据需求形成 after；确认 TASK 时必须把两者作�
 `work-items/<task-id>/interfaces.md`，并从 TASK baseline 与 Delivery
 baseline 串联；完全没有声明的 TASK 不生成该文件、路径和导航。控制器不
 动态扫描实现代码或隐式推算契约；TASK/Review Loop 可用真实代码验证 after。
-字段仍是 Loop 的不透明输入，不参与依赖、资源锁或 Graph 调度。
+接口详情直接在完整请求和响应表中逐字段比较 before/after，标记新增、修改、
+删除或未变；类型、必填性和简介使用“修改前 → 修改后”展示，不再拆成两份
+重复清单。字段仍是 Loop 的不透明输入，不参与依赖、资源锁或 Graph 调度。
 
 ## Skill Hint 晚绑定
 
@@ -298,6 +311,56 @@ Git 场景先检查首次 `workspace_status`：
 - 在某个 Active Delivery 的 feature worktree 中要求启动另一个独立 Delivery 时，也先从主线创建另一个 worktree；不得从当前 feature HEAD 分叉。只有用户明确要求 stacked delivery 时才允许建立真实的 Delivery 间 Git 依赖，而当前 Graph 不把它伪装成两个独立 Delivery。
 - Git worktree 缺少 `gitBinding`、当前分支不匹配、HEAD 不继承 `baseCommit`，或主线不再包含该基线时，`prepare_hierarchy` / 运行工具必须停止。控制器不代替宿主运行 `git worktree add`、`switch`、`commit`、`merge` 或 `push`。
 
+### 跨本地仓库的同一 Delivery
+
+主需求位于 `erp-pm`，但需要同时修改 `erp-order`、`erp-supplier` 等本地仓库时，不拆成多个 Delivery。使用 `delivery.projectScopes` 声明精确范围：
+
+```json
+{
+  "projectScopes": [
+    {
+      "id": "erp-pm",
+      "workspaceRoot": "G:\\www\\workspace\\service\\erp-pm",
+      "access": "READ_WRITE",
+      "gitBinding": {
+        "branchRef": "feature/order-supplier-contract",
+        "baseRef": "main",
+        "baseCommit": "<erp-pm 的完整基线提交>",
+        "integrationTarget": "main"
+      }
+    },
+    {
+      "id": "erp-order",
+      "workspaceRoot": "G:\\www\\workspace\\service\\erp-order",
+      "access": "READ_WRITE",
+      "gitBinding": {
+        "branchRef": "feature/order-supplier-contract",
+        "baseRef": "master",
+        "baseCommit": "<erp-order 的完整基线提交>",
+        "integrationTarget": "master"
+      }
+    },
+    {
+      "id": "erp-supplier",
+      "workspaceRoot": "G:\\www\\workspace\\service\\erp-supplier",
+      "access": "READ_WRITE",
+      "gitBinding": {
+        "branchRef": "feature/order-supplier-contract",
+        "baseRef": "main",
+        "baseCommit": "<erp-supplier 的完整基线提交>",
+        "integrationTarget": "main"
+      }
+    }
+  ]
+}
+```
+
+- scope 必须包含当前 Delivery 工作区；每个 `workspaceRoot` 必须唯一且存在。
+- `READ_WRITE` Git 项目的 `branchRef` 必须完全同名；不同仓库可使用各自的 `main`/`master`、基线提交和最终集成目标。
+- prepare 只读校验每个仓库的分支与基线。响应中的 `requiredProjectAuthorizations` 是本 Revision 的完整授权清单。
+- freeze 必须提交完全相同的项目 ID 集合；缺失、额外或重复 ID 都拒绝。该授权只限定调度 scope，不授权 Git commit、push、merge 或发布。
+- 后续 Revision 新增 `erp-supplier` 等项目时，必须重新 prepare 并授权完整新清单；不能沿用旧 Revision 的授权。
+
 新建、修改或无法安全续接 `PREPARED` 结果时：
 
 1. 调用 `hierarchy_contract(root_kind=...)`。
@@ -315,9 +378,9 @@ Git 场景先检查首次 `workspace_status`：
    > 如需继续调整需求，请直接回复修改意见；当前方案不会冻结。
 
 6. 按用户回复执行：
-   - 用户选择**自动执行**后，立即以当前 `hierarchyFingerprint`、`execution_mode=active` 和真实确认人调用 `freeze_hierarchy`；冻结成功后直接进入 `graph_frontier` 调度循环。
-   - 用户选择**手动交接**后，立即以当前 `hierarchyFingerprint`、`execution_mode=manual` 和真实确认人调用 `freeze_hierarchy`；冻结成功后只输出一次包含 `rootId` 的纯文本交接说明，接收会话从 `graph_frontier` 恢复，不重新 prepare 或 freeze。
+   - 用户选择**自动执行**后，立即以当前 `deliveryRevision`、`hierarchyFingerprint`、`requiredProjectAuthorizations` 的精确项目 ID 集合、`execution_mode=active` 和真实确认人调用 `freeze_hierarchy`；冻结成功后直接进入 `graph_frontier` 调度循环。
+   - 用户选择**手动交接**后，立即以当前 `deliveryRevision`、`hierarchyFingerprint`、精确 `authorized_project_ids`、`execution_mode=manual` 和真实确认人调用 `freeze_hierarchy`；冻结成功后只输出一次包含 `rootId` 的纯文本交接说明，接收会话从 `graph_frontier` 恢复，不重新 prepare 或 freeze。
    - 用户直接回复修改意见时，不调用 freeze；仅在需求实际变化后重新 prepare，并只使用新 fingerprint。
    - 用户询问问题或给出未改变需求的其他回复时，不调用 freeze、不重新 prepare；回答后保留当前 fingerprint 并重新展示上述两个选项。
 6. 自动或手动选择本身就是一次性的完整冻结授权。只有这两个选择可以紧邻调用 `freeze_hierarchy`；该工具在宿主权限层使用自动批准，不得再询问通用 Yes/No 或触发任何冻结弹窗，也不要向 MCP 发送内部 `confirmed` 字段。适配器会在控制器边界内注入严格的布尔值 `True`；自动/手动只决定当前会话继续还是交接，不改变内部自动确认模式。
-7. 初次冻结后 `delivery.gitBinding`、依赖、资源和拓扑固定，所有 TASK requirement 都是 revision 1、`FROZEN`，不再逐 TASK 请求方案确认。开发期间仅在用户主动要求修改尚未开始 TASK 时，才按执行说明单独解冻/再冻结该 TASK；该操作不能改变 Git binding。自动模式继续消费 frontier；手动模式到一次性交接后停止当前会话的执行循环。
+7. 初次冻结后当前 Delivery Revision 的 Git/project binding、依赖、资源和拓扑固定，所有 TASK requirement 都是 revision 1、`FROZEN`，不再逐 TASK 请求方案确认。开发期间仅在用户主动要求修改尚未开始 TASK 时，才按执行说明单独解冻/再冻结该 TASK；该操作不能改变 Git/project binding。需要改变外层范围时使用同一 Delivery 的下一 Revision。自动模式继续消费 frontier；手动模式到一次性交接后停止当前会话的执行循环。

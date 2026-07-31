@@ -75,9 +75,10 @@ class PluginBundleTests(unittest.TestCase):
             "回答后保留当前 fingerprint",
             planning,
         )
-        self.assertIn("`cancel_graph_run`", main)
-        self.assertIn("新的 `delivery.id`", main)
-        self.assertIn("不要自动取消当前 run", execution)
+        self.assertIn("`prepare_delivery_revision`", main)
+        self.assertIn("保持原 `delivery.id`", main)
+        self.assertIn("不要创建新的 Delivery ID", execution)
+        self.assertIn("旧 run 自动成为 `SUPERSEDED`", execution)
         self.assertIn(
             "不要把“Review 未通过”提交成 `BLOCKED`",
             execution,
@@ -100,6 +101,7 @@ class PluginBundleTests(unittest.TestCase):
             "progress.md",
             "acceptance.md",
             "interfaces.md",
+            "revisions.md",
         ):
             with self.subTest(projection=projection):
                 self.assertIn(projection, planning)
@@ -196,9 +198,11 @@ class PluginBundleTests(unittest.TestCase):
             planning,
         )
         self.assertIn(
-            "TASK 共享 Delivery feature worktree",
+            "TASK 共享同一 Delivery",
             main + execution,
         )
+        self.assertIn("projectScopes", main + planning + execution)
+        self.assertIn("同名", main + planning + execution)
         self.assertIn(
             "TASK 可按各自 scope 单独执行 `git add` 和 `git commit`",
             main + execution,
@@ -318,7 +322,7 @@ class PluginBundleTests(unittest.TestCase):
         )
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
-        self.assertEqual(len(tool_definitions()), 21)
+        self.assertEqual(len(tool_definitions()), 23)
 
     def test_bundled_mcp_prefers_modern_stdio_discovery(self) -> None:
         entry = SKILL / "scripts" / "hdg_mcp.py"
@@ -418,7 +422,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            21,
+            23,
         )
         discovery = responses[2]["result"]["structuredContent"]["result"]
         self.assertFalse(
@@ -499,7 +503,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            21,
+            23,
         )
 
 

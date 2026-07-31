@@ -321,7 +321,83 @@ def verify_delivery_git_binding(
     }
 
 
+def verify_delivery_project_scopes(
+    workspace_root: str,
+    delivery: dict[str, Any],
+    *,
+    preparing: bool,
+) -> list[dict[str, Any]]:
+    """Verify the exact project roots frozen into one Delivery revision."""
+
+    scopes = delivery.get("projectScopes")
+    if scopes is None:
+        return []
+    primary_root = Path(workspace_root).absolute().resolve(strict=True)
+    verified: list[dict[str, Any]] = []
+    includes_primary = False
+    for scope in scopes:
+        try:
+            project_root = Path(scope["workspaceRoot"]).resolve(
+                strict=True
+            )
+        except (FileNotFoundError, OSError):
+            fail(
+                "SCHEDULER_PROJECT_SCOPE_INVALID",
+                "A project workspace root must exist before prepare",
+                projectId=scope["id"],
+                workspaceRoot=scope["workspaceRoot"],
+            )
+        if not project_root.is_dir():
+            fail(
+                "SCHEDULER_PROJECT_SCOPE_INVALID",
+                "A project workspace root must be a directory",
+                projectId=scope["id"],
+                workspaceRoot=str(project_root),
+            )
+        if project_root == primary_root:
+            includes_primary = True
+        scope_binding = scope.get("gitBinding")
+        if project_root == primary_root:
+            delivery_binding = delivery.get("gitBinding")
+            if (
+                scope_binding is not None
+                and delivery_binding is not None
+                and scope_binding != delivery_binding
+            ):
+                fail(
+                    "SCHEDULER_PROJECT_SCOPE_INVALID",
+                    "The primary project Git binding must match the "
+                    "Delivery Git binding",
+                    projectId=scope["id"],
+                )
+            if scope_binding is None:
+                scope_binding = delivery_binding
+        git_workspace = verify_delivery_git_binding(
+            str(project_root),
+            scope_binding,
+            preparing=preparing,
+        )
+        item = {
+            "id": scope["id"],
+            "workspaceRoot": str(project_root),
+            "access": scope["access"],
+        }
+        if scope_binding is not None:
+            item["gitBinding"] = scope_binding
+        if git_workspace is not None:
+            item["gitWorkspace"] = git_workspace
+        verified.append(item)
+    if not includes_primary:
+        fail(
+            "SCHEDULER_PROJECT_SCOPE_INVALID",
+            "projectScopes must include the current Delivery workspace",
+            workspaceRoot=str(primary_root),
+        )
+    return sorted(verified, key=lambda item: item["id"])
+
+
 __all__ = (
     "inspect_delivery_git_workspace",
     "verify_delivery_git_binding",
+    "verify_delivery_project_scopes",
 )

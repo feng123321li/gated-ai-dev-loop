@@ -34,7 +34,7 @@ TASK Review、GROUP Review 和 Delivery Review 使用相同规则：
 3. P2 不阻断成功，但必须逐项列示并说明接受理由或后续处置。
 4. P0/P1 全部修复、验证并独立复审后，才可用 `SUCCEEDED` 返回结果；同时在 `result.reviewFindings` 提交完整问题清单，P2 不得因非阻断而省略。
 
-`BLOCKED` 不是 Review 失败状态，只能在当前 scope 和权限内已经没有继续路径时使用并显式分类；`REPLAN_REQUIRED` 只用于必须改变冻结依赖、资源声明或拓扑的情况。任一级真实 `BLOCKED` 都停止向上收敛；`REPLAN_REQUIRED` 由 frontier 进入 `REPLAN_HIERARCHY`，按执行说明等待取消授权和替代图评审。
+`BLOCKED` 不是 Review 失败状态，只能在当前 scope 和权限内已经没有继续路径时使用并显式分类；`REPLAN_REQUIRED` 只用于必须改变冻结依赖、资源声明、项目范围或拓扑的情况。任一级真实 `BLOCKED` 都停止向上收敛；`REPLAN_REQUIRED` 由 frontier 进入 `REPLAN_HIERARCHY`，按执行说明等待用户决定，并在同一 Delivery 下评审下一 Revision。
 
 ## Delivery Review
 
@@ -83,7 +83,7 @@ Review 成功时使用以下结果约定；没有问题也提交空数组：
 frontier 返回 `RECORD_USER_CONFIRMATION` 后：
 
 1. 向用户展示根工作项摘要和报告链接、递归 Review 报告链、Delivery Review 摘要以及重要阻断/风险，不重复展开所有下层报告。
-2. 等待用户明确接受。
+2. 等待用户明确接受。用户此时提出需求修改，说明当前 Delivery 尚未结束；不要确认完成，也不要直接修改已冻结 Revision。保持同一 `delivery.id` 进入 `prepare_delivery_revision`。
 3. 用户明确接受本身就是写入最终验收的授权；使用控制器接受的可移植 ASCII `confirmed_by` 调用 `record_user_confirmation`，不要再请求通用 Yes/No，也不要触发宿主权限弹窗。
 4. Graph 进入 `COMPLETED` 后只返回简短终态摘要；不要自行写入宿主记忆、触发持续学习、维护旧 schema 笔记或更新任何项目文件。
 

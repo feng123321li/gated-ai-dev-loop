@@ -15,7 +15,7 @@
 ## 强制边界
 
 - 返回值固定为建议性绑定，`binding=ADVISORY`、`dispatchAllowed=false`。
-- 推荐工具本身不创建接收 Agent、不调用外部开发 CLI、不切换当前会话模型、不 claim Loop，也不改变 `dispatch_loop.owner`。自动执行模式的总调度器可在工具返回后通过宿主原生 Agent 机制执行派遣。
+- 推荐工具本身不创建接收 Agent、不调用外部开发 CLI、不切换当前会话模型、不 claim Loop，也不改变 `dispatch_loop.owner`。自动执行模式的总调度器可在工具返回后通过宿主原生 Agent 机制执行派遣；真正的接收方必须把实际 `agent_id` / `model_id` 交给 `dispatch_loop`，未被采用的建议不得写成执行事实。
 - 建议和临时不可用列表都不持久化到 schema v3、hierarchy、Graph、SQLite、事件链或人类投影；配置或容量改变后重新发现。
 - 推荐器不解析 `loop.payload` 或 `loop.result`。TASK Loop 只按开发角色匹配；TASK/GROUP/Delivery Review 额外优先选择不同于上游开发建议的 Agent。
 - 只有一个合格 Agent 时仍可展示它，但 Review 的 `independence.satisfied=false` 且置信度降低；独立上下文要求继续由实际 Loop 执行机制保证。

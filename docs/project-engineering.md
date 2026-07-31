@@ -33,7 +33,8 @@ src/hdg/
 
 | 表 | 内容 |
 |---|---|
-| `hierarchies` | Delivery 交付信息（含可选冻结 Git binding）、递归 GROUP/TASK hierarchy、graph、指纹与冻结状态 |
+| `hierarchies` | Delivery 当前 Revision 的项目/Git scope、递归 GROUP/TASK hierarchy、graph、指纹与冻结状态 |
+| `delivery_revisions` | 同一 Delivery 的不可变 Revision 定义、原因、项目授权和冻结/取代时间 |
 | `delivery_workspaces` | Delivery 与对话工作区 `workspaceKey` 的绑定；linked worktree 共享主控制根但保持身份隔离 |
 | `runs` | 整体运行状态 |
 | `node_runs` | 每个节点的 attempt、claim、lease 和 outcome |
@@ -49,7 +50,8 @@ Hierarchy 最外层只有两个入口：
 ```text
 hierarchy
 ├─ delivery            # Graph/run 身份、交付摘要、Git binding、最终 Review
-│  └─ gitBinding?      # feature/base/fork commit/integration target
+│  ├─ gitBinding?      # 主工作区 feature/base/fork commit/integration target
+│  └─ projectScopes?   # 多仓库 root/access/gitBinding；可写仓库同名分支
 └─ root
    ├─ schemaVersion
    ├─ skillHints
@@ -81,6 +83,7 @@ Graph 编译遵循以下终态规则：
 │   ├── baseline.md
 │   ├── progress.md
 │   ├── acceptance.md
+│   ├── revisions.md
 │   └── work-items/
 │       └── g-order/
 │           ├── baseline.md
@@ -99,9 +102,9 @@ Graph 编译遵循以下终态规则：
     └── acceptance.md
 ```
 
-`scheduler.db` 是唯一机器权威；各 `<delivery-id>` 目录只保存可从数据库状态重建的中文人类投影，不再复制 hierarchy、Graph 或运行状态 JSON。目录命名使用不可变的 `delivery.id` 和节点 ID，不使用可修改标题；同一控制根可以保留并并发运行多个 Delivery。每个 Active Delivery 必须绑定不同对话工作区；linked Git worktree 通过 `.git/worktrees/*/commondir` 映射到主 checkout 的共享控制根。Git hierarchy 的 `delivery.gitBinding` 冻结最终 feature 分支、本地主线（优先 `main`，否则 `master`）、不可变 fork commit 与最终集成目标；同一 Delivery 的全部 TASK 共享该 worktree/feature 分支，不存在 TASK 级 Git binding，也不允许 TASK Agent 创建或切换内部分支。获得相应 Git 写入授权后，每个 TASK 可只暂存并提交自身 scope 的变更，在 Delivery 分支上形成独立 commit；共享 Git index 的写入临界区必须串行，提交前必须检查并避免带入其他 TASK 的 staged 或 working-tree 变更。运行入口通过只读 Git 命令验证 worktree/branch/祖先关系，不保存动态 HEAD，控制器本身也不执行 Git 写操作。`work-items/<root-id>/children/...` 镜像逻辑父子关系，但不表达 `dependsOn`、文件 scope 或调度授权；根 TASK 不增加 GROUP 目录。
+`scheduler.db` 是唯一机器权威；各 `<delivery-id>` 目录只保存可重建的人类投影。稳定 `delivery.id` 下可以有多个不可变 Revision；`revisions.md` 默认展示当前 Revision 并串联旧 run 的 `SUPERSEDED` 审计状态。`projectScopes` 允许一个需求覆盖多个本地仓库，冻结时要求精确项目 ID 授权；所有可写 Git 项目使用同名 feature 分支，但分别绑定自己的主线与 `baseCommit`。TASK Agent 不创建内部分支；Git stage/commit/push 仍需各自授权。`work-items/<root-id>/children/...` 镜像逻辑父子关系，但不表达文件授权。
 
-工作区根 `overview.md` 只列 Delivery 标识、标题、状态、更新时间和详情；Delivery `overview.md` 才展示本交付的 TASK 完成度、GROUP 数量与导航。顶层 `baseline.md` 保存基线树和节点链接，`progress.md` 聚合运行进展，`acceptance.md` 只完整展示 Delivery 本层 Review 与用户确认，并以摘要和链接串联根工作项报告。每个 GROUP/TASK 在递归节点目录下拥有自己的 baseline、progress 和 acceptance；GROUP baseline 链接直接子节点，TASK baseline 展示冻结 Loop 输入。TASK 验收只展开本 TASK 与 TASK Review；GROUP 验收只展开本层完成点与 Review，对直接子节点只显示状态、简要结果和验收链接。任何下层输入、证据或 Review findings 都不向上重复复制。progress 状态、acceptance 摘要、子节点结果和 Review P0/P1/P2 问题使用表格。只有 TASK payload 显式声明接口时，才在该 TASK 目录生成 `interfaces.md`，展示 `CREATE` / `MODIFY` / `DELETE` 的完整 before/after 契约；`protocol` 为开放字符串，HTTP、Dubbo、gRPC、GraphQL、消息等只是示例，通用协议可用 `identifier` 定位。无声明时不生成。代码可辅助提取和校验，但不是动态投影源。所有文件绑定双指纹并可随权威状态重建；`workspace_status` 会为早期 schema v3 Delivery 补建当前适用的投影树，但不迁移数据库或 Graph。所有固定文案和状态保持中文，标明 UTC+8 的人类时间使用 `YYYY-MM-DD HH:mm:ss`；机器权威仍使用 UTC。
+工作区根 `overview.md` 只列 Delivery 标识、标题、状态、更新时间和详情；Delivery `overview.md` 才展示本交付的 TASK 完成度、GROUP 数量与导航。顶层 `baseline.md` 保存基线树和节点链接，`progress.md` 聚合运行进展，`acceptance.md` 只完整展示 Delivery 本层 Review 与用户确认，并以摘要和链接串联根工作项报告。每个 GROUP/TASK 在递归节点目录下拥有自己的 baseline、progress 和 acceptance；GROUP baseline 链接直接子节点，TASK baseline 展示冻结 Loop 输入。TASK 验收只展开本 TASK 与 TASK Review；GROUP 验收只展开本层完成点与 Review，对直接子节点只显示状态、简要结果和验收链接。任何下层输入、证据或 Review findings 都不向上重复复制。progress 状态表显示 claim 事件记录的实际执行代理、执行模型、认领身份和执行轮次；acceptance 摘要、子节点结果和 Review P0/P1/P2 问题使用表格。只有 TASK payload 显式声明接口时，才在该 TASK 目录生成 `interfaces.md`；完整 before/after 契约会被确定性比较，并直接在入参与出参表中逐字段标记新增、修改、删除或未变，类型、必填性和说明使用“修改前 → 修改后”展示。`protocol` 为开放字符串，HTTP、Dubbo、gRPC、GraphQL、消息等只是示例，通用协议可用 `identifier` 定位。无声明时不生成。代码可辅助提取和校验，但不是动态投影源。所有文件绑定双指纹并可随权威状态重建；`workspace_status` 会为早期 schema v3 Delivery 补建当前适用的投影树，但不迁移数据库或 Graph。所有固定文案和状态保持中文，标明 UTC+8 的人类时间使用 `YYYY-MM-DD HH:mm:ss`；机器权威仍使用 UTC。
 
 ## MCP
 
@@ -109,6 +112,7 @@ Graph 编译遵循以下终态规则：
 
 - 发现与建议：`available_agents`、`recommend_executors`
 - 规划：`workspace_status`、`hierarchy_contract`、`prepare_hierarchy`、`freeze_hierarchy`
+- Delivery 修订：`delivery_revision_history`、`prepare_delivery_revision`
 - 需求修订：`unfreeze_task_requirement`、`refreeze_task_requirement`
 - 查询：`graph_frontier`、`graph_status`、`graph_events`、`loop_context`
 - Loop 控制：`dispatch_loop`、`heartbeat_loop`、`pause_loop`、`resume_loop`、`record_loop_result`
@@ -117,11 +121,13 @@ Graph 编译遵循以下终态规则：
 
 Plugin MCP 工具不接收业务 `root` 参数。Adapter 从宿主配置或请求元数据解析项目根，再通过 `ControllerContext` 注入；Python 领域函数的 `root` 仅供 Controller 注入和测试。
 
+`prepare_hierarchy.inputSchema` 由 `hierarchy_contract.py` 的 schema v3 生成器直接构建，以 `oneOf` 暴露 GROUP/TASK 两种根节点，并保持所有结构对象闭合、仅 `loop.payload` 开放。`validate_tool_arguments` 在调用 Controller 前复用 `validate_hierarchy_definition` 完成跨字段语义预检，将 hierarchy 契约错误统一包装为 `MCP_TOOL_ARGUMENT_INVALID`；Controller 内部校验继续作为非 MCP 调用的防御边界。
+
 `loop_context.completionPolicy` 明确输入和终态边界：payload 是目标、明确约束和已知验收点的输入，Loop 在运行时从真实代码、契约和数据链路推导 scope 内必要条件；冻结 Graph 不冻结内部实现计划，可修复 finding 必须在当前 Loop 内调整方案、修正并复验。初始 freeze 同时为所有 TASK 建立 revision 1 冻结记录；`unfreeze_task_requirement` 只接受未开始 TASK，`refreeze_task_requirement` 只替换标题、摘要和 payload，并原子更新 hierarchy/graph 双指纹、事件链和人类投影。`record_loop_result` 的 `BLOCKED` 要求显式 failure class，只用于当前 scope 和权限内没有继续路径的真实终态；调度器仍不解释不透明 finding，也不为返工创建 Graph 环。
 
-`controller.py` 是唯一共享应用入口；它只接受 `ControllerContext` 和 operation 参数，不导入 MCP、Codex 或 Claude 代码。`mcp_tools.py` 把 21 个工具 schema 映射到 Controller，`mcp_adapter.py` 负责协议结果、错误、版本协商和宿主策略，`mcp_server.py` 只处理 newline-delimited stdio 与进程生命周期。
+`controller.py` 是唯一共享应用入口；它只接受 `ControllerContext` 和 operation 参数，不导入 MCP、Codex 或 Claude 代码。`mcp_tools.py` 把 23 个工具 schema 映射到 Controller，`mcp_adapter.py` 负责协议结果、错误、版本协商和宿主策略，`mcp_server.py` 只处理 newline-delimited stdio 与进程生命周期。
 
-`agent_discovery.py` 只读取 PATH、终端 `--version`、非敏感模型字段和用户本地 Profile，不启动开发命令或返回绝对路径、凭据与服务地址。`agent_recommendation.py` 只按 `TASK_LOOP`/Review 角色、显式 Profile 优先级、可用性和上游开发 Agent 多样性排序；不读取 Loop payload，不持久化结果，也不调用 `dispatch_loop`。因此 CC-Switch 或本机配置变化无需重建 Frozen Graph。
+`agent_discovery.py` 只读取 PATH、终端 `--version`、非敏感模型字段和用户本地 Profile，不启动开发命令或返回绝对路径、凭据与服务地址。`agent_recommendation.py` 只按 `TASK_LOOP`/Review 角色、显式 Profile 优先级、可用性和上游开发 Agent 多样性排序；不读取 Loop payload，不持久化结果，也不调用 `dispatch_loop`。因此 CC-Switch 或本机配置变化无需重建 Frozen Graph。`dispatch_loop` 单独要求接收方提交实际 `agent_id` / `model_id`，并把它们写入 `LOOP_CLAIMED` 事件；推荐值不会被当成执行事实。
 
 提供方限额按容量范围分流。单个执行 Agent 受限时，`pause_loop(..., capacity_scope=EXECUTOR)` 持久化真实 `resetAt`，frontier 允许临时排除该 Agent 后动态推荐其他执行者；调度宿主自身受限时，`capacity_scope=HOST` 只产生 `WAIT_FOR_HOST_CAPACITY` 和 `nextWakeAt`。后者必须由 MCP/模型之外的宿主适配器捕获限额、记录暂停并注册定时器，因为 Controller 只在被调用时推进 Graph，不能在模型已不可用时自行启动进程。
 

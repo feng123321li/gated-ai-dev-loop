@@ -216,6 +216,18 @@ def interface_hierarchy() -> dict:
                                 "type": "string",
                                 "required": True,
                                 "description": "原客户编号",
+                            },
+                            {
+                                "name": "quantity",
+                                "type": "integer",
+                                "required": False,
+                                "description": "商品数量",
+                            },
+                            {
+                                "name": "channel",
+                                "type": "string",
+                                "required": False,
+                                "description": "下单渠道",
                             }
                         ],
                         "response": [
@@ -235,6 +247,18 @@ def interface_hierarchy() -> dict:
                                 "type": "string",
                                 "required": True,
                                 "description": "客户标识",
+                            },
+                            {
+                                "name": "quantity",
+                                "type": "integer",
+                                "required": True,
+                                "description": "必须大于零的商品数量",
+                            },
+                            {
+                                "name": "channel",
+                                "type": "string",
+                                "required": False,
+                                "description": "下单渠道",
                             }
                         ],
                         "response": [
@@ -466,7 +490,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             completed_overview,
         )
         self.assertNotIn("agent-1", completed_overview)
-        self.assertIn("| 已成功 | 1 | reviewer-1 |", completed_overview)
+        self.assertIn("| 已成功 | reviewer-1 | 1 |", completed_overview)
         self.assertIn("opaque-to-scheduler", completed_overview)
         self.assertNotIn("SUCCEEDED", completed_overview)
         task_acceptance = (
@@ -477,9 +501,9 @@ class SchedulerRuntimeTests(unittest.TestCase):
             / "t-service"
             / "acceptance.md"
         ).read_text(encoding="utf-8")
-        self.assertIn("| 已成功 | 1 | agent-1 |", task_acceptance)
+        self.assertIn("| 已成功 | agent-1 | 1 |", task_acceptance)
         self.assertIn(
-            "| 已成功 | 1 | task-reviewer-1 |",
+            "| 已成功 | task-reviewer-1 | 1 |",
             task_acceptance,
         )
         workspace_overview = (
@@ -1010,6 +1034,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "prioritizeApplicableSkillHints": True,
                 "returnOnlyStandardLoopOutcome": True,
                 "coordinatorMustNotExecuteLoopInline": True,
+                "accessOnlyAuthorizedProjectScopes": True,
             },
         )
 
@@ -1446,15 +1471,28 @@ class SchedulerRuntimeTests(unittest.TestCase):
             root_id=root_id,
             node_id=node_id,
             owner="agent-task",
+            agent_id="codex",
+            model_id="gpt-5.6-sol",
             operation_id="op-task-projection",
             now=at(2),
         )
+        claimed = graph_status(root=self.root, root_id=root_id)
+        claimed_node = next(
+            item
+            for item in claimed["nodes"]
+            if item["nodeId"] == node_id
+        )
+        self.assertEqual(claimed_node["agentId"], "codex")
+        self.assertEqual(claimed_node["modelId"], "gpt-5.6-sol")
 
         running_progress = (item_root / "progress.md").read_text(
             encoding="utf-8"
         )
         self.assertIn(
-            "| TASK | 执行中 | 1 | agent-task |",
+            (
+                "| TASK | 执行中 | codex | gpt-5.6-sol | "
+                "agent-task | 1 |"
+            ),
             running_progress,
         )
 
@@ -1470,6 +1508,15 @@ class SchedulerRuntimeTests(unittest.TestCase):
             },
             now=at(3),
         )
+        rebuild_graph_run(root=self.root, root_id=root_id)
+        rebuilt = graph_status(root=self.root, root_id=root_id)
+        rebuilt_node = next(
+            item
+            for item in rebuilt["nodes"]
+            if item["nodeId"] == node_id
+        )
+        self.assertEqual(rebuilt_node["agentId"], "codex")
+        self.assertEqual(rebuilt_node["modelId"], "gpt-5.6-sol")
 
         completed_progress = (item_root / "progress.md").read_text(
             encoding="utf-8"
@@ -1479,20 +1526,24 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertIn(
             (
-                "| 阶段 | 当前进度 | 尝试次数 | 执行者 | "
+                "| 阶段 | 当前进度 | 执行代理 | 执行模型 | "
+                "认领身份 | 执行轮次 | "
                 "最近更新时间（UTC+8） | 结果摘要 |"
             ),
             completed_progress,
         )
         self.assertIn(
-            "| TASK | 已成功 | 1 | agent-task |",
+            (
+                "| TASK | 已成功 | codex | gpt-5.6-sol | "
+                "agent-task | 1 |"
+            ),
             completed_progress,
         )
         self.assertNotIn("\n- 当前进度：", completed_progress)
         self.assertIn("任务实现与验证已完成。", completed_progress)
         self.assertIn(
             (
-                "| 当前进度 | 尝试次数 | 执行者 | "
+                "| 当前进度 | 认领身份 | 执行轮次 | "
                 "结束时间（UTC+8） | 结果摘要 |"
             ),
             acceptance,
@@ -1829,9 +1880,11 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "freeze_hierarchy",
                 {
                     "root_id": current["rootId"],
+                    "expected_delivery_revision": 1,
                     "expected_hierarchy_fingerprint": (
                         current["hierarchyFingerprint"]
                     ),
+                    "authorized_project_ids": [],
                     "execution_mode": "active",
                     "confirmed_by": "human",
                 },
@@ -1846,6 +1899,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "root_id": "d-first",
                 "node_id": loop_node_id("t-first"),
                 "owner": "agent-first",
+                "agent_id": "codex",
+                "model_id": "gpt-5.6-sol",
                 "operation_id": "op-first",
             },
             root=self.root,
@@ -1879,6 +1934,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "root_id": "d-second",
                     "node_id": loop_node_id("t-second"),
                     "owner": "agent-second",
+                    "agent_id": "claude-code",
+                    "model_id": "claude-sonnet-4",
                     "operation_id": "op-second",
                 },
                 root=self.root,
@@ -2354,6 +2411,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "baseline": f"{artifact_prefix}/baseline.md",
                 "progress": f"{artifact_prefix}/progress.md",
                 "acceptance": f"{artifact_prefix}/acceptance.md",
+                "revisions": f"{artifact_prefix}/revisions.md",
                 "taskBaselines": expected_task_baselines,
                 "workItems": expected_work_items,
             },
@@ -2726,7 +2784,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertIn("t-service", progress)
         self.assertIn(
             (
-                "| 层级路径 | 阶段 | 当前进度 | 尝试次数 | 执行者 | "
+                "| 层级路径 | 阶段 | 当前进度 | 执行代理 | 执行模型 | "
+                "认领身份 | 执行轮次 | "
                 "最近更新时间（UTC+8） | 结果摘要 | 节点进展 |"
             ),
             progress,
@@ -2738,7 +2797,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertIn("# 交付验收记录", acceptance)
         self.assertIn(
             (
-                "| 当前进度 | 尝试次数 | 执行者 | "
+                "| 当前进度 | 认领身份 | 执行轮次 | "
                 "结束时间（UTC+8） | 结果摘要 |"
             ),
             acceptance,
@@ -2769,10 +2828,38 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertIn("必填", interfaces)
         self.assertIn("类型", interfaces)
         self.assertIn("说明", interfaces)
+        self.assertIn("字段路径", interfaces)
+        self.assertIn(
+            (
+                "| legacyCustomerNo | 删除 | string → — | "
+                "是 → — | 原客户编号 → — |"
+            ),
+            interfaces,
+        )
+        self.assertIn(
+            (
+                "| customerId | 新增 | — → string | "
+                "— → 是 | — → 客户标识 |"
+            ),
+            interfaces,
+        )
+        self.assertIn(
+            (
+                "| quantity | 修改 | integer | 否 → 是 | "
+                "商品数量 → 必须大于零的商品数量 |"
+            ),
+            interfaces,
+        )
+        self.assertIn(
+            (
+                "| channel | 未变 | string | 否 | 下单渠道 |"
+            ),
+            interfaces,
+        )
         self.assertIn("orderId", interfaces)
         self.assertIn("创建订单服务", interfaces)
         self.assertIn("新增", interfaces)
-        self.assertIn("不适用（新增接口）", interfaces)
+        self.assertIn("不适用 →", interfaces)
         self.assertIn(
             "com.example.order.OrderService.createOrder",
             interfaces,
@@ -2787,9 +2874,11 @@ class SchedulerRuntimeTests(unittest.TestCase):
             interfaces,
         )
         self.assertIn("LegacyOrderResponse", interfaces)
-        self.assertIn("不适用（删除接口）", interfaces)
-        self.assertIn("#### 修改前", interfaces)
-        self.assertIn("#### 修改后", interfaces)
+        self.assertIn("→ 不适用", interfaces)
+        self.assertNotIn("#### 修改前", interfaces)
+        self.assertNotIn("#### 修改后", interfaces)
+        self.assertIn("#### 入参", interfaces)
+        self.assertIn("#### 出参", interfaces)
         self.assertNotIn("```json", interfaces)
         self.assertNotIn("PREPARED", interfaces)
         self.assertIn(
@@ -2940,6 +3029,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "baseline.md",
                 "progress.md",
                 "acceptance.md",
+                "revisions.md",
             },
         )
         self.assertGreaterEqual(PROJECTION_TEMPLATE_VERSION, 7)
@@ -3365,7 +3455,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 node_id = state["nodeId"]
                 status = STATUS_TEXT[state["status"]]
                 if node_id.startswith("confirm:"):
-                    self.assertIn(f"| {status} | 1 |", acceptance)
+                    self.assertIn(f"| {status} | 无 | 1 |", acceptance)
                     continue
                 if node_id.startswith("loop:"):
                     item_id = node_id.removeprefix("loop:")
@@ -3389,7 +3479,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     path = hierarchy["delivery"]["id"]
                     stage = "Delivery Review"
                 self.assertIn(
-                    f"| {path} | {stage} | {status} | 1 |",
+                    (
+                        f"| {path} | {stage} | {status} | "
+                        "无 | 无 | 无 | 1 |"
+                    ),
                     progress,
                 )
 
@@ -3462,7 +3555,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertIn(
             (
-                "| t-service | TASK | 执行中 | 1 | agent-local-time | "
+                "| t-service | TASK | 执行中 | 无 | 无 | "
+                "agent-local-time | 1 | "
                 "2026-01-01 08:02:00 |"
             ),
             active_progress,

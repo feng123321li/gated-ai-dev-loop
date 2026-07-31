@@ -1,7 +1,7 @@
 {
   "name": "layered-delivery",
-  "version": "0.26.0",
-  "description": "调度带 Git worktree/feature 分支绑定的递归 GROUP/TASK 交付 Graph，并提供本机 Agent/模型建议",
+  "version": "0.28.0",
+  "description": "调度支持不可变 Revision 与跨仓同名分支的递归 GROUP/TASK 交付 Graph",
   "author": {
     "name": "layered-delivery contributors",
     "url": "https://github.com/feng123321li/layered-delivery"
@@ -50,8 +50,8 @@
   },
   "interface": {
     "displayName": "递归交付调度",
-    "shortDescription": "递归调度 Graph，并展示 Agent + Model 建议",
-    "longDescription": "每个 Delivery 定义一次交付与验收边界，内部递归调度 GROUP 与执行叶子 TASK；治理依赖、资源锁、租约、重试、GROUP Join、逐级 Review Loop 和最终确认，并为每个 TASK/Review 展示不自动派遣的本机 Agent + Model 建议。",
+    "shortDescription": "同一 Delivery 修订与跨仓同名分支调度",
+    "longDescription": "每个 Delivery 使用稳定身份和不可变 Revision 管理验收前的需求调整，可在冻结前精确授权多个本地仓库，并强制所有可写仓库使用同名 feature 分支；内部递归调度 GROUP 与 TASK，治理依赖、资源锁、租约、Review Loop、结果继承和最终确认。",
     "developerName": "layered-delivery contributors",
     "category": "Productivity",
     "capabilities": [
@@ -60,7 +60,7 @@
     ],
     "websiteURL": "https://github.com/feng123321li/layered-delivery",
     "defaultPrompt": [
-      "使用 layered-delivery 恢复或创建递归 GROUP/TASK 交付 Graph，并展示每个 TASK/Review 的本机 Agent + Model 建议。"
+      "使用 layered-delivery 恢复或创建递归 GROUP/TASK 交付 Graph，并管理同一 Delivery 的 Revision 与跨仓同名分支。"
     ],
     "brandColor": "#2563EB"
   }

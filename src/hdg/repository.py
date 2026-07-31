@@ -22,10 +22,15 @@ from .graph_model import (
     JOIN_NODE_KINDS,
     compile_delivery_graph,
     graph_fingerprint,
+    loop_node_id,
+    task_review_node_id,
     validate_delivery_graph,
 )
 from .jsonio import canonical_json, fingerprint
-from .model_core import validate_hierarchy_definition
+from .model_core import (
+    iter_hierarchy_nodes,
+    validate_hierarchy_definition,
+)
 from .model_rendering import (
     WORK_ITEM_DIRECTORY,
     render_projection_documents,
@@ -287,6 +292,7 @@ class SchedulerRepository:
             """
             CREATE TABLE IF NOT EXISTS hierarchies (
                 root_id TEXT PRIMARY KEY,
+                revision INTEGER NOT NULL DEFAULT 1,
                 hierarchy_fingerprint TEXT NOT NULL,
                 graph_fingerprint TEXT NOT NULL,
                 hierarchy_json TEXT NOT NULL,
@@ -297,12 +303,16 @@ class SchedulerRepository:
             );
             CREATE TABLE IF NOT EXISTS runs (
                 run_id TEXT PRIMARY KEY,
-                root_id TEXT NOT NULL UNIQUE,
+                root_id TEXT NOT NULL,
+                revision INTEGER NOT NULL DEFAULT 1,
                 status TEXT NOT NULL,
                 started_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 completed_at TEXT,
                 cancelled_at TEXT,
+                superseded_at TEXT,
+                superseded_by_revision INTEGER,
+                UNIQUE(root_id, revision),
                 FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
             );
             CREATE TABLE IF NOT EXISTS node_runs (
@@ -357,6 +367,186 @@ class SchedulerRepository:
                 PRIMARY KEY(run_id, task_id),
                 FOREIGN KEY(run_id) REFERENCES runs(run_id)
             );
+            CREATE TABLE IF NOT EXISTS delivery_revisions (
+                root_id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                hierarchy_fingerprint TEXT NOT NULL,
+                graph_fingerprint TEXT NOT NULL,
+                hierarchy_json TEXT NOT NULL,
+                graph_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                reason TEXT,
+                requested_by TEXT,
+                confirmed_by TEXT,
+                authorized_project_ids_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                frozen_at TEXT,
+                superseded_at TEXT,
+                PRIMARY KEY(root_id, revision),
+                FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
+            );
+            """
+        )
+        SchedulerRepository._upgrade_revision_storage(connection)
+
+    @staticmethod
+    def _upgrade_revision_storage(
+        connection: sqlite3.Connection,
+    ) -> None:
+        """Upgrade internal SQLite storage without accepting old contracts."""
+
+        hierarchy_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(hierarchies)"
+            ).fetchall()
+        }
+        if "revision" not in hierarchy_columns:
+            connection.execute(
+                "ALTER TABLE hierarchies "
+                "ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"
+            )
+
+        run_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(runs)"
+            ).fetchall()
+        }
+        needs_run_rebuild = (
+            "revision" not in run_columns
+            or "superseded_at" not in run_columns
+            or "superseded_by_revision" not in run_columns
+        )
+        if needs_run_rebuild:
+            connection.execute("PRAGMA foreign_keys = OFF")
+            connection.executescript(
+                """
+                DROP INDEX IF EXISTS operation_ids_unique;
+                CREATE TABLE runs_revision_upgrade (
+                    run_id TEXT PRIMARY KEY,
+                    root_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL DEFAULT 1,
+                    status TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    cancelled_at TEXT,
+                    superseded_at TEXT,
+                    superseded_by_revision INTEGER,
+                    UNIQUE(root_id, revision),
+                    FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
+                );
+                INSERT INTO runs_revision_upgrade(
+                    run_id, root_id, revision, status, started_at,
+                    updated_at, completed_at, cancelled_at
+                )
+                SELECT run_id, root_id, 1, status, started_at,
+                       updated_at, completed_at, cancelled_at
+                FROM runs;
+
+                CREATE TABLE node_runs_revision_upgrade (
+                    run_id TEXT NOT NULL,
+                    node_id TEXT NOT NULL,
+                    attempt INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    owner TEXT,
+                    operation_id TEXT,
+                    claimed_at TEXT,
+                    last_heartbeat_at TEXT,
+                    lease_expires_at TEXT,
+                    finished_at TEXT,
+                    outcome_json TEXT,
+                    failure_class TEXT,
+                    PRIMARY KEY(run_id, node_id, attempt),
+                    FOREIGN KEY(run_id)
+                        REFERENCES runs_revision_upgrade(run_id)
+                );
+                INSERT INTO node_runs_revision_upgrade
+                SELECT * FROM node_runs;
+
+                CREATE TABLE graph_events_revision_upgrade (
+                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_uuid TEXT NOT NULL UNIQUE,
+                    run_id TEXT NOT NULL,
+                    node_id TEXT,
+                    attempt INTEGER,
+                    event_type TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    operation_id TEXT,
+                    payload_json TEXT NOT NULL,
+                    recorded_at TEXT NOT NULL,
+                    previous_hash TEXT,
+                    event_hash TEXT NOT NULL UNIQUE,
+                    FOREIGN KEY(run_id)
+                        REFERENCES runs_revision_upgrade(run_id)
+                );
+                INSERT INTO graph_events_revision_upgrade
+                SELECT * FROM graph_events;
+
+                CREATE TABLE task_requirement_states_revision_upgrade (
+                    run_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(run_id, task_id),
+                    FOREIGN KEY(run_id)
+                        REFERENCES runs_revision_upgrade(run_id)
+                );
+                INSERT INTO task_requirement_states_revision_upgrade
+                SELECT * FROM task_requirement_states;
+
+                DROP TABLE graph_events;
+                DROP TABLE node_runs;
+                DROP TABLE task_requirement_states;
+                DROP TABLE runs;
+                ALTER TABLE runs_revision_upgrade RENAME TO runs;
+                ALTER TABLE node_runs_revision_upgrade
+                    RENAME TO node_runs;
+                ALTER TABLE graph_events_revision_upgrade
+                    RENAME TO graph_events;
+                ALTER TABLE task_requirement_states_revision_upgrade
+                    RENAME TO task_requirement_states;
+                CREATE UNIQUE INDEX operation_ids_unique
+                ON node_runs(operation_id)
+                WHERE operation_id IS NOT NULL;
+                """
+            )
+            connection.execute("PRAGMA foreign_keys = ON")
+
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS delivery_revisions (
+                root_id TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                hierarchy_fingerprint TEXT NOT NULL,
+                graph_fingerprint TEXT NOT NULL,
+                hierarchy_json TEXT NOT NULL,
+                graph_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                reason TEXT,
+                requested_by TEXT,
+                confirmed_by TEXT,
+                authorized_project_ids_json TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                frozen_at TEXT,
+                superseded_at TEXT,
+                PRIMARY KEY(root_id, revision),
+                FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
+            );
+            INSERT OR IGNORE INTO delivery_revisions(
+                root_id, revision, hierarchy_fingerprint,
+                graph_fingerprint, hierarchy_json, graph_json, status,
+                created_at, updated_at, frozen_at
+            )
+            SELECT root_id, revision, hierarchy_fingerprint,
+                   graph_fingerprint, hierarchy_json, graph_json, status,
+                   created_at, updated_at,
+                   CASE WHEN status = 'FROZEN' THEN updated_at ELSE NULL END
+            FROM hierarchies;
             """
         )
 
@@ -486,7 +676,8 @@ class SchedulerRepository:
                     row["root_id"]
                     for row in connection.execute(
                         "SELECT root_id FROM runs "
-                        "WHERE status NOT IN ('COMPLETED', 'CANCELLED')"
+                        "WHERE status NOT IN "
+                        "('COMPLETED', 'CANCELLED', 'SUPERSEDED')"
                     ).fetchall()
                 }
                 active_candidates = [
@@ -512,13 +703,18 @@ class SchedulerRepository:
             latest = candidates[0]
             latest_hierarchy, _ = _validated_stored_definition(latest)
             run = connection.execute(
-                "SELECT status FROM runs WHERE root_id = ?",
-                (latest["root_id"],),
+                "SELECT status FROM runs "
+                "WHERE root_id = ? AND revision = ?",
+                (latest["root_id"], latest["revision"]),
             ).fetchone()
         state = (
-            run["status"]
-            if run is not None
-            else latest["status"]
+            latest["status"]
+            if latest["status"] == "PREPARED"
+            else (
+                run["status"]
+                if run is not None
+                else latest["status"]
+            )
         )
         # Projection templates are rebuildable views, not stored schema.
         # Refresh every stored schema-v3 Delivery so workspaces created by an
@@ -532,6 +728,7 @@ class SchedulerRepository:
                 else state
             ),
             "rootId": latest["root_id"],
+            "deliveryRevision": latest["revision"],
             "controlRoot": GOVERNANCE_DIRECTORY,
         }
         if workspace_root is not None:
@@ -541,6 +738,10 @@ class SchedulerRepository:
         git_binding = latest_hierarchy["delivery"].get("gitBinding")
         if git_binding is not None:
             result["gitBinding"] = git_binding
+        result["projectScopes"] = latest_hierarchy["delivery"].get(
+            "projectScopes",
+            [],
+        )
         return result
 
     def prepare(
@@ -570,14 +771,26 @@ class SchedulerRepository:
                     rootId=root_id,
                 )
             frozen = connection.execute(
-                "SELECT status, updated_at FROM hierarchies "
+                "SELECT status, revision, updated_at FROM hierarchies "
                 "WHERE root_id = ?",
                 (root_id,),
             ).fetchone()
-            if frozen is not None and frozen["status"] == "FROZEN":
+            existing_run = connection.execute(
+                "SELECT 1 FROM runs WHERE root_id = ? LIMIT 1",
+                (root_id,),
+            ).fetchone()
+            if (
+                frozen is not None
+                and (
+                    frozen["status"] == "FROZEN"
+                    or frozen["revision"] != 1
+                    or existing_run is not None
+                )
+            ):
                 fail(
                     "SCHEDULER_HIERARCHY_FROZEN",
-                    "A frozen hierarchy cannot be replaced",
+                    "Use prepare_delivery_revision to revise a Delivery "
+                    "after its first freeze",
                 )
             at = _commit_timestamp(
                 self.now,
@@ -586,11 +799,38 @@ class SchedulerRepository:
             connection.execute(
                 """
                 INSERT INTO hierarchies(
-                    root_id, hierarchy_fingerprint, graph_fingerprint,
+                    root_id, revision, hierarchy_fingerprint, graph_fingerprint,
                     hierarchy_json, graph_json, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'PREPARED', ?, ?)
+                ) VALUES (?, 1, ?, ?, ?, ?, 'PREPARED', ?, ?)
                 ON CONFLICT(root_id) DO UPDATE SET
+                    revision = 1,
                     hierarchy_fingerprint = excluded.hierarchy_fingerprint,
+                    graph_fingerprint = excluded.graph_fingerprint,
+                    hierarchy_json = excluded.hierarchy_json,
+                    graph_json = excluded.graph_json,
+                    status = 'PREPARED',
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    root_id,
+                    hierarchy_fingerprint,
+                    graph_fingerprint,
+                    canonical_json(hierarchy),
+                    canonical_json(graph),
+                    at,
+                    at,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO delivery_revisions(
+                    root_id, revision, hierarchy_fingerprint,
+                    graph_fingerprint, hierarchy_json, graph_json, status,
+                    created_at, updated_at
+                ) VALUES (?, 1, ?, ?, ?, ?, 'PREPARED', ?, ?)
+                ON CONFLICT(root_id, revision) DO UPDATE SET
+                    hierarchy_fingerprint =
+                        excluded.hierarchy_fingerprint,
                     graph_fingerprint = excluded.graph_fingerprint,
                     hierarchy_json = excluded.hierarchy_json,
                     graph_json = excluded.graph_json,
@@ -619,6 +859,7 @@ class SchedulerRepository:
         self.write_projections(root_id)
         result = {
             "rootId": root_id,
+            "deliveryRevision": 1,
             "status": "PREPARED",
             "hierarchyFingerprint": hierarchy_fingerprint,
             "graphFingerprint": graph_fingerprint,
@@ -630,6 +871,10 @@ class SchedulerRepository:
         git_binding = hierarchy["delivery"].get("gitBinding")
         if git_binding is not None:
             result["gitBinding"] = git_binding
+        result["projectScopes"] = hierarchy["delivery"].get(
+            "projectScopes",
+            [],
+        )
         return result
 
     def hierarchy(
@@ -655,6 +900,7 @@ class SchedulerRepository:
         hierarchy, graph = _validated_stored_definition(row)
         return {
             "rootId": row["root_id"],
+            "deliveryRevision": row["revision"],
             "status": row["status"],
             "hierarchyFingerprint": row["hierarchy_fingerprint"],
             "graphFingerprint": row["graph_fingerprint"],
@@ -664,12 +910,54 @@ class SchedulerRepository:
             "updatedAt": row["updated_at"],
         }
 
-    def freeze(
+    @staticmethod
+    def _carriable_task_ids(
+        previous_hierarchy: dict[str, Any],
+        revised_hierarchy: dict[str, Any],
+        previous_nodes: list[dict[str, Any]],
+    ) -> list[str]:
+        previous_tasks = {
+            item["definition"]["id"]: item
+            for item in iter_hierarchy_nodes(previous_hierarchy)
+            if item["definition"]["kind"] == "TASK"
+        }
+        revised_tasks = {
+            item["definition"]["id"]: item
+            for item in iter_hierarchy_nodes(revised_hierarchy)
+            if item["definition"]["kind"] == "TASK"
+        }
+        state = {
+            item["nodeId"]: item["status"]
+            for item in previous_nodes
+        }
+        result = []
+        for task_id, revised in revised_tasks.items():
+            previous = previous_tasks.get(task_id)
+            if (
+                previous is None
+                or previous["definition"] != revised["definition"]
+                or previous["reviewLoop"] != revised["reviewLoop"]
+                or state.get(loop_node_id(task_id)) != "SUCCEEDED"
+                or state.get(task_review_node_id(task_id)) != "SUCCEEDED"
+            ):
+                continue
+            result.append(task_id)
+        return sorted(result)
+
+    def prepare_revision(
         self,
-        root_id: str,
+        hierarchy: dict[str, Any],
+        graph: dict[str, Any],
         *,
-        expected_hierarchy_fingerprint: str,
+        root_id: str,
+        expected_current_revision: int,
+        hierarchy_fingerprint: str,
+        graph_fingerprint: str,
+        reason: str,
+        requested_by: str,
+        workspace_root: str | os.PathLike[str],
     ) -> dict[str, Any]:
+        workspace_key = self.workspace_key(workspace_root)
         with self.transaction() as connection:
             row = connection.execute(
                 "SELECT * FROM hierarchies WHERE root_id = ?",
@@ -685,6 +973,185 @@ class SchedulerRepository:
                 "WHERE root_id = ?",
                 (root_id,),
             ).fetchone()
+            if (
+                binding is None
+                or binding["workspace_key"] != workspace_key
+            ):
+                fail(
+                    "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH",
+                    "A Delivery revision must stay in its bound workspace",
+                    rootId=root_id,
+                )
+            if hierarchy["delivery"]["id"] != root_id:
+                fail(
+                    "SCHEDULER_DELIVERY_IDENTITY_IMMUTABLE",
+                    "A Delivery revision must retain the original "
+                    "Delivery ID",
+                    rootId=root_id,
+                )
+            if (
+                not isinstance(expected_current_revision, int)
+                or isinstance(expected_current_revision, bool)
+                or expected_current_revision < 1
+            ):
+                fail(
+                    "SCHEDULER_REVISION_CONFLICT",
+                    "expected_current_revision must be a positive integer",
+                )
+            preparing_revision = expected_current_revision + 1
+            is_reprepare = (
+                row["status"] == "PREPARED"
+                and row["revision"] == preparing_revision
+            )
+            if not is_reprepare and (
+                row["status"] != "FROZEN"
+                or row["revision"] != expected_current_revision
+            ):
+                fail(
+                    "SCHEDULER_REVISION_CONFLICT",
+                    "The expected Delivery revision is not current",
+                    expectedRevision=expected_current_revision,
+                    actualRevision=row["revision"],
+                    status=row["status"],
+                )
+            previous_revision_row = connection.execute(
+                "SELECT * FROM delivery_revisions "
+                "WHERE root_id = ? AND revision = ?",
+                (root_id, expected_current_revision),
+            ).fetchone()
+            previous_run = connection.execute(
+                "SELECT * FROM runs WHERE root_id = ? AND revision = ?",
+                (root_id, expected_current_revision),
+            ).fetchone()
+            if previous_revision_row is None or previous_run is None:
+                fail(
+                    "SCHEDULER_REVISION_CONFLICT",
+                    "The previous frozen Delivery revision is missing",
+                )
+            if previous_run["status"] in {
+                "COMPLETED",
+                "SUPERSEDED",
+            }:
+                fail(
+                    "SCHEDULER_DELIVERY_TERMINAL",
+                    "Only an unaccepted active Delivery can be revised",
+                    runStatus=previous_run["status"],
+                )
+            previous_hierarchy = validate_hierarchy_definition(
+                json.loads(previous_revision_row["hierarchy_json"])
+            )
+            previous_nodes = self.latest_nodes(
+                connection,
+                previous_run["run_id"],
+            )
+            carry_forward = self._carriable_task_ids(
+                previous_hierarchy,
+                hierarchy,
+                previous_nodes,
+            )
+            at = _commit_timestamp(self.now, row["updated_at"])
+            connection.execute(
+                """
+                INSERT INTO delivery_revisions(
+                    root_id, revision, hierarchy_fingerprint,
+                    graph_fingerprint, hierarchy_json, graph_json, status,
+                    reason, requested_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'PREPARED', ?, ?, ?, ?)
+                ON CONFLICT(root_id, revision) DO UPDATE SET
+                    hierarchy_fingerprint =
+                        excluded.hierarchy_fingerprint,
+                    graph_fingerprint = excluded.graph_fingerprint,
+                    hierarchy_json = excluded.hierarchy_json,
+                    graph_json = excluded.graph_json,
+                    status = 'PREPARED',
+                    reason = excluded.reason,
+                    requested_by = excluded.requested_by,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    root_id,
+                    preparing_revision,
+                    hierarchy_fingerprint,
+                    graph_fingerprint,
+                    canonical_json(hierarchy),
+                    canonical_json(graph),
+                    reason,
+                    requested_by,
+                    at,
+                    at,
+                ),
+            )
+            connection.execute(
+                "UPDATE hierarchies SET revision = ?, "
+                "hierarchy_fingerprint = ?, graph_fingerprint = ?, "
+                "hierarchy_json = ?, graph_json = ?, status = 'PREPARED', "
+                "updated_at = ? WHERE root_id = ?",
+                (
+                    preparing_revision,
+                    hierarchy_fingerprint,
+                    graph_fingerprint,
+                    canonical_json(hierarchy),
+                    canonical_json(graph),
+                    at,
+                    root_id,
+                ),
+            )
+        self.write_projections(root_id)
+        return {
+            "rootId": root_id,
+            "deliveryRevision": preparing_revision,
+            "previousRevision": expected_current_revision,
+            "status": "PREPARED",
+            "hierarchyFingerprint": hierarchy_fingerprint,
+            "graphFingerprint": graph_fingerprint,
+            "carryForwardTaskIds": carry_forward,
+            "projectScopes": hierarchy["delivery"].get(
+                "projectScopes",
+                [],
+            ),
+            "workspaceIsolation": {
+                "mode": "DEDICATED_CONVERSATION_WORKSPACE",
+                "workspaceKey": workspace_key,
+            },
+        }
+
+    def freeze(
+        self,
+        root_id: str,
+        *,
+        expected_delivery_revision: int,
+        expected_hierarchy_fingerprint: str,
+        authorized_project_ids: list[str],
+        confirmed_by: str,
+    ) -> dict[str, Any]:
+        carried_forward: list[str] = []
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM hierarchies WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if row is None:
+                fail(
+                    "SCHEDULER_HIERARCHY_MISSING",
+                    f"Scheduler hierarchy is missing: {root_id}",
+                )
+            if (
+                not isinstance(expected_delivery_revision, int)
+                or isinstance(expected_delivery_revision, bool)
+                or expected_delivery_revision < 1
+                or row["revision"] != expected_delivery_revision
+            ):
+                fail(
+                    "SCHEDULER_REVISION_CONFLICT",
+                    "Delivery revision is not current",
+                    expectedRevision=expected_delivery_revision,
+                    actualRevision=row["revision"],
+                )
+            binding = connection.execute(
+                "SELECT workspace_key FROM delivery_workspaces "
+                "WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
             if binding is None:
                 fail(
                     "SCHEDULER_DELIVERY_WORKSPACE_MISSING",
@@ -694,7 +1161,8 @@ class SchedulerRepository:
                 "SELECT r.root_id FROM delivery_workspaces w "
                 "JOIN runs r ON r.root_id = w.root_id "
                 "WHERE w.workspace_key = ? AND r.root_id != ? "
-                "AND r.status NOT IN ('COMPLETED', 'CANCELLED') "
+                "AND r.status NOT IN "
+                "('COMPLETED', 'CANCELLED', 'SUPERSEDED') "
                 "LIMIT 1",
                 (binding["workspace_key"], root_id),
             ).fetchone()
@@ -713,10 +1181,130 @@ class SchedulerRepository:
                     "SCHEDULER_REVISION_CONFLICT",
                     "Hierarchy fingerprint is not current",
                 )
+            hierarchy, graph = _validated_stored_definition(row)
+            project_scopes = hierarchy["delivery"].get(
+                "projectScopes",
+                [],
+            )
+            required_project_ids = sorted(
+                item["id"] for item in project_scopes
+            )
+            if (
+                not isinstance(authorized_project_ids, list)
+                or any(
+                    not isinstance(item, str) or not item
+                    for item in authorized_project_ids
+                )
+                or len(set(authorized_project_ids))
+                != len(authorized_project_ids)
+            ):
+                fail(
+                    "SCHEDULER_PROJECT_AUTHORIZATION_REQUIRED",
+                    "authorized_project_ids must contain unique project IDs",
+                )
+            supplied_project_ids = sorted(authorized_project_ids)
+            if supplied_project_ids != required_project_ids:
+                fail(
+                    "SCHEDULER_PROJECT_AUTHORIZATION_REQUIRED",
+                    "Freeze requires exact authorization of every project "
+                    "in this Delivery revision",
+                    requiredProjectIds=required_project_ids,
+                    suppliedProjectIds=supplied_project_ids,
+                    missingProjectIds=sorted(
+                        set(required_project_ids)
+                        - set(supplied_project_ids)
+                    ),
+                    unknownProjectIds=sorted(
+                        set(supplied_project_ids)
+                        - set(required_project_ids)
+                    ),
+                )
             if row["status"] == "FROZEN":
                 return self.run(root_id)
-            _, graph = _validated_stored_definition(row)
             at = _commit_timestamp(self.now, row["updated_at"])
+            previous_run = None
+            previous_nodes: dict[str, dict[str, Any]] = {}
+            previous_requirement_revisions: dict[str, int] = {}
+            if expected_delivery_revision > 1:
+                previous_revision = expected_delivery_revision - 1
+                previous_definition = connection.execute(
+                    "SELECT * FROM delivery_revisions "
+                    "WHERE root_id = ? AND revision = ?",
+                    (root_id, previous_revision),
+                ).fetchone()
+                previous_run = connection.execute(
+                    "SELECT * FROM runs "
+                    "WHERE root_id = ? AND revision = ?",
+                    (root_id, previous_revision),
+                ).fetchone()
+                if previous_definition is None or previous_run is None:
+                    fail(
+                        "SCHEDULER_REVISION_CONFLICT",
+                        "The previous Delivery revision is missing",
+                    )
+                previous_hierarchy = validate_hierarchy_definition(
+                    json.loads(previous_definition["hierarchy_json"])
+                )
+                previous_node_values = self.latest_nodes(
+                    connection,
+                    previous_run["run_id"],
+                )
+                carried_forward = self._carriable_task_ids(
+                    previous_hierarchy,
+                    hierarchy,
+                    previous_node_values,
+                )
+                previous_nodes = {
+                    item["nodeId"]: item
+                    for item in previous_node_values
+                }
+                previous_requirement_revisions = {
+                    item["taskId"]: item["revision"]
+                    for item in self.task_requirement_states(
+                        connection,
+                        previous_run["run_id"],
+                    )
+                }
+                connection.execute(
+                    "UPDATE node_runs SET status = 'CANCELLED', "
+                    "finished_at = COALESCE(finished_at, ?) "
+                    "WHERE run_id = ? AND status NOT IN "
+                    "('SUCCEEDED', 'COMPLETED', 'CANCELLED')",
+                    (at, previous_run["run_id"]),
+                )
+                self._append_event(
+                    connection,
+                    run_id=previous_run["run_id"],
+                    node_id=None,
+                    attempt=None,
+                    event_type="GRAPH_RUN_SUPERSEDED",
+                    actor="USER",
+                    operation_id=None,
+                    payload={
+                        "fromRevision": previous_revision,
+                        "toRevision": expected_delivery_revision,
+                        "confirmedBy": confirmed_by,
+                    },
+                    at=at,
+                )
+                connection.execute(
+                    "UPDATE runs SET status = 'SUPERSEDED', "
+                    "updated_at = ?, superseded_at = ?, "
+                    "superseded_by_revision = ? WHERE run_id = ?",
+                    (
+                        at,
+                        at,
+                        expected_delivery_revision,
+                        previous_run["run_id"],
+                    ),
+                )
+                connection.execute(
+                    "UPDATE delivery_revisions "
+                    "SET status = 'SUPERSEDED', updated_at = ?, "
+                    "superseded_at = ? "
+                    "WHERE root_id = ? AND revision = ?",
+                    (at, at, root_id, previous_revision),
+                )
             run_id = f"run-{uuid.uuid4().hex}"
             connection.execute(
                 "UPDATE hierarchies SET status = 'FROZEN', updated_at = ? "
@@ -724,22 +1312,76 @@ class SchedulerRepository:
                 (at, root_id),
             )
             connection.execute(
-                "INSERT INTO runs(run_id, root_id, status, started_at, "
-                "updated_at) VALUES (?, ?, 'ACTIVE', ?, ?)",
-                (run_id, root_id, at, at),
+                "INSERT INTO runs(run_id, root_id, revision, status, "
+                "started_at, updated_at) "
+                "VALUES (?, ?, ?, 'ACTIVE', ?, ?)",
+                (
+                    run_id,
+                    root_id,
+                    expected_delivery_revision,
+                    at,
+                    at,
+                ),
             )
             for node in graph["nodes"]:
+                carried_task = (
+                    node["workItemId"]
+                    if (
+                        node["kind"]
+                        in {"TASK_LOOP", "TASK_REVIEW_LOOP"}
+                        and node["workItemId"] in carried_forward
+                    )
+                    else None
+                )
+                previous_state = (
+                    previous_nodes.get(node["id"])
+                    if carried_task is not None
+                    else None
+                )
+                status = (
+                    "SUCCEEDED"
+                    if previous_state is not None
+                    else "PENDING"
+                )
                 connection.execute(
-                    "INSERT INTO node_runs(run_id, node_id, attempt, status) "
-                    "VALUES (?, ?, 1, 'PENDING')",
-                    (run_id, node["id"]),
+                    "INSERT INTO node_runs("
+                    "run_id, node_id, attempt, status, finished_at, "
+                    "outcome_json, failure_class"
+                    ") VALUES (?, ?, 1, ?, ?, ?, ?)",
+                    (
+                        run_id,
+                        node["id"],
+                        status,
+                        at if previous_state is not None else None,
+                        (
+                            canonical_json(previous_state["outcome"])
+                            if (
+                                previous_state is not None
+                                and previous_state["outcome"] is not None
+                            )
+                            else None
+                        ),
+                        (
+                            previous_state["failureClass"]
+                            if previous_state is not None
+                            else None
+                        ),
+                    ),
                 )
                 if node["kind"] == "TASK_LOOP":
                     connection.execute(
                         "INSERT INTO task_requirement_states("
                         "run_id, task_id, revision, status, updated_at"
-                        ") VALUES (?, ?, 1, 'FROZEN', ?)",
-                        (run_id, node["workItemId"], at),
+                        ") VALUES (?, ?, ?, 'FROZEN', ?)",
+                        (
+                            run_id,
+                            node["workItemId"],
+                            previous_requirement_revisions.get(
+                                node["workItemId"],
+                                1,
+                            ),
+                            at,
+                        ),
                     )
             self._append_event(
                 connection,
@@ -749,21 +1391,87 @@ class SchedulerRepository:
                 event_type="GRAPH_RUN_STARTED",
                 actor="USER",
                 operation_id=None,
-                payload={},
+                payload={
+                    "deliveryRevision": expected_delivery_revision,
+                    "previousRevision": (
+                        expected_delivery_revision - 1
+                        if expected_delivery_revision > 1
+                        else None
+                    ),
+                    "authorizedProjectIds": required_project_ids,
+                },
                 at=at,
+            )
+            for task_id in carried_forward:
+                for node_id in (
+                    loop_node_id(task_id),
+                    task_review_node_id(task_id),
+                ):
+                    self._append_event(
+                        connection,
+                        run_id=run_id,
+                        node_id=node_id,
+                        attempt=1,
+                        event_type="NODE_RESULT_CARRIED_FORWARD",
+                        actor="CONTROLLER",
+                        operation_id=None,
+                        payload={
+                            "taskId": task_id,
+                            "fromRevision": (
+                                expected_delivery_revision - 1
+                            ),
+                            "outcome": previous_nodes[node_id][
+                                "outcome"
+                            ],
+                            "failureClass": previous_nodes[node_id][
+                                "failureClass"
+                            ],
+                            "requirementRevision": (
+                                previous_requirement_revisions.get(
+                                    task_id,
+                                    1,
+                                )
+                            ),
+                        },
+                        at=at,
+                    )
+            connection.execute(
+                "UPDATE delivery_revisions SET status = 'FROZEN', "
+                "confirmed_by = ?, authorized_project_ids_json = ?, "
+                "updated_at = ?, frozen_at = ? "
+                "WHERE root_id = ? AND revision = ?",
+                (
+                    confirmed_by,
+                    canonical_json(required_project_ids),
+                    at,
+                    at,
+                    root_id,
+                    expected_delivery_revision,
+                ),
             )
             self.refresh_ready(connection, graph, run_id, at=at)
         self.write_projections(root_id)
-        return self.run(root_id)
+        result = self.run(root_id)
+        result["carriedForwardTaskIds"] = carried_forward
+        return result
 
     def run(
         self,
         root_id: str,
     ) -> dict[str, Any]:
         with self.read() as connection:
-            row = connection.execute(
-                "SELECT * FROM runs WHERE root_id = ?",
+            hierarchy_row = connection.execute(
+                "SELECT * FROM hierarchies WHERE root_id = ?",
                 (root_id,),
+            ).fetchone()
+            if hierarchy_row is None:
+                fail(
+                    "SCHEDULER_HIERARCHY_MISSING",
+                    f"Scheduler hierarchy is missing: {root_id}",
+                )
+            row = connection.execute(
+                "SELECT * FROM runs WHERE root_id = ? AND revision = ?",
+                (root_id, hierarchy_row["revision"]),
             ).fetchone()
             if row is None:
                 fail(
@@ -785,24 +1493,20 @@ class SchedulerRepository:
                     "SCHEDULER_DELIVERY_WORKSPACE_MISSING",
                     f"Delivery workspace binding is missing: {root_id}",
                 )
-            hierarchy_row = connection.execute(
-                "SELECT * FROM hierarchies WHERE root_id = ?",
-                (root_id,),
-            ).fetchone()
-            if hierarchy_row is None:
-                fail(
-                    "SCHEDULER_HIERARCHY_MISSING",
-                    f"Scheduler hierarchy is missing: {root_id}",
-                )
             hierarchy, _ = _validated_stored_definition(hierarchy_row)
         result = {
             "runId": row["run_id"],
             "rootId": row["root_id"],
+            "deliveryRevision": row["revision"],
             "status": row["status"],
             "startedAt": row["started_at"],
             "updatedAt": row["updated_at"],
             "completedAt": row["completed_at"],
             "cancelledAt": row["cancelled_at"],
+            "supersededAt": row["superseded_at"],
+            "supersededByRevision": row[
+                "superseded_by_revision"
+            ],
             "nodes": nodes,
             "taskRequirements": task_requirements,
             "workspaceIsolation": {
@@ -813,7 +1517,69 @@ class SchedulerRepository:
         git_binding = hierarchy["delivery"].get("gitBinding")
         if git_binding is not None:
             result["gitBinding"] = git_binding
+        result["projectScopes"] = hierarchy["delivery"].get(
+            "projectScopes",
+            [],
+        )
         return result
+
+    def revision_history(self, root_id: str) -> dict[str, Any]:
+        with self.read() as connection:
+            hierarchy = connection.execute(
+                "SELECT revision FROM hierarchies WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if hierarchy is None:
+                fail(
+                    "SCHEDULER_HIERARCHY_MISSING",
+                    f"Scheduler hierarchy is missing: {root_id}",
+                )
+            rows = connection.execute(
+                "SELECT d.*, r.run_id, r.status AS run_status, "
+                "r.started_at, r.completed_at, r.cancelled_at, "
+                "r.superseded_at AS run_superseded_at "
+                "FROM delivery_revisions d "
+                "LEFT JOIN runs r ON r.root_id = d.root_id "
+                "AND r.revision = d.revision "
+                "WHERE d.root_id = ? ORDER BY d.revision",
+                (root_id,),
+            ).fetchall()
+        return {
+            "rootId": root_id,
+            "currentRevision": hierarchy["revision"],
+            "revisions": [
+                {
+                    "revision": row["revision"],
+                    "status": row["status"],
+                    "runId": row["run_id"],
+                    "runStatus": row["run_status"],
+                    "hierarchyFingerprint": row[
+                        "hierarchy_fingerprint"
+                    ],
+                    "graphFingerprint": row["graph_fingerprint"],
+                    "reason": row["reason"],
+                    "requestedBy": row["requested_by"],
+                    "confirmedBy": row["confirmed_by"],
+                    "authorizedProjectIds": (
+                        json.loads(
+                            row["authorized_project_ids_json"]
+                        )
+                        if row["authorized_project_ids_json"]
+                        else []
+                    ),
+                    "createdAt": row["created_at"],
+                    "updatedAt": row["updated_at"],
+                    "frozenAt": row["frozen_at"],
+                    "completedAt": row["completed_at"],
+                    "cancelledAt": row["cancelled_at"],
+                    "supersededAt": (
+                        row["run_superseded_at"]
+                        or row["superseded_at"]
+                    ),
+                }
+                for row in rows
+            ],
+        }
 
     @staticmethod
     def task_requirement_states(
@@ -855,9 +1621,11 @@ class SchedulerRepository:
             "n.node_id AS reservation_node_id "
             "FROM node_runs n "
             "JOIN runs r ON r.run_id = n.run_id "
-            "JOIN hierarchies h ON h.root_id = r.root_id "
+            "JOIN delivery_revisions h ON h.root_id = r.root_id "
+            "AND h.revision = r.revision "
             "WHERE n.status = 'CLAIMED' "
-            "AND r.status NOT IN ('COMPLETED', 'CANCELLED') "
+            "AND r.status NOT IN "
+            "('COMPLETED', 'CANCELLED', 'SUPERSEDED') "
             "AND n.lease_expires_at IS NOT NULL "
             "AND n.lease_expires_at >= ? "
             + exclusion
@@ -902,6 +1670,21 @@ class SchedulerRepository:
         connection: sqlite3.Connection,
         run_id: str,
     ) -> list[dict[str, Any]]:
+        executor_metadata: dict[tuple[str, int], dict[str, Any]] = {}
+        claim_rows = connection.execute(
+            """
+            SELECT node_id, attempt, payload_json
+            FROM graph_events
+            WHERE run_id = ? AND event_type = 'LOOP_CLAIMED'
+            ORDER BY event_id
+            """,
+            (run_id,),
+        ).fetchall()
+        for claim_row in claim_rows:
+            payload = json.loads(claim_row["payload_json"])
+            executor_metadata[
+                (claim_row["node_id"], claim_row["attempt"])
+            ] = payload if isinstance(payload, dict) else {}
         rows = connection.execute(
             """
             SELECT n.* FROM node_runs n
@@ -918,6 +1701,14 @@ class SchedulerRepository:
         ).fetchall()
         nodes: list[dict[str, Any]] = []
         for row in rows:
+            executor = (
+                executor_metadata.get(
+                    (row["node_id"], row["attempt"]),
+                    {},
+                )
+                if row["operation_id"] is not None
+                else {}
+            )
             stored_outcome = (
                 json.loads(row["outcome_json"])
                 if row["outcome_json"] is not None
@@ -934,6 +1725,8 @@ class SchedulerRepository:
                 "attempt": row["attempt"],
                 "status": row["status"],
                 "owner": row["owner"],
+                "agentId": executor.get("agentId"),
+                "modelId": executor.get("modelId"),
                 "operationId": row["operation_id"],
                 "claimedAt": row["claimed_at"],
                 "lastHeartbeatAt": row["last_heartbeat_at"],
@@ -1050,7 +1843,10 @@ class SchedulerRepository:
             )
         with self.read() as connection:
             run = connection.execute(
-                "SELECT run_id FROM runs WHERE root_id = ?",
+                "SELECT r.run_id FROM runs r "
+                "JOIN hierarchies h ON h.root_id = r.root_id "
+                "AND h.revision = r.revision "
+                "WHERE r.root_id = ?",
                 (root_id,),
             ).fetchone()
             if run is None:
@@ -1120,7 +1916,11 @@ class SchedulerRepository:
                 "SCHEDULER_RUN_MISSING",
                 f"Scheduler run is missing: {run_id}",
             )
-        if run_state["status"] in {"COMPLETED", "CANCELLED"}:
+        if run_state["status"] in {
+            "COMPLETED",
+            "CANCELLED",
+            "SUPERSEDED",
+        }:
             return
 
         incoming: dict[str, list[str]] = {
@@ -1242,7 +2042,12 @@ class SchedulerRepository:
                 ):
                     raise
             projection_root = safe_path(self.control_root, root_id)
-            documents = render_projection_documents(definition, run)
+            revision_history = self.revision_history(root_id)
+            documents = render_projection_documents(
+                definition,
+                run,
+                revision_history,
+            )
             for legacy_filename in (
                 "hierarchy.json",
                 "graph.json",
@@ -1310,14 +2115,16 @@ class SchedulerRepository:
             for row in rows:
                 hierarchy, graph = _validated_stored_definition(row)
                 run_row = connection.execute(
-                    "SELECT * FROM runs WHERE root_id = ?",
-                    (row["root_id"],),
+                    "SELECT * FROM runs "
+                    "WHERE root_id = ? AND revision = ?",
+                    (row["root_id"], row["revision"]),
                 ).fetchone()
                 run = None
                 if run_row is not None:
                     run = {
                         "runId": run_row["run_id"],
                         "rootId": run_row["root_id"],
+                        "deliveryRevision": run_row["revision"],
                         "status": run_row["status"],
                         "startedAt": run_row["started_at"],
                         "updatedAt": run_row["updated_at"],

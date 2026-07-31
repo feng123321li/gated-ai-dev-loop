@@ -4,6 +4,24 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.28.0 — 2026-07-31
+
+发布提交：`ab4e6bc`
+
+- 一个业务需求现在保持稳定的 `delivery.id`，用户最终验收前通过不可变 Delivery Revision 继续调整范围；`prepare_delivery_revision` 与 `delivery_revision_history` 显式准备、冻结和追溯各 Revision，新 Revision 冻结后旧运行进入 `SUPERSEDED`，不再为同一需求创建无关 Delivery。
+- Revision 会继承定义与 Review Loop 均未改变且已经通过 TASK Loop 和 TASK Review 的任务结果；受影响 TASK、全部 GROUP Review 与 Delivery Review 重新执行。已经误取消但尚未最终验收的运行也可以显式进入下一 Revision。
+- `delivery.projectScopes` 支持一个 Delivery 精确授权多个本地仓库。所有可写 Git 项目必须使用同名 feature 分支，同时分别冻结各仓库自己的 `baseRef`、`baseCommit` 与 `integrationTarget`；冻结调用必须提交与准备结果完全一致的项目 ID 集合，项目范围不会隐式授予提交、推送、合并或发布权限。
+- SQLite 当前调度库增加 Revision 历史、旧运行升级和携带结果事件；新增 `revisions.md` 与跨项目授权投影，MCP 工具面增至 23 个。schema 继续只维护完整 v3。Python 全量 128 项测试、编译检查、Skill/Plugin 校验和 `git diff --check` 通过。
+
+## 0.27.0 — 2026-07-31
+
+发布提交：`195d50a`
+
+- `prepare_hierarchy` 的 MCP 工具定义现在直接暴露完整 schema v3，以 `oneOf` 约束 GROUP/TASK 根节点；Adapter 在进入 Controller 前执行结构和领域预检，非法顶层字段、父子关系或依赖不会形成事后拒绝的 `PREPARED` 结果。
+- `dispatch_loop` 要求接收方提交实际 Agent 与模型，claim 事件和 `progress.md` 使用中文列展示执行代理、执行模型、认领身份与执行轮次；推荐结果仍保持 `ADVISORY`，不会自动冒充实际派遣。
+- TASK 接口详情改为请求/响应字段级变更表，在完整契约内直接标记新增、修改、删除和未变，并以“修改前 → 修改后”展示类型、必填性和说明。
+- schema 继续只维护完整 v3；本版本没有实现按推荐结果自动派遣。Python 全量 122 项测试、编译检查、Skill/Plugin 校验和 `git diff --check` 通过。
+
 ## 0.26.0 — 2026-07-31
 
 发布提交：`b1914e2`

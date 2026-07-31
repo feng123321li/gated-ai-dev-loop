@@ -6,6 +6,7 @@ import sqlite3
 import subprocess
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import Mock
 
 from hdg.controller import (
     ControllerContext,
@@ -36,7 +37,11 @@ from hdg.planning import workspace_status
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.repository import SchedulerRepository
 
-from .test_loop_architecture import loop_descriptor, task_hierarchy
+from .test_loop_architecture import (
+    group_hierarchy,
+    loop_descriptor,
+    task_hierarchy,
+)
 from .test_scheduler_runtime import at
 
 
@@ -409,6 +414,24 @@ class HierarchyContractTests(unittest.TestCase):
             "method",
             interface_guidance["dubboSnapshotFields"],
         )
+        self.assertEqual(
+            interface_guidance["fieldProjection"],
+            {
+                "layout": "REQUEST_RESPONSE_TABLES",
+                "changeStates": [
+                    "CREATE",
+                    "MODIFY",
+                    "DELETE",
+                    "UNCHANGED",
+                ],
+                "comparisonColumns": [
+                    "type",
+                    "required",
+                    "description",
+                ],
+                "transitionFormat": "BEFORE_TO_AFTER",
+            },
+        )
         self.assertIn(
             "explicit before and after snapshots",
             interface_guidance["description"],
@@ -520,6 +543,7 @@ class McpSurfaceTests(unittest.TestCase):
             human,
             {
                 "cancel_graph_run",
+                "prepare_delivery_revision",
                 "refreeze_task_requirement",
                 "unfreeze_task_requirement",
             },
@@ -555,6 +579,29 @@ class McpSurfaceTests(unittest.TestCase):
         )
         self.assertNotIn("_meta", by_name["available_agents"])
         self.assertNotIn("_meta", by_name["recommend_executors"])
+        dispatch_schema = by_name["dispatch_loop"]["inputSchema"]
+        self.assertEqual(
+            dispatch_schema["required"],
+            [
+                "root_id",
+                "node_id",
+                "owner",
+                "agent_id",
+                "model_id",
+                "operation_id",
+            ],
+        )
+        self.assertEqual(
+            set(dispatch_schema["properties"]),
+            {
+                "root_id",
+                "node_id",
+                "owner",
+                "agent_id",
+                "model_id",
+                "operation_id",
+            },
+        )
         pause_schema = by_name["pause_loop"]["inputSchema"]
         self.assertNotIn("resume_at", pause_schema["required"])
         self.assertEqual(
@@ -601,6 +648,30 @@ class McpSurfaceTests(unittest.TestCase):
             },
         )
         self.assertIn("execution_mode", freeze_schema["required"])
+        self.assertIn(
+            "expected_delivery_revision",
+            freeze_schema["required"],
+        )
+        self.assertIn(
+            "authorized_project_ids",
+            freeze_schema["required"],
+        )
+        self.assertTrue(
+            freeze_schema["properties"]["authorized_project_ids"][
+                "uniqueItems"
+            ]
+        )
+        revision_prepare = by_name["prepare_delivery_revision"]
+        self.assertIn(
+            "hierarchy",
+            revision_prepare["inputSchema"]["required"],
+        )
+        self.assertEqual(
+            by_name["delivery_revision_history"]["inputSchema"][
+                "required"
+            ],
+            ["root_id"],
+        )
         final_confirmation = by_name["record_user_confirmation"][
             "inputSchema"
         ]["properties"]["confirmed"]
@@ -636,6 +707,123 @@ class McpSurfaceTests(unittest.TestCase):
         self.assertEqual(
             set(refreeze["properties"]["requirement"]["properties"]),
             {"title", "summary", "payload"},
+        )
+
+    def test_prepare_hierarchy_exposes_the_complete_v3_input_schema(
+        self,
+    ) -> None:
+        by_name = {
+            tool["name"]: tool
+            for tool in tool_definitions()
+        }
+        prepare_schema = by_name["prepare_hierarchy"]["inputSchema"]
+        hierarchy_schema = prepare_schema["properties"]["hierarchy"]
+
+        self.assertIs(hierarchy_schema["additionalProperties"], False)
+        self.assertEqual(
+            set(hierarchy_schema["properties"]),
+            {"delivery", "root"},
+        )
+        self.assertEqual(
+            hierarchy_schema["properties"]["root"],
+            {
+                "oneOf": [
+                    {"$ref": "#/$defs/groupRootNode"},
+                    {"$ref": "#/$defs/taskRootNode"},
+                ]
+            },
+        )
+        self.assertEqual(
+            prepare_schema["$defs"],
+            hierarchy_contract(root_kind="TASK")["inputSchema"]["$defs"],
+        )
+        self.assertTrue(
+            prepare_schema["$defs"]["loop"]["properties"]["payload"][
+                "additionalProperties"
+            ]
+        )
+        project_scopes = hierarchy_schema["properties"]["delivery"][
+            "properties"
+        ]["projectScopes"]
+        self.assertEqual(project_scopes["minItems"], 1)
+        self.assertEqual(
+            project_scopes["items"]["properties"]["access"]["enum"],
+            ["READ_ONLY", "READ_WRITE"],
+        )
+
+    def test_prepare_hierarchy_rejects_invalid_schema_before_controller(
+        self,
+    ) -> None:
+        hierarchy = task_hierarchy()
+        hierarchy["schemaVersion"] = 3
+        controller = Mock(spec=LayeredDeliveryController)
+
+        with self.assertRaises(GatedLoopError) as caught:
+            call_tool(
+                "prepare_hierarchy",
+                {"hierarchy": hierarchy},
+                root="unused",
+                controller=controller,
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "MCP_TOOL_ARGUMENT_INVALID",
+        )
+        self.assertEqual(
+            caught.exception.details["unknownFields"],
+            ["schemaVersion"],
+        )
+        controller.execute.assert_not_called()
+
+    def test_prepare_hierarchy_preflights_semantic_contract_before_controller(
+        self,
+    ) -> None:
+        hierarchy = group_hierarchy()
+        hierarchy["root"]["children"][0]["definition"]["parentId"] = (
+            "g-other"
+        )
+        controller = Mock(spec=LayeredDeliveryController)
+
+        with self.assertRaises(GatedLoopError) as caught:
+            call_tool(
+                "prepare_hierarchy",
+                {"hierarchy": hierarchy},
+                root="unused",
+                controller=controller,
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "MCP_TOOL_ARGUMENT_INVALID",
+        )
+        self.assertEqual(
+            caught.exception.details["schemaError"]["code"],
+            "WORK_ITEM_PARENT_INVALID",
+        )
+        controller.execute.assert_not_called()
+
+    def test_prepare_hierarchy_preflight_accepts_both_root_kinds(
+        self,
+    ) -> None:
+        task = task_hierarchy()
+        task["root"]["definition"]["execution"]["loop"]["payload"][
+            "custom"
+        ] = {"nested": ["opaque", 1, True]}
+
+        self.assertEqual(
+            validate_tool_arguments(
+                "prepare_hierarchy",
+                {"hierarchy": task},
+            ),
+            {"hierarchy": task},
+        )
+        self.assertEqual(
+            validate_tool_arguments(
+                "prepare_hierarchy",
+                {"hierarchy": group_hierarchy()},
+            ),
+            {"hierarchy": group_hierarchy()},
         )
 
     def test_argument_validation_rejects_unknown_fields(self) -> None:
@@ -696,6 +884,33 @@ class McpSurfaceTests(unittest.TestCase):
                 },
             )
 
+    def test_dispatch_requires_bounded_actual_executor_metadata(self) -> None:
+        base = {
+            "root_id": "d-service",
+            "node_id": "loop:t-service",
+            "owner": "agent-1",
+            "agent_id": "codex",
+            "model_id": "gpt-5.6-sol",
+            "operation_id": "op-1",
+        }
+        self.assertEqual(
+            validate_tool_arguments("dispatch_loop", base),
+            base,
+        )
+        for invalid in (
+            {key: value for key, value in base.items() if key != "agent_id"},
+            {key: value for key, value in base.items() if key != "model_id"},
+            {**base, "agent_id": "x" * 257},
+            {**base, "model_id": "x" * 257},
+        ):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(GatedLoopError) as caught:
+                    validate_tool_arguments("dispatch_loop", invalid)
+                self.assertEqual(
+                    caught.exception.code,
+                    "MCP_TOOL_ARGUMENT_INVALID",
+                )
+
     def test_freeze_adapter_injects_strict_boolean_confirmation(
         self,
     ) -> None:
@@ -711,9 +926,11 @@ class McpSurfaceTests(unittest.TestCase):
                         "freeze_hierarchy",
                         {
                             "root_id": prepared["rootId"],
+                            "expected_delivery_revision": 1,
                             "expected_hierarchy_fingerprint": (
                                 prepared["hierarchyFingerprint"]
                             ),
+                            "authorized_project_ids": [],
                             "execution_mode": execution_mode,
                             "confirmed_by": "human",
                         },
@@ -771,9 +988,11 @@ class McpSurfaceTests(unittest.TestCase):
                     "freeze_hierarchy",
                     {
                         "root_id": prepared["rootId"],
+                        "expected_delivery_revision": 1,
                         "expected_hierarchy_fingerprint": (
                             prepared["hierarchyFingerprint"]
                         ),
+                        "authorized_project_ids": [],
                         "execution_mode": "active",
                         "confirmed_by": "human",
                     },
@@ -842,9 +1061,11 @@ class McpSurfaceTests(unittest.TestCase):
                 "freeze_hierarchy",
                 {
                     "root_id": first["rootId"],
+                    "expected_delivery_revision": 1,
                     "expected_hierarchy_fingerprint": (
                         first["hierarchyFingerprint"]
                     ),
+                    "authorized_project_ids": [],
                     "execution_mode": "active",
                     "confirmed_by": "human",
                 },
@@ -882,9 +1103,11 @@ class McpSurfaceTests(unittest.TestCase):
                     "freeze_hierarchy",
                     {
                         "root_id": second["rootId"],
+                        "expected_delivery_revision": 1,
                         "expected_hierarchy_fingerprint": (
                             second["hierarchyFingerprint"]
                         ),
+                        "authorized_project_ids": [],
                         "execution_mode": "active",
                         "confirmed_by": "human",
                     },
@@ -995,9 +1218,11 @@ class McpSurfaceTests(unittest.TestCase):
                 "freeze_hierarchy",
                 {
                     "root_id": prepared["rootId"],
+                    "expected_delivery_revision": 1,
                     "expected_hierarchy_fingerprint": (
                         prepared["hierarchyFingerprint"]
                     ),
+                    "authorized_project_ids": [],
                     "execution_mode": "active",
                     "confirmed_by": "human",
                 },
@@ -1204,9 +1429,11 @@ class McpSurfaceTests(unittest.TestCase):
                     "freeze_hierarchy",
                     {
                         "root_id": delivery_id,
+                        "expected_delivery_revision": 1,
                         "expected_hierarchy_fingerprint": (
                             prepared["hierarchyFingerprint"]
                         ),
+                        "authorized_project_ids": [],
                         "execution_mode": "active",
                         "confirmed_by": "human",
                     },
@@ -1232,6 +1459,8 @@ class McpSurfaceTests(unittest.TestCase):
                         "root_id": delivery_id,
                         "node_id": f"loop:{task_id}",
                         "owner": f"agent-{delivery_id}",
+                        "agent_id": "codex",
+                        "model_id": "gpt-5.6-sol",
                         "operation_id": f"op-{delivery_id}",
                     },
                     root=str(repository),
@@ -1516,6 +1745,8 @@ class McpSurfaceTests(unittest.TestCase):
                         "root_id": prepared["rootId"],
                         "node_id": "loop:t-service",
                         "owner": "agent-integrity",
+                        "agent_id": "codex",
+                        "model_id": "gpt-5.6-sol",
                         "operation_id": "op-integrity",
                     },
                     root=root,
@@ -1611,8 +1842,7 @@ class McpSurfaceTests(unittest.TestCase):
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "All TASKs in that Delivery share its feature worktree and "
-                "branch",
+                "All TASKs in that Delivery share those project branches",
                 initialized["result"]["instructions"],
             )
             self.assertIn(
@@ -1711,7 +1941,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 21)
+            self.assertEqual(len(listed["result"]["tools"]), 23)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

@@ -9,8 +9,10 @@ from .controller import (
     DEFAULT_CONTROLLER,
     LayeredDeliveryController,
 )
-from .errors import fail
+from .errors import GatedLoopError, fail
+from .hierarchy_contract import hierarchy_input_schema
 from .jsonio import canonical_json
+from .model_core import validate_hierarchy_definition
 
 
 def _object(
@@ -84,6 +86,45 @@ def _tool(
     return result
 
 
+def _prepare_hierarchy_tool_schema() -> dict[str, Any]:
+    hierarchy_schema = hierarchy_input_schema()
+    definitions = hierarchy_schema.pop("$defs")
+    tool_schema = _object(
+        {"hierarchy": hierarchy_schema},
+        required=["hierarchy"],
+    )
+    tool_schema["$defs"] = definitions
+    return tool_schema
+
+
+def _prepare_revision_tool_schema() -> dict[str, Any]:
+    hierarchy_schema = hierarchy_input_schema()
+    definitions = hierarchy_schema.pop("$defs")
+    tool_schema = _object(
+        {
+            "root_id": ROOT_ID,
+            "expected_current_revision": {
+                "type": "integer",
+                "minimum": 1,
+            },
+            "hierarchy": hierarchy_schema,
+            "reason": _string(
+                "Why the active, not-yet-accepted Delivery scope changed."
+            ),
+            "requested_by": _string("Human requester identity."),
+        },
+        required=[
+            "root_id",
+            "expected_current_revision",
+            "hierarchy",
+            "reason",
+            "requested_by",
+        ],
+    )
+    tool_schema["$defs"] = definitions
+    return tool_schema
+
+
 TOOLS = (
     _tool(
         "workspace_status",
@@ -123,17 +164,29 @@ TOOLS = (
             "hints remain advisory, Loop payloads stay opaque, and a Git "
             "Delivery feature-branch binding is verified read-only."
         ),
+        _prepare_hierarchy_tool_schema(),
+    ),
+    _tool(
+        "prepare_delivery_revision",
+        (
+            "Prepare the next immutable revision of the same active "
+            "Delivery after its frozen scope changes. The Delivery ID stays "
+            "stable, completed unchanged TASKs are candidates for "
+            "carry-forward, and every project scope is reauthorized at "
+            "freeze."
+        ),
+        _prepare_revision_tool_schema(),
+        human=True,
+    ),
+    _tool(
+        "delivery_revision_history",
+        (
+            "Read every immutable revision and run status for one logical "
+            "Delivery."
+        ),
         _object(
-            {
-                "hierarchy": {
-                    "type": "object",
-                    "description": (
-                        "Hierarchy matching hierarchy_contract.inputSchema."
-                    ),
-                    "additionalProperties": True,
-                }
-            },
-            required=["hierarchy"],
+            {"root_id": ROOT_ID},
+            required=["root_id"],
         ),
     ),
     _tool(
@@ -159,9 +212,26 @@ TOOLS = (
         _object(
             {
                 "root_id": ROOT_ID,
+                "expected_delivery_revision": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": (
+                        "Exact Delivery revision returned by prepare."
+                    ),
+                },
                 "expected_hierarchy_fingerprint": _string(
                     "Fingerprint returned by prepare_hierarchy."
                 ),
+                "authorized_project_ids": {
+                    "type": "array",
+                    "items": ROOT_ID,
+                    "uniqueItems": True,
+                    "description": (
+                        "Exact project IDs explicitly authorized by the "
+                        "user for this revision; use an empty array when "
+                        "projectScopes is absent."
+                    ),
+                },
                 "execution_mode": {
                     "type": "string",
                     "enum": ["active", "manual"],
@@ -175,7 +245,9 @@ TOOLS = (
             },
             required=[
                 "root_id",
+                "expected_delivery_revision",
                 "expected_hierarchy_fingerprint",
+                "authorized_project_ids",
                 "execution_mode",
                 "confirmed_by",
             ],
@@ -317,20 +389,42 @@ TOOLS = (
         (
             "Claim one ready TASK, TASK Review, GROUP Review, or Delivery "
             "Review Loop "
-            "for its receiving isolated executor, subject to exact resource "
-            "locks."
+            "for its receiving isolated executor, recording the actual "
+            "Agent and model used by that executor and subject to exact "
+            "resource locks."
         ),
         _object(
             {
                 "root_id": ROOT_ID,
                 "node_id": NODE_ID,
                 "owner": _string("Current Loop executor identity."),
+                "agent_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "description": (
+                        "Actual receiving Agent ID, such as codex or "
+                        "claude-code. This is execution evidence, not an "
+                        "executor recommendation."
+                    ),
+                },
+                "model_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "description": (
+                        "Actual model ID used by the receiving Agent. This "
+                        "is execution evidence, not a recommended model."
+                    ),
+                },
                 "operation_id": OPERATION_ID,
             },
             required=[
                 "root_id",
                 "node_id",
                 "owner",
+                "agent_id",
+                "model_id",
                 "operation_id",
             ],
         ),
@@ -529,6 +623,7 @@ def _validate_schema(
         if (
             not isinstance(value, str)
             or len(value) < schema.get("minLength", 0)
+            or len(value) > schema.get("maxLength", len(value))
             or (
                 "enum" in schema
                 and value not in schema["enum"]
@@ -592,7 +687,21 @@ def validate_tool_arguments(
     if tool is None or name not in CONTROLLER_OPERATIONS:
         fail("MCP_TOOL_UNKNOWN", f"Unknown scheduler tool: {name}")
     _validate_schema(arguments, tool["inputSchema"], "arguments")
-    return dict(arguments)
+    validated = dict(arguments)
+    if name in {"prepare_hierarchy", "prepare_delivery_revision"}:
+        try:
+            validate_hierarchy_definition(validated["hierarchy"])
+        except GatedLoopError as error:
+            fail(
+                "MCP_TOOL_ARGUMENT_INVALID",
+                "arguments.hierarchy does not match schema v3",
+                schemaError={
+                    "code": error.code,
+                    "message": error.message,
+                    "details": error.details,
+                },
+            )
+    return validated
 
 
 def call_tool(
@@ -605,8 +714,7 @@ def call_tool(
     controller: LayeredDeliveryController = DEFAULT_CONTROLLER,
     **_: Any,
 ) -> dict[str, Any]:
-    validate_tool_arguments(name, arguments)
-    internal_arguments = dict(arguments)
+    internal_arguments = validate_tool_arguments(name, arguments)
     execution_mode = None
     if name == "freeze_hierarchy":
         execution_mode = internal_arguments.pop("execution_mode")

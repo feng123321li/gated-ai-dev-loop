@@ -13,6 +13,7 @@
 - `WAIT_FOR_HOST_CAPACITY`：总调度 Agent 在软阈值暂停后等待宿主原生的一次性恢复提示；到时重新消费 frontier。两种等待都不调用推荐器或自动换 Agent。
 - `RESOLVE_LOOP_BLOCK`：展示 Loop 返回的摘要和不透明 result，等待外部条件或人工决定。
 - `REPLAN_HIERARCHY`：展示外层契约变化及原图无法继续的原因，等待用户决定。只有用户明确授权后才调用 `cancel_graph_run`；取消成功后使用新的 `delivery.id` prepare 替代图并重新评审、冻结。
+- `REFREEZE_TASK_REQUIREMENT`：该未开始 TASK 的需求处于解冻编辑态，当前不可派遣。按用户已经明确提出的修改完成 `unfreeze_task_requirement → refreeze_task_requirement`，再重新读取 frontier。
 - `RECORD_USER_CONFIRMATION`：Review Loop 已成功；读取 [acceptance.md](acceptance.md)，等待用户最终接受。
 
 不要自行增加 TASK/Gate 节点，也不要根据 payload 内容改变 frontier 顺序。
@@ -37,8 +38,9 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。不要绕过 TASK
 3. 接收方原生进入 layered-delivery，使用精确 `nodeId` 调用 `loop_context`。TASK、TASK Review 与 GROUP Review Loop 同时取得控制器生成的 `humanArtifacts.workItem` baseline/progress/acceptance 路径；TASK 与 TASK Review 继续取得 `humanArtifacts.taskBaseline` 便捷路径，接口型 TASK 的 workItem 还包含自己的 `interfaces`。机器输入仍以 MCP 响应为准。
 4. 接收方创建全局唯一 `operation_id` 并调用 `dispatch_loop`。没有可用 Agent 容量时才把同样的 `rootId/nodeId` 作为人工交接，且在接收方存在前不要提前 claim。
 5. 按 `loop.ref` 启动对应内部 TASK、TASK Review、GROUP Review 或 Delivery Review Loop，并把 `payload` 和共享 `skillHints` 原样交给该 Loop。
-   - 开发型 TASK 可在宿主和仓库支持时使用独立 Git worktree，尤其适合并行 TASK 隔离未提交改动；这是 Loop 内部实现选择，不进入 hierarchy、Graph 或 baseline 契约。
-   - 每个并行 TASK 使用独立 worktree 与分支，仍遵守 `resourceClaims`。MCP 协调根保持原工作区，不要在每个 worktree 启动独立 scheduler 或复制 `.layered-delivery`；合并、删除 worktree、提交、推送和发布仍按各自授权边界执行。
+   - 并行 Active Delivery 必须使用不同对话工作区；每个 Git Delivery 使用独立 linked worktree 和最终 feature 分支。控制器把 linked worktree 映射到主 checkout 的共享调度根，同时以不同 `workspaceKey` 隔离 Delivery，并校验各自 `gitBinding.branchRef`，禁止一个工作区或 feature 分支冒充另一个 Delivery。
+   - 新的独立 Delivery 一律从 `main`（不存在时 `master`）创建 feature worktree，不从当前 Delivery feature HEAD 创建。主线在创建后继续前进不改变已冻结 `baseCommit`；最终集成前由 Delivery 自己解决与最新主线的差异。
+   - 同一 Delivery 的所有 TASK 共享 Delivery feature worktree 和绑定分支；TASK Agent 不创建、绑定或切换内部 Git 分支。获得相应 Git 写入授权后，TASK 可按各自 scope 单独执行 `git add` 和 `git commit`，在 Delivery 分支上形成独立 TASK commit；必须使用显式 pathspec 只暂存本 TASK 变更，提交前检查 staged/working-tree 状态，且同一 worktree 的 Git index/commit 写入不可并发。互不冲突的 TASK 实现可按 frontier 并行执行，会触及同一共享模块或外部环境的 TASK 必须声明相同精确 `resourceClaims` 以串行化。不要复制 `.layered-delivery` 或启动第二套 scheduler。worktree 不隔离数据库、端口或部署环境，所有 Delivery/TASK 继续遵守全局 `resourceClaims`。合并、删除 worktree、提交、推送和发布仍按各自授权边界执行。
 6. 内部 Loop 先识别当前任务与宿主可用 Skill，再优先原生触发适用的 Skill Hint；不要因为 hierarchy 提供了提示，就假定每条提示都适用于当前 Loop。
 7. 让内部 Loop 自己选择其他必要 Skill。payload 是目标、明确约束和已知验收点的输入，不是完整实现规约；Loop 要结合真实代码、契约和数据链路推导当前 scope 的必要条件。冻结 Graph 不冻结内部实现计划。TASK Loop 自主管理实现、文件、测试、Gate 和修正；Review Loop 自主管理独立发现、修正协调、Gate 和复审。
 8. 当前目标内可修复的实现缺陷、测试失败、数据完整性或边界问题都留在当前 Loop：调整内部计划，完成修正，再重新验证。Review 可以自行修正或使用宿主内部执行容量派遣修正上下文，但必须保留独立复核；不要把“Review 未通过”提交成 `BLOCKED`。
@@ -91,7 +93,16 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 
 ## 资源锁
 
-已 claim Loop 占用其全部 `resourceClaims`。另一个 Ready Loop 只要存在相同键就不能 dispatch；无交集则可并行。相同 frontier 批次内也必须先保留已选择 Loop 的 claim，避免同时派发冲突资源。不要从路径、仓库层级或模块前缀推导额外冲突。
+租约有效的已 claim Loop 占用其全部 `resourceClaims`。共享控制根内任何 Delivery 的另一个 Ready Loop 只要存在相同键就不能 dispatch；frontier 会用 `<rootId>/<nodeId>` 标识跨 Delivery 冲突。租约过期后不再占用跨 Delivery 资源；原 Delivery 下次推进时仍按 `WORKER_LOST` 回收旧 attempt。无交集则可并行。相同 frontier 批次内也必须先保留已选择 Loop 的 claim，避免同时派发冲突资源。不要从路径、仓库层级或模块前缀推导额外冲突。
+
+## 未开始 TASK 的需求修订
+
+1. 初次 Delivery 冻结后，`graph_status.taskRequirements` 中每个 TASK 都是 revision 1、`FROZEN`。
+2. 用户明确要求调整某个尚未开始的 TASK 时，读取其当前 revision，调用 `unfreeze_task_requirement`，提供真实授权人和原因。曾经 claim（包括进入自动重试）、暂停、成功、阻断或取消的 TASK 必须拒绝解冻。
+3. 解冻返回完整 `requirement`。只修改 `title`、`summary` 与不透明 `payload`；不得修改依赖、`resourceClaims`、Loop ref、TASK Review、父子层级或 Graph 拓扑。
+4. 以解冻时相同的 `expected_revision`、完整替代 requirement 和真实确认人调用 `refreeze_task_requirement`。成功后 revision 递增、双指纹和 TASK baseline 更新，事件链保留解冻与再冻结审计记录。
+5. `UNFROZEN` 期间 `graph_frontier` 只返回 `REFREEZE_TASK_REQUIREMENT`，`dispatch_loop` 必须拒绝该 TASK；重新冻结并再次读取 frontier 后才可开发。
+6. 需求修改若必须改变依赖、资源声明或拓扑，不使用局部解冻，继续走 `REPLAN_REQUIRED`。
 
 ## 恢复
 

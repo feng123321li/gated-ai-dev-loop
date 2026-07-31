@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sqlite3
+import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 
@@ -94,6 +95,22 @@ def legacy_delivery_hierarchy_017() -> dict:
         },
         "children": tasks,
     }
+
+
+def isolated_task_hierarchy(
+    delivery_id: str,
+    task_id: str,
+    *,
+    claims: list[str] | None = None,
+) -> dict:
+    hierarchy = task_hierarchy()
+    hierarchy["delivery"]["id"] = delivery_id
+    hierarchy["delivery"]["title"] = f"Deliver {delivery_id}"
+    definition = hierarchy["root"]["definition"]
+    definition["id"] = task_id
+    definition["title"] = f"Run {task_id}"
+    definition["execution"]["loop"]["resourceClaims"] = claims or []
+    return hierarchy
     return {
         "schemaVersion": 3,
         "skillHints": [],
@@ -119,6 +136,74 @@ def legacy_delivery_hierarchy_017() -> dict:
             "children": [capability],
         },
     }
+
+
+def git_command(worktree: Path, *arguments: str) -> str:
+    completed = subprocess.run(
+        ["git", "-C", str(worktree), *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    return completed.stdout.strip()
+
+
+def git_delivery_checkout(
+    root: str,
+    *,
+    delivery_id: str = "d-git",
+    mainline: str = "main",
+) -> tuple[Path, Path, str, str]:
+    repository = Path(root, "repository")
+    worktree = Path(root, "worktrees", delivery_id)
+    repository.mkdir()
+    git_command(
+        repository,
+        "init",
+        f"--initial-branch={mainline}",
+    )
+    git_command(repository, "config", "user.name", "Scheduler Tests")
+    git_command(
+        repository,
+        "config",
+        "user.email",
+        "scheduler-tests@example.invalid",
+    )
+    Path(repository, "README.md").write_text(
+        "# Git delivery fixture\n",
+        encoding="utf-8",
+    )
+    git_command(repository, "add", "README.md")
+    git_command(repository, "commit", "-m", "Initial main baseline")
+    base_commit = git_command(repository, "rev-parse", "HEAD")
+    branch_ref = f"feature/{delivery_id}"
+    git_command(
+        repository,
+        "worktree",
+        "add",
+        "-b",
+        branch_ref,
+        str(worktree),
+        mainline,
+    )
+    return repository, worktree, base_commit, branch_ref
+
+
+def bind_delivery_to_git(
+    hierarchy: dict,
+    *,
+    branch_ref: str,
+    base_commit: str,
+    base_ref: str = "main",
+) -> dict:
+    hierarchy["delivery"]["gitBinding"] = {
+        "branchRef": branch_ref,
+        "baseRef": base_ref,
+        "baseCommit": base_commit,
+        "integrationTarget": base_ref,
+    }
+    return hierarchy
 
 
 class HierarchyContractTests(unittest.TestCase):
@@ -205,6 +290,45 @@ class HierarchyContractTests(unittest.TestCase):
                 "reviewLoop"
             ],
             {"$ref": "#/$defs/loop"},
+        )
+        git_binding = contract["inputSchema"]["properties"]["delivery"][
+            "properties"
+        ]["gitBinding"]
+        self.assertEqual(
+            set(git_binding["properties"]),
+            {
+                "branchRef",
+                "baseRef",
+                "baseCommit",
+                "integrationTarget",
+            },
+        )
+        self.assertNotIn(
+            "gitBinding",
+            contract["inputSchema"]["properties"]["delivery"]["required"],
+        )
+        self.assertEqual(
+            contract["projectionGuidance"]["gitBinding"][
+                "defaultMainlinePreference"
+            ],
+            ["main", "master"],
+        )
+        self.assertEqual(
+            contract["projectionGuidance"]["gitBinding"][
+                "taskBranchPolicy"
+            ],
+            "SHARED_DELIVERY_FEATURE_BRANCH",
+        )
+        self.assertFalse(
+            contract["projectionGuidance"]["gitBinding"][
+                "taskBranchBindingsSupported"
+            ],
+        )
+        self.assertEqual(
+            contract["projectionGuidance"]["gitBinding"][
+                "taskCommitPolicy"
+            ],
+            "TASK_SCOPED_COMMITS_ON_DELIVERY_BRANCH",
         )
         self.assertEqual(
             contract["inputSchema"]["$defs"]["taskRootNode"]["properties"][
@@ -294,6 +418,64 @@ class HierarchyContractTests(unittest.TestCase):
             interface_guidance["description"],
         )
 
+    def test_git_binding_normalizes_and_rejects_invalid_contracts(
+        self,
+    ) -> None:
+        source = bind_delivery_to_git(
+            task_hierarchy(),
+            branch_ref="feature/d-service",
+            base_commit="a" * 40,
+        )
+        normalized = validate_hierarchy_definition(source)
+        self.assertEqual(
+            normalized["delivery"]["gitBinding"],
+            {
+                "branchRef": "feature/d-service",
+                "baseRef": "main",
+                "baseCommit": "a" * 40,
+                "integrationTarget": "main",
+            },
+        )
+
+        wrong_target = bind_delivery_to_git(
+            task_hierarchy(),
+            branch_ref="feature/d-service",
+            base_commit="a" * 40,
+        )
+        wrong_target["delivery"]["gitBinding"][
+            "integrationTarget"
+        ] = "release"
+        with self.assertRaises(GatedLoopError) as caught:
+            validate_hierarchy_definition(wrong_target)
+        self.assertEqual(
+            caught.exception.code,
+            "DELIVERY_GIT_BINDING_INVALID",
+        )
+
+        unsafe_branch = bind_delivery_to_git(
+            task_hierarchy(),
+            branch_ref="../feature",
+            base_commit="a" * 40,
+        )
+        with self.assertRaises(GatedLoopError):
+            validate_hierarchy_definition(unsafe_branch)
+
+        full_ref = bind_delivery_to_git(
+            task_hierarchy(),
+            branch_ref="refs/heads/feature/d-service",
+            base_commit="a" * 40,
+        )
+        with self.assertRaises(GatedLoopError):
+            validate_hierarchy_definition(full_ref)
+
+        mainline_delivery = bind_delivery_to_git(
+            task_hierarchy(),
+            branch_ref="master",
+            base_commit="a" * 40,
+        )
+        with self.assertRaises(GatedLoopError):
+            validate_hierarchy_definition(mainline_delivery)
+
 
 class McpSurfaceTests(unittest.TestCase):
     def test_shared_controller_executes_without_mcp_context(self) -> None:
@@ -338,9 +520,23 @@ class McpSurfaceTests(unittest.TestCase):
             human,
             {
                 "cancel_graph_run",
+                "refreeze_task_requirement",
+                "unfreeze_task_requirement",
             },
         )
         by_name = {tool["name"]: tool for tool in tools}
+        self.assertEqual(
+            set(
+                by_name["workspace_status"]["inputSchema"][
+                    "properties"
+                ]
+            ),
+            {"root_id"},
+        )
+        self.assertEqual(
+            by_name["workspace_status"]["inputSchema"]["required"],
+            [],
+        )
         self.assertEqual(
             by_name["available_agents"]["inputSchema"]["required"],
             [],
@@ -414,6 +610,33 @@ class McpSurfaceTests(unittest.TestCase):
         )
         self.assertEqual(final_confirmation["type"], "boolean")
         self.assertIs(final_confirmation["const"], True)
+
+        unfreeze = by_name["unfreeze_task_requirement"]["inputSchema"]
+        self.assertEqual(
+            unfreeze["required"],
+            [
+                "root_id",
+                "task_id",
+                "expected_revision",
+                "authorized_by",
+                "reason",
+            ],
+        )
+        refreeze = by_name["refreeze_task_requirement"]["inputSchema"]
+        self.assertEqual(
+            refreeze["required"],
+            [
+                "root_id",
+                "task_id",
+                "expected_revision",
+                "requirement",
+                "confirmed_by",
+            ],
+        )
+        self.assertEqual(
+            set(refreeze["properties"]["requirement"]["properties"]),
+            {"title", "summary", "payload"},
+        )
 
     def test_argument_validation_rejects_unknown_fields(self) -> None:
         with self.assertRaises(GatedLoopError):
@@ -509,6 +732,600 @@ class McpSurfaceTests(unittest.TestCase):
                 )
                 self.assertEqual(frozen["confirmedBy"], "human")
                 self.assertEqual(status["status"], "ACTIVE")
+
+    def test_distinct_conversation_workspaces_run_distinct_deliveries(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            first_workspace = Path(root, "worktree-first")
+            second_workspace = Path(root, "worktree-second")
+            first_workspace.mkdir()
+            second_workspace.mkdir()
+            first = call_tool(
+                "prepare_hierarchy",
+                {
+                    "hierarchy": isolated_task_hierarchy(
+                        "d-first",
+                        "t-first",
+                    )
+                },
+                root=root,
+                workspace_root=str(first_workspace),
+            )
+            second = call_tool(
+                "prepare_hierarchy",
+                {
+                    "hierarchy": isolated_task_hierarchy(
+                        "d-second",
+                        "t-second",
+                    )
+                },
+                root=root,
+                workspace_root=str(second_workspace),
+            )
+            for prepared, workspace in (
+                (first, first_workspace),
+                (second, second_workspace),
+            ):
+                frozen = call_tool(
+                    "freeze_hierarchy",
+                    {
+                        "root_id": prepared["rootId"],
+                        "expected_hierarchy_fingerprint": (
+                            prepared["hierarchyFingerprint"]
+                        ),
+                        "execution_mode": "active",
+                        "confirmed_by": "human",
+                    },
+                    root=root,
+                    workspace_root=str(workspace),
+                )
+                self.assertEqual(frozen["status"], "ACTIVE")
+                status = call_tool(
+                    "workspace_status",
+                    {},
+                    root=root,
+                    workspace_root=str(workspace),
+                )
+                self.assertEqual(status["rootId"], prepared["rootId"])
+                self.assertEqual(status["status"], "ACTIVE")
+                selected = call_tool(
+                    "workspace_status",
+                    {"root_id": prepared["rootId"]},
+                    root=root,
+                    workspace_root=str(workspace),
+                )
+                self.assertEqual(selected["rootId"], prepared["rootId"])
+
+            self.assertNotEqual(
+                first["workspaceIsolation"]["workspaceKey"],
+                second["workspaceIsolation"]["workspaceKey"],
+            )
+            self.assertEqual(
+                SchedulerRepository(root).run("d-first")["status"],
+                "ACTIVE",
+            )
+            self.assertEqual(
+                SchedulerRepository(root).run("d-second")["status"],
+                "ACTIVE",
+            )
+            with self.assertRaises(GatedLoopError) as caught:
+                call_tool(
+                    "graph_status",
+                    {"root_id": "d-first"},
+                    root=root,
+                    workspace_root=str(second_workspace),
+                )
+            self.assertEqual(
+                caught.exception.code,
+                "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH",
+            )
+
+    def test_one_workspace_cannot_run_two_active_deliveries(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            workspace = Path(root, "one-worktree")
+            workspace.mkdir()
+            first = call_tool(
+                "prepare_hierarchy",
+                {
+                    "hierarchy": isolated_task_hierarchy(
+                        "d-first",
+                        "t-first",
+                    )
+                },
+                root=root,
+                workspace_root=str(workspace),
+            )
+            call_tool(
+                "freeze_hierarchy",
+                {
+                    "root_id": first["rootId"],
+                    "expected_hierarchy_fingerprint": (
+                        first["hierarchyFingerprint"]
+                    ),
+                    "execution_mode": "active",
+                    "confirmed_by": "human",
+                },
+                root=root,
+                workspace_root=str(workspace),
+            )
+            second = call_tool(
+                "prepare_hierarchy",
+                {
+                    "hierarchy": isolated_task_hierarchy(
+                        "d-second",
+                        "t-second",
+                    )
+                },
+                root=root,
+                workspace_root=str(workspace),
+            )
+            active_status = call_tool(
+                "workspace_status",
+                {},
+                root=root,
+                workspace_root=str(workspace),
+            )
+            self.assertEqual(active_status["rootId"], "d-first")
+            self.assertEqual(active_status["status"], "ACTIVE")
+            prepared_status = call_tool(
+                "workspace_status",
+                {"root_id": "d-second"},
+                root=root,
+                workspace_root=str(workspace),
+            )
+            self.assertEqual(prepared_status["status"], "PREPARED")
+            with self.assertRaises(GatedLoopError) as caught:
+                call_tool(
+                    "freeze_hierarchy",
+                    {
+                        "root_id": second["rootId"],
+                        "expected_hierarchy_fingerprint": (
+                            second["hierarchyFingerprint"]
+                        ),
+                        "execution_mode": "active",
+                        "confirmed_by": "human",
+                    },
+                    root=root,
+                    workspace_root=str(workspace),
+                )
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED",
+        )
+
+    def test_linked_git_worktrees_share_control_root_but_keep_identity(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            repository_root = Path(root, "repository")
+            linked_root = Path(root, "linked")
+            common_git = repository_root / ".git"
+            worktree_git = common_git / "worktrees" / "linked"
+            worktree_git.mkdir(parents=True)
+            linked_root.mkdir()
+            (linked_root / ".git").write_text(
+                f"gitdir: {worktree_git}\n",
+                encoding="utf-8",
+            )
+            (worktree_git / "commondir").write_text(
+                "../..\n",
+                encoding="utf-8",
+            )
+            binding = ProjectRootBinding.from_startup(
+                None,
+                from_sandbox_meta=True,
+            )
+            resolved = binding.resolve_request(
+                {
+                    "codex/sandbox-state-meta": {
+                        "sandboxCwd": linked_root.as_uri(),
+                    }
+                },
+                stateless=True,
+            )
+        self.assertEqual(
+            resolved.project_root,
+            str(repository_root.resolve()),
+        )
+        self.assertEqual(
+            resolved.workspace_root,
+            str(linked_root.resolve()),
+        )
+
+    def test_git_delivery_binding_is_frozen_and_checked_at_runtime(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            repository, worktree, base_commit, branch_ref = (
+                git_delivery_checkout(root)
+            )
+            hierarchy = bind_delivery_to_git(
+                isolated_task_hierarchy("d-git", "t-git"),
+                branch_ref=branch_ref,
+                base_commit=base_commit,
+            )
+            Path(repository, "MAINLINE.md").write_text(
+                "Mainline advanced after the feature branch was created.\n",
+                encoding="utf-8",
+            )
+            git_command(repository, "add", "MAINLINE.md")
+            git_command(
+                repository,
+                "commit",
+                "-m",
+                "Advance main after feature fork",
+            )
+            discovered = call_tool(
+                "workspace_status",
+                {},
+                root=str(repository),
+                workspace_root=str(worktree),
+            )
+            self.assertEqual(discovered["status"], "ABSENT")
+            self.assertEqual(
+                discovered["gitWorkspace"]["branchRef"],
+                branch_ref,
+            )
+            self.assertEqual(
+                discovered["suggestedGitBinding"],
+                hierarchy["delivery"]["gitBinding"],
+            )
+            prepared = call_tool(
+                "prepare_hierarchy",
+                {"hierarchy": hierarchy},
+                root=str(repository),
+                workspace_root=str(worktree),
+            )
+            self.assertEqual(
+                prepared["gitBinding"],
+                hierarchy["delivery"]["gitBinding"],
+            )
+            self.assertEqual(
+                prepared["gitWorkspace"]["branchRef"],
+                branch_ref,
+            )
+            self.assertEqual(
+                prepared["gitWorkspace"]["headCommit"],
+                base_commit,
+            )
+            frozen = call_tool(
+                "freeze_hierarchy",
+                {
+                    "root_id": prepared["rootId"],
+                    "expected_hierarchy_fingerprint": (
+                        prepared["hierarchyFingerprint"]
+                    ),
+                    "execution_mode": "active",
+                    "confirmed_by": "human",
+                },
+                root=str(repository),
+                workspace_root=str(worktree),
+            )
+            self.assertEqual(
+                frozen["gitBinding"]["branchRef"],
+                branch_ref,
+            )
+            authoritative_run = SchedulerRepository(
+                str(repository)
+            ).run("d-git")
+            self.assertEqual(
+                authoritative_run["gitBinding"],
+                hierarchy["delivery"]["gitBinding"],
+            )
+            baseline = Path(
+                repository,
+                ".layered-delivery",
+                "d-git",
+                "baseline.md",
+            ).read_text(encoding="utf-8")
+            self.assertIn("## Git 分支绑定", baseline)
+            self.assertIn(
+                f"Delivery feature 分支：{branch_ref}",
+                baseline,
+            )
+            self.assertIn(
+                f"创建基线提交：{base_commit}",
+                baseline,
+            )
+            self.assertIn("最终集成目标：main", baseline)
+            self.assertIn(
+                f"main@{base_commit} → {branch_ref} → main",
+                baseline,
+            )
+
+            git_command(
+                worktree,
+                "switch",
+                "-c",
+                "feature/wrong-delivery",
+            )
+            with self.assertRaises(GatedLoopError) as caught:
+                call_tool(
+                    "graph_status",
+                    {"root_id": "d-git"},
+                    root=str(repository),
+                    workspace_root=str(worktree),
+                )
+            self.assertEqual(
+                caught.exception.code,
+                "SCHEDULER_GIT_BRANCH_MISMATCH",
+            )
+            git_command(worktree, "switch", branch_ref)
+            resumed = call_tool(
+                "graph_status",
+                {"root_id": "d-git"},
+                root=str(repository),
+                workspace_root=str(worktree),
+            )
+            self.assertEqual(resumed["status"], "ACTIVE")
+            self.assertEqual(
+                resumed["gitWorkspace"]["branchRef"],
+                branch_ref,
+            )
+
+    def test_git_delivery_requires_binding_and_valid_common_base(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            repository, worktree, base_commit, branch_ref = (
+                git_delivery_checkout(root)
+            )
+            with self.assertRaises(GatedLoopError) as caught:
+                call_tool(
+                    "prepare_hierarchy",
+                    {
+                        "hierarchy": isolated_task_hierarchy(
+                            "d-git",
+                            "t-git",
+                        )
+                    },
+                    root=str(repository),
+                    workspace_root=str(worktree),
+                )
+            self.assertEqual(
+                caught.exception.code,
+                "SCHEDULER_GIT_BINDING_REQUIRED",
+            )
+
+            wrong_branch = bind_delivery_to_git(
+                isolated_task_hierarchy("d-git", "t-git"),
+                branch_ref="feature/another-delivery",
+                base_commit=base_commit,
+            )
+            with self.assertRaises(GatedLoopError) as caught:
+                call_tool(
+                    "prepare_hierarchy",
+                    {"hierarchy": wrong_branch},
+                    root=str(repository),
+                    workspace_root=str(worktree),
+                )
+            self.assertEqual(
+                caught.exception.code,
+                "SCHEDULER_GIT_BRANCH_MISMATCH",
+            )
+
+            missing_base = bind_delivery_to_git(
+                isolated_task_hierarchy("d-git", "t-git"),
+                branch_ref=branch_ref,
+                base_commit="f" * 40,
+            )
+            with self.assertRaises(GatedLoopError) as caught:
+                call_tool(
+                    "prepare_hierarchy",
+                    {"hierarchy": missing_base},
+                    root=str(repository),
+                    workspace_root=str(worktree),
+                )
+            self.assertEqual(
+                caught.exception.code,
+                "SCHEDULER_GIT_BASE_INVALID",
+            )
+
+            Path(repository, "MAINLINE.md").write_text(
+                "This commit is not part of the feature branch.\n",
+                encoding="utf-8",
+            )
+            git_command(repository, "add", "MAINLINE.md")
+            git_command(repository, "commit", "-m", "Advance mainline")
+            non_ancestor = git_command(
+                repository,
+                "rev-parse",
+                "HEAD",
+            )
+            wrong_base = bind_delivery_to_git(
+                isolated_task_hierarchy("d-git", "t-git"),
+                branch_ref=branch_ref,
+                base_commit=non_ancestor,
+            )
+            with self.assertRaises(GatedLoopError) as caught:
+                call_tool(
+                    "prepare_hierarchy",
+                    {"hierarchy": wrong_base},
+                    root=str(repository),
+                    workspace_root=str(worktree),
+                )
+            self.assertEqual(
+                caught.exception.code,
+                "SCHEDULER_GIT_BASE_INVALID",
+            )
+
+    def test_two_git_deliveries_run_in_separate_feature_worktrees(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            repository, first_worktree, base_commit, first_branch = (
+                git_delivery_checkout(root, delivery_id="d-first")
+            )
+            second_worktree = Path(root, "worktrees", "d-second")
+            second_branch = "feature/d-second"
+            git_command(
+                repository,
+                "worktree",
+                "add",
+                "-b",
+                second_branch,
+                str(second_worktree),
+                "main",
+            )
+            deliveries = (
+                (
+                    "d-first",
+                    "t-first",
+                    first_branch,
+                    first_worktree,
+                ),
+                (
+                    "d-second",
+                    "t-second",
+                    second_branch,
+                    second_worktree,
+                ),
+            )
+            for delivery_id, task_id, branch_ref, worktree in deliveries:
+                hierarchy = bind_delivery_to_git(
+                    isolated_task_hierarchy(
+                        delivery_id,
+                        task_id,
+                        claims=[f"project:test/module:{delivery_id}"],
+                    ),
+                    branch_ref=branch_ref,
+                    base_commit=base_commit,
+                )
+                prepared = call_tool(
+                    "prepare_hierarchy",
+                    {"hierarchy": hierarchy},
+                    root=str(repository),
+                    workspace_root=str(worktree),
+                )
+                call_tool(
+                    "freeze_hierarchy",
+                    {
+                        "root_id": delivery_id,
+                        "expected_hierarchy_fingerprint": (
+                            prepared["hierarchyFingerprint"]
+                        ),
+                        "execution_mode": "active",
+                        "confirmed_by": "human",
+                    },
+                    root=str(repository),
+                    workspace_root=str(worktree),
+                )
+                Path(worktree, f"{delivery_id}.txt").write_text(
+                    f"{delivery_id} implementation\n",
+                    encoding="utf-8",
+                )
+                git_command(worktree, "add", f"{delivery_id}.txt")
+                git_command(
+                    worktree,
+                    "commit",
+                    "-m",
+                    f"Implement {delivery_id}",
+                )
+
+            for delivery_id, task_id, branch_ref, worktree in deliveries:
+                dispatched = call_tool(
+                    "dispatch_loop",
+                    {
+                        "root_id": delivery_id,
+                        "node_id": f"loop:{task_id}",
+                        "owner": f"agent-{delivery_id}",
+                        "operation_id": f"op-{delivery_id}",
+                    },
+                    root=str(repository),
+                    workspace_root=str(worktree),
+                )
+                self.assertEqual(dispatched["status"], "CLAIMED")
+                self.assertEqual(
+                    dispatched["gitWorkspace"]["branchRef"],
+                    branch_ref,
+                )
+                self.assertEqual(
+                    dispatched["gitWorkspace"]["headCommit"],
+                    git_command(worktree, "rev-parse", "HEAD"),
+                )
+
+            self.assertEqual(
+                SchedulerRepository(str(repository)).run("d-first")[
+                    "status"
+                ],
+                "ACTIVE",
+            )
+            self.assertEqual(
+                SchedulerRepository(str(repository)).run("d-second")[
+                    "status"
+                ],
+                "ACTIVE",
+            )
+
+    def test_git_binding_discovery_falls_back_to_master(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            repository, worktree, base_commit, branch_ref = (
+                git_delivery_checkout(root, mainline="master")
+            )
+            discovered = call_tool(
+                "workspace_status",
+                {},
+                root=str(repository),
+                workspace_root=str(worktree),
+            )
+            self.assertEqual(
+                discovered["suggestedGitBinding"],
+                {
+                    "branchRef": branch_ref,
+                    "baseRef": "master",
+                    "baseCommit": base_commit,
+                    "integrationTarget": "master",
+                },
+            )
+            hierarchy = bind_delivery_to_git(
+                isolated_task_hierarchy("d-git", "t-git"),
+                branch_ref=branch_ref,
+                base_commit=base_commit,
+                base_ref="master",
+            )
+            prepared = call_tool(
+                "prepare_hierarchy",
+                {"hierarchy": hierarchy},
+                root=str(repository),
+                workspace_root=str(worktree),
+            )
+            self.assertEqual(
+                prepared["gitBinding"]["baseRef"],
+                "master",
+            )
+
+    def test_git_file_without_worktree_metadata_keeps_its_own_root(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            workspace = Path(root, "submodule")
+            git_dir = Path(root, "parent", ".git", "modules", "submodule")
+            workspace.mkdir()
+            git_dir.mkdir(parents=True)
+            (workspace / ".git").write_text(
+                f"gitdir: {git_dir}\n",
+                encoding="utf-8",
+            )
+            binding = ProjectRootBinding.from_startup(
+                str(workspace),
+            )
+            resolved = binding.resolve_request(
+                None,
+                stateless=True,
+            )
+        self.assertEqual(
+            resolved.project_root,
+            str(workspace.resolve()),
+        )
+        self.assertEqual(
+            resolved.workspace_root,
+            str(workspace.resolve()),
+        )
 
     def test_workspace_status_tool_starts_absent(self) -> None:
         with TemporaryDirectory() as root:
@@ -793,6 +1610,16 @@ class McpSurfaceTests(unittest.TestCase):
                 "non-binding",
                 initialized["result"]["instructions"],
             )
+            self.assertIn(
+                "All TASKs in that Delivery share its feature worktree and "
+                "branch",
+                initialized["result"]["instructions"],
+            )
+            self.assertIn(
+                "Each TASK may stage and commit only its own changes on that "
+                "Delivery branch",
+                initialized["result"]["instructions"],
+            )
             handle_message(
                 {
                     "jsonrpc": "2.0",
@@ -884,7 +1711,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 19)
+            self.assertEqual(len(listed["result"]["tools"]), 21)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

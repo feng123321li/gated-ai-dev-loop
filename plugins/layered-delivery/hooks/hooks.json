@@ -30,6 +30,36 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "mcp__plugin_layered-delivery_layered-delivery__unfreeze_task_requirement",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "-X",
+              "utf8",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/require_sensitive_tool_approval.py"
+            ],
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__plugin_layered-delivery_layered-delivery__refreeze_task_requirement",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "-X",
+              "utf8",
+              "${CLAUDE_PLUGIN_ROOT}/hooks/require_sensitive_tool_approval.py"
+            ],
+            "timeout": 10
+          }
+        ]
       }
     ]
   }

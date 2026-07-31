@@ -2,22 +2,33 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .errors import fail
-from .graph_model import FAILURE_CLASSES, LOOP_NODE_KINDS
+from .graph_model import (
+    FAILURE_CLASSES,
+    LOOP_NODE_KINDS,
+    compile_delivery_graph,
+    graph_fingerprint,
+)
 from .loop_contracts import (
     loop_completion_policy,
     loop_execution_policy,
     resource_claims_overlap,
+    validate_loop_descriptor,
     validate_loop_outcome,
 )
 from .model_rendering import (
     task_baseline_relative_path,
     work_item_projection_relative_path,
 )
-from .model_core import iter_hierarchy_nodes
+from .model_core import (
+    hierarchy_fingerprint,
+    iter_hierarchy_nodes,
+    validate_hierarchy_definition,
+)
 from .repository import (
     SchedulerRepository,
     _validated_stored_definition,
@@ -507,7 +518,7 @@ def loop_context(
                     item_id,
                 )
             )
-    return {
+    context = {
         "rootId": root_id,
         "runId": run["runId"],
         "nodeId": node_id,
@@ -531,6 +542,7 @@ def loop_context(
             node_id,
         ),
         "humanArtifacts": human_artifacts,
+        "workspaceIsolation": run["workspaceIsolation"],
         "executionPolicy": loop_execution_policy(),
         "completionPolicy": loop_completion_policy(),
         "rules": {
@@ -545,6 +557,25 @@ def loop_context(
             "coordinatorMustNotExecuteLoopInline": True,
         },
     }
+    git_binding = stored["hierarchy"]["delivery"].get("gitBinding")
+    if git_binding is not None:
+        context["gitBinding"] = git_binding
+    if definition["kind"] == "TASK_LOOP":
+        requirement_state = next(
+            (
+                item
+                for item in run["taskRequirements"]
+                if item["taskId"] == definition["workItemId"]
+            ),
+            None,
+        )
+        if requirement_state is None:
+            fail(
+                "SCHEDULER_STATE_INVALID",
+                "TASK requirement state is missing",
+            )
+        context["taskRequirement"] = requirement_state
+    return context
 
 
 def dispatch_loop(
@@ -574,6 +605,23 @@ def dispatch_loop(
                 "SCHEDULER_LOOP_NOT_READY",
                 f"{node_id} is not ready for dispatch",
             )
+        if definition["kind"] == "TASK_LOOP":
+            task_requirement = connection.execute(
+                "SELECT status FROM task_requirement_states "
+                "WHERE run_id = ? AND task_id = ?",
+                (run["run_id"], definition["workItemId"]),
+            ).fetchone()
+            if task_requirement is None:
+                fail(
+                    "SCHEDULER_STATE_INVALID",
+                    "TASK requirement state is missing",
+                )
+            if task_requirement["status"] != "FROZEN":
+                fail(
+                    "SCHEDULER_TASK_REQUIREMENT_UNFROZEN",
+                    "An unfrozen TASK requirement cannot be dispatched",
+                    taskId=definition["workItemId"],
+                )
         used = connection.execute(
             "SELECT 1 FROM graph_events WHERE operation_id = ? LIMIT 1",
             (operation_id,),
@@ -587,6 +635,23 @@ def dispatch_loop(
             item["id"]: item
             for item in graph["nodes"]
         }
+        for reservation in repository.claimed_resource_reservations(
+            connection,
+            at=at,
+            exclude_root_id=root_id,
+        ):
+            if resource_claims_overlap(
+                definition["loop"]["resourceClaims"],
+                reservation["resourceClaims"],
+            ):
+                fail(
+                    "SCHEDULER_RESOURCE_CONFLICT",
+                    f"{node_id} conflicts with active Loop "
+                    f"{reservation['nodeId']} in Delivery "
+                    f"{reservation['rootId']}",
+                    conflictingRootId=reservation["rootId"],
+                    conflictingNodeId=reservation["nodeId"],
+                )
         for active in nodes:
             if active["status"] != "CLAIMED":
                 continue
@@ -647,6 +712,376 @@ def dispatch_loop(
         "operationId": operation_id,
         "leaseExpiresAt": expires,
     }
+
+
+def _task_requirement_snapshot(
+    hierarchy: dict[str, Any],
+    task_id: str,
+) -> dict[str, Any]:
+    task = next(
+        (
+            node["definition"]
+            for node in iter_hierarchy_nodes(hierarchy)
+            if (
+                node["definition"]["kind"] == "TASK"
+                and node["definition"]["id"] == task_id
+            )
+        ),
+        None,
+    )
+    if task is None:
+        fail(
+            "SCHEDULER_TASK_MISSING",
+            f"TASK is missing from the Delivery: {task_id}",
+        )
+    return {
+        "title": task["title"],
+        "summary": task["summary"],
+        "payload": deepcopy(task["execution"]["loop"]["payload"]),
+    }
+
+
+def _task_requirement_row(
+    connection: Any,
+    *,
+    run_id: str,
+    task_id: str,
+) -> Any:
+    row = connection.execute(
+        "SELECT * FROM task_requirement_states "
+        "WHERE run_id = ? AND task_id = ?",
+        (run_id, task_id),
+    ).fetchone()
+    if row is None:
+        fail(
+            "SCHEDULER_TASK_MISSING",
+            f"TASK requirement is missing: {task_id}",
+        )
+    return row
+
+
+def _expected_requirement_revision(
+    value: object,
+    current: int,
+) -> int:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 1
+        or value != current
+    ):
+        fail(
+            "SCHEDULER_TASK_REQUIREMENT_REVISION_CONFLICT",
+            "TASK requirement revision is not current",
+            currentRevision=current,
+        )
+    return value
+
+
+def _assert_task_requirement_unstarted(
+    connection: Any,
+    *,
+    run_id: str,
+    node_id: str,
+    task_id: str,
+    state: dict[str, Any],
+) -> None:
+    previously_claimed = connection.execute(
+        "SELECT 1 FROM graph_events "
+        "WHERE run_id = ? AND node_id = ? "
+        "AND event_type = 'LOOP_CLAIMED' LIMIT 1",
+        (run_id, node_id),
+    ).fetchone()
+    if (
+        state["status"] not in {"PENDING", "READY"}
+        or previously_claimed is not None
+    ):
+        fail(
+            "SCHEDULER_TASK_ALREADY_STARTED",
+            "Only an unstarted TASK requirement can be changed",
+            taskId=task_id,
+            taskStatus=state["status"],
+        )
+
+
+def unfreeze_task_requirement(
+    *,
+    root: str,
+    root_id: str,
+    task_id: str,
+    expected_revision: int,
+    authorized_by: str,
+    reason: str,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    authorized_by = _identity(authorized_by, "authorized_by")
+    if not isinstance(reason, str) or not reason.strip():
+        fail(
+            "SCHEDULER_TASK_REQUIREMENT_CHANGE_INVALID",
+            "reason must be non-empty",
+        )
+    with repository.transaction() as connection:
+        graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
+        definition = next(
+            (
+                node
+                for node in graph["nodes"]
+                if (
+                    node["kind"] == "TASK_LOOP"
+                    and node["workItemId"] == task_id
+                )
+            ),
+            None,
+        )
+        if definition is None:
+            fail(
+                "SCHEDULER_TASK_MISSING",
+                f"TASK is missing from the Delivery: {task_id}",
+            )
+        _, state = _node(graph, nodes, definition["id"])
+        _assert_task_requirement_unstarted(
+            connection,
+            run_id=run["run_id"],
+            node_id=definition["id"],
+            task_id=task_id,
+            state=state,
+        )
+        requirement = _task_requirement_row(
+            connection,
+            run_id=run["run_id"],
+            task_id=task_id,
+        )
+        _expected_requirement_revision(
+            expected_revision,
+            requirement["revision"],
+        )
+        if requirement["status"] != "FROZEN":
+            fail(
+                "SCHEDULER_TASK_REQUIREMENT_ALREADY_UNFROZEN",
+                "TASK requirement is already unfrozen",
+                taskId=task_id,
+            )
+        connection.execute(
+            "UPDATE task_requirement_states "
+            "SET status = 'UNFROZEN', updated_at = ? "
+            "WHERE run_id = ? AND task_id = ?",
+            (at, run["run_id"], task_id),
+        )
+        repository.append_event(
+            connection,
+            run_id=run["run_id"],
+            node_id=definition["id"],
+            attempt=state["attempt"],
+            event_type="TASK_REQUIREMENT_UNFROZEN",
+            actor=authorized_by,
+            operation_id=None,
+            payload={
+                "taskId": task_id,
+                "revision": requirement["revision"],
+                "reason": reason.strip(),
+            },
+            at=at,
+        )
+        connection.execute(
+            "UPDATE runs SET updated_at = ? WHERE run_id = ?",
+            (at, run["run_id"]),
+        )
+        hierarchy_row = connection.execute(
+            "SELECT * FROM hierarchies WHERE root_id = ?",
+            (root_id,),
+        ).fetchone()
+        assert hierarchy_row is not None
+        hierarchy, _ = _validated_stored_definition(hierarchy_row)
+        result = {
+            "rootId": root_id,
+            "taskRequirement": {
+                "taskId": task_id,
+                "revision": requirement["revision"],
+                "status": "UNFROZEN",
+                "updatedAt": at,
+                "requirement": _task_requirement_snapshot(
+                    hierarchy,
+                    task_id,
+                ),
+            },
+            "nextAction": "REFREEZE_TASK_REQUIREMENT",
+        }
+    repository.write_projections(root_id)
+    return result
+
+
+def refreeze_task_requirement(
+    *,
+    root: str,
+    root_id: str,
+    task_id: str,
+    expected_revision: int,
+    requirement: object,
+    confirmed_by: str,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    confirmed_by = _identity(confirmed_by, "confirmed_by")
+    if not isinstance(requirement, dict) or set(requirement) != {
+        "title",
+        "summary",
+        "payload",
+    }:
+        fail(
+            "SCHEDULER_TASK_REQUIREMENT_CHANGE_INVALID",
+            "requirement fields must be title, summary, and payload",
+        )
+    with repository.transaction() as connection:
+        graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
+        definition = next(
+            (
+                node
+                for node in graph["nodes"]
+                if (
+                    node["kind"] == "TASK_LOOP"
+                    and node["workItemId"] == task_id
+                )
+            ),
+            None,
+        )
+        if definition is None:
+            fail(
+                "SCHEDULER_TASK_MISSING",
+                f"TASK is missing from the Delivery: {task_id}",
+            )
+        _, state = _node(graph, nodes, definition["id"])
+        _assert_task_requirement_unstarted(
+            connection,
+            run_id=run["run_id"],
+            node_id=definition["id"],
+            task_id=task_id,
+            state=state,
+        )
+        requirement_row = _task_requirement_row(
+            connection,
+            run_id=run["run_id"],
+            task_id=task_id,
+        )
+        _expected_requirement_revision(
+            expected_revision,
+            requirement_row["revision"],
+        )
+        if requirement_row["status"] != "UNFROZEN":
+            fail(
+                "SCHEDULER_TASK_REQUIREMENT_NOT_UNFROZEN",
+                "TASK requirement must be unfrozen before replacement",
+                taskId=task_id,
+            )
+        hierarchy_row = connection.execute(
+            "SELECT * FROM hierarchies WHERE root_id = ?",
+            (root_id,),
+        ).fetchone()
+        assert hierarchy_row is not None
+        hierarchy, _ = _validated_stored_definition(hierarchy_row)
+        replacement = deepcopy(hierarchy)
+        task_definition = next(
+            node["definition"]
+            for node in iter_hierarchy_nodes(replacement)
+            if (
+                node["definition"]["kind"] == "TASK"
+                and node["definition"]["id"] == task_id
+            )
+        )
+        candidate_loop = {
+            **task_definition["execution"]["loop"],
+            "payload": requirement.get("payload"),
+        }
+        task_definition["title"] = requirement.get("title")
+        task_definition["summary"] = requirement.get("summary")
+        task_definition["execution"]["loop"] = (
+            validate_loop_descriptor(candidate_loop)
+        )
+        normalized = validate_hierarchy_definition(replacement)
+        hierarchy_value = hierarchy_fingerprint(normalized)
+        revised_graph = compile_delivery_graph(
+            normalized,
+            hierarchy_fingerprint=hierarchy_value,
+        )
+        graph_value = graph_fingerprint(revised_graph)
+        revision = requirement_row["revision"] + 1
+        connection.execute(
+            "UPDATE hierarchies SET hierarchy_fingerprint = ?, "
+            "graph_fingerprint = ?, hierarchy_json = ?, graph_json = ?, "
+            "updated_at = ? WHERE root_id = ?",
+            (
+                hierarchy_value,
+                graph_value,
+                json.dumps(
+                    normalized,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                json.dumps(
+                    revised_graph,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                at,
+                root_id,
+            ),
+        )
+        connection.execute(
+            "UPDATE task_requirement_states SET revision = ?, "
+            "status = 'FROZEN', updated_at = ? "
+            "WHERE run_id = ? AND task_id = ?",
+            (revision, at, run["run_id"], task_id),
+        )
+        repository.append_event(
+            connection,
+            run_id=run["run_id"],
+            node_id=definition["id"],
+            attempt=state["attempt"],
+            event_type="TASK_REQUIREMENT_REFROZEN",
+            actor=confirmed_by,
+            operation_id=None,
+            payload={
+                "taskId": task_id,
+                "revision": revision,
+                "requirement": _task_requirement_snapshot(
+                    normalized,
+                    task_id,
+                ),
+                "hierarchyFingerprint": hierarchy_value,
+                "graphFingerprint": graph_value,
+            },
+            at=at,
+        )
+        connection.execute(
+            "UPDATE runs SET updated_at = ? WHERE run_id = ?",
+            (at, run["run_id"]),
+        )
+        result = {
+            "rootId": root_id,
+            "hierarchyFingerprint": hierarchy_value,
+            "graphFingerprint": graph_value,
+            "taskRequirement": {
+                "taskId": task_id,
+                "revision": revision,
+                "status": "FROZEN",
+                "updatedAt": at,
+                "requirement": _task_requirement_snapshot(
+                    normalized,
+                    task_id,
+                ),
+            },
+            "nextAction": "READ_GRAPH_FRONTIER",
+        }
+    repository.write_projections(root_id)
+    return result
 
 
 def heartbeat_loop(
@@ -1274,6 +1709,16 @@ def _rebuild_graph_run_locked(
         for node_id, state in initial.items()
     }
     latest = dict(initial)
+    requirement_states = {
+        node["workItemId"]: {
+            "taskId": node["workItemId"],
+            "revision": 1,
+            "status": "FROZEN",
+            "updatedAt": current_run["startedAt"],
+        }
+        for node in graph["nodes"]
+        if node["kind"] == "TASK_LOOP"
+    }
     completed_at: str | None = None
     cancelled_at: str | None = None
 
@@ -1330,6 +1775,38 @@ def _rebuild_graph_run_locked(
                 "SCHEDULER_EVENT_REPLAY_INVALID",
                 "Event does not reference the latest Loop attempt",
             )
+        if event_type == "TASK_REQUIREMENT_UNFROZEN":
+            task_id = payload.get("taskId")
+            requirement = requirement_states.get(task_id)
+            if (
+                requirement is None
+                or requirement["revision"] != payload.get("revision")
+                or requirement["status"] != "FROZEN"
+            ):
+                fail(
+                    "SCHEDULER_EVENT_REPLAY_INVALID",
+                    "TASK requirement unfreeze sequence is invalid",
+                )
+            requirement["status"] = "UNFROZEN"
+            requirement["updatedAt"] = at
+            continue
+        if event_type == "TASK_REQUIREMENT_REFROZEN":
+            task_id = payload.get("taskId")
+            requirement = requirement_states.get(task_id)
+            if (
+                requirement is None
+                or requirement["status"] != "UNFROZEN"
+                or payload.get("revision")
+                != requirement["revision"] + 1
+            ):
+                fail(
+                    "SCHEDULER_EVENT_REPLAY_INVALID",
+                    "TASK requirement refreeze sequence is invalid",
+                )
+            requirement["revision"] = payload["revision"]
+            requirement["status"] = "FROZEN"
+            requirement["updatedAt"] = at
+            continue
         if event_type == "NODE_READY":
             state["status"] = "READY"
         elif event_type == "JOIN_COMPLETED":
@@ -1495,6 +1972,23 @@ def _rebuild_graph_run_locked(
                 ),
             )
         connection.execute(
+            "DELETE FROM task_requirement_states WHERE run_id = ?",
+            (current_run["runId"],),
+        )
+        for requirement in requirement_states.values():
+            connection.execute(
+                "INSERT INTO task_requirement_states("
+                "run_id, task_id, revision, status, updated_at"
+                ") VALUES (?, ?, ?, ?, ?)",
+                (
+                    current_run["runId"],
+                    requirement["taskId"],
+                    requirement["revision"],
+                    requirement["status"],
+                    requirement["updatedAt"],
+                ),
+            )
+        connection.execute(
             "UPDATE runs SET status = ?, updated_at = ?, "
             "completed_at = ?, cancelled_at = ? WHERE run_id = ?",
             (
@@ -1538,8 +2032,10 @@ __all__ = (
     "heartbeat_loop",
     "loop_context",
     "pause_loop",
+    "refreeze_task_requirement",
     "record_loop_result",
     "record_user_confirmation",
     "rebuild_graph_run",
     "resume_loop",
+    "unfreeze_task_requirement",
 )

@@ -6,6 +6,7 @@ from typing import Any, Callable, Mapping
 from .agent_recommendation import available_agents, recommend_executors
 from .errors import fail
 from .graph_frontier import get_graph_frontier
+from .git_binding import verify_delivery_git_binding
 from .graph_runtime import (
     advance_graph,
     cancel_graph_run,
@@ -15,10 +16,12 @@ from .graph_runtime import (
     heartbeat_loop,
     loop_context,
     pause_loop,
+    refreeze_task_requirement,
     rebuild_graph_run,
     record_loop_result,
     record_user_confirmation,
     resume_loop,
+    unfreeze_task_requirement,
 )
 from .hierarchy_contract import hierarchy_contract
 from .planning import (
@@ -26,6 +29,7 @@ from .planning import (
     prepare_hierarchy,
     workspace_status,
 )
+from .repository import SchedulerRepository
 
 
 ControllerOperation = Callable[..., dict[str, Any]]
@@ -45,6 +49,8 @@ CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "dispatch_loop": dispatch_loop,
     "heartbeat_loop": heartbeat_loop,
     "pause_loop": pause_loop,
+    "unfreeze_task_requirement": unfreeze_task_requirement,
+    "refreeze_task_requirement": refreeze_task_requirement,
     "resume_loop": resume_loop,
     "record_loop_result": record_loop_result,
     "rebuild_graph_run": rebuild_graph_run,
@@ -58,6 +64,7 @@ class ControllerContext:
     """Protocol-neutral execution context supplied by an outer adapter."""
 
     project_root: str
+    workspace_root: str | None = None
     explicit_dogfood: bool = False
 
 
@@ -87,11 +94,39 @@ class LayeredDeliveryController:
                 "CONTROLLER_OPERATION_UNKNOWN",
                 f"Unknown scheduler operation: {name}",
             )
-        return operation(
+        workspace_root = context.workspace_root or context.project_root
+        arguments_value = dict(arguments)
+        root_id = arguments_value.get("root_id")
+        repository = SchedulerRepository(context.project_root)
+        git_binding = None
+        git_workspace = None
+        if isinstance(root_id, str):
+            repository.assert_delivery_workspace(
+                root_id,
+                workspace_root,
+            )
+            if name != "workspace_status":
+                stored = repository.hierarchy(root_id)
+                git_binding = stored["hierarchy"]["delivery"].get(
+                    "gitBinding"
+                )
+                git_workspace = verify_delivery_git_binding(
+                    workspace_root,
+                    git_binding,
+                    preparing=False,
+                )
+        if name in {"workspace_status", "prepare_hierarchy"}:
+            arguments_value["workspace_root"] = workspace_root
+        result = operation(
             root=context.project_root,
             explicit_dogfood=context.explicit_dogfood,
-            **dict(arguments),
+            **arguments_value,
         )
+        if git_binding is not None:
+            result["gitBinding"] = git_binding
+        if git_workspace is not None:
+            result["gitWorkspace"] = git_workspace
+        return result
 
 
 DEFAULT_CONTROLLER = LayeredDeliveryController()

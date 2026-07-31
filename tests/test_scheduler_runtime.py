@@ -34,6 +34,7 @@ from hdg.loop_contracts import (
     loop_execution_policy,
 )
 from hdg.mcp_tools import tool_definitions
+from hdg.mcp_tools import call_tool
 from hdg.model_core import validate_hierarchy_definition
 from hdg.model_rendering import (
     PROJECTION_TEMPLATES,
@@ -57,6 +58,22 @@ from .test_loop_architecture import (
     task_definition,
     task_hierarchy,
 )
+
+
+def delivery_task_hierarchy(
+    delivery_id: str,
+    task_id: str,
+    *,
+    claims: list[str] | None = None,
+) -> dict:
+    hierarchy = task_hierarchy()
+    hierarchy["delivery"]["id"] = delivery_id
+    hierarchy["delivery"]["title"] = f"Deliver {delivery_id}"
+    definition = hierarchy["root"]["definition"]
+    definition["id"] = task_id
+    definition["title"] = f"Run {task_id}"
+    definition["execution"]["loop"]["resourceClaims"] = claims or []
+    return hierarchy
 
 
 def at(minutes: int) -> datetime:
@@ -1784,6 +1801,383 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 operation_id="op-core",
                 now=at(3),
             )
+
+    def test_resource_claims_serialize_loops_across_deliveries(self) -> None:
+        first_workspace = Path(self.root, "worktree-first")
+        second_workspace = Path(self.root, "worktree-second")
+        first_workspace.mkdir()
+        second_workspace.mkdir()
+        claim = ["project:erp/environment:shared"]
+        prepared = []
+        for delivery_id, task_id, workspace in (
+            ("d-first", "t-first", first_workspace),
+            ("d-second", "t-second", second_workspace),
+        ):
+            current = call_tool(
+                "prepare_hierarchy",
+                {
+                    "hierarchy": delivery_task_hierarchy(
+                        delivery_id,
+                        task_id,
+                        claims=claim,
+                    )
+                },
+                root=self.root,
+                workspace_root=str(workspace),
+            )
+            call_tool(
+                "freeze_hierarchy",
+                {
+                    "root_id": current["rootId"],
+                    "expected_hierarchy_fingerprint": (
+                        current["hierarchyFingerprint"]
+                    ),
+                    "execution_mode": "active",
+                    "confirmed_by": "human",
+                },
+                root=self.root,
+                workspace_root=str(workspace),
+            )
+            prepared.append(current)
+
+        call_tool(
+            "dispatch_loop",
+            {
+                "root_id": "d-first",
+                "node_id": loop_node_id("t-first"),
+                "owner": "agent-first",
+                "operation_id": "op-first",
+            },
+            root=self.root,
+            workspace_root=str(first_workspace),
+        )
+        frontier = call_tool(
+            "graph_frontier",
+            {"root_id": "d-second"},
+            root=self.root,
+            workspace_root=str(second_workspace),
+        )
+        second_ready = next(
+            item
+            for item in frontier["readyLoops"]
+            if item["nodeId"] == loop_node_id("t-second")
+        )
+        self.assertEqual(
+            second_ready["resourceConflicts"],
+            [f"d-first/{loop_node_id('t-first')}"],
+        )
+        self.assertFalse(
+            any(
+                action["action"] == "DISPATCH_LOOP"
+                for action in frontier["actions"]
+            )
+        )
+        with self.assertRaises(GatedLoopError) as caught:
+            call_tool(
+                "dispatch_loop",
+                {
+                    "root_id": "d-second",
+                    "node_id": loop_node_id("t-second"),
+                    "owner": "agent-second",
+                    "operation_id": "op-second",
+                },
+                root=self.root,
+                workspace_root=str(second_workspace),
+            )
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_RESOURCE_CONFLICT",
+        )
+        self.assertEqual(
+            caught.exception.details["conflictingRootId"],
+            "d-first",
+        )
+
+    def test_expired_cross_delivery_claim_does_not_block_dispatch(
+        self,
+    ) -> None:
+        first_workspace = Path(self.root, "worktree-first")
+        second_workspace = Path(self.root, "worktree-second")
+        first_workspace.mkdir()
+        second_workspace.mkdir()
+        claim = ["project:erp/environment:shared"]
+        for delivery_id, task_id, workspace in (
+            ("d-first", "t-first", first_workspace),
+            ("d-second", "t-second", second_workspace),
+        ):
+            prepared = prepare_hierarchy(
+                root=self.root,
+                hierarchy=delivery_task_hierarchy(
+                    delivery_id,
+                    task_id,
+                    claims=claim,
+                ),
+                workspace_root=str(workspace),
+                now=at(0),
+            )
+            freeze_hierarchy(
+                root=self.root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="human",
+                now=at(1),
+            )
+
+        dispatch_loop(
+            root=self.root,
+            root_id="d-first",
+            node_id=loop_node_id("t-first"),
+            owner="agent-first",
+            operation_id="op-first-expiring",
+            now=at(2),
+        )
+        frontier = get_graph_frontier(
+            root=self.root,
+            root_id="d-second",
+            now=at(33),
+        )
+        self.assertIn(
+            loop_node_id("t-second"),
+            [
+                action.get("nodeId")
+                for action in frontier["actions"]
+                if action["action"] == "DISPATCH_LOOP"
+            ],
+        )
+        dispatched = dispatch_loop(
+            root=self.root,
+            root_id="d-second",
+            node_id=loop_node_id("t-second"),
+            owner="agent-second",
+            operation_id="op-second-after-expiry",
+            now=at(33),
+        )
+        self.assertEqual(dispatched["status"], "CLAIMED")
+
+    def test_unstarted_task_requirement_can_be_unfrozen_and_refrozen(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        task_id = "t-service"
+        initial = graph_status(root=self.root, root_id=root_id)
+        self.assertEqual(
+            initial["taskRequirements"],
+            [
+                {
+                    "taskId": task_id,
+                    "revision": 1,
+                    "status": "FROZEN",
+                    "updatedAt": at(1).isoformat().replace(
+                        "+00:00",
+                        "Z",
+                    ),
+                }
+            ],
+        )
+
+        unfrozen = call_tool(
+            "unfreeze_task_requirement",
+            {
+                "root_id": root_id,
+                "task_id": task_id,
+                "expected_revision": 1,
+                "authorized_by": "human",
+                "reason": "Clarify the acceptance boundary.",
+            },
+            root=self.root,
+        )
+        self.assertEqual(
+            unfrozen["taskRequirement"]["status"],
+            "UNFROZEN",
+        )
+        frontier = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(2),
+        )
+        self.assertNotIn(
+            loop_node_id(task_id),
+            [
+                action.get("nodeId")
+                for action in frontier["actions"]
+                if action["action"] == "DISPATCH_LOOP"
+            ],
+        )
+        self.assertIn(
+            {
+                "action": "REFREEZE_TASK_REQUIREMENT",
+                "nodeId": loop_node_id(task_id),
+                "taskId": task_id,
+                "revision": 1,
+            },
+            frontier["actions"],
+        )
+        with self.assertRaises(GatedLoopError) as caught:
+            dispatch_loop(
+                root=self.root,
+                root_id=root_id,
+                node_id=loop_node_id(task_id),
+                owner="agent",
+                operation_id="op-unfrozen",
+                now=at(2),
+            )
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_TASK_REQUIREMENT_UNFROZEN",
+        )
+
+        requirement = unfrozen["taskRequirement"]["requirement"]
+        requirement["title"] = "Run clarified service task"
+        requirement["summary"] = "Implement the clarified requirement."
+        requirement["payload"] = {
+            "goal": "Deliver the revised result.",
+            "acceptance": ["The revised acceptance boundary is verified."],
+        }
+        refrozen = call_tool(
+            "refreeze_task_requirement",
+            {
+                "root_id": root_id,
+                "task_id": task_id,
+                "expected_revision": 1,
+                "requirement": requirement,
+                "confirmed_by": "human",
+            },
+            root=self.root,
+        )
+        self.assertEqual(
+            refrozen["taskRequirement"]["revision"],
+            2,
+        )
+        self.assertEqual(
+            refrozen["taskRequirement"]["status"],
+            "FROZEN",
+        )
+        context = loop_context(
+            root=self.root,
+            root_id=root_id,
+            node_id=loop_node_id(task_id),
+        )
+        self.assertEqual(
+            context["loop"]["payload"],
+            requirement["payload"],
+        )
+        self.assertEqual(
+            context["taskRequirement"]["revision"],
+            2,
+        )
+        resumed = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(3),
+        )
+        self.assertIn(
+            loop_node_id(task_id),
+            [
+                action.get("nodeId")
+                for action in resumed["actions"]
+                if action["action"] == "DISPATCH_LOOP"
+            ],
+        )
+        baseline = (
+            Path(self.root)
+            / ".layered-delivery"
+            / root_id
+            / "work-items"
+            / task_id
+            / "baseline.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("需求版本：2", baseline)
+        self.assertIn("需求状态：已冻结", baseline)
+        self.assertIn(requirement["title"], baseline)
+        rebuilt = rebuild_graph_run(
+            root=self.root,
+            root_id=root_id,
+        )
+        self.assertEqual(
+            rebuilt["taskRequirements"][0]["revision"],
+            2,
+        )
+        self.assertEqual(
+            rebuilt["taskRequirements"][0]["status"],
+            "FROZEN",
+        )
+
+    def test_started_task_requirement_cannot_be_unfrozen(self) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=loop_node_id("t-service"),
+            owner="agent",
+            operation_id="op-started-requirement",
+            now=at(2),
+        )
+        with self.assertRaises(GatedLoopError) as caught:
+            call_tool(
+                "unfreeze_task_requirement",
+                {
+                    "root_id": root_id,
+                    "task_id": "t-service",
+                    "expected_revision": 1,
+                    "authorized_by": "human",
+                    "reason": "Too late.",
+                },
+                root=self.root,
+            )
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_TASK_ALREADY_STARTED",
+        )
+
+    def test_retried_task_requirement_cannot_be_unfrozen(self) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="agent",
+            operation_id="op-started-before-retry",
+            now=at(2),
+        )
+        retried = record_loop_result(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id="op-started-before-retry",
+            outcome={
+                "status": "BLOCKED",
+                "summary": "Worker transport failed.",
+                "result": {},
+            },
+            failure_class="RETRYABLE_INFRA",
+            now=at(3),
+        )
+        self.assertTrue(retried["retried"])
+        self.assertEqual(retried["schedulerStatus"], "READY")
+
+        with self.assertRaises(GatedLoopError) as caught:
+            call_tool(
+                "unfreeze_task_requirement",
+                {
+                    "root_id": root_id,
+                    "task_id": "t-service",
+                    "expected_revision": 1,
+                    "authorized_by": "human",
+                    "reason": "This task already entered development.",
+                },
+                root=self.root,
+            )
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_TASK_ALREADY_STARTED",
+        )
 
     def test_initial_frontier_reserves_shared_resources_deterministically(
         self,

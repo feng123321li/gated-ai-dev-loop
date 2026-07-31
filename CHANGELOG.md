@@ -4,6 +4,17 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.26.0 — 2026-07-31
+
+发布提交：`b1914e2`
+
+- 同一共享控制根现在支持多个对话窗口并行维护多个 Delivery：每个 Active Delivery 绑定独立 `workspaceKey`，linked Git worktree 共享主 checkout 的统一 `scheduler.db`，但隔离工作目录、Git index 与未提交改动；每个工作区最多运行一个未结束 Delivery。
+- Git hierarchy 新增冻结的 `delivery.gitBinding`，记录 Delivery feature 分支、本地主线（优先 `main`，不存在时回退 `master`）、不可变 fork commit 与最终集成目标。准备和运行入口只读校验 worktree、当前分支、HEAD 对 fork commit 的继承关系以及主线仍包含该基线，切错分支时拒绝运行，切回后可继续；控制器不自动创建、切换、提交、合并或推送分支。
+- Git 模型收敛为“一 Delivery、一 linked worktree、一 feature 分支”。同一 Delivery 的全部 TASK 共享该分支，不创建 TASK 级 Git binding；获得相应 Git 写入授权后，各 TASK 可只暂存并提交自身 scope 的变更，在 Delivery 分支上形成独立 commit，共享 Git index 的写入必须串行。
+- 初次冻结会把全部 TASK requirement 置为 revision 1 冻结态。开发期间，只有从未 claim 的 TASK 可经用户明确授权单独解冻，替换 `title`、`summary` 和不透明 `payload` 后再次冻结并递增 revision；依赖、资源声明、Loop、Review 和拓扑仍不可局部修改。
+- `resourceClaims` 在共享控制根内跨 Delivery 全局生效，确保 worktree 文件隔离不会掩盖数据库、端口、部署环境或共享模块冲突。MCP 工具面保持 21 个，schema 继续只维护完整 v3，不增加旧结构迁移入口。
+- Python 全量 117 项测试、编译检查、Skill 校验和 `git diff --check` 通过。
+
 ## 0.25.0 — 2026-07-30
 
 发布提交：`ef0042b`

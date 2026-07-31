@@ -27,6 +27,8 @@ PLACEHOLDER = re.compile(
     re.I,
 )
 CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+GIT_COMMIT = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+GIT_REF_FORBIDDEN = re.compile(r"[\x00-\x20\x7f~^:?*[\]\\]")
 
 
 def _exact_keys(value: object, expected: set[str]) -> bool:
@@ -379,8 +381,13 @@ def work_item_dependencies(definition: dict[str, Any]) -> list[str]:
 
 
 def _delivery_definition(value: object) -> dict[str, Any]:
-    expected = {"id", "title", "summary", "reviewLoop"}
-    if not _exact_keys(value, expected):
+    required = {"id", "title", "summary", "reviewLoop"}
+    expected = required | {"gitBinding"}
+    if (
+        not isinstance(value, dict)
+        or not required.issubset(value)
+        or not set(value).issubset(expected)
+    ):
         _shape_error(
             "DELIVERY_DEFINITION_INVALID",
             "Delivery fields are invalid",
@@ -388,7 +395,7 @@ def _delivery_definition(value: object) -> dict[str, Any]:
             field="hierarchy.delivery",
             expected=expected,
         )
-    return {
+    normalized = {
         "id": safe_id(value["id"], "hierarchy.delivery.id"),
         "title": _text(value["title"], "hierarchy.delivery.title"),
         "summary": _text(value["summary"], "hierarchy.delivery.summary"),
@@ -397,6 +404,122 @@ def _delivery_definition(value: object) -> dict[str, Any]:
             field="hierarchy.delivery.reviewLoop",
         ),
     }
+    if "gitBinding" in value:
+        normalized["gitBinding"] = _git_binding(
+            value["gitBinding"],
+            field="hierarchy.delivery.gitBinding",
+        )
+    return normalized
+
+
+def _git_branch_ref(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        fail(
+            "DELIVERY_GIT_BINDING_INVALID",
+            f"{field} must be a local Git branch name",
+            field=field,
+        )
+    branch = value.strip()
+    components = branch.split("/")
+    if (
+        not branch
+        or len(branch) > 240
+        or branch == "@"
+        or branch.startswith("-")
+        or branch.startswith("refs/")
+        or branch.startswith("/")
+        or branch.endswith("/")
+        or branch.endswith(".")
+        or "//" in branch
+        or ".." in branch
+        or "@{" in branch
+        or GIT_REF_FORBIDDEN.search(branch)
+        or any(
+            not component
+            or component.startswith(".")
+            or component.endswith(".lock")
+            for component in components
+        )
+    ):
+        fail(
+            "DELIVERY_GIT_BINDING_INVALID",
+            f"{field} must be a safe local Git branch name",
+            field=field,
+        )
+    return branch
+
+
+def _git_binding(value: object, *, field: str) -> dict[str, str]:
+    expected = {
+        "branchRef",
+        "baseRef",
+        "baseCommit",
+        "integrationTarget",
+    }
+    if not _exact_keys(value, expected):
+        _shape_error(
+            "DELIVERY_GIT_BINDING_INVALID",
+            "Git binding fields are invalid",
+            value,
+            field=field,
+            expected=expected,
+        )
+    branch_ref = _git_branch_ref(
+        value["branchRef"],
+        f"{field}.branchRef",
+    )
+    base_ref = _git_branch_ref(
+        value["baseRef"],
+        f"{field}.baseRef",
+    )
+    integration_target = _git_branch_ref(
+        value["integrationTarget"],
+        f"{field}.integrationTarget",
+    )
+    base_commit = value["baseCommit"]
+    if (
+        not isinstance(base_commit, str)
+        or not GIT_COMMIT.fullmatch(base_commit)
+    ):
+        fail(
+            "DELIVERY_GIT_BINDING_INVALID",
+            "baseCommit must be a lowercase full Git object ID",
+            field=f"{field}.baseCommit",
+        )
+    if base_ref != integration_target:
+        fail(
+            "DELIVERY_GIT_BINDING_INVALID",
+            "baseRef and integrationTarget must identify the same "
+            "mainline branch",
+            field=field,
+        )
+    if branch_ref == integration_target:
+        fail(
+            "DELIVERY_GIT_BINDING_INVALID",
+            "Delivery feature branch must differ from its integration target",
+            field=field,
+        )
+    if branch_ref in {"main", "master"}:
+        fail(
+            "DELIVERY_GIT_BINDING_INVALID",
+            "main and master are integration branches, not Delivery "
+            "feature branches",
+            field=f"{field}.branchRef",
+        )
+    return {
+        "branchRef": branch_ref,
+        "baseRef": base_ref,
+        "baseCommit": base_commit,
+        "integrationTarget": integration_target,
+    }
+
+
+def validate_git_binding(
+    value: object,
+    *,
+    field: str = "hierarchy.delivery.gitBinding",
+) -> dict[str, str]:
+    return _git_binding(value, field=field)
 
 
 def _validate_dependency_dag(
@@ -705,6 +828,7 @@ __all__ = [
     "resolve_self_hosting_policy",
     "resource_claims_overlap",
     "safe_id",
+    "validate_git_binding",
     "validate_hierarchy_definition",
     "validate_work_item_definition",
     "work_item_dependencies",

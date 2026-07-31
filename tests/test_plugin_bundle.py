@@ -165,6 +165,46 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("模型外宿主定时器", execution)
         self.assertNotIn("RECOMMEND_ALTERNATE_OR_WAIT", execution)
 
+    def test_skill_isolates_deliveries_and_versions_task_requirements(
+        self,
+    ) -> None:
+        main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        planning = (
+            SKILL / "references" / "planning-quickstart.md"
+        ).read_text(encoding="utf-8")
+        execution = (
+            SKILL / "references" / "execution-quickstart.md"
+        ).read_text(encoding="utf-8")
+        for marker in (
+            "workspaceKey",
+            "linked worktree",
+            "suggestedGitBinding",
+            "delivery.gitBinding",
+            "unfreeze_task_requirement",
+            "refreeze_task_requirement",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, main + planning + execution)
+        self.assertIn("跨 Delivery", main)
+        self.assertIn("REFREEZE_TASK_REQUIREMENT", execution)
+        self.assertIn("revision 1", planning)
+        self.assertIn("不得修改依赖", execution)
+        self.assertIn("优先 `main`", main)
+        self.assertIn("回退 `master`", main)
+        self.assertIn(
+            "不得从当前 feature HEAD 分叉",
+            planning,
+        )
+        self.assertIn(
+            "TASK 共享 Delivery feature worktree",
+            main + execution,
+        )
+        self.assertIn(
+            "TASK 可按各自 scope 单独执行 `git add` 和 `git commit`",
+            main + execution,
+        )
+        self.assertNotIn("临时 task branch", main + execution)
+
     def test_documented_hierarchy_examples_are_valid(self) -> None:
         documents = (
             ROOT / "README.md",
@@ -246,6 +286,8 @@ class PluginBundleTests(unittest.TestCase):
             {
                 "rebuild_graph_run",
                 "cancel_graph_run",
+                "unfreeze_task_requirement",
+                "refreeze_task_requirement",
             },
         )
         self.assertLessEqual(matchers, names)
@@ -266,9 +308,17 @@ class PluginBundleTests(unittest.TestCase):
         approvals = server["tools"]
         self.assertNotIn("freeze_hierarchy", approvals)
         self.assertNotIn("record_user_confirmation", approvals)
+        self.assertEqual(
+            approvals["unfreeze_task_requirement"]["approval_mode"],
+            "prompt",
+        )
+        self.assertEqual(
+            approvals["refreeze_task_requirement"]["approval_mode"],
+            "prompt",
+        )
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
-        self.assertEqual(len(tool_definitions()), 19)
+        self.assertEqual(len(tool_definitions()), 21)
 
     def test_bundled_mcp_prefers_modern_stdio_discovery(self) -> None:
         entry = SKILL / "scripts" / "hdg_mcp.py"
@@ -368,7 +418,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            19,
+            21,
         )
         discovery = responses[2]["result"]["structuredContent"]["result"]
         self.assertFalse(
@@ -449,7 +499,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            19,
+            21,
         )
 
 

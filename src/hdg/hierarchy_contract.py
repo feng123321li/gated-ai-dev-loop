@@ -101,6 +101,46 @@ def _skill_hints_schema() -> dict[str, Any]:
     }
 
 
+def _git_binding_schema() -> dict[str, Any]:
+    branch = {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 240,
+        "description": (
+            "Local Git branch name without the refs/heads/ prefix."
+        ),
+    }
+    return _object(
+        {
+            "branchRef": {
+                **branch,
+                "description": (
+                    "Delivery feature branch checked out by its worktree."
+                ),
+            },
+            "baseRef": {
+                **branch,
+                "description": (
+                    "Mainline branch from which the Delivery was created."
+                ),
+            },
+            "baseCommit": {
+                "type": "string",
+                "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+                "description": (
+                    "Full immutable Git object ID of the Delivery fork base."
+                ),
+            },
+            "integrationTarget": {
+                **branch,
+                "description": (
+                    "Mainline branch that receives the final Delivery PR."
+                ),
+            },
+        }
+    )
+
+
 def _depends_on_schema() -> dict[str, Any]:
     return {
         "type": "array",
@@ -378,8 +418,10 @@ def hierarchy_contract(
                     "id": _identifier("Delivery and Graph run ID."),
                     "title": _text("Delivery title."),
                     "summary": _text("Delivery outcome summary."),
+                    "gitBinding": _git_binding_schema(),
                     "reviewLoop": _ref("loop"),
-                }
+                },
+                required=["id", "title", "summary", "reviewLoop"],
             ),
             "root": _ref(
                 "groupRootNode"
@@ -395,6 +437,42 @@ def hierarchy_contract(
         "inputSchema": input_schema,
         "example": _example(root_kind),
         "projectionGuidance": {
+            "gitBinding": {
+                "requiredForGitWorkspace": True,
+                "branchRole": "DELIVERY_FEATURE",
+                "defaultMainlinePreference": ["main", "master"],
+                "baseAndIntegrationTargetMustMatch": True,
+                "baseCommitRole": "IMMUTABLE_FORK_POINT",
+                "taskBranchPolicy": "SHARED_DELIVERY_FEATURE_BRANCH",
+                "taskBranchBindingsSupported": False,
+                "taskCommitPolicy": (
+                    "TASK_SCOPED_COMMITS_ON_DELIVERY_BRANCH"
+                ),
+                "taskCommitConstraints": [
+                    "EXPLICIT_TASK_SCOPE",
+                    "SERIALIZED_GIT_INDEX_WRITE",
+                    "SEPARATE_GIT_WRITE_AUTHORIZATION",
+                ],
+                "runtimeValidation": [
+                    "WORKTREE_ROOT",
+                    "BOUND_BRANCH",
+                    "HEAD_INHERITS_BASE_COMMIT",
+                    "MAINLINE_CONTAINS_BASE_COMMIT",
+                ],
+                "description": (
+                    "For a Git workspace, copy workspace_status."
+                    "suggestedGitBinding into delivery.gitBinding. One "
+                    "independent Delivery uses one feature branch created "
+                    "from main, falling back to master when main is absent. "
+                    "All TASKs share that Delivery worktree and branch; TASK "
+                    "agents do not create, bind, or switch internal branches. "
+                    "When separately authorized, each TASK may stage and "
+                    "commit only its own changes on the Delivery branch; "
+                    "shared Git index writes must be serialized. "
+                    "The scheduler verifies but never creates, switches, "
+                    "commits, merges, or pushes Git branches."
+                ),
+            },
             "acceptanceReports": {
                 "scope": "CURRENT_LAYER",
                 "taskReport": {
@@ -485,6 +563,10 @@ def hierarchy_contract(
         },
         "invariants": [
             "Delivery is the frozen Graph and final acceptance boundary.",
+            (
+                "A Git Delivery freezes one feature branch, its immutable "
+                "mainline fork commit, and the same base/integration target."
+            ),
             "GROUP may recursively contain GROUP or TASK children.",
             "TASK is the only execution leaf and cannot contain children.",
             (

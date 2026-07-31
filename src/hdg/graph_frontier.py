@@ -14,9 +14,11 @@ from .repository import SchedulerRepository
 def build_graph_frontier(
     graph: dict[str, Any],
     run: dict[str, Any],
+    *,
+    external_reservations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if run["status"] in {"COMPLETED", "CANCELLED"}:
-        return {
+        result = {
             "rootId": run["rootId"],
             "runId": run["runId"],
             "status": run["status"],
@@ -25,11 +27,19 @@ def build_graph_frontier(
             "pausedLoops": [],
             "blockedLoops": [],
             "nextWakeAt": None,
+            "workspaceIsolation": run.get("workspaceIsolation"),
             "actions": [],
         }
+        if run.get("gitBinding") is not None:
+            result["gitBinding"] = run["gitBinding"]
+        return result
     definitions = {
         node["id"]: node
         for node in graph["nodes"]
+    }
+    task_requirements = {
+        item["taskId"]: item
+        for item in run.get("taskRequirements", [])
     }
     claimed = [
         state
@@ -48,11 +58,47 @@ def build_graph_frontier(
         )
         for state in claimed
     ]
+    reserved_claims.extend(
+        (
+            f"{reservation['rootId']}/{reservation['nodeId']}",
+            reservation["resourceClaims"],
+        )
+        for reservation in (external_reservations or [])
+    )
 
     for state in sorted(run["nodes"], key=lambda item: item["nodeId"]):
         definition = definitions[state["nodeId"]]
         kind = definition["kind"]
         if state["status"] == "READY" and kind in LOOP_NODE_KINDS:
+            task_requirement = (
+                task_requirements.get(definition["workItemId"])
+                if kind == "TASK_LOOP"
+                else None
+            )
+            if (
+                task_requirement is not None
+                and task_requirement["status"] == "UNFROZEN"
+            ):
+                ready_loops.append(
+                    {
+                        "nodeId": state["nodeId"],
+                        "kind": kind,
+                        "workItemId": definition["workItemId"],
+                        "attempt": state["attempt"],
+                        "loop": definition["loop"],
+                        "resourceConflicts": [],
+                        "taskRequirement": task_requirement,
+                    }
+                )
+                actions.append(
+                    {
+                        "action": "REFREEZE_TASK_REQUIREMENT",
+                        "nodeId": state["nodeId"],
+                        "taskId": definition["workItemId"],
+                        "revision": task_requirement["revision"],
+                    }
+                )
+                continue
             conflicts = sorted(
                 reserved_node_id
                 for reserved_node_id, claims in reserved_claims
@@ -69,6 +115,8 @@ def build_graph_frontier(
                 "loop": definition["loop"],
                 "resourceConflicts": conflicts,
             }
+            if task_requirement is not None:
+                record["taskRequirement"] = task_requirement
             ready_loops.append(record)
             if not conflicts:
                 reserved_claims.append(
@@ -192,7 +240,7 @@ def build_graph_frontier(
             }
             for node_id in replan_nodes
         ]
-    return {
+    result = {
         "rootId": run["rootId"],
         "runId": run["runId"],
         "status": run["status"],
@@ -208,8 +256,12 @@ def build_graph_frontier(
             ),
             default=None,
         ),
+        "workspaceIsolation": run.get("workspaceIsolation"),
         "actions": actions,
     }
+    if run.get("gitBinding") is not None:
+        result["gitBinding"] = run["gitBinding"]
+    return result
 
 
 def get_graph_frontier(
@@ -227,7 +279,19 @@ def get_graph_frontier(
     )
     repository = SchedulerRepository(root)
     graph = repository.hierarchy(root_id)["graph"]
-    return build_graph_frontier(graph, run)
+    with repository.read() as connection:
+        external_reservations = (
+            repository.claimed_resource_reservations(
+                connection,
+                at=run["updatedAt"],
+                exclude_root_id=root_id,
+            )
+        )
+    return build_graph_frontier(
+        graph,
+        run,
+        external_reservations=external_reservations,
+    )
 
 
 __all__ = (

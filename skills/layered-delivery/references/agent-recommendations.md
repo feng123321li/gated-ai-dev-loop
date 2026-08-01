@@ -16,7 +16,7 @@
 
 普通推荐仍是 `ADVISORY`。`available_agents` / `recommend_executors` 从 PATH 和本机设置发现的候选固定标记为 `LOCAL_TERMINAL / EXTERNAL_PROCESS / hostDispatchEligible=false`。自动 assignment 只接受宿主原生 catalog；MCP Server 启动配置中的精确宿主适配器会拒绝其他 Agent，协议 `clientInfo` 不参与授权，缺失配置时 fail closed。
 
-返回的 `binding=HOST_NATIVE_DISPATCH_PLAN`。预留与已 claim Loop 都占用跨 Delivery Agent 槽位；宿主创建原生子 Agent 后必须签发一次性接收凭证。接收方以实际 Agent/模型、attested context、HOST_NATIVE、预留 ID 与决策指纹调用 `dispatch_loop`。外部进程仍以 `UNSAFE_EXECUTOR_TRANSPORT` deferred；计划工具本身不启动 Agent、不切换当前会话模型、不 claim。
+返回的 `binding=HOST_NATIVE_DISPATCH_PLAN`。预留与已 claim Loop 都占用跨 Delivery Agent 槽位。Claude Code 通过 dispatch PreToolUse Hook 签发目标级凭证，接收方以实际 Agent/模型、attested context、HOST_NATIVE、预留 ID 与决策指纹调用 `dispatch_loop`。Codex assignment 返回 reservation 派生的唯一 `hostTaskName`，`SubagentStart` Hook 用 Codex transcript 校验 child/parent/task/model，在 bearer 进入模型上下文前完成唯一 AUTO 预留的 host-side claim，只向 child 注入非秘密 assignment。外部进程仍以 `UNSAFE_EXECUTOR_TRANSPORT` deferred；计划工具本身不启动 Agent、不切换当前会话模型，也不会在 Hook 之外 claim。
 
 ### 计算顺序
 

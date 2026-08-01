@@ -949,9 +949,16 @@ def plan_dispatch_batch(
         reservation = reservations["accepted"].get(node_id)
         if reservation is not None:
             assignment.update(reservation)
+            assignment["hostTaskName"] = (
+                "ld_"
+                + reservation["dispatchReservationId"].replace("-", "")
+            )
             assignment["contextInput"]["dispatchReservationId"] = (
                 reservation["dispatchReservationId"]
             )
+            assignment["contextInput"]["hostTaskName"] = assignment[
+                "hostTaskName"
+            ]
             reserved_assignments.append(assignment)
             continue
         rejection = reservations["rejected"][node_id]

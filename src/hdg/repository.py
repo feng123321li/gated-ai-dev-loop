@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 import uuid
@@ -403,6 +405,7 @@ class SchedulerRepository:
                 attempt INTEGER NOT NULL,
                 agent_id TEXT,
                 model_id TEXT,
+                reasoning_class TEXT,
                 graph_fingerprint TEXT NOT NULL,
                 decision_fingerprint TEXT NOT NULL,
                 status TEXT NOT NULL,
@@ -435,6 +438,29 @@ class SchedulerRepository:
             );
             CREATE INDEX IF NOT EXISTS receiver_attestations_by_node
             ON receiver_attestations(run_id, node_id, attempt, status);
+            CREATE TABLE IF NOT EXISTS host_receiver_identities (
+                attestation_digest TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                root_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                reservation_id TEXT NOT NULL UNIQUE,
+                host_adapter_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                receiver_context_id TEXT NOT NULL,
+                parent_context_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT,
+                operation_id TEXT,
+                FOREIGN KEY(run_id) REFERENCES runs(run_id)
+            );
+            CREATE INDEX IF NOT EXISTS host_receiver_identities_by_context
+            ON host_receiver_identities(
+                run_id, host_adapter_id, receiver_context_id, status
+            );
             CREATE TABLE IF NOT EXISTS run_receiver_roots (
                 run_id TEXT PRIMARY KEY,
                 host_adapter_id TEXT NOT NULL,
@@ -674,7 +700,11 @@ class SchedulerRepository:
                 "PRAGMA table_info(dispatch_reservations)"
             ).fetchall()
         }
-        for column_name in ("agent_id", "model_id"):
+        for column_name in (
+            "agent_id",
+            "model_id",
+            "reasoning_class",
+        ):
             if column_name not in dispatch_reservation_columns:
                 connection.execute(
                     "ALTER TABLE dispatch_reservations "
@@ -709,6 +739,29 @@ class SchedulerRepository:
             );
             CREATE INDEX IF NOT EXISTS receiver_attestations_by_node
             ON receiver_attestations(run_id, node_id, attempt, status);
+            CREATE TABLE IF NOT EXISTS host_receiver_identities (
+                attestation_digest TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                root_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                reservation_id TEXT NOT NULL UNIQUE,
+                host_adapter_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                receiver_context_id TEXT NOT NULL,
+                parent_context_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT,
+                operation_id TEXT,
+                FOREIGN KEY(run_id) REFERENCES runs(run_id)
+            );
+            CREATE INDEX IF NOT EXISTS host_receiver_identities_by_context
+            ON host_receiver_identities(
+                run_id, host_adapter_id, receiver_context_id, status
+            );
             CREATE TABLE IF NOT EXISTS run_receiver_roots (
                 run_id TEXT PRIMARY KEY,
                 host_adapter_id TEXT NOT NULL,
@@ -2085,27 +2138,13 @@ class SchedulerRepository:
             datetime.fromisoformat(at.replace("Z", "+00:00"))
             + timedelta(seconds=RECEIVER_ATTESTATION_SECONDS)
         ).isoformat().replace("+00:00", "Z")
-        receiver_root = connection.execute(
-            "SELECT * FROM run_receiver_roots WHERE run_id = ?",
-            (run_id,),
-        ).fetchone()
-        if receiver_root is None:
-            connection.execute(
-                "INSERT INTO run_receiver_roots("
-                "run_id, host_adapter_id, orchestrator_context_id, "
-                "created_at) VALUES (?, ?, ?, ?)",
-                (run_id, host_adapter_id, parent_context_id, at),
-            )
-        elif receiver_root["orchestrator_context_id"] != parent_context_id:
-            fail(
-                "SCHEDULER_RECEIVER_PARENT_UNTRUSTED",
-                "Receiver attestations must originate from the run's "
-                "host-attested orchestrator context",
-                expectedOrchestratorContextId=(
-                    receiver_root["orchestrator_context_id"]
-                ),
-                suppliedParentContextId=parent_context_id,
-            )
+        self._assert_receiver_root(
+            connection,
+            run_id=run_id,
+            host_adapter_id=host_adapter_id,
+            parent_context_id=parent_context_id,
+            at=at,
+        )
         connection.execute(
             "UPDATE receiver_attestations SET status = 'SUPERSEDED' "
             "WHERE run_id = ? AND node_id = ? AND attempt = ? "
@@ -2135,6 +2174,96 @@ class SchedulerRepository:
         return attestation_id
 
     @staticmethod
+    def _assert_receiver_root(
+        connection: sqlite3.Connection,
+        *,
+        run_id: str,
+        host_adapter_id: str,
+        parent_context_id: str,
+        at: str,
+    ) -> None:
+        receiver_root = connection.execute(
+            "SELECT * FROM run_receiver_roots WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if receiver_root is None:
+            connection.execute(
+                "INSERT INTO run_receiver_roots("
+                "run_id, host_adapter_id, orchestrator_context_id, "
+                "created_at) VALUES (?, ?, ?, ?)",
+                (run_id, host_adapter_id, parent_context_id, at),
+            )
+            return
+        if receiver_root["orchestrator_context_id"] != parent_context_id:
+            fail(
+                "SCHEDULER_RECEIVER_PARENT_UNTRUSTED",
+                "Receiver attestations must originate from the run's "
+                "host-attested orchestrator context",
+                expectedOrchestratorContextId=(
+                    receiver_root["orchestrator_context_id"]
+                ),
+                suppliedParentContextId=parent_context_id,
+            )
+
+    @staticmethod
+    def issue_host_receiver_identity(
+        connection: sqlite3.Connection,
+        *,
+        run_id: str,
+        root_id: str,
+        node_id: str,
+        attempt: int,
+        reservation_id: str,
+        host_adapter_id: str,
+        agent_id: str,
+        model_id: str,
+        receiver_context_id: str,
+        parent_context_id: str,
+        at: str,
+    ) -> str:
+        """Issue identity evidence from a native subagent lifecycle hook."""
+
+        attestation_id = secrets.token_hex(32)
+        attestation_digest = hashlib.sha256(
+            attestation_id.encode("utf-8")
+        ).hexdigest()
+        expires_at = (
+            datetime.fromisoformat(at.replace("Z", "+00:00"))
+            + timedelta(seconds=RECEIVER_ATTESTATION_SECONDS)
+        ).isoformat().replace("+00:00", "Z")
+        connection.execute(
+            "UPDATE host_receiver_identities SET status = 'SUPERSEDED' "
+            "WHERE run_id = ? AND host_adapter_id = ? "
+            "AND receiver_context_id = ? "
+            "AND status = 'ISSUED'",
+            (run_id, host_adapter_id, receiver_context_id),
+        )
+        connection.execute(
+            "INSERT INTO host_receiver_identities("
+            "attestation_digest, run_id, root_id, node_id, attempt, "
+            "reservation_id, host_adapter_id, agent_id, model_id, "
+            "receiver_context_id, parent_context_id, status, created_at, "
+            "expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ISSUED', ?, ?)",
+            (
+                attestation_digest,
+                run_id,
+                root_id,
+                node_id,
+                attempt,
+                reservation_id,
+                host_adapter_id,
+                agent_id,
+                model_id,
+                receiver_context_id,
+                parent_context_id,
+                at,
+                expires_at,
+            ),
+        )
+        return attestation_id
+
+    @staticmethod
     def consume_receiver_attestation(
         connection: sqlite3.Connection,
         *,
@@ -2145,6 +2274,8 @@ class SchedulerRepository:
         attempt: int,
         receiver_context_id: str,
         host_adapter_id: str,
+        agent_id: str,
+        model_id: str,
         reservation_id: str | None,
         operation_id: str,
         at: str,
@@ -2154,10 +2285,81 @@ class SchedulerRepository:
             (attestation_id,),
         ).fetchone()
         if row is None:
-            fail(
-                "SCHEDULER_RECEIVER_ATTESTATION_MISSING",
-                "The host-issued receiver attestation does not exist",
+            attestation_digest = hashlib.sha256(
+                attestation_id.encode("utf-8")
+            ).hexdigest()
+            identity = connection.execute(
+                "SELECT * FROM host_receiver_identities "
+                "WHERE attestation_digest = ?",
+                (attestation_digest,),
+            ).fetchone()
+            if identity is None:
+                fail(
+                    "SCHEDULER_RECEIVER_ATTESTATION_MISSING",
+                    "The host-issued receiver attestation does not exist",
+                )
+            if identity["status"] != "ISSUED":
+                fail(
+                    "SCHEDULER_RECEIVER_ATTESTATION_CONSUMED",
+                    "The host-issued receiver attestation is no longer active",
+                    attestationStatus=identity["status"],
+                )
+            if identity["expires_at"] < at:
+                fail(
+                    "SCHEDULER_RECEIVER_ATTESTATION_EXPIRED",
+                    "The host-issued receiver attestation expired",
+                )
+            reservation = (
+                connection.execute(
+                    "SELECT * FROM dispatch_reservations "
+                    "WHERE reservation_id = ?",
+                    (reservation_id,),
+                ).fetchone()
+                if reservation_id is not None
+                else None
             )
+            if (
+                identity["run_id"] != run_id
+                or identity["root_id"] != root_id
+                or identity["node_id"] != node_id
+                or identity["attempt"] != attempt
+                or identity["reservation_id"] != reservation_id
+                or identity["host_adapter_id"] != host_adapter_id
+                or identity["agent_id"] != agent_id
+                or identity["model_id"] != model_id
+                or identity["receiver_context_id"]
+                != receiver_context_id
+                or reservation is None
+                or reservation["status"] != "RESERVED"
+                or reservation["expires_at"] < at
+                or reservation["run_id"] != run_id
+                or reservation["root_id"] != root_id
+                or reservation["node_id"] != node_id
+                or reservation["attempt"] != attempt
+                or reservation["agent_id"] != agent_id
+                or reservation["model_id"] != model_id
+            ):
+                fail(
+                    "SCHEDULER_RECEIVER_ATTESTATION_MISMATCH",
+                    "The receiver attestation is not bound to this claim",
+                )
+            SchedulerRepository._assert_receiver_root(
+                connection,
+                run_id=run_id,
+                host_adapter_id=host_adapter_id,
+                parent_context_id=identity["parent_context_id"],
+                at=at,
+            )
+            connection.execute(
+                "UPDATE host_receiver_identities SET status = 'CONSUMED', "
+                "consumed_at = ?, operation_id = ? "
+                "WHERE attestation_digest = ? AND status = 'ISSUED'",
+                (at, operation_id, attestation_digest),
+            )
+            return {
+                "parentContextId": identity["parent_context_id"],
+                "hostAdapterId": identity["host_adapter_id"],
+            }
         if row["status"] != "ISSUED":
             fail(
                 "SCHEDULER_RECEIVER_ATTESTATION_CONSUMED",
@@ -2370,10 +2572,12 @@ class SchedulerRepository:
                     """
                     INSERT INTO dispatch_reservations(
                         reservation_id, run_id, root_id, node_id, attempt,
-                        agent_id, model_id,
+                        agent_id, model_id, reasoning_class,
                         graph_fingerprint, decision_fingerprint, status,
                         reserved_at, expires_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'RESERVED', ?, ?)
+                    ) VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'RESERVED', ?, ?
+                    )
                     """,
                     (
                         reservation_id,
@@ -2383,6 +2587,7 @@ class SchedulerRepository:
                         state["attempt"],
                         agent_id,
                         model_id,
+                        assignment["reasoningClass"],
                         graph_fingerprint,
                         assignment["decisionFingerprint"],
                         at,

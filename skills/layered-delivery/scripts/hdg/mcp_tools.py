@@ -38,7 +38,11 @@ def _string(description: str) -> dict[str, Any]:
 
 ROOT_ID = _string("Frozen Delivery and Graph run ID.")
 NODE_ID = _string("Exact graph node ID from graph_frontier.")
-OPERATION_ID = _string("Globally unique Loop operation ID.")
+OPERATION_ID = _string(
+    "Globally unique Loop operation ID. Codex-native children omit it for "
+    "heartbeat, pause, and result calls so their PreToolUse Hook can inject "
+    "the attested value; every other caller must supply the claim value."
+)
 FINGERPRINT = {
     "type": "string",
     "minLength": 64,
@@ -671,7 +675,7 @@ TOOLS = (
                 "node_id": NODE_ID,
                 "operation_id": OPERATION_ID,
             },
-            required=["root_id", "node_id", "operation_id"],
+            required=["root_id", "node_id"],
         ),
     ),
     _tool(
@@ -707,7 +711,7 @@ TOOLS = (
                     ),
                 },
             },
-            required=["root_id", "node_id", "operation_id"],
+            required=["root_id", "node_id"],
         ),
     ),
     _tool(
@@ -754,7 +758,6 @@ TOOLS = (
             required=[
                 "root_id",
                 "node_id",
-                "operation_id",
                 "outcome",
             ],
         ),

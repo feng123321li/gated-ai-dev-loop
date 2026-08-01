@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -765,6 +766,7 @@ def dispatch_loop(
     host_native_agent_ids: tuple[str, ...] | None = None,
     host_adapter_id: str | None = None,
     require_receiver_attestation: bool = False,
+    host_receiver_parent_context_id: str | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
@@ -800,11 +802,38 @@ def dispatch_loop(
         if receiver_attestation_id is not None
         else None
     )
+    actual_host_receiver_parent_context_id = (
+        _identity(
+            host_receiver_parent_context_id,
+            "host_receiver_parent_context_id",
+        )
+        if host_receiver_parent_context_id is not None
+        else None
+    )
+    if (
+        actual_host_receiver_parent_context_id is not None
+        and not require_receiver_attestation
+    ):
+        fail(
+            "SCHEDULER_RECEIVER_ATTESTATION_INVALID",
+            "Host-side identity issuance requires attested dispatch",
+        )
     if require_receiver_attestation:
-        if actual_receiver_attestation_id is None:
+        if (
+            actual_receiver_attestation_id is None
+            and actual_host_receiver_parent_context_id is None
+        ):
             fail(
                 "SCHEDULER_RECEIVER_ATTESTATION_REQUIRED",
                 "MCP dispatch requires a host-issued receiver attestation",
+            )
+        if (
+            actual_receiver_attestation_id is not None
+            and actual_host_receiver_parent_context_id is not None
+        ):
+            fail(
+                "SCHEDULER_RECEIVER_ATTESTATION_INVALID",
+                "Receiver identity may be supplied or host-issued, not both",
             )
         if host_adapter_id not in HOST_ADAPTER_AGENTS:
             fail(
@@ -985,6 +1014,59 @@ def dispatch_loop(
         definition, state = _node(graph, nodes, node_id)
         receiver_attestation = None
         if require_receiver_attestation:
+            if actual_host_receiver_parent_context_id is not None:
+                if (
+                    dispatch_mode != "AUTO"
+                    or host_adapter_id != "codex"
+                    or actual_reservation_id is None
+                ):
+                    fail(
+                        "SCHEDULER_RECEIVER_ATTESTATION_INVALID",
+                        "Host-side identity issuance is Codex AUTO only",
+                    )
+                reservation = connection.execute(
+                    "SELECT d.* FROM dispatch_reservations d "
+                    "LEFT JOIN host_receiver_identities h "
+                    "ON h.reservation_id = d.reservation_id "
+                    "WHERE d.reservation_id = ? AND d.run_id = ? "
+                    "AND d.root_id = ? AND d.node_id = ? "
+                    "AND d.attempt = ? AND d.agent_id = 'codex' "
+                    "AND d.model_id = ? AND d.status = 'RESERVED' "
+                    "AND d.expires_at >= ? "
+                    "AND h.attestation_digest IS NULL LIMIT 1",
+                    (
+                        actual_reservation_id,
+                        run["run_id"],
+                        root_id,
+                        node_id,
+                        state["attempt"],
+                        actual_model_id,
+                        at,
+                    ),
+                ).fetchone()
+                if reservation is None:
+                    fail(
+                        "SCHEDULER_CODEX_RECEIVER_RESERVATION_MISSING",
+                        "Codex SubagentStart has no matching live reservation",
+                    )
+                actual_receiver_attestation_id = (
+                    repository.issue_host_receiver_identity(
+                        connection,
+                        run_id=run["run_id"],
+                        root_id=root_id,
+                        node_id=node_id,
+                        attempt=state["attempt"],
+                        reservation_id=actual_reservation_id,
+                        host_adapter_id="codex",
+                        agent_id="codex",
+                        model_id=str(actual_model_id),
+                        receiver_context_id=actual_receiver_context_id,
+                        parent_context_id=(
+                            actual_host_receiver_parent_context_id
+                        ),
+                        at=at,
+                    )
+                )
             receiver_attestation = (
                 repository.consume_receiver_attestation(
                     connection,
@@ -995,6 +1077,8 @@ def dispatch_loop(
                     attempt=state["attempt"],
                     receiver_context_id=actual_receiver_context_id,
                     host_adapter_id=str(host_adapter_id),
+                    agent_id=str(actual_agent_id),
+                    model_id=str(actual_model_id),
                     reservation_id=actual_reservation_id,
                     operation_id=operation_id,
                     at=at,
@@ -1321,6 +1405,318 @@ def attest_loop_receiver(
         "receiverContextId": receiver_context_id,
         "receiverAttestationId": attestation_id,
         "hostAdapterId": host_adapter_id,
+    }
+
+
+def claim_codex_subagent_receiver(
+    *,
+    root: str,
+    root_id: str,
+    workspace_root: str,
+    receiver_context_id: str,
+    parent_context_id: str,
+    model_id: str,
+    dispatch_reservation_id: str,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    """Atomically claim or recover one Codex-native AUTO assignment."""
+
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    repository.assert_delivery_workspace(root_id, workspace_root)
+    receiver_context_id = _identity(
+        receiver_context_id,
+        "receiver_context_id",
+    )
+    parent_context_id = _identity(parent_context_id, "parent_context_id")
+    actual_model_id = _executor_descriptor(model_id, "model_id")
+    reservation_id = _identity(
+        dispatch_reservation_id,
+        "dispatch_reservation_id",
+    )
+
+    def committed_assignment(connection: Any) -> dict[str, Any] | None:
+        row = connection.execute(
+            "SELECT h.operation_id, d.node_id, d.reasoning_class, "
+            "d.decision_fingerprint, n.lease_expires_at "
+            "FROM host_receiver_identities h "
+            "JOIN dispatch_reservations d "
+            "ON d.reservation_id = h.reservation_id "
+            "JOIN node_runs n ON n.run_id = h.run_id "
+            "AND n.node_id = h.node_id AND n.attempt = h.attempt "
+            "WHERE h.root_id = ? AND h.reservation_id = ? "
+            "AND h.host_adapter_id = 'codex' "
+            "AND h.agent_id = 'codex' AND h.model_id = ? "
+            "AND h.receiver_context_id = ? "
+            "AND h.parent_context_id = ? AND h.status = 'CONSUMED' "
+            "AND n.status = 'CLAIMED' "
+            "AND n.operation_id = h.operation_id LIMIT 1",
+            (
+                root_id,
+                reservation_id,
+                actual_model_id,
+                receiver_context_id,
+                parent_context_id,
+            ),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "rootId": root_id,
+            "nodeId": row["node_id"],
+            "agentId": "codex",
+            "modelId": actual_model_id,
+            "receiverContextId": receiver_context_id,
+            "receiverAttested": True,
+            "dispatchMode": "AUTO",
+            "dispatchTransport": HOST_NATIVE_DISPATCH_TRANSPORT,
+            "dispatchReservationId": reservation_id,
+            "dispatchReasoningClass": row["reasoning_class"],
+            "dispatchDecisionFingerprint": row[
+                "decision_fingerprint"
+            ],
+            "operationId": row["operation_id"],
+            "leaseExpiresAt": row["lease_expires_at"],
+        }
+
+    with repository.transaction() as connection:
+        _graph, run, _nodes = _loaded(connection, root_id)
+        recovered = committed_assignment(connection)
+        if recovered is not None:
+            return recovered
+        at = _locked_timestamp(now, run["updated_at"])
+        if run["execution_mode"] != "active":
+            fail(
+                "SCHEDULER_CODEX_RECEIVER_RESERVATION_MISSING",
+                "Codex SubagentStart claim requires active execution",
+            )
+        repository.expire_dispatch_reservations(connection, at=at)
+        reservation = connection.execute(
+            "SELECT d.* FROM dispatch_reservations d "
+            "LEFT JOIN host_receiver_identities h "
+            "ON h.reservation_id = d.reservation_id "
+            "WHERE d.reservation_id = ? AND d.run_id = ? "
+            "AND d.root_id = ? AND d.agent_id = 'codex' "
+            "AND d.model_id = ? AND d.status = 'RESERVED' "
+            "AND d.expires_at >= ? AND h.attestation_digest IS NULL "
+            "LIMIT 1",
+            (
+                reservation_id,
+                run["run_id"],
+                root_id,
+                actual_model_id,
+                at,
+            ),
+        ).fetchone()
+        if reservation is None:
+            fail(
+                "SCHEDULER_CODEX_RECEIVER_RESERVATION_MISSING",
+                "Codex SubagentStart has no matching live AUTO reservation",
+            )
+        reservation_values = dict(reservation)
+
+    operation_id = "codex-claim-" + secrets.token_hex(24)
+    try:
+        return dispatch_loop(
+            root=root,
+            root_id=root_id,
+            node_id=reservation_values["node_id"],
+            owner=receiver_context_id,
+            operation_id=operation_id,
+            agent_id="codex",
+            model_id=actual_model_id,
+            receiver_context_id=receiver_context_id,
+            dispatch_mode="AUTO",
+            dispatch_transport=HOST_NATIVE_DISPATCH_TRANSPORT,
+            dispatch_reservation_id=reservation_id,
+            dispatch_reasoning_class=reservation_values[
+                "reasoning_class"
+            ],
+            dispatch_decision_fingerprint=reservation_values[
+                "decision_fingerprint"
+            ],
+            host_native_agent_ids=("codex",),
+            host_adapter_id="codex",
+            require_receiver_attestation=True,
+            host_receiver_parent_context_id=parent_context_id,
+            explicit_dogfood=explicit_dogfood,
+            now=now,
+        )
+    except Exception:
+        with repository.transaction() as connection:
+            recovered = committed_assignment(connection)
+        if recovered is not None:
+            return recovered
+        raise
+
+
+def authorize_codex_subagent_operation(
+    *,
+    root: str,
+    root_id: str,
+    node_id: str,
+    workspace_root: str,
+    receiver_context_id: str,
+    parent_context_id: str,
+    model_id: str,
+    dispatch_reservation_id: str,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    """Resolve a claimed Codex child operation for a PreToolUse hook."""
+
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    repository.assert_delivery_workspace(root_id, workspace_root)
+    receiver_context_id = _identity(
+        receiver_context_id,
+        "receiver_context_id",
+    )
+    parent_context_id = _identity(parent_context_id, "parent_context_id")
+    actual_model_id = _executor_descriptor(model_id, "model_id")
+    reservation_id = _identity(
+        dispatch_reservation_id,
+        "dispatch_reservation_id",
+    )
+    with repository.transaction() as connection:
+        _graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
+        _definition, state = _node(_graph, nodes, node_id)
+        if (
+            not _active_claim(
+                state,
+                operation_id=state["operationId"],
+                at=at,
+            )
+            or state["owner"] != receiver_context_id
+        ):
+            fail(
+                "SCHEDULER_CODEX_RECEIVER_OPERATION_UNAUTHORIZED",
+                "The current Codex context does not own this live Loop",
+            )
+        identity = connection.execute(
+            "SELECT 1 FROM host_receiver_identities "
+            "WHERE run_id = ? AND root_id = ? AND node_id = ? "
+            "AND attempt = ? AND reservation_id = ? "
+            "AND host_adapter_id = 'codex' AND agent_id = 'codex' "
+            "AND model_id = ? AND receiver_context_id = ? "
+            "AND parent_context_id = ? AND status = 'CONSUMED' "
+            "AND operation_id = ? LIMIT 1",
+            (
+                run["run_id"],
+                root_id,
+                node_id,
+                state["attempt"],
+                reservation_id,
+                actual_model_id,
+                receiver_context_id,
+                parent_context_id,
+                state["operationId"],
+            ),
+        ).fetchone()
+        if identity is None:
+            fail(
+                "SCHEDULER_CODEX_RECEIVER_OPERATION_UNAUTHORIZED",
+                "The current Codex context has no attested Loop operation",
+            )
+    return {
+        "rootId": root_id,
+        "nodeId": node_id,
+        "receiverContextId": receiver_context_id,
+        "operationId": state["operationId"],
+    }
+
+
+def authorize_claude_subagent_operation(
+    *,
+    root: str,
+    root_id: str,
+    node_id: str,
+    workspace_root: str,
+    receiver_context_id: str,
+    parent_context_id: str,
+    model_id: str,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    """Resolve a claimed Claude child operation for a PreToolUse hook."""
+
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    repository.assert_delivery_workspace(root_id, workspace_root)
+    receiver_context_id = _identity(
+        receiver_context_id,
+        "receiver_context_id",
+    )
+    parent_context_id = _identity(parent_context_id, "parent_context_id")
+    actual_model_id = _executor_descriptor(model_id, "model_id")
+    with repository.transaction() as connection:
+        graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
+        _definition, state = _node(graph, nodes, node_id)
+        if not _active_claim(
+            state,
+            operation_id=state["operationId"],
+            at=at,
+        ):
+            fail(
+                "SCHEDULER_CLAUDE_RECEIVER_OPERATION_UNAUTHORIZED",
+                "The current Claude context has no live Loop",
+            )
+        attestation = connection.execute(
+            "SELECT 1 FROM receiver_attestations "
+            "WHERE run_id = ? AND root_id = ? AND node_id = ? "
+            "AND attempt = ? AND receiver_context_id = ? "
+            "AND parent_context_id = ? "
+            "AND host_adapter_id = 'claude-code' "
+            "AND status = 'CONSUMED' AND operation_id = ? LIMIT 1",
+            (
+                run["run_id"],
+                root_id,
+                node_id,
+                state["attempt"],
+                receiver_context_id,
+                parent_context_id,
+                state["operationId"],
+            ),
+        ).fetchone()
+        claimed_event = connection.execute(
+            "SELECT payload_json FROM graph_events "
+            "WHERE run_id = ? AND node_id = ? AND attempt = ? "
+            "AND event_type = 'LOOP_CLAIMED' AND operation_id = ? "
+            "ORDER BY event_id DESC LIMIT 1",
+            (
+                run["run_id"],
+                node_id,
+                state["attempt"],
+                state["operationId"],
+            ),
+        ).fetchone()
+        payload = (
+            json.loads(claimed_event["payload_json"])
+            if claimed_event is not None
+            else None
+        )
+        if (
+            attestation is None
+            or not isinstance(payload, dict)
+            or payload.get("receiverContextId") != receiver_context_id
+            or payload.get("receiverParentContextId")
+            != parent_context_id
+            or payload.get("hostAdapterId") != "claude-code"
+            or payload.get("agentId") != "claude-code"
+            or payload.get("modelId") != actual_model_id
+        ):
+            fail(
+                "SCHEDULER_CLAUDE_RECEIVER_OPERATION_UNAUTHORIZED",
+                "The current Claude context does not own this Loop",
+            )
+    return {
+        "rootId": root_id,
+        "nodeId": node_id,
+        "receiverContextId": receiver_context_id,
+        "operationId": state["operationId"],
     }
 
 
@@ -3027,6 +3423,7 @@ __all__ = (
     "advance_graph",
     "attest_loop_receiver",
     "cancel_graph_run",
+    "claim_codex_subagent_receiver",
     "dispatch_loop",
     "graph_events",
     "graph_status",

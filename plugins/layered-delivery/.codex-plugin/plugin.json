@@ -31,6 +31,9 @@
         "--project-root-from-meta"
       ],
       "cwd": ".",
+      "env": {
+        "HDG_HOST_ADAPTER": "codex"
+      },
       "supports_parallel_tool_calls": false,
       "default_tools_approval_mode": "approve",
       "tools": {

@@ -4,6 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest import mock
 
 from hdg.dispatch_planning import plan_dispatch_batch
 from hdg.errors import GatedLoopError
@@ -11,6 +12,7 @@ from hdg.graph_frontier import get_graph_frontier
 from hdg.graph_model import loop_node_id, task_review_node_id
 from hdg.graph_runtime import (
     attest_loop_receiver,
+    claim_codex_subagent_receiver,
     dispatch_loop,
     graph_events,
     graph_status,
@@ -18,6 +20,7 @@ from hdg.graph_runtime import (
 )
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.mcp_tools import call_tool
+from hdg.repository import SchedulerRepository
 
 from .test_loop_architecture import group_hierarchy, task_hierarchy
 
@@ -186,6 +189,11 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 and assignment["dispatchTransport"] == "HOST_NATIVE"
                 and assignment["modelSelection"] == "EXPLICIT_OVERRIDE"
                 and assignment["hostDispatchAllowed"]
+                and assignment["hostTaskName"]
+                == "ld_"
+                + assignment["dispatchReservationId"].replace("-", "")
+                and assignment["contextInput"]["hostTaskName"]
+                == assignment["hostTaskName"]
                 for assignment in plan["assignments"]
             )
         )
@@ -415,6 +423,306 @@ class HostDispatchPlanningTests(unittest.TestCase):
             replayed.exception.code,
             "SCHEDULER_RECEIVER_ATTESTATION_CONSUMED",
         )
+
+    def test_codex_identity_cannot_cross_delivery_workspaces(self) -> None:
+        with TemporaryDirectory() as root:
+            deliveries = []
+            for delivery_id, task_id in (
+                ("d-codex-first", "t-codex-first"),
+                ("d-codex-second", "t-codex-second"),
+            ):
+                workspace = Path(root, f"workspace-{delivery_id}")
+                workspace.mkdir()
+                hierarchy = task_hierarchy()
+                hierarchy["delivery"]["id"] = delivery_id
+                hierarchy["root"]["definition"]["id"] = task_id
+                prepared = prepare_hierarchy(
+                    root=root,
+                    hierarchy=hierarchy,
+                    workspace_root=str(workspace),
+                )
+                freeze_hierarchy(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    expected_hierarchy_fingerprint=(
+                        prepared["hierarchyFingerprint"]
+                    ),
+                    execution_mode="active",
+                    confirmed=True,
+                    confirmed_by="human",
+                )
+                assignment = plan_dispatch_batch(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    expected_graph_fingerprint=prepared[
+                        "graphFingerprint"
+                    ],
+                    executor_inventory=host_executor_inventory(),
+                    node_requirements=[
+                        agent_requirement(loop_node_id(task_id))
+                    ],
+                )["assignments"][0]
+                deliveries.append(
+                    (prepared, assignment, str(workspace))
+                )
+
+            first, first_assignment, first_workspace = deliveries[0]
+            second, second_assignment, _second_workspace = deliveries[1]
+            claim_codex_subagent_receiver(
+                root=root,
+                root_id=first["rootId"],
+                workspace_root=first_workspace,
+                receiver_context_id="codex-first-child",
+                parent_context_id="codex-orchestrator",
+                model_id=first_assignment["model"]["id"],
+                dispatch_reservation_id=first_assignment[
+                    "dispatchReservationId"
+                ],
+            )
+            with self.assertRaises(GatedLoopError) as crossed:
+                claim_codex_subagent_receiver(
+                    root=root,
+                    root_id=second["rootId"],
+                    workspace_root=first_workspace,
+                    receiver_context_id="codex-first-child",
+                    parent_context_id="codex-orchestrator",
+                    model_id=second_assignment["model"]["id"],
+                    dispatch_reservation_id=second_assignment[
+                        "dispatchReservationId"
+                    ],
+                )
+
+        self.assertEqual(
+            crossed.exception.code,
+            "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH",
+        )
+
+    def test_parallel_codex_children_cannot_swap_reservations(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(
+                root,
+                parallel_group_hierarchy(),
+            )
+            assignments = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared[
+                    "graphFingerprint"
+                ],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-api")),
+                    agent_requirement(loop_node_id("t-core")),
+                ],
+            )["assignments"]
+            claimed = []
+            for index, assignment in enumerate(assignments):
+                claimed.append(
+                    claim_codex_subagent_receiver(
+                        root=root,
+                        root_id=prepared["rootId"],
+                        workspace_root=root,
+                        receiver_context_id=f"codex-child-{index}",
+                        parent_context_id="codex-orchestrator",
+                        model_id=assignment["model"]["id"],
+                        dispatch_reservation_id=assignment[
+                            "dispatchReservationId"
+                        ],
+                    )
+                )
+
+            _first_assignment, second_assignment = assignments
+            with self.assertRaises(GatedLoopError) as swapped:
+                claim_codex_subagent_receiver(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    workspace_root=root,
+                    receiver_context_id="codex-child-0",
+                    parent_context_id="codex-orchestrator",
+                    model_id=second_assignment["model"]["id"],
+                    dispatch_reservation_id=second_assignment[
+                        "dispatchReservationId"
+                    ],
+                )
+
+        self.assertEqual(
+            swapped.exception.code,
+            "SCHEDULER_CODEX_RECEIVER_RESERVATION_MISSING",
+        )
+        self.assertEqual(
+            {item["nodeId"] for item in claimed},
+            {assignment["nodeId"] for assignment in assignments},
+        )
+        self.assertTrue(all(item["receiverAttested"] for item in claimed))
+
+    def test_first_successful_codex_claim_pins_orchestrator_parent(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(
+                root,
+                parallel_group_hierarchy(),
+            )
+            assignments = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared[
+                    "graphFingerprint"
+                ],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-api")),
+                    agent_requirement(loop_node_id("t-core")),
+                ],
+            )["assignments"]
+            first, second = assignments
+            claim_codex_subagent_receiver(
+                root=root,
+                root_id=prepared["rootId"],
+                workspace_root=root,
+                receiver_context_id="codex-first-child",
+                parent_context_id="codex-orchestrator",
+                model_id=first["model"]["id"],
+                dispatch_reservation_id=first[
+                    "dispatchReservationId"
+                ],
+            )
+            with self.assertRaises(GatedLoopError) as untrusted:
+                claim_codex_subagent_receiver(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    workspace_root=root,
+                    receiver_context_id="codex-wrong-parent-child",
+                    parent_context_id="another-codex-session",
+                    model_id=second["model"]["id"],
+                    dispatch_reservation_id=second[
+                        "dispatchReservationId"
+                    ],
+                )
+            accepted = claim_codex_subagent_receiver(
+                root=root,
+                root_id=prepared["rootId"],
+                workspace_root=root,
+                receiver_context_id="codex-second-child",
+                parent_context_id="codex-orchestrator",
+                model_id=second["model"]["id"],
+                dispatch_reservation_id=second[
+                    "dispatchReservationId"
+                ],
+            )
+
+        self.assertEqual(
+            untrusted.exception.code,
+            "SCHEDULER_RECEIVER_PARENT_UNTRUSTED",
+        )
+        self.assertEqual(accepted["nodeId"], second["nodeId"])
+
+    def test_codex_claim_recovers_after_projection_failure(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared[
+                    "graphFingerprint"
+                ],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-service"))
+                ],
+            )["assignments"][0]
+            with mock.patch.object(
+                SchedulerRepository,
+                "write_projections",
+                side_effect=OSError("projection unavailable"),
+            ):
+                claimed = claim_codex_subagent_receiver(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    workspace_root=root,
+                    receiver_context_id="codex-projection-child",
+                    parent_context_id="codex-orchestrator",
+                    model_id=assignment["model"]["id"],
+                    dispatch_reservation_id=assignment[
+                        "dispatchReservationId"
+                    ],
+                )
+            replayed = claim_codex_subagent_receiver(
+                root=root,
+                root_id=prepared["rootId"],
+                workspace_root=root,
+                receiver_context_id="codex-projection-child",
+                parent_context_id="codex-orchestrator",
+                model_id=assignment["model"]["id"],
+                dispatch_reservation_id=assignment[
+                    "dispatchReservationId"
+                ],
+            )
+
+        self.assertEqual(claimed["nodeId"], assignment["nodeId"])
+        self.assertEqual(claimed["operationId"], replayed["operationId"])
+        self.assertTrue(claimed["receiverAttested"])
+
+    def test_failed_codex_claim_transaction_does_not_pin_root(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared[
+                    "graphFingerprint"
+                ],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-service"))
+                ],
+            )["assignments"][0]
+            repository = SchedulerRepository(root)
+            with self.assertRaises(RuntimeError):
+                with repository.transaction() as connection:
+                    reservation = connection.execute(
+                        "SELECT * FROM dispatch_reservations "
+                        "WHERE reservation_id = ?",
+                        (assignment["dispatchReservationId"],),
+                    ).fetchone()
+                    identity = repository.issue_host_receiver_identity(
+                        connection,
+                        run_id=reservation["run_id"],
+                        root_id=prepared["rootId"],
+                        node_id=reservation["node_id"],
+                        attempt=reservation["attempt"],
+                        reservation_id=reservation["reservation_id"],
+                        host_adapter_id="codex",
+                        agent_id="codex",
+                        model_id=reservation["model_id"],
+                        receiver_context_id="codex-rolled-back-child",
+                        parent_context_id="codex-rolled-back-parent",
+                        at=reservation["reserved_at"],
+                    )
+                    repository.consume_receiver_attestation(
+                        connection,
+                        attestation_id=identity,
+                        run_id=reservation["run_id"],
+                        root_id=prepared["rootId"],
+                        node_id=reservation["node_id"],
+                        attempt=reservation["attempt"],
+                        receiver_context_id="codex-rolled-back-child",
+                        host_adapter_id="codex",
+                        agent_id="codex",
+                        model_id=reservation["model_id"],
+                        reservation_id=reservation["reservation_id"],
+                        operation_id="codex-rolled-back-operation",
+                        at=reservation["reserved_at"],
+                    )
+                    raise RuntimeError("force claim rollback")
+            with repository.transaction() as connection:
+                root_count = connection.execute(
+                    "SELECT COUNT(*) FROM run_receiver_roots"
+                ).fetchone()[0]
+                identity_count = connection.execute(
+                    "SELECT COUNT(*) FROM host_receiver_identities"
+                ).fetchone()[0]
+
+        self.assertEqual(root_count, 0)
+        self.assertEqual(identity_count, 0)
 
     def test_every_ready_loop_requires_agent_reasoning_analysis(
         self,

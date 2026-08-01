@@ -6,12 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": [
-              "-X",
-              "utf8",
-              "${CLAUDE_PLUGIN_ROOT}/hooks/attest_claude_dispatch_receiver.py"
-            ],
+            "command": "python -X utf8 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['CLAUDE_PLUGIN_ROOT'],'hooks','attest_claude_dispatch_receiver.py'),run_name='__main__')\"",
             "timeout": 10
           }
         ]
@@ -21,12 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": [
-              "-X",
-              "utf8",
-              "${CLAUDE_PLUGIN_ROOT}/hooks/require_sensitive_tool_approval.py"
-            ],
+            "command": "python -X utf8 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['CLAUDE_PLUGIN_ROOT'],'hooks','require_sensitive_tool_approval.py'),run_name='__main__')\"",
             "timeout": 10
           }
         ]
@@ -36,12 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": [
-              "-X",
-              "utf8",
-              "${CLAUDE_PLUGIN_ROOT}/hooks/require_sensitive_tool_approval.py"
-            ],
+            "command": "python -X utf8 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['CLAUDE_PLUGIN_ROOT'],'hooks','require_sensitive_tool_approval.py'),run_name='__main__')\"",
             "timeout": 10
           }
         ]
@@ -51,12 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": [
-              "-X",
-              "utf8",
-              "${CLAUDE_PLUGIN_ROOT}/hooks/require_sensitive_tool_approval.py"
-            ],
+            "command": "python -X utf8 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['CLAUDE_PLUGIN_ROOT'],'hooks','require_sensitive_tool_approval.py'),run_name='__main__')\"",
             "timeout": 10
           }
         ]
@@ -66,13 +46,30 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": [
-              "-X",
-              "utf8",
-              "${CLAUDE_PLUGIN_ROOT}/hooks/require_sensitive_tool_approval.py"
-            ],
+            "command": "python -X utf8 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['CLAUDE_PLUGIN_ROOT'],'hooks','require_sensitive_tool_approval.py'),run_name='__main__')\"",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "^mcp__.*__(heartbeat_loop|pause_loop|record_loop_result)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -X utf8 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['CLAUDE_PLUGIN_ROOT'],'hooks','authorize_codex_loop_operation.py'),run_name='__main__')\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -X utf8 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['CLAUDE_PLUGIN_ROOT'],'hooks','attest_codex_subagent_receiver.py'),run_name='__main__')\"",
+            "timeout": 30,
+            "statusMessage": "Attesting Layered Delivery receiver"
           }
         ]
       }
@@ -83,12 +80,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python",
-            "args": [
-              "-X",
-              "utf8",
-              "${CLAUDE_PLUGIN_ROOT}/hooks/handle_claude_rate_limit.py"
-            ],
+            "command": "python -X utf8 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['CLAUDE_PLUGIN_ROOT'],'hooks','handle_claude_rate_limit.py'),run_name='__main__')\"",
             "timeout": 10
           }
         ]

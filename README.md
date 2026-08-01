@@ -314,11 +314,11 @@ Claude Code 和旧 Codex 仍可走 `2025-11-25` 的 `initialize → notification
 
 `freeze_hierarchy` 对模型只暴露 `execution_mode=active|manual`，不暴露内部 `confirmed`。冻结前只展示“自动执行 / 手动交接”两个确认选项；自动和手动都表示完整授权并确认开发，区别只在冻结后由当前会话继续调度还是生成交接。需要调整时，用户直接回复修改意见，当前方案不冻结；只有需求实际变化才重新 prepare，单纯询问或其他未改变需求的回复保留当前 `PREPARED` 结果。初始 prepare 和 `prepare_delivery_revision` 都只准备候选，不应触发宿主通用确认弹窗；用户对自动执行或手动交接的选择是每个 Revision 唯一一次业务确认。冻结工具在宿主权限层统一走自动批准。冻结后若用户调整尚未开始的 TASK，`unfreeze_task_requirement` 与 `refreeze_task_requirement` 分别执行显式的人机授权；解冻只开放 `title`、`summary`、`payload`，不开放拓扑与资源契约。
 
-总调度上下文只消费 frontier。每个 Loop 默认路由到独立接收上下文；MCP `dispatch_loop` 除 `receiver_context_id` 外还必须消费宿主创建子 Agent 后签发的一次性 `receiver_attestation_id`。Claude Code 由 PreToolUse Hook 使用真实 `agent_id` 自动签发；每个 run 的首个签发会固定宿主证明的编排根，后续直接、多级子上下文或新平台适配器均不能另建信任根，跨平台派遣只有提交同一宿主编排根时才可继续，否则 fail closed；伪造 ID 与重放凭证同样被拒绝。Review 复用任一上游上下文也会被拒绝。宿主提供结构化剩余额度和真实 `resetAt` 时，可在额度耗尽前用对应 `capacity_scope` 定时 pause；标准 Claude CLI Hook 目前只暴露失败事件，不能凭文本猜测提前阈值。宿主直接观察到硬 429 时，Claude `StopFailure(rate_limit)` 或等价模型外适配器只信任结构化错误详情，调用私有容量回调；该回调校验实际接收上下文、限制 24 小时恢复窗口、幂等防重放，并按共享容量域暂停所有同 Agent claimed Loop。宿主取消旧周期监控，只保留 reset 后一次唤醒。硬额度熔断不依赖失败模型反馈，也不暴露给模型主动调用；事件重建仅能按原 `reportId` 恢复或按更晚 `reportedAt` 更新共享断路器，旧 Delivery 重建不能覆盖新报告。
+总调度上下文只消费 frontier。每个 Loop 默认路由到独立接收上下文。Claude Code 的 MCP `dispatch_loop` 除 `receiver_context_id` 外还必须消费 PreToolUse Hook 以真实 `agent_id` 签发的一次性 `receiver_attestation_id`。Codex assignment 则返回由 reservation 派生的唯一 `hostTaskName`，总调度器必须用它创建子 Agent；`SubagentStart` Hook 从 Codex 自有 transcript 校验真实子线程、父 `session_id`、task name 和实际 `model`，在一个 SQLite claim 事务内签发并消费内部身份、固定成功编排根、消费 reservation 和写入目标 claim，只向 child 注入不含 receiver/operation bearer 的已认领 assignment。后续 heartbeat、pause 和 result 统一由 `PreToolUse` 注入 operation：Codex 校验当前 child transcript，Claude 校验真实 `agent_id` 与已消费 attestation；root/helper、缺失 transcript/agent 身份或自带 operation 的未授权 MCP 调用都会被拒绝。每个 run 首次成功消费宿主身份会固定编排根，后续直接、多级子上下文或新平台适配器均不能另建信任根，跨平台派遣只有提交同一宿主编排根时才可继续，否则 fail closed；模型错配、错任务、伪造 ID 与重放同样被拒绝。Review 复用任一上游上下文也会被拒绝。宿主提供结构化剩余额度和真实 `resetAt` 时，可在额度耗尽前用对应 `capacity_scope` 定时 pause；标准 Claude CLI Hook 目前只暴露失败事件，不能凭文本猜测提前阈值。宿主直接观察到硬 429 时，Claude `StopFailure(rate_limit)` 或等价模型外适配器只信任结构化错误详情，调用私有容量回调；该回调校验实际接收上下文、限制 24 小时恢复窗口、幂等防重放，并按共享容量域暂停所有同 Agent claimed Loop。宿主取消旧周期监控，只保留 reset 后一次唤醒。硬额度熔断不依赖失败模型反馈，也不暴露给模型主动调用；事件重建仅能按原 `reportId` 恢复或按更晚 `reportedAt` 更新共享断路器，旧 Delivery 重建不能覆盖新报告。
 
-`recommend_executors` 自身仍不启动 CLI、不切换模型、不 claim，也不派遣。自动执行模式下，总调度器构造宿主真实 inventory 并调用 `plan_dispatch_batch`；宿主随后按 assignment 显式覆盖模型、并发创建接收上下文。接收方使用真实 Agent/模型、宿主一次性接收凭证、`dispatch_mode=AUTO`、`HOST_NATIVE`、预留 ID 与决策指纹调用 `dispatch_loop`，控制器重新计算绑定后才写入 claim 事件；请求 `gpt-5.6-sol` 而实际报告 `gpt-5` 会被拒绝。冻结时选择的 `execution_mode` 持久化到 run：`active` 只接受 AUTO claim，`manual` 只接受 MANUAL claim。
+`recommend_executors` 自身仍不启动 CLI、不切换模型、不 claim，也不派遣。自动执行模式下，总调度器构造宿主真实 inventory 并调用 `plan_dispatch_batch`；宿主随后按 assignment 显式覆盖模型、并发创建接收上下文。Claude 接收方使用真实 Agent/模型、宿主一次性接收凭证、`dispatch_mode=AUTO`、`HOST_NATIVE`、预留 ID 与决策指纹调用 `dispatch_loop`；Codex 由 `SubagentStart` Hook 在 child 可见上下文建立前完成同一校验与 claim，child 不再二次调用 `dispatch_loop`。请求 `gpt-5.6-sol` 而实际模型是 `gpt-5` 会被拒绝。冻结时选择的 `execution_mode` 持久化到 run：`active` 只接受 AUTO claim，`manual` 只接受 MANUAL claim。
 
-当前 Claude Code Plugin 已通过 PreToolUse Hook 实现真实接收凭证注入。标准 Codex Plugin manifest 暂无同等宿主生命周期回调，因此默认不设置 `HDG_HOST_ADAPTER`，自动计划和 MCP claim 会 fail closed 并转人工交接；只有 Codex 宿主原生实现私有签发回调后，才能在启动 MCP Server 时显式启用 `HDG_HOST_ADAPTER=codex`。模型或 shell 直接调用私有 Python issuer 不算宿主证明。
+Claude Code Plugin 通过 PreToolUse Hook 实现目标级接收凭证注入。Codex Plugin 通过原生 `SubagentStart` Hook 实现子 Agent 身份校验与 host-side claim，并用 `PreToolUse` 保护后续 Loop 变更；MCP Server 启动环境固定 `HDG_HOST_ADAPTER=codex`。Hook 只接受操作系统账户默认 `~/.codex/sessions` 下与 child/parent/task 相符的 Codex transcript，且只在当前工作区已有 active Delivery、task name 指向精确预留、实际模型匹配时完成 claim 并输出不含 bearer 的 assignment，不会在普通仓库创建控制面。调用方覆盖 `CODEX_HOME` 时，由于缺少宿主认证的会话根，自动 attestation 会 fail closed。普通 helper/explorer 子 Agent、工作区伪造 transcript、错误 task/model 和并发串换都会保持静默或被拒绝。安装或升级后的 Hook 必须由用户在 Codex `/hooks` 中审阅并信任；未信任、旧宿主不支持相应事件或 Hook 未运行时，预留不会被认领。Codex 官方也把 tool Hook 定义为 guardrail 而非完整强制边界；因此该适配器保证正常宿主工具路径上的生命周期与上下文隔离，不是对恶意编排 Agent 的密码学证明。能手工执行 Hook/控制器脚本、绕过正常 MCP 工具路径或改写 transcript/SQLite 的本机进程仍可冒充 receiver；真正抵抗这类调用者需要宿主提供模型不可访问的签名 caller-context 通道。
 
 ## 主要投影
 
@@ -394,8 +394,8 @@ Loop 输入是冻结后交给对应 TASK 或 Review 执行上下文的 `loop.ref
 
 仓库构建一个双宿主 Plugin payload：
 
-- Codex：`.codex-plugin/plugin.json`
-- Claude Code：`.claude-plugin/plugin.json`、`.mcp.json` 和敏感操作 Hook
+- Codex：`.codex-plugin/plugin.json` 内联 MCP 配置和共享 `hooks/hooks.json` 中的 `SubagentStart` / Loop mutation `PreToolUse` Hook
+- Claude Code：`.claude-plugin/plugin.json`、`.mcp.json` 和共享 Hook bundle 中的 PreToolUse / StopFailure Hook
 
 安装或更新 Plugin 后应新建 Agent 会话，使宿主重新加载 Skill、MCP Server 和工具权限。
 

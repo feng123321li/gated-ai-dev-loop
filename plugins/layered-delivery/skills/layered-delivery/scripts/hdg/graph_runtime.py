@@ -888,8 +888,8 @@ def dispatch_loop(
         fail(
             "SCHEDULER_DISPATCH_REASONING_REQUIRED",
             (
-                "Automatic dispatch requires the STANDARD, HIGH, or "
-                "UNCLASSIFIED reasoning class returned by the host "
+                "Automatic dispatch requires the ROUTINE, STANDARD, HIGH, "
+                "or UNCLASSIFIED reasoning class returned by the host "
                 "dispatch plan"
             ),
         )

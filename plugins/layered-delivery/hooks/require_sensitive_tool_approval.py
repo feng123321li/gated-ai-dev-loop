@@ -20,6 +20,9 @@ SENSITIVE_TOOL_REASONS = {
     f"{MCP_PERMISSION_PREFIX}refreeze_task_requirement": (
         "重新冻结修改后的 TASK 需求前需要用户明确确认。"
     ),
+    f"{MCP_PERMISSION_PREFIX}update_orchestrator_settings": (
+        "保存本机用户级中央编排器设置前需要用户明确确认。"
+    ),
 }
 
 

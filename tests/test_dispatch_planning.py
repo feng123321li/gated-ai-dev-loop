@@ -20,6 +20,7 @@ from hdg.graph_runtime import (
 )
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.mcp_tools import call_tool
+from hdg.orchestrator_config import OrchestratorConfig
 from hdg.repository import SchedulerRepository
 
 from .test_loop_architecture import group_hierarchy, task_hierarchy
@@ -41,6 +42,13 @@ def host_executor_inventory(
             "priority": 20,
             "modelOverrideSupported": model_override_supported,
             "models": [
+                {
+                    "id": "gpt-5.6-luna",
+                    "family": "gpt-5.6",
+                    "tier": "EFFICIENT",
+                    "reasoningEffort": "low",
+                    "priority": 30,
+                },
                 {
                     "id": "gpt-5.6-sol",
                     "family": "gpt-5.6",
@@ -215,6 +223,159 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 }
             )
         )
+
+    def test_default_orchestrator_policy_is_safe_and_visible(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+
+            policy = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-service"))
+                ],
+            )["dispatchPolicy"]
+
+        self.assertTrue(policy["automaticOrchestration"])
+        self.assertTrue(policy["autoSelectModel"])
+        self.assertFalse(policy["allowCrossAdapterDispatch"])
+        self.assertEqual(policy["allowedAdapters"], ["codex", "claude-code"])
+        self.assertEqual(policy["maxConcurrentExecutors"], 4)
+        self.assertEqual(policy["quotaExhaustionPolicy"], "PAUSE_AND_RESUME")
+        self.assertTrue(policy["preferDifferentAdapterForReview"])
+
+    def test_configuration_can_disable_automatic_orchestration(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+
+            with self.assertRaises(GatedLoopError) as caught:
+                plan_dispatch_batch(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    expected_graph_fingerprint=(
+                        prepared["graphFingerprint"]
+                    ),
+                    executor_inventory=host_executor_inventory(),
+                    node_requirements=[
+                        agent_requirement(loop_node_id("t-service"))
+                    ],
+                    orchestrator_config=OrchestratorConfig(
+                        automatic_orchestration=False
+                    ),
+                )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_AUTOMATIC_ORCHESTRATION_DISABLED",
+        )
+
+    def test_disabling_model_selection_uses_current_executor(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+
+            plan = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(
+                        loop_node_id("t-service"),
+                        reasoning_class="HIGH",
+                    )
+                ],
+                current_executor={
+                    "agentId": "codex",
+                    "modelId": "gpt-5.6-terra",
+                },
+                orchestrator_config=OrchestratorConfig(
+                    auto_select_model=False
+                ),
+            )
+
+        assignment = plan["assignments"][0]
+        self.assertEqual(assignment["model"]["id"], "gpt-5.6-terra")
+        self.assertEqual(assignment["reasoningClass"], "UNCLASSIFIED")
+        self.assertEqual(
+            assignment["modelSelection"],
+            "CURRENT_HOST_DEFAULT",
+        )
+
+    def test_configured_max_concurrency_is_reserved_atomically(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(
+                root,
+                parallel_group_hierarchy(),
+            )
+
+            plan = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-api")),
+                    agent_requirement(loop_node_id("t-core")),
+                ],
+                orchestrator_config=OrchestratorConfig(
+                    max_concurrent_executors=1
+                ),
+            )
+
+        self.assertEqual(len(plan["assignments"]), 1)
+        self.assertEqual(len(plan["deferred"]), 1)
+        self.assertEqual(
+            plan["deferred"][0]["code"],
+            "ORCHESTRATOR_CAPACITY_RESERVED",
+        )
+
+    def test_unlisted_native_adapter_is_rejected(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+
+            with self.assertRaises(GatedLoopError) as caught:
+                plan_dispatch_batch(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    expected_graph_fingerprint=(
+                        prepared["graphFingerprint"]
+                    ),
+                    executor_inventory=host_executor_inventory(),
+                    node_requirements=[
+                        agent_requirement(loop_node_id("t-service"))
+                    ],
+                    orchestrator_config=OrchestratorConfig(
+                        allowed_adapters=("claude-code",)
+                    ),
+                )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_ADAPTER_NOT_ALLOWED",
+        )
+
+    def test_adapter_allowlist_is_independent_from_agent_id(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            inventory = host_executor_inventory()
+            inventory[0]["agentId"] = "codex-worker"
+            inventory[0]["adapterId"] = "codex"
+
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=inventory,
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-service"))
+                ],
+                host_adapter_id="codex",
+            )["assignments"][0]
+
+        self.assertEqual(assignment["agent"]["id"], "codex-worker")
+        self.assertEqual(assignment["agent"]["adapterId"], "codex")
 
     def test_cross_delivery_plans_share_atomic_host_slots(self) -> None:
         with TemporaryDirectory() as root:
@@ -1306,6 +1467,60 @@ class HostDispatchPlanningTests(unittest.TestCase):
             assignment["reasoningRequirement"]["reason"],
         )
 
+    def test_routine_task_uses_efficient_model_and_can_be_claimed(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(
+                        loop_node_id("t-service"),
+                        reasoning_class="ROUTINE",
+                        reason=(
+                            "The change is explicit, repeatable, and has "
+                            "a deterministic verification path."
+                        ),
+                    )
+                ],
+            )["assignments"][0]
+
+            dispatch_loop(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=assignment["nodeId"],
+                owner="codex-luna-receiver",
+                agent_id=assignment["agent"]["id"],
+                model_id=assignment["model"]["id"],
+                dispatch_mode="AUTO",
+                dispatch_transport=assignment["dispatchTransport"],
+                dispatch_reservation_id=assignment[
+                    "dispatchReservationId"
+                ],
+                dispatch_reasoning_class=assignment["reasoningClass"],
+                dispatch_decision_fingerprint=(
+                    assignment["decisionFingerprint"]
+                ),
+                operation_id="op-routine-luna",
+            )
+            state = graph_status(root=root, root_id=prepared["rootId"])
+
+        claimed = next(
+            node
+            for node in state["nodes"]
+            if node["nodeId"] == assignment["nodeId"]
+        )
+        self.assertEqual(assignment["model"]["id"], "gpt-5.6-luna")
+        self.assertEqual(assignment["model"]["tier"], "EFFICIENT")
+        self.assertEqual(assignment["reasoningClass"], "ROUTINE")
+        self.assertEqual(claimed["modelId"], "gpt-5.6-luna")
+        self.assertEqual(claimed["dispatchReasoningClass"], "ROUTINE")
+
     def test_model_tiers_are_mapped_by_each_host_inventory(self) -> None:
         cases = (
             (
@@ -1735,6 +1950,9 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 node_requirements=[
                     agent_requirement(loop_node_id("t-service"))
                 ],
+                orchestrator_config=OrchestratorConfig(
+                    allow_cross_adapter_dispatch=True
+                ),
             )["assignments"][0]
             dispatch_loop(
                 root=root,
@@ -1777,6 +1995,9 @@ class HostDispatchPlanningTests(unittest.TestCase):
                         reasoning_class="HIGH",
                     )
                 ],
+                orchestrator_config=OrchestratorConfig(
+                    allow_cross_adapter_dispatch=True
+                ),
             )["assignments"][0]
 
         self.assertEqual(review["agent"]["id"], "claude-code")

@@ -324,7 +324,6 @@ class PluginBundleTests(unittest.TestCase):
         recommendations = (
             SKILL / "references" / "agent-recommendations.md"
         ).read_text(encoding="utf-8")
-
         for tool_name in ("available_agents", "recommend_executors"):
             with self.subTest(tool_name=tool_name):
                 self.assertIn(f"`{tool_name}`", main)
@@ -350,6 +349,11 @@ class PluginBundleTests(unittest.TestCase):
         recommendations = (
             SKILL / "references" / "agent-recommendations.md"
         ).read_text(encoding="utf-8")
+        orchestrator = (
+            SKILL
+            / "references"
+            / "orchestrator-configuration.md"
+        ).read_text(encoding="utf-8")
 
         self.assertIn("`plan_dispatch_batch`", main)
         self.assertIn("显式模型覆盖", main)
@@ -363,6 +367,9 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("decisionFingerprint", execution)
         self.assertIn("不能继承总调度 Agent 的模型", execution)
         self.assertIn("派遣前自动判级", execution)
+        self.assertIn("`ROUTINE`/`STANDARD`/`HIGH`", execution)
+        self.assertIn("`ROUTINE` 目标为 `EFFICIENT`", recommendations)
+        self.assertIn("luna 标为 `EFFICIENT`", recommendations)
         self.assertIn("不确定时使用 `HIGH`", execution)
         self.assertIn("只用于路由判级", execution)
         self.assertIn("HOST_NATIVE_DISPATCH_PLAN", recommendations)
@@ -371,6 +378,11 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("codex-companion", main + execution)
         self.assertIn("UNSAFE_EXECUTOR_TRANSPORT", recommendations)
         self.assertIn("diversityLevel=CONTEXT_ONLY", main + recommendations)
+        self.assertIn('"autoSelectModel": true', orchestrator)
+        self.assertIn('"allowCrossAdapterDispatch": false', orchestrator)
+        self.assertIn('"maxConcurrentExecutors": 4', orchestrator)
+        self.assertIn("%APPDATA%", orchestrator)
+        self.assertIn("XDG_CONFIG_HOME", orchestrator)
 
     def test_skill_uses_native_soft_stop_and_hard_429_breaker(
         self,
@@ -532,6 +544,7 @@ class PluginBundleTests(unittest.TestCase):
                 "cancel_graph_run",
                 "unfreeze_task_requirement",
                 "refreeze_task_requirement",
+                "update_orchestrator_settings",
             },
         )
         self.assertLessEqual(matchers, names)
@@ -1327,9 +1340,13 @@ class PluginBundleTests(unittest.TestCase):
             approvals["refreeze_task_requirement"]["approval_mode"],
             "prompt",
         )
+        self.assertEqual(
+            approvals["update_orchestrator_settings"]["approval_mode"],
+            "prompt",
+        )
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
-        self.assertEqual(len(tool_definitions()), 24)
+        self.assertEqual(len(tool_definitions()), 26)
         self.assertNotIn(
             "report_host_capacity_exhausted",
             {tool["name"] for tool in tool_definitions()},
@@ -1433,7 +1450,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-                24,
+                26,
         )
         discovery = responses[2]["result"]["structuredContent"]["result"]
         self.assertFalse(
@@ -1514,7 +1531,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-                24,
+                26,
         )
 
 

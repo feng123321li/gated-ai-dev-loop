@@ -2426,6 +2426,7 @@ class SchedulerRepository:
         graph_fingerprint: str,
         assignments: list[dict[str, Any]],
         agent_slot_limits: dict[str, int],
+        orchestrator_slot_limit: int | None = None,
         reservation_seconds: int,
     ) -> dict[str, Any]:
         with self.transaction() as connection:
@@ -2518,6 +2519,22 @@ class SchedulerRepository:
                             "Loop for host Agent creation."
                         ),
                         **existing,
+                    }
+                    continue
+                if (
+                    orchestrator_slot_limit is not None
+                    and len(active) + len(accepted)
+                    >= orchestrator_slot_limit
+                ):
+                    rejected[node_id] = {
+                        "code": "ORCHESTRATOR_CAPACITY_RESERVED",
+                        "message": (
+                            "The configured central orchestrator "
+                            "concurrency limit is already occupied."
+                        ),
+                        "maxConcurrentExecutors": (
+                            orchestrator_slot_limit
+                        ),
                     }
                     continue
                 if reserved_agent_slots.get(agent_id, 0) >= (

@@ -582,9 +582,28 @@ class McpSurfaceTests(unittest.TestCase):
                 "cancel_graph_run",
                 "refreeze_task_requirement",
                 "unfreeze_task_requirement",
+                "update_orchestrator_settings",
             },
         )
         by_name = {tool["name"]: tool for tool in tools}
+        open_settings = by_name["open_orchestrator_settings"]
+        self.assertTrue(open_settings["annotations"]["readOnlyHint"])
+        self.assertEqual(
+            open_settings["_meta"]["ui"]["resourceUri"],
+            "ui://layered-delivery/orchestrator-settings.html",
+        )
+        update_settings = by_name["update_orchestrator_settings"]
+        self.assertFalse(update_settings["annotations"]["readOnlyHint"])
+        self.assertEqual(
+            update_settings["inputSchema"]["required"],
+            ["config"],
+        )
+        self.assertEqual(
+            update_settings["inputSchema"]["properties"]["config"][
+                "properties"
+            ]["quotaExhaustionPolicy"]["enum"],
+            ["PAUSE_AND_RESUME", "SWITCH_ADAPTER", "ASK_USER"],
+        )
         self.assertEqual(
             set(
                 by_name["workspace_status"]["inputSchema"][
@@ -643,10 +662,17 @@ class McpSurfaceTests(unittest.TestCase):
             ),
             None,
         )
+        self.assertEqual(
+            dispatch_plan_schema["properties"]["node_requirements"]
+            ["items"]["properties"]["reasoningClass"]["enum"],
+            ["ROUTINE", "STANDARD", "HIGH"],
+        )
         executor_schema = dispatch_plan_schema["properties"][
             "executor_inventory"
         ]["items"]
         self.assertIn("dispatchTransport", executor_schema["required"])
+        self.assertIn("adapterId", executor_schema["properties"])
+        self.assertNotIn("adapterId", executor_schema["required"])
         self.assertEqual(
             executor_schema["properties"]["dispatchTransport"]["enum"],
             ["HOST_NATIVE", "EXTERNAL_PROCESS"],
@@ -689,7 +715,7 @@ class McpSurfaceTests(unittest.TestCase):
             dispatch_schema["properties"]["dispatch_reasoning_class"][
                 "enum"
             ],
-            ["STANDARD", "HIGH", "UNCLASSIFIED"],
+            ["ROUTINE", "STANDARD", "HIGH", "UNCLASSIFIED"],
         )
         pause_schema = by_name["pause_loop"]["inputSchema"]
         self.assertNotIn("resume_at", pause_schema["required"])
@@ -2069,7 +2095,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 24)
+            self.assertEqual(len(listed["result"]["tools"]), 26)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

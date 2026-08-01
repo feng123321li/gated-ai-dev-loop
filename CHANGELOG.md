@@ -4,6 +4,12 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 未发布
+
+- 自动派遣推理分类增加 `ROUTINE`，由 Agent 为明确、低歧义、可重复且具备确定验证路径的 Loop 选择，并映射到宿主动态 inventory 中的 `EFFICIENT` 模型；`STANDARD → BALANCED` 与 `HIGH → FRONTIER` 保持不变。
+- 新增用户级中央编排器配置：默认开启自动编排与自动选模、关闭跨 Adapter，允许手动配置 Adapter 白名单、跨 Delivery 全局并发上限、额度耗尽策略和 Review Adapter 偏好；同机 Codex/Claude Code 共享配置，Marketplace 升级不覆盖，非法配置 fail closed。
+- 新增中央编排器 MCP Apps 配置面板和无 UI 降级工具：可视化查看真实 Adapter 能力并经审批原子保存用户级策略；支持 MCP Apps 的宿主内嵌呈现，不支持的 Codex/CLI 继续使用结构化工具结果。
+
 ## 0.28.4 — 2026-08-01
 
 发布提交：`19d2885`

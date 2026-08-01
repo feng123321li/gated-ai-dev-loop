@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from . import __version__
@@ -13,10 +13,16 @@ from .host_policy import (
     ProjectRootBinding,
 )
 from .jsonio import redact
+from .mcp_apps import read_resource, resource_definitions
 from .mcp_tools import (
     call_tool,
     tool_definitions,
     validate_tool_arguments,
+)
+from .orchestrator_config import (
+    OrchestratorConfig,
+    built_in_orchestrator_config,
+    load_orchestrator_config,
 )
 
 
@@ -88,7 +94,18 @@ SERVER_INSTRUCTIONS = (
     "requirement planning. available_agents and recommend_executors expose "
     "live, non-binding local Agent/model advice with reasons; they never "
     "start a CLI, switch a model, claim a Loop, dispatch work, or persist "
-    "an assignment. For automatic execution, plan_dispatch_batch consumes "
+    "an assignment. Automatic execution also obeys one user-level central "
+    "orchestrator configuration shared by local host products: automatic "
+    "orchestration and model selection default on, cross-Adapter dispatch "
+    "defaults off, the Adapter allowlist and global concurrency cap are "
+    "mandatory, and invalid configured files fail closed. For automatic "
+    "configuration, open_orchestrator_settings returns a portable MCP Apps "
+    "panel plus complete structured fallback data. "
+    "update_orchestrator_settings requires explicit host approval, "
+    "atomically replaces the per-user file, and refreshes the current MCP "
+    "connection. UI support never changes dispatch authority: terminal-only "
+    "discovery remains EXTERNAL_PROCESS. For automatic "
+    "execution, plan_dispatch_batch consumes "
     "ephemeral host-native capacity, dispatchTransport, and selectable-"
     "model facts, then "
     "atomically reserves each selected Loop and its cross-Delivery host "
@@ -145,6 +162,9 @@ class McpConnection:
     legacy_initialized: bool = False
     legacy_client_info: dict[str, object] | None = None
     trusted_host_adapter: str | None = None
+    orchestrator_config: OrchestratorConfig = field(
+        default_factory=built_in_orchestrator_config
+    )
 
 
 @dataclass(frozen=True)
@@ -165,6 +185,10 @@ def _server_info() -> dict[str, str]:
 def _server_capabilities() -> dict[str, object]:
     return {
         "tools": {"listChanged": False},
+        "resources": {
+            "subscribe": False,
+            "listChanged": False,
+        },
         "experimental": {
             CODEX_SANDBOX_META_KEY: {},
         },
@@ -436,6 +460,46 @@ def _validate_call_params(
     return name, arguments
 
 
+def _validate_resource_read_params(
+    params: Mapping[str, object],
+) -> str | None:
+    if set(params) - {"uri", "_meta"}:
+        return None
+    uri = params.get("uri")
+    request_meta = params.get("_meta")
+    if (
+        not isinstance(uri, str)
+        or not uri
+        or (
+            request_meta is not None
+            and not isinstance(request_meta, dict)
+        )
+    ):
+        return None
+    return uri
+
+
+def _read_mcp_resource(
+    *,
+    request_id: object,
+    params: Mapping[str, object],
+    modern: bool,
+) -> dict[str, Any]:
+    uri = _validate_resource_read_params(params)
+    if uri is None:
+        return _invalid_params(request_id)
+    try:
+        result = read_resource(uri)
+    except GatedLoopError as error:
+        return _rpc_error(
+            request_id,
+            -32002,
+            error.message,
+            data={"code": error.code, "details": error.details},
+        )
+    return _rpc_result(request_id, result, modern=modern)
+
+
 def _call_scheduler_tool(
     *,
     request_id: object,
@@ -480,7 +544,10 @@ def _call_scheduler_tool(
             explicit_dogfood=explicit_dogfood,
             client_info=(dict(client_info) if client_info else None),
             trusted_host_adapter=connection.trusted_host_adapter,
+            orchestrator_config=connection.orchestrator_config,
         )
+        if name == "update_orchestrator_settings":
+            connection.orchestrator_config = load_orchestrator_config()
         payload = {
             "ok": True,
             "result": business_result,
@@ -553,6 +620,26 @@ def _handle_modern_request(
                 "ttlMs": TOOLS_TTL_MS,
                 "cacheScope": CACHE_SCOPE,
             },
+            modern=True,
+        )
+
+    if method == "resources/list":
+        if not _validate_list_params(params):
+            return _invalid_params(request_id)
+        return _rpc_result(
+            request_id,
+            {
+                "resources": resource_definitions(),
+                "ttlMs": TOOLS_TTL_MS,
+                "cacheScope": CACHE_SCOPE,
+            },
+            modern=True,
+        )
+
+    if method == "resources/read":
+        return _read_mcp_resource(
+            request_id=request_id,
+            params=params,
             modern=True,
         )
 
@@ -632,6 +719,22 @@ def _handle_legacy_request(
         return _rpc_result(
             request_id,
             {"tools": tool_definitions()},
+            modern=False,
+        )
+
+    if method == "resources/list":
+        if not _validate_list_params(params):
+            return _invalid_params(request_id)
+        return _rpc_result(
+            request_id,
+            {"resources": resource_definitions()},
+            modern=False,
+        )
+
+    if method == "resources/read":
+        return _read_mcp_resource(
+            request_id=request_id,
+            params=params,
             modern=False,
         )
 

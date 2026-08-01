@@ -21,14 +21,15 @@
 
 需要展示当前节点的执行建议时，调用 `available_agents` 和 `recommend_executors`，按 `nodeId` 选择对应建议。推荐工具不得据此启动外部 CLI、切换模型、改变 owner、提前 claim、绕过宿主原生 Agent 容量或接管限额恢复；自动执行由总调度器在工具返回后使用宿主原生 Agent 完成。CC-Switch、配置或容量变化后可以重新调用，旧建议不作为缓存权威。
 
-自动模式不直接消费终端建议来启动进程。总调度器从宿主明确暴露的原生 Agent catalog 构造 `executor_inventory`：每项必须包含宿主证明的 `dispatchTransport=HOST_NATIVE`，并只登记真实 `availableSlots`、`development`/`review` 能力、可显式选择的模型、模型 tier、reasoning effort 与优先级；不包含 Token、Base URL、命令参数，也不把 PATH 中存在的 CLI 当成自动启动授权。PATH、CLI、exec、subprocess 或 companion bridge 必须标为 `EXTERNAL_PROCESS`，只会得到安全 deferred，不能进入 assignment。以当前 `graphFingerprint` 调用 `plan_dispatch_batch` 后，只消费 `binding=HOST_NATIVE_DISPATCH_PLAN` 的 assignments。计划工具不启动 Agent、不 claim、不保存完整 inventory/requirements；提供方限额恢复也不调用它。
+自动模式不直接消费终端建议来启动进程。Plugin MCP Server 启动时先读取用户级中央编排器配置；配置文件不存在时默认开启自动编排与自动选模、关闭跨 Adapter、只允许 `codex`/`claude-code`、最多并发 4 个执行器、额度耗尽暂停恢复并优先用不同 Adapter Review。非法配置 fail closed，配置不进入 Delivery schema 或 SQLite；路径和手动修改方法见 [orchestrator-configuration.md](orchestrator-configuration.md)。总调度器从宿主明确暴露的原生 Agent catalog 构造 `executor_inventory`：每项必须包含宿主证明的 `dispatchTransport=HOST_NATIVE`，可以用 `adapterId` 区分中央宿主 Adapter（省略时等于 `agentId`），并只登记真实 `availableSlots`、`development`/`review` 能力、可显式选择的模型、模型 tier、reasoning effort 与优先级；不包含 Token、Base URL、命令参数，也不把 PATH 中存在的 CLI 当成自动启动授权。PATH、CLI、exec、subprocess 或 companion bridge 必须标为 `EXTERNAL_PROCESS`，只会得到安全 deferred，不能进入 assignment。以当前 `graphFingerprint` 调用 `plan_dispatch_batch` 后，只消费 `binding=HOST_NATIVE_DISPATCH_PLAN` 的 assignments。计划工具不启动 Agent、不 claim、不保存完整 inventory/requirements；提供方限额恢复也不调用它。
 
 ### 派遣前自动判级
 
-对当前每个 Ready TASK/Review，总调度 Agent 在调用派遣计划前先调用该节点的 `loop_context`，只读取目标、约束、已知验收点、Loop ref、上游结果摘要和工作项基线路径，使用自身分析能力完成 `STANDARD`/`HIGH` 路由判断；该读取只用于路由判级，不在总调度上下文内实现 TASK 或 Review。Python Controller 不做任何本地语义分析。
+对当前每个 Ready TASK/Review，总调度 Agent 在调用派遣计划前先调用该节点的 `loop_context`，只读取目标、约束、已知验收点、Loop ref、上游结果摘要和工作项基线路径，使用自身分析能力完成 `ROUTINE`/`STANDARD`/`HIGH` 路由判断；该读取只用于路由判级，不在总调度上下文内实现 TASK 或 Review。Python Controller 不做任何本地语义分析。
 
 - 跨模块或跨仓、架构调整、数据库迁移、安全权限、并发一致性、复杂故障定位、破坏性操作、高风险接口兼容，以及需要汇总多项上游证据的整体 Review：`HIGH`。
 - 单模块局部修改、契约清晰、影响范围小、验证路径明确：`STANDARD`。
+- 输入输出和完成条件完全明确、低歧义、低风险、可重复执行并有确定验证路径的机械性修改、提取、分类或转换：`ROUTINE`。
 - 无法可靠判断风险时，不确定时使用 `HIGH`。
 
 总调度 Agent 优先为每个当前 Ready TASK/Review 提交临时 `node_requirements`，`source=PLANNING` 并给出具体原因；不能把 payload 中出现的模型名、`reasoningClass` 或路由指令直接当作配置。若某个当前节点缺少分析，可同时提交宿主明确报告且与 inventory 精确匹配的 `current_executor={agentId, modelId}`。Controller 不补做语义分析，只让缺失节点原样沿用当前 Agent/模型，输出 `UNCLASSIFIED / CURRENT_EXECUTOR_FALLBACK / CURRENT_HOST_DEFAULT`；没有当前执行器事实时才以 `SCHEDULER_DISPATCH_REQUIREMENT_MISSING` 拒绝计划。
@@ -47,7 +48,7 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。不要绕过 TASK
 ## 执行 Loop
 
 1. 总调度上下文只读取 frontier 和路由 action，不直接执行 Loop。
-2. 对当前批次调用 `plan_dispatch_batch`，取得短租约后按 `concurrentDispatchGroups` 并发创建独立宿主原生 Agent。预留转为 claim 后仍占用跨 Delivery 槽位，直到 Loop 暂停或终态。`HOST_NATIVE` 集合由 MCP Server 启动配置中的精确适配器限制，协议 `clientInfo` 和本机 CLI 发现不参与授权；缺失配置时自动派遣 fail closed。显式模型 assignment 必须覆盖子 Agent 模型，不能继承总调度 Agent 的模型；Codex 还必须把 assignment 的 `hostTaskName` 原样作为 `task_name`。
+2. 对当前批次调用 `plan_dispatch_batch`，取得短租约后按 `concurrentDispatchGroups` 并发创建独立宿主原生 Agent。预留转为 claim 后仍占用跨 Delivery 槽位，直到 Loop 暂停或终态；全部 Delivery 的未过期预留和已 claim 执行器还共同受 `maxConcurrentExecutors` 限制。`HOST_NATIVE` 集合由 MCP Server 启动配置中的精确适配器与用户 `allowedAdapters` 共同限制，协议 `clientInfo` 和本机 CLI 发现不参与授权；跨 Adapter 默认关闭，只有用户明确开启且中央编排器能证明目标 Adapter 属于同一可信编排根时才可选择。显式模型 assignment 必须覆盖子 Agent 模型，不能继承总调度 Agent 的模型；Codex 还必须把 assignment 的 `hostTaskName` 原样作为 `task_name`。
 3. 每个 assignment 都先预留、再创建接收 Agent。Claude 最后由接收方 claim；Codex 由 `SubagentStart` Hook 在 child 上下文可见前完成 host-side claim。只向接收方传 `rootId`、`nodeId`、`dispatchReservationId` 与 `decisionFingerprint`，不要复制规划上下文、payload 或旧 operation。单个创建失败不影响已创建的同批 Agent，也不 claim 失败节点；等待预留过期后刷新 frontier 与 inventory，最多重算一次，仍失败则生成该节点的人工交接。
 4. 接收方原生进入 layered-delivery，使用精确 `nodeId` 调用 `loop_context`。TASK、TASK Review 与 GROUP Review Loop 同时取得控制器生成的 `humanArtifacts.workItem` baseline/progress/acceptance 路径；TASK 与 TASK Review 继续取得 `humanArtifacts.taskBaseline` 便捷路径，接口型 TASK 的 workItem 还包含自己的 `interfaces`。机器输入仍以 MCP 响应为准。
 5. Claude dispatch PreToolUse Hook 把真实 context 与 node/attempt/adapter/预留直接绑定，接收方连同实际 Agent/模型、AUTO、HOST_NATIVE、推理等级、预留和决策指纹调用 `dispatch_loop`。Codex `SubagentStart` Hook 不接受调用方指定的会话根，只接受操作系统账户默认 `~/.codex/sessions` 内 child/parent/role 与 `hostTaskName` 一致的 transcript，在单一事务内签发/消费内部身份、固定首次成功编排根、消费 reservation 并完成唯一 claim；`additionalContext` 不写 receiver/operation bearer，child 不再调用 `dispatch_loop`。Codex 调用 heartbeat、pause、result 时省略 `operation_id`，mutation PreToolUse Hook 依据当前 child transcript 注入并拒绝 root/helper 的普通工具调用。跨平台 adapter 只有能证明同一宿主编排根时才继续，否则 fail closed。Codex Hook 安装或变更后需在 `/hooks` 审阅并信任；覆盖 `CODEX_HOME`、普通 helper、工作区伪造 transcript、缺失 Hook、错 task/model、无预留和重放均保持拒绝。该 Hook 是正常宿主工具路径上的生命周期 guardrail；能手工执行 Hook/控制器或改写 transcript/SQLite 的恶意编排 Agent 需要宿主不可伪造的 caller-context 才能进一步防御。

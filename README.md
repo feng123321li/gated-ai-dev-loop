@@ -289,7 +289,15 @@ Controller 前复用领域校验，继续拦截父子关系、依赖和子节点
 
 推荐器只消费 Graph 节点角色和发现元数据，不解释 `loop.payload`。TASK Loop 匹配开发能力；TASK/GROUP/Delivery Review 优先选择不同于上游开发建议的 Agent。推荐器不参与提供方限额恢复，也不会自动换 Agent。只有一个合格 Agent 时，Review 仍展示可用组合，但明确标记 `diversityLevel=CONTEXT_ONLY`，不宣称异构审查。所有结果固定为 `binding=ADVISORY`、`dispatchAllowed=false`、`dispatchTransport=EXTERNAL_PROCESS`，不进入 schema v3、Frozen Graph、claim 或 owner。真正接收 Loop 的宿主在 `dispatch_loop` 中提交实际 `agent_id` 与 `model_id`；控制器把这份执行事实写入 claim 事件，并与认领身份和执行轮次一起投影到 `progress.md`。
 
-自动派遣与普通建议分离。`plan_dispatch_batch` 只接受宿主明确提供且 `dispatchTransport=HOST_NATIVE` 的原生 Agent inventory，不把 PATH 中存在的 CLI 当成启动授权；MCP Server 启动配置中的精确 `HDG_HOST_ADAPTER` 会拒绝当前宿主无法原生创建的 Agent，协议 `clientInfo` 只用于兼容展示，不参与授权。inventory 为每个 Agent 声明容量上界、开发/审查能力、可显式覆盖的模型、模型 tier、reasoning effort 和优先级；完整 inventory 不持久化。总调度 Agent 在派遣前优先为当前 Ready TASK/Review 读取 `loop_context`，使用自身分析能力按固定风险规则判为 `STANDARD → BALANCED` 或 `HIGH → FRONTIER`，完成分析但不确定时使用 `HIGH`。已有判级通过临时 `node_requirements` 提交；若某节点缺少分析，可提交与 inventory 精确匹配的宿主 `current_executor`，Controller 仅对缺失节点沿用当前 Agent/模型，并标记 `UNCLASSIFIED / CURRENT_EXECUTOR_FALLBACK / CURRENT_HOST_DEFAULT`。没有当前执行器事实时仍拒绝缺失节点。Controller 不做本地语义分析，也不把 payload 自带的模型名当路由配置。Review 还会优先避开上游实际 Agent/模型家族；回退路径则忠实沿用当前执行器。返回的 `HOST_NATIVE_DISPATCH_PLAN` 先在 SQLite 中为 assignment 原子签发短租约 `dispatchReservationId`，同时原子扣减共享控制根中跨 Delivery 的宿主 Agent 槽位；预留转为 claim 后，槽位持续占用到该 Loop 暂停或终态，再形成 `concurrentDispatchGroups`。另一个监控器不会重复创建同一节点或超卖最后槽位。
+自动派遣与普通建议分离。`plan_dispatch_batch` 只接受宿主明确提供且 `dispatchTransport=HOST_NATIVE` 的原生 Agent inventory，不把 PATH 中存在的 CLI 当成启动授权；MCP Server 启动配置中的精确 `HDG_HOST_ADAPTER` 会拒绝当前宿主无法原生创建的 Agent，协议 `clientInfo` 只用于兼容展示，不参与授权。inventory 为每个 Agent 声明容量上界、开发/审查能力、可显式覆盖的模型、模型 tier、reasoning effort 和优先级；完整 inventory 不持久化。总调度 Agent 在派遣前优先为当前 Ready TASK/Review 读取 `loop_context`，使用自身分析能力按固定风险规则判为 `ROUTINE → EFFICIENT`、`STANDARD → BALANCED` 或 `HIGH → FRONTIER`，完成分析但不确定时使用 `HIGH`。已有判级通过临时 `node_requirements` 提交；若某节点缺少分析，可提交与 inventory 精确匹配的宿主 `current_executor`，Controller 仅对缺失节点沿用当前 Agent/模型，并标记 `UNCLASSIFIED / CURRENT_EXECUTOR_FALLBACK / CURRENT_HOST_DEFAULT`。没有当前执行器事实时仍拒绝缺失节点。Controller 不做本地语义分析，也不把 payload 自带的模型名当路由配置。Review 还会优先避开上游实际 Agent/模型家族；回退路径则忠实沿用当前执行器。返回的 `HOST_NATIVE_DISPATCH_PLAN` 先在 SQLite 中为 assignment 原子签发短租约 `dispatchReservationId`，同时原子扣减共享控制根中跨 Delivery 的宿主 Agent 槽位；预留转为 claim 后，槽位持续占用到该 Loop 暂停或终态，再形成 `concurrentDispatchGroups`。另一个监控器不会重复创建同一节点或超卖最后槽位。
+
+## 中央编排器配置
+
+自动派遣受 Plugin 安装目录之外的一份用户级配置约束。同一台机器上的 Codex、Claude Code 与不同项目共享该配置，Marketplace 安装或升级不会覆盖；不同物理机器、远程宿主或容器各自配置一次。文件不存在时默认开启自动编排和自动选模、关闭跨 Adapter、允许 `codex`/`claude-code`、最大并发 4、额度耗尽暂停恢复并优先使用不同 Adapter Review。
+
+配置项覆盖自动编排总开关、自动选模、跨 Adapter 权限、Adapter 允许列表、跨 Delivery 全局并发上限、额度耗尽策略和 Review Adapter 偏好。跨 Adapter 开关只提供用户授权，目标仍必须由中央编排器通过正式宿主 API 证明可创建、可认证且有容量；终端 CLI 和外部进程不会因开关开启而升级为自动派遣能力。配置路径、完整 JSON、三个平台的手动修改方法及故障处理见 [中央编排器配置](skills/layered-delivery/references/orchestrator-configuration.md)。
+
+`open_orchestrator_settings` 提供标准 MCP Apps 配置卡片，`update_orchestrator_settings` 在宿主审批后原子保存并刷新当前连接。支持 MCP Apps 的桌面宿主可内嵌显示；不渲染组件的 Codex/CLI 仍返回同一结构化配置并可通过工具保存。它不是 Codex 的永久原生 Settings 页面，面板会把“当前宿主原生可派遣”“仅检测到本机终端”和“未检测到”分开显示。
 
 ## Controller / Adapter 架构
 

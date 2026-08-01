@@ -24,6 +24,12 @@ src/hdg/
 ├── controller.py       # 协议无关的共享应用 Controller
 ├── operations.py       # 旧 Python 公共导入面的薄兼容 façade
 ├── host_policy.py      # Codex 项目根与 Claude 审批兼容策略
+├── orchestrator_config.py
+│                      # 用户级中央编排器配置、原子写入与跨平台路径
+├── orchestrator_settings.py
+│                      # 面板数据、动态 Adapter 能力状态与设置保存
+├── mcp_apps.py        # MCP Apps 资源清单、读取与隔离元数据
+├── assets/            # 自包含中央编排器 HTML 组件
 ├── mcp_tools.py        # MCP 工具 schema 与 Controller 参数适配
 ├── mcp_adapter.py      # 2026-07-28 / legacy 双栈 JSON-RPC
 └── mcp_server.py       # stdio framing、输入限制与进程入口
@@ -136,7 +142,9 @@ Plugin MCP 工具不接收业务 `root` 参数。Adapter 从宿主配置或请�
 
 `agent_discovery.py` 只读取 PATH、终端 `--version`、非敏感模型字段和用户本地 Profile，不启动开发命令或返回绝对路径、凭据与服务地址。`agent_recommendation.py` 只按 `TASK_LOOP`/Review 角色、显式 Profile 优先级、可用性和上游开发 Agent 多样性排序；发现候选固定标记为 `LOCAL_TERMINAL / EXTERNAL_PROCESS / hostDispatchEligible=false`，不读取 Loop payload，不持久化结果，也不调用 `dispatch_loop`。因此 CC-Switch 或本机配置变化无需重建 Frozen Graph。
 
-`dispatch_planning.py` 与终端发现分离：它只消费宿主显式提交且标为 `HOST_NATIVE` 的原生 Agent inventory、当前 frontier、临时 `node_requirements` 和可选当前执行器事实。可信原生 Agent 集合来自 MCP Server 启动配置的精确适配器 ID；协议 `clientInfo` 不参与授权，缺失配置时自动派遣 fail closed。计划预留和已认领 Loop 共同占用跨 Delivery Agent 槽位，直到 Loop 暂停或终态才释放。Claude Code 接收方必须消费 PreToolUse Hook 签发并直接绑定 node/attempt/context/reservation 的一次性 attestation。Codex assignment 返回唯一 `hostTaskName`，`SubagentStart` Hook 通过 Codex transcript 校验 child/parent/task/model 后，在单一数据库事务内签发并消费内部身份、固定成功编排根、消费 reservation 和写入唯一 claim；child 只收到不含 receiver/operation bearer 的 assignment。后续 heartbeat、pause 和 result 由共享 PreToolUse Hook 注入 operation：Codex 依据当前 child transcript，Claude 依据真实 `agent_id` 与 consumed attestation；普通 root/helper 或缺少宿主身份的工具调用统一拒绝。后续直接、多级子上下文或首次引入另一平台 adapter 都不能另建信任根。跨平台派遣只有两个原生 adapter 能证明同一宿主编排根时才继续，否则 fail closed。Review 再校验该 attested context 不复用上游上下文。
+`orchestrator_config.py` 从 Plugin 外的用户配置目录读取一份同机宿主共享的严格 JSON。缺失时使用安全默认值；存在但字段、类型、版本、大小或文件类型非法时 fail closed。该配置不进入 Delivery schema、SQLite 或事件链，Marketplace 更新也不覆盖。`dispatch_planning.py` 与终端发现分离：它只消费宿主显式提交且标为 `HOST_NATIVE` 的原生 Agent inventory、当前 frontier、临时 `node_requirements` 和可选当前执行器事实，并应用自动编排/自动选模开关、Adapter 允许列表、跨 Adapter 权限、全局并发上限、额度策略和 Review Adapter 偏好。可信原生 Agent 集合仍来自 MCP Server 启动配置的精确适配器 ID；协议 `clientInfo` 不参与授权。计划预留和已认领 Loop 共同占用跨 Delivery Agent 槽位，直到 Loop 暂停或终态才释放。Claude Code 接收方必须消费 PreToolUse Hook 签发并直接绑定 node/attempt/context/reservation 的一次性 attestation。Codex assignment 返回唯一 `hostTaskName`，`SubagentStart` Hook 通过 Codex transcript 校验 child/parent/task/model 后，在单一数据库事务内签发并消费内部身份、固定成功编排根、消费 reservation 和写入唯一 claim；child 只收到不含 receiver/operation bearer 的 assignment。后续 heartbeat、pause 和 result 由共享 PreToolUse Hook 注入 operation：Codex 依据当前 child transcript，Claude 依据真实 `agent_id` 与 consumed attestation；普通 root/helper 或缺少宿主身份的工具调用统一拒绝。后续直接、多级子上下文或首次引入另一平台 adapter 都不能另建信任根。跨平台派遣只有两个原生 adapter 能证明同一宿主编排根时才继续，否则 fail closed。Review 再校验该 attested context 不复用上游上下文。
+
+`open_orchestrator_settings` 是只读 render tool，关联 `ui://layered-delivery/orchestrator-settings.html`；`resources/list` / `resources/read` 返回自包含的 `text/html;profile=mcp-app` 组件。组件只使用 MCP Apps `ui/*` bridge，不访问外部网络，并通过需要宿主确认的 `update_orchestrator_settings` 保存完整策略。Controller 对这两个操作不构造 `SchedulerRepository`，所以查看或修改用户配置不会在任一项目生成 `.layered-delivery`。保存使用同目录临时文件和 `os.replace`，成功后 MCP Adapter 重新加载当前连接。UI catalog 把当前可信 `HDG_HOST_ADAPTER`、仅 PATH 发现的 `EXTERNAL_PROCESS` 与未检测候选分开；任何 UI 都不能把终端发现提升为原生派遣事实。官方宿主未渲染 MCP Apps 时，工具的 `structuredContent` 仍是完整降级界面。
 
 Codex Plugin 通过约定的 `hooks/hooks.json` 注册 `SubagentStart` 与 Loop mutation `PreToolUse` Hook，并由 manifest 的 MCP 启动环境声明可信 `codex` adapter；同一 Hook bundle 继续承载 Claude Code 的 PreToolUse 与 StopFailure 回调。Hook 不信任调用方环境里的会话目录，只接受操作系统账户默认 `~/.codex/sessions` 中与实际 child、parent 和 assignment `hostTaskName` 相符的 transcript，并要求绑定工作区存在 active Delivery、精确预留与实际模型匹配。校验成功后 claim 的权威状态在一个事务提交；内部一次性身份、operation 均不写入 `SubagentStart.additionalContext`。重复 Hook 可从已提交 identity 幂等恢复 assignment，投影后处理失败不撤销权威 claim。覆盖 `CODEX_HOME`、普通 helper、工作区伪造 transcript、错误模型、过期预留、手动 claim 和重放均得不到正常工具路径授权。Codex 会按 Hook 内容哈希要求用户审阅和信任，未信任或宿主版本不支持相应事件时不会降级为模型自证，预留保持未认领。该校验遵循 Codex Hook 的 guardrail 信任边界，不等同于恶意编排 Agent 的密码学宿主证明；手工调用 Hook/控制器或改写 transcript/SQLite 需要宿主不可伪造的 caller-context 才能进一步防御。若需支持自定义 Codex home，也必须由宿主提供调用方不可伪造的会话根。
 

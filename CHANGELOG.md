@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.28.4 — 2026-08-01
+
+发布提交：`19d2885`
+
+- 自动派遣为每个 Codex assignment 生成 reservation 派生的唯一 `hostTaskName`，宿主按 Agent 分析产生的 `STANDARD` / `HIGH` 路由结果显式覆盖模型并按 `concurrentDispatchGroups` 并发创建独立上下文；普通 helper、错误模型、过期预留和跨 Delivery 工作区不能串换 claim。
+- Codex Plugin 新增原生 `SubagentStart` 生命周期适配，在单一 SQLite 事务内签发并消费内部 identity、固定成功编排根、消费 reservation 并写入 Loop claim；receiver 与 operation bearer 不进入 child 上下文，重复 Hook 和投影后处理异常可从已提交状态幂等恢复。
+- heartbeat、pause 与 result 使用共享 mutation `PreToolUse` 授权：Codex 校验默认账户 session transcript，Claude Code 校验真实 `agent_id`、已消费 attestation 与 claim 事件；缺失 transcript、自定义 `CODEX_HOME`、root/helper 自带 operation 以及未知宿主统一 fail closed。Hook 仍遵循宿主 guardrail 边界，不把可执行 CLI 当作宿主原生 Agent。
+- Python 全量 185 项测试、编译检查、Skill/Plugin 校验和 `git diff --check` 通过；独立安全复审在正常宿主 Hook/MCP 路径下无 CRITICAL/HIGH finding。
+
 ## 0.28.3 — 2026-07-31
 
 发布提交：`cec4e59`

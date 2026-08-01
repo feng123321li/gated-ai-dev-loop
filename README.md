@@ -2,7 +2,7 @@
 
 `layered-delivery` 是面向可插拔 Loop 的递归交付 Graph 调度器。
 
-当前版本：**0.28.3**
+当前版本：**0.28.4**
 
 同一仓库可以由多个对话窗口并行维护多个 Delivery。每个 Active Delivery 绑定独立对话工作区；一个业务需求使用稳定的 `delivery.id`，在最终用户验收前可形成多个不可变 Revision。一个 Delivery 还可以通过 `projectScopes` 覆盖多个本地仓库，例如主需求位于 `erp-pm`，同时修改 `erp-order` 与 `erp-supplier`。所有可写 Git 项目必须使用同名 feature 分支，但分别冻结各仓库自己的 `baseCommit` 和主线目标；冻结前用户必须精确授权完整项目 ID 集合。同一 Delivery 的 TASK 共享这些项目分支，不创建 TASK 分支。跨 Delivery 的 `resourceClaims` 仍在共享数据库中全局互斥，因此 worktree 不会掩盖数据库、端口或部署环境冲突。
 

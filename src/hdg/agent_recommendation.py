@@ -219,7 +219,6 @@ def recommend_graph_executors(
     agents: list[dict[str, Any]],
     *,
     current_agent_ids: tuple[str, ...] = (),
-    manual_development_agent_id: str | None = None,
 ) -> dict[str, Any]:
     """Return non-binding executor advice without reading Loop payloads."""
 
@@ -267,20 +266,8 @@ def recommend_graph_executors(
             if role == "INDEPENDENT_REVIEW"
             else list(current_agent_ids)
         )
-        candidates = (
-            [
-                agent
-                for agent in agents
-                if agent["id"] == manual_development_agent_id
-            ]
-            if (
-                role == "DEVELOPMENT"
-                and manual_development_agent_id is not None
-            )
-            else agents
-        )
         ranked = _ranked_agents(
-            candidates,
+            agents,
             role=role,
             avoid=avoid,
         )
@@ -376,14 +363,13 @@ def recommend_executors(
     executor_inventory: list[dict[str, Any]] | None = None,
     node_requirements: list[dict[str, Any]] | None = None,
     current_executor: dict[str, str] | None = None,
-    manual_development_agent_id: str | None = None,
     host_native_agent_ids: tuple[str, ...] | None = None,
     host_adapter_id: str | None = None,
     orchestrator_config: OrchestratorConfig | None = None,
     explicit_dogfood: bool = False,
     **_: Any,
 ) -> dict[str, Any]:
-    """Recommend automatic native routes or an explicit manual handoff."""
+    """Recommend current-host native routes for automatic execution."""
 
     repository = SchedulerRepository(root)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
@@ -398,11 +384,6 @@ def recommend_executors(
             fail(
                 "SCHEDULER_AUTOMATIC_RECOMMENDATION_INPUT_REQUIRED",
                 "Automatic recommendations require host-native inventory and reasoning requirements",
-            )
-        if manual_development_agent_id is not None:
-            fail(
-                "SCHEDULER_RECOMMENDATION_MODE_CONFLICT",
-                "manual_development_agent_id is valid only for MANUAL_HANDOFF",
             )
         preview = preview_dispatch_routes(
             graph=stored["graph"],
@@ -464,12 +445,8 @@ def recommend_executors(
                 "mode": "AUTOMATIC",
                 "binding": "HOST_NATIVE_DISPATCH_PREVIEW",
                 "dispatchAllowed": False,
-                "automaticDispatchAllowed": execution_mode != "manual",
-                "use": (
-                    "RECEIVER_LOCAL_EXECUTION_PREVIEW"
-                    if execution_mode == "manual"
-                    else "AUTOMATIC_DISPATCH_PREVIEW"
-                ),
+                "automaticDispatchAllowed": True,
+                "use": "AUTOMATIC_DISPATCH_PREVIEW",
                 "selectionScope": "CURRENT_EXECUTION_AGENT_ONLY",
                 "crossAgentRecommendationAllowed": False,
                 "hostInventoryEligible": True,
@@ -480,68 +457,11 @@ def recommend_executors(
                 "mayChangeAtDispatch": True,
             },
         }
-    if recommendation_mode != "MANUAL_HANDOFF":
-        fail(
-            "SCHEDULER_RECOMMENDATION_MODE_INVALID",
-            "recommendation_mode must be AUTOMATIC or MANUAL_HANDOFF",
-        )
-    if (
-        executor_inventory is not None
-        or node_requirements is not None
-        or current_executor is not None
-    ):
-        fail(
-            "SCHEDULER_RECOMMENDATION_MODE_CONFLICT",
-            "Host-native routing inputs are valid only for AUTOMATIC recommendations",
-        )
-    discovery = discover_available_agents()
-    if manual_development_agent_id is not None:
-        selected = next(
-            (
-                agent
-                for agent in discovery["agents"]
-                if agent["id"] == manual_development_agent_id
-                and "development" in agent["capabilities"]
-            ),
-            None,
-        )
-        if selected is None:
-            fail(
-                "SCHEDULER_MANUAL_HANDOFF_AGENT_UNAVAILABLE",
-                "The requested manual development Agent is not available or development-capable",
-                agentId=manual_development_agent_id,
-            )
-    recommendation = recommend_graph_executors(
-        stored["graph"],
-        discovery["agents"],
-        current_agent_ids=host_native_agent_ids or (),
-        manual_development_agent_id=manual_development_agent_id,
+    fail(
+        "SCHEDULER_RECOMMENDATION_MODE_INVALID",
+        "recommendation_mode must be AUTOMATIC; manual handoff does not "
+        "select an Agent or model",
     )
-    for item in recommendation["recommendations"]:
-        item["binding"] = "MANUAL_HANDOFF_ADVISORY"
-    return {
-        "rootId": root_id,
-        "graphFingerprint": stored["graphFingerprint"],
-        "discoveryFingerprint": discovery.get("discoveryFingerprint"),
-        "availableAgents": discovery["agents"],
-        "discoveryWarnings": discovery.get("warnings", []),
-        **recommendation,
-        "recommendationPolicy": {
-            "mode": "MANUAL_HANDOFF",
-            "binding": "MANUAL_HANDOFF_ADVISORY",
-            "dispatchAllowed": False,
-            "automaticDispatchAllowed": False,
-            "selectionScope": "EXPLICIT_MANUAL_HANDOFF",
-            "crossAgentRecommendationAllowed": True,
-            "availabilityScope": "LOCAL_TERMINAL",
-            "hostInventoryEligible": False,
-            "dispatchTransport": "EXTERNAL_PROCESS",
-            "persisted": False,
-            "payloadInterpreted": False,
-            "actualModelAffectsRecommendation": False,
-            "manualDevelopmentAgentId": manual_development_agent_id,
-        },
-    }
 
 
 __all__ = (

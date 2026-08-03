@@ -1,7 +1,7 @@
 {
   "name": "layered-delivery",
-  "version": "0.31.0",
-  "description": "调度递归 GROUP/TASK、原生模型分档、30 秒路由调整、独立交接与中文进度",
+  "version": "0.32.0",
+  "description": "预览和调度递归 GROUP/TASK、原生模型分档、开发内容交接与中文进度",
   "author": {
     "name": "layered-delivery contributors",
     "url": "https://github.com/feng123321li/layered-delivery"

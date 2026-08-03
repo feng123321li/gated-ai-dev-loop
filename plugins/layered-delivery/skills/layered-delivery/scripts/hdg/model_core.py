@@ -8,7 +8,10 @@ from typing import Any
 from .constants import MAX_IDENTIFIER_LENGTH, SCHEMA_VERSION
 from .errors import fail
 from .jsonio import fingerprint
-from .loop_contracts import validate_loop_descriptor
+from .loop_contracts import (
+    validate_loop_assurance_profile,
+    validate_loop_descriptor,
+)
 
 
 WORK_ITEM_SCHEMA_VERSION = SCHEMA_VERSION
@@ -384,7 +387,12 @@ def work_item_dependencies(definition: dict[str, Any]) -> list[str]:
 
 def _delivery_definition(value: object) -> dict[str, Any]:
     required = {"id", "title", "summary", "reviewLoop"}
-    expected = required | {"gitBinding", "projectScopes"}
+    expected = required | {
+        "assuranceProfile",
+        "assuranceRationale",
+        "gitBinding",
+        "projectScopes",
+    }
     if (
         not isinstance(value, dict)
         or not required.issubset(value)
@@ -397,15 +405,52 @@ def _delivery_definition(value: object) -> dict[str, Any]:
             field="hierarchy.delivery",
             expected=expected,
         )
+    assurance_profile = validate_loop_assurance_profile(
+        value.get("assuranceProfile", "STANDARD")
+    )
+    assurance_rationale = value.get("assuranceRationale")
+    if assurance_profile == "LIGHT" and assurance_rationale is None:
+        fail(
+            "DELIVERY_ASSURANCE_INVALID",
+            "LIGHT assurance requires a rationale based on the actual "
+            "change content and impact scope",
+            field="hierarchy.delivery.assuranceRationale",
+        )
+    if assurance_rationale is not None:
+        assurance_rationale = _text(
+            assurance_rationale,
+            "hierarchy.delivery.assuranceRationale",
+        )
+    review_loop = value["reviewLoop"]
+    if assurance_profile == "LIGHT":
+        if review_loop is not None:
+            fail(
+                "DELIVERY_ASSURANCE_INVALID",
+                "LIGHT assurance does not create a Delivery Review Loop",
+                field="hierarchy.delivery.reviewLoop",
+            )
+        normalized_review_loop = None
+    else:
+        if review_loop is None:
+            fail(
+                "DELIVERY_REVIEW_REQUIRED",
+                "STANDARD assurance requires a Delivery Review Loop",
+                field="hierarchy.delivery.reviewLoop",
+            )
+        normalized_review_loop = validate_loop_descriptor(
+            review_loop,
+            field="hierarchy.delivery.reviewLoop",
+        )
     normalized = {
         "id": safe_id(value["id"], "hierarchy.delivery.id"),
         "title": _text(value["title"], "hierarchy.delivery.title"),
         "summary": _text(value["summary"], "hierarchy.delivery.summary"),
-        "reviewLoop": validate_loop_descriptor(
-            value["reviewLoop"],
-            field="hierarchy.delivery.reviewLoop",
-        ),
+        "reviewLoop": normalized_review_loop,
     }
+    if "assuranceProfile" in value:
+        normalized["assuranceProfile"] = assurance_profile
+    if assurance_rationale is not None:
+        normalized["assuranceRationale"] = assurance_rationale
     if "gitBinding" in value:
         normalized["gitBinding"] = _git_binding(
             value["gitBinding"],
@@ -745,7 +790,10 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
                     "WORK_ITEM_TASK_NOT_LEAF",
                     "Task hierarchy nodes cannot contain children",
                 )
-            if review_loop is None:
+            if review_loop is None and not (
+                is_root
+                and delivery.get("assuranceProfile", "STANDARD") == "LIGHT"
+            ):
                 fail(
                     "WORK_ITEM_TASK_REVIEW_REQUIRED",
                     "Every TASK hierarchy node requires a Review Loop",
@@ -841,6 +889,19 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
 
     root = normalize_node(hierarchy["root"], None, field="root")
     root_definition = root["definition"]
+    if delivery.get("assuranceProfile", "STANDARD") == "LIGHT":
+        if root_definition["kind"] != "TASK":
+            fail(
+                "DELIVERY_ASSURANCE_INVALID",
+                "LIGHT assurance supports only one root TASK",
+                field="hierarchy.root.definition.kind",
+            )
+        if root["reviewLoop"] is not None:
+            fail(
+                "DELIVERY_ASSURANCE_INVALID",
+                "LIGHT assurance does not create a TASK Review Loop",
+                field="hierarchy.root.reviewLoop",
+            )
     if work_item_dependencies(root_definition):
         fail(
             "WORK_ITEM_DEPENDENCY_INVALID",

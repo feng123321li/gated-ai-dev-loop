@@ -2,18 +2,19 @@
 
 `layered-delivery` 把已经确认的需求冻结为递归 Delivery Graph，再协调多个独立 Agent/WorkLoop 完成实现、逐层审查和最终验收。
 
-当前版本：**0.31.0**
+当前版本：**0.32.0**
 
 ## 核心流程
 
 ```text
 沟通并确认需求
-  → 制定 Delivery Graph 计划
-  → 用户选择“自动执行”或“手动交接”并冻结
-  → 并发调度 TASK WorkLoop
-  → TASK Review
-  → 逐层 GROUP Review
-  → Delivery Review
+  → 检查真实改动内容和影响范围，选择 LIGHT / STANDARD
+  → 只读预览 Delivery Graph 计划
+  → 用户选择“自动执行”或“手动交接”
+  → 自动执行：创建开发工作区、准备并冻结 Graph、并发调度 TASK WorkLoop
+  → 手动交接：只生成一个自包含开发内容文件，接收后再创建开发工作区
+  → LIGHT：单一 TASK 定向验证
+  → STANDARD：TASK Review → 逐层 GROUP Review → Delivery Review
   → 用户最终验收
 ```
 
@@ -30,23 +31,24 @@ Delivery
 └─ 根工作项完成 → Delivery Review → 用户确认
 ```
 
-- `TASK` 是唯一执行叶子，每个 TASK 都必须有独立 Review。
+- `TASK` 是唯一执行叶子。STANDARD 中每个 TASK 都有独立 Review；LIGHT 仅允许一个根 TASK 并直接进入用户确认。
 - `GROUP` 只用于真实的依赖、并行汇合或分层审查，不强制存在。
 - 兄弟节点之间可以声明 DAG 依赖；无依赖且资源不冲突的节点可以并发。
 - `resourceClaims` 是跨 Delivery 生效的精确排他资源键，不是文件路径授权。
 - Frozen Graph 保存目标、依赖、资源、项目范围和 Loop 边界，不冻结 Loop 内部实现计划。
+- `LIGHT` 由规划 Agent 根据真实代码/diff 和影响范围判断，只适用于无接口、数据、权限、安全、生产部署等关键边界的局部修改；影响扩大时必须升级同一 Delivery 的 STANDARD Revision。
 
 ## 解决的问题
 
 - 把跨项目、跨模块需求拆成可恢复的递归 `GROUP` / `TASK` Graph。
-- 为 TASK、GROUP 和 Delivery 提供强制分层 Review 与最终人工验收。
+- 为 STANDARD 交付的 TASK、GROUP 和 Delivery 提供强制分层 Review；LIGHT 保留定向验证与最终人工验收。
 - 在同一批 frontier 中并发派遣互不冲突的宿主原生 Agent。
 - 根据 Agent 对任务风险的分析动态选择高效、平衡或前沿的宿主原生模型名。
 - 用 claim、heartbeat、lease、重试和容量断路器处理长时间运行与失联。
 - 支持一个 Delivery 覆盖多个本地 Git 项目，并冻结各项目的基线与权限上限。
 - 用不可变 Delivery Revision 管理验收前的需求调整和安全结果携带。
 - 以 SQLite 和哈希事件链保存机器状态，同时生成可读的中文进度与验收投影。
-- 后台 Loop 在代码检查、测试、问题修复和复审等阶段上报结构化中文进度；主 Agent 以表格持续展示 Agent、原生模型与宿主观测到的实际模型、测试、心跳、剩余租约及失联预警，原始事件仅用于诊断。
+- 后台 Loop 在代码检查、测试、问题修复和复审等阶段使用用户当前语言上报结构化进度；主 Agent 以表格持续展示 Agent、原生模型与宿主观测到的实际模型、测试、心跳、剩余租约及失联预警，原始事件仅用于诊断。
 
 ## 能力边界
 
@@ -56,7 +58,7 @@ Delivery
 | Graph 依赖、资源锁和并发批次 | Loop 内部计划、Gate 与修正循环 |
 | Agent/模型建议与宿主原生派遣计划 | 真正创建 Agent、执行模型与沙箱权限 |
 | 租约、暂停、恢复和基础设施重试 | 外部系统凭据与不可逆操作授权 |
-| 分层 Review 和最终确认顺序 | Git commit、merge、push、发布与迁移 |
+| 保障档、分层 Review 和最终确认顺序 | Git commit、merge、push、发布与迁移 |
 
 调度器不解析 `loop.payload` 或 `loop.result` 的业务语义，也不会把 PATH 中发现的 CLI 当成可自动派遣的 Agent。
 
@@ -65,29 +67,30 @@ Delivery
 Plugin 激活后，在 Codex 或 Claude Code 的新会话中提出需求，并要求使用 `layered-delivery`。Agent 会按当前工作区状态选择创建、继续或恢复：
 
 1. 读取工作区状态和当前 schema v3 契约。
-2. 与用户沟通需求并准备 Delivery Graph。
+2. 与用户沟通需求，检查真实代码、预计或已有 diff 和影响范围；无法可靠判断时使用 STANDARD。然后调用 `preview_hierarchy` 只读预览 Delivery Graph。
 3. 展示完整计划，以及“自动执行 / 手动交接”两个选项；选择前不混入模型建议。
-4. 用户选择后展示对应路由：自动执行只展示当前宿主 Agent 的原生模型分档；手动交接展示目标开发 Agent，并由目标 Agent 接收后重新生成本地模型表。路由展示不增加第二次确认，随后冻结 Graph；未选择时不开始开发。
-5. 自动模式对正式 Ready 批次展示中文模型表和默认 30 秒路由调整窗口；用户可直接改为其他可用原生模型，不再回答确认问题，超时后自动预留并派遣。
-6. 自动模式持续消费 frontier，并发调度当前可运行的独立 WorkLoop。
-7. 所有 Review 完成后展示验收报告，等待用户最终确认。
+4. 用户选择自动执行后，才创建或选择实际开发工作区，调用 `prepare_hierarchy` 与 `freeze_hierarchy`，并展示当前宿主 Agent 的原生模型分档；路由展示不增加第二次确认。
+5. 用户选择手动交接后，调用 `create_manual_handoff` 只生成一个自包含交接文件；交接前不指定 Agent、模型或接收会话，也不创建任务或 worktree。
+6. 自动模式对正式 Ready 批次展示中文模型表和默认 30 秒路由调整窗口；用户可直接改为其他可用原生模型，不再回答确认问题，超时后自动预留并派遣。
+7. 自动模式持续消费 frontier，并发调度当前可运行的独立 WorkLoop。
+8. STANDARD 在所有 Review 完成后展示验收报告；LIGHT 在唯一 TASK 定向验证完成后展示改动与影响依据。两者都等待用户最终确认。
 
 执行方式的区别：
 
-| 模式 | 冻结后行为 |
+| 模式 | 选择后的行为 |
 |---|---|
-| 自动执行 | 当前宿主继续规划并派遣可证明为 `HOST_NATIVE` 的 Agent |
-| 手动交接 | 冻结后输出稳定 `rootId`，并为目标开发 Agent 创建独立接收会话；Codex 目标进入新 Codex 任务，Claude Code 目标进入新 Claude 会话 |
+| 自动执行 | 开始实际开发：按需创建 worktree，准备并冻结 Graph，再由当前宿主派遣可证明为 `HOST_NATIVE` 的 Agent |
+| 手动交接 | 只输出一个包含完整开发内容和 schema v3 附录的 Markdown 文件；不冻结 Graph、不选 Agent、不建任务/worktree |
 
-新业务目标默认创建新 Delivery。一个工作区最多绑定一个未结束 Delivery；并行需求使用独立对话工作区，Git 项目优先使用 linked worktree。只有用户明确要求继续同一需求，或当前 Loop 返回 `REPLAN_REQUIRED`，才在原 `delivery.id` 上创建下一 Revision。
+新业务目标默认创建新 Delivery。一个工作区最多绑定一个未结束 Delivery；并行需求真正开始开发时使用独立对话工作区，Git 项目优先使用 linked worktree。只读预览或生成手动交接文件不需要提前创建 worktree。只有用户明确要求继续同一需求，或当前 Loop 返回 `REPLAN_REQUIRED`，才在原 `delivery.id` 上创建下一 Revision。
 
 ## Agent、模型与并发
 
-Agent 发现、两类路由建议和自动派遣是不同的事：
+Agent 发现、自动路由建议和手动内容交接是不同的事：
 
-- `available_agents` 只为人工交接发现本机终端和非敏感模型信息。
+- `available_agents` 只提供通用本机终端与非敏感模型发现，不参与手动交接选择。
 - `recommend_executors(AUTOMATIC)` 只在当前宿主 Agent 内按原生 tier 生成全 Graph 只读预览，并与正式派遣复用路由决策。
-- `recommend_executors(MANUAL_HANDOFF)` 才允许指定另一 TASK 开发 Agent；它只生成外部人工交接信息，当前总调度会话不代替接收方开发。
+- `create_manual_handoff` 只生成开发内容文件，不调用推荐器、不绑定接收 Agent/模型；接收后开始实际开发时，宿主才确定执行者和本机模型映射。
 - `plan_dispatch_batch` 只接受宿主正式 Agent API 证明为 `HOST_NATIVE` 的容量；先返回无预留的 `HOST_NATIVE_ROUTE_REVIEW` 和 30 秒调整窗口，到期重调后才返回可并发 assignment。
 - assignment 只使用 Claude/Codex 原生 `modelId` 派遣；本机配置在原生调用后如何转发与本项目无关。宿主可把观测到的结果记录为展示用 `actualModelId`，但它不参与选模、指纹、预留、授权或 Review 多样性。
 
@@ -154,7 +157,10 @@ Controller 不用 Python 做本地语义判断。某个节点缺少 Agent 分析
 | `skills/layered-delivery/` | 规范 Skill、按需 references 和生成的运行包 |
 | `plugins/layered-delivery/` | Codex / Claude Code 双宿主 Plugin 产物 |
 | `tests/` | schema、调度、并发、Hook、配置与投影测试 |
+| `examples/team-loops/` | 可校验的团队 LIGHT / STANDARD hierarchy 模板 |
 | `scripts/build_skill.py` | 从源码重建 Skill 和 Plugin 运行包 |
+| `scripts/validate_release.py` | 无网络发布候选一致性校验 |
+| `scripts/host_smoke.py` | 双宿主本地探测与显式 opt-in 的同宿主原生派遣冒烟 |
 
 项目使用 Python 3.10+ 和标准库，只维护完整 schema v3，不提供 CLI 入口或旧业务 schema 迁移。
 
@@ -164,6 +170,8 @@ Controller 不用 Python 做本地语义判断。某个节点缺少 Agent 分析
 python -m unittest
 python -m compileall -q src tests skills/layered-delivery/scripts plugins/layered-delivery
 python scripts/build_skill.py
+python scripts/validate_release.py
+python scripts/host_smoke.py probe --json
 python -X utf8 <skill-creator>/scripts/quick_validate.py skills/layered-delivery
 python -X utf8 <plugin-creator>/scripts/validate_plugin.py plugins/layered-delivery
 git diff --check
@@ -179,4 +187,7 @@ git diff --check
 - [中央编排器配置](skills/layered-delivery/references/orchestrator-configuration.md)
 - [Graph Engineering 架构](docs/graph-engineering-upgrade.md)
 - [项目实现结构](docs/project-engineering.md)
+- [团队安装、升级、恢复、卸载与回滚](docs/team-operations.md)
+- [宿主兼容矩阵](docs/host-compatibility.md)
+- [团队 Loop 模板与 resource claim 规范](docs/team-loop-templates.md)
 - [版本记录](CHANGELOG.md)

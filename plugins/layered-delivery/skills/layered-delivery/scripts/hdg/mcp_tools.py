@@ -46,6 +46,19 @@ OPERATION_ID = _string(
     "can inject the attested value; every other caller must supply the claim "
     "value."
 )
+SCHEDULER_IDENTITY = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 192,
+    "pattern": r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,191}$",
+    "description": (
+        "Portable current Loop executor label. Use the native agent_id "
+        "when the host does not supply a separate label (for example "
+        "claude-code). Only letters, digits, dot, underscore, colon, at, "
+        "slash, and hyphen are accepted; spaces and # are invalid. This "
+        "is not receiver_context_id."
+    ),
+}
 FINGERPRINT = {
     "type": "string",
     "minLength": 64,
@@ -247,6 +260,37 @@ def _prepare_hierarchy_tool_schema() -> dict[str, Any]:
     return tool_schema
 
 
+def _manual_handoff_tool_schema() -> dict[str, Any]:
+    hierarchy_schema = hierarchy_input_schema()
+    definitions = hierarchy_schema.pop("$defs")
+    tool_schema = _object(
+        {
+            "hierarchy": hierarchy_schema,
+            "expected_hierarchy_fingerprint": FINGERPRINT,
+            "expected_graph_fingerprint": FINGERPRINT,
+            "authorized_project_ids": {
+                "type": "array",
+                "items": ROOT_ID,
+                "uniqueItems": True,
+                "description": (
+                    "Exact project IDs authorized for the handoff; use an "
+                    "empty array when projectScopes is absent."
+                ),
+            },
+            "confirmed_by": _string("Human confirmer identity."),
+        },
+        required=[
+            "hierarchy",
+            "expected_hierarchy_fingerprint",
+            "expected_graph_fingerprint",
+            "authorized_project_ids",
+            "confirmed_by",
+        ],
+    )
+    tool_schema["$defs"] = definitions
+    return tool_schema
+
+
 def _prepare_revision_tool_schema() -> dict[str, Any]:
     hierarchy_schema = hierarchy_input_schema()
     definitions = hierarchy_schema.pop("$defs")
@@ -421,6 +465,27 @@ TOOLS = (
         ),
     ),
     _tool(
+        "preview_hierarchy",
+        (
+            "Validate and fingerprint a proposed hierarchy without writing "
+            "scheduler state, freezing a Graph, or creating a workspace. "
+            "Use this before the user chooses automatic execution or a "
+            "manual development-content handoff."
+        ),
+        _prepare_hierarchy_tool_schema(),
+    ),
+    _tool(
+        "create_manual_handoff",
+        (
+            "After the user selects manual handoff, create exactly one "
+            "self-contained Markdown development-content file from the "
+            "confirmed preview. Do not prepare or freeze a Graph, choose "
+            "an Agent/model, create a receiving task, or initialize a "
+            "worktree."
+        ),
+        _manual_handoff_tool_schema(),
+    ),
+    _tool(
         "prepare_hierarchy",
         (
             "Validate and prepare an outer scheduling graph; shared Skill "
@@ -458,21 +523,18 @@ TOOLS = (
         (
             "Return non-binding execution recommendations for every Loop. "
             "AUTOMATIC uses only the current host Agent and its native "
-            "model tiers, sharing the later dispatch routing policy. "
-            "MANUAL_HANDOFF may recommend or accept an explicit different "
-            "development Agent, but remains external manual advice. Never "
-            "claim or dispatch a Loop."
+            "model tiers, sharing the later dispatch routing policy. Never "
+            "use this tool for manual handoff, claim, or dispatch a Loop."
         ),
         _object(
             {
                 "root_id": ROOT_ID,
                 "recommendation_mode": {
                     "type": "string",
-                    "enum": ["AUTOMATIC", "MANUAL_HANDOFF"],
+                    "enum": ["AUTOMATIC"],
                     "description": (
                         "AUTOMATIC stays within the current execution "
-                        "Agent. MANUAL_HANDOFF may switch the TASK "
-                        "development Agent by explicit human handoff."
+                        "Agent and its native model selectors."
                     ),
                 },
                 "executor_inventory": {
@@ -501,9 +563,6 @@ TOOLS = (
                         "analysis is unavailable."
                     ),
                 },
-                "manual_development_agent_id": _string(
-                    "Optional MANUAL_HANDOFF target Agent for TASK development."
-                ),
             },
             required=["root_id", "recommendation_mode"],
         ),
@@ -568,8 +627,9 @@ TOOLS = (
     _tool(
         "freeze_hierarchy",
         (
-            "Freeze a prepared graph after the user selects active or manual "
-            "execution; that mode selection is the one-time confirmation."
+            "Freeze a prepared graph after the user selects automatic "
+            "execution. Manual handoff uses create_manual_handoff instead "
+            "and does not create a Graph run."
         ),
         _object(
             {
@@ -594,15 +654,6 @@ TOOLS = (
                         "projectScopes is absent."
                     ),
                 },
-                "execution_mode": {
-                    "type": "string",
-                    "enum": ["active", "manual"],
-                    "description": (
-                        "User-selected host execution mode. active continues "
-                        "the Graph in this session; manual freezes and emits "
-                        "a handoff for another session."
-                    ),
-                },
                 "confirmed_by": _string("Human confirmer identity."),
             },
             required=[
@@ -610,7 +661,6 @@ TOOLS = (
                 "expected_delivery_revision",
                 "expected_hierarchy_fingerprint",
                 "authorized_project_ids",
-                "execution_mode",
                 "confirmed_by",
             ],
         ),
@@ -759,7 +809,7 @@ TOOLS = (
             {
                 "root_id": ROOT_ID,
                 "node_id": NODE_ID,
-                "owner": _string("Current Loop executor identity."),
+                "owner": SCHEDULER_IDENTITY,
                 "agent_id": {
                     "type": "string",
                     "minLength": 1,
@@ -794,19 +844,23 @@ TOOLS = (
                 },
                 "dispatch_mode": {
                     "type": "string",
-                    "enum": ["AUTO", "MANUAL"],
+                    "enum": ["AUTO"],
                     "description": (
-                        "Required dispatch provenance. AUTO requires the "
-                        "exact decision fingerprint returned for this node."
+                        "Required automatic dispatch provenance. The exact "
+                        "decision fingerprint returned for this node is "
+                        "also required. Manual Graph claims are unsupported."
                     ),
                 },
                 "receiver_context_id": _string(
-                    "Host-native receiving Agent context ID. Review Loops "
-                    "must differ from every upstream receiving context."
+                    "Host-native receiving Agent context ID. Claude children "
+                    "must omit it from the model-authored call: PreToolUse "
+                    "injects the attested value. Review Loops must differ "
+                    "from every upstream receiving context."
                 ),
                 "receiver_attestation_id": _string(
-                    "One-time receiver grant issued by the model-external "
-                    "host adapter after it creates this native context."
+                    "One-time receiver grant issued and injected by the "
+                    "model-external Claude PreToolUse hook. The receiving "
+                    "model must omit it and must never invent a placeholder."
                 ),
                 "dispatch_transport": {
                     "type": "string",
@@ -851,8 +905,6 @@ TOOLS = (
                 "agent_id",
                 "model_id",
                 "dispatch_mode",
-                "receiver_context_id",
-                "receiver_attestation_id",
                 "operation_id",
             ],
         ),
@@ -873,9 +925,9 @@ TOOLS = (
         "report_loop_progress",
         (
             "Report bounded, user-visible business progress for one claimed "
-            "Loop without renewing its lease. Human-facing text must be in "
-            "Simplified Chinese; raw terminal logs and hidden reasoning are "
-            "not accepted."
+            "Loop without renewing its lease. Human-facing text follows the "
+            "user's current language; raw terminal logs and hidden reasoning "
+            "are not accepted."
         ),
         _object(
             {
@@ -904,8 +956,8 @@ TOOLS = (
                     "minLength": 1,
                     "maxLength": 500,
                     "description": (
-                        "Concise current progress written in Simplified "
-                        "Chinese for the main Agent window."
+                        "Concise current progress written for the main Agent "
+                        "window in the user's current language."
                     ),
                 },
                 "completed_zh": {
@@ -917,7 +969,7 @@ TOOLS = (
                     },
                     "maxItems": 8,
                     "description": (
-                        "Completed milestones written in Simplified Chinese."
+                        "Completed milestones in the user's current language."
                     ),
                 },
                 "next_step_zh": {
@@ -925,7 +977,7 @@ TOOLS = (
                     "minLength": 1,
                     "maxLength": 300,
                     "description": (
-                        "Next action written in Simplified Chinese."
+                        "Next action in the user's current language."
                     ),
                 },
                 "progress_percent": {
@@ -1215,7 +1267,12 @@ def validate_tool_arguments(
         fail("MCP_TOOL_UNKNOWN", f"Unknown scheduler tool: {name}")
     _validate_schema(arguments, tool["inputSchema"], "arguments")
     validated = dict(arguments)
-    if name in {"prepare_hierarchy", "prepare_delivery_revision"}:
+    if name in {
+        "preview_hierarchy",
+        "create_manual_handoff",
+        "prepare_hierarchy",
+        "prepare_delivery_revision",
+    }:
         try:
             validate_hierarchy_definition(validated["hierarchy"])
         except GatedLoopError as error:
@@ -1245,7 +1302,7 @@ def call_tool(
     **_: Any,
 ) -> dict[str, Any]:
     internal_arguments = validate_tool_arguments(name, arguments)
-    if name == "freeze_hierarchy":
+    if name in {"create_manual_handoff", "freeze_hierarchy"}:
         internal_arguments["confirmed"] = True
     result = controller.execute(
         name,

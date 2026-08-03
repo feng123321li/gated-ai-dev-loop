@@ -79,14 +79,14 @@ Delivery: d-commerce
 
 ## Agent 与模型晚绑定
 
-Frozen Graph 表达“哪个 TASK/Review 何时可运行”，不表达“某台主机上的哪个 Agent/模型必须运行”。Graph 外按用户已经选择的开发方式提供两条分离路径：
+预览 hierarchy 表达开发内容；Frozen Graph 表达“哪个 TASK/Review 何时可运行”，不表达“某台主机上的哪个 Agent/模型必须运行”。按用户选择提供两条分离路径：
 
 ```text
 自动执行：当前宿主原生 inventory → 原生模型 tier 预览 → 30 秒路由调整窗口 → 宿主原生派遣
-手动交接：available_agents → 目标开发 Agent → 目标 Agent 独立接收会话 → 接收方本地模型表
+手动交接：只读 hierarchy 预览 → 一个自包含开发内容文件 → 接收后才选择宿主与工作区
 ```
 
-建议不修改 hierarchy、Graph、事件链、claim 或 owner。自动建议只在当前宿主 Agent 内按原生 tier 选择模型，不因为发现另一 CLI 而生成跨 Agent 建议；手动交接才可切换 TASK 开发 Agent。目标为 Codex 时创建新的 Codex 任务，目标为 Claude Code 时创建新的 Claude 会话；原总调度会话只跟踪交接。推荐器不解析不透明 payload，因此不会把模型路由策略重新塞进外层业务 schema。
+建议不修改 hierarchy、Graph、事件链、claim 或 owner。自动建议只在当前宿主 Agent 内按原生 tier 选择模型，不因为发现另一 CLI 而生成跨 Agent 建议。手动交接不调用 Agent 推荐器、不创建接收任务/worktree、不冻结 Graph；具体 Agent 与模型只有接收宿主开始实际开发后才知道。推荐器不解析不透明 payload，因此不会把模型路由策略重新塞进外层业务 schema。
 
 手工配置、任意本机修改器、PATH 或用户 Profile 改变后重新发现即可；同一 Frozen Graph 可在不同主机得到不同展示。人工交接发现保持 `ADVISORY / EXTERNAL_PROCESS`。自动模式由 `plan_dispatch_batch` 消费宿主明确提供且 `dispatchTransport=HOST_NATIVE` 的原生 Agent 容量、原生模型 selector 与选择能力；Agent 分析完整时按 tier 选择子 Agent 的原生模型名，缺少节点分析时可沿用宿主明确报告的当前 Agent/原生模型并标记 `UNCLASSIFIED`。正式 Ready 批次的首次稳定路由返回 `HOST_NATIVE_ROUTE_REVIEW`，持久化 30 秒调整窗口但不预留；主 Agent 用中文表格展示路由，用户可直接修改 `preferredNativeModelId`，不再询问确认。到期后宿主自动重调，相同决策才原子签发短租约并返回 `HOST_NATIVE_DISPATCH_PLAN`；变化节点重新计时。本机配置在原生调用后转发到哪个实际模型与编排无关，宿主观测值只作为 `actualModelId` 展示。随后按槽位并发创建接收上下文；第二个调度器只能等待接收方 claim 或预留过期。PATH 中发现的 CLI 不自动取得启动授权，计划工具也不启动 Agent 或 claim。
 
@@ -179,7 +179,7 @@ Review 沿层级逐层向上收敛，但不会把同一个 Review 节点重复�
 
 冻结 Revision 只固定当前外层目标、依赖、资源声明、项目范围和拓扑，不固定 Loop 内部实现计划；显式 payload 也不是工程正确性的穷举清单。Gate 失败、普通实现缺陷或 Review finding 只要能在当前 scope 和权限内修正，就由当前 Loop 调整方案、修正并重新验证。`BLOCKED` 仅用于当前 Loop 已无可行的 scope 内路径，并要求显式 failure class；只有冻结的依赖、资源、项目范围或拓扑必须改变时才返回 `REPLAN_REQUIRED`。最终用户验收前的 replan 保持同一 `delivery.id` 并生成下一不可变 Revision，不再用取消旧 run 加新 Delivery ID 表达同一需求。
 
-Revision 连续性必须来自用户明确说明，而不是来自工作区恰好恢复了哪个 Active Delivery。不同工单或独立业务目标默认建立新 Delivery；同一物理工作区已有未结束 Delivery 时，新的初始 prepare 在持久化前返回 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED / CREATE_INDEPENDENT_WORKTREE_TASK`。Codex 宿主据此直接创建 `environment=worktree` 的项目任务，从主线建立新 feature 分支后重新取得 `ABSENT` 工作区；same-directory/local 新任务不视为隔离。`prepare_delivery_revision` 只准备候选，不触发宿主通用确认；用户选择自动执行或手动交接是该 Revision 唯一一次业务确认。
+Revision 连续性必须来自用户明确说明，而不是来自工作区恰好恢复了哪个 Active Delivery。不同工单或独立业务目标默认建立新 Delivery。`preview_hierarchy` 和 `create_manual_handoff` 不绑定工作区；同一物理工作区已有未结束 Delivery 时，只有真正开始自动开发的初始 prepare 才返回 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED / CREATE_INDEPENDENT_WORKTREE_TASK`。宿主此时才从主线创建 worktree；若只返回排队标识，则保持 `WORKTREE_SETUP_QUEUED`，不重复创建，也不宣称 Graph 已冻结。`prepare_delivery_revision` 只准备候选，不触发宿主通用确认；用户选择自动执行或手动交接文件是该 Revision 唯一一次业务确认。
 
 ## 逻辑递归与物理布局
 

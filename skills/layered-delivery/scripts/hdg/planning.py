@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .errors import fail
+from .fs_safe import atomic_write, safe_path
 from .git_binding import (
     inspect_delivery_git_workspace,
     verify_delivery_git_binding,
@@ -20,11 +21,16 @@ from .model_core import (
     validate_hierarchy_definition,
 )
 from .model_rendering import (
+    render_manual_handoff,
     task_baseline_relative_path,
     task_has_interface_projection,
     work_item_projection_relative_path,
 )
-from .repository import SchedulerRepository
+from .repository import (
+    GOVERNANCE_DIRECTORY,
+    SchedulerRepository,
+    timestamp,
+)
 
 
 def workspace_status(
@@ -150,6 +156,173 @@ def _human_artifacts(hierarchy: dict[str, Any]) -> dict[str, Any]:
         "revisions": f"{projection_root}/revisions.md",
         "taskBaselines": task_baselines,
         "workItems": work_items,
+    }
+
+
+def _preview_values(hierarchy: object) -> tuple[
+    dict[str, Any],
+    dict[str, Any],
+    str,
+    str,
+]:
+    normalized = validate_hierarchy_definition(hierarchy)
+    hierarchy_value = hierarchy_fingerprint(normalized)
+    graph = compile_delivery_graph(
+        normalized,
+        hierarchy_fingerprint=hierarchy_value,
+    )
+    return (
+        normalized,
+        graph,
+        hierarchy_value,
+        graph_fingerprint(graph),
+    )
+
+
+def preview_hierarchy(
+    *,
+    root: str,
+    hierarchy: object,
+    explicit_dogfood: bool = False,
+    **_: Any,
+) -> dict[str, Any]:
+    """Validate and fingerprint a plan without creating controller state."""
+
+    repository = SchedulerRepository(root)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    normalized, graph, hierarchy_value, graph_value = _preview_values(
+        hierarchy
+    )
+    return {
+        "rootId": normalized["delivery"]["id"],
+        "status": "PREVIEW",
+        "hierarchyFingerprint": hierarchy_value,
+        "graphFingerprint": graph_value,
+        "graphSummary": graph_summary(graph),
+        "requiredProjectAuthorizations": normalized["delivery"].get(
+            "projectScopes",
+            [],
+        ),
+        "controlStateCreated": False,
+        "nextAction": (
+            "SELECT_AUTOMATIC_EXECUTION_OR_MANUAL_HANDOFF"
+        ),
+    }
+
+
+def _assert_exact_project_authorization(
+    hierarchy: dict[str, Any],
+    authorized_project_ids: list[str] | None,
+) -> None:
+    required = sorted(
+        item["id"]
+        for item in hierarchy["delivery"].get("projectScopes", [])
+    )
+    if (
+        not isinstance(authorized_project_ids, list)
+        or any(
+            not isinstance(item, str) or not item
+            for item in authorized_project_ids
+        )
+        or len(set(authorized_project_ids))
+        != len(authorized_project_ids)
+    ):
+        fail(
+            "SCHEDULER_PROJECT_AUTHORIZATION_REQUIRED",
+            "authorized_project_ids must contain unique project IDs",
+        )
+    supplied = sorted(authorized_project_ids)
+    if supplied != required:
+        fail(
+            "SCHEDULER_PROJECT_AUTHORIZATION_REQUIRED",
+            "Manual handoff requires exact authorization of every project",
+            requiredProjectIds=required,
+            suppliedProjectIds=supplied,
+            missingProjectIds=sorted(set(required) - set(supplied)),
+            unexpectedProjectIds=sorted(set(supplied) - set(required)),
+        )
+
+
+def create_manual_handoff(
+    *,
+    root: str,
+    hierarchy: object,
+    expected_hierarchy_fingerprint: str,
+    expected_graph_fingerprint: str,
+    authorized_project_ids: list[str] | None,
+    confirmed: bool,
+    confirmed_by: str,
+    explicit_dogfood: bool = False,
+    now: object = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """Create one portable handoff file without preparing or running a Graph."""
+
+    if confirmed is not True:
+        fail(
+            "SCHEDULER_USER_CONFIRMATION_REQUIRED",
+            "Creating a manual handoff requires explicit user confirmation",
+        )
+    if not isinstance(confirmed_by, str) or not confirmed_by.strip():
+        fail(
+            "SCHEDULER_USER_CONFIRMATION_REQUIRED",
+            "confirmed_by must identify the confirming human",
+        )
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    normalized, graph, hierarchy_value, graph_value = _preview_values(
+        hierarchy
+    )
+    if hierarchy_value != expected_hierarchy_fingerprint:
+        fail(
+            "SCHEDULER_HANDOFF_PREVIEW_CONFLICT",
+            "The confirmed hierarchy differs from the preview",
+            expectedHierarchyFingerprint=(
+                expected_hierarchy_fingerprint
+            ),
+            actualHierarchyFingerprint=hierarchy_value,
+        )
+    if graph_value != expected_graph_fingerprint:
+        fail(
+            "SCHEDULER_HANDOFF_PREVIEW_CONFLICT",
+            "The confirmed Graph differs from the preview",
+            expectedGraphFingerprint=expected_graph_fingerprint,
+            actualGraphFingerprint=graph_value,
+        )
+    _assert_exact_project_authorization(
+        normalized,
+        authorized_project_ids,
+    )
+    root_id = normalized["delivery"]["id"]
+    relative_path = (
+        f"{GOVERNANCE_DIRECTORY}/handoffs/"
+        f"{root_id}-{hierarchy_value[:12]}.md"
+    )
+    created_at = timestamp(now)
+    content = render_manual_handoff(
+        normalized,
+        hierarchy_fingerprint=hierarchy_value,
+        graph_fingerprint=graph_value,
+        confirmed_by=confirmed_by.strip(),
+        created_at=created_at,
+    )
+    atomic_write(safe_path(root, relative_path), content)
+    return {
+        "rootId": root_id,
+        "status": "HANDOFF_READY",
+        "hierarchyFingerprint": hierarchy_value,
+        "graphFingerprint": graph_value,
+        "confirmedBy": confirmed_by.strip(),
+        "createdAt": created_at,
+        "manualHandoff": {
+            "path": relative_path,
+            "format": "MARKDOWN",
+            "selfContained": True,
+        },
+        "controlStateCreated": False,
+        "graphRunCreated": False,
+        "workspaceCreated": False,
+        "nextAction": "DELIVER_MANUAL_HANDOFF_FILE",
     }
 
 
@@ -330,12 +503,10 @@ def freeze_hierarchy(
     expected_delivery_revision: int = 1,
     expected_hierarchy_fingerprint: str,
     authorized_project_ids: list[str] | None = None,
-    execution_mode: str = "manual",
     confirmed: bool,
     confirmed_by: str,
     explicit_dogfood: bool = False,
     now: object = None,
-    **_: Any,
 ) -> dict[str, Any]:
     """Freeze the graph after explicit human confirmation and start it."""
 
@@ -358,7 +529,6 @@ def freeze_hierarchy(
             expected_hierarchy_fingerprint
         ),
         authorized_project_ids=authorized_project_ids or [],
-        execution_mode=execution_mode,
         confirmed_by=confirmed_by.strip(),
     )
     return {
@@ -369,9 +539,11 @@ def freeze_hierarchy(
 
 
 __all__ = (
+    "create_manual_handoff",
     "delivery_revision_history",
     "freeze_hierarchy",
     "prepare_delivery_revision",
     "prepare_hierarchy",
+    "preview_hierarchy",
     "workspace_status",
 )

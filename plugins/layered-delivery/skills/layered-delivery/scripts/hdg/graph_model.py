@@ -6,7 +6,9 @@ from typing import Any
 from .constants import SCHEMA_VERSION
 from .errors import fail
 from .jsonio import fingerprint
-from .loop_contracts import validate_loop_descriptor
+from .loop_contracts import (
+    validate_loop_descriptor,
+)
 from .model_core import safe_id, work_item_dependencies
 
 
@@ -400,9 +402,45 @@ def compile_delivery_graph(
         )
     delivery = hierarchy["delivery"]
     root_id = delivery["id"]
+    assurance_profile = delivery.get("assuranceProfile", "STANDARD")
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     hierarchy_nodes = _walk_hierarchy(hierarchy)
+    if assurance_profile == "LIGHT":
+        root_definition = hierarchy["root"]["definition"]
+        task_node_id = loop_node_id(root_definition["id"])
+        confirmation_id = confirmation_node_id(root_id)
+        graph = {
+            "schemaVersion": SCHEMA_VERSION,
+            "rootId": root_id,
+            "hierarchyFingerprint": hierarchy_fingerprint,
+            "nodes": sorted(
+                [
+                    _node(
+                        task_node_id,
+                        "TASK_LOOP",
+                        root_definition["id"],
+                        loop=root_definition["execution"]["loop"],
+                    ),
+                    _node(
+                        confirmation_id,
+                        "USER_CONFIRMATION",
+                        root_id,
+                    ),
+                ],
+                key=lambda item: item["id"],
+            ),
+            "edges": [
+                _edge(
+                    task_node_id,
+                    confirmation_id,
+                    "REQUIRES_SUCCESS",
+                    plane="GOVERNANCE",
+                )
+            ],
+            "runtime": compile_runtime_policy(),
+        }
+        return validate_delivery_graph(graph)
     by_id = {
         item["definition"]["id"]: item
         for item in hierarchy_nodes
@@ -722,16 +760,52 @@ def validate_delivery_graph(value: object) -> dict[str, Any]:
             "DELIVERY_GRAPH_EDGE_INVALID",
             "Delivery graph edges must use stable ordering",
         )
-    if (
+    confirmation_id = confirmation_node_id(root_id)
+    assurance_profile = graph_assurance_profile(value)
+    if assurance_profile == "LIGHT":
+        kinds = [node["kind"] for node in nodes]
+        if (
+            kinds.count("TASK_LOOP") != 1
+            or kinds.count("USER_CONFIRMATION") != 1
+            or len(nodes) != 2
+            or confirmation_id not in node_ids
+            or len(edges) != 1
+            or edges[0]["target"] != confirmation_id
+            or edges[0]["source"] not in node_ids
+        ):
+            fail(
+                "DELIVERY_GRAPH_INVALID",
+                "LIGHT Delivery graph must contain one TASK Loop followed "
+                "directly by user confirmation",
+            )
+    elif (
         review_node_id(root_id) not in node_ids
-        or confirmation_node_id(root_id) not in node_ids
+        or confirmation_id not in node_ids
     ):
         fail(
             "DELIVERY_GRAPH_INVALID",
-            "Delivery graph root review and confirmation nodes are required",
+            "STANDARD Delivery graph root review and confirmation nodes "
+            "are required",
         )
     _validate_acyclic(nodes, edges)
     return value
+
+
+def graph_assurance_profile(graph: dict[str, Any]) -> str:
+    """Infer the frozen assurance profile from its immutable topology."""
+
+    nodes = graph.get("nodes") if isinstance(graph, dict) else None
+    if not isinstance(nodes, list):
+        return "STANDARD"
+    return (
+        "STANDARD"
+        if any(
+            isinstance(node, dict)
+            and node.get("kind") in REVIEW_NODE_KINDS
+            for node in nodes
+        )
+        else "LIGHT"
+    )
 
 
 def graph_fingerprint(graph: dict[str, Any]) -> str:

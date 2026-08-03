@@ -255,7 +255,13 @@ def _task_node(*, root: bool) -> dict[str, Any]:
         "definition": _ref(
             "taskRootDefinition" if root else "taskChildDefinition"
         ),
-        "reviewLoop": _ref("loop"),
+        "reviewLoop": {
+            "oneOf": [_ref("loop"), {"type": "null"}],
+            "description": (
+                "Independent TASK Review Loop. It may be null only for a "
+                "root TASK in an explicitly classified LIGHT Delivery."
+            ),
+        },
         "children": {"type": "array", "maxItems": 0},
     }
     if root:
@@ -471,9 +477,27 @@ def hierarchy_input_schema(
                     "id": _identifier("Delivery and Graph run ID."),
                     "title": _text("Delivery title."),
                     "summary": _text("Delivery outcome summary."),
+                    "assuranceProfile": {
+                        "type": "string",
+                        "enum": ["LIGHT", "STANDARD"],
+                        "description": (
+                            "Assurance inferred from actual change content "
+                            "and impact. Omit for the safe STANDARD default."
+                        ),
+                    },
+                    "assuranceRationale": _text(
+                        "Required for LIGHT: concise evidence from the actual "
+                        "change surface and impact assessment."
+                    ),
                     "gitBinding": _git_binding_schema(),
                     "projectScopes": _project_scopes_schema(),
-                    "reviewLoop": _ref("loop"),
+                    "reviewLoop": {
+                        "oneOf": [_ref("loop"), {"type": "null"}],
+                        "description": (
+                            "Independent Delivery Review Loop. It may be null "
+                            "only for a LIGHT Delivery."
+                        ),
+                    },
                 },
                 required=["id", "title", "summary", "reviewLoop"],
             ),
@@ -496,6 +520,34 @@ def hierarchy_contract(
         "inputSchema": input_schema,
         "example": _example(root_kind),
         "projectionGuidance": {
+            "assuranceProfiles": {
+                "default": "STANDARD",
+                "classificationOwner": "PLANNING_AGENT",
+                "classificationBasis": (
+                    "ACTUAL_CHANGE_CONTENT_AND_IMPACT_SCOPE"
+                ),
+                "light": {
+                    "shape": "SINGLE_ROOT_TASK",
+                    "reviewLoops": "OMITTED",
+                    "verification": "TARGETED_FOR_DECLARED_CHANGE",
+                    "requiresRationale": True,
+                    "expandedImpact": "REPLAN_REQUIRED_TO_STANDARD",
+                },
+                "standard": {
+                    "shape": "RECURSIVE_GROUP_TASK",
+                    "reviewLoops": "TASK_GROUP_AND_DELIVERY",
+                    "verification": "FULL_DECLARED_ACCEPTANCE",
+                },
+                "standardWhenAny": [
+                    "MULTI_TASK_OR_MULTI_PROJECT",
+                    "PUBLIC_OR_CROSS_MODULE_INTERFACE_CHANGE",
+                    "DATA_SCHEMA_OR_MIGRATION",
+                    "AUTHORIZATION_SECURITY_OR_PRIVACY",
+                    "MONEY_BILLING_OR_IRREVERSIBLE_SIDE_EFFECT",
+                    "CONCURRENCY_OR_PRODUCTION_DEPLOYMENT",
+                    "UNKNOWN_OR_EXPANDING_IMPACT",
+                ],
+            },
             "gitBinding": {
                 "requiredForGitWorkspace": True,
                 "branchRole": "DELIVERY_FEATURE",
@@ -679,8 +731,9 @@ def hierarchy_contract(
             "GROUP may recursively contain GROUP or TASK children.",
             "TASK is the only execution leaf and cannot contain children.",
             (
-                "Every TASK compiles to TASK_LOOP followed by its required "
-                "independent TASK_REVIEW_LOOP."
+                "Under STANDARD assurance every TASK compiles to TASK_LOOP "
+                "followed by its independent TASK_REVIEW_LOOP; an eligible "
+                "LIGHT Delivery contains one root TASK_LOOP and omits it."
             ),
             (
                 "Every GROUP compiles to GROUP_JOIN followed by its required "
@@ -691,8 +744,15 @@ def hierarchy_contract(
                 "GROUP dependency gates the dependent subtree entries."
             ),
             (
-                "The root terminal flows through DELIVERY_REVIEW_LOOP and "
-                "one final USER_CONFIRMATION."
+                "Under STANDARD assurance the root terminal flows through "
+                "DELIVERY_REVIEW_LOOP and final USER_CONFIRMATION; under "
+                "LIGHT it flows directly from the root TASK_LOOP to final "
+                "USER_CONFIRMATION."
+            ),
+            (
+                "LIGHT is inferred from actual change content and impact, "
+                "requires an audit rationale, and must replan to STANDARD "
+                "when the observed impact expands or remains uncertain."
             ),
             "Loop payloads own implementation, tests, gates, and Skills.",
             (

@@ -12,6 +12,7 @@ from hdg.agent_recommendation import (
     recommend_graph_executors,
     recommend_executors,
 )
+from hdg.errors import GatedLoopError
 from hdg.graph_model import (
     compile_delivery_graph,
     graph_fingerprint,
@@ -21,8 +22,12 @@ from hdg.model_core import (
     validate_hierarchy_definition,
 )
 from hdg.mcp_tools import call_tool
-from hdg.planning import prepare_hierarchy
-from hdg.planning import freeze_hierarchy
+from hdg.planning import (
+    create_manual_handoff,
+    freeze_hierarchy,
+    prepare_hierarchy,
+    preview_hierarchy,
+)
 from hdg.dispatch_planning import plan_dispatch_batch
 from hdg.repository import SchedulerRepository
 
@@ -513,7 +518,6 @@ class AgentRecommendationTests(unittest.TestCase):
                 expected_hierarchy_fingerprint=(
                     prepared["hierarchyFingerprint"]
                 ),
-                execution_mode="active",
                 confirmed=True,
                 confirmed_by="human",
             )
@@ -591,27 +595,46 @@ class AgentRecommendationTests(unittest.TestCase):
         )
         self.assertNotIn("actualModelId", json.dumps(result))
 
-    def test_manual_receiver_can_regenerate_native_model_list_read_only(self) -> None:
-        with TemporaryDirectory() as root:
-            prepared = prepare_hierarchy(
-                root=root,
-                hierarchy=group_hierarchy(),
+    def test_handoff_defers_executor_choice_until_receiver_starts(self) -> None:
+        hierarchy = group_hierarchy()
+        with TemporaryDirectory() as source_root:
+            preview = preview_hierarchy(
+                root=source_root,
+                hierarchy=hierarchy,
             )
-            graph = SchedulerRepository(root).hierarchy(
+            handoff = create_manual_handoff(
+                root=source_root,
+                hierarchy=hierarchy,
+                expected_hierarchy_fingerprint=(
+                    preview["hierarchyFingerprint"]
+                ),
+                expected_graph_fingerprint=preview["graphFingerprint"],
+                authorized_project_ids=[],
+                confirmed=True,
+                confirmed_by="human",
+            )
+            self.assertNotIn("agentId", json.dumps(handoff))
+            self.assertNotIn("modelId", json.dumps(handoff))
+
+        with TemporaryDirectory() as receiver_root:
+            prepared = prepare_hierarchy(
+                root=receiver_root,
+                hierarchy=hierarchy,
+            )
+            graph = SchedulerRepository(receiver_root).hierarchy(
                 prepared["rootId"]
             )["graph"]
             freeze_hierarchy(
-                root=root,
+                root=receiver_root,
                 root_id=prepared["rootId"],
                 expected_hierarchy_fingerprint=(
                     prepared["hierarchyFingerprint"]
                 ),
-                execution_mode="manual",
                 confirmed=True,
                 confirmed_by="human",
             )
             result = recommend_executors(
-                root=root,
+                root=receiver_root,
                 root_id=prepared["rootId"],
                 recommendation_mode="AUTOMATIC",
                 executor_inventory=host_executor_inventory("codex"),
@@ -620,77 +643,38 @@ class AgentRecommendationTests(unittest.TestCase):
                 host_adapter_id="codex",
             )
 
-        self.assertEqual(result["executionMode"], "manual")
-        self.assertFalse(
+        self.assertEqual(result["executionMode"], "active")
+        self.assertTrue(
             result["recommendationPolicy"]["automaticDispatchAllowed"]
         )
         self.assertEqual(
-            result["recommendationPolicy"]["use"],
-            "RECEIVER_LOCAL_EXECUTION_PREVIEW",
+            {
+                item["recommended"]["agentId"]
+                for item in result["recommendations"]
+            },
+            {"codex"},
         )
 
-    def test_manual_handoff_recommends_a_different_development_agent(self) -> None:
-        discovery = {
-            "agents": [
-                discovered_agent(
-                    "codex",
-                    model_id="gpt-5.6-terra",
-                ),
-                discovered_agent(
-                    "claude-code",
-                    model_id="glm-5.2",
-                ),
-            ],
-            "warnings": [],
-            "discoveryFingerprint": "f" * 64,
-        }
+    def test_manual_handoff_is_not_an_executor_recommendation_mode(self) -> None:
         with TemporaryDirectory() as root:
             prepared = call_tool(
                 "prepare_hierarchy",
                 {"hierarchy": group_hierarchy()},
                 root=root,
             )
-            with patch(
-                "hdg.agent_recommendation.discover_available_agents",
-                return_value=discovery,
-            ):
-                agents = call_tool(
-                    "available_agents",
-                    {},
-                    root=root,
-                )
-                advice = call_tool(
+            with self.assertRaises(GatedLoopError) as caught:
+                call_tool(
                     "recommend_executors",
                     {
                         "root_id": prepared["rootId"],
                         "recommendation_mode": "MANUAL_HANDOFF",
-                        "manual_development_agent_id": "claude-code",
                     },
                     root=root,
-                    host_adapter_id="codex",
                 )
 
-        self.assertEqual(agents, discovery)
-        self.assertTrue(advice["recommendations"])
-        self.assertTrue(
-            all(
-                item["recommended"]["agentId"] == "claude-code"
-                and not item["dispatchAllowed"]
-                for item in advice["recommendations"]
-                if item["role"] == "DEVELOPMENT"
-            )
-        )
         self.assertEqual(
-            advice["recommendationPolicy"]["binding"],
-            "MANUAL_HANDOFF_ADVISORY",
-        )
-        self.assertTrue(
-            advice["recommendationPolicy"][
-                "crossAgentRecommendationAllowed"
-            ]
-        )
-        self.assertFalse(
-            advice["recommendationPolicy"]["automaticDispatchAllowed"]
+            caught.exception.code,
+            "MCP_TOOL_ARGUMENT_INVALID",
         )
 
 

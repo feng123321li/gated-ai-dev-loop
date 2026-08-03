@@ -310,7 +310,7 @@ class SchedulerRepository:
                 run_id TEXT PRIMARY KEY,
                 root_id TEXT NOT NULL,
                 revision INTEGER NOT NULL DEFAULT 1,
-                execution_mode TEXT NOT NULL DEFAULT 'manual',
+                execution_mode TEXT NOT NULL DEFAULT 'active',
                 status TEXT NOT NULL,
                 started_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -538,7 +538,7 @@ class SchedulerRepository:
                     run_id TEXT PRIMARY KEY,
                     root_id TEXT NOT NULL,
                     revision INTEGER NOT NULL DEFAULT 1,
-                    execution_mode TEXT NOT NULL DEFAULT 'manual',
+                    execution_mode TEXT NOT NULL DEFAULT 'active',
                     status TEXT NOT NULL,
                     started_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -558,7 +558,7 @@ class SchedulerRepository:
                     started_at,
                     updated_at, completed_at, cancelled_at
                 )
-                SELECT run_id, root_id, 1, 'manual', status, started_at,
+                SELECT run_id, root_id, 1, 'active', status, started_at,
                        updated_at, completed_at, cancelled_at
                 FROM runs;
 
@@ -641,7 +641,7 @@ class SchedulerRepository:
         if "execution_mode" not in run_columns:
             connection.execute(
                 "ALTER TABLE runs ADD COLUMN execution_mode TEXT "
-                "NOT NULL DEFAULT 'manual'"
+                "NOT NULL DEFAULT 'active'"
             )
         run_columns = {
             row["name"]
@@ -1426,9 +1426,9 @@ class SchedulerRepository:
         expected_delivery_revision: int,
         expected_hierarchy_fingerprint: str,
         authorized_project_ids: list[str],
-        execution_mode: str,
         confirmed_by: str,
     ) -> dict[str, Any]:
+        execution_mode = "active"
         carried_forward: list[str] = []
         with self.transaction() as connection:
             row = connection.execute(
@@ -1449,11 +1449,6 @@ class SchedulerRepository:
                     "SCHEDULER_REVISION_CONFLICT",
                     "Delivery revision must be a positive integer",
                     expectedRevision=expected_delivery_revision,
-                )
-            if execution_mode not in {"active", "manual"}:
-                fail(
-                    "SCHEDULER_EXECUTION_MODE_INVALID",
-                    "execution_mode must be active or manual",
                 )
             if expected_delivery_revision == row["revision"]:
                 revision_row = row
@@ -1560,21 +1555,6 @@ class SchedulerRepository:
                 row["status"] == "FROZEN"
                 and row["revision"] == expected_delivery_revision
             ):
-                existing_run = connection.execute(
-                    "SELECT execution_mode FROM runs "
-                    "WHERE root_id = ? AND revision = ?",
-                    (root_id, expected_delivery_revision),
-                ).fetchone()
-                if (
-                    existing_run is not None
-                    and existing_run["execution_mode"] != execution_mode
-                ):
-                    fail(
-                        "SCHEDULER_EXECUTION_MODE_MISMATCH",
-                        "A frozen run cannot change execution mode",
-                        expectedExecutionMode=existing_run["execution_mode"],
-                        suppliedExecutionMode=execution_mode,
-                    )
                 return self.run(root_id)
             at = _commit_timestamp(
                 self.now,
@@ -2084,6 +2064,8 @@ class SchedulerRepository:
                               AND n.node_id = d.node_id
                               AND n.attempt = d.attempt
                               AND n.status = 'CLAIMED'
+                              AND n.lease_expires_at IS NOT NULL
+                              AND n.lease_expires_at >= ?
                         )
                     )
                 )
@@ -2091,7 +2073,7 @@ class SchedulerRepository:
                     ('COMPLETED', 'CANCELLED', 'SUPERSEDED')
             ORDER BY d.root_id, d.node_id
             """,
-            (at,),
+            (at, at),
         ).fetchall()
         result: list[dict[str, Any]] = []
         graph_cache: dict[tuple[str, str], dict[str, Any]] = {}

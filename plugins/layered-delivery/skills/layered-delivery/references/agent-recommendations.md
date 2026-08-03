@@ -1,17 +1,17 @@
 # Agent 与模型建议
 
-用于在不改变 Graph 执行的前提下，为每个 TASK、TASK Review、递归 GROUP Review 和 Delivery Review生成两类不会混用的建议：当前宿主 Agent 内的自动执行预览，以及显式跨 Agent 的人工开发交接建议。
+用于在不改变 Graph 执行的前提下，为每个 TASK、TASK Review、递归 GROUP Review 和 Delivery Review 生成当前宿主 Agent 内的自动执行预览。手动交接不是路由建议，而是一个不绑定 Agent/模型的开发内容文件。
 
 ## 调用
 
-`available_agents` 与 `recommend_executors` 都是只读工具；前者服务人工候选发现，后者按所选开发方式生成路由建议。
+`available_agents` 与 `recommend_executors` 都是只读工具；前者只提供通用本机发现，后者只接受 `recommendation_mode=AUTOMATIC`。
 
-1. hierarchy 已 `PREPARED` 或 Graph 已冻结时，总调度 Agent 先为全部 Loop 给出 `ROUTINE`、`STANDARD` 或 `HIGH` 的临时分析。
+1. 自动执行已选定、hierarchy 已 `PREPARED` 或 Graph 已冻结时，总调度 Agent 先为全部 Loop 给出 `ROUTINE`、`STANDARD` 或 `HIGH` 的临时分析。
 2. 默认调用 `recommend_executors(recommendation_mode=AUTOMATIC)`，同时传入当前宿主真实 `executor_inventory`、覆盖全部 Loop 的 `node_requirements`，以及必要时的 `current_executor`。该模式只接受当前执行 Agent：Codex 中只建议 Codex 原生 Luna/Terra/Sol 等 selector；Claude Code 中只建议 Claude 原生 Haiku/Sonnet/Opus 等 selector。
-3. 只有用户选择手动交接时，才调用 `recommend_executors(recommendation_mode=MANUAL_HANDOFF)`。宿主可用 `manual_development_agent_id` 明确指定 TASK 的目标开发 Agent；未指定时，优先建议不同于当前宿主且声明 development 能力的本机 Agent。
-4. `available_agents` 只为人工交接提供本机终端快照。它不构成宿主原生派遣 inventory。
+3. 用户选择手动交接时，不调用 `available_agents` 或 `recommend_executors`；改用 `create_manual_handoff`。
+4. `available_agents` 的本机终端快照不构成宿主原生派遣 inventory，也不能用于预先判断手动交接的接收方。
 
-人工交接每次调用都重新读取当前本机配置中的非敏感可见信息。配置可能由用户直接修改，也可能由任意本机工具维护；本项目不识别或依赖具体修改器，不把旧模型清单写入 Frozen Graph。人工交接中发现的 GLM、DeepSeek 等当前配置模型只用于展示，不参与 Agent 排名或自动模型选择。
+本机配置可能由用户直接修改，也可能由任意本机工具维护；本项目不识别或依赖具体修改器。自动派遣只使用宿主原生 selector；GLM、DeepSeek 等转发后的实际模型只在宿主观测到后展示。
 
 推荐器不参与提供方限额恢复。软阈值暂停后由原 Agent 等待宿主原生计划提示；硬 429 由宿主适配器持久化容量熔断、取消周期监控并只安排一次 reset 后唤醒。两种情况都不临时改写推荐、不自动换 Agent。
 
@@ -19,7 +19,13 @@
 
 `AUTOMATIC` 返回 `binding=HOST_NATIVE_DISPATCH_PREVIEW`，但 `dispatchAllowed=false`：它与 `plan_dispatch_batch` 复用同一原生路由函数和决策指纹计算，只是不预留容量、不创建 Agent、不 claim。预览固定为 `selectionScope=CURRENT_EXECUTION_AGENT_ONLY`、`crossAgentRecommendationAllowed=false`，所以当前在 Codex 就不会建议 Claude，当前在 Claude Code 也不会建议 Codex。冻结后，正式 Ready 批次第一次调用 `plan_dispatch_batch` 会返回 `HOST_NATIVE_ROUTE_REVIEW` 并开启持久化 30 秒调整窗口；主 Agent 展示中文路由表，不再次提问，在到期时自动重调并取得带预留的 `HOST_NATIVE_DISPATCH_PLAN`。派遣时若 frontier、容量、配置或 inventory 已变化，仍以新计划为准。
 
-`MANUAL_HANDOFF` 返回 `binding=MANUAL_HANDOFF_ADVISORY`。它允许为 TASK 切换开发 Agent，但固定 `automaticDispatchAllowed=false`、`LOCAL_TERMINAL / EXTERNAL_PROCESS / hostDispatchEligible=false`，只生成交接信息。冻结后由宿主为目标开发 Agent 创建独立接收会话：Codex 目标进入新的 Codex 任务，Claude Code 目标进入新的 Claude 会话；总调度会话不执行被交接的开发工作。人工目标不能被倒填成 AUTO assignment，也不使用自动模式的 30 秒超时派遣。
+## 手动开发内容交接
+
+`preview_hierarchy` 先对原 hierarchy 做只读校验并返回双 fingerprint，不创建 scheduler 状态。用户选择手动交接后，`create_manual_handoff` 校验原 hierarchy、双 fingerprint 与精确项目授权，生成一个自包含 Markdown 文件。文件同时包含中文开发内容和机器可读 schema v3 附录。
+
+该路径固定 `controlStateCreated=false`、`graphRunCreated=false`、`workspaceCreated=false`：不 prepare、不 freeze、不创建接收任务/会话、不初始化 worktree、不选择 Agent 或模型。具体执行宿主只有接收文件后才知道；接收方真正开始开发时再创建或选择工作区、校准 projectScopes/gitBinding、准备并冻结 Graph，然后生成自己的原生模型表。
+
+如果接收方创建 worktree 时宿主只返回排队标识，状态是 `WORKTREE_SETUP_QUEUED`，不是 Graph 已运行。同一交接只创建一次；得到真实任务 ID 前不重复发起，也不宣称 Delivery 已冻结。
 
 自动 assignment 还服从用户级中央编排器配置。默认 `automaticOrchestration=true`、`autoSelectModel=true`、`allowCrossAdapterDispatch=false`、`allowedAdapters=[codex, claude-code]`、`maxConcurrentExecutors=4`、`quotaExhaustionPolicy=PAUSE_AND_RESUME`、`preferDifferentAdapterForReview=true`。当前跨 Adapter 与自动切换策略不可保存，直到宿主原生多 Adapter 桥接开放；同机 Codex 与 Claude Code 仍共享其他策略，Marketplace 升级不覆盖。完整路径和手动修改见 [orchestrator-configuration.md](orchestrator-configuration.md)。
 
@@ -88,11 +94,11 @@
 
 ## 强制边界
 
-- 两种返回都固定 `dispatchAllowed=false`。自动预览为 `HOST_NATIVE_DISPATCH_PREVIEW`，人工交接为 `MANUAL_HANDOFF_ADVISORY`，不得混写。
+- 自动推荐固定 `dispatchAllowed=false`，binding 为 `HOST_NATIVE_DISPATCH_PREVIEW`。手动交接没有 recommendation binding，也不返回 Agent/model 候选。
 - 推荐工具本身不创建接收 Agent、不调用外部开发 CLI、不切换当前会话模型、不 claim Loop，也不改变 `dispatch_loop.owner`。自动执行模式的总调度器只能通过宿主原生 Agent 机制执行派遣，禁止调用 `codex --write`、`codex-companion` 或等价外部自治命令；真正的接收方必须把原生 `agent_id` / `model_id` 与 `dispatch_transport=HOST_NATIVE` 交给 `dispatch_loop`，未被采用的建议不得写成执行事实。
 - 自动决策指纹同时绑定 Graph、节点、Agent、原生 `modelId`、推理等级和派遣通道。宿主观测到的 `actualModelId` 不进入 fingerprint、reservation、tier、能力、Review 多样性或授权比较；它只形成 `原生 modelId → 实际 actualModelId` 的展示关系，未知时必须省略或显示“未报告”，不得猜测。
 - 建议和临时不可用列表都不持久化到 schema v3、hierarchy、Graph、SQLite、事件链或人类投影；配置或容量改变后重新发现。
-- 推荐器不解析 `loop.payload` 或 `loop.result`。自动模式的 TASK/Review 都固定当前执行 Agent，只按推理等级选择原生模型档位；人工模式才允许 TASK 切换开发 Agent。
+- 推荐器不解析 `loop.payload` 或 `loop.result`。自动模式的 TASK/Review 都固定当前执行 Agent，只按推理等级选择原生模型档位；手动交接不经过推荐器。
 - 自动模式只有一个当前宿主 Agent 时，Review 使用独立上下文并报告真实的 `diversityLevel`，不能因为本机发现了另一个 CLI 就宣称异构 Agent 审查已满足。
 - `model.id=null` 表示终端可用但无法安全确定当前模型，只能展示为 current/default，不能猜测模型。
 
@@ -128,4 +134,4 @@ Codex 当前模型从本机 Codex 配置的非敏感模型字段读取；Claude 
 
 自动建议使用中文表格，至少包含：`节点 | 模式 | 执行 Agent | 原生模型角色 | 原生 modelId | 实际代理模型 | 状态`。执行前实际代理模型显示“未报告”；领取后宿主若有观测，显示“原生 modelId → actualModelId”，但不回写建议。
 
-人工交接使用另一张中文表格，至少包含：`节点 | 模式 | 当前宿主 | 目标开发 Agent | 当前配置模型（仅展示） | 动作`。动作固定说明“等待人工交接，不自动派遣”。普通用户输出不直接展开英文 JSON、fingerprint 或内部 reason code；需要解释时把 `reasons` 转成简体中文。
+手动交接只展示文件结果表：`交接文件 | 内容 | 调度状态 | 开发工作区 | 接收执行者`。值分别写实际 Markdown 路径、“完整开发内容 + schema v3 附录”、“未创建 Graph Run”、“开始实际开发时才创建”、“交接前不指定”。不要展示 Agent/model 推荐表，也不要在主窗口展开文件末尾的 JSON 附录。

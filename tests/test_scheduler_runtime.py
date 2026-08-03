@@ -21,7 +21,6 @@ from hdg.graph_model import (
 from hdg.graph_runtime import (
     attest_loop_receiver,
     cancel_graph_run,
-    dispatch_loop,
     graph_events,
     graph_status,
     heartbeat_loop,
@@ -48,8 +47,10 @@ from hdg.model_rendering import (
     WORK_ITEM_DIRECTORY,
 )
 from hdg.planning import (
+    create_manual_handoff,
     freeze_hierarchy,
     prepare_hierarchy,
+    preview_hierarchy,
     workspace_status,
 )
 from hdg.repository import SchedulerRepository
@@ -63,6 +64,7 @@ from .test_loop_architecture import (
     task_definition,
     task_hierarchy,
 )
+from .automatic_dispatch import dispatch_loop, reserve_loop
 
 
 def delivery_task_hierarchy(
@@ -348,6 +350,117 @@ class SchedulerRuntimeTests(unittest.TestCase):
             now=at(1),
         )
         return prepared
+
+    def test_manual_handoff_is_one_file_without_starting_development(
+        self,
+    ) -> None:
+        first = prepare_hierarchy(
+            root=self.root,
+            hierarchy=delivery_task_hierarchy("d-first", "t-first"),
+            now=at(0),
+        )
+        freeze_hierarchy(
+            root=self.root,
+            root_id=first["rootId"],
+            expected_hierarchy_fingerprint=(
+                first["hierarchyFingerprint"]
+            ),
+            confirmed=True,
+            confirmed_by="human",
+            now=at(1),
+        )
+        hierarchy = delivery_task_hierarchy("d-second", "t-second")
+        hierarchy["root"]["definition"]["execution"]["loop"][
+            "payload"
+        ]["goal"] = "实现第二个独立需求并完成验证。"
+
+        preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(2),
+        )
+        handoff = create_manual_handoff(
+            root=self.root,
+            hierarchy=hierarchy,
+            expected_hierarchy_fingerprint=(
+                preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=preview["graphFingerprint"],
+            authorized_project_ids=[],
+            confirmed=True,
+            confirmed_by="human",
+            now=at(3),
+        )
+
+        self.assertEqual(preview["status"], "PREVIEW")
+        self.assertEqual(
+            preview["nextAction"],
+            "SELECT_AUTOMATIC_EXECUTION_OR_MANUAL_HANDOFF",
+        )
+        self.assertEqual(handoff["status"], "HANDOFF_READY")
+        self.assertEqual(
+            handoff["nextAction"],
+            "DELIVER_MANUAL_HANDOFF_FILE",
+        )
+        self.assertFalse(handoff["controlStateCreated"])
+        self.assertFalse(handoff["graphRunCreated"])
+        self.assertFalse(handoff["workspaceCreated"])
+        self.assertEqual(
+            set(handoff["manualHandoff"]),
+            {"path", "format", "selfContained"},
+        )
+        self.assertEqual(handoff["manualHandoff"]["format"], "MARKDOWN")
+        self.assertTrue(handoff["manualHandoff"]["selfContained"])
+
+        handoff_root = Path(
+            self.root,
+            ".layered-delivery",
+            "handoffs",
+        )
+        files = list(handoff_root.glob("*.md"))
+        self.assertEqual(len(files), 1)
+        self.assertEqual(
+            files[0].relative_to(Path(self.root)).as_posix(),
+            handoff["manualHandoff"]["path"],
+        )
+        content = files[0].read_text(encoding="utf-8")
+        for expected in (
+            "# 开发内容交接",
+            "d-second",
+            "t-second",
+            "实现第二个独立需求并完成验证。",
+            preview["hierarchyFingerprint"],
+            preview["graphFingerprint"],
+            "交接前不指定",
+            "开始实际开发时再创建",
+            "workspace_status",
+            "prepare_hierarchy",
+            "freeze_hierarchy",
+            "graph_frontier",
+            '"id": "d-second"',
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, content)
+        for forbidden in (
+            "目标开发 Agent",
+            "Codex",
+            "Claude Code",
+            "glm-5.2",
+            "gpt-5.6",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, content)
+
+        active = workspace_status(root=self.root)
+        self.assertEqual(active["rootId"], "d-first")
+        self.assertEqual(active["status"], "ACTIVE")
+        with self.assertRaises(GatedLoopError) as caught:
+            SchedulerRepository(self.root).hierarchy("d-second")
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_HIERARCHY_MISSING",
+        )
+        self.assertFalse(Path(self.root, "worktrees").exists())
 
     def test_task_and_review_are_uniform_loops_until_confirmation(
         self,
@@ -910,6 +1023,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(
             policy,
             {
+                "assuranceProfile": "STANDARD",
+                "reviewTopology": "TASK_GROUP_AND_DELIVERY_REVIEWS",
                 "contextIsolation": "REQUIRED",
                 "dispatch": {
                     "preferredExecutor": "HOST_NATIVE_AGENT",
@@ -925,7 +1040,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 },
                 "progressReporting": {
                     "tool": "report_loop_progress",
-                    "language": "SIMPLIFIED_CHINESE",
+                    "language": "USER_PREFERRED",
                     "heartbeatRenewsLease": True,
                     "progressRenewsLease": False,
                     "reportAt": [
@@ -1140,6 +1255,160 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 if action["action"] == "DISPATCH_LOOP"
             ],
         )
+
+    def test_light_assurance_keeps_safety_but_reduces_process_reporting(
+        self,
+    ) -> None:
+        hierarchy = task_hierarchy()
+        hierarchy["delivery"].update(
+            {
+                "assuranceProfile": "LIGHT",
+                "assuranceRationale": (
+                    "The actual change is confined to one internal helper "
+                    "with targeted tests and no boundary impact."
+                ),
+                "reviewLoop": None,
+            }
+        )
+        hierarchy["root"]["reviewLoop"] = None
+        prepared = self.prepare_and_freeze(hierarchy)
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+
+        frontier = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(2),
+        )
+        dispatch_action = next(
+            action
+            for action in frontier["actions"]
+            if action["action"] == "DISPATCH_LOOP"
+        )
+        context = loop_context(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+        )
+        execution_policy = context["executionPolicy"]
+        completion_policy = context["completionPolicy"]
+
+        self.assertEqual(execution_policy["assuranceProfile"], "LIGHT")
+        self.assertEqual(
+            execution_policy["reviewTopology"],
+            "NO_INDEPENDENT_REVIEW_LOOPS",
+        )
+        self.assertEqual(
+            execution_policy["progressReporting"]["reportAt"],
+            ["ISSUE_FOUND", "FINAL_VERIFICATION"],
+        )
+        self.assertTrue(
+            execution_policy["progressReporting"][
+                "shortLoopMayReportOnlyFinal"
+            ]
+        )
+        self.assertEqual(
+            execution_policy["contextIsolation"],
+            "REQUIRED",
+        )
+        self.assertEqual(
+            dispatch_action["executionPolicy"],
+            execution_policy,
+        )
+        self.assertEqual(
+            completion_policy["verificationScope"],
+            "TARGETED_FOR_DECLARED_CHANGE",
+        )
+        self.assertEqual(
+            completion_policy["reviewCycle"],
+            "FOCUSED_REVIEW_RESOLVE_VERIFY_AND_REREVIEW_IF_NEEDED",
+        )
+        self.assertEqual(
+            completion_policy["reviewFindings"]["p0p1"],
+            "RESOLVE_AND_REREVIEW_BEFORE_SUCCEEDED",
+        )
+
+    def test_light_delivery_completes_without_independent_review_loops(
+        self,
+    ) -> None:
+        hierarchy = task_hierarchy()
+        hierarchy["delivery"].update(
+            {
+                "assuranceProfile": "LIGHT",
+                "assuranceRationale": (
+                    "The actual diff changes one internal helper, keeps all "
+                    "interfaces stable, and has a focused passing test."
+                ),
+                "reviewLoop": None,
+            }
+        )
+        hierarchy["root"]["reviewLoop"] = None
+        prepared = self.prepare_and_freeze(hierarchy)
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="light-agent",
+            operation_id="op-light",
+            now=at(2),
+        )
+        report_loop_progress(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id="op-light",
+            phase="VERIFYING",
+            summary_zh="Focused verification passed for the local change.",
+            tests={"passed": 1, "failed": 0, "skipped": 0, "total": 1},
+            now=at(3),
+        )
+        record_loop_result(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id="op-light",
+            outcome=success("Light change and focused verification completed."),
+            now=at(4),
+        )
+
+        frontier = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(5),
+        )
+        self.assertEqual(frontier["readyLoops"], [])
+        self.assertIn(
+            "RECORD_USER_CONFIRMATION",
+            [action["action"] for action in frontier["actions"]],
+        )
+        completed = record_user_confirmation(
+            root=self.root,
+            root_id=root_id,
+            confirmed=True,
+            confirmed_by="human",
+            summary="Accepted the focused change.",
+            now=at(6),
+        )
+        self.assertEqual(completed["status"], "COMPLETED")
+        event_types = [
+            event["eventType"]
+            for event in graph_events(
+                root=self.root,
+                root_id=root_id,
+            )["events"]
+        ]
+        self.assertEqual(event_types.count("LOOP_SUCCEEDED"), 1)
+        self.assertNotIn("review:task:t-service", repr(frontier))
+        acceptance = (
+            Path(self.root)
+            / ".layered-delivery"
+            / root_id
+            / "acceptance.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("LIGHT 保障档不创建 Delivery Review Loop", acceptance)
 
     def test_rate_limited_loop_waits_until_reset_then_redispatches(
         self,
@@ -1498,7 +1767,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             root=self.root,
             root_id=root_id,
         )
-        self.assertEqual(rebuilt_open["executionMode"], "manual")
+        self.assertEqual(rebuilt_open["executionMode"], "active")
         self.assertEqual(
             rebuilt_open["hostCapacity"]["capacityKey"],
             "claude-code:default",
@@ -2223,23 +2492,24 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 root=self.root,
                 workspace_root=str(workspace),
             )
-            call_tool(
-                "freeze_hierarchy",
-                {
-                    "root_id": current["rootId"],
-                    "expected_delivery_revision": 1,
-                    "expected_hierarchy_fingerprint": (
-                        current["hierarchyFingerprint"]
-                    ),
-                    "authorized_project_ids": [],
-                    "execution_mode": "manual",
-                    "confirmed_by": "human",
-                },
+            freeze_hierarchy(
                 root=self.root,
-                workspace_root=str(workspace),
+                root_id=current["rootId"],
+                expected_delivery_revision=1,
+                expected_hierarchy_fingerprint=(
+                    current["hierarchyFingerprint"]
+                ),
+                authorized_project_ids=[],
+                confirmed=True,
+                confirmed_by="human",
             )
             prepared.append(current)
 
+        first_reservation = reserve_loop(
+            root=self.root,
+            root_id="d-first",
+            node_id=loop_node_id("t-first"),
+        )
         first_attestation = attest_loop_receiver(
             root=self.root,
             root_id="d-first",
@@ -2247,6 +2517,9 @@ class SchedulerRuntimeTests(unittest.TestCase):
             receiver_context_id="context-first",
             parent_context_id="codex-parent",
             host_adapter_id="codex",
+            dispatch_reservation_id=first_reservation[
+                "dispatchReservationId"
+            ],
         )
         call_tool(
             "dispatch_loop",
@@ -2254,9 +2527,21 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "root_id": "d-first",
                 "node_id": loop_node_id("t-first"),
                 "owner": "agent-first",
-                "agent_id": "codex",
-                "model_id": "gpt-5.6-sol",
-                "dispatch_mode": "MANUAL",
+                "agent_id": first_reservation["agentId"],
+                "model_id": first_reservation["modelId"],
+                "dispatch_mode": first_reservation["dispatchMode"],
+                "dispatch_transport": first_reservation[
+                    "dispatchTransport"
+                ],
+                "dispatch_reservation_id": first_reservation[
+                    "dispatchReservationId"
+                ],
+                "dispatch_reasoning_class": first_reservation[
+                    "dispatchReasoningClass"
+                ],
+                "dispatch_decision_fingerprint": first_reservation[
+                    "dispatchDecisionFingerprint"
+                ],
                 "receiver_context_id": "context-first",
                 "receiver_attestation_id": first_attestation[
                     "receiverAttestationId"
@@ -2289,6 +2574,11 @@ class SchedulerRuntimeTests(unittest.TestCase):
             )
         )
         with self.assertRaises(GatedLoopError) as caught:
+            second_reservation = reserve_loop(
+                root=self.root,
+                root_id="d-second",
+                node_id=loop_node_id("t-second"),
+            )
             second_attestation = attest_loop_receiver(
                 root=self.root,
                 root_id="d-second",
@@ -2296,6 +2586,9 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 receiver_context_id="context-second",
                 parent_context_id="codex-parent",
                 host_adapter_id="codex",
+                dispatch_reservation_id=second_reservation[
+                    "dispatchReservationId"
+                ],
             )
             call_tool(
                 "dispatch_loop",
@@ -2303,9 +2596,23 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "root_id": "d-second",
                     "node_id": loop_node_id("t-second"),
                     "owner": "agent-second",
-                    "agent_id": "codex",
-                    "model_id": "gpt-5.6-sol",
-                    "dispatch_mode": "MANUAL",
+                    "agent_id": second_reservation["agentId"],
+                    "model_id": second_reservation["modelId"],
+                    "dispatch_mode": second_reservation[
+                        "dispatchMode"
+                    ],
+                    "dispatch_transport": second_reservation[
+                        "dispatchTransport"
+                    ],
+                    "dispatch_reservation_id": second_reservation[
+                        "dispatchReservationId"
+                    ],
+                    "dispatch_reasoning_class": second_reservation[
+                        "dispatchReasoningClass"
+                    ],
+                    "dispatch_decision_fingerprint": second_reservation[
+                        "dispatchDecisionFingerprint"
+                    ],
                     "receiver_context_id": "context-second",
                     "receiver_attestation_id": second_attestation[
                         "receiverAttestationId"
@@ -3985,7 +4292,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertIn(
             (
-                "| t-service | TASK | 执行中 | 无 | 无 | "
+                "| t-service | TASK | 执行中 | codex | gpt-test | "
                 "agent-local-time | 1 | "
                 "2026-01-01 08:02:00 |"
             ),
@@ -4105,7 +4412,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "正在运行测试，准备检查接口兼容性。",
         )
 
-    def test_loop_progress_requires_chinese_human_text_and_live_claim(
+    def test_loop_progress_accepts_user_language_and_requires_live_claim(
         self,
     ) -> None:
         prepared = self.prepare_and_freeze(task_hierarchy())
@@ -4120,6 +4427,24 @@ class SchedulerRuntimeTests(unittest.TestCase):
             now=at(2),
         )
 
+        reported = report_loop_progress(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id="op-progress-validation",
+            phase="INSPECTING",
+            summary_zh="Inspecting source code.",
+            completed_zh=["Loaded the relevant modules."],
+            next_step_zh="Run the focused tests.",
+            now=at(2) + timedelta(seconds=1),
+        )
+        self.assertEqual(reported["summaryZh"], "Inspecting source code.")
+        self.assertEqual(
+            reported["completedZh"],
+            ["Loaded the relevant modules."],
+        )
+        self.assertEqual(reported["nextStepZh"], "Run the focused tests.")
+
         with self.assertRaises(GatedLoopError) as caught:
             report_loop_progress(
                 root=self.root,
@@ -4127,13 +4452,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 node_id=node_id,
                 operation_id="op-progress-validation",
                 phase="INSPECTING",
-                summary_zh="Inspecting source code.",
+                summary_zh="Invalid\x01progress",
                 now=at(2) + timedelta(seconds=1),
             )
-        self.assertEqual(
-            caught.exception.code,
-            "SCHEDULER_PROGRESS_LANGUAGE_REQUIRED",
-        )
+        self.assertEqual(caught.exception.code, "SCHEDULER_PROGRESS_INVALID")
 
         with self.assertRaises(GatedLoopError) as caught:
             report_loop_progress(

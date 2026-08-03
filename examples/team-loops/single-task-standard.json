@@ -1,0 +1,54 @@
+{
+  "delivery": {
+    "id": "d-single-standard",
+    "title": "交付一个标准功能",
+    "summary": "完成一个功能、独立任务审查和交付审查",
+    "assuranceProfile": "STANDARD",
+    "assuranceRationale": "改动涉及可见行为，需要独立任务审查和完整交付审查。",
+    "reviewLoop": {
+      "ref": "team/delivery-review-loop@1",
+      "payload": {
+        "goal": "独立检查完整交付的正确性、兼容性和验收证据"
+      },
+      "resourceClaims": []
+    }
+  },
+  "root": {
+    "schemaVersion": 3,
+    "skillHints": [],
+    "definition": {
+      "schemaVersion": 3,
+      "id": "t-feature",
+      "kind": "TASK",
+      "parentId": null,
+      "title": "实现标准功能",
+      "summary": "返回经过测试的功能结果",
+      "execution": {
+        "dependsOn": [],
+        "loop": {
+          "ref": "team/feature-loop@1",
+          "payload": {
+            "goal": "实现已经确认的功能",
+            "acceptance": [
+              "功能行为符合需求",
+              "相关自动化测试通过"
+            ]
+          },
+          "resourceClaims": [
+            "repo:catalog-service"
+          ]
+        }
+      }
+    },
+    "reviewLoop": {
+      "ref": "team/task-review-loop@1",
+      "payload": {
+        "goal": "独立检查实现、测试和边界条件"
+      },
+      "resourceClaims": [
+        "repo:catalog-service"
+      ]
+    },
+    "children": []
+  }
+}

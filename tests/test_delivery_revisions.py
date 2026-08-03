@@ -11,10 +11,10 @@ from hdg.graph_frontier import get_graph_frontier
 from hdg.graph_model import loop_node_id, task_review_node_id
 from hdg.graph_runtime import (
     cancel_graph_run,
-    dispatch_loop,
     rebuild_graph_run,
     record_loop_result,
 )
+from .automatic_dispatch import dispatch_loop
 from hdg.model_core import validate_hierarchy_definition
 from hdg.planning import (
     delivery_revision_history,

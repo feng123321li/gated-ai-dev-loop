@@ -1,0 +1,43 @@
+stages:
+  - verify
+  - host-smoke
+
+contract:
+  stage: verify
+  image: "python:${PYTHON_VERSION}-slim"
+  parallel:
+    matrix:
+      - PYTHON_VERSION: ["3.10", "3.12", "3.14"]
+  variables:
+    PYTHONPATH: "src"
+    PYTHONUTF8: "1"
+  script:
+    - python -m unittest discover -s tests -t .
+    - python -m compileall -q src tests scripts
+    - python scripts/build_skill.py
+    - git diff --exit-code -- skills/layered-delivery/scripts/hdg skills/layered-delivery/scripts/hdg_mcp.py plugins/layered-delivery/skills/layered-delivery
+    - python scripts/validate_release.py
+
+.host-smoke:
+  stage: host-smoke
+  tags:
+    - windows
+    - layered-delivery-host-smoke
+  variables:
+    PYTHONUTF8: "1"
+  before_script:
+    - python scripts/host_smoke.py probe --json
+  when: manual
+  allow_failure: false
+
+host-smoke:codex:
+  extends: .host-smoke
+  when: manual
+  script:
+    - python scripts/host_smoke.py run --host codex --scenario standard --execute
+
+host-smoke:claude:
+  extends: .host-smoke
+  when: manual
+  script:
+    - python scripts/host_smoke.py run --host claude-code --scenario standard --execute

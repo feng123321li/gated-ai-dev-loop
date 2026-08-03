@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
+import re
 import sqlite3
 import subprocess
 from tempfile import TemporaryDirectory
@@ -45,6 +47,7 @@ from .test_loop_architecture import (
     task_hierarchy,
 )
 from .test_scheduler_runtime import at
+from .automatic_dispatch import reserve_loop
 
 
 def modern_meta(
@@ -292,11 +295,20 @@ class HierarchyContractTests(unittest.TestCase):
                 "#/$defs/taskChildNode",
             },
         )
+        delivery_properties = contract["inputSchema"]["properties"][
+            "delivery"
+        ]["properties"]
         self.assertEqual(
-            contract["inputSchema"]["properties"]["delivery"]["properties"][
-                "reviewLoop"
-            ],
-            {"$ref": "#/$defs/loop"},
+            delivery_properties["reviewLoop"]["oneOf"],
+            [{"$ref": "#/$defs/loop"}, {"type": "null"}],
+        )
+        self.assertEqual(
+            delivery_properties["assuranceProfile"]["enum"],
+            ["LIGHT", "STANDARD"],
+        )
+        self.assertNotIn(
+            "assuranceProfile",
+            contract["inputSchema"]["properties"]["delivery"]["required"],
         )
         git_binding = contract["inputSchema"]["properties"]["delivery"][
             "properties"
@@ -340,8 +352,8 @@ class HierarchyContractTests(unittest.TestCase):
         self.assertEqual(
             contract["inputSchema"]["$defs"]["taskRootNode"]["properties"][
                 "reviewLoop"
-            ],
-            {"$ref": "#/$defs/loop"},
+            ]["oneOf"],
+            [{"$ref": "#/$defs/loop"}, {"type": "null"}],
         )
         self.assertEqual(
             contract["inputSchema"]["$defs"]["groupRootNode"]["properties"][
@@ -634,8 +646,16 @@ class McpSurfaceTests(unittest.TestCase):
             ],
         )
         self.assertIn(
+            "user's current language",
+            progress_tool["inputSchema"]["properties"]["summary_zh"][
+                "description"
+            ],
+        )
+        self.assertNotIn(
             "Simplified Chinese",
-            progress_tool["inputSchema"]["properties"]["summary_zh"]["description"],
+            progress_tool["inputSchema"]["properties"]["summary_zh"][
+                "description"
+            ],
         )
         open_settings = by_name["open_orchestrator_settings"]
         self.assertTrue(open_settings["annotations"]["readOnlyHint"])
@@ -672,6 +692,25 @@ class McpSurfaceTests(unittest.TestCase):
             [],
         )
         self.assertEqual(
+            by_name["preview_hierarchy"]["inputSchema"]["required"],
+            ["hierarchy"],
+        )
+        self.assertEqual(
+            by_name["create_manual_handoff"]["inputSchema"]["required"],
+            [
+                "hierarchy",
+                "expected_hierarchy_fingerprint",
+                "expected_graph_fingerprint",
+                "authorized_project_ids",
+                "confirmed_by",
+            ],
+        )
+        self.assertNotIn(
+            "confirmed",
+            by_name["create_manual_handoff"]["inputSchema"]["properties"],
+        )
+        self.assertNotIn("_meta", by_name["create_manual_handoff"])
+        self.assertEqual(
             by_name["recommend_executors"]["inputSchema"]["required"],
             ["root_id", "recommendation_mode"],
         )
@@ -687,13 +726,12 @@ class McpSurfaceTests(unittest.TestCase):
                 "executor_inventory",
                 "node_requirements",
                 "current_executor",
-                "manual_development_agent_id",
             },
         )
         self.assertEqual(
             by_name["recommend_executors"]["inputSchema"]
             ["properties"]["recommendation_mode"]["enum"],
-            ["AUTOMATIC", "MANUAL_HANDOFF"],
+            ["AUTOMATIC"],
         )
         self.assertNotIn("_meta", by_name["available_agents"])
         self.assertNotIn("_meta", by_name["recommend_executors"])
@@ -764,9 +802,19 @@ class McpSurfaceTests(unittest.TestCase):
                 "agent_id",
                 "model_id",
                 "dispatch_mode",
-                "receiver_context_id",
-                "receiver_attestation_id",
                 "operation_id",
+            ],
+        )
+        self.assertIn(
+            "must omit",
+            dispatch_schema["properties"]["receiver_context_id"][
+                "description"
+            ],
+        )
+        self.assertIn(
+            "never invent",
+            dispatch_schema["properties"]["receiver_attestation_id"][
+                "description"
             ],
         )
         self.assertNotIn(
@@ -837,19 +885,15 @@ class McpSurfaceTests(unittest.TestCase):
         self.assertNotIn("_meta", freeze)
         freeze_schema = freeze["inputSchema"]
         self.assertNotIn("confirmed", freeze_schema["properties"])
-        self.assertEqual(
-            freeze_schema["properties"]["execution_mode"],
-            {
-                "type": "string",
-                "enum": ["active", "manual"],
-                "description": (
-                    "User-selected host execution mode. active continues "
-                    "the Graph in this session; manual freezes and emits "
-                    "a handoff for another session."
-                ),
-            },
+        self.assertNotIn("execution_mode", freeze_schema["properties"])
+        self.assertNotIn(
+            "execution_mode",
+            inspect.signature(freeze_hierarchy).parameters,
         )
-        self.assertIn("execution_mode", freeze_schema["required"])
+        self.assertNotIn(
+            "execution_mode",
+            inspect.signature(SchedulerRepository.freeze).parameters,
+        )
         self.assertIn(
             "expected_delivery_revision",
             freeze_schema["required"],
@@ -1088,13 +1132,21 @@ class McpSurfaceTests(unittest.TestCase):
             )
 
     def test_dispatch_requires_bounded_actual_executor_metadata(self) -> None:
+        dispatch_schema = {
+            tool["name"]: tool
+            for tool in tool_definitions()
+        }["dispatch_loop"]["inputSchema"]
+        self.assertEqual(
+            dispatch_schema["properties"]["dispatch_mode"]["enum"],
+            ["AUTO"],
+        )
         base = {
             "root_id": "d-service",
             "node_id": "loop:t-service",
             "owner": "agent-1",
             "agent_id": "codex",
             "model_id": "gpt-5.6-sol",
-            "dispatch_mode": "MANUAL",
+            "dispatch_mode": "AUTO",
             "receiver_context_id": "context-1",
             "receiver_attestation_id": "attestation-1",
             "operation_id": "op-1",
@@ -1102,6 +1154,18 @@ class McpSurfaceTests(unittest.TestCase):
         self.assertEqual(
             validate_tool_arguments("dispatch_loop", base),
             base,
+        )
+        host_injected = {
+            key: value
+            for key, value in base.items()
+            if key not in {
+                "receiver_context_id",
+                "receiver_attestation_id",
+            }
+        }
+        self.assertEqual(
+            validate_tool_arguments("dispatch_loop", host_injected),
+            host_injected,
         )
         for invalid in (
             {key: value for key, value in base.items() if key != "agent_id"},
@@ -1117,48 +1181,99 @@ class McpSurfaceTests(unittest.TestCase):
                     "MCP_TOOL_ARGUMENT_INVALID",
                 )
 
+    def test_dispatch_owner_exposes_portable_identity_contract(self) -> None:
+        dispatch = {
+            tool["name"]: tool["inputSchema"]
+            for tool in tool_definitions()
+        }["dispatch_loop"]
+        owner = dispatch["properties"]["owner"]
+        self.assertEqual(owner["maxLength"], 192)
+        self.assertIn("native agent_id", owner["description"])
+        self.assertIsNotNone(re.fullmatch(owner["pattern"], "claude-code"))
+        self.assertIsNone(
+            re.fullmatch(owner["pattern"], "claude-code#loop:task")
+        )
+
     def test_freeze_adapter_injects_strict_boolean_confirmation(
         self,
     ) -> None:
-        for execution_mode in ("active", "manual"):
-            with self.subTest(execution_mode=execution_mode):
-                with TemporaryDirectory() as root:
-                    prepared = call_tool(
-                        "prepare_hierarchy",
-                        {"hierarchy": task_hierarchy()},
-                        root=root,
-                    )
-                    frozen = call_tool(
-                        "freeze_hierarchy",
-                        {
-                            "root_id": prepared["rootId"],
-                            "expected_delivery_revision": 1,
-                            "expected_hierarchy_fingerprint": (
-                                prepared["hierarchyFingerprint"]
-                            ),
-                            "authorized_project_ids": [],
-                            "execution_mode": execution_mode,
-                            "confirmed_by": "human",
-                        },
-                        root=root,
-                    )
-                    status = call_tool(
-                        "workspace_status",
-                        {},
-                        root=root,
-                    )
+        with TemporaryDirectory() as root:
+            prepared = call_tool(
+                "prepare_hierarchy",
+                {"hierarchy": task_hierarchy()},
+                root=root,
+            )
+            frozen = call_tool(
+                "freeze_hierarchy",
+                {
+                    "root_id": prepared["rootId"],
+                    "expected_delivery_revision": 1,
+                    "expected_hierarchy_fingerprint": (
+                        prepared["hierarchyFingerprint"]
+                    ),
+                    "authorized_project_ids": [],
+                    "confirmed_by": "human",
+                },
+                root=root,
+            )
+            status = call_tool(
+                "workspace_status",
+                {},
+                root=root,
+            )
 
-                self.assertEqual(frozen["status"], "ACTIVE")
-                self.assertEqual(
-                    frozen["executionMode"],
-                    execution_mode,
-                )
-                self.assertEqual(frozen["confirmedBy"], "human")
-                self.assertEqual(status["status"], "ACTIVE")
-                self.assertEqual(
-                    frozen["executionMode"],
-                    status["executionMode"],
-                )
+        self.assertEqual(frozen["status"], "ACTIVE")
+        self.assertEqual(frozen["executionMode"], "active")
+        self.assertEqual(frozen["confirmedBy"], "human")
+        self.assertEqual(status["status"], "ACTIVE")
+        self.assertEqual(
+            frozen["executionMode"],
+            status["executionMode"],
+        )
+
+    def test_handoff_adapter_injects_strict_boolean_confirmation(
+        self,
+    ) -> None:
+        hierarchy = task_hierarchy()
+        with TemporaryDirectory() as root:
+            preview = call_tool(
+                "preview_hierarchy",
+                {"hierarchy": hierarchy},
+                root=root,
+            )
+            handoff = call_tool(
+                "create_manual_handoff",
+                {
+                    "hierarchy": hierarchy,
+                    "expected_hierarchy_fingerprint": (
+                        preview["hierarchyFingerprint"]
+                    ),
+                    "expected_graph_fingerprint": (
+                        preview["graphFingerprint"]
+                    ),
+                    "authorized_project_ids": [],
+                    "confirmed_by": "human",
+                },
+                root=root,
+            )
+
+            control_root = Path(root, ".layered-delivery")
+            self.assertFalse(Path(control_root, "scheduler.db").exists())
+            self.assertEqual(
+                [
+                    path.relative_to(control_root).as_posix()
+                    for path in control_root.rglob("*")
+                    if path.is_file()
+                ],
+                [
+                    Path(handoff["manualHandoff"]["path"])
+                    .relative_to(".layered-delivery")
+                    .as_posix()
+                ],
+            )
+
+        self.assertEqual(handoff["status"], "HANDOFF_READY")
+        self.assertEqual(handoff["confirmedBy"], "human")
 
     def test_distinct_conversation_workspaces_run_distinct_deliveries(
         self,
@@ -1203,7 +1318,6 @@ class McpSurfaceTests(unittest.TestCase):
                             prepared["hierarchyFingerprint"]
                         ),
                         "authorized_project_ids": [],
-                        "execution_mode": "active",
                         "confirmed_by": "human",
                     },
                     root=root,
@@ -1276,7 +1390,6 @@ class McpSurfaceTests(unittest.TestCase):
                         first["hierarchyFingerprint"]
                     ),
                     "authorized_project_ids": [],
-                    "execution_mode": "active",
                     "confirmed_by": "human",
                 },
                 root=root,
@@ -1431,7 +1544,6 @@ class McpSurfaceTests(unittest.TestCase):
                         prepared["hierarchyFingerprint"]
                     ),
                     "authorized_project_ids": [],
-                    "execution_mode": "active",
                     "confirmed_by": "human",
                 },
                 root=str(repository),
@@ -1633,20 +1745,16 @@ class McpSurfaceTests(unittest.TestCase):
                     root=str(repository),
                     workspace_root=str(worktree),
                 )
-                call_tool(
-                    "freeze_hierarchy",
-                    {
-                        "root_id": delivery_id,
-                        "expected_delivery_revision": 1,
-                        "expected_hierarchy_fingerprint": (
-                            prepared["hierarchyFingerprint"]
-                        ),
-                        "authorized_project_ids": [],
-                        "execution_mode": "manual",
-                        "confirmed_by": "human",
-                    },
+                freeze_hierarchy(
                     root=str(repository),
-                    workspace_root=str(worktree),
+                    root_id=delivery_id,
+                    expected_delivery_revision=1,
+                    expected_hierarchy_fingerprint=(
+                        prepared["hierarchyFingerprint"]
+                    ),
+                    authorized_project_ids=[],
+                    confirmed=True,
+                    confirmed_by="human",
                 )
                 Path(worktree, f"{delivery_id}.txt").write_text(
                     f"{delivery_id} implementation\n",
@@ -1661,6 +1769,11 @@ class McpSurfaceTests(unittest.TestCase):
                 )
 
             for delivery_id, task_id, branch_ref, worktree in deliveries:
+                reservation = reserve_loop(
+                    root=str(repository),
+                    root_id=delivery_id,
+                    node_id=f"loop:{task_id}",
+                )
                 attestation = attest_loop_receiver(
                     root=str(repository),
                     root_id=delivery_id,
@@ -1668,6 +1781,9 @@ class McpSurfaceTests(unittest.TestCase):
                     receiver_context_id=f"context-{delivery_id}",
                     parent_context_id="codex-parent",
                     host_adapter_id="codex",
+                    dispatch_reservation_id=reservation[
+                        "dispatchReservationId"
+                    ],
                 )
                 dispatched = call_tool(
                     "dispatch_loop",
@@ -1675,9 +1791,21 @@ class McpSurfaceTests(unittest.TestCase):
                         "root_id": delivery_id,
                         "node_id": f"loop:{task_id}",
                         "owner": f"agent-{delivery_id}",
-                        "agent_id": "codex",
-                        "model_id": "gpt-5.6-sol",
-                        "dispatch_mode": "MANUAL",
+                        "agent_id": reservation["agentId"],
+                        "model_id": reservation["modelId"],
+                        "dispatch_mode": reservation["dispatchMode"],
+                        "dispatch_transport": reservation[
+                            "dispatchTransport"
+                        ],
+                        "dispatch_reservation_id": reservation[
+                            "dispatchReservationId"
+                        ],
+                        "dispatch_reasoning_class": reservation[
+                            "dispatchReasoningClass"
+                        ],
+                        "dispatch_decision_fingerprint": reservation[
+                            "dispatchDecisionFingerprint"
+                        ],
                         "receiver_context_id": (
                             f"context-{delivery_id}"
                         ),
@@ -1971,7 +2099,11 @@ class McpSurfaceTests(unittest.TestCase):
                         "owner": "agent-integrity",
                         "agent_id": "codex",
                         "model_id": "gpt-5.6-sol",
-                        "dispatch_mode": "MANUAL",
+                        "dispatch_mode": "AUTO",
+                        "dispatch_transport": "HOST_NATIVE",
+                        "dispatch_reservation_id": "reservation-integrity",
+                        "dispatch_reasoning_class": "STANDARD",
+                        "dispatch_decision_fingerprint": "0" * 64,
                         "receiver_context_id": "context-integrity",
                         "receiver_attestation_id": "attestation-integrity",
                         "operation_id": "op-integrity",
@@ -2182,7 +2314,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 27)
+            self.assertEqual(len(listed["result"]["tools"]), 29)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

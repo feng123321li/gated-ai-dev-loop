@@ -20,7 +20,7 @@ import hdg
 from hdg.dispatch_planning import plan_dispatch_batch
 from hdg.errors import GatedLoopError
 from hdg.graph_model import loop_node_id
-from hdg.graph_runtime import dispatch_loop, graph_status
+from hdg.graph_runtime import graph_status
 from hdg.mcp_tools import call_tool, tool_definitions
 from hdg.mcp_adapter import (
     CLIENT_CAPABILITIES_META_KEY,
@@ -30,9 +30,14 @@ from hdg.mcp_adapter import (
     PROTOCOL_VERSION_META_KEY,
 )
 from hdg.model_core import validate_hierarchy_definition
-from hdg.planning import freeze_hierarchy, prepare_hierarchy
+from hdg.planning import (
+    freeze_hierarchy,
+    prepare_hierarchy,
+    preview_hierarchy,
+)
 
 from .test_loop_architecture import group_hierarchy, task_hierarchy
+from .automatic_dispatch import dispatch_loop, reserve_loop
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -228,8 +233,11 @@ class PluginBundleTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         expected_copy = (
             "请选择下一步：",
-            "**自动执行**：立即冻结并开始实现、测试和独立审查",
-            "**手动交接**：冻结后生成交接信息",
+            (
+                "**自动执行**：创建或选择实际开发工作区，准备并冻结后"
+                "开始实现、测试和独立审查"
+            ),
+            "**手动交接**：只生成开发内容交接文件，不创建任务或工作区",
             "如需继续调整需求，请直接回复修改意见；当前方案不会冻结。",
         )
         for line in expected_copy:
@@ -255,8 +263,8 @@ class PluginBundleTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("`PREPARED`", main)
-        self.assertIn("需求未变时不要重复 prepare", main + planning)
-        self.assertIn("初次冻结前用户修改需求时", planning)
+        self.assertIn("需求未变时不要重复 preview", main + planning)
+        self.assertIn("初次开发前用户修改需求时", planning)
         self.assertIn(
             "回答后保留当前 fingerprint",
             planning,
@@ -324,11 +332,14 @@ class PluginBundleTests(unittest.TestCase):
             with self.subTest(tool_name=tool_name):
                 self.assertIn(f"`{tool_name}`", main)
                 self.assertIn(f"`{tool_name}`", recommendations)
-        self.assertIn("不再次询问确认", planning)
+        self.assertIn("不再询问", planning)
         self.assertIn("30 秒调整窗口", planning)
-        self.assertIn("自动用同一输入重调", planning)
-        self.assertIn("创建新 Codex 任务", planning)
-        self.assertIn("创建新 Claude 会话", planning)
+        self.assertIn("到期自动重调", planning)
+        self.assertIn("只生成一个自包含交接文件", planning)
+        self.assertIn("交接前不指定 Agent", planning)
+        self.assertIn("开始实际开发时才创建", planning)
+        self.assertNotIn("创建新 Codex 任务", planning)
+        self.assertNotIn("创建新 Claude 会话", planning)
         self.assertIn("推荐工具不得启动外部 CLI", execution)
         self.assertIn("dispatchAllowed=false", recommendations)
         self.assertIn("不解析 `loop.payload`", recommendations)
@@ -339,7 +350,7 @@ class PluginBundleTests(unittest.TestCase):
         metadata = (
             SKILL / "agents" / "openai.yaml"
         ).read_text(encoding="utf-8")
-        self.assertIn("Agent + Model", metadata)
+        self.assertIn("开发内容交接文件", metadata)
 
     def test_skill_auto_dispatches_planned_models_in_parallel(self) -> None:
         main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
@@ -435,7 +446,7 @@ class PluginBundleTests(unittest.TestCase):
                 self.assertIn(marker, main + planning + execution)
         self.assertIn("跨 Delivery", main)
         self.assertIn("REFREEZE_TASK_REQUIREMENT", execution)
-        self.assertIn("revision 1", planning)
+        self.assertIn("requirement revision 1", planning)
         self.assertIn("不得修改依赖", execution)
         self.assertIn("优先选择本地 `main`", planning)
         self.assertIn("回退 `master`", planning)
@@ -448,9 +459,9 @@ class PluginBundleTests(unittest.TestCase):
             "不得仅因 `workspace_status` 返回旧 Delivery 就进入 Revision",
             planning,
         )
-        self.assertIn("`environment=worktree`", planning)
+        self.assertIn("`WORKTREE_SETUP_QUEUED`", planning)
         self.assertIn(
-            "不得再次要求用户回复一次",
+            "排队期间不重试创建",
             planning,
         )
         self.assertIn(
@@ -639,9 +650,15 @@ class PluginBundleTests(unittest.TestCase):
                 expected_hierarchy_fingerprint=(
                     prepared["hierarchyFingerprint"]
                 ),
-                execution_mode="manual",
                 confirmed=True,
                 confirmed_by="human",
+            )
+            reservation = reserve_loop(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=loop_node_id("t-service"),
+                agent_id="claude-code",
+                model_id="claude-sonnet",
             )
             tool_input = {
                 "root_id": prepared["rootId"],
@@ -649,7 +666,19 @@ class PluginBundleTests(unittest.TestCase):
                 "owner": "claude-child",
                 "agent_id": "untrusted-model-claim",
                 "model_id": "claude-sonnet",
-                "dispatch_mode": "MANUAL",
+                "dispatch_mode": reservation["dispatchMode"],
+                "dispatch_transport": reservation[
+                    "dispatchTransport"
+                ],
+                "dispatch_reservation_id": reservation[
+                    "dispatchReservationId"
+                ],
+                "dispatch_reasoning_class": reservation[
+                    "dispatchReasoningClass"
+                ],
+                "dispatch_decision_fingerprint": reservation[
+                    "dispatchDecisionFingerprint"
+                ],
                 "receiver_context_id": "untrusted-context",
                 "operation_id": "op-claude-hook-attested",
             }
@@ -922,7 +951,6 @@ class PluginBundleTests(unittest.TestCase):
                 expected_hierarchy_fingerprint=(
                     prepared["hierarchyFingerprint"]
                 ),
-                execution_mode="active",
                 confirmed=True,
                 confirmed_by="human",
             )
@@ -1109,7 +1137,6 @@ class PluginBundleTests(unittest.TestCase):
                 expected_hierarchy_fingerprint=(
                     prepared["hierarchyFingerprint"]
                 ),
-                execution_mode="active",
                 confirmed=True,
                 confirmed_by="human",
             )
@@ -1166,7 +1193,6 @@ class PluginBundleTests(unittest.TestCase):
                 expected_hierarchy_fingerprint=(
                     prepared["hierarchyFingerprint"]
                 ),
-                execution_mode="active",
                 confirmed=True,
                 confirmed_by="human",
             )
@@ -1229,7 +1255,6 @@ class PluginBundleTests(unittest.TestCase):
                 expected_hierarchy_fingerprint=(
                     prepared["hierarchyFingerprint"]
                 ),
-                execution_mode="active",
                 confirmed=True,
                 confirmed_by="human",
             )
@@ -1501,7 +1526,8 @@ class PluginBundleTests(unittest.TestCase):
         )
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
-        self.assertEqual(len(tool_definitions()), 27)
+        tool_count = len(tool_definitions())
+        self.assertEqual(tool_count, 29)
         self.assertIn(
             "report_loop_progress",
             {tool["name"] for tool in tool_definitions()},
@@ -1510,6 +1536,15 @@ class PluginBundleTests(unittest.TestCase):
             "report_host_capacity_exhausted",
             {tool["name"] for tool in tool_definitions()},
         )
+        engineering = (ROOT / "docs" / "project-engineering.md").read_text(
+            encoding="utf-8"
+        )
+        documented = re.search(
+            r"`mcp_tools\.py` 把 (\d+) 个模型可调用工具映射到 Controller",
+            engineering,
+        )
+        self.assertIsNotNone(documented)
+        self.assertEqual(int(documented.group(1)), tool_count)
 
     def test_bundled_mcp_prefers_modern_stdio_discovery(self) -> None:
         entry = SKILL / "scripts" / "hdg_mcp.py"
@@ -1521,7 +1556,13 @@ class PluginBundleTests(unittest.TestCase):
                 "version": "1.0.0",
             },
         }
-        messages = [
+        hierarchy = group_hierarchy()
+        with TemporaryDirectory() as project_root:
+            preview = preview_hierarchy(
+                root=project_root,
+                hierarchy=hierarchy,
+            )
+            messages = [
             {
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -1549,8 +1590,8 @@ class PluginBundleTests(unittest.TestCase):
                 "id": 4,
                 "method": "tools/call",
                 "params": {
-                    "name": "prepare_hierarchy",
-                    "arguments": {"hierarchy": group_hierarchy()},
+                    "name": "preview_hierarchy",
+                    "arguments": {"hierarchy": hierarchy},
                     "_meta": request_meta,
                 },
             },
@@ -1559,20 +1600,26 @@ class PluginBundleTests(unittest.TestCase):
                 "id": 5,
                 "method": "tools/call",
                 "params": {
-                    "name": "recommend_executors",
+                    "name": "create_manual_handoff",
                     "arguments": {
-                        "root_id": "d-service",
-                        "recommendation_mode": "MANUAL_HANDOFF",
+                        "hierarchy": hierarchy,
+                        "expected_hierarchy_fingerprint": (
+                            preview["hierarchyFingerprint"]
+                        ),
+                        "expected_graph_fingerprint": (
+                            preview["graphFingerprint"]
+                        ),
+                        "authorized_project_ids": [],
+                        "confirmed_by": "human",
                     },
                     "_meta": request_meta,
                 },
             },
-        ]
-        request = "".join(
-            json.dumps(message, separators=(",", ":")) + "\n"
-            for message in messages
-        )
-        with TemporaryDirectory() as project_root:
+            ]
+            request = "".join(
+                json.dumps(message, separators=(",", ":")) + "\n"
+                for message in messages
+            )
             process = subprocess.Popen(
                 [
                     sys.executable,
@@ -1612,20 +1659,19 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-                27,
+            29,
         )
         discovery = responses[2]["result"]["structuredContent"]["result"]
         self.assertFalse(
             discovery["rules"]["developmentCommandsStarted"]
         )
-        advice = responses[4]["result"]["structuredContent"]["result"]
-        self.assertTrue(advice["recommendations"])
-        self.assertTrue(
-            all(
-                not item["dispatchAllowed"]
-                for item in advice["recommendations"]
-            )
-        )
+        preview_result = responses[3]["result"]["structuredContent"][
+            "result"
+        ]
+        self.assertEqual(preview_result["status"], "PREVIEW")
+        handoff = responses[4]["result"]["structuredContent"]["result"]
+        self.assertEqual(handoff["status"], "HANDOFF_READY")
+        self.assertFalse(handoff["graphRunCreated"])
 
     def test_bundled_mcp_keeps_legacy_initialize_fallback(self) -> None:
         entry = SKILL / "scripts" / "hdg_mcp.py"
@@ -1693,7 +1739,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-                27,
+            29,
         )
 
 

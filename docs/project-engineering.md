@@ -60,25 +60,26 @@ Hierarchy 最外层只有两个入口：
 
 ```text
 hierarchy
-├─ delivery            # Graph/run 身份、交付摘要、Git binding、最终 Review
+├─ delivery            # Graph/run 身份、保障档、交付摘要、Git binding
 │  ├─ gitBinding?      # 主工作区 feature/base/fork commit/integration target
 │  └─ projectScopes?   # 多仓库 root/access/gitBinding；可写仓库同名分支
 └─ root
    ├─ schemaVersion
    ├─ skillHints
    ├─ definition       # GROUP 或 TASK
-   ├─ reviewLoop       # TASK/GROUP 均必填
+   ├─ reviewLoop       # STANDARD 的 TASK/GROUP 必填；LIGHT 根 TASK 为 null
    └─ children         # GROUP 可递归包含 GROUP/TASK，TASK 为空
 ```
 
 嵌套节点不重复 `schemaVersion` 和 `skillHints` 包装字段。Delivery 不是 work item kind；`model_core.py` 只接受 `GROUP` 与 `TASK` 定义。
 
-Graph 编译遵循以下终态规则：
+保障档由规划 Agent 根据实际改动内容和影响范围判断，Controller 不解析业务 payload 或按行数猜测。省略时安全回退为 `STANDARD`；`LIGHT` 只允许一个根 TASK，并要求保存 `assuranceRationale`。Graph 编译遵循以下终态规则：
 
-- TASK 依次通过 `TASK_LOOP` 和 `TASK_REVIEW_LOOP`，Review 成功才是终态；
+- STANDARD TASK 依次通过 `TASK_LOOP` 和 `TASK_REVIEW_LOOP`，Review 成功才是终态；
 - GROUP 等待全部直接子节点终态，依次通过 `GROUP_JOIN`（GROUP 完成点）和 `GROUP_REVIEW_LOOP`；
 - 父 GROUP 只消费子 GROUP Review 后的终态；
-- 根终态进入 `DELIVERY_REVIEW_LOOP`，最后进入一次 `USER_CONFIRMATION`。
+- STANDARD 根终态进入 `DELIVERY_REVIEW_LOOP`，最后进入一次 `USER_CONFIRMATION`；
+- LIGHT 只有 `TASK_LOOP → USER_CONFIRMATION`，执行中发现接口、数据、权限、安全、生产部署、跨模块影响或其他范围扩大时返回 `REPLAN_REQUIRED`，由同一 Delivery 的下一 Revision 升级为 STANDARD。
 
 兄弟 `dependsOn` 是启动屏障。若依赖源是 GROUP，目标子树要等待源 GROUP 的 Review 成功，而不是只等待其 Join。
 
@@ -123,14 +124,16 @@ Graph 编译遵循以下终态规则：
 
 工具分为六组：
 
-- 发现、分模式建议与派遣计划：`available_agents`、`recommend_executors`、`plan_dispatch_batch`。自动模式的正式路由先进入 30 秒 `HOST_NATIVE_ROUTE_REVIEW` 调整窗口，超时后才预留；手动交接由目标 Agent 的独立会话继续。
-- 规划：`workspace_status`、`hierarchy_contract`、`prepare_hierarchy`、`freeze_hierarchy`
+- 发现、自动建议与派遣计划：`available_agents`、`recommend_executors`、`plan_dispatch_batch`。自动模式的正式路由先进入 30 秒 `HOST_NATIVE_ROUTE_REVIEW` 调整窗口，超时后才预留；手动交接不经过推荐器。
+- 规划与交接：`workspace_status`、`hierarchy_contract`、`preview_hierarchy`、`create_manual_handoff`、`prepare_hierarchy`、`freeze_hierarchy`。手动交接只生成一个自包含文件，接收后开始开发时才创建 worktree 并准备 Graph。
 - Delivery 修订：`delivery_revision_history`、`prepare_delivery_revision`
 - 需求修订：`unfreeze_task_requirement`、`refreeze_task_requirement`
 - 查询：`graph_frontier`、`graph_status`、`graph_events`、`loop_context`
 - Loop 控制：`dispatch_loop`、`heartbeat_loop`、`report_loop_progress`、`pause_loop`、`resume_loop`、`record_loop_result`
 
-`report_loop_progress` 写入有界的 `LOOP_PROGRESS_REPORTED` 可观测事件，不参与 Graph FSM、不续租。`graph_status` 与会先推进租约的 `graph_frontier` 返回 `progressMonitor`：结构化行用于宿主监控，`markdownTable` 用简体中文汇总 attempt、Agent、原生/实际模型、当前阶段、摘要、里程碑、下一步、测试、心跳/租约和健康预警。主 Agent 默认展示该表格，不把原始事件名、operation、reservation 或终端日志直接暴露给普通用户。
+Graph Run 只有自动执行一种模式：MCP 与 Python `freeze_hierarchy` 均不接收 `execution_mode`，Repository 冻结只写入 `active`；`dispatch_loop` 必须显式提交 `dispatch_mode=AUTO` 及对应的宿主原生 reservation/decision，`MANUAL` 会在 schema 和运行时同时被拒绝。手动交接是 `create_manual_handoff` 生成文件的独立流程，不创建 Graph Run，也不存在可供第三方调用的 manual claim 兼容入口。
+
+`report_loop_progress` 写入有界的 `LOOP_PROGRESS_REPORTED` 可观测事件，不参与 Graph FSM、不续租。摘要、里程碑和下一步使用用户当前语言，不强制包含中文字符。`graph_status` 与会先推进租约的 `graph_frontier` 返回 `progressMonitor`：结构化行用于宿主监控，`markdownTable` 使用中文固定表头与状态标签汇总 attempt、Agent、原生/实际模型、当前阶段、摘要、里程碑、下一步、测试、心跳/租约和健康预警。主 Agent 默认展示该表格，不把原始事件名、operation、reservation 或终端日志直接暴露给普通用户。
 - 恢复：`advance_graph`、`rebuild_graph_run`
 - 终态：`record_user_confirmation`、`cancel_graph_run`
 
@@ -138,9 +141,9 @@ Plugin MCP 工具不接收业务 `root` 参数。Adapter 从宿主配置或请�
 
 `prepare_hierarchy.inputSchema` 由 `hierarchy_contract.py` 的 schema v3 生成器直接构建，以 `oneOf` 暴露 GROUP/TASK 两种根节点，并保持所有结构对象闭合、仅 `loop.payload` 开放。`validate_tool_arguments` 在调用 Controller 前复用 `validate_hierarchy_definition` 完成跨字段语义预检，将 hierarchy 契约错误统一包装为 `MCP_TOOL_ARGUMENT_INVALID`；Controller 内部校验继续作为非 MCP 调用的防御边界。
 
-`loop_context.completionPolicy` 明确输入和终态边界：payload 是目标、明确约束和已知验收点的输入，Loop 在运行时从真实代码、契约和数据链路推导 scope 内必要条件；冻结 Graph 不冻结内部实现计划，可修复 finding 必须在当前 Loop 内调整方案、修正并复验。初始 freeze 同时为所有 TASK 建立 revision 1 冻结记录；`unfreeze_task_requirement` 只接受未开始 TASK，`refreeze_task_requirement` 只替换标题、摘要和 payload，并原子更新 hierarchy/graph 双指纹、事件链和人类投影。`record_loop_result` 的 `BLOCKED` 要求显式 failure class，只用于当前 scope 和权限内没有继续路径的真实终态；调度器仍不解释不透明 finding，也不为返工创建 Graph 环。
+`loop_context.completionPolicy` 明确输入和终态边界：payload 是目标、明确约束和已知验收点的输入，Loop 在运行时从真实代码、契约和数据链路推导 scope 内必要条件；冻结 Graph 不冻结内部实现计划，可修复 finding 必须在当前 Loop 内调整方案、修正并复验。STANDARD 执行完整声明验收并保留分层 Review；LIGHT 对已声明改动做定向验证，并在实际内容或影响超出判断依据时以 `REPLAN_REQUIRED` 退出，不能继续借轻量档绕过 Review。初始 freeze 同时为所有 TASK 建立 revision 1 冻结记录；`unfreeze_task_requirement` 只接受未开始 TASK，`refreeze_task_requirement` 只替换标题、摘要和 payload，并原子更新 hierarchy/graph 双指纹、事件链和人类投影。`record_loop_result` 的 `BLOCKED` 要求显式 failure class，只用于当前 scope 和权限内没有继续路径的真实终态；调度器仍不解释不透明 finding，也不为返工创建 Graph 环。
 
-`controller.py` 是唯一共享应用入口；`mcp_tools.py` 把 24 个模型可调用工具映射到 Controller。接收凭证签发和硬额度熔断是模型外宿主回调，不进入 MCP 工具目录。`mcp_adapter.py` 负责协议、精确启动适配器身份与宿主策略。
+`controller.py` 是唯一共享应用入口；`mcp_tools.py` 把 29 个模型可调用工具映射到 Controller。接收凭证签发和硬额度熔断是模型外宿主回调，不进入 MCP 工具目录。该数量由契约测试与真实工具目录同步校验，避免文档漂移。`mcp_adapter.py` 负责协议、精确启动适配器身份与宿主策略。
 
 `agent_discovery.py` 只读取 PATH、终端 `--version`、非敏感模型字段和用户本地 Profile，不启动开发命令或返回绝对路径、凭据与服务地址。`agent_recommendation.py` 只按 `TASK_LOOP`/Review 角色、显式 Profile 优先级、可用性和上游开发 Agent 多样性排序；发现候选固定标记为 `LOCAL_TERMINAL / EXTERNAL_PROCESS / hostDispatchEligible=false`，不读取 Loop payload，不持久化结果，也不调用 `dispatch_loop`。因此手工配置或任意本机修改器的变化无需重建 Frozen Graph，项目也不依赖修改器类型。
 

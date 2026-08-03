@@ -682,7 +682,18 @@ class PluginBundleTests(unittest.TestCase):
                 root=root,
                 trusted_host_adapter="claude-code",
             )
-            claude_transcript = Path(root, "claude-child.jsonl")
+            claude_transcript = Path(
+                root,
+                "claude-parent-session.jsonl",
+            )
+            claude_transcript.write_text("", encoding="utf-8")
+            claude_sidechain = Path(
+                root,
+                "claude-parent-session",
+                "subagents",
+                "agent-claude-agent-child-1.jsonl",
+            )
+            claude_sidechain.parent.mkdir(parents=True)
             heartbeat_tool = (
                 "mcp__plugin_layered-delivery_layered-delivery"
                 "__heartbeat_loop"
@@ -691,7 +702,7 @@ class PluginBundleTests(unittest.TestCase):
                 "root_id": prepared["rootId"],
                 "node_id": loop_node_id("t-service"),
             }
-            claude_transcript.write_text(
+            claude_sidechain.write_text(
                 json.dumps(
                     {
                         "agentId": "claude-agent-child-1",
@@ -730,7 +741,7 @@ class PluginBundleTests(unittest.TestCase):
             mutation_output = json.loads(mutation.stdout)[
                 "hookSpecificOutput"
             ]
-            with claude_transcript.open("a", encoding="utf-8") as handle:
+            with claude_sidechain.open("a", encoding="utf-8") as handle:
                 handle.write(
                     json.dumps(
                         {

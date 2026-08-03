@@ -25,48 +25,66 @@ def _claude_model_from_transcript(
     tool_use_id: str,
 ) -> str | None:
     transcript = Path(transcript_path).expanduser().resolve(strict=True)
-    if transcript.suffix != ".jsonl" or not transcript.is_file():
+    if (
+        transcript.suffix != ".jsonl"
+        or not transcript.is_file()
+        or "/" in receiver_context_id
+        or "\\" in receiver_context_id
+    ):
         return None
 
+    candidates = [
+        transcript,
+        transcript.with_suffix("")
+        / "subagents"
+        / f"agent-{receiver_context_id}.jsonl",
+    ]
     matched_model = None
-    with transcript.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            event = json.loads(line)
-            if (
-                not isinstance(event, dict)
-                or event.get("agentId") != receiver_context_id
-                or event.get("sessionId") != parent_context_id
-            ):
-                continue
-            message = event.get("message")
-            if not isinstance(message, dict):
-                continue
-            content = message.get("content")
-            model_id = message.get("model")
-            if (
-                message.get("role") != "assistant"
-                or not isinstance(content, list)
-                or not isinstance(model_id, str)
-                or not model_id
-            ):
-                continue
-            for item in content:
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (OSError, ValueError):
+            continue
+        if resolved.suffix != ".jsonl" or not resolved.is_file():
+            continue
+        with resolved.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                event = json.loads(line)
                 if (
-                    not isinstance(item, dict)
-                    or item.get("type") != "tool_use"
-                    or item.get("id") != tool_use_id
+                    not isinstance(event, dict)
+                    or event.get("agentId") != receiver_context_id
+                    or event.get("sessionId") != parent_context_id
                 ):
                     continue
+                message = event.get("message")
+                if not isinstance(message, dict):
+                    continue
+                content = message.get("content")
+                model_id = message.get("model")
                 if (
-                    item.get("name") != tool_name
-                    or item.get("input") != tool_input
-                    or (
-                        matched_model is not None
-                        and matched_model != model_id
-                    )
+                    message.get("role") != "assistant"
+                    or not isinstance(content, list)
+                    or not isinstance(model_id, str)
+                    or not model_id
                 ):
-                    return None
-                matched_model = model_id
+                    continue
+                for item in content:
+                    if (
+                        not isinstance(item, dict)
+                        or item.get("type") != "tool_use"
+                        or item.get("id") != tool_use_id
+                    ):
+                        continue
+                    if (
+                        item.get("name") != tool_name
+                        or item.get("input") != tool_input
+                        or (
+                            matched_model is not None
+                            and matched_model != model_id
+                        )
+                    ):
+                        return None
+                    matched_model = model_id
     return matched_model
 
 

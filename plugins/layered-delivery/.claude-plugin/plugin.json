@@ -1,6 +1,6 @@
 {
   "name": "layered-delivery",
-  "version": "0.28.8",
+  "version": "0.28.9",
   "description": "调度递归 GROUP/TASK、不可变 Revision、跨仓分支与宿主原生 Agent/Model 自动派遣",
   "author": {
     "name": "layered-delivery contributors",

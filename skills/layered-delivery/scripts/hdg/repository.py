@@ -2141,9 +2141,12 @@ class SchedulerRepository:
         self._assert_receiver_root(
             connection,
             run_id=run_id,
+            node_id=node_id,
+            attempt=attempt,
             host_adapter_id=host_adapter_id,
             parent_context_id=parent_context_id,
             at=at,
+            commit=False,
         )
         connection.execute(
             "UPDATE receiver_attestations SET status = 'SUPERSEDED' "
@@ -2173,37 +2176,171 @@ class SchedulerRepository:
         )
         return attestation_id
 
-    @staticmethod
     def _assert_receiver_root(
+        self,
         connection: sqlite3.Connection,
         *,
         run_id: str,
+        node_id: str,
+        attempt: int,
         host_adapter_id: str,
         parent_context_id: str,
         at: str,
+        commit: bool,
     ) -> None:
         receiver_root = connection.execute(
             "SELECT * FROM run_receiver_roots WHERE run_id = ?",
             (run_id,),
         ).fetchone()
         if receiver_root is None:
-            connection.execute(
-                "INSERT INTO run_receiver_roots("
-                "run_id, host_adapter_id, orchestrator_context_id, "
-                "created_at) VALUES (?, ?, ?, ?)",
-                (run_id, host_adapter_id, parent_context_id, at),
-            )
+            if commit:
+                connection.execute(
+                    "INSERT INTO run_receiver_roots("
+                    "run_id, host_adapter_id, orchestrator_context_id, "
+                    "created_at) VALUES (?, ?, ?, ?)",
+                    (run_id, host_adapter_id, parent_context_id, at),
+                )
             return
-        if receiver_root["orchestrator_context_id"] != parent_context_id:
+
+        same_adapter = receiver_root["host_adapter_id"] == host_adapter_id
+        same_parent = (
+            receiver_root["orchestrator_context_id"] == parent_context_id
+        )
+        if same_adapter and same_parent:
+            return
+        if (
+            not same_adapter
+            or not self._worker_lost_retry_allows_receiver_root_rotation(
+                connection,
+                run_id=run_id,
+                node_id=node_id,
+                attempt=attempt,
+                parent_context_id=parent_context_id,
+                at=at,
+            )
+        ):
             fail(
                 "SCHEDULER_RECEIVER_PARENT_UNTRUSTED",
                 "Receiver attestations must originate from the run's "
                 "host-attested orchestrator context",
+                expectedHostAdapterId=receiver_root["host_adapter_id"],
+                suppliedHostAdapterId=host_adapter_id,
                 expectedOrchestratorContextId=(
                     receiver_root["orchestrator_context_id"]
                 ),
                 suppliedParentContextId=parent_context_id,
             )
+        if not commit:
+            return
+
+        previous_context_id = receiver_root["orchestrator_context_id"]
+        updated = connection.execute(
+            "UPDATE run_receiver_roots SET host_adapter_id = ?, "
+            "orchestrator_context_id = ? WHERE run_id = ? "
+            "AND host_adapter_id = ? AND orchestrator_context_id = ?",
+            (
+                host_adapter_id,
+                parent_context_id,
+                run_id,
+                receiver_root["host_adapter_id"],
+                previous_context_id,
+            ),
+        )
+        if updated.rowcount != 1:
+            fail(
+                "SCHEDULER_RECEIVER_PARENT_UNTRUSTED",
+                "The receiver orchestrator root changed concurrently",
+            )
+        self.append_event(
+            connection,
+            run_id=run_id,
+            node_id=node_id,
+            attempt=attempt,
+            event_type="RECEIVER_ROOT_ROTATED",
+            actor=host_adapter_id,
+            operation_id=None,
+            payload={
+                "reason": "WORKER_LOST_RETRY",
+                "previousOrchestratorContextDigest": hashlib.sha256(
+                    previous_context_id.encode("utf-8")
+                ).hexdigest(),
+                "orchestratorContextDigest": hashlib.sha256(
+                    parent_context_id.encode("utf-8")
+                ).hexdigest(),
+            },
+            at=at,
+        )
+
+    @staticmethod
+    def _worker_lost_retry_allows_receiver_root_rotation(
+        connection: sqlite3.Connection,
+        *,
+        run_id: str,
+        node_id: str,
+        attempt: int,
+        parent_context_id: str,
+        at: str,
+    ) -> bool:
+        if attempt <= 1:
+            return False
+        current = connection.execute(
+            "SELECT status FROM node_runs WHERE run_id = ? "
+            "AND node_id = ? AND attempt = ?",
+            (run_id, node_id, attempt),
+        ).fetchone()
+        previous = connection.execute(
+            "SELECT status, failure_class FROM node_runs WHERE run_id = ? "
+            "AND node_id = ? AND attempt = ?",
+            (run_id, node_id, attempt - 1),
+        ).fetchone()
+        retry_event = connection.execute(
+            "SELECT payload_json FROM graph_events WHERE run_id = ? "
+            "AND node_id = ? AND attempt = ? "
+            "AND event_type = 'LOOP_RETRY_SCHEDULED' "
+            "ORDER BY event_id DESC LIMIT 1",
+            (run_id, node_id, attempt),
+        ).fetchone()
+        if (
+            current is None
+            or current["status"] != "READY"
+            or previous is None
+            or previous["status"] != "BLOCKED"
+            or previous["failure_class"] != "WORKER_LOST"
+            or retry_event is None
+        ):
+            return False
+        try:
+            retry_payload = json.loads(retry_event["payload_json"])
+        except (TypeError, ValueError):
+            return False
+        if (
+            retry_payload.get("failureClass") != "WORKER_LOST"
+            or retry_payload.get("previousAttempt") != attempt - 1
+        ):
+            return False
+        active_claim = connection.execute(
+            "SELECT 1 FROM node_runs WHERE run_id = ? "
+            "AND status = 'CLAIMED' LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if active_claim is not None:
+            return False
+        active_claude_attestation = connection.execute(
+            "SELECT 1 FROM receiver_attestations WHERE run_id = ? "
+            "AND status = 'ISSUED' AND expires_at >= ? "
+            "AND parent_context_id != ? LIMIT 1",
+            (run_id, at, parent_context_id),
+        ).fetchone()
+        active_codex_identity = connection.execute(
+            "SELECT 1 FROM host_receiver_identities WHERE run_id = ? "
+            "AND status = 'ISSUED' AND expires_at >= ? "
+            "AND parent_context_id != ? LIMIT 1",
+            (run_id, at, parent_context_id),
+        ).fetchone()
+        return (
+            active_claude_attestation is None
+            and active_codex_identity is None
+        )
 
     @staticmethod
     def issue_host_receiver_identity(
@@ -2263,8 +2400,8 @@ class SchedulerRepository:
         )
         return attestation_id
 
-    @staticmethod
     def consume_receiver_attestation(
+        self,
         connection: sqlite3.Connection,
         *,
         attestation_id: str,
@@ -2343,12 +2480,15 @@ class SchedulerRepository:
                     "SCHEDULER_RECEIVER_ATTESTATION_MISMATCH",
                     "The receiver attestation is not bound to this claim",
                 )
-            SchedulerRepository._assert_receiver_root(
+            self._assert_receiver_root(
                 connection,
                 run_id=run_id,
+                node_id=node_id,
+                attempt=attempt,
                 host_adapter_id=host_adapter_id,
                 parent_context_id=identity["parent_context_id"],
                 at=at,
+                commit=True,
             )
             connection.execute(
                 "UPDATE host_receiver_identities SET status = 'CONSUMED', "
@@ -2384,6 +2524,16 @@ class SchedulerRepository:
                 "SCHEDULER_RECEIVER_ATTESTATION_MISMATCH",
                 "The receiver attestation is not bound to this claim",
             )
+        self._assert_receiver_root(
+            connection,
+            run_id=run_id,
+            node_id=node_id,
+            attempt=attempt,
+            host_adapter_id=host_adapter_id,
+            parent_context_id=row["parent_context_id"],
+            at=at,
+            commit=True,
+        )
         connection.execute(
             "UPDATE receiver_attestations SET status = 'CONSUMED', "
             "consumed_at = ?, operation_id = ? "

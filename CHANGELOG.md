@@ -4,6 +4,12 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## Unreleased
+
+- 修复中央编排器设置工具在 Codex MCP Apps 保存时错误要求项目 sandbox metadata 的问题；设置读写保持用户级、与 Delivery 工作区无关，其他 Graph 工具仍严格校验工作区身份。
+- 在中央编排器面板和保存接口中显式锁定尚不可用的跨 Adapter 调度与 `SWITCH_ADAPTER` 策略，并返回 `ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE`；README 新增配置路径、刷新语义和当前能力边界。
+- 修复 `WORKER_LOST` 后新编排会话无法接管同一 Adapter 重试 attempt 的 receiver-root 连续性问题。信任根只在首次成功 claim 时固定；满足严格失联重试条件时可原子轮换并记录 `RECEIVER_ROOT_ROTATED`，无需重冻或直接修改调度数据库，跨 Adapter 和并发活跃接收方仍保持拒绝。
+
 ## 0.28.7 — 2026-08-03
 
 发布提交：`4ec6dd6`

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .agent_discovery import discover_available_agents
+from .errors import fail
 from .orchestrator_config import (
     OrchestratorConfig,
     built_in_orchestrator_config,
@@ -14,6 +15,16 @@ KNOWN_ADAPTER_NAMES = {
     "codex": "Codex Native",
     "claude-code": "Claude Native",
     "gemini": "Gemini Adapter",
+}
+
+CROSS_ADAPTER_UNAVAILABLE = {
+    "supported": False,
+    "mutable": False,
+    "code": "ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE",
+    "message": (
+        "跨 Adapter 自动派遣暂不可用；当前宿主只能原生创建和认证"
+        "当前 Adapter 的接收上下文。"
+    ),
 }
 
 
@@ -97,6 +108,9 @@ def open_orchestrator_settings(
             "currentHostNativeOnly": True,
             "terminalDiscoveryDoesNotImplyNativeDispatch": True,
         },
+        "featureAvailability": {
+            "crossAdapterDispatch": dict(CROSS_ADAPTER_UNAVAILABLE),
+        },
     }
 
 
@@ -111,6 +125,19 @@ def update_orchestrator_settings(
     """Persist one explicitly approved complete user-level policy."""
 
     del root, explicit_dogfood
+    unsupported_fields: list[str] = []
+    if isinstance(config, dict):
+        if config.get("allowCrossAdapterDispatch") is True:
+            unsupported_fields.append("allowCrossAdapterDispatch")
+        if config.get("quotaExhaustionPolicy") == "SWITCH_ADAPTER":
+            unsupported_fields.append("quotaExhaustionPolicy")
+    if unsupported_fields:
+        fail(
+            CROSS_ADAPTER_UNAVAILABLE["code"],
+            CROSS_ADAPTER_UNAVAILABLE["message"],
+            unsupportedFields=unsupported_fields,
+            currentHostNativeOnly=True,
+        )
     saved = save_orchestrator_config(config)
     result = open_orchestrator_settings(
         root=".",
@@ -123,6 +150,7 @@ def update_orchestrator_settings(
 
 
 __all__ = (
+    "CROSS_ADAPTER_UNAVAILABLE",
     "KNOWN_ADAPTER_NAMES",
     "open_orchestrator_settings",
     "update_orchestrator_settings",

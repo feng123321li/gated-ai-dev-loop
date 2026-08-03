@@ -3090,6 +3090,33 @@ def _rebuild_graph_run_locked(
                 "SCHEDULER_EVENT_REPLAY_INVALID",
                 "Event does not reference the latest Loop attempt",
             )
+        if event_type == "RECEIVER_ROOT_ROTATED":
+            if (
+                state["status"] != "READY"
+                or event["actor"] not in HOST_ADAPTER_AGENTS
+                or payload.get("reason") != "WORKER_LOST_RETRY"
+                or not isinstance(
+                    payload.get("previousOrchestratorContextDigest"),
+                    str,
+                )
+                or SHA256_FINGERPRINT.fullmatch(
+                    payload["previousOrchestratorContextDigest"]
+                )
+                is None
+                or not isinstance(
+                    payload.get("orchestratorContextDigest"),
+                    str,
+                )
+                or SHA256_FINGERPRINT.fullmatch(
+                    payload["orchestratorContextDigest"]
+                )
+                is None
+            ):
+                fail(
+                    "SCHEDULER_EVENT_REPLAY_INVALID",
+                    "Receiver root rotation event is invalid",
+                )
+            continue
         if event_type == "NODE_RESULT_CARRIED_FORWARD":
             if state["status"] != "PENDING":
                 fail(

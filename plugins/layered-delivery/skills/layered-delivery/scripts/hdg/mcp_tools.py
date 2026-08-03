@@ -328,7 +328,8 @@ TOOLS = (
             "Read the shared user-level central orchestrator policy and "
             "live Adapter discovery. Render the settings panel when the "
             "host supports MCP Apps; otherwise return the same structured "
-            "configuration for text-based inspection."
+            "configuration for text-based inspection. This user-level tool "
+            "does not require a Delivery workspace."
         ),
         _object({}),
         title="打开中央编排器设置",
@@ -355,7 +356,9 @@ TOOLS = (
             "Replace the complete shared user-level central orchestrator "
             "policy after explicit user confirmation. This writes the "
             "platform-specific orchestrator.json atomically and applies "
-            "the validated policy to the current MCP connection."
+            "the validated policy to the current MCP connection without "
+            "requiring a Delivery workspace. Cross-Adapter dispatch and "
+            "SWITCH_ADAPTER remain unavailable and are rejected."
         ),
         _object(
             {"config": ORCHESTRATOR_POLICY},

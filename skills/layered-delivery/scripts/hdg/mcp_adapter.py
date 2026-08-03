@@ -98,7 +98,10 @@ SERVER_INSTRUCTIONS = (
     "orchestrator configuration shared by local host products: automatic "
     "orchestration and model selection default on, cross-Adapter dispatch "
     "defaults off, the Adapter allowlist and global concurrency cap are "
-    "mandatory, and invalid configured files fail closed. For automatic "
+    "mandatory, and invalid configured files fail closed. Cross-Adapter "
+    "dispatch and SWITCH_ADAPTER remain unavailable until the host exposes "
+    "a trusted native multi-Adapter bridge; settings fail closed when a "
+    "caller tries to enable either option. For automatic "
     "configuration, open_orchestrator_settings returns a portable MCP Apps "
     "panel plus complete structured fallback data. "
     "update_orchestrator_settings requires explicit host approval, "
@@ -149,6 +152,13 @@ _USER_INTERACTION_TOOLS = frozenset(
     tool["name"]
     for tool in tool_definitions()
     if tool.get("_meta", {}).get("anthropic/requiresUserInteraction") is True
+)
+
+_PROJECT_ROOT_INDEPENDENT_TOOLS = frozenset(
+    {
+        "open_orchestrator_settings",
+        "update_orchestrator_settings",
+    }
 )
 
 
@@ -535,6 +545,9 @@ def _call_scheduler_tool(
         root_resolution = connection.project_root.resolve_request(
             params.get("_meta"),
             stateless=modern,
+            require_sandbox_metadata=(
+                name not in _PROJECT_ROOT_INDEPENDENT_TOOLS
+            ),
         )
         business_result = call_tool(
             name,

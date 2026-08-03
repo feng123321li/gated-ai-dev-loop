@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.31.0 — 2026-08-03
+
+发布提交：`ed56e67`
+
+- 自动建议与正式派遣统一使用当前宿主 Agent 的 Claude/Codex 原生模型分档；Codex 使用 Luna/Terra/Sol 等原生 selector，Claude Code 使用 Haiku/Sonnet/Opus 等原生 selector。GLM、DeepSeek 等转发后的实际模型继续只通过 `actualModelId` 展示，不参与 tier、决策指纹、reservation 或 claim。
+- `plan_dispatch_batch` 新增持久化 30 秒路由调整窗口：首次稳定路由返回无预留的 `HOST_NATIVE_ROUTE_REVIEW` 和中文表格所需结构；无需第二次确认，到期后宿主自动重调并原子预留。用户可在 claim 前用 `USER_POLICY + preferredNativeModelId` 精确修改原生模型，变化节点重新计时。
+- 自动建议限制在当前执行 Agent，不再根据本机发现结果虚构跨 Agent 建议；手动交接才允许改变 TASK 开发 Agent，并要求宿主创建目标 Agent 的独立接收会话。交给 Codex 时进入新的 Codex 任务，交给 Claude Code 时进入新的 Claude 会话，总调度会话只负责跟踪。
+- 路由预览和正式计划复用相同选择函数与决策指纹；新增持久化 route review 存储、宿主强制窗口、原生模型覆盖校验及配套回归测试。当前 schema 仍为 v3，不增加旧 schema 兼容入口。
+
 ## 0.30.0 — 2026-08-03
 
 发布提交：`ede8782`

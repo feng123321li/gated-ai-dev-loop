@@ -140,7 +140,7 @@ def _validate_executor(
         "capabilities",
         "availableSlots",
         "priority",
-        "modelOverrideSupported",
+        "nativeModelSelectionSupported",
         "models",
     }
     required = allowed - {"adapterId"}
@@ -179,10 +179,13 @@ def _validate_executor(
             "SCHEDULER_EXECUTOR_INVENTORY_INVALID",
             f"{field}.availableSlots must be from 0 through 64",
         )
-    if not isinstance(value["modelOverrideSupported"], bool):
+    if not isinstance(value["nativeModelSelectionSupported"], bool):
         fail(
             "SCHEDULER_EXECUTOR_INVENTORY_INVALID",
-            f"{field}.modelOverrideSupported must be a boolean",
+            (
+                f"{field}.nativeModelSelectionSupported must be a "
+                "boolean"
+            ),
         )
     raw_models = value["models"]
     if not isinstance(raw_models, list) or not raw_models:
@@ -218,7 +221,9 @@ def _validate_executor(
         "capabilities": sorted(capabilities),
         "availableSlots": available_slots,
         "priority": _priority(value["priority"], f"{field}.priority"),
-        "modelOverrideSupported": value["modelOverrideSupported"],
+        "nativeModelSelectionSupported": value[
+            "nativeModelSelectionSupported"
+        ],
         "models": sorted(models, key=lambda model: model["id"]),
     }
 
@@ -393,7 +398,7 @@ def _incoming_edges(graph: dict[str, Any]) -> dict[str, list[str]]:
     return incoming
 
 
-def _upstream_actual_executors(
+def _upstream_native_executors(
     *,
     node_id: str,
     incoming: dict[str, list[str]],
@@ -482,22 +487,22 @@ def _deferred_code(
             "NO_COMPATIBLE_HOST_EXECUTOR",
             "No host-native Agent advertises the required capability.",
         )
-    override_capable = [
+    selector_capable = [
         executor
         for executor in capable
-        if executor["modelOverrideSupported"]
+        if executor["nativeModelSelectionSupported"]
     ]
-    if not override_capable:
+    if not selector_capable:
         return (
-            "MODEL_OVERRIDE_UNAVAILABLE",
+            "NATIVE_MODEL_SELECTION_UNAVAILABLE",
             (
-                "Compatible Agents cannot guarantee an explicit child "
-                "model override."
+                "Compatible Agents cannot select an advertised native "
+                "model name when creating the child."
             ),
         )
     if reasoning_class == "HIGH" and not any(
         any(model["tier"] == "FRONTIER" for model in executor["models"])
-        for executor in override_capable
+        for executor in selector_capable
     ):
         return (
             "NO_HIGH_REASONING_MODEL",
@@ -508,7 +513,7 @@ def _deferred_code(
         )
     if not any(
         remaining_slots[executor["agentId"]] > 0
-        for executor in override_capable
+        for executor in selector_capable
     ):
         return (
             "NO_HOST_EXECUTOR_CAPACITY",
@@ -903,7 +908,7 @@ def plan_dispatch_batch(
             }
             routing_basis = "CURRENT_EXECUTOR_FALLBACK"
         reasoning_class = reasoning_requirement["reasoningClass"]
-        upstream_agents, upstream_models = _upstream_actual_executors(
+        upstream_agents, upstream_models = _upstream_native_executors(
             node_id=node_id,
             incoming=incoming,
             states=states,
@@ -930,7 +935,7 @@ def plan_dispatch_batch(
                     executor["dispatchTransport"]
                     != HOST_NATIVE_DISPATCH_TRANSPORT
                     or capability not in executor["capabilities"]
-                    or not executor["modelOverrideSupported"]
+                    or not executor["nativeModelSelectionSupported"]
                     or remaining_slots[executor["agentId"]] <= 0
                     or (
                         reasoning_class == "HIGH"
@@ -1174,9 +1179,10 @@ def plan_dispatch_batch(
             "hostNativeOnly": True,
             "externalProcessLaunchAllowed": False,
             "companionScriptLaunchAllowed": False,
-            "analyzedRoutesRequireExplicitModelOverride": (
+            "analyzedRoutesRequireNativeModelSelection": (
                 configuration.auto_select_model
             ),
+            "actualModelAffectsDispatch": False,
             "currentExecutorFallbackAllowed": True,
             "fallbackModelSelection": "CURRENT_HOST_DEFAULT",
             "fallbackReasoningClass": "UNCLASSIFIED",

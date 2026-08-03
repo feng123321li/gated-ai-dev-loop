@@ -1381,7 +1381,16 @@ def _projection_state_values(
         "nodeId": node_id,
         "status": _status_text(state["status"]),
         "agent": state.get("agentId") or "无",
-        "model": state.get("modelId") or "无",
+        "model": (
+            (
+                "原生 "
+                + (state.get("modelId") or "未记录")
+                + " → 实际 "
+                + state["actualModelId"]
+            )
+            if state.get("actualModelId")
+            else (state.get("modelId") or "无")
+        ),
         "owner": state["owner"] or "无",
         "attempt": str(state["attempt"]),
         "updatedAt": _utc_plus_8(latest) if latest else "无",

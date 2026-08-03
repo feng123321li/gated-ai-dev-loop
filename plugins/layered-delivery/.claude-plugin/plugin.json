@@ -1,7 +1,7 @@
 {
   "name": "layered-delivery",
-  "version": "0.29.0",
-  "description": "调度递归 GROUP/TASK、后台中文进度、失联预警与宿主原生 Agent/Model 自动派遣",
+  "version": "0.30.0",
+  "description": "调度递归 GROUP/TASK、原生模型派遣、实际模型展示、中文进度与失联预警",
   "author": {
     "name": "layered-delivery contributors",
     "url": "https://github.com/feng123321li/layered-delivery"

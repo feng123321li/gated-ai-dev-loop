@@ -54,7 +54,7 @@ class PluginBundleTests(unittest.TestCase):
                 "capabilities": ["development", "review"],
                 "availableSlots": 2,
                 "priority": 20,
-                "modelOverrideSupported": True,
+                "nativeModelSelectionSupported": True,
                 "models": [
                     {
                         "id": "gpt-5.6-sol",
@@ -172,7 +172,7 @@ class PluginBundleTests(unittest.TestCase):
         )
 
     @staticmethod
-    def run_codex_operation_hook(
+    def run_loop_operation_hook(
         hook_event: dict,
         codex_home: Path,
     ) -> subprocess.CompletedProcess:
@@ -196,7 +196,7 @@ class PluginBundleTests(unittest.TestCase):
             str(
                 PLUGIN
                 / "hooks"
-                / "authorize_codex_loop_operation.py"
+                / "authorize_loop_operation.py"
             )
         )
         stdout = io.StringIO()
@@ -216,7 +216,7 @@ class PluginBundleTests(unittest.TestCase):
         ):
             returncode = hook_module["main"]()
         return subprocess.CompletedProcess(
-            args=["in-process-codex-operation-hook"],
+            args=["in-process-loop-operation-hook"],
             returncode=returncode,
             stdout=stdout.getvalue(),
             stderr=stderr.getvalue(),
@@ -647,6 +647,44 @@ class PluginBundleTests(unittest.TestCase):
                 "receiver_context_id": "untrusted-context",
                 "operation_id": "op-claude-hook-attested",
             }
+            claude_transcript = Path(
+                root,
+                "claude-parent-session.jsonl",
+            )
+            claude_transcript.write_text("", encoding="utf-8")
+            claude_sidechain = Path(
+                root,
+                "claude-parent-session",
+                "subagents",
+                "agent-claude-agent-child-1.jsonl",
+            )
+            claude_sidechain.parent.mkdir(parents=True)
+            dispatch_tool = (
+                "mcp__plugin_layered-delivery_layered-delivery"
+                "__dispatch_loop"
+            )
+            claude_sidechain.write_text(
+                json.dumps(
+                    {
+                        "agentId": "claude-agent-child-1",
+                        "sessionId": "claude-parent-session",
+                        "message": {
+                            "role": "assistant",
+                            "model": "glm-5.2",
+                            "content": [
+                                {
+                                    "type": "tool_use",
+                                    "id": "claude-dispatch-tool",
+                                    "name": dispatch_tool,
+                                    "input": tool_input,
+                                }
+                            ],
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             completed = subprocess.run(
                 [
                     sys.executable,
@@ -661,10 +699,13 @@ class PluginBundleTests(unittest.TestCase):
                 input=json.dumps(
                     {
                         "hook_event_name": "PreToolUse",
+                        "tool_name": dispatch_tool,
+                        "tool_use_id": "claude-dispatch-tool",
                         "tool_input": tool_input,
                         "agent_id": "claude-agent-child-1",
                         "session_id": "claude-parent-session",
                         "cwd": root,
+                        "transcript_path": str(claude_transcript),
                     }
                 ),
                 text=True,
@@ -682,18 +723,6 @@ class PluginBundleTests(unittest.TestCase):
                 root=root,
                 trusted_host_adapter="claude-code",
             )
-            claude_transcript = Path(
-                root,
-                "claude-parent-session.jsonl",
-            )
-            claude_transcript.write_text("", encoding="utf-8")
-            claude_sidechain = Path(
-                root,
-                "claude-parent-session",
-                "subagents",
-                "agent-claude-agent-child-1.jsonl",
-            )
-            claude_sidechain.parent.mkdir(parents=True)
             heartbeat_tool = (
                 "mcp__plugin_layered-delivery_layered-delivery"
                 "__heartbeat_loop"
@@ -702,30 +731,7 @@ class PluginBundleTests(unittest.TestCase):
                 "root_id": prepared["rootId"],
                 "node_id": loop_node_id("t-service"),
             }
-            claude_sidechain.write_text(
-                json.dumps(
-                    {
-                        "agentId": "claude-agent-child-1",
-                        "sessionId": "claude-parent-session",
-                        "type": "assistant",
-                        "message": {
-                            "role": "assistant",
-                            "model": "claude-sonnet",
-                            "content": [
-                                {
-                                    "type": "tool_use",
-                                    "id": "claude-heartbeat-tool",
-                                    "name": heartbeat_tool,
-                                    "input": heartbeat_input,
-                                }
-                            ],
-                        },
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            mutation = self.run_codex_operation_hook(
+            mutation = self.run_loop_operation_hook(
                 {
                     "hook_event_name": "PreToolUse",
                     "session_id": "claude-parent-session",
@@ -739,6 +745,22 @@ class PluginBundleTests(unittest.TestCase):
                 Path(root, "codex-home"),
             )
             mutation_output = json.loads(mutation.stdout)[
+                "hookSpecificOutput"
+            ]
+            unassigned_mutation = self.run_loop_operation_hook(
+                {
+                    "hook_event_name": "PreToolUse",
+                    "session_id": "claude-parent-session",
+                    "agent_id": "claude-agent-unassigned",
+                    "tool_name": heartbeat_tool,
+                    "tool_input": heartbeat_input,
+                    "tool_use_id": "claude-unassigned-heartbeat",
+                    "cwd": root,
+                    "transcript_path": str(claude_transcript),
+                },
+                Path(root, "codex-home"),
+            )
+            unassigned_output = json.loads(unassigned_mutation.stdout)[
                 "hookSpecificOutput"
             ]
             with claude_sidechain.open("a", encoding="utf-8") as handle:
@@ -764,7 +786,7 @@ class PluginBundleTests(unittest.TestCase):
                     )
                     + "\n"
                 )
-            forged_mutation = self.run_codex_operation_hook(
+            forwarded_mutation = self.run_loop_operation_hook(
                 {
                     "hook_event_name": "PreToolUse",
                     "session_id": "claude-parent-session",
@@ -778,7 +800,7 @@ class PluginBundleTests(unittest.TestCase):
                 },
                 Path(root, "codex-home"),
             )
-            forged_output = json.loads(forged_mutation.stdout)[
+            forwarded_output = json.loads(forwarded_mutation.stdout)[
                 "hookSpecificOutput"
             ]
 
@@ -788,12 +810,21 @@ class PluginBundleTests(unittest.TestCase):
             "claude-agent-child-1",
         )
         self.assertTrue(claimed["receiverAttested"])
+        self.assertEqual(claimed["modelId"], "claude-sonnet")
+        self.assertEqual(claimed["actualModelId"], "glm-5.2")
         self.assertEqual(mutation_output["permissionDecision"], "allow")
         self.assertEqual(
             mutation_output["updatedInput"]["operation_id"],
             claimed["operationId"],
         )
-        self.assertEqual(forged_output["permissionDecision"], "deny")
+        self.assertEqual(
+            unassigned_output["permissionDecision"],
+            "deny",
+        )
+        self.assertEqual(
+            forwarded_output["permissionDecision"],
+            "allow",
+        )
 
     def test_claude_dispatch_hook_blocks_parent_context_claim(self) -> None:
         completed = subprocess.run(
@@ -850,7 +881,7 @@ class PluginBundleTests(unittest.TestCase):
             entry
             for entry in hooks["hooks"]["PreToolUse"]
             if (
-                "authorize_codex_loop_operation.py"
+                "authorize_loop_operation.py"
                 in entry["hooks"][0]["command"]
             )
         ]
@@ -908,7 +939,7 @@ class PluginBundleTests(unittest.TestCase):
             hook_event, hook_codex_home = self.codex_subagent_event(
                 root,
                 agent_id="codex-child-1",
-                model_id=assignment["model"]["id"],
+                model_id="effective-model-from-local-forwarder",
                 task_name=assignment["hostTaskName"],
                 cwd=str(nested_cwd),
             )
@@ -948,7 +979,7 @@ class PluginBundleTests(unittest.TestCase):
                 "cwd": hook_event["cwd"],
                 "transcript_path": hook_event["transcript_path"],
             }
-            authorized = self.run_codex_operation_hook(
+            authorized = self.run_loop_operation_hook(
                 operation_event,
                 hook_codex_home,
             )
@@ -1002,7 +1033,7 @@ class PluginBundleTests(unittest.TestCase):
                     "operation_id": injected_operation,
                 },
             }
-            denied = self.run_codex_operation_hook(
+            denied = self.run_loop_operation_hook(
                 denied_event,
                 helper_codex_home,
             )
@@ -1018,7 +1049,7 @@ class PluginBundleTests(unittest.TestCase):
                     "operation_id": injected_operation,
                 },
             }
-            missing_transcript = self.run_codex_operation_hook(
+            missing_transcript = self.run_loop_operation_hook(
                 missing_transcript_event,
                 hook_codex_home,
             )
@@ -1037,6 +1068,11 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(assignment_context["node_id"], assignment["nodeId"])
         self.assertEqual(claimed["status"], "CLAIMED")
+        self.assertEqual(claimed["modelId"], assignment["model"]["id"])
+        self.assertEqual(
+            claimed["actualModelId"],
+            "effective-model-from-local-forwarder",
+        )
         self.assertEqual(
             claimed["operationId"],
             injected_operation,
@@ -1053,7 +1089,9 @@ class PluginBundleTests(unittest.TestCase):
         self.assertEqual(denied_output["permissionDecision"], "deny")
         self.assertEqual(missing_output["permissionDecision"], "deny")
 
-    def test_codex_subagent_hook_requires_reserved_model(self) -> None:
+    def test_codex_subagent_hook_treats_observed_model_as_display_only(
+        self,
+    ) -> None:
         with TemporaryDirectory() as root:
             prepared = prepare_hierarchy(
                 root=root,
@@ -1085,8 +1123,8 @@ class PluginBundleTests(unittest.TestCase):
             )
             hook_event, hook_codex_home = self.codex_subagent_event(
                 root,
-                agent_id="codex-child-wrong-model",
-                model_id="gpt-5.6-sol",
+                agent_id="codex-child-forwarded-model",
+                model_id="deepseek-v4-pro",
                 task_name=plan["assignments"][0]["hostTaskName"],
                 cwd=root,
             )
@@ -1094,9 +1132,21 @@ class PluginBundleTests(unittest.TestCase):
                 hook_event,
                 hook_codex_home,
             )
+            state = graph_status(root=root, root_id=prepared["rootId"])
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertEqual(completed.stdout, "")
+        self.assertIn("LAYERED_DELIVERY_ASSIGNMENT=", completed.stdout)
+        claimed = next(
+            item
+            for item in state["nodes"]
+            if item["nodeId"] == loop_node_id("t-service")
+        )
+        self.assertEqual(claimed["modelId"], "gpt-5.6-terra")
+        self.assertEqual(claimed["actualModelId"], "deepseek-v4-pro")
+        self.assertEqual(
+            claimed["actualModelSource"],
+            "HOST_REPORTED",
+        )
 
     def test_codex_subagent_hook_requires_reserved_task_name(self) -> None:
         with TemporaryDirectory() as root:

@@ -29,6 +29,9 @@ def main() -> int:
     ):
         return 0
     tool_input = hook_input.get("tool_input")
+    tool_name = hook_input.get("tool_name")
+    tool_use_id = hook_input.get("tool_use_id")
+    transcript_path = hook_input.get("transcript_path")
     agent_id = hook_input.get("agent_id")
     parent_session_id = hook_input.get("session_id")
     cwd = hook_input.get("cwd")
@@ -76,11 +79,34 @@ def main() -> int:
         return _block(f"Layered Delivery receiver attestation failed: {error}")
 
     updated_input: dict[str, Any] = dict(tool_input)
+    updated_input.pop("actual_model_id", None)
     updated_input["agent_id"] = "claude-code"
     updated_input["receiver_context_id"] = agent_id
     updated_input["receiver_attestation_id"] = attestation[
         "receiverAttestationId"
     ]
+    if all(
+        isinstance(value, str) and value
+        for value in (tool_name, tool_use_id, transcript_path)
+    ):
+        try:
+            sys.path.insert(0, str(Path(__file__).resolve().parent))
+            from authorize_loop_operation import (
+                _claude_model_from_transcript,
+            )
+
+            observed_model_id = _claude_model_from_transcript(
+                transcript_path,
+                receiver_context_id=agent_id,
+                parent_context_id=parent_session_id,
+                tool_name=tool_name,
+                tool_input=tool_input,
+                tool_use_id=tool_use_id,
+            )
+        except (json.JSONDecodeError, OSError, ValueError):
+            observed_model_id = None
+        if observed_model_id is not None:
+            updated_input["actual_model_id"] = observed_model_id
     print(
         json.dumps(
             {

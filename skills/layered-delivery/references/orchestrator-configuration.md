@@ -40,7 +40,7 @@ Adapter 行的状态有严格含义：
 | 选项 | 默认值 | 说明 |
 |---|---:|---|
 | 自动编排 | 开启 | 允许活动 Delivery 调用宿主原生自动派遣计划 |
-| 自动选择模型 | 开启 | 按 `ROUTINE` / `STANDARD` / `HIGH` 选择动态 inventory 中的模型 |
+| 自动选择模型 | 开启 | 按 `ROUTINE` / `STANDARD` / `HIGH` 选择动态 inventory 中的宿主原生模型名 |
 | 跨 Adapter 调度 | 关闭且只读 | 当前版本未提供可信多 Adapter 宿主桥接 |
 | 允许的 Adapter | `codex`、`claude-code` | 这是允许列表，不表示对应 Adapter 已安装或可用 |
 | 最大并发执行器 | `4` | 跨 Delivery 统计已预留和已认领的执行器 |
@@ -121,8 +121,8 @@ Plugin 源码、Marketplace manifest 或 Plugin 缓存目录。
 
 - `true`：Agent 分析产生 `ROUTINE → EFFICIENT`、`STANDARD → BALANCED`、
   `HIGH → FRONTIER` 路由。
-- `false`：不做模型覆盖，宿主必须提供精确 `current_executor`，所有新节点沿用
-  当前 Agent 和模型。
+- `false`：不选择新的原生模型名，宿主必须提供精确 `current_executor`，所有
+  新节点沿用当前 Agent 和原生模型。原生调用后的本机转发不属于编排器配置。
 
 ### `allowCrossAdapterDispatch` 与 `allowedAdapters`
 

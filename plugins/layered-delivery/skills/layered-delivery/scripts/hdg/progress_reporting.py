@@ -439,13 +439,19 @@ def build_progress_monitor(
             heartbeat_zh = "不适用"
         agent_id = state.get("agentId") or state.get("owner") or "未分配"
         model_id = state.get("modelId") or "未记录模型"
+        actual_model_id = state.get("actualModelId") or "未报告"
         row = {
             "nodeId": state["nodeId"],
             "displayNameZh": f"{definition['workItemId']} · {kind_text}",
             "attempt": state["attempt"],
             "agentId": state.get("agentId"),
             "modelId": state.get("modelId"),
-            "executorZh": f"第 {state['attempt']} 轮 · {agent_id} / {model_id}",
+            "actualModelId": state.get("actualModelId"),
+            "actualModelSource": state.get("actualModelSource"),
+            "executorZh": (
+                f"第 {state['attempt']} 轮 · {agent_id} · "
+                f"原生 {model_id} → 实际 {actual_model_id}"
+            ),
             "phaseZh": phase_zh,
             "summaryZh": summary_zh,
             "completedZh": completed_zh,

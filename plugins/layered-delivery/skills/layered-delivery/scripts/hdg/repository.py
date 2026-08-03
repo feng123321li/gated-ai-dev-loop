@@ -2926,6 +2926,10 @@ class SchedulerRepository:
                 "owner": row["owner"],
                 "agentId": executor.get("agentId"),
                 "modelId": executor.get("modelId"),
+                "actualModelId": executor.get("actualModelId"),
+                "actualModelSource": executor.get(
+                    "actualModelSource"
+                ),
                 "receiverContextId": (
                     executor.get("receiverContextId") or row["owner"]
                 ),

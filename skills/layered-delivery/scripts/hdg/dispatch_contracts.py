@@ -3,7 +3,7 @@ from __future__ import annotations
 from .jsonio import fingerprint
 
 
-DISPATCH_POLICY_VERSION = "HOST_NATIVE_MODEL_ROUTING_V3"
+DISPATCH_POLICY_VERSION = "HOST_NATIVE_MODEL_ROUTING_V4"
 HOST_NATIVE_DISPATCH_TRANSPORT = "HOST_NATIVE"
 DISPATCH_TRANSPORTS = frozenset(
     {HOST_NATIVE_DISPATCH_TRANSPORT, "EXTERNAL_PROCESS"}
@@ -22,7 +22,7 @@ def dispatch_model_selection(reasoning_class: str) -> str:
     return (
         "CURRENT_HOST_DEFAULT"
         if reasoning_class == "UNCLASSIFIED"
-        else "EXPLICIT_OVERRIDE"
+        else "NATIVE_MODEL_SELECTOR"
     )
 
 
@@ -35,7 +35,7 @@ def automatic_dispatch_decision_fingerprint(
     reasoning_class: str,
     dispatch_transport: str,
 ) -> str:
-    """Bind one automatic route to its Graph, executor, and transport."""
+    """Bind one automatic route to its Graph and native host selector."""
 
     return fingerprint(
         {

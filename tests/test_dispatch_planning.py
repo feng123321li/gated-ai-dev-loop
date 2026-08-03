@@ -33,7 +33,7 @@ from .test_loop_architecture import group_hierarchy, task_hierarchy
 def host_executor_inventory(
     *,
     slots: int = 2,
-    model_override_supported: bool = True,
+    native_model_selection_supported: bool = True,
     dispatch_transport: str = "HOST_NATIVE",
 ) -> list[dict]:
     return [
@@ -44,7 +44,9 @@ def host_executor_inventory(
             "capabilities": ["development", "review"],
             "availableSlots": slots,
             "priority": 20,
-            "modelOverrideSupported": model_override_supported,
+            "nativeModelSelectionSupported": (
+                native_model_selection_supported
+            ),
             "models": [
                 {
                     "id": "gpt-5.6-luna",
@@ -82,7 +84,7 @@ def diverse_host_executor_inventory() -> list[dict]:
             "capabilities": ["review"],
             "availableSlots": 1,
             "priority": 10,
-            "modelOverrideSupported": True,
+            "nativeModelSelectionSupported": True,
             "models": [
                 {
                     "id": "claude-opus",
@@ -105,7 +107,7 @@ def claude_host_executor_inventory() -> list[dict]:
             "capabilities": ["development", "review"],
             "availableSlots": 2,
             "priority": 20,
-            "modelOverrideSupported": True,
+            "nativeModelSelectionSupported": True,
             "models": [
                 {
                     "id": "claude-sonnet",
@@ -191,6 +193,12 @@ class HostDispatchPlanningTests(unittest.TestCase):
             state = graph_status(root=root, root_id=prepared["rootId"])
 
         self.assertEqual(len(plan["assignments"]), 2)
+        self.assertTrue(
+            all(
+                "actualModelId" not in assignment["model"]
+                for assignment in plan["assignments"]
+            )
+        )
         self.assertTrue(plan["summary"]["concurrent"])
         self.assertEqual(plan["summary"]["dispatchable"], 2)
         self.assertEqual(plan["summary"]["deferred"], 0)
@@ -199,7 +207,8 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 assignment["agent"]["id"] == "codex"
                 and assignment["model"]["id"] == "gpt-5.6-terra"
                 and assignment["dispatchTransport"] == "HOST_NATIVE"
-                and assignment["modelSelection"] == "EXPLICIT_OVERRIDE"
+                and assignment["modelSelection"]
+                == "NATIVE_MODEL_SELECTOR"
                 and assignment["hostDispatchAllowed"]
                 and assignment["hostTaskName"]
                 == "ld_"
@@ -249,6 +258,10 @@ class HostDispatchPlanningTests(unittest.TestCase):
         self.assertEqual(policy["maxConcurrentExecutors"], 4)
         self.assertEqual(policy["quotaExhaustionPolicy"], "PAUSE_AND_RESUME")
         self.assertTrue(policy["preferDifferentAdapterForReview"])
+        self.assertTrue(
+            policy["analyzedRoutesRequireNativeModelSelection"]
+        )
+        self.assertFalse(policy["actualModelAffectsDispatch"])
 
     def test_configuration_can_disable_automatic_orchestration(self) -> None:
         with TemporaryDirectory() as root:
@@ -639,7 +652,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 workspace_root=first_workspace,
                 receiver_context_id="codex-first-child",
                 parent_context_id="codex-orchestrator",
-                model_id=first_assignment["model"]["id"],
+                actual_model_id=first_assignment["model"]["id"],
                 dispatch_reservation_id=first_assignment[
                     "dispatchReservationId"
                 ],
@@ -651,7 +664,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                     workspace_root=first_workspace,
                     receiver_context_id="codex-first-child",
                     parent_context_id="codex-orchestrator",
-                    model_id=second_assignment["model"]["id"],
+                    actual_model_id=second_assignment["model"]["id"],
                     dispatch_reservation_id=second_assignment[
                         "dispatchReservationId"
                     ],
@@ -689,7 +702,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                         workspace_root=root,
                         receiver_context_id=f"codex-child-{index}",
                         parent_context_id="codex-orchestrator",
-                        model_id=assignment["model"]["id"],
+                        actual_model_id=assignment["model"]["id"],
                         dispatch_reservation_id=assignment[
                             "dispatchReservationId"
                         ],
@@ -704,7 +717,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                     workspace_root=root,
                     receiver_context_id="codex-child-0",
                     parent_context_id="codex-orchestrator",
-                    model_id=second_assignment["model"]["id"],
+                    actual_model_id=second_assignment["model"]["id"],
                     dispatch_reservation_id=second_assignment[
                         "dispatchReservationId"
                     ],
@@ -745,7 +758,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 workspace_root=root,
                 receiver_context_id="codex-first-child",
                 parent_context_id="codex-orchestrator",
-                model_id=first["model"]["id"],
+                actual_model_id=first["model"]["id"],
                 dispatch_reservation_id=first[
                     "dispatchReservationId"
                 ],
@@ -757,7 +770,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                     workspace_root=root,
                     receiver_context_id="codex-wrong-parent-child",
                     parent_context_id="another-codex-session",
-                    model_id=second["model"]["id"],
+                    actual_model_id=second["model"]["id"],
                     dispatch_reservation_id=second[
                         "dispatchReservationId"
                     ],
@@ -768,7 +781,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 workspace_root=root,
                 receiver_context_id="codex-second-child",
                 parent_context_id="codex-orchestrator",
-                model_id=second["model"]["id"],
+                actual_model_id=second["model"]["id"],
                 dispatch_reservation_id=second[
                     "dispatchReservationId"
                 ],
@@ -971,7 +984,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 workspace_root=root,
                 receiver_context_id="codex-first-worker",
                 parent_context_id="codex-original-session",
-                model_id=first["model"]["id"],
+                actual_model_id=first["model"]["id"],
                 dispatch_reservation_id=first["dispatchReservationId"],
             )
             second_claim = claim_codex_subagent_receiver(
@@ -980,7 +993,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 workspace_root=root,
                 receiver_context_id="codex-second-worker",
                 parent_context_id="codex-original-session",
-                model_id=second["model"]["id"],
+                actual_model_id=second["model"]["id"],
                 dispatch_reservation_id=second["dispatchReservationId"],
             )
             first_expiry = datetime.fromisoformat(
@@ -1014,7 +1027,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                     workspace_root=root,
                     receiver_context_id="codex-takeover-worker",
                     parent_context_id="codex-takeover-session",
-                    model_id=retry_assignment["model"]["id"],
+                    actual_model_id=retry_assignment["model"]["id"],
                     dispatch_reservation_id=retry_assignment[
                         "dispatchReservationId"
                     ],
@@ -1051,7 +1064,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                     workspace_root=root,
                     receiver_context_id="codex-projection-child",
                     parent_context_id="codex-orchestrator",
-                    model_id=assignment["model"]["id"],
+                    actual_model_id=assignment["model"]["id"],
                     dispatch_reservation_id=assignment[
                         "dispatchReservationId"
                     ],
@@ -1062,7 +1075,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 workspace_root=root,
                 receiver_context_id="codex-projection-child",
                 parent_context_id="codex-orchestrator",
-                model_id=assignment["model"]["id"],
+                actual_model_id=assignment["model"]["id"],
                 dispatch_reservation_id=assignment[
                     "dispatchReservationId"
                 ],
@@ -1198,7 +1211,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 root_id=prepared["rootId"],
                 expected_graph_fingerprint=prepared["graphFingerprint"],
                 executor_inventory=host_executor_inventory(
-                    model_override_supported=False
+                    native_model_selection_supported=False
                 ),
                 node_requirements=[],
                 current_executor={
@@ -1341,7 +1354,9 @@ class HostDispatchPlanningTests(unittest.TestCase):
             )
         )
 
-    def test_model_override_is_required_for_automatic_dispatch(self) -> None:
+    def test_native_model_selection_is_required_for_analyzed_dispatch(
+        self,
+    ) -> None:
         with TemporaryDirectory() as root:
             prepared = self.prepare_and_freeze(root, task_hierarchy())
 
@@ -1350,7 +1365,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 root_id=prepared["rootId"],
                 expected_graph_fingerprint=prepared["graphFingerprint"],
                 executor_inventory=host_executor_inventory(
-                    model_override_supported=False,
+                    native_model_selection_supported=False,
                 ),
                 node_requirements=[
                     agent_requirement(loop_node_id("t-service"))
@@ -1360,7 +1375,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
         self.assertEqual(plan["assignments"], [])
         self.assertEqual(
             plan["deferred"][0]["code"],
-            "MODEL_OVERRIDE_UNAVAILABLE",
+            "NATIVE_MODEL_SELECTION_UNAVAILABLE",
         )
         self.assertFalse(plan["summary"]["concurrent"])
 

@@ -769,6 +769,7 @@ def dispatch_loop(
     operation_id: str,
     agent_id: str | None = None,
     model_id: str | None = None,
+    actual_model_id: str | None = None,
     receiver_context_id: str | None = None,
     receiver_attestation_id: str | None = None,
     dispatch_mode: str | None = "MANUAL",
@@ -797,11 +798,21 @@ def dispatch_loop(
         if agent_id is not None
         else None
     )
-    actual_model_id = (
+    native_model_id = (
         _executor_descriptor(model_id, "model_id")
         if model_id is not None
         else None
     )
+    observed_actual_model_id = (
+        _executor_descriptor(actual_model_id, "actual_model_id")
+        if actual_model_id is not None
+        else None
+    )
+    if observed_actual_model_id is not None and native_model_id is None:
+        fail(
+            "SCHEDULER_EXECUTOR_METADATA_INVALID",
+            "actual_model_id requires the dispatched native model_id",
+        )
     actual_receiver_context_id = (
         _identity(receiver_context_id, "receiver_context_id")
         if receiver_context_id is not None
@@ -949,7 +960,7 @@ def dispatch_loop(
     if dispatch_mode == "AUTO" and actual_agent_id is None:
         fail(
             "SCHEDULER_EXECUTOR_METADATA_INVALID",
-            "Automatic dispatch requires actual agent and model IDs",
+            "Automatic dispatch requires native agent and model IDs",
         )
     if (
         dispatch_mode == "AUTO"
@@ -983,7 +994,7 @@ def dispatch_loop(
                     graph_fingerprint=graph_fingerprint(graph),
                     node_id=node_id,
                     agent_id=actual_agent_id,
-                    model_id=actual_model_id,
+                    model_id=native_model_id,
                     reasoning_class=dispatch_reasoning_class,
                     dispatch_transport=dispatch_transport,
                 )
@@ -1053,7 +1064,7 @@ def dispatch_loop(
                         root_id,
                         node_id,
                         state["attempt"],
-                        actual_model_id,
+                        native_model_id,
                         at,
                     ),
                 ).fetchone()
@@ -1072,7 +1083,7 @@ def dispatch_loop(
                         reservation_id=actual_reservation_id,
                         host_adapter_id="codex",
                         agent_id="codex",
-                        model_id=str(actual_model_id),
+                        model_id=str(native_model_id),
                         receiver_context_id=actual_receiver_context_id,
                         parent_context_id=(
                             actual_host_receiver_parent_context_id
@@ -1091,7 +1102,7 @@ def dispatch_loop(
                     receiver_context_id=actual_receiver_context_id,
                     host_adapter_id=str(host_adapter_id),
                     agent_id=str(actual_agent_id),
-                    model_id=str(actual_model_id),
+                    model_id=str(native_model_id),
                     reservation_id=actual_reservation_id,
                     operation_id=operation_id,
                     at=at,
@@ -1280,7 +1291,15 @@ def dispatch_loop(
                 **(
                     {
                         "agentId": actual_agent_id,
-                        "modelId": actual_model_id,
+                        "modelId": native_model_id,
+                        **(
+                            {
+                                "actualModelId": observed_actual_model_id,
+                                "actualModelSource": "HOST_REPORTED",
+                            }
+                            if observed_actual_model_id is not None
+                            else {}
+                        ),
                     }
                     if actual_agent_id is not None
                     else {}
@@ -1320,7 +1339,13 @@ def dispatch_loop(
         ),
         "owner": owner,
         "agentId": actual_agent_id,
-        "modelId": actual_model_id,
+        "modelId": native_model_id,
+        "actualModelId": observed_actual_model_id,
+        "actualModelSource": (
+            "HOST_REPORTED"
+            if observed_actual_model_id is not None
+            else None
+        ),
         "receiverContextId": actual_receiver_context_id,
         "receiverAttested": receiver_attestation is not None,
         "dispatchMode": dispatch_mode,
@@ -1428,7 +1453,7 @@ def claim_codex_subagent_receiver(
     workspace_root: str,
     receiver_context_id: str,
     parent_context_id: str,
-    model_id: str,
+    actual_model_id: str,
     dispatch_reservation_id: str,
     explicit_dogfood: bool = False,
     now: object = None,
@@ -1443,7 +1468,10 @@ def claim_codex_subagent_receiver(
         "receiver_context_id",
     )
     parent_context_id = _identity(parent_context_id, "parent_context_id")
-    actual_model_id = _executor_descriptor(model_id, "model_id")
+    observed_actual_model_id = _executor_descriptor(
+        actual_model_id,
+        "actual_model_id",
+    )
     reservation_id = _identity(
         dispatch_reservation_id,
         "dispatch_reservation_id",
@@ -1451,7 +1479,8 @@ def claim_codex_subagent_receiver(
 
     def committed_assignment(connection: Any) -> dict[str, Any] | None:
         row = connection.execute(
-            "SELECT h.operation_id, d.node_id, d.reasoning_class, "
+            "SELECT h.operation_id, d.node_id, d.model_id, "
+            "d.reasoning_class, "
             "d.decision_fingerprint, n.lease_expires_at "
             "FROM host_receiver_identities h "
             "JOIN dispatch_reservations d "
@@ -1460,7 +1489,7 @@ def claim_codex_subagent_receiver(
             "AND n.node_id = h.node_id AND n.attempt = h.attempt "
             "WHERE h.root_id = ? AND h.reservation_id = ? "
             "AND h.host_adapter_id = 'codex' "
-            "AND h.agent_id = 'codex' AND h.model_id = ? "
+            "AND h.agent_id = 'codex' "
             "AND h.receiver_context_id = ? "
             "AND h.parent_context_id = ? AND h.status = 'CONSUMED' "
             "AND n.status = 'CLAIMED' "
@@ -1468,7 +1497,6 @@ def claim_codex_subagent_receiver(
             (
                 root_id,
                 reservation_id,
-                actual_model_id,
                 receiver_context_id,
                 parent_context_id,
             ),
@@ -1479,7 +1507,9 @@ def claim_codex_subagent_receiver(
             "rootId": root_id,
             "nodeId": row["node_id"],
             "agentId": "codex",
-            "modelId": actual_model_id,
+            "modelId": row["model_id"],
+            "actualModelId": observed_actual_model_id,
+            "actualModelSource": "HOST_REPORTED",
             "receiverContextId": receiver_context_id,
             "receiverAttested": True,
             "dispatchMode": "AUTO",
@@ -1511,14 +1541,13 @@ def claim_codex_subagent_receiver(
             "ON h.reservation_id = d.reservation_id "
             "WHERE d.reservation_id = ? AND d.run_id = ? "
             "AND d.root_id = ? AND d.agent_id = 'codex' "
-            "AND d.model_id = ? AND d.status = 'RESERVED' "
+            "AND d.status = 'RESERVED' "
             "AND d.expires_at >= ? AND h.attestation_digest IS NULL "
             "LIMIT 1",
             (
                 reservation_id,
                 run["run_id"],
                 root_id,
-                actual_model_id,
                 at,
             ),
         ).fetchone()
@@ -1538,7 +1567,8 @@ def claim_codex_subagent_receiver(
             owner=receiver_context_id,
             operation_id=operation_id,
             agent_id="codex",
-            model_id=actual_model_id,
+            model_id=reservation_values["model_id"],
+            actual_model_id=observed_actual_model_id,
             receiver_context_id=receiver_context_id,
             dispatch_mode="AUTO",
             dispatch_transport=HOST_NATIVE_DISPATCH_TRANSPORT,
@@ -1572,7 +1602,7 @@ def authorize_codex_subagent_operation(
     workspace_root: str,
     receiver_context_id: str,
     parent_context_id: str,
-    model_id: str,
+    actual_model_id: str,
     dispatch_reservation_id: str,
     explicit_dogfood: bool = False,
     now: object = None,
@@ -1587,7 +1617,7 @@ def authorize_codex_subagent_operation(
         "receiver_context_id",
     )
     parent_context_id = _identity(parent_context_id, "parent_context_id")
-    actual_model_id = _executor_descriptor(model_id, "model_id")
+    _executor_descriptor(actual_model_id, "actual_model_id")
     reservation_id = _identity(
         dispatch_reservation_id,
         "dispatch_reservation_id",
@@ -1613,7 +1643,7 @@ def authorize_codex_subagent_operation(
             "WHERE run_id = ? AND root_id = ? AND node_id = ? "
             "AND attempt = ? AND reservation_id = ? "
             "AND host_adapter_id = 'codex' AND agent_id = 'codex' "
-            "AND model_id = ? AND receiver_context_id = ? "
+            "AND receiver_context_id = ? "
             "AND parent_context_id = ? AND status = 'CONSUMED' "
             "AND operation_id = ? LIMIT 1",
             (
@@ -1622,7 +1652,6 @@ def authorize_codex_subagent_operation(
                 node_id,
                 state["attempt"],
                 reservation_id,
-                actual_model_id,
                 receiver_context_id,
                 parent_context_id,
                 state["operationId"],
@@ -1649,7 +1678,6 @@ def authorize_claude_subagent_operation(
     workspace_root: str,
     receiver_context_id: str,
     parent_context_id: str,
-    model_id: str,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
@@ -1663,7 +1691,6 @@ def authorize_claude_subagent_operation(
         "receiver_context_id",
     )
     parent_context_id = _identity(parent_context_id, "parent_context_id")
-    actual_model_id = _executor_descriptor(model_id, "model_id")
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
         at = _locked_timestamp(now, run["updated_at"])
@@ -1719,7 +1746,6 @@ def authorize_claude_subagent_operation(
             != parent_context_id
             or payload.get("hostAdapterId") != "claude-code"
             or payload.get("agentId") != "claude-code"
-            or payload.get("modelId") != actual_model_id
         ):
             fail(
                 "SCHEDULER_CLAUDE_RECEIVER_OPERATION_UNAUTHORIZED",

@@ -15,6 +15,61 @@ PROTECTED_TOOLS = frozenset(
 )
 
 
+def _claude_model_from_transcript(
+    transcript_path: str,
+    *,
+    receiver_context_id: str,
+    parent_context_id: str,
+    tool_name: str,
+    tool_input: dict[str, object],
+    tool_use_id: str,
+) -> str | None:
+    transcript = Path(transcript_path).expanduser().resolve(strict=True)
+    if transcript.suffix != ".jsonl" or not transcript.is_file():
+        return None
+
+    matched_model = None
+    with transcript.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            event = json.loads(line)
+            if (
+                not isinstance(event, dict)
+                or event.get("agentId") != receiver_context_id
+                or event.get("sessionId") != parent_context_id
+            ):
+                continue
+            message = event.get("message")
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            model_id = message.get("model")
+            if (
+                message.get("role") != "assistant"
+                or not isinstance(content, list)
+                or not isinstance(model_id, str)
+                or not model_id
+            ):
+                continue
+            for item in content:
+                if (
+                    not isinstance(item, dict)
+                    or item.get("type") != "tool_use"
+                    or item.get("id") != tool_use_id
+                ):
+                    continue
+                if (
+                    item.get("name") != tool_name
+                    or item.get("input") != tool_input
+                    or (
+                        matched_model is not None
+                        and matched_model != model_id
+                    )
+                ):
+                    return None
+                matched_model = model_id
+    return matched_model
+
+
 def _deny(reason: str) -> int:
     print(
         json.dumps(
@@ -49,7 +104,6 @@ def main() -> int:
     tool_input = hook_input.get("tool_input")
     session_id = hook_input.get("session_id")
     transcript_path = hook_input.get("transcript_path")
-    model_id = hook_input.get("model")
     cwd = hook_input.get("cwd")
     if (
         not isinstance(tool_input, dict)
@@ -57,7 +111,6 @@ def main() -> int:
             isinstance(value, str) and value
             for value in (
                 session_id,
-                model_id,
                 cwd,
             )
         )
@@ -87,7 +140,11 @@ def main() -> int:
     receiver_context_id: str
     parent_context_id: str
     dispatch_reservation_id: str | None
+    model_id: str | None
     if session_meta is not None:
+        model_id = hook_input.get("model")
+        if not isinstance(model_id, str) or not model_id:
+            return _deny("Loop mutation lacks a host receiver context")
         try:
             metadata = _subagent_claim_metadata(
                 transcript_path,
@@ -103,12 +160,35 @@ def main() -> int:
         dispatch_reservation_id = metadata["dispatchReservationId"]
     else:
         claude_agent_id = hook_input.get("agent_id")
-        if not isinstance(claude_agent_id, str) or not claude_agent_id:
+        tool_use_id = hook_input.get("tool_use_id")
+        if (
+            not isinstance(claude_agent_id, str)
+            or not claude_agent_id
+            or not isinstance(transcript_path, str)
+            or not transcript_path
+            or not isinstance(tool_use_id, str)
+            or not tool_use_id
+        ):
             return _deny("Loop mutation lacks an attested host child")
         host_adapter_id = "claude-code"
         receiver_context_id = claude_agent_id
         parent_context_id = session_id
         dispatch_reservation_id = None
+        try:
+            model_id = _claude_model_from_transcript(
+                transcript_path,
+                receiver_context_id=receiver_context_id,
+                parent_context_id=parent_context_id,
+                tool_name=tool_name,
+                tool_input=tool_input,
+                tool_use_id=tool_use_id,
+            )
+        except (json.JSONDecodeError, OSError, ValueError):
+            model_id = None
+        if model_id is None:
+            return _deny(
+                "The current Claude tool use is not host-attested"
+            )
 
     root_id = tool_input.get("root_id")
     node_id = tool_input.get("node_id")

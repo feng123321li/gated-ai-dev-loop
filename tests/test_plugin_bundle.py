@@ -673,27 +673,91 @@ class PluginBundleTests(unittest.TestCase):
                 trusted_host_adapter="claude-code",
             )
             claude_transcript = Path(root, "claude-child.jsonl")
-            claude_transcript.write_text("{}\n", encoding="utf-8")
+            heartbeat_tool = (
+                "mcp__plugin_layered-delivery_layered-delivery"
+                "__heartbeat_loop"
+            )
+            heartbeat_input = {
+                "root_id": prepared["rootId"],
+                "node_id": loop_node_id("t-service"),
+            }
+            claude_transcript.write_text(
+                json.dumps(
+                    {
+                        "agentId": "claude-agent-child-1",
+                        "sessionId": "claude-parent-session",
+                        "type": "assistant",
+                        "message": {
+                            "role": "assistant",
+                            "model": "claude-sonnet",
+                            "content": [
+                                {
+                                    "type": "tool_use",
+                                    "id": "claude-heartbeat-tool",
+                                    "name": heartbeat_tool,
+                                    "input": heartbeat_input,
+                                }
+                            ],
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
             mutation = self.run_codex_operation_hook(
                 {
                     "hook_event_name": "PreToolUse",
                     "session_id": "claude-parent-session",
                     "agent_id": "claude-agent-child-1",
-                    "tool_name": (
-                        "mcp__plugin_layered-delivery_layered-delivery"
-                        "__heartbeat_loop"
-                    ),
-                    "tool_input": {
-                        "root_id": prepared["rootId"],
-                        "node_id": loop_node_id("t-service"),
-                    },
-                    "model": "claude-sonnet",
+                    "tool_name": heartbeat_tool,
+                    "tool_input": heartbeat_input,
+                    "tool_use_id": "claude-heartbeat-tool",
                     "cwd": root,
                     "transcript_path": str(claude_transcript),
                 },
                 Path(root, "codex-home"),
             )
             mutation_output = json.loads(mutation.stdout)[
+                "hookSpecificOutput"
+            ]
+            with claude_transcript.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(
+                        {
+                            "agentId": "claude-agent-child-1",
+                            "sessionId": "claude-parent-session",
+                            "type": "assistant",
+                            "message": {
+                                "role": "assistant",
+                                "model": "claude-opus",
+                                "content": [
+                                    {
+                                        "type": "tool_use",
+                                        "id": "forged-model-tool",
+                                        "name": heartbeat_tool,
+                                        "input": heartbeat_input,
+                                    }
+                                ],
+                            },
+                        }
+                    )
+                    + "\n"
+                )
+            forged_mutation = self.run_codex_operation_hook(
+                {
+                    "hook_event_name": "PreToolUse",
+                    "session_id": "claude-parent-session",
+                    "agent_id": "claude-agent-child-1",
+                    "tool_name": heartbeat_tool,
+                    "tool_input": heartbeat_input,
+                    "tool_use_id": "forged-model-tool",
+                    "model": "claude-sonnet",
+                    "cwd": root,
+                    "transcript_path": str(claude_transcript),
+                },
+                Path(root, "codex-home"),
+            )
+            forged_output = json.loads(forged_mutation.stdout)[
                 "hookSpecificOutput"
             ]
 
@@ -708,6 +772,7 @@ class PluginBundleTests(unittest.TestCase):
             mutation_output["updatedInput"]["operation_id"],
             claimed["operationId"],
         )
+        self.assertEqual(forged_output["permissionDecision"], "deny")
 
     def test_claude_dispatch_hook_blocks_parent_context_claim(self) -> None:
         completed = subprocess.run(

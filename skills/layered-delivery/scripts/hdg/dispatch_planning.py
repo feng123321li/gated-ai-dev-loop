@@ -14,7 +14,11 @@ from .dispatch_contracts import (
 from .errors import fail
 from .graph_frontier import get_graph_frontier
 from .jsonio import fingerprint
-from .repository import SchedulerRepository
+from .orchestrator_config import (
+    OrchestratorConfig,
+    built_in_orchestrator_config,
+)
+from .repository import SchedulerRepository, timestamp
 
 
 DISPATCH_RESERVATION_SECONDS = 300
@@ -130,6 +134,7 @@ def _validate_executor(
         )
     allowed = {
         "agentId",
+        "adapterId",
         "displayName",
         "dispatchTransport",
         "capabilities",
@@ -138,7 +143,8 @@ def _validate_executor(
         "modelOverrideSupported",
         "models",
     }
-    if set(value) != allowed:
+    required = allowed - {"adapterId"}
+    if set(value) - allowed or not required <= set(value):
         fail(
             "SCHEDULER_EXECUTOR_INVENTORY_INVALID",
             f"{field} fields are invalid",
@@ -193,11 +199,17 @@ def _validate_executor(
             "SCHEDULER_EXECUTOR_INVENTORY_INVALID",
             f"{field}.models must have unique IDs",
         )
+    agent_id = _safe_executor_id(
+        value["agentId"],
+        f"{field}.agentId",
+    )
+    adapter_id = _safe_executor_id(
+        value.get("adapterId", agent_id),
+        f"{field}.adapterId",
+    )
     return {
-        "agentId": _safe_executor_id(
-            value["agentId"],
-            f"{field}.agentId",
-        ),
+        "agentId": agent_id,
+        "adapterId": adapter_id,
         "displayName": _safe_text(
             value["displayName"],
             f"{field}.displayName",
@@ -350,7 +362,11 @@ def _required_capability(role: str) -> str:
 
 
 def _desired_model_tier(reasoning_class: str) -> str:
-    return "FRONTIER" if reasoning_class == "HIGH" else "BALANCED"
+    return {
+        "ROUTINE": "EFFICIENT",
+        "STANDARD": "BALANCED",
+        "HIGH": "FRONTIER",
+    }[reasoning_class]
 
 
 def _select_model(
@@ -414,6 +430,20 @@ def _model_families(
             for executor in executors
             for model in executor["models"]
             if model["id"] in wanted
+        }
+    )
+
+
+def _adapter_ids(
+    agent_ids: list[str],
+    executors: list[dict[str, Any]],
+) -> list[str]:
+    wanted = set(agent_ids)
+    return sorted(
+        {
+            executor["adapterId"]
+            for executor in executors
+            if executor["agentId"] in wanted
         }
     )
 
@@ -498,6 +528,7 @@ def _assignment(
     model: dict[str, Any],
     graph_fingerprint: str,
     upstream_agents: list[str],
+    upstream_adapters: list[str],
     upstream_models: list[str],
     upstream_model_families: list[str],
     reasoning_requirement: dict[str, str],
@@ -506,6 +537,11 @@ def _assignment(
     agent_diverse = (
         executor["agentId"] not in set(upstream_agents)
         if role == "INDEPENDENT_REVIEW" and upstream_agents
+        else None
+    )
+    adapter_diverse = (
+        executor["adapterId"] not in set(upstream_adapters)
+        if role == "INDEPENDENT_REVIEW" and upstream_adapters
         else None
     )
     model_identity = model["family"] or model["id"]
@@ -543,8 +579,8 @@ def _assignment(
             {
                 "code": "REASONING_UNCLASSIFIED",
                 "message": (
-                    "No STANDARD or HIGH classification is inferred by "
-                    "the controller."
+                    "No ROUTINE, STANDARD, or HIGH classification is "
+                    "inferred by the controller."
                 ),
             },
         ]
@@ -576,6 +612,7 @@ def _assignment(
         "routingBasis": routing_basis,
         "agent": {
             "id": executor["agentId"],
+            "adapterId": executor["adapterId"],
             "displayName": executor["displayName"],
         },
         "dispatchTransport": executor["dispatchTransport"],
@@ -634,9 +671,11 @@ def _assignment(
         "independence": {
             "required": role == "INDEPENDENT_REVIEW",
             "agentDiverse": agent_diverse,
+            "adapterDiverse": adapter_diverse,
             "modelDiverse": model_diverse,
             "diversityLevel": diversity_level,
             "upstreamAgentIds": upstream_agents,
+            "upstreamAdapterIds": upstream_adapters,
             "upstreamModelIds": upstream_models,
             "upstreamModelFamilies": upstream_model_families,
         },
@@ -651,6 +690,9 @@ def plan_dispatch_batch(
     executor_inventory: list[dict[str, Any]],
     node_requirements: list[dict[str, Any]],
     current_executor: dict[str, str] | None = None,
+    host_native_agent_ids: tuple[str, ...] | None = None,
+    host_adapter_id: str | None = None,
+    orchestrator_config: OrchestratorConfig | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
     **_: Any,
@@ -659,6 +701,15 @@ def plan_dispatch_batch(
 
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
+    configuration = (
+        orchestrator_config or built_in_orchestrator_config()
+    )
+    if not configuration.automatic_orchestration:
+        fail(
+            "SCHEDULER_AUTOMATIC_ORCHESTRATION_DISABLED",
+            "Automatic orchestration is disabled by user configuration",
+            orchestratorConfig=configuration.public_summary(),
+        )
     stored = repository.hierarchy(root_id)
     if expected_graph_fingerprint != stored["graphFingerprint"]:
         fail(
@@ -668,6 +719,44 @@ def plan_dispatch_batch(
             actualGraphFingerprint=stored["graphFingerprint"],
         )
     executors = _validate_inventory(executor_inventory)
+    disallowed_native_adapters = sorted(
+        {
+            executor["adapterId"]
+            for executor in executors
+            if (
+                executor["dispatchTransport"]
+                == HOST_NATIVE_DISPATCH_TRANSPORT
+                and executor["adapterId"]
+                not in set(configuration.allowed_adapters)
+            )
+        }
+    )
+    if disallowed_native_adapters:
+        fail(
+            "SCHEDULER_ADAPTER_NOT_ALLOWED",
+            "Host-native inventory contains Adapters that user configuration does not allow",
+            allowedAdapters=list(configuration.allowed_adapters),
+            disallowedAdapters=disallowed_native_adapters,
+        )
+    if host_native_agent_ids is not None:
+        allowed_native_agents = set(host_native_agent_ids)
+        unsupported_native_agents = sorted(
+            executor["agentId"]
+            for executor in executors
+            if (
+                executor["dispatchTransport"]
+                == HOST_NATIVE_DISPATCH_TRANSPORT
+                and executor["agentId"] not in allowed_native_agents
+            )
+        )
+        if unsupported_native_agents:
+            fail(
+                "SCHEDULER_HOST_NATIVE_INVENTORY_MISMATCH",
+                "Host-native inventory contains Agents this MCP client "
+                "cannot create through its native Agent API",
+                supportedAgentIds=sorted(allowed_native_agents),
+                unsupportedAgentIds=unsupported_native_agents,
+            )
     requirements = _validate_node_requirements(node_requirements)
     fallback_executor = _validate_current_executor(
         current_executor,
@@ -680,6 +769,37 @@ def plan_dispatch_batch(
         now=now,
     )
     run = repository.run(root_id)
+    if run["executionMode"] != "active":
+        fail(
+            "SCHEDULER_AUTO_DISPATCH_DISABLED",
+            "Host-native automatic dispatch requires active execution mode",
+            executionMode=run["executionMode"],
+        )
+    if run.get("hostCapacity") is not None:
+        fail(
+            "SCHEDULER_HOST_CAPACITY_EXHAUSTED",
+            "Automatic dispatch is paused by the host capacity breaker",
+            **run["hostCapacity"],
+        )
+    observation_at = max(timestamp(now), run["updatedAt"])
+    with repository.read() as connection:
+        for executor in executors:
+            if (
+                executor["dispatchTransport"]
+                != HOST_NATIVE_DISPATCH_TRANSPORT
+            ):
+                continue
+            shared_breaker = repository.open_host_capacity_breaker(
+                connection,
+                agent_id=executor["agentId"],
+                at=observation_at,
+            )
+            if shared_breaker is not None:
+                fail(
+                    "SCHEDULER_HOST_CAPACITY_EXHAUSTED",
+                    "Automatic dispatch is paused by a shared host capacity breaker",
+                    **shared_breaker,
+                )
     graph = stored["graph"]
     definitions = {node["id"]: node for node in graph["nodes"]}
     states = {node["nodeId"]: node for node in run["nodes"]}
@@ -705,7 +825,11 @@ def plan_dispatch_batch(
             nodeIds=sorted(stale_requirements),
         )
     missing_requirements = set(dispatch_node_ids) - set(requirements)
-    if missing_requirements and fallback_executor is None:
+    if (
+        configuration.auto_select_model
+        and missing_requirements
+        and fallback_executor is None
+    ):
         fail(
             "SCHEDULER_DISPATCH_REQUIREMENT_MISSING",
             (
@@ -713,6 +837,11 @@ def plan_dispatch_batch(
                 "reasoning analysis"
             ),
             nodeIds=sorted(missing_requirements),
+        )
+    if not configuration.auto_select_model and fallback_executor is None:
+        fail(
+            "SCHEDULER_CURRENT_EXECUTOR_REQUIRED",
+            "Disabling automatic model selection requires the exact current Agent and model",
         )
     remaining_slots = {
         executor["agentId"]: executor["availableSlots"]
@@ -738,7 +867,11 @@ def plan_dispatch_batch(
     routing_node_ids = sorted(
         dispatch_node_ids,
         key=lambda node_id: (
-            node_id in requirements,
+            (
+                node_id in requirements
+                if configuration.auto_select_model
+                else False
+            ),
             node_id,
         ),
     )
@@ -746,17 +879,27 @@ def plan_dispatch_batch(
         node = definitions[node_id]
         role = _role(node["kind"])
         capability = _required_capability(role)
-        reasoning_requirement = requirements.get(node_id)
+        reasoning_requirement = (
+            requirements.get(node_id)
+            if configuration.auto_select_model
+            else None
+        )
         routing_basis = "AGENT_ANALYSIS"
         if reasoning_requirement is None:
+            fallback_reason = (
+                "Automatic model selection is disabled by user "
+                "configuration; use the exact current Agent and model."
+                if not configuration.auto_select_model
+                else (
+                    "Agent analysis unavailable; use the exact current "
+                    "Agent and model reported by the host."
+                )
+            )
             reasoning_requirement = {
                 "nodeId": node_id,
                 "reasoningClass": "UNCLASSIFIED",
                 "source": "CURRENT_EXECUTOR_FALLBACK",
-                "reason": (
-                    "Agent analysis unavailable; use the exact current "
-                    "Agent and model reported by the host."
-                ),
+                "reason": fallback_reason,
             }
             routing_basis = "CURRENT_EXECUTOR_FALLBACK"
         reasoning_class = reasoning_requirement["reasoningClass"]
@@ -765,11 +908,13 @@ def plan_dispatch_batch(
             incoming=incoming,
             states=states,
         )
+        upstream_adapters = _adapter_ids(upstream_agents, executors)
         upstream_model_families = _model_families(
             upstream_models,
             executors,
         )
         candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        cross_adapter_blocked = False
         if routing_basis == "CURRENT_EXECUTOR_FALLBACK":
             executor, model = fallback_executor
             if (
@@ -801,8 +946,45 @@ def plan_dispatch_batch(
                     desired_tier=_desired_model_tier(reasoning_class),
                 )
                 candidates.append((executor, model))
+        if candidates and not configuration.allow_cross_adapter_dispatch:
+            candidate_adapter_ids = {
+                candidate[0]["adapterId"] for candidate in candidates
+            }
+            same_adapter_id = None
+            if host_adapter_id in candidate_adapter_ids:
+                same_adapter_id = host_adapter_id
+            elif (
+                fallback_executor is not None
+                and fallback_executor[0]["adapterId"]
+                in candidate_adapter_ids
+            ):
+                same_adapter_id = fallback_executor[0]["adapterId"]
+            else:
+                upstream_candidate_ids = (
+                    set(upstream_adapters) & candidate_adapter_ids
+                )
+                if len(upstream_candidate_ids) == 1:
+                    same_adapter_id = next(iter(upstream_candidate_ids))
+                elif len(candidate_adapter_ids) == 1:
+                    same_adapter_id = next(iter(candidate_adapter_ids))
+            if same_adapter_id is None:
+                candidates = []
+                cross_adapter_blocked = True
+            else:
+                candidates = [
+                    candidate
+                    for candidate in candidates
+                    if candidate[0]["adapterId"] == same_adapter_id
+                ]
         if not candidates:
-            if routing_basis == "CURRENT_EXECUTOR_FALLBACK":
+            if cross_adapter_blocked:
+                code = "CROSS_ADAPTER_DISPATCH_DISABLED"
+                message = (
+                    "Multiple eligible native Adapters remain, but cross-"
+                    "Adapter dispatch is disabled and no current Adapter "
+                    "can be determined."
+                )
+            elif routing_basis == "CURRENT_EXECUTOR_FALLBACK":
                 executor, _ = fallback_executor
                 if (
                     executor["dispatchTransport"]
@@ -847,8 +1029,12 @@ def plan_dispatch_batch(
         candidates.sort(
             key=lambda candidate: (
                 (
-                    candidate[0]["agentId"] in set(upstream_agents)
-                    if role == "INDEPENDENT_REVIEW"
+                    candidate[0]["adapterId"]
+                    in set(upstream_adapters)
+                    if (
+                        role == "INDEPENDENT_REVIEW"
+                        and configuration.prefer_different_adapter_for_review
+                    )
                     else False
                 ),
                 (
@@ -875,6 +1061,7 @@ def plan_dispatch_batch(
             model=model,
             graph_fingerprint=stored["graphFingerprint"],
             upstream_agents=upstream_agents,
+            upstream_adapters=upstream_adapters,
             upstream_models=upstream_models,
             upstream_model_families=upstream_model_families,
             reasoning_requirement=reasoning_requirement,
@@ -886,6 +1073,13 @@ def plan_dispatch_batch(
         root_id=root_id,
         graph_fingerprint=stored["graphFingerprint"],
         assignments=assignments,
+        agent_slot_limits={
+            executor["agentId"]: executor["availableSlots"]
+            for executor in executors
+        },
+        orchestrator_slot_limit=(
+            configuration.max_concurrent_executors
+        ),
         reservation_seconds=DISPATCH_RESERVATION_SECONDS,
     )
     reserved_assignments: list[dict[str, Any]] = []
@@ -894,9 +1088,16 @@ def plan_dispatch_batch(
         reservation = reservations["accepted"].get(node_id)
         if reservation is not None:
             assignment.update(reservation)
+            assignment["hostTaskName"] = (
+                "ld_"
+                + reservation["dispatchReservationId"].replace("-", "")
+            )
             assignment["contextInput"]["dispatchReservationId"] = (
                 reservation["dispatchReservationId"]
             )
+            assignment["contextInput"]["hostTaskName"] = assignment[
+                "hostTaskName"
+            ]
             reserved_assignments.append(assignment)
             continue
         rejection = reservations["rejected"][node_id]
@@ -928,6 +1129,7 @@ def plan_dispatch_batch(
             if fallback_executor is not None
             else None
         ),
+        "orchestratorConfig": configuration.policy(),
         "assignments": assignments,
         "deferred": deferred,
     }
@@ -951,10 +1153,30 @@ def plan_dispatch_batch(
             "concurrent": len(assignments) > 1,
         },
         "dispatchPolicy": {
+            "automaticOrchestration": (
+                configuration.automatic_orchestration
+            ),
+            "autoSelectModel": configuration.auto_select_model,
+            "allowCrossAdapterDispatch": (
+                configuration.allow_cross_adapter_dispatch
+            ),
+            "allowedAdapters": list(configuration.allowed_adapters),
+            "maxConcurrentExecutors": (
+                configuration.max_concurrent_executors
+            ),
+            "quotaExhaustionPolicy": (
+                configuration.quota_exhaustion_policy
+            ),
+            "preferDifferentAdapterForReview": (
+                configuration.prefer_different_adapter_for_review
+            ),
+            "configurationSource": configuration.source,
             "hostNativeOnly": True,
             "externalProcessLaunchAllowed": False,
             "companionScriptLaunchAllowed": False,
-            "analyzedRoutesRequireExplicitModelOverride": True,
+            "analyzedRoutesRequireExplicitModelOverride": (
+                configuration.auto_select_model
+            ),
             "currentExecutorFallbackAllowed": True,
             "fallbackModelSelection": "CURRENT_HOST_DEFAULT",
             "fallbackReasoningClass": "UNCLASSIFIED",
@@ -967,6 +1189,8 @@ def plan_dispatch_batch(
             "childContext": "ROOT_ID_NODE_ID_AND_DECISION_ONLY",
             "reasoningClassSource": (
                 "HOST_AGENT_ANALYSIS_OR_CURRENT_EXECUTOR_FALLBACK"
+                if configuration.auto_select_model
+                else "CURRENT_EXECUTOR_BY_ORCHESTRATOR_POLICY"
             ),
             "controllerAnalyzesLoopPayload": False,
             "quotaRecoveryUsesPlan": False,

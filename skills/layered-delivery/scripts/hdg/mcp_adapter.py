@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping
 
 from . import __version__
@@ -13,10 +13,16 @@ from .host_policy import (
     ProjectRootBinding,
 )
 from .jsonio import redact
+from .mcp_apps import read_resource, resource_definitions
 from .mcp_tools import (
     call_tool,
     tool_definitions,
     validate_tool_arguments,
+)
+from .orchestrator_config import (
+    OrchestratorConfig,
+    built_in_orchestrator_config,
+    load_orchestrator_config,
 )
 
 
@@ -88,26 +94,47 @@ SERVER_INSTRUCTIONS = (
     "requirement planning. available_agents and recommend_executors expose "
     "live, non-binding local Agent/model advice with reasons; they never "
     "start a CLI, switch a model, claim a Loop, dispatch work, or persist "
-    "an assignment. For automatic execution, plan_dispatch_batch consumes "
+    "an assignment. Automatic execution also obeys one user-level central "
+    "orchestrator configuration shared by local host products: automatic "
+    "orchestration and model selection default on, cross-Adapter dispatch "
+    "defaults off, the Adapter allowlist and global concurrency cap are "
+    "mandatory, and invalid configured files fail closed. For automatic "
+    "configuration, open_orchestrator_settings returns a portable MCP Apps "
+    "panel plus complete structured fallback data. "
+    "update_orchestrator_settings requires explicit host approval, "
+    "atomically replaces the per-user file, and refreshes the current MCP "
+    "connection. UI support never changes dispatch authority: terminal-only "
+    "discovery remains EXTERNAL_PROCESS. For automatic "
+    "execution, plan_dispatch_batch consumes "
     "ephemeral host-native capacity, dispatchTransport, and selectable-"
     "model facts, then "
-    "atomically reserves each selected Loop and returns analyzed model "
+    "atomically reserves each selected Loop and its cross-Delivery host "
+    "Agent slot, then returns analyzed model "
     "overrides or an explicitly reported current-executor fallback, plus "
     "concurrent assignments. A second dispatcher sees "
     "WAIT_FOR_DISPATCH_RECEIVER and cannot reserve or launch the same Loop. "
     "The fallback remains "
     "UNCLASSIFIED; the controller never analyzes Loop payloads. It never "
-    "starts Agents or claims Loops; the native host creates each receiving "
+    "starts Agents or claims Loops. The server launch adapter limits HOST_NATIVE "
+    "inventory to Agents that client can actually create; a locally "
+    "installed CLI remains external advice. The native host creates each receiving "
     "Agent only after reservation; that Agent claims with its actual "
-    "Agent/model IDs, HOST_NATIVE transport, reservation ID, and the "
+    "Agent/model IDs, host-attested receiving context ID, one-time "
+    "receiver attestation, HOST_NATIVE transport, reservation ID, and the "
     "verified decision fingerprint. Local "
     "terminal discovery is EXTERNAL_PROCESS advice only. Never spawn an "
     "autonomous CLI, subprocess, or companion script such as codex-companion "
     "to satisfy an assignment. Such a route stays unclaimed and is handed "
-    "off manually. prepare_delivery_revision only stages a candidate and "
+    "off manually. prepare_delivery_revision requires explicit same-"
+    "Delivery or recorded replan continuity, only stages a candidate, "
+    "and leaves the current run active until freeze. It "
     "does not require a generic host approval prompt; the user's active or "
     "manual freeze choice is the single business confirmation for that "
-    "revision. The scheduler treats Loop payload and result "
+    "revision. A model-external host adapter observing hard 429 quota "
+    "exhaustion invokes the private capacity callback with the structured "
+    "provider reset time, cancels "
+    "recurring monitors, and keeps only one native wake after reset. The "
+    "scheduler treats Loop payload and result "
     "as opaque and accepts only standard Loop outcomes. resourceClaims "
     "are exact cross-Delivery scheduling locks, not file scopes. Every TASK "
     "requirement starts frozen. An explicitly authorized, not-yet-started "
@@ -134,6 +161,10 @@ class McpConnection:
     legacy_initialize_requested: bool = False
     legacy_initialized: bool = False
     legacy_client_info: dict[str, object] | None = None
+    trusted_host_adapter: str | None = None
+    orchestrator_config: OrchestratorConfig = field(
+        default_factory=built_in_orchestrator_config
+    )
 
 
 @dataclass(frozen=True)
@@ -154,6 +185,10 @@ def _server_info() -> dict[str, str]:
 def _server_capabilities() -> dict[str, object]:
     return {
         "tools": {"listChanged": False},
+        "resources": {
+            "subscribe": False,
+            "listChanged": False,
+        },
         "experimental": {
             CODEX_SANDBOX_META_KEY: {},
         },
@@ -425,6 +460,46 @@ def _validate_call_params(
     return name, arguments
 
 
+def _validate_resource_read_params(
+    params: Mapping[str, object],
+) -> str | None:
+    if set(params) - {"uri", "_meta"}:
+        return None
+    uri = params.get("uri")
+    request_meta = params.get("_meta")
+    if (
+        not isinstance(uri, str)
+        or not uri
+        or (
+            request_meta is not None
+            and not isinstance(request_meta, dict)
+        )
+    ):
+        return None
+    return uri
+
+
+def _read_mcp_resource(
+    *,
+    request_id: object,
+    params: Mapping[str, object],
+    modern: bool,
+) -> dict[str, Any]:
+    uri = _validate_resource_read_params(params)
+    if uri is None:
+        return _invalid_params(request_id)
+    try:
+        result = read_resource(uri)
+    except GatedLoopError as error:
+        return _rpc_error(
+            request_id,
+            -32002,
+            error.message,
+            data={"code": error.code, "details": error.details},
+        )
+    return _rpc_result(request_id, result, modern=modern)
+
+
 def _call_scheduler_tool(
     *,
     request_id: object,
@@ -467,7 +542,12 @@ def _call_scheduler_tool(
             root=root_resolution.project_root,
             workspace_root=root_resolution.workspace_root,
             explicit_dogfood=explicit_dogfood,
+            client_info=(dict(client_info) if client_info else None),
+            trusted_host_adapter=connection.trusted_host_adapter,
+            orchestrator_config=connection.orchestrator_config,
         )
+        if name == "update_orchestrator_settings":
+            connection.orchestrator_config = load_orchestrator_config()
         payload = {
             "ok": True,
             "result": business_result,
@@ -540,6 +620,26 @@ def _handle_modern_request(
                 "ttlMs": TOOLS_TTL_MS,
                 "cacheScope": CACHE_SCOPE,
             },
+            modern=True,
+        )
+
+    if method == "resources/list":
+        if not _validate_list_params(params):
+            return _invalid_params(request_id)
+        return _rpc_result(
+            request_id,
+            {
+                "resources": resource_definitions(),
+                "ttlMs": TOOLS_TTL_MS,
+                "cacheScope": CACHE_SCOPE,
+            },
+            modern=True,
+        )
+
+    if method == "resources/read":
+        return _read_mcp_resource(
+            request_id=request_id,
+            params=params,
             modern=True,
         )
 
@@ -619,6 +719,22 @@ def _handle_legacy_request(
         return _rpc_result(
             request_id,
             {"tools": tool_definitions()},
+            modern=False,
+        )
+
+    if method == "resources/list":
+        if not _validate_list_params(params):
+            return _invalid_params(request_id)
+        return _rpc_result(
+            request_id,
+            {"resources": resource_definitions()},
+            modern=False,
+        )
+
+    if method == "resources/read":
+        return _read_mcp_resource(
+            request_id=request_id,
+            params=params,
             modern=False,
         )
 

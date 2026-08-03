@@ -4,6 +4,43 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.28.5 — 2026-08-01
+
+发布提交：`e8591da`
+
+- 自动派遣推理分类增加 `ROUTINE`，由 Agent 为明确、低歧义、可重复且具备确定验证路径的 Loop 选择，并映射到宿主动态 inventory 中的 `EFFICIENT` 模型；`STANDARD → BALANCED` 与 `HIGH → FRONTIER` 保持不变。
+- 新增用户级中央编排器配置：默认开启自动编排与自动选模、关闭跨 Adapter，允许手动配置 Adapter 白名单、跨 Delivery 全局并发上限、额度耗尽策略和 Review Adapter 偏好；同机 Codex/Claude Code 共享配置，Marketplace 升级不覆盖，非法配置 fail closed。
+- 新增中央编排器 MCP Apps 配置面板和无 UI 降级工具：可视化查看真实 Adapter 能力并经审批原子保存用户级策略；支持 MCP Apps 的宿主内嵌呈现，不支持的 Codex/CLI 继续使用结构化工具结果。
+- 自动派遣只接受当前宿主证明为 `HOST_NATIVE` 的容量；跨 Adapter 开关是显式授权而非可用性证明，终端发现继续保持 `EXTERNAL_PROCESS`。Python 全量 204 项测试、三份运行包编译、Skill/Plugin 校验和 `git diff --check` 通过。
+
+## 0.28.4 — 2026-08-01
+
+发布提交：`19d2885`
+
+- 自动派遣为每个 Codex assignment 生成 reservation 派生的唯一 `hostTaskName`，宿主按 Agent 分析产生的 `STANDARD` / `HIGH` 路由结果显式覆盖模型并按 `concurrentDispatchGroups` 并发创建独立上下文；普通 helper、错误模型、过期预留和跨 Delivery 工作区不能串换 claim。
+- Codex Plugin 新增原生 `SubagentStart` 生命周期适配，在单一 SQLite 事务内签发并消费内部 identity、固定成功编排根、消费 reservation 并写入 Loop claim；receiver 与 operation bearer 不进入 child 上下文，重复 Hook 和投影后处理异常可从已提交状态幂等恢复。
+- heartbeat、pause 与 result 使用共享 mutation `PreToolUse` 授权：Codex 校验默认账户 session transcript，Claude Code 校验真实 `agent_id`、已消费 attestation 与 claim 事件；缺失 transcript、自定义 `CODEX_HOME`、root/helper 自带 operation 以及未知宿主统一 fail closed。Hook 仍遵循宿主 guardrail 边界，不把可执行 CLI 当作宿主原生 Agent。
+- Python 全量 185 项测试、编译检查、Skill/Plugin 校验和 `git diff --check` 通过；独立安全复审在正常宿主 Hook/MCP 路径下无 CRITICAL/HIGH finding。
+
+## 0.28.3 — 2026-07-31
+
+发布提交：`cec4e59`
+
+- TASK 接口投影改为 `interfaces.md` 索引加 `interfaces/` 详情目录，每个显式声明的 HTTP、Dubbo、gRPC 或其他协议接口均生成独立文档；索引保留协议、变更类型、调用标识、简介和稳定详情链接。
+- 入参表继续比较类型、必填性和说明，出参表移除无业务意义的必填列。新增或删除字段只显示实际存在的一侧，不再展示 `— →` / `→ —`；删除字段与删除接口使用 Markdown 删除线，真正修改的属性仍保留 before/after 箭头。
+- 投影模板升级到版本 11。已有 schema v3 Delivery 无需数据库或 Graph 迁移，后续合法状态刷新会从 SQLite 权威状态重建新的接口索引和详情目录。
+- Python 全量 173 项测试、编译检查、Skill/Plugin 校验和 `git diff --check` 通过。
+
+## 0.28.2 — 2026-07-31
+
+发布提交：`52a1961`
+
+- 自动派遣改为逐 Loop 消费 Agent 推理分析，并按 TASK、Review 与高推理等级选择宿主原生 Agent/模型；任一节点缺少分析时回退当前执行 Agent/模型。派遣预留和已 claim Loop 共同占用跨 Delivery 并发槽位，实际接收 Agent/模型继续以调度器落库事实为准。
+- 新增宿主签发的一次性 receiver attestation。每个 run 固定唯一编排根，多级子上下文及首次切换另一平台 adapter 都不能另建信任根；标准 Codex Plugin 没有原生生命周期签发回调时 fail closed，Claude Code 由 PreToolUse Hook 注入真实子 Agent 身份。
+- Claude `unfreeze_task_requirement` / `refreeze_task_requirement` 恢复敏感操作确认。`StopFailure(rate_limit)` 在模型无法反馈时由宿主按结构化错误暂停，可信 reset 到点自动恢复；共享额度断路器覆盖同 Agent 的跨 Delivery Loop，旧 run 重建不能覆盖更新的 report。
+- Delivery/Revision 继续按独立对话工作区与 linked worktree 隔离，新需求不会因恢复旧 Delivery 而误生成 Revision；Revision 迭代只保留冻结时的一次业务确认。
+- MCP 工具面保持 24 个，schema 继续只维护完整 v3。Python 全量 173 项测试、编译检查、Skill/Plugin 校验、`git diff --check` 与独立上下文复核通过，无 CRITICAL/HIGH finding。
+
 ## 0.28.1 — 2026-07-31
 
 发布提交：`1dffd62`

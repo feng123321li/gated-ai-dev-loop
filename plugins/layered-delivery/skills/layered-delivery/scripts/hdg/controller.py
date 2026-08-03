@@ -28,6 +28,11 @@ from .graph_runtime import (
     unfreeze_task_requirement,
 )
 from .hierarchy_contract import hierarchy_contract
+from .orchestrator_config import OrchestratorConfig
+from .orchestrator_settings import (
+    open_orchestrator_settings,
+    update_orchestrator_settings,
+)
 from .planning import (
     delivery_revision_history,
     freeze_hierarchy,
@@ -41,6 +46,8 @@ from .repository import SchedulerRepository
 ControllerOperation = Callable[..., dict[str, Any]]
 
 CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
+    "open_orchestrator_settings": open_orchestrator_settings,
+    "update_orchestrator_settings": update_orchestrator_settings,
     "workspace_status": workspace_status,
     "available_agents": available_agents,
     "hierarchy_contract": hierarchy_contract,
@@ -75,6 +82,9 @@ class ControllerContext:
     project_root: str
     workspace_root: str | None = None
     explicit_dogfood: bool = False
+    host_native_agent_ids: tuple[str, ...] | None = None
+    host_adapter_id: str | None = None
+    orchestrator_config: OrchestratorConfig | None = None
 
 
 class LayeredDeliveryController:
@@ -106,10 +116,10 @@ class LayeredDeliveryController:
         workspace_root = context.workspace_root or context.project_root
         arguments_value = dict(arguments)
         root_id = arguments_value.get("root_id")
-        repository = SchedulerRepository(context.project_root)
         git_binding = None
         git_workspace = None
         if isinstance(root_id, str):
+            repository = SchedulerRepository(context.project_root)
             repository.assert_delivery_workspace(
                 root_id,
                 workspace_root,
@@ -155,6 +165,27 @@ class LayeredDeliveryController:
             "prepare_delivery_revision",
         }:
             arguments_value["workspace_root"] = workspace_root
+        if name in {"plan_dispatch_batch", "dispatch_loop"}:
+            arguments_value["host_native_agent_ids"] = (
+                context.host_native_agent_ids
+            )
+        if name == "plan_dispatch_batch":
+            arguments_value["host_adapter_id"] = context.host_adapter_id
+            arguments_value["orchestrator_config"] = (
+                context.orchestrator_config
+            )
+        if name in {
+            "open_orchestrator_settings",
+            "update_orchestrator_settings",
+        }:
+            arguments_value["host_adapter_id"] = context.host_adapter_id
+        if name == "open_orchestrator_settings":
+            arguments_value["orchestrator_config"] = (
+                context.orchestrator_config
+            )
+        if name == "dispatch_loop":
+            arguments_value["host_adapter_id"] = context.host_adapter_id
+            arguments_value["require_receiver_attestation"] = True
         result = operation(
             root=context.project_root,
             explicit_dogfood=context.explicit_dogfood,

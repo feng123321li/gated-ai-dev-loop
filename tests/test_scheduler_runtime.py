@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import shutil
+import sqlite3
 from tempfile import TemporaryDirectory
 from threading import Event, Lock, Thread, current_thread
 import unittest
@@ -18,12 +19,14 @@ from hdg.graph_model import (
     review_node_id,
 )
 from hdg.graph_runtime import (
+    attest_loop_receiver,
     cancel_graph_run,
     dispatch_loop,
     graph_events,
     graph_status,
     loop_context,
     pause_loop,
+    report_host_capacity_exhausted,
     rebuild_graph_run,
     record_loop_result,
     record_user_confirmation,
@@ -680,6 +683,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 root_id=root_id,
                 node_id=node_id,
                 owner="agent",
+                receiver_context_id=f"context-{item_id}",
                 operation_id=operation_id,
                 now=at(minute),
             )
@@ -698,6 +702,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 root_id=root_id,
                 node_id=review_id,
                 owner="task-reviewer",
+                receiver_context_id=f"context-review-{item_id}",
                 operation_id=review_operation,
                 now=at(minute + 2),
             )
@@ -716,6 +721,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             root_id=root_id,
             node_id=group_review_id,
             owner="group-reviewer",
+            receiver_context_id="context-review-g-service",
             operation_id="op-group-review",
             now=at(10),
         )
@@ -785,6 +791,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 root_id=root_id,
                 node_id=node_id,
                 owner="recursive-agent",
+                receiver_context_id=f"context-{node_id}",
                 operation_id=operation_id,
                 now=at(minute),
             )
@@ -935,8 +942,12 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "sameAttempt": True,
                     "loopOutcome": "NONE",
                     "hard429": {
-                        "action": "MANUAL_AGENT_RESUME",
-                        "scheduleWake": False,
+                        "action": "TRIP_HOST_CAPACITY_BREAKER",
+                        "hostCallback": "MODEL_EXTERNAL_HOST_ADAPTER",
+                        "cancelRecurringMonitors": True,
+                        "scheduleWake": (
+                            "HOST_NATIVE_ONE_SHOT_AT_RESET"
+                        ),
                     },
                 },
                 "expiredLeaseRecovery": {
@@ -1394,6 +1405,318 @@ class SchedulerRuntimeTests(unittest.TestCase):
             ],
         )
 
+    def test_hard_429_trips_host_breaker_after_worker_stops(self) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        reset_at = at(40).isoformat().replace("+00:00", "Z")
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="claude-worker",
+            agent_id="claude-code",
+            model_id="claude-opus",
+            operation_id="op-hard-429",
+            now=at(3),
+        )
+
+        tripped = report_host_capacity_exhausted(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            reset_at=reset_at,
+            host_adapter_id="claude-code",
+            receiver_context_id="claude-worker",
+            report_id="report-hard-429",
+            reason="HTTP 429 quota exhausted",
+            now=at(30),
+        )
+        waiting = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(35),
+        )
+
+        self.assertEqual(tripped["status"], "OPEN")
+        self.assertTrue(tripped["cancelRecurringMonitors"])
+        self.assertEqual(tripped["wakeMode"], "HOST_NATIVE_ONE_SHOT")
+        self.assertEqual(waiting["nextWakeAt"], reset_at)
+        self.assertEqual(
+            waiting["actions"],
+            [
+                {
+                    "action": "WAIT_FOR_HOST_CAPACITY",
+                    "resetAt": reset_at,
+                    "capacityKey": "claude-code:default",
+                    "affectedNodeIds": [node_id],
+                    "cancelRecurringMonitors": True,
+                    "wakeMode": "HOST_NATIVE_ONE_SHOT",
+                }
+            ],
+        )
+        current = graph_status(root=self.root, root_id=root_id)
+        current_node = next(
+            item for item in current["nodes"] if item["nodeId"] == node_id
+        )
+        self.assertEqual(current_node["status"], "PAUSED")
+        replayed = report_host_capacity_exhausted(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            reset_at=reset_at,
+            host_adapter_id="claude-code",
+            receiver_context_id="claude-worker",
+            report_id="report-hard-429",
+            reason="HTTP 429 quota exhausted",
+            now=at(31),
+        )
+        self.assertTrue(replayed["idempotentReplay"])
+        repository = SchedulerRepository(self.root)
+        with repository.transaction() as connection:
+            connection.execute("DELETE FROM host_capacity_breakers")
+        rebuilt_open = rebuild_graph_run(
+            root=self.root,
+            root_id=root_id,
+        )
+        self.assertEqual(rebuilt_open["executionMode"], "manual")
+        self.assertEqual(
+            rebuilt_open["hostCapacity"]["capacityKey"],
+            "claude-code:default",
+        )
+        with repository.read() as connection:
+            rebuilt_breaker = repository.open_host_capacity_breaker(
+                connection,
+                agent_id="claude-code",
+                at=at(35).isoformat().replace("+00:00", "Z"),
+            )
+        self.assertIsNotNone(rebuilt_breaker)
+
+        ready = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(40),
+        )
+        self.assertNotIn("hostCapacity", ready)
+        self.assertIn(
+            node_id,
+            [
+                action["nodeId"]
+                for action in ready["actions"]
+                if action["action"] == "DISPATCH_LOOP"
+            ],
+        )
+        rebuilt_restored = rebuild_graph_run(
+            root=self.root,
+            root_id=root_id,
+        )
+        self.assertNotIn("hostCapacity", rebuilt_restored)
+
+    def test_hard_quota_report_rejects_unbounded_reset_horizon(self) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        node_id = loop_node_id("t-service")
+        dispatch_loop(
+            root=self.root,
+            root_id=prepared["rootId"],
+            node_id=node_id,
+            owner="claude-worker",
+            agent_id="claude-code",
+            model_id="claude-opus",
+            receiver_context_id="claude-context",
+            operation_id="op-hard-quota-horizon",
+            now=at(3),
+        )
+        with self.assertRaises(GatedLoopError) as caught:
+            report_host_capacity_exhausted(
+                root=self.root,
+                root_id=prepared["rootId"],
+                node_id=node_id,
+                reset_at=at(30 + 25 * 60).isoformat().replace(
+                    "+00:00",
+                    "Z",
+                ),
+                host_adapter_id="claude-code",
+                receiver_context_id="claude-context",
+                report_id="report-too-far",
+                reason="HTTP 429 quota exhausted",
+                now=at(30),
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_HOST_CAPACITY_REPORT_INVALID",
+        )
+
+    def test_rebuild_does_not_overwrite_newer_global_capacity_report(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="claude-worker",
+            agent_id="claude-code",
+            model_id="claude-opus",
+            receiver_context_id="claude-worker",
+            operation_id="op-stale-open",
+            now=at(3),
+        )
+        report_host_capacity_exhausted(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            reset_at=at(40).isoformat().replace("+00:00", "Z"),
+            host_adapter_id="claude-code",
+            receiver_context_id="claude-worker",
+            report_id="report-stale-open",
+            reason="HTTP 429 quota exhausted",
+            now=at(30),
+        )
+        repository = SchedulerRepository(self.root)
+        newer_reset = at(60).isoformat().replace("+00:00", "Z")
+        newer_reported = at(50).isoformat().replace("+00:00", "Z")
+        with repository.transaction() as connection:
+            connection.execute(
+                "UPDATE host_capacity_breakers SET reset_at = ?, "
+                "report_id = 'report-newer-open', status = 'OPEN', "
+                "reported_at = ?, restored_at = NULL, "
+                "reason = 'newer host report' "
+                "WHERE capacity_key = 'claude-code:default'",
+                (newer_reset, newer_reported),
+            )
+
+        rebuild_graph_run(root=self.root, root_id=root_id)
+
+        with repository.read() as connection:
+            breaker = connection.execute(
+                "SELECT * FROM host_capacity_breakers WHERE "
+                "capacity_key = 'claude-code:default'"
+            ).fetchone()
+        self.assertEqual(breaker["report_id"], "report-newer-open")
+        self.assertEqual(breaker["reset_at"], newer_reset)
+        self.assertEqual(breaker["status"], "OPEN")
+
+    def test_rebuild_old_restore_does_not_clear_newer_global_breaker(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="claude-worker",
+            agent_id="claude-code",
+            model_id="claude-opus",
+            receiver_context_id="claude-worker",
+            operation_id="op-stale-restore",
+            now=at(3),
+        )
+        report_host_capacity_exhausted(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            reset_at=at(40).isoformat().replace("+00:00", "Z"),
+            host_adapter_id="claude-code",
+            receiver_context_id="claude-worker",
+            report_id="report-stale-restore",
+            reason="HTTP 429 quota exhausted",
+            now=at(30),
+        )
+        get_graph_frontier(root=self.root, root_id=root_id, now=at(40))
+        repository = SchedulerRepository(self.root)
+        newer_reset = at(60).isoformat().replace("+00:00", "Z")
+        newer_reported = at(50).isoformat().replace("+00:00", "Z")
+        with repository.transaction() as connection:
+            connection.execute(
+                "UPDATE host_capacity_breakers SET reset_at = ?, "
+                "report_id = 'report-newer-after-restore', "
+                "status = 'OPEN', reported_at = ?, restored_at = NULL, "
+                "reason = 'newer host report' "
+                "WHERE capacity_key = 'claude-code:default'",
+                (newer_reset, newer_reported),
+            )
+
+        rebuild_graph_run(root=self.root, root_id=root_id)
+
+        with repository.read() as connection:
+            breaker = connection.execute(
+                "SELECT * FROM host_capacity_breakers WHERE "
+                "capacity_key = 'claude-code:default'"
+            ).fetchone()
+        self.assertEqual(
+            breaker["report_id"],
+            "report-newer-after-restore",
+        )
+        self.assertEqual(breaker["reset_at"], newer_reset)
+        self.assertEqual(breaker["status"], "OPEN")
+
+    def test_hard_quota_breaker_pauses_same_agent_across_deliveries(
+        self,
+    ) -> None:
+        deliveries = []
+        for delivery_id, task_id in (
+            ("d-first", "t-first"),
+            ("d-second", "t-second"),
+        ):
+            workspace = Path(self.root, delivery_id)
+            workspace.mkdir()
+            prepared = prepare_hierarchy(
+                root=self.root,
+                hierarchy=delivery_task_hierarchy(delivery_id, task_id),
+                workspace_root=str(workspace),
+                now=at(0),
+            )
+            freeze_hierarchy(
+                root=self.root,
+                root_id=delivery_id,
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="human",
+                now=at(1),
+            )
+            dispatch_loop(
+                root=self.root,
+                root_id=delivery_id,
+                node_id=loop_node_id(task_id),
+                owner=f"claude-{task_id}",
+                agent_id="claude-code",
+                model_id="claude-opus",
+                receiver_context_id=f"context-{task_id}",
+                operation_id=f"op-{task_id}",
+                now=at(3),
+            )
+            deliveries.append((delivery_id, task_id))
+
+        report_host_capacity_exhausted(
+            root=self.root,
+            root_id="d-first",
+            node_id=loop_node_id("t-first"),
+            reset_at=at(40).isoformat().replace("+00:00", "Z"),
+            host_adapter_id="claude-code",
+            receiver_context_id="context-t-first",
+            report_id="report-cross-delivery",
+            reason="HTTP 429 quota exhausted",
+            now=at(30),
+        )
+
+        for delivery_id, task_id in deliveries:
+            node = next(
+                item
+                for item in graph_status(
+                    root=self.root,
+                    root_id=delivery_id,
+                )["nodes"]
+                if item["nodeId"] == loop_node_id(task_id)
+            )
+            self.assertEqual(node["status"], "PAUSED")
+
     def test_timed_pause_requires_explicit_capacity_scope(
         self,
     ) -> None:
@@ -1568,6 +1891,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 root_id=root_id,
                 node_id=node_id,
                 owner="task-agent",
+                receiver_context_id=f"context-{item_id}-severity",
                 operation_id=operation_id,
                 now=at(minute),
             )
@@ -1586,6 +1910,9 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 root_id=root_id,
                 node_id=task_review_id,
                 owner="task-review-agent",
+                receiver_context_id=(
+                    f"context-{item_id}-task-review-severity"
+                ),
                 operation_id=task_review_operation,
                 now=at(minute + 2),
             )
@@ -1604,6 +1931,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             root_id=root_id,
             node_id=review_id,
             owner="review-agent",
+            receiver_context_id="context-group-review-severity",
             operation_id="op-review-severity",
             now=at(10),
         )
@@ -1885,7 +2213,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                         current["hierarchyFingerprint"]
                     ),
                     "authorized_project_ids": [],
-                    "execution_mode": "active",
+                    "execution_mode": "manual",
                     "confirmed_by": "human",
                 },
                 root=self.root,
@@ -1893,6 +2221,14 @@ class SchedulerRuntimeTests(unittest.TestCase):
             )
             prepared.append(current)
 
+        first_attestation = attest_loop_receiver(
+            root=self.root,
+            root_id="d-first",
+            node_id=loop_node_id("t-first"),
+            receiver_context_id="context-first",
+            parent_context_id="codex-parent",
+            host_adapter_id="codex",
+        )
         call_tool(
             "dispatch_loop",
             {
@@ -1901,10 +2237,16 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "owner": "agent-first",
                 "agent_id": "codex",
                 "model_id": "gpt-5.6-sol",
+                "dispatch_mode": "MANUAL",
+                "receiver_context_id": "context-first",
+                "receiver_attestation_id": first_attestation[
+                    "receiverAttestationId"
+                ],
                 "operation_id": "op-first",
             },
             root=self.root,
             workspace_root=str(first_workspace),
+            trusted_host_adapter="codex",
         )
         frontier = call_tool(
             "graph_frontier",
@@ -1928,18 +2270,32 @@ class SchedulerRuntimeTests(unittest.TestCase):
             )
         )
         with self.assertRaises(GatedLoopError) as caught:
+            second_attestation = attest_loop_receiver(
+                root=self.root,
+                root_id="d-second",
+                node_id=loop_node_id("t-second"),
+                receiver_context_id="context-second",
+                parent_context_id="codex-parent",
+                host_adapter_id="codex",
+            )
             call_tool(
                 "dispatch_loop",
                 {
                     "root_id": "d-second",
                     "node_id": loop_node_id("t-second"),
                     "owner": "agent-second",
-                    "agent_id": "claude-code",
-                    "model_id": "claude-sonnet-4",
+                    "agent_id": "codex",
+                    "model_id": "gpt-5.6-sol",
+                    "dispatch_mode": "MANUAL",
+                    "receiver_context_id": "context-second",
+                    "receiver_attestation_id": second_attestation[
+                        "receiverAttestationId"
+                    ],
                     "operation_id": "op-second",
                 },
                 root=self.root,
                 workspace_root=str(second_workspace),
+                trusted_host_adapter="codex",
             )
         self.assertEqual(
             caught.exception.code,
@@ -2748,6 +3104,30 @@ class SchedulerRuntimeTests(unittest.TestCase):
         interfaces = (task_root / "interfaces.md").read_text(
             encoding="utf-8"
         )
+        interface_directory = task_root / "interfaces"
+        interface_documents = sorted(interface_directory.glob("*.md"))
+        self.assertEqual(
+            [path.name for path in interface_documents],
+            [
+                "001-http-post-api-orders.md",
+                (
+                    "002-dubbo-com-example-order-orderservice-"
+                    "createorder.md"
+                ),
+                (
+                    "003-grpc-order-v1-legacyorderservice-"
+                    "getorder.md"
+                ),
+            ],
+        )
+        interface_details = {
+            path.name: path.read_text(encoding="utf-8")
+            for path in interface_documents
+        }
+        all_interface_details = "\n".join(interface_details.values())
+        create_order_detail = interface_details[
+            "001-http-post-api-orders.md"
+        ]
         task_baseline = (task_root / "baseline.md").read_text(
             encoding="utf-8"
         )
@@ -2814,72 +3194,96 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "修改前调用标识",
             "修改后调用标识",
             "简介",
-            "入参",
-            "出参",
         ):
             with self.subTest(chinese_label=label):
                 self.assertIn(label, interfaces)
+        self.assertNotIn("## 接口详情", interfaces)
+        self.assertNotIn("legacyCustomerNo", interfaces)
         self.assertIn("创建订单", interfaces)
         self.assertIn("修改", interfaces)
         self.assertIn("POST /api/v1/orders", interfaces)
         self.assertIn("POST /api/orders", interfaces)
-        self.assertIn("legacyCustomerNo", interfaces)
-        self.assertIn("customerId", interfaces)
-        self.assertIn("必填", interfaces)
-        self.assertIn("类型", interfaces)
-        self.assertIn("说明", interfaces)
-        self.assertIn("字段路径", interfaces)
+        self.assertIn(
+            "[创建订单](interfaces/001-http-post-api-orders.md)",
+            interfaces,
+        )
+        self.assertIn("legacyCustomerNo", all_interface_details)
+        self.assertIn("customerId", all_interface_details)
+        self.assertIn("必填", create_order_detail)
+        self.assertIn("类型", create_order_detail)
+        self.assertIn("说明", create_order_detail)
+        self.assertIn("字段路径", create_order_detail)
+        self.assertIn("[返回接口清单](../interfaces.md)", create_order_detail)
         self.assertIn(
             (
-                "| legacyCustomerNo | 删除 | string → — | "
-                "是 → — | 原客户编号 → — |"
+                "| ~~legacyCustomerNo~~ | 删除 | ~~string~~ | "
+                "~~是~~ | ~~原客户编号~~ |"
             ),
-            interfaces,
+            create_order_detail,
         )
         self.assertIn(
             (
-                "| customerId | 新增 | — → string | "
-                "— → 是 | — → 客户标识 |"
+                "| customerId | 新增 | string | "
+                "是 | 客户标识 |"
             ),
-            interfaces,
+            create_order_detail,
         )
         self.assertIn(
             (
                 "| quantity | 修改 | integer | 否 → 是 | "
                 "商品数量 → 必须大于零的商品数量 |"
             ),
-            interfaces,
+            create_order_detail,
         )
         self.assertIn(
             (
                 "| channel | 未变 | string | 否 | 下单渠道 |"
             ),
-            interfaces,
+            create_order_detail,
         )
-        self.assertIn("orderId", interfaces)
+        response_section = create_order_detail.split("## 出参", 1)[1]
+        self.assertNotIn("必填", response_section)
+        self.assertIn(
+            "| ~~orderNo~~ | 删除 | ~~string~~ | ~~原订单编号~~ |",
+            response_section,
+        )
+        self.assertIn(
+            "| orderId | 新增 | string | 订单标识 |",
+            response_section,
+        )
+        self.assertNotIn("— →", all_interface_details)
+        self.assertNotIn("→ —", all_interface_details)
+        self.assertIn("orderId", all_interface_details)
         self.assertIn("创建订单服务", interfaces)
         self.assertIn("新增", interfaces)
-        self.assertIn("不适用 →", interfaces)
+        self.assertIn("不适用 →", all_interface_details)
         self.assertIn(
             "com.example.order.OrderService.createOrder",
             interfaces,
         )
-        self.assertIn("CreateOrderRequest", interfaces)
-        self.assertIn("CreateOrderResponse", interfaces)
+        self.assertIn("CreateOrderRequest", all_interface_details)
+        self.assertIn("CreateOrderResponse", all_interface_details)
         self.assertIn("旧版订单查询服务", interfaces)
         self.assertIn("GRPC", interfaces)
         self.assertIn("删除", interfaces)
         self.assertIn(
+            (
+                "~~[旧版订单查询服务](interfaces/"
+                "003-grpc-order-v1-legacyorderservice-getorder.md)~~"
+            ),
+            interfaces,
+        )
+        self.assertIn(
             "order.v1.LegacyOrderService/GetOrder",
             interfaces,
         )
-        self.assertIn("LegacyOrderResponse", interfaces)
-        self.assertIn("→ 不适用", interfaces)
-        self.assertNotIn("#### 修改前", interfaces)
-        self.assertNotIn("#### 修改后", interfaces)
-        self.assertIn("#### 入参", interfaces)
-        self.assertIn("#### 出参", interfaces)
-        self.assertNotIn("```json", interfaces)
+        self.assertIn("LegacyOrderResponse", all_interface_details)
+        self.assertIn("→ 不适用", all_interface_details)
+        self.assertNotIn("#### 修改前", all_interface_details)
+        self.assertNotIn("#### 修改后", all_interface_details)
+        self.assertIn("## 入参", all_interface_details)
+        self.assertIn("## 出参", all_interface_details)
+        self.assertNotIn("```json", all_interface_details)
         self.assertNotIn("PREPARED", interfaces)
         self.assertIn(
             "[查看本 TASK 的接口契约](interfaces.md)",
@@ -2971,8 +3375,13 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "投影模板版本",
                     interface_projection.read_text(encoding="utf-8"),
                 )
+                self.assertEqual(
+                    len(list((item_root / "interfaces").glob("*.md"))),
+                    3,
+                )
             else:
                 self.assertFalse(interface_projection.exists())
+                self.assertFalse((item_root / "interfaces").exists())
 
     def test_reprepare_without_interfaces_removes_optional_projection(
         self,
@@ -2991,6 +3400,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             projection_root / WORK_ITEM_DIRECTORY / "t-service"
         )
         self.assertTrue((task_root / "interfaces.md").is_file())
+        self.assertTrue((task_root / "interfaces").is_dir())
 
         replacement = prepare_hierarchy(
             root=self.root,
@@ -3003,6 +3413,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             replacement["humanArtifacts"]["workItems"]["t-service"],
         )
         self.assertFalse((task_root / "interfaces.md").exists())
+        self.assertFalse((task_root / "interfaces").exists())
         overview = (projection_root / "overview.md").read_text(
             encoding="utf-8"
         )

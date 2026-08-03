@@ -8,7 +8,8 @@
         "${CLAUDE_PLUGIN_ROOT}/skills/layered-delivery/scripts/hdg_mcp.py"
       ],
       "env": {
-        "HDG_PROJECT_ROOT": "${CLAUDE_PROJECT_DIR}"
+        "HDG_PROJECT_ROOT": "${CLAUDE_PROJECT_DIR}",
+        "HDG_HOST_ADAPTER": "claude-code"
       }
     }
   }

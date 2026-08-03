@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>中央编排器设置</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system,
+          BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --surface: #ffffff;
+        --surface-muted: #f4f6fa;
+        --border: #dce2ea;
+        --text: #18212f;
+        --muted: #667085;
+        --brand: #2563eb;
+        --brand-soft: #eaf1ff;
+        --success: #15803d;
+        --warning: #b45309;
+        --danger: #b42318;
+        --shadow: 0 16px 36px rgba(15, 23, 42, 0.1);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --surface: #111827;
+          --surface-muted: #1b2535;
+          --border: #344054;
+          --text: #f8fafc;
+          --muted: #aab4c3;
+          --brand: #7ba7ff;
+          --brand-soft: #1d3158;
+          --success: #6ee7a2;
+          --warning: #fdb56b;
+          --danger: #ff8a80;
+          --shadow: none;
+        }
+      }
+
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 12px; color: var(--text); background: transparent; }
+      main {
+        width: min(100%, 760px);
+        margin: 0 auto;
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+      header {
+        display: flex;
+        gap: 14px;
+        align-items: flex-start;
+        justify-content: space-between;
+        padding: 20px 22px 16px;
+        border-bottom: 1px solid var(--border);
+      }
+      h1 { margin: 0; font-size: 1.2rem; line-height: 1.4; }
+      .subtitle { margin: 4px 0 0; color: var(--muted); font-size: 0.86rem; }
+      .host-badge {
+        flex: none;
+        border-radius: 999px;
+        padding: 5px 9px;
+        color: var(--brand);
+        background: var(--brand-soft);
+        font-size: 0.76rem;
+        font-weight: 650;
+      }
+      form { padding: 6px 22px 20px; }
+      .row, fieldset {
+        margin: 0;
+        padding: 15px 0;
+        border: 0;
+        border-bottom: 1px solid var(--border);
+      }
+      .row { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+      .label { display: block; font-weight: 640; line-height: 1.35; }
+      .hint { display: block; margin-top: 3px; color: var(--muted); font-size: 0.78rem; line-height: 1.45; }
+      .switch { position: relative; display: inline-flex; flex: none; width: 42px; height: 24px; }
+      .switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+      .switch span { width: 100%; border-radius: 999px; background: #98a2b3; transition: 150ms ease; }
+      .switch span::after {
+        content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px;
+        border-radius: 50%; background: white; box-shadow: 0 1px 3px rgba(0,0,0,.24); transition: 150ms ease;
+      }
+      .switch input:checked + span { background: var(--brand); }
+      .switch input:checked + span::after { transform: translateX(18px); }
+      .switch input:focus-visible + span { outline: 3px solid var(--brand-soft); outline-offset: 2px; }
+      legend { width: 100%; padding: 0 0 10px; font-weight: 640; }
+      .adapter-list, .radio-list { display: grid; gap: 8px; }
+      .adapter {
+        display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center;
+        padding: 10px 12px; border-radius: 12px; background: var(--surface-muted);
+      }
+      .adapter input, .radio-list input { accent-color: var(--brand); }
+      .adapter-name { font-weight: 600; font-size: 0.9rem; }
+      .adapter-id { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.72rem; }
+      .state { font-size: 0.74rem; font-weight: 650; text-align: right; }
+      .state.native { color: var(--success); }
+      .state.terminal { color: var(--warning); }
+      .state.missing { color: var(--muted); }
+      .number-input {
+        width: 74px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 9px;
+        color: var(--text); background: var(--surface); font: inherit; text-align: center;
+      }
+      .radio-list label { display: flex; gap: 9px; align-items: flex-start; font-size: 0.88rem; }
+      .radio-copy { display: grid; gap: 2px; }
+      .radio-copy small { color: var(--muted); line-height: 1.4; }
+      .notice {
+        margin: 14px 0 0; padding: 10px 12px; border-radius: 10px;
+        background: var(--brand-soft); color: var(--text); font-size: 0.78rem; line-height: 1.45;
+      }
+      .path { overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+      footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 18px; }
+      #status { min-height: 20px; color: var(--muted); font-size: 0.8rem; }
+      #status.error { color: var(--danger); }
+      #status.success { color: var(--success); }
+      button {
+        flex: none; border: 0; border-radius: 10px; padding: 9px 16px;
+        background: var(--brand); color: white; font: inherit; font-weight: 650; cursor: pointer;
+      }
+      button:disabled { cursor: wait; opacity: .65; }
+      @media (max-width: 560px) {
+        body { padding: 0; }
+        main { border-radius: 0; border-left: 0; border-right: 0; }
+        header, form { padding-left: 16px; padding-right: 16px; }
+        .adapter { grid-template-columns: auto 1fr; }
+        .state { grid-column: 2; text-align: left; }
+        footer { align-items: flex-end; }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>中央编排器设置</h1>
+          <p class="subtitle">本机用户级策略，在 Codex、Claude Code 等 Adapter 间共享</p>
+        </div>
+        <span id="host-badge" class="host-badge">宿主检测中</span>
+      </header>
+
+      <form id="settings-form">
+        <div class="row">
+          <div><span class="label">自动编排</span><span class="hint">自动规划并发 Loop 的派遣批次</span></div>
+          <label class="switch"><input id="automatic" type="checkbox" /><span aria-hidden="true"></span></label>
+        </div>
+        <div class="row">
+          <div><span class="label">自动选择模型</span><span class="hint">按 Agent 分析的 ROUTINE / STANDARD / HIGH 分类选择模型</span></div>
+          <label class="switch"><input id="model" type="checkbox" /><span aria-hidden="true"></span></label>
+        </div>
+        <div class="row">
+          <div><span class="label">跨 Adapter 调度</span><span class="hint">仅授予调度权限；仍需目标 Adapter 已注册且可接收</span></div>
+          <label class="switch"><input id="cross" type="checkbox" /><span aria-hidden="true"></span></label>
+        </div>
+
+        <fieldset>
+          <legend>允许的 Adapter</legend>
+          <div id="adapter-list" class="adapter-list"></div>
+        </fieldset>
+
+        <div class="row">
+          <div><span class="label">最大并发执行器</span><span class="hint">所有 Delivery 共用的原子并发上限（1–64）</span></div>
+          <input id="concurrency" class="number-input" type="number" min="1" max="64" required />
+        </div>
+
+        <fieldset>
+          <legend>额度耗尽</legend>
+          <div class="radio-list">
+            <label><input type="radio" name="quota" value="PAUSE_AND_RESUME" /><span class="radio-copy">暂停并在额度恢复后继续<small>保留 Loop，按已知重置时间恢复</small></span></label>
+            <label><input type="radio" name="quota" value="SWITCH_ADAPTER" /><span class="radio-copy">自动切换到其他 Adapter<small>仅在跨 Adapter 已授权且目标可接收时生效</small></span></label>
+            <label><input type="radio" name="quota" value="ASK_USER" /><span class="radio-copy">询问用户<small>暂停自动派遣并等待选择</small></span></label>
+          </div>
+        </fieldset>
+
+        <div class="row">
+          <div><span class="label">优先使用不同 Adapter 审查</span><span class="hint">在可用容量允许时提高 Review 的执行器独立性</span></div>
+          <label class="switch"><input id="review" type="checkbox" /><span aria-hidden="true"></span></label>
+        </div>
+
+        <div class="notice">
+          配置文件：<span id="config-path" class="path">读取中</span><br />
+          “终端已安装”不等于当前宿主可原生派遣；面板会分别显示真实能力。
+        </div>
+        <footer>
+          <span id="status" role="status" aria-live="polite"></span>
+          <button id="save" type="submit">保存设置</button>
+        </footer>
+      </form>
+    </main>
+
+    <script type="module">
+      const byId = (id) => document.getElementById(id);
+      const form = byId("settings-form");
+      const saveButton = byId("save");
+      const status = byId("status");
+      const adaptersElement = byId("adapter-list");
+      let latestSettings = null;
+      let rpcId = 0;
+      const pending = new Map();
+
+      const setStatus = (message, kind = "") => {
+        status.textContent = message;
+        status.className = kind;
+      };
+
+      const stateCopy = {
+        CURRENT_HOST_NATIVE: ["当前宿主原生可派遣", "native"],
+        TERMINAL_ONLY: ["仅检测到本机终端", "terminal"],
+        NOT_DETECTED: ["未检测到", "missing"],
+      };
+
+      const render = (payload) => {
+        const settings = payload?.result ?? payload;
+        if (!settings?.config) return;
+        latestSettings = settings;
+        const config = settings.config;
+        byId("automatic").checked = Boolean(config.automaticOrchestration);
+        byId("model").checked = Boolean(config.autoSelectModel);
+        byId("cross").checked = Boolean(config.allowCrossAdapterDispatch);
+        byId("concurrency").value = String(config.maxConcurrentExecutors ?? 4);
+        byId("review").checked = Boolean(config.preferDifferentAdapterForReview);
+        const quota = form.querySelector(`input[name="quota"][value="${config.quotaExhaustionPolicy}"]`);
+        if (quota) quota.checked = true;
+        byId("config-path").textContent = config.configPath || "未解析";
+        byId("host-badge").textContent = settings.currentHostAdapter
+          ? `当前宿主：${settings.currentHostAdapter}`
+          : "宿主未声明";
+
+        adaptersElement.replaceChildren();
+        for (const adapter of settings.adapters ?? []) {
+          const row = document.createElement("label");
+          row.className = "adapter";
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.name = "adapter";
+          checkbox.value = adapter.id;
+          checkbox.checked = Boolean(adapter.enabled);
+          const copy = document.createElement("span");
+          const name = document.createElement("span");
+          name.className = "adapter-name";
+          name.textContent = adapter.displayName;
+          const id = document.createElement("span");
+          id.className = "adapter-id";
+          id.textContent = adapter.id;
+          copy.append(name, document.createElement("br"), id);
+          const state = document.createElement("span");
+          const [label, className] = stateCopy[adapter.registrationState] ?? [adapter.registrationState, "missing"];
+          state.className = `state ${className}`;
+          state.textContent = label;
+          row.append(checkbox, copy, state);
+          adaptersElement.append(row);
+        }
+        if (settings.saved) setStatus("设置已保存并应用到当前连接。", "success");
+      };
+
+      const notify = (method, params) => {
+        window.parent.postMessage({ jsonrpc: "2.0", method, params }, "*");
+      };
+      const request = (method, params) => new Promise((resolve, reject) => {
+        const id = ++rpcId;
+        pending.set(id, { resolve, reject });
+        window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+      });
+
+      window.addEventListener("message", (event) => {
+        if (event.source !== window.parent) return;
+        const message = event.data;
+        if (!message || message.jsonrpc !== "2.0") return;
+        if (typeof message.id === "number") {
+          const waiter = pending.get(message.id);
+          if (!waiter) return;
+          pending.delete(message.id);
+          if (message.error) waiter.reject(message.error);
+          else waiter.resolve(message.result);
+          return;
+        }
+        if (message.method === "ui/notifications/tool-result") {
+          render(message.params?.structuredContent);
+        }
+      }, { passive: true });
+
+      const bridgeReady = request("ui/initialize", {
+        appInfo: { name: "layered-delivery-orchestrator-settings", version: "1.0.0" },
+        appCapabilities: {},
+        protocolVersion: "2026-01-26",
+      }).then(() => notify("ui/notifications/initialized", {}));
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const allowedAdapters = [...form.querySelectorAll('input[name="adapter"]:checked')]
+          .map((input) => input.value);
+        if (!allowedAdapters.length) {
+          setStatus("至少保留一个允许的 Adapter。", "error");
+          return;
+        }
+        const maximum = Number(byId("concurrency").value);
+        if (!Number.isInteger(maximum) || maximum < 1 || maximum > 64) {
+          setStatus("最大并发执行器必须是 1–64 的整数。", "error");
+          return;
+        }
+        const quota = form.querySelector('input[name="quota"]:checked')?.value;
+        const config = {
+          schemaVersion: 1,
+          automaticOrchestration: byId("automatic").checked,
+          autoSelectModel: byId("model").checked,
+          allowCrossAdapterDispatch: byId("cross").checked,
+          allowedAdapters,
+          maxConcurrentExecutors: maximum,
+          quotaExhaustionPolicy: quota,
+          preferDifferentAdapterForReview: byId("review").checked,
+        };
+        saveButton.disabled = true;
+        setStatus("正在保存…");
+        try {
+          await bridgeReady;
+          const response = await request("tools/call", {
+            name: "update_orchestrator_settings",
+            arguments: { config },
+          });
+          const payload = response?.structuredContent;
+          if (!payload?.ok) throw new Error(payload?.error?.message || "保存失败");
+          render(payload);
+        } catch (error) {
+          setStatus(`保存失败：${error?.message || "宿主拒绝或连接不可用"}`, "error");
+        } finally {
+          saveButton.disabled = false;
+        }
+      });
+
+      const compatibilityPayload = window.openai?.toolOutput;
+      if (compatibilityPayload) render(compatibilityPayload);
+      bridgeReady.catch(() => setStatus("当前宿主未提供 MCP Apps 交互桥；可由 Agent 使用同名工具保存。", "error"));
+    </script>
+  </body>
+</html>

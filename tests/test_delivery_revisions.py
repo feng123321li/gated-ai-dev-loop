@@ -132,6 +132,7 @@ class DeliveryRevisionTests(unittest.TestCase):
             expected_current_revision=1,
             hierarchy=revised,
             reason="用户在最终验收前补充 supplier 合同修复。",
+            continuity_basis="USER_EXPLICIT_SAME_DELIVERY",
             requested_by="human",
             now=at(6),
         )
@@ -196,6 +197,10 @@ class DeliveryRevisionTests(unittest.TestCase):
             history["revisions"][0]["runStatus"],
             "SUPERSEDED",
         )
+        self.assertEqual(
+            history["revisions"][1]["continuityBasis"],
+            "USER_EXPLICIT_SAME_DELIVERY",
+        )
         rebuilt = rebuild_graph_run(
             root=self.root,
             root_id=root_id,
@@ -220,6 +225,63 @@ class DeliveryRevisionTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("当前修订：2", revisions_projection)
         self.assertIn("SUPERSEDED", revisions_projection)
+
+    def test_prepared_revision_keeps_the_current_run_active(self) -> None:
+        initial = task_hierarchy()
+        prepared = self._freeze_initial(initial)
+        root_id = prepared["rootId"]
+        before = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(2),
+        )
+        revised = deepcopy(initial)
+        revised["delivery"]["title"] = "Candidate only"
+
+        candidate = prepare_delivery_revision(
+            root=self.root,
+            root_id=root_id,
+            expected_current_revision=1,
+            hierarchy=revised,
+            reason="Prepare a candidate without replacing the live run.",
+            continuity_basis="USER_EXPLICIT_SAME_DELIVERY",
+            requested_by="human",
+            now=at(3),
+        )
+        after = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(4),
+        )
+        stored = SchedulerRepository(self.root).hierarchy(root_id)
+
+        self.assertEqual(candidate["deliveryRevision"], 2)
+        self.assertEqual(after["runId"], before["runId"])
+        self.assertEqual(stored["deliveryRevision"], 1)
+        self.assertEqual(stored["status"], "FROZEN")
+
+    def test_workspace_match_is_not_revision_continuity(self) -> None:
+        initial = task_hierarchy()
+        prepared = self._freeze_initial(initial)
+        revised = deepcopy(initial)
+        revised["delivery"]["title"] = "Unrelated path-local request"
+
+        with self.assertRaises(GatedLoopError) as caught:
+            prepare_delivery_revision(
+                root=self.root,
+                root_id=prepared["rootId"],
+                expected_current_revision=1,
+                hierarchy=revised,
+                reason="The same directory happens to be active.",
+                continuity_basis="WORKSPACE_MATCH",
+                requested_by="agent",
+                now=at(3),
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_REVISION_CONTINUITY_REQUIRED",
+        )
 
     def test_cross_project_scope_requires_exact_freeze_authorization(
         self,
@@ -313,6 +375,7 @@ class DeliveryRevisionTests(unittest.TestCase):
                 expected_current_revision=1,
                 hierarchy=replacement,
                 reason="Invalid identity change.",
+                continuity_basis="USER_EXPLICIT_SAME_DELIVERY",
                 requested_by="human",
                 now=at(2),
             )
@@ -345,6 +408,7 @@ class DeliveryRevisionTests(unittest.TestCase):
             expected_current_revision=1,
             hierarchy=revised,
             reason="恢复尚未最终验收的同一需求。",
+            continuity_basis="USER_EXPLICIT_SAME_DELIVERY",
             requested_by="human",
             now=at(3),
         )

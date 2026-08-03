@@ -8,8 +8,8 @@
 - 不得仅因 `workspace_status` 返回旧 Delivery 就进入 Revision。只有用户明确要求修改或继续该 Delivery 时，才允许调用 `unfreeze_task_requirement` 或 `prepare_delivery_revision`；Agent 的语义判断不能替代这项用户连续性授权。
 - 当前上下文仍保留最近一次 `prepare_hierarchy` 响应和原始 hierarchy 时，复用其中的 `hierarchyFingerprint`、完整清单与人类投影路径；需求未变时不要重复 prepare，回答用户问题后重新展示同一组冻结选项。
 - 初次冻结前用户修改需求时，更新 hierarchy 并重新调用 `prepare_hierarchy`；只使用新响应的 fingerprint，不复用旧值。
-- 初次冻结后、最终用户验收前用户修改依赖、项目范围、资源或拓扑时，保持相同 `delivery.id` 调用 `prepare_delivery_revision`，不得重新调用初始 prepare，也不得创建另一个 Delivery ID。
-- `prepare_delivery_revision` 只生成待确认候选，不激活执行，不应触发宿主通用确认弹窗；用户在完整范围和授权清单上选择自动执行或手动交接，才是该 Revision 唯一一次业务确认。
+- 初次冻结后、最终用户验收前用户修改依赖、项目范围、资源或拓扑时，保持相同 `delivery.id` 调用 `prepare_delivery_revision`，不得重新调用初始 prepare，也不得创建另一个 Delivery ID。用户明确要求继续同一 Delivery 时提交 `continuity_basis=USER_EXPLICIT_SAME_DELIVERY`；只有当前 Graph 已记录 `REPLAN_REQUIRED` 时提交 `ACTIVE_LOOP_REPLAN`。路径、分支和旧 Delivery 状态都不是连续性依据。
+- `prepare_delivery_revision` 只生成待确认候选，不替换当前 hierarchy 或旧 run，不应触发宿主通用确认弹窗；用户在完整范围和授权清单上选择自动执行或手动交接，才是该 Revision 唯一一次业务确认。
 - 当前上下文不再持有精确 fingerprint 或原始 hierarchy 时，不从 JSON/Markdown 投影反推机器输入，也不猜测旧值；重新收集需求并 prepare 后再请求冻结确认。
 
 ## 选择根节点
@@ -284,12 +284,14 @@ before 候选，并根据需求形成 after；确认 TASK 时必须把两者作�
 `projectionGuidance.interfaces` 为实时约定。
 
 控制器把每个 TASK 的声明确定性写入该 TASK 的
-`work-items/<task-id>/interfaces.md`，并从 TASK baseline 与 Delivery
-baseline 串联；完全没有声明的 TASK 不生成该文件、路径和导航。控制器不
-动态扫描实现代码或隐式推算契约；TASK/Review Loop 可用真实代码验证 after。
-接口详情直接在完整请求和响应表中逐字段比较 before/after，标记新增、修改、
-删除或未变；类型、必填性和简介使用“修改前 → 修改后”展示，不再拆成两份
-重复清单。字段仍是 Loop 的不透明输入，不参与依赖、资源锁或 Graph 调度。
+`work-items/<task-id>/interfaces.md` 索引，并在相邻 `interfaces/` 目录中为
+每个接口生成一份字段级详情；TASK baseline 与 Delivery baseline 只串联索引。
+完全没有声明的 TASK 不生成这些文件、目录和导航。控制器不动态扫描实现代码
+或隐式推算契约；TASK/Review Loop 可用真实代码验证 after。接口详情在完整
+请求和响应表中逐字段比较 before/after，标记新增、修改、删除或未变。入参表
+展示类型、必填性和说明，出参表不展示必填性；只有真正修改的属性使用“修改前
+→ 修改后”，新增或删除字段只显示存在的一侧，删除值使用 Markdown 删除线。
+字段仍是 Loop 的不透明输入，不参与依赖、资源锁或 Graph 调度。
 
 ## Skill Hint 晚绑定
 

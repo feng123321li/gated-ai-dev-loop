@@ -13,6 +13,8 @@ from .errors import GatedLoopError, fail
 from .hierarchy_contract import hierarchy_input_schema
 from .jsonio import canonical_json
 from .model_core import validate_hierarchy_definition
+from .mcp_apps import ORCHESTRATOR_SETTINGS_RESOURCE_URI
+from .orchestrator_config import OrchestratorConfig
 
 
 def _object(
@@ -38,7 +40,11 @@ def _string(description: str) -> dict[str, Any]:
 
 ROOT_ID = _string("Frozen Delivery and Graph run ID.")
 NODE_ID = _string("Exact graph node ID from graph_frontier.")
-OPERATION_ID = _string("Globally unique Loop operation ID.")
+OPERATION_ID = _string(
+    "Globally unique Loop operation ID. Codex-native children omit it for "
+    "heartbeat, pause, and result calls so their PreToolUse Hook can inject "
+    "the attested value; every other caller must supply the claim value."
+)
 FINGERPRINT = {
     "type": "string",
     "minLength": 64,
@@ -71,6 +77,9 @@ HOST_MODEL = _object(
 HOST_EXECUTOR = _object(
     {
         "agentId": _string("Host-native Agent ID."),
+        "adapterId": _string(
+            "Optional central host Adapter ID; defaults to agentId."
+        ),
         "displayName": _string("Host-native Agent display name."),
         "dispatchTransport": {
             "type": "string",
@@ -145,10 +154,11 @@ DISPATCH_NODE_REQUIREMENT = _object(
         "nodeId": NODE_ID,
         "reasoningClass": {
             "type": "string",
-            "enum": ["STANDARD", "HIGH"],
+            "enum": ["ROUTINE", "STANDARD", "HIGH"],
             "description": (
-                "Host Agent analysis: STANDARD targets a balanced model; "
-                "HIGH requires a frontier model."
+                "Host Agent analysis: ROUTINE targets an efficient model; "
+                "STANDARD targets a balanced model; HIGH requires a "
+                "frontier model."
             ),
         },
         "source": {
@@ -195,16 +205,24 @@ def _tool(
     schema: dict[str, Any],
     *,
     human: bool = False,
+    title: str | None = None,
+    annotations: dict[str, Any] | None = None,
+    meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {
         "name": name,
         "description": description,
         "inputSchema": schema,
     }
+    if title is not None:
+        result["title"] = title
+    if annotations is not None:
+        result["annotations"] = deepcopy(annotations)
+    tool_meta = deepcopy(meta) if meta is not None else {}
     if human:
-        result["_meta"] = {
-            "anthropic/requiresUserInteraction": True,
-        }
+        tool_meta["anthropic/requiresUserInteraction"] = True
+    if tool_meta:
+        result["_meta"] = tool_meta
     return result
 
 
@@ -233,6 +251,17 @@ def _prepare_revision_tool_schema() -> dict[str, Any]:
             "reason": _string(
                 "Why the active, not-yet-accepted Delivery scope changed."
             ),
+            "continuity_basis": {
+                "type": "string",
+                "enum": [
+                    "USER_EXPLICIT_SAME_DELIVERY",
+                    "ACTIVE_LOOP_REPLAN",
+                ],
+                "description": (
+                    "Explicit evidence that this is the same logical "
+                    "Delivery. Workspace/path reuse is never continuity."
+                ),
+            },
             "requested_by": _string("Human requester identity."),
         },
         required=[
@@ -240,6 +269,7 @@ def _prepare_revision_tool_schema() -> dict[str, Any]:
             "expected_current_revision",
             "hierarchy",
             "reason",
+            "continuity_basis",
             "requested_by",
         ],
     )
@@ -247,7 +277,105 @@ def _prepare_revision_tool_schema() -> dict[str, Any]:
     return tool_schema
 
 
+ORCHESTRATOR_POLICY = _object(
+    {
+        "schemaVersion": {
+            "type": "integer",
+            "const": 1,
+        },
+        "automaticOrchestration": {"type": "boolean"},
+        "autoSelectModel": {"type": "boolean"},
+        "allowCrossAdapterDispatch": {"type": "boolean"},
+        "allowedAdapters": {
+            "type": "array",
+            "items": _string("Allowed central Adapter ID."),
+            "minItems": 1,
+            "maxItems": 64,
+            "uniqueItems": True,
+        },
+        "maxConcurrentExecutors": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64,
+        },
+        "quotaExhaustionPolicy": {
+            "type": "string",
+            "enum": [
+                "PAUSE_AND_RESUME",
+                "SWITCH_ADAPTER",
+                "ASK_USER",
+            ],
+        },
+        "preferDifferentAdapterForReview": {"type": "boolean"},
+    },
+    required=[
+        "schemaVersion",
+        "automaticOrchestration",
+        "autoSelectModel",
+        "allowCrossAdapterDispatch",
+        "allowedAdapters",
+        "maxConcurrentExecutors",
+        "quotaExhaustionPolicy",
+        "preferDifferentAdapterForReview",
+    ],
+)
+
+
 TOOLS = (
+    _tool(
+        "open_orchestrator_settings",
+        (
+            "Read the shared user-level central orchestrator policy and "
+            "live Adapter discovery. Render the settings panel when the "
+            "host supports MCP Apps; otherwise return the same structured "
+            "configuration for text-based inspection."
+        ),
+        _object({}),
+        title="打开中央编排器设置",
+        annotations={
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "openWorldHint": False,
+            "idempotentHint": True,
+        },
+        meta={
+            "ui": {
+                "resourceUri": ORCHESTRATOR_SETTINGS_RESOURCE_URI,
+                "visibility": ["model", "app"],
+            },
+            "openai/outputTemplate": ORCHESTRATOR_SETTINGS_RESOURCE_URI,
+            "openai/widgetAccessible": True,
+            "openai/toolInvocation/invoking": "正在读取编排设置…",
+            "openai/toolInvocation/invoked": "编排设置已就绪",
+        },
+    ),
+    _tool(
+        "update_orchestrator_settings",
+        (
+            "Replace the complete shared user-level central orchestrator "
+            "policy after explicit user confirmation. This writes the "
+            "platform-specific orchestrator.json atomically and applies "
+            "the validated policy to the current MCP connection."
+        ),
+        _object(
+            {"config": ORCHESTRATOR_POLICY},
+            required=["config"],
+        ),
+        human=True,
+        title="保存中央编排器设置",
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "openWorldHint": False,
+            "idempotentHint": True,
+        },
+        meta={
+            "ui": {"visibility": ["model", "app"]},
+            "openai/widgetAccessible": True,
+            "openai/toolInvocation/invoking": "正在保存编排设置…",
+            "openai/toolInvocation/invoked": "编排设置已保存",
+        },
+    ),
     _tool(
         "workspace_status",
         (
@@ -333,7 +461,10 @@ TOOLS = (
             "frontier using ephemeral host-native Agent capacity and "
             "selectable models. Missing host Agent analysis may use the "
             "exact current Agent/model reported by the host and remains "
-            "UNCLASSIFIED. Atomically reserves every returned assignment "
+            "UNCLASSIFIED. Applies the user-level central orchestrator "
+            "switches, Adapter allowlist, cross-Adapter permission, "
+            "concurrency limit, quota policy, and Review preference. "
+            "Atomically reserves every returned assignment "
             "before host Agent creation and returns model-selection "
             "instructions and decision fingerprints; never starts Agents "
             "or claims Loops."
@@ -594,10 +725,18 @@ TOOLS = (
                     "type": "string",
                     "enum": ["AUTO", "MANUAL"],
                     "description": (
-                        "Optional dispatch provenance. AUTO requires the "
+                        "Required dispatch provenance. AUTO requires the "
                         "exact decision fingerprint returned for this node."
                     ),
                 },
+                "receiver_context_id": _string(
+                    "Host-native receiving Agent context ID. Review Loops "
+                    "must differ from every upstream receiving context."
+                ),
+                "receiver_attestation_id": _string(
+                    "One-time receiver grant issued by the model-external "
+                    "host adapter after it creates this native context."
+                ),
                 "dispatch_transport": {
                     "type": "string",
                     "enum": ["HOST_NATIVE"],
@@ -614,7 +753,12 @@ TOOLS = (
                 ),
                 "dispatch_reasoning_class": {
                     "type": "string",
-                    "enum": ["STANDARD", "HIGH", "UNCLASSIFIED"],
+                    "enum": [
+                        "ROUTINE",
+                        "STANDARD",
+                        "HIGH",
+                        "UNCLASSIFIED",
+                    ],
                     "description": (
                         "Reasoning class bound into an AUTO decision. "
                         "UNCLASSIFIED identifies current-executor fallback."
@@ -635,6 +779,9 @@ TOOLS = (
                 "owner",
                 "agent_id",
                 "model_id",
+                "dispatch_mode",
+                "receiver_context_id",
+                "receiver_attestation_id",
                 "operation_id",
             ],
         ),
@@ -648,7 +795,7 @@ TOOLS = (
                 "node_id": NODE_ID,
                 "operation_id": OPERATION_ID,
             },
-            required=["root_id", "node_id", "operation_id"],
+            required=["root_id", "node_id"],
         ),
     ),
     _tool(
@@ -658,7 +805,8 @@ TOOLS = (
             "current attempt and frozen Graph. Provide resume_at for a "
             "known provider soft-stop window and identify whether the "
             "limited capacity belongs to the executor or the native host. "
-            "Do not create a timed pause after an unhandled 429."
+            "A native host observing hard 429 uses its model-external "
+            "capacity callback instead."
         ),
         _object(
             {
@@ -683,7 +831,7 @@ TOOLS = (
                     ),
                 },
             },
-            required=["root_id", "node_id", "operation_id"],
+            required=["root_id", "node_id"],
         ),
     ),
     _tool(
@@ -730,7 +878,6 @@ TOOLS = (
             required=[
                 "root_id",
                 "node_id",
-                "operation_id",
                 "outcome",
             ],
         ),
@@ -922,12 +1069,13 @@ def call_tool(
     workspace_root: str | None = None,
     explicit_dogfood: bool = False,
     controller: LayeredDeliveryController = DEFAULT_CONTROLLER,
+    client_info: dict[str, Any] | None = None,
+    trusted_host_adapter: str | None = None,
+    orchestrator_config: OrchestratorConfig | None = None,
     **_: Any,
 ) -> dict[str, Any]:
     internal_arguments = validate_tool_arguments(name, arguments)
-    execution_mode = None
     if name == "freeze_hierarchy":
-        execution_mode = internal_arguments.pop("execution_mode")
         internal_arguments["confirmed"] = True
     result = controller.execute(
         name,
@@ -936,14 +1084,24 @@ def call_tool(
             project_root=root,
             workspace_root=workspace_root or root,
             explicit_dogfood=explicit_dogfood,
+            host_native_agent_ids=_host_native_agent_ids(
+                trusted_host_adapter
+            ),
+            host_adapter_id=trusted_host_adapter,
+            orchestrator_config=orchestrator_config,
         ),
     )
-    if name == "freeze_hierarchy":
-        return {
-            **result,
-            "executionMode": execution_mode,
-        }
     return result
+
+
+def _host_native_agent_ids(
+    trusted_host_adapter: str | None,
+) -> tuple[str, ...]:
+    if trusted_host_adapter == "claude-code":
+        return ("claude-code",)
+    if trusted_host_adapter == "codex":
+        return ("codex",)
+    return ()
 
 
 __all__ = (

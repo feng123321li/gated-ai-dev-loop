@@ -6,7 +6,7 @@ import sqlite3
 import subprocess
 from tempfile import TemporaryDirectory
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from hdg.controller import (
     ControllerContext,
@@ -32,6 +32,7 @@ from hdg.mcp_tools import (
     tool_definitions,
     validate_tool_arguments,
 )
+from hdg.graph_runtime import attest_loop_receiver
 from hdg.model_core import validate_hierarchy_definition
 from hdg.planning import workspace_status
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
@@ -418,17 +419,28 @@ class HierarchyContractTests(unittest.TestCase):
             interface_guidance["fieldProjection"],
             {
                 "layout": "REQUEST_RESPONSE_TABLES",
+                "documents": {
+                    "index": "interfaces.md",
+                    "detailsDirectory": "interfaces/",
+                    "oneDocumentPerInterface": True,
+                },
                 "changeStates": [
                     "CREATE",
                     "MODIFY",
                     "DELETE",
                     "UNCHANGED",
                 ],
-                "comparisonColumns": [
+                "requestComparisonColumns": [
                     "type",
                     "required",
                     "description",
                 ],
+                "responseComparisonColumns": [
+                    "type",
+                    "description",
+                ],
+                "deletedValueStyle": "MARKDOWN_STRIKETHROUGH",
+                "singleSidedChangeStyle": "PRESENT_VALUE_ONLY",
                 "transitionFormat": "BEFORE_TO_AFTER",
             },
         )
@@ -499,6 +511,31 @@ class HierarchyContractTests(unittest.TestCase):
         with self.assertRaises(GatedLoopError):
             validate_hierarchy_definition(mainline_delivery)
 
+    def test_posix_project_roots_remain_case_sensitive(self) -> None:
+        hierarchy = task_hierarchy()
+        hierarchy["delivery"]["projectScopes"] = [
+            {
+                "id": "upper",
+                "workspaceRoot": "C:\\srv\\Repo",
+                "access": "READ_ONLY",
+            },
+            {
+                "id": "lower",
+                "workspaceRoot": "C:\\srv\\repo",
+                "access": "READ_ONLY",
+            },
+        ]
+        with patch(
+            "hdg.model_core.os.path.normcase",
+            side_effect=lambda value: value,
+        ):
+            normalized = validate_hierarchy_definition(hierarchy)
+
+        self.assertEqual(
+            [scope["id"] for scope in normalized["delivery"]["projectScopes"]],
+            ["lower", "upper"],
+        )
+
 
 class McpSurfaceTests(unittest.TestCase):
     def test_shared_controller_executes_without_mcp_context(self) -> None:
@@ -545,9 +582,28 @@ class McpSurfaceTests(unittest.TestCase):
                 "cancel_graph_run",
                 "refreeze_task_requirement",
                 "unfreeze_task_requirement",
+                "update_orchestrator_settings",
             },
         )
         by_name = {tool["name"]: tool for tool in tools}
+        open_settings = by_name["open_orchestrator_settings"]
+        self.assertTrue(open_settings["annotations"]["readOnlyHint"])
+        self.assertEqual(
+            open_settings["_meta"]["ui"]["resourceUri"],
+            "ui://layered-delivery/orchestrator-settings.html",
+        )
+        update_settings = by_name["update_orchestrator_settings"]
+        self.assertFalse(update_settings["annotations"]["readOnlyHint"])
+        self.assertEqual(
+            update_settings["inputSchema"]["required"],
+            ["config"],
+        )
+        self.assertEqual(
+            update_settings["inputSchema"]["properties"]["config"][
+                "properties"
+            ]["quotaExhaustionPolicy"]["enum"],
+            ["PAUSE_AND_RESUME", "SWITCH_ADAPTER", "ASK_USER"],
+        )
         self.assertEqual(
             set(
                 by_name["workspace_status"]["inputSchema"][
@@ -606,10 +662,17 @@ class McpSurfaceTests(unittest.TestCase):
             ),
             None,
         )
+        self.assertEqual(
+            dispatch_plan_schema["properties"]["node_requirements"]
+            ["items"]["properties"]["reasoningClass"]["enum"],
+            ["ROUTINE", "STANDARD", "HIGH"],
+        )
         executor_schema = dispatch_plan_schema["properties"][
             "executor_inventory"
         ]["items"]
         self.assertIn("dispatchTransport", executor_schema["required"])
+        self.assertIn("adapterId", executor_schema["properties"])
+        self.assertNotIn("adapterId", executor_schema["required"])
         self.assertEqual(
             executor_schema["properties"]["dispatchTransport"]["enum"],
             ["HOST_NATIVE", "EXTERNAL_PROCESS"],
@@ -624,6 +687,9 @@ class McpSurfaceTests(unittest.TestCase):
                 "owner",
                 "agent_id",
                 "model_id",
+                "dispatch_mode",
+                "receiver_context_id",
+                "receiver_attestation_id",
                 "operation_id",
             ],
         )
@@ -640,6 +706,8 @@ class McpSurfaceTests(unittest.TestCase):
                 "dispatch_reservation_id",
                 "dispatch_reasoning_class",
                 "dispatch_decision_fingerprint",
+                "receiver_context_id",
+                "receiver_attestation_id",
                 "operation_id",
             },
         )
@@ -647,7 +715,7 @@ class McpSurfaceTests(unittest.TestCase):
             dispatch_schema["properties"]["dispatch_reasoning_class"][
                 "enum"
             ],
-            ["STANDARD", "HIGH", "UNCLASSIFIED"],
+            ["ROUTINE", "STANDARD", "HIGH", "UNCLASSIFIED"],
         )
         pause_schema = by_name["pause_loop"]["inputSchema"]
         self.assertNotIn("resume_at", pause_schema["required"])
@@ -939,6 +1007,9 @@ class McpSurfaceTests(unittest.TestCase):
             "owner": "agent-1",
             "agent_id": "codex",
             "model_id": "gpt-5.6-sol",
+            "dispatch_mode": "MANUAL",
+            "receiver_context_id": "context-1",
+            "receiver_attestation_id": "attestation-1",
             "operation_id": "op-1",
         }
         self.assertEqual(
@@ -997,6 +1068,10 @@ class McpSurfaceTests(unittest.TestCase):
                 )
                 self.assertEqual(frozen["confirmedBy"], "human")
                 self.assertEqual(status["status"], "ACTIVE")
+                self.assertEqual(
+                    frozen["executionMode"],
+                    status["executionMode"],
+                )
 
     def test_distinct_conversation_workspaces_run_distinct_deliveries(
         self,
@@ -1480,7 +1555,7 @@ class McpSurfaceTests(unittest.TestCase):
                             prepared["hierarchyFingerprint"]
                         ),
                         "authorized_project_ids": [],
-                        "execution_mode": "active",
+                        "execution_mode": "manual",
                         "confirmed_by": "human",
                     },
                     root=str(repository),
@@ -1499,6 +1574,14 @@ class McpSurfaceTests(unittest.TestCase):
                 )
 
             for delivery_id, task_id, branch_ref, worktree in deliveries:
+                attestation = attest_loop_receiver(
+                    root=str(repository),
+                    root_id=delivery_id,
+                    node_id=f"loop:{task_id}",
+                    receiver_context_id=f"context-{delivery_id}",
+                    parent_context_id="codex-parent",
+                    host_adapter_id="codex",
+                )
                 dispatched = call_tool(
                     "dispatch_loop",
                     {
@@ -1507,10 +1590,18 @@ class McpSurfaceTests(unittest.TestCase):
                         "owner": f"agent-{delivery_id}",
                         "agent_id": "codex",
                         "model_id": "gpt-5.6-sol",
+                        "dispatch_mode": "MANUAL",
+                        "receiver_context_id": (
+                            f"context-{delivery_id}"
+                        ),
+                        "receiver_attestation_id": attestation[
+                            "receiverAttestationId"
+                        ],
                         "operation_id": f"op-{delivery_id}",
                     },
                     root=str(repository),
                     workspace_root=str(worktree),
+                    trusted_host_adapter="codex",
                 )
                 self.assertEqual(dispatched["status"], "CLAIMED")
                 self.assertEqual(
@@ -1793,9 +1884,13 @@ class McpSurfaceTests(unittest.TestCase):
                         "owner": "agent-integrity",
                         "agent_id": "codex",
                         "model_id": "gpt-5.6-sol",
+                        "dispatch_mode": "MANUAL",
+                        "receiver_context_id": "context-integrity",
+                        "receiver_attestation_id": "attestation-integrity",
                         "operation_id": "op-integrity",
                     },
                     root=root,
+                    trusted_host_adapter="codex",
                 )
             self.assertEqual(
                 caught.exception.code,
@@ -2000,7 +2095,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 24)
+            self.assertEqual(len(listed["result"]["tools"]), 26)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

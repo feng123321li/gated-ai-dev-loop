@@ -296,6 +296,33 @@ def build_graph_frontier(
             }
             for node_id in replan_nodes
         ]
+    host_capacity = run.get("hostCapacity")
+    if host_capacity is not None:
+        affected_node_ids = sorted(
+            item["nodeId"]
+            for item in paused_loops
+            if item.get("capacityScope") == "HOST"
+        )
+        actions = [
+            action
+            for action in actions
+            if action["action"]
+            not in {
+                "DISPATCH_LOOP",
+                "CONTINUE_OR_HEARTBEAT_LOOP",
+                "WAIT_FOR_HOST_CAPACITY",
+            }
+        ]
+        actions.append(
+            {
+                "action": "WAIT_FOR_HOST_CAPACITY",
+                "resetAt": host_capacity["resetAt"],
+                "capacityKey": host_capacity["capacityKey"],
+                "affectedNodeIds": affected_node_ids,
+                "cancelRecurringMonitors": True,
+                "wakeMode": "HOST_NATIVE_ONE_SHOT",
+            }
+        )
     result = {
         "rootId": run["rootId"],
         "runId": run["runId"],
@@ -320,6 +347,14 @@ def build_graph_frontier(
         "workspaceIsolation": run.get("workspaceIsolation"),
         "actions": actions,
     }
+    if host_capacity is not None:
+        result["hostCapacity"] = host_capacity
+        result["nextWakeAt"] = min(
+            filter(
+                None,
+                [result["nextWakeAt"], host_capacity["resetAt"]],
+            )
+        )
     if run.get("gitBinding") is not None:
         result["gitBinding"] = run["gitBinding"]
     return result

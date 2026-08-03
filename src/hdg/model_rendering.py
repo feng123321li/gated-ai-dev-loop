@@ -149,7 +149,7 @@ PAYLOAD_FIELD_ORDER = MappingProxyType(
     }
 )
 UTC_PLUS_8 = timezone(timedelta(hours=8))
-PROJECTION_TEMPLATE_VERSION = 10
+PROJECTION_TEMPLATE_VERSION = 11
 WORK_ITEM_DIRECTORY = "work-items"
 WORKSPACE_OVERVIEW_PROJECTION_TEMPLATE = Template(
     """# 全部交付调度与进度总览
@@ -275,14 +275,33 @@ ${interface_status}
 - Delivery 需求基线：[返回 Delivery 基线](${delivery_baseline})
 
 本文件只确定性投影本 TASK Loop payload 中显式声明的 `interfaces`；
-接口声明不参与 Graph 调度决策。
+接口声明不参与 Graph 调度决策。每个接口的字段级契约独立位于
+`interfaces/` 目录，通过下方接口名称进入详情。
 
 ## 接口清单
 
 ${interface_rows}
-## 接口详情
+"""
+)
+INTERFACE_DETAIL_PROJECTION_TEMPLATE = Template(
+    """# ${protocol}：${name}
 
-${interface_details}
+## 导航
+
+- [返回接口清单](../interfaces.md)
+- [返回 TASK 基线](../baseline.md)
+
+## 接口定义
+
+${interface_metadata}
+
+## 入参
+
+${request_table}
+
+## 出参
+
+${response_table}
 """
 )
 TASK_BASELINE_PROJECTION_TEMPLATE = Template(
@@ -863,9 +882,13 @@ def _interface_transition(
     after: dict[str, str] | None,
     field: str,
 ) -> str:
-    before_value = before[field] if before is not None else "—"
-    after_value = after[field] if after is not None else "—"
-    if before is not None and after is not None and before_value == after_value:
+    if before is None:
+        return after[field] if after is not None else "未声明"
+    if after is None:
+        return before[field]
+    before_value = before[field]
+    after_value = after[field]
+    if before_value == after_value:
         return before_value
     return f"{before_value} → {after_value}"
 
@@ -873,6 +896,8 @@ def _interface_transition(
 def _interface_change_table(
     before: object,
     after: object,
+    *,
+    include_required: bool = True,
 ) -> list[str]:
     before_rows = _interface_field_rows(before) if before is not None else []
     after_rows = _interface_field_rows(after) if after is not None else []
@@ -894,42 +919,60 @@ def _interface_change_table(
             change = "新增"
         elif after_row is None:
             change = "删除"
-        elif before_row != after_row:
+        elif any(
+            before_row[field] != after_row[field]
+            for field in (
+                ("type", "required", "description")
+                if include_required
+                else ("type", "description")
+            )
+        ):
             change = "修改"
         else:
             change = "未变"
-        rendered_rows.append(
-            _table_row(
-                [
-                    path,
-                    change,
-                    _interface_transition(before_row, after_row, "type"),
-                    _interface_transition(
-                        before_row,
-                        after_row,
-                        "required",
-                    ),
-                    _interface_transition(
-                        before_row,
-                        after_row,
-                        "description",
-                    ),
-                ]
+        values = [
+            path,
+            change,
+            _interface_transition(before_row, after_row, "type"),
+        ]
+        if include_required:
+            values.append(
+                _interface_transition(
+                    before_row,
+                    after_row,
+                    "required",
+                )
+            )
+        values.append(
+            _interface_transition(
+                before_row,
+                after_row,
+                "description",
             )
         )
-    return [
-        (
+        if before_row is not None and after_row is None:
+            values = [
+                value if index == 1 else f"~~{value}~~"
+                for index, value in enumerate(values)
+            ]
+        rendered_rows.append(
+            _table_row(values)
+        )
+    if include_required:
+        header = (
             "| 字段路径 | 变更 | 类型（修改前 → 修改后） | "
             "必填（修改前 → 修改后） | 说明（修改前 → 修改后） |"
-        ),
-        "|---|---|---|---|---|",
-        *(
-            rendered_rows
-            or [
-                "| （整体） | 未声明 | 未声明 | 未声明 | 未声明 |"
-            ]
-        ),
-    ]
+        )
+        separator = "|---|---|---|---|---|"
+        empty_row = "| （整体） | 未声明 | 未声明 | 未声明 | 未声明 |"
+    else:
+        header = (
+            "| 字段路径 | 变更 | 类型（修改前 → 修改后） | "
+            "说明（修改前 → 修改后） |"
+        )
+        separator = "|---|---|---|---|"
+        empty_row = "| （整体） | 未声明 | 未声明 | 未声明 |"
+    return [header, separator, *(rendered_rows or [empty_row])]
 
 
 def render_workspace_overview(
@@ -2222,6 +2265,121 @@ def render_work_item_acceptance(
     )
 
 
+def _interface_projection_values(
+    interface: dict[str, Any],
+) -> dict[str, Any]:
+    protocol = _interface_scalar(
+        interface.get("protocol"),
+        fallback="未声明",
+    ).upper()
+    name = _interface_scalar(
+        interface.get("name"),
+        fallback="未命名接口",
+    )
+    summary = _interface_scalar(
+        interface.get("summary"),
+        fallback="未提供简介",
+    )
+    change_type = _interface_scalar(
+        interface.get("changeType"),
+        fallback="UNSPECIFIED",
+    ).upper()
+    before_value = interface.get("before")
+    after_value = interface.get("after")
+    before = before_value if isinstance(before_value, dict) else None
+    after = after_value if isinstance(after_value, dict) else None
+    return {
+        "protocol": protocol,
+        "name": name,
+        "summary": summary,
+        "changeType": change_type,
+        "changeText": INTERFACE_CHANGE_TYPE_TEXT.get(
+            change_type,
+            "未声明",
+        ),
+        "before": before,
+        "after": after,
+        "beforeIdentifier": _interface_call_identifier(protocol, before),
+        "afterIdentifier": _interface_call_identifier(protocol, after),
+    }
+
+
+def _interface_filename_slug(value: str) -> str:
+    characters: list[str] = []
+    pending_separator = False
+    for character in value.casefold():
+        if character.isascii() and character.isalnum():
+            if pending_separator and characters:
+                characters.append("-")
+            characters.append(character)
+            pending_separator = False
+        else:
+            pending_separator = True
+    return "".join(characters).strip("-")
+
+
+def _interface_document_filename(
+    position: int,
+    values: dict[str, Any],
+) -> str:
+    name_slug = _interface_filename_slug(values["name"])
+    identity = values["name"] if name_slug else values["afterIdentifier"]
+    if identity == "不适用":
+        identity = values["beforeIdentifier"]
+    slug = _interface_filename_slug(
+        f"{values['protocol']}-{identity}"
+    )[:64].rstrip("-")
+    return f"{position:03d}-{slug or 'interface'}.md"
+
+
+def _render_task_interface_detail(
+    definition: dict[str, Any],
+    values: dict[str, Any],
+) -> str:
+    before = values["before"]
+    after = values["after"]
+    metadata = "\n".join(
+        [
+            f"- 来源 TASK：{_markdown_text(definition['id'])}",
+            f"- 协议：{_markdown_text(values['protocol'])}",
+            f"- 接口名称：{_markdown_text(values['name'])}",
+            f"- 变更类型：{_markdown_text(values['changeText'])}",
+            f"- 简介：{_markdown_text(values['summary'])}",
+            (
+                "- 调用标识（修改前 → 修改后）："
+                f"{_markdown_text(values['beforeIdentifier'])} → "
+                f"{_markdown_text(values['afterIdentifier'])}"
+            ),
+        ]
+    )
+    return INTERFACE_DETAIL_PROJECTION_TEMPLATE.substitute(
+        protocol=_markdown_text(values["protocol"]),
+        name=_markdown_text(values["name"]),
+        interface_metadata=metadata,
+        request_table="\n".join(
+            _interface_change_table(
+                before.get("request", "未声明")
+                if before is not None
+                else None,
+                after.get("request", "未声明")
+                if after is not None
+                else None,
+            )
+        ),
+        response_table="\n".join(
+            _interface_change_table(
+                before.get("response", "未声明")
+                if before is not None
+                else None,
+                after.get("response", "未声明")
+                if after is not None
+                else None,
+                include_required=False,
+            )
+        ),
+    )
+
+
 def render_task_interfaces(
     definition: dict[str, Any],
     *,
@@ -2235,96 +2393,28 @@ def render_task_interfaces(
         raise ValueError("Interface projection requires a TASK definition")
     declarations = _task_interface_declarations(definition)
     rows: list[str] = []
-    details: list[str] = []
-    for interface in declarations:
-        protocol = _interface_scalar(
-            interface.get("protocol"),
-            fallback="未声明",
-        ).upper()
-        name = _interface_scalar(
-            interface.get("name"),
-            fallback="未命名接口",
+    for position, interface in enumerate(declarations, start=1):
+        values = _interface_projection_values(interface)
+        filename = _interface_document_filename(position, values)
+        name_link = (
+            f"[{_markdown_text(values['name'])}]"
+            f"(interfaces/{filename})"
         )
-        summary = _interface_scalar(
-            interface.get("summary"),
-            fallback="未提供简介",
-        )
-        change_type = _interface_scalar(
-            interface.get("changeType"),
-            fallback="UNSPECIFIED",
-        ).upper()
-        change_text = INTERFACE_CHANGE_TYPE_TEXT.get(
-            change_type,
-            "未声明",
-        )
-        before_value = interface.get("before")
-        after_value = interface.get("after")
-        before = (
-            before_value if isinstance(before_value, dict) else None
-        )
-        after = after_value if isinstance(after_value, dict) else None
-        before_identifier = _interface_call_identifier(
-            protocol,
-            before,
-        )
-        after_identifier = _interface_call_identifier(
-            protocol,
-            after,
-        )
+        if values["changeType"] == "DELETE":
+            name_link = f"~~{name_link}~~"
         rows.append(
-            "| "
-            + " | ".join(
-                _markdown_text(value)
-                for value in (
+            _table_row(
+                [
                     definition["id"],
-                    protocol,
-                    name,
-                    change_text,
-                    before_identifier,
-                    after_identifier,
-                    summary,
-                )
+                    values["protocol"],
+                    name_link,
+                    values["changeText"],
+                    values["beforeIdentifier"],
+                    values["afterIdentifier"],
+                    values["summary"],
+                ],
+                raw_indices={2},
             )
-            + " |"
-        )
-        details.extend(
-            [
-                f"### { _markdown_text(protocol) }：{_markdown_text(name)}",
-                "",
-                f"- 来源 TASK：{_markdown_text(definition['id'])}",
-                f"- 协议：{_markdown_text(protocol)}",
-                f"- 接口名称：{_markdown_text(name)}",
-                f"- 变更类型：{_markdown_text(change_text)}",
-                f"- 简介：{_markdown_text(summary)}",
-                (
-                    "- 调用标识（修改前 → 修改后）："
-                    f"{_markdown_text(before_identifier)} → "
-                    f"{_markdown_text(after_identifier)}"
-                ),
-                "",
-                "#### 入参",
-                "",
-                *_interface_change_table(
-                    before.get("request", "未声明")
-                    if before is not None
-                    else None,
-                    after.get("request", "未声明")
-                    if after is not None
-                    else None,
-                ),
-                "",
-                "#### 出参",
-                "",
-                *_interface_change_table(
-                    before.get("response", "未声明")
-                    if before is not None
-                    else None,
-                    after.get("response", "未声明")
-                    if after is not None
-                    else None,
-                ),
-                "",
-            ]
         )
     interface_rows = (
         "\n".join(
@@ -2340,11 +2430,6 @@ def render_task_interfaces(
         if rows
         else "- 当前需求未显式声明接口契约。"
     )
-    interface_details = (
-        "\n".join(details).rstrip()
-        if details
-        else "- 无接口详情。"
-    )
     return INTERFACES_PROJECTION_TEMPLATE.substitute(
         template_version=str(PROJECTION_TEMPLATE_VERSION),
         interface_status="\n".join(
@@ -2357,9 +2442,32 @@ def render_task_interfaces(
             )
         ),
         interface_rows=interface_rows,
-        interface_details=interface_details,
         delivery_baseline=delivery_baseline,
     )
+
+
+def render_task_interface_documents(
+    definition: dict[str, Any],
+    **index_arguments: Any,
+) -> dict[str, str]:
+    if definition["kind"] != "TASK":
+        raise ValueError("Interface projection requires a TASK definition")
+    documents = {
+        "interfaces.md": render_task_interfaces(
+            definition,
+            **index_arguments,
+        )
+    }
+    for position, interface in enumerate(
+        _task_interface_declarations(definition),
+        start=1,
+    ):
+        values = _interface_projection_values(interface)
+        filename = _interface_document_filename(position, values)
+        documents[f"interfaces/{filename}"] = (
+            _render_task_interface_detail(definition, values)
+        )
+    return documents
 
 
 def render_projection_documents(
@@ -2536,26 +2644,27 @@ def render_work_item_projection_documents(
             )
         )
         if _task_interface_declarations(definition):
-            documents[f"{tree_directory}/interfaces.md"] = (
-                render_task_interfaces(
-                    definition,
-                    delivery_baseline=delivery_baseline,
-                    hierarchy_fingerprint=stored_definition[
-                        "hierarchyFingerprint"
-                    ],
-                    graph_fingerprint=stored_definition[
-                        "graphFingerprint"
-                    ],
-                    hierarchy_status=stored_definition["status"],
-                    updated_at=stored_definition["updatedAt"],
-                )
+            interface_documents = render_task_interface_documents(
+                definition,
+                delivery_baseline=delivery_baseline,
+                hierarchy_fingerprint=stored_definition[
+                    "hierarchyFingerprint"
+                ],
+                graph_fingerprint=stored_definition[
+                    "graphFingerprint"
+                ],
+                hierarchy_status=stored_definition["status"],
+                updated_at=stored_definition["updatedAt"],
             )
+            for filename, content in interface_documents.items():
+                documents[f"{tree_directory}/{filename}"] = content
     return documents
 
 
 __all__ = (
     "ACCEPTANCE_PROJECTION_TEMPLATE",
     "BASELINE_PROJECTION_TEMPLATE",
+    "INTERFACE_DETAIL_PROJECTION_TEMPLATE",
     "INTERFACES_PROJECTION_TEMPLATE",
     "PROGRESS_PROJECTION_TEMPLATE",
     "PROJECTION_TEMPLATES",
@@ -2574,6 +2683,7 @@ __all__ = (
     "render_group_baseline",
     "render_projection_documents",
     "render_scheduling_plan",
+    "render_task_interface_documents",
     "render_task_interfaces",
     "render_work_item_baseline",
     "render_work_item_acceptance",

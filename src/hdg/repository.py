@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 import uuid
@@ -42,6 +44,7 @@ from .model_rendering import (
 
 GOVERNANCE_DIRECTORY = ".layered-delivery"
 DATABASE_FILE = "scheduler.db"
+RECEIVER_ATTESTATION_SECONDS = 300
 
 
 def _projection_tree_matches(
@@ -306,6 +309,7 @@ class SchedulerRepository:
                 run_id TEXT PRIMARY KEY,
                 root_id TEXT NOT NULL,
                 revision INTEGER NOT NULL DEFAULT 1,
+                execution_mode TEXT NOT NULL DEFAULT 'manual',
                 status TEXT NOT NULL,
                 started_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -313,6 +317,10 @@ class SchedulerRepository:
                 cancelled_at TEXT,
                 superseded_at TEXT,
                 superseded_by_revision INTEGER,
+                host_capacity_key TEXT,
+                host_capacity_reset_at TEXT,
+                host_capacity_reported_at TEXT,
+                host_capacity_reason TEXT,
                 UNIQUE(root_id, revision),
                 FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
             );
@@ -377,9 +385,11 @@ class SchedulerRepository:
                 graph_json TEXT NOT NULL,
                 status TEXT NOT NULL,
                 reason TEXT,
+                continuity_basis TEXT,
                 requested_by TEXT,
                 confirmed_by TEXT,
                 authorized_project_ids_json TEXT,
+                execution_mode TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 frozen_at TEXT,
@@ -393,6 +403,9 @@ class SchedulerRepository:
                 root_id TEXT NOT NULL,
                 node_id TEXT NOT NULL,
                 attempt INTEGER NOT NULL,
+                agent_id TEXT,
+                model_id TEXT,
+                reasoning_class TEXT,
                 graph_fingerprint TEXT NOT NULL,
                 decision_fingerprint TEXT NOT NULL,
                 status TEXT NOT NULL,
@@ -406,6 +419,66 @@ class SchedulerRepository:
             active_dispatch_reservation_by_node
             ON dispatch_reservations(run_id, node_id, attempt)
             WHERE status = 'RESERVED';
+            CREATE TABLE IF NOT EXISTS receiver_attestations (
+                attestation_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                root_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                receiver_context_id TEXT NOT NULL,
+                parent_context_id TEXT NOT NULL,
+                host_adapter_id TEXT NOT NULL,
+                reservation_id TEXT,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT,
+                operation_id TEXT,
+                FOREIGN KEY(run_id) REFERENCES runs(run_id)
+            );
+            CREATE INDEX IF NOT EXISTS receiver_attestations_by_node
+            ON receiver_attestations(run_id, node_id, attempt, status);
+            CREATE TABLE IF NOT EXISTS host_receiver_identities (
+                attestation_digest TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                root_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                reservation_id TEXT NOT NULL UNIQUE,
+                host_adapter_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                receiver_context_id TEXT NOT NULL,
+                parent_context_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT,
+                operation_id TEXT,
+                FOREIGN KEY(run_id) REFERENCES runs(run_id)
+            );
+            CREATE INDEX IF NOT EXISTS host_receiver_identities_by_context
+            ON host_receiver_identities(
+                run_id, host_adapter_id, receiver_context_id, status
+            );
+            CREATE TABLE IF NOT EXISTS run_receiver_roots (
+                run_id TEXT PRIMARY KEY,
+                host_adapter_id TEXT NOT NULL,
+                orchestrator_context_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(run_id) REFERENCES runs(run_id)
+            );
+            CREATE TABLE IF NOT EXISTS host_capacity_breakers (
+                capacity_key TEXT PRIMARY KEY,
+                host_adapter_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                reset_at TEXT NOT NULL,
+                report_id TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL,
+                reported_at TEXT NOT NULL,
+                restored_at TEXT,
+                reason TEXT NOT NULL
+            );
             """
         )
         SchedulerRepository._upgrade_revision_storage(connection)
@@ -448,6 +521,7 @@ class SchedulerRepository:
                     run_id TEXT PRIMARY KEY,
                     root_id TEXT NOT NULL,
                     revision INTEGER NOT NULL DEFAULT 1,
+                    execution_mode TEXT NOT NULL DEFAULT 'manual',
                     status TEXT NOT NULL,
                     started_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -455,14 +529,19 @@ class SchedulerRepository:
                     cancelled_at TEXT,
                     superseded_at TEXT,
                     superseded_by_revision INTEGER,
+                    host_capacity_key TEXT,
+                    host_capacity_reset_at TEXT,
+                    host_capacity_reported_at TEXT,
+                    host_capacity_reason TEXT,
                     UNIQUE(root_id, revision),
                     FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
                 );
                 INSERT INTO runs_revision_upgrade(
-                    run_id, root_id, revision, status, started_at,
+                    run_id, root_id, revision, execution_mode, status,
+                    started_at,
                     updated_at, completed_at, cancelled_at
                 )
-                SELECT run_id, root_id, 1, status, started_at,
+                SELECT run_id, root_id, 1, 'manual', status, started_at,
                        updated_at, completed_at, cancelled_at
                 FROM runs;
 
@@ -536,6 +615,34 @@ class SchedulerRepository:
             )
             connection.execute("PRAGMA foreign_keys = ON")
 
+        run_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(runs)"
+            ).fetchall()
+        }
+        if "execution_mode" not in run_columns:
+            connection.execute(
+                "ALTER TABLE runs ADD COLUMN execution_mode TEXT "
+                "NOT NULL DEFAULT 'manual'"
+            )
+        run_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(runs)"
+            ).fetchall()
+        }
+        for column_name in (
+            "host_capacity_key",
+            "host_capacity_reset_at",
+            "host_capacity_reported_at",
+            "host_capacity_reason",
+        ):
+            if column_name not in run_columns:
+                connection.execute(
+                    f"ALTER TABLE runs ADD COLUMN {column_name} TEXT"
+                )
+
         connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS delivery_revisions (
@@ -547,9 +654,11 @@ class SchedulerRepository:
                 graph_json TEXT NOT NULL,
                 status TEXT NOT NULL,
                 reason TEXT,
+                continuity_basis TEXT,
                 requested_by TEXT,
                 confirmed_by TEXT,
                 authorized_project_ids_json TEXT,
+                execution_mode TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 frozen_at TEXT,
@@ -569,6 +678,121 @@ class SchedulerRepository:
             FROM hierarchies;
             """
         )
+        delivery_revision_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(delivery_revisions)"
+            ).fetchall()
+        }
+        if "execution_mode" not in delivery_revision_columns:
+            connection.execute(
+                "ALTER TABLE delivery_revisions "
+                "ADD COLUMN execution_mode TEXT"
+            )
+        if "continuity_basis" not in delivery_revision_columns:
+            connection.execute(
+                "ALTER TABLE delivery_revisions "
+                "ADD COLUMN continuity_basis TEXT"
+            )
+        dispatch_reservation_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(dispatch_reservations)"
+            ).fetchall()
+        }
+        for column_name in (
+            "agent_id",
+            "model_id",
+            "reasoning_class",
+        ):
+            if column_name not in dispatch_reservation_columns:
+                connection.execute(
+                    "ALTER TABLE dispatch_reservations "
+                    f"ADD COLUMN {column_name} TEXT"
+                )
+        connection.execute(
+            "UPDATE delivery_revisions SET execution_mode = "
+            "COALESCE(execution_mode, ("
+            "SELECT r.execution_mode FROM runs r "
+            "WHERE r.root_id = delivery_revisions.root_id "
+            "AND r.revision = delivery_revisions.revision"
+            ")) WHERE status != 'PREPARED'"
+        )
+        connection.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS receiver_attestations (
+                attestation_id TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                root_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                receiver_context_id TEXT NOT NULL,
+                parent_context_id TEXT NOT NULL,
+                host_adapter_id TEXT NOT NULL,
+                reservation_id TEXT,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT,
+                consumed_at TEXT,
+                operation_id TEXT,
+                FOREIGN KEY(run_id) REFERENCES runs(run_id)
+            );
+            CREATE INDEX IF NOT EXISTS receiver_attestations_by_node
+            ON receiver_attestations(run_id, node_id, attempt, status);
+            CREATE TABLE IF NOT EXISTS host_receiver_identities (
+                attestation_digest TEXT PRIMARY KEY,
+                run_id TEXT NOT NULL,
+                root_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                reservation_id TEXT NOT NULL UNIQUE,
+                host_adapter_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                receiver_context_id TEXT NOT NULL,
+                parent_context_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT,
+                operation_id TEXT,
+                FOREIGN KEY(run_id) REFERENCES runs(run_id)
+            );
+            CREATE INDEX IF NOT EXISTS host_receiver_identities_by_context
+            ON host_receiver_identities(
+                run_id, host_adapter_id, receiver_context_id, status
+            );
+            CREATE TABLE IF NOT EXISTS run_receiver_roots (
+                run_id TEXT PRIMARY KEY,
+                host_adapter_id TEXT NOT NULL,
+                orchestrator_context_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(run_id) REFERENCES runs(run_id)
+            );
+            CREATE TABLE IF NOT EXISTS host_capacity_breakers (
+                capacity_key TEXT PRIMARY KEY,
+                host_adapter_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                reset_at TEXT NOT NULL,
+                report_id TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL,
+                reported_at TEXT NOT NULL,
+                restored_at TEXT,
+                reason TEXT NOT NULL
+            );
+            """
+        )
+        receiver_attestation_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(receiver_attestations)"
+            ).fetchall()
+        }
+        if "expires_at" not in receiver_attestation_columns:
+            connection.execute(
+                "ALTER TABLE receiver_attestations ADD COLUMN expires_at TEXT"
+            )
+        connection.commit()
 
     @contextmanager
     def scheduler_lock(self) -> Iterator[None]:
@@ -723,7 +947,7 @@ class SchedulerRepository:
             latest = candidates[0]
             latest_hierarchy, _ = _validated_stored_definition(latest)
             run = connection.execute(
-                "SELECT status FROM runs "
+                "SELECT status, execution_mode FROM runs "
                 "WHERE root_id = ? AND revision = ?",
                 (latest["root_id"], latest["revision"]),
             ).fetchone()
@@ -751,6 +975,8 @@ class SchedulerRepository:
             "deliveryRevision": latest["revision"],
             "controlRoot": GOVERNANCE_DIRECTORY,
         }
+        if run is not None:
+            result["executionMode"] = run["execution_mode"]
         if workspace_root is not None:
             result["workspaceIsolation"] = self.workspace_binding(
                 latest["root_id"]
@@ -996,6 +1222,7 @@ class SchedulerRepository:
         hierarchy_fingerprint: str,
         graph_fingerprint: str,
         reason: str,
+        continuity_basis: str,
         requested_by: str,
         workspace_root: str | os.PathLike[str],
     ) -> dict[str, Any]:
@@ -1041,11 +1268,16 @@ class SchedulerRepository:
                     "expected_current_revision must be a positive integer",
                 )
             preparing_revision = expected_current_revision + 1
+            candidate_row = connection.execute(
+                "SELECT * FROM delivery_revisions "
+                "WHERE root_id = ? AND revision = ?",
+                (root_id, preparing_revision),
+            ).fetchone()
             is_reprepare = (
-                row["status"] == "PREPARED"
-                and row["revision"] == preparing_revision
+                candidate_row is not None
+                and candidate_row["status"] == "PREPARED"
             )
-            if not is_reprepare and (
+            if (
                 row["status"] != "FROZEN"
                 or row["revision"] != expected_current_revision
             ):
@@ -1055,6 +1287,13 @@ class SchedulerRepository:
                     expectedRevision=expected_current_revision,
                     actualRevision=row["revision"],
                     status=row["status"],
+                )
+            if candidate_row is not None and not is_reprepare:
+                fail(
+                    "SCHEDULER_REVISION_CONFLICT",
+                    "The next Delivery revision is not a prepared candidate",
+                    expectedRevision=preparing_revision,
+                    status=candidate_row["status"],
                 )
             previous_revision_row = connection.execute(
                 "SELECT * FROM delivery_revisions "
@@ -1086,19 +1325,38 @@ class SchedulerRepository:
                 connection,
                 previous_run["run_id"],
             )
+            if continuity_basis == "ACTIVE_LOOP_REPLAN" and not any(
+                item["failureClass"] == "REPLAN_REQUIRED"
+                for item in previous_nodes
+            ):
+                fail(
+                    "SCHEDULER_REVISION_CONTINUITY_REQUIRED",
+                    "ACTIVE_LOOP_REPLAN requires a recorded replan outcome",
+                )
             carry_forward = self._carriable_task_ids(
                 previous_hierarchy,
                 hierarchy,
                 previous_nodes,
             )
-            at = _commit_timestamp(self.now, row["updated_at"])
+            at = _commit_timestamp(
+                self.now,
+                max(
+                    row["updated_at"],
+                    (
+                        candidate_row["updated_at"]
+                        if candidate_row is not None
+                        else row["updated_at"]
+                    ),
+                ),
+            )
             connection.execute(
                 """
                 INSERT INTO delivery_revisions(
                     root_id, revision, hierarchy_fingerprint,
                     graph_fingerprint, hierarchy_json, graph_json, status,
-                    reason, requested_by, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'PREPARED', ?, ?, ?, ?)
+                    reason, continuity_basis, requested_by,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'PREPARED', ?, ?, ?, ?, ?)
                 ON CONFLICT(root_id, revision) DO UPDATE SET
                     hierarchy_fingerprint =
                         excluded.hierarchy_fingerprint,
@@ -1107,6 +1365,7 @@ class SchedulerRepository:
                     graph_json = excluded.graph_json,
                     status = 'PREPARED',
                     reason = excluded.reason,
+                    continuity_basis = excluded.continuity_basis,
                     requested_by = excluded.requested_by,
                     updated_at = excluded.updated_at
                 """,
@@ -1118,24 +1377,10 @@ class SchedulerRepository:
                     canonical_json(hierarchy),
                     canonical_json(graph),
                     reason,
+                    continuity_basis,
                     requested_by,
                     at,
                     at,
-                ),
-            )
-            connection.execute(
-                "UPDATE hierarchies SET revision = ?, "
-                "hierarchy_fingerprint = ?, graph_fingerprint = ?, "
-                "hierarchy_json = ?, graph_json = ?, status = 'PREPARED', "
-                "updated_at = ? WHERE root_id = ?",
-                (
-                    preparing_revision,
-                    hierarchy_fingerprint,
-                    graph_fingerprint,
-                    canonical_json(hierarchy),
-                    canonical_json(graph),
-                    at,
-                    root_id,
                 ),
             )
         self.write_projections(root_id)
@@ -1164,6 +1409,7 @@ class SchedulerRepository:
         expected_delivery_revision: int,
         expected_hierarchy_fingerprint: str,
         authorized_project_ids: list[str],
+        execution_mode: str,
         confirmed_by: str,
     ) -> dict[str, Any]:
         carried_forward: list[str] = []
@@ -1181,13 +1427,45 @@ class SchedulerRepository:
                 not isinstance(expected_delivery_revision, int)
                 or isinstance(expected_delivery_revision, bool)
                 or expected_delivery_revision < 1
-                or row["revision"] != expected_delivery_revision
             ):
                 fail(
                     "SCHEDULER_REVISION_CONFLICT",
-                    "Delivery revision is not current",
+                    "Delivery revision must be a positive integer",
+                    expectedRevision=expected_delivery_revision,
+                )
+            if execution_mode not in {"active", "manual"}:
+                fail(
+                    "SCHEDULER_EXECUTION_MODE_INVALID",
+                    "execution_mode must be active or manual",
+                )
+            if expected_delivery_revision == row["revision"]:
+                revision_row = row
+            elif (
+                row["status"] == "FROZEN"
+                and expected_delivery_revision == row["revision"] + 1
+            ):
+                revision_row = connection.execute(
+                    "SELECT * FROM delivery_revisions "
+                    "WHERE root_id = ? AND revision = ?",
+                    (root_id, expected_delivery_revision),
+                ).fetchone()
+                if (
+                    revision_row is None
+                    or revision_row["status"] != "PREPARED"
+                ):
+                    fail(
+                        "SCHEDULER_REVISION_CONFLICT",
+                        "The requested Delivery revision is not prepared",
+                        expectedRevision=expected_delivery_revision,
+                        actualRevision=row["revision"],
+                    )
+            else:
+                fail(
+                    "SCHEDULER_REVISION_CONFLICT",
+                    "Delivery revision is not current or next prepared",
                     expectedRevision=expected_delivery_revision,
                     actualRevision=row["revision"],
+                    status=row["status"],
                 )
             binding = connection.execute(
                 "SELECT workspace_key FROM delivery_workspaces "
@@ -1216,14 +1494,14 @@ class SchedulerRepository:
                     rootId=occupied["root_id"],
                 )
             if (
-                row["hierarchy_fingerprint"]
+                revision_row["hierarchy_fingerprint"]
                 != expected_hierarchy_fingerprint
             ):
                 fail(
                     "SCHEDULER_REVISION_CONFLICT",
                     "Hierarchy fingerprint is not current",
                 )
-            hierarchy, graph = _validated_stored_definition(row)
+            hierarchy, graph = _validated_stored_definition(revision_row)
             project_scopes = hierarchy["delivery"].get(
                 "projectScopes",
                 [],
@@ -1261,9 +1539,30 @@ class SchedulerRepository:
                         - set(required_project_ids)
                     ),
                 )
-            if row["status"] == "FROZEN":
+            if (
+                row["status"] == "FROZEN"
+                and row["revision"] == expected_delivery_revision
+            ):
+                existing_run = connection.execute(
+                    "SELECT execution_mode FROM runs "
+                    "WHERE root_id = ? AND revision = ?",
+                    (root_id, expected_delivery_revision),
+                ).fetchone()
+                if (
+                    existing_run is not None
+                    and existing_run["execution_mode"] != execution_mode
+                ):
+                    fail(
+                        "SCHEDULER_EXECUTION_MODE_MISMATCH",
+                        "A frozen run cannot change execution mode",
+                        expectedExecutionMode=existing_run["execution_mode"],
+                        suppliedExecutionMode=execution_mode,
+                    )
                 return self.run(root_id)
-            at = _commit_timestamp(self.now, row["updated_at"])
+            at = _commit_timestamp(
+                self.now,
+                max(row["updated_at"], revision_row["updated_at"]),
+            )
             previous_run = None
             previous_nodes: dict[str, dict[str, Any]] = {}
             previous_requirement_revisions: dict[str, int] = {}
@@ -1349,18 +1648,30 @@ class SchedulerRepository:
                 )
             run_id = f"run-{uuid.uuid4().hex}"
             connection.execute(
-                "UPDATE hierarchies SET status = 'FROZEN', updated_at = ? "
-                "WHERE root_id = ?",
-                (at, root_id),
+                "UPDATE hierarchies SET revision = ?, "
+                "hierarchy_fingerprint = ?, graph_fingerprint = ?, "
+                "hierarchy_json = ?, graph_json = ?, status = 'FROZEN', "
+                "updated_at = ? WHERE root_id = ?",
+                (
+                    expected_delivery_revision,
+                    revision_row["hierarchy_fingerprint"],
+                    revision_row["graph_fingerprint"],
+                    revision_row["hierarchy_json"],
+                    revision_row["graph_json"],
+                    at,
+                    root_id,
+                ),
             )
             connection.execute(
-                "INSERT INTO runs(run_id, root_id, revision, status, "
+                "INSERT INTO runs(run_id, root_id, revision, "
+                "execution_mode, status, "
                 "started_at, updated_at) "
-                "VALUES (?, ?, ?, 'ACTIVE', ?, ?)",
+                "VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?)",
                 (
                     run_id,
                     root_id,
                     expected_delivery_revision,
+                    execution_mode,
                     at,
                     at,
                 ),
@@ -1441,6 +1752,7 @@ class SchedulerRepository:
                         else None
                     ),
                     "authorizedProjectIds": required_project_ids,
+                    "executionMode": execution_mode,
                 },
                 at=at,
             )
@@ -1480,11 +1792,12 @@ class SchedulerRepository:
             connection.execute(
                 "UPDATE delivery_revisions SET status = 'FROZEN', "
                 "confirmed_by = ?, authorized_project_ids_json = ?, "
-                "updated_at = ?, frozen_at = ? "
+                "execution_mode = ?, updated_at = ?, frozen_at = ? "
                 "WHERE root_id = ? AND revision = ?",
                 (
                     confirmed_by,
                     canonical_json(required_project_ids),
+                    execution_mode,
                     at,
                     at,
                     root_id,
@@ -1540,6 +1853,7 @@ class SchedulerRepository:
             "runId": row["run_id"],
             "rootId": row["root_id"],
             "deliveryRevision": row["revision"],
+            "executionMode": row["execution_mode"],
             "status": row["status"],
             "startedAt": row["started_at"],
             "updatedAt": row["updated_at"],
@@ -1556,6 +1870,14 @@ class SchedulerRepository:
                 "workspaceKey": workspace["workspace_key"],
             },
         }
+        if row["host_capacity_reset_at"] is not None:
+            result["hostCapacity"] = {
+                "status": "OPEN",
+                "capacityKey": row["host_capacity_key"],
+                "resetAt": row["host_capacity_reset_at"],
+                "reportedAt": row["host_capacity_reported_at"],
+                "reason": row["host_capacity_reason"],
+            }
         git_binding = hierarchy["delivery"].get("gitBinding")
         if git_binding is not None:
             result["gitBinding"] = git_binding
@@ -1600,6 +1922,7 @@ class SchedulerRepository:
                     ],
                     "graphFingerprint": row["graph_fingerprint"],
                     "reason": row["reason"],
+                    "continuityBasis": row["continuity_basis"],
                     "requestedBy": row["requested_by"],
                     "confirmedBy": row["confirmed_by"],
                     "authorizedProjectIds": (
@@ -1734,8 +2057,19 @@ class SchedulerRepository:
             JOIN runs r ON r.run_id = d.run_id
             JOIN delivery_revisions h ON h.root_id = r.root_id
                 AND h.revision = r.revision
-            WHERE d.status = 'RESERVED'
-                AND d.expires_at >= ?
+            WHERE (
+                    (d.status = 'RESERVED' AND d.expires_at >= ?)
+                    OR (
+                        d.status = 'CLAIMED'
+                        AND EXISTS (
+                            SELECT 1 FROM node_runs n
+                            WHERE n.run_id = d.run_id
+                              AND n.node_id = d.node_id
+                              AND n.attempt = d.attempt
+                              AND n.status = 'CLAIMED'
+                        )
+                    )
+                )
                 AND r.status NOT IN
                     ('COMPLETED', 'CANCELLED', 'SUPERSEDED')
             ORDER BY d.root_id, d.node_id
@@ -1770,6 +2104,8 @@ class SchedulerRepository:
                     "rootId": row["root_id"],
                     "nodeId": row["node_id"],
                     "attempt": row["attempt"],
+                    "agentId": row["agent_id"],
+                    "modelId": row["model_id"],
                     "graphFingerprint": row["graph_fingerprint"],
                     "decisionFingerprint": row[
                         "decision_fingerprint"
@@ -1783,12 +2119,314 @@ class SchedulerRepository:
             )
         return result
 
+    def issue_receiver_attestation(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        run_id: str,
+        root_id: str,
+        node_id: str,
+        attempt: int,
+        receiver_context_id: str,
+        parent_context_id: str,
+        host_adapter_id: str,
+        reservation_id: str | None,
+        at: str,
+    ) -> str:
+        attestation_id = str(uuid.uuid4())
+        expires_at = (
+            datetime.fromisoformat(at.replace("Z", "+00:00"))
+            + timedelta(seconds=RECEIVER_ATTESTATION_SECONDS)
+        ).isoformat().replace("+00:00", "Z")
+        self._assert_receiver_root(
+            connection,
+            run_id=run_id,
+            host_adapter_id=host_adapter_id,
+            parent_context_id=parent_context_id,
+            at=at,
+        )
+        connection.execute(
+            "UPDATE receiver_attestations SET status = 'SUPERSEDED' "
+            "WHERE run_id = ? AND node_id = ? AND attempt = ? "
+            "AND receiver_context_id = ? AND status = 'ISSUED'",
+            (run_id, node_id, attempt, receiver_context_id),
+        )
+        connection.execute(
+            "INSERT INTO receiver_attestations("
+            "attestation_id, run_id, root_id, node_id, attempt, "
+            "receiver_context_id, parent_context_id, host_adapter_id, "
+            "reservation_id, status, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ISSUED', ?, ?)",
+            (
+                attestation_id,
+                run_id,
+                root_id,
+                node_id,
+                attempt,
+                receiver_context_id,
+                parent_context_id,
+                host_adapter_id,
+                reservation_id,
+                at,
+                expires_at,
+            ),
+        )
+        return attestation_id
+
+    @staticmethod
+    def _assert_receiver_root(
+        connection: sqlite3.Connection,
+        *,
+        run_id: str,
+        host_adapter_id: str,
+        parent_context_id: str,
+        at: str,
+    ) -> None:
+        receiver_root = connection.execute(
+            "SELECT * FROM run_receiver_roots WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if receiver_root is None:
+            connection.execute(
+                "INSERT INTO run_receiver_roots("
+                "run_id, host_adapter_id, orchestrator_context_id, "
+                "created_at) VALUES (?, ?, ?, ?)",
+                (run_id, host_adapter_id, parent_context_id, at),
+            )
+            return
+        if receiver_root["orchestrator_context_id"] != parent_context_id:
+            fail(
+                "SCHEDULER_RECEIVER_PARENT_UNTRUSTED",
+                "Receiver attestations must originate from the run's "
+                "host-attested orchestrator context",
+                expectedOrchestratorContextId=(
+                    receiver_root["orchestrator_context_id"]
+                ),
+                suppliedParentContextId=parent_context_id,
+            )
+
+    @staticmethod
+    def issue_host_receiver_identity(
+        connection: sqlite3.Connection,
+        *,
+        run_id: str,
+        root_id: str,
+        node_id: str,
+        attempt: int,
+        reservation_id: str,
+        host_adapter_id: str,
+        agent_id: str,
+        model_id: str,
+        receiver_context_id: str,
+        parent_context_id: str,
+        at: str,
+    ) -> str:
+        """Issue identity evidence from a native subagent lifecycle hook."""
+
+        attestation_id = secrets.token_hex(32)
+        attestation_digest = hashlib.sha256(
+            attestation_id.encode("utf-8")
+        ).hexdigest()
+        expires_at = (
+            datetime.fromisoformat(at.replace("Z", "+00:00"))
+            + timedelta(seconds=RECEIVER_ATTESTATION_SECONDS)
+        ).isoformat().replace("+00:00", "Z")
+        connection.execute(
+            "UPDATE host_receiver_identities SET status = 'SUPERSEDED' "
+            "WHERE run_id = ? AND host_adapter_id = ? "
+            "AND receiver_context_id = ? "
+            "AND status = 'ISSUED'",
+            (run_id, host_adapter_id, receiver_context_id),
+        )
+        connection.execute(
+            "INSERT INTO host_receiver_identities("
+            "attestation_digest, run_id, root_id, node_id, attempt, "
+            "reservation_id, host_adapter_id, agent_id, model_id, "
+            "receiver_context_id, parent_context_id, status, created_at, "
+            "expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ISSUED', ?, ?)",
+            (
+                attestation_digest,
+                run_id,
+                root_id,
+                node_id,
+                attempt,
+                reservation_id,
+                host_adapter_id,
+                agent_id,
+                model_id,
+                receiver_context_id,
+                parent_context_id,
+                at,
+                expires_at,
+            ),
+        )
+        return attestation_id
+
+    @staticmethod
+    def consume_receiver_attestation(
+        connection: sqlite3.Connection,
+        *,
+        attestation_id: str,
+        run_id: str,
+        root_id: str,
+        node_id: str,
+        attempt: int,
+        receiver_context_id: str,
+        host_adapter_id: str,
+        agent_id: str,
+        model_id: str,
+        reservation_id: str | None,
+        operation_id: str,
+        at: str,
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            "SELECT * FROM receiver_attestations WHERE attestation_id = ?",
+            (attestation_id,),
+        ).fetchone()
+        if row is None:
+            attestation_digest = hashlib.sha256(
+                attestation_id.encode("utf-8")
+            ).hexdigest()
+            identity = connection.execute(
+                "SELECT * FROM host_receiver_identities "
+                "WHERE attestation_digest = ?",
+                (attestation_digest,),
+            ).fetchone()
+            if identity is None:
+                fail(
+                    "SCHEDULER_RECEIVER_ATTESTATION_MISSING",
+                    "The host-issued receiver attestation does not exist",
+                )
+            if identity["status"] != "ISSUED":
+                fail(
+                    "SCHEDULER_RECEIVER_ATTESTATION_CONSUMED",
+                    "The host-issued receiver attestation is no longer active",
+                    attestationStatus=identity["status"],
+                )
+            if identity["expires_at"] < at:
+                fail(
+                    "SCHEDULER_RECEIVER_ATTESTATION_EXPIRED",
+                    "The host-issued receiver attestation expired",
+                )
+            reservation = (
+                connection.execute(
+                    "SELECT * FROM dispatch_reservations "
+                    "WHERE reservation_id = ?",
+                    (reservation_id,),
+                ).fetchone()
+                if reservation_id is not None
+                else None
+            )
+            if (
+                identity["run_id"] != run_id
+                or identity["root_id"] != root_id
+                or identity["node_id"] != node_id
+                or identity["attempt"] != attempt
+                or identity["reservation_id"] != reservation_id
+                or identity["host_adapter_id"] != host_adapter_id
+                or identity["agent_id"] != agent_id
+                or identity["model_id"] != model_id
+                or identity["receiver_context_id"]
+                != receiver_context_id
+                or reservation is None
+                or reservation["status"] != "RESERVED"
+                or reservation["expires_at"] < at
+                or reservation["run_id"] != run_id
+                or reservation["root_id"] != root_id
+                or reservation["node_id"] != node_id
+                or reservation["attempt"] != attempt
+                or reservation["agent_id"] != agent_id
+                or reservation["model_id"] != model_id
+            ):
+                fail(
+                    "SCHEDULER_RECEIVER_ATTESTATION_MISMATCH",
+                    "The receiver attestation is not bound to this claim",
+                )
+            SchedulerRepository._assert_receiver_root(
+                connection,
+                run_id=run_id,
+                host_adapter_id=host_adapter_id,
+                parent_context_id=identity["parent_context_id"],
+                at=at,
+            )
+            connection.execute(
+                "UPDATE host_receiver_identities SET status = 'CONSUMED', "
+                "consumed_at = ?, operation_id = ? "
+                "WHERE attestation_digest = ? AND status = 'ISSUED'",
+                (at, operation_id, attestation_digest),
+            )
+            return {
+                "parentContextId": identity["parent_context_id"],
+                "hostAdapterId": identity["host_adapter_id"],
+            }
+        if row["status"] != "ISSUED":
+            fail(
+                "SCHEDULER_RECEIVER_ATTESTATION_CONSUMED",
+                "The host-issued receiver attestation is no longer active",
+                attestationStatus=row["status"],
+            )
+        if row["expires_at"] is None or row["expires_at"] < at:
+            fail(
+                "SCHEDULER_RECEIVER_ATTESTATION_EXPIRED",
+                "The host-issued receiver attestation expired",
+            )
+        if (
+            row["run_id"] != run_id
+            or row["root_id"] != root_id
+            or row["node_id"] != node_id
+            or row["attempt"] != attempt
+            or row["receiver_context_id"] != receiver_context_id
+            or row["host_adapter_id"] != host_adapter_id
+            or row["reservation_id"] != reservation_id
+        ):
+            fail(
+                "SCHEDULER_RECEIVER_ATTESTATION_MISMATCH",
+                "The receiver attestation is not bound to this claim",
+            )
+        connection.execute(
+            "UPDATE receiver_attestations SET status = 'CONSUMED', "
+            "consumed_at = ?, operation_id = ? "
+            "WHERE attestation_id = ? AND status = 'ISSUED'",
+            (at, operation_id, attestation_id),
+        )
+        return {
+            "parentContextId": row["parent_context_id"],
+            "hostAdapterId": row["host_adapter_id"],
+        }
+
+    @staticmethod
+    def open_host_capacity_breaker(
+        connection: sqlite3.Connection,
+        *,
+        agent_id: str,
+        at: str,
+    ) -> dict[str, Any] | None:
+        row = connection.execute(
+            "SELECT * FROM host_capacity_breakers "
+            "WHERE agent_id = ? AND status = 'OPEN' "
+            "AND reset_at > ? ORDER BY reset_at LIMIT 1",
+            (agent_id, at),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "capacityKey": row["capacity_key"],
+            "hostAdapterId": row["host_adapter_id"],
+            "agentId": row["agent_id"],
+            "resetAt": row["reset_at"],
+            "reportedAt": row["reported_at"],
+            "reason": row["reason"],
+        }
+
     def reserve_dispatch_assignments(
         self,
         *,
         root_id: str,
         graph_fingerprint: str,
         assignments: list[dict[str, Any]],
+        agent_slot_limits: dict[str, int],
+        orchestrator_slot_limit: int | None = None,
         reservation_seconds: int,
     ) -> dict[str, Any]:
         with self.transaction() as connection:
@@ -1834,6 +2472,13 @@ class SchedulerRepository:
                 ): item
                 for item in active
             }
+            reserved_agent_slots: dict[str, int] = {}
+            for item in active:
+                agent_id = item.get("agentId")
+                if isinstance(agent_id, str):
+                    reserved_agent_slots[agent_id] = (
+                        reserved_agent_slots.get(agent_id, 0) + 1
+                    )
             occupied = [
                 *self.claimed_resource_reservations(
                     connection,
@@ -1856,6 +2501,8 @@ class SchedulerRepository:
             rejected: dict[str, dict[str, Any]] = {}
             for assignment in assignments:
                 node_id = assignment["nodeId"]
+                agent_id = assignment["agent"]["id"]
+                model_id = assignment["model"]["id"]
                 state = states.get(node_id)
                 definition = definitions.get(node_id)
                 key = (
@@ -1872,6 +2519,34 @@ class SchedulerRepository:
                             "Loop for host Agent creation."
                         ),
                         **existing,
+                    }
+                    continue
+                if (
+                    orchestrator_slot_limit is not None
+                    and len(active) + len(accepted)
+                    >= orchestrator_slot_limit
+                ):
+                    rejected[node_id] = {
+                        "code": "ORCHESTRATOR_CAPACITY_RESERVED",
+                        "message": (
+                            "The configured central orchestrator "
+                            "concurrency limit is already occupied."
+                        ),
+                        "maxConcurrentExecutors": (
+                            orchestrator_slot_limit
+                        ),
+                    }
+                    continue
+                if reserved_agent_slots.get(agent_id, 0) >= (
+                    agent_slot_limits.get(agent_id, 0)
+                ):
+                    rejected[node_id] = {
+                        "code": "DISPATCH_AGENT_CAPACITY_RESERVED",
+                        "message": (
+                            "Another Delivery already reserved the "
+                            "remaining host-native Agent slot."
+                        ),
+                        "agentId": agent_id,
                     }
                     continue
                 if (
@@ -1914,9 +2589,12 @@ class SchedulerRepository:
                     """
                     INSERT INTO dispatch_reservations(
                         reservation_id, run_id, root_id, node_id, attempt,
+                        agent_id, model_id, reasoning_class,
                         graph_fingerprint, decision_fingerprint, status,
                         reserved_at, expires_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'RESERVED', ?, ?)
+                    ) VALUES (
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'RESERVED', ?, ?
+                    )
                     """,
                     (
                         reservation_id,
@@ -1924,6 +2602,9 @@ class SchedulerRepository:
                         root_id,
                         node_id,
                         state["attempt"],
+                        agent_id,
+                        model_id,
+                        assignment["reasoningClass"],
                         graph_fingerprint,
                         assignment["decisionFingerprint"],
                         at,
@@ -1935,6 +2616,9 @@ class SchedulerRepository:
                     "reservationExpiresAt": expires_at,
                 }
                 accepted[node_id] = reservation
+                reserved_agent_slots[agent_id] = (
+                    reserved_agent_slots.get(agent_id, 0) + 1
+                )
                 occupied.append(
                     {
                         "rootId": root_id,
@@ -2058,6 +2742,9 @@ class SchedulerRepository:
                 "owner": row["owner"],
                 "agentId": executor.get("agentId"),
                 "modelId": executor.get("modelId"),
+                "receiverContextId": (
+                    executor.get("receiverContextId") or row["owner"]
+                ),
                 "dispatchMode": executor.get("dispatchMode"),
                 "dispatchTransport": executor.get(
                     "dispatchTransport"

@@ -48,8 +48,10 @@ _LOOP_EXECUTION_POLICY = {
         "sameAttempt": True,
         "loopOutcome": "NONE",
         "hard429": {
-            "action": "MANUAL_AGENT_RESUME",
-            "scheduleWake": False,
+            "action": "TRIP_HOST_CAPACITY_BREAKER",
+            "hostCallback": "MODEL_EXTERNAL_HOST_ADAPTER",
+            "cancelRecurringMonitors": True,
+            "scheduleWake": "HOST_NATIVE_ONE_SHOT_AT_RESET",
         },
     },
     "expiredLeaseRecovery": {

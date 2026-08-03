@@ -14,6 +14,7 @@ from .jsonio import (
     strict_json_loads,
 )
 from .mcp_adapter import McpConnection, handle_message
+from .orchestrator_config import load_orchestrator_config
 
 
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
@@ -117,6 +118,8 @@ def serve(
             root,
             from_sandbox_meta=project_root_from_meta,
         ),
+        trusted_host_adapter=os.environ.get("HDG_HOST_ADAPTER"),
+        orchestrator_config=load_orchestrator_config(),
     )
     while True:
         try:

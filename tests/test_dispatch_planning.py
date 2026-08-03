@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest import mock
 
 from hdg.dispatch_planning import plan_dispatch_batch
 from hdg.errors import GatedLoopError
 from hdg.graph_frontier import get_graph_frontier
 from hdg.graph_model import loop_node_id, task_review_node_id
 from hdg.graph_runtime import (
+    attest_loop_receiver,
+    claim_codex_subagent_receiver,
     dispatch_loop,
     graph_events,
     graph_status,
@@ -16,6 +20,8 @@ from hdg.graph_runtime import (
 )
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.mcp_tools import call_tool
+from hdg.orchestrator_config import OrchestratorConfig
+from hdg.repository import SchedulerRepository
 
 from .test_loop_architecture import group_hierarchy, task_hierarchy
 
@@ -36,6 +42,13 @@ def host_executor_inventory(
             "priority": 20,
             "modelOverrideSupported": model_override_supported,
             "models": [
+                {
+                    "id": "gpt-5.6-luna",
+                    "family": "gpt-5.6",
+                    "tier": "EFFICIENT",
+                    "reasoningEffort": "low",
+                    "priority": 30,
+                },
                 {
                     "id": "gpt-5.6-sol",
                     "family": "gpt-5.6",
@@ -147,6 +160,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
             expected_hierarchy_fingerprint=(
                 prepared["hierarchyFingerprint"]
             ),
+            execution_mode="active",
             confirmed=True,
             confirmed_by="human",
         )
@@ -183,6 +197,11 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 and assignment["dispatchTransport"] == "HOST_NATIVE"
                 and assignment["modelSelection"] == "EXPLICIT_OVERRIDE"
                 and assignment["hostDispatchAllowed"]
+                and assignment["hostTaskName"]
+                == "ld_"
+                + assignment["dispatchReservationId"].replace("-", "")
+                and assignment["contextInput"]["hostTaskName"]
+                == assignment["hostTaskName"]
                 for assignment in plan["assignments"]
             )
         )
@@ -204,6 +223,667 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 }
             )
         )
+
+    def test_default_orchestrator_policy_is_safe_and_visible(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+
+            policy = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-service"))
+                ],
+            )["dispatchPolicy"]
+
+        self.assertTrue(policy["automaticOrchestration"])
+        self.assertTrue(policy["autoSelectModel"])
+        self.assertFalse(policy["allowCrossAdapterDispatch"])
+        self.assertEqual(policy["allowedAdapters"], ["codex", "claude-code"])
+        self.assertEqual(policy["maxConcurrentExecutors"], 4)
+        self.assertEqual(policy["quotaExhaustionPolicy"], "PAUSE_AND_RESUME")
+        self.assertTrue(policy["preferDifferentAdapterForReview"])
+
+    def test_configuration_can_disable_automatic_orchestration(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+
+            with self.assertRaises(GatedLoopError) as caught:
+                plan_dispatch_batch(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    expected_graph_fingerprint=(
+                        prepared["graphFingerprint"]
+                    ),
+                    executor_inventory=host_executor_inventory(),
+                    node_requirements=[
+                        agent_requirement(loop_node_id("t-service"))
+                    ],
+                    orchestrator_config=OrchestratorConfig(
+                        automatic_orchestration=False
+                    ),
+                )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_AUTOMATIC_ORCHESTRATION_DISABLED",
+        )
+
+    def test_disabling_model_selection_uses_current_executor(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+
+            plan = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(
+                        loop_node_id("t-service"),
+                        reasoning_class="HIGH",
+                    )
+                ],
+                current_executor={
+                    "agentId": "codex",
+                    "modelId": "gpt-5.6-terra",
+                },
+                orchestrator_config=OrchestratorConfig(
+                    auto_select_model=False
+                ),
+            )
+
+        assignment = plan["assignments"][0]
+        self.assertEqual(assignment["model"]["id"], "gpt-5.6-terra")
+        self.assertEqual(assignment["reasoningClass"], "UNCLASSIFIED")
+        self.assertEqual(
+            assignment["modelSelection"],
+            "CURRENT_HOST_DEFAULT",
+        )
+
+    def test_configured_max_concurrency_is_reserved_atomically(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(
+                root,
+                parallel_group_hierarchy(),
+            )
+
+            plan = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-api")),
+                    agent_requirement(loop_node_id("t-core")),
+                ],
+                orchestrator_config=OrchestratorConfig(
+                    max_concurrent_executors=1
+                ),
+            )
+
+        self.assertEqual(len(plan["assignments"]), 1)
+        self.assertEqual(len(plan["deferred"]), 1)
+        self.assertEqual(
+            plan["deferred"][0]["code"],
+            "ORCHESTRATOR_CAPACITY_RESERVED",
+        )
+
+    def test_unlisted_native_adapter_is_rejected(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+
+            with self.assertRaises(GatedLoopError) as caught:
+                plan_dispatch_batch(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    expected_graph_fingerprint=(
+                        prepared["graphFingerprint"]
+                    ),
+                    executor_inventory=host_executor_inventory(),
+                    node_requirements=[
+                        agent_requirement(loop_node_id("t-service"))
+                    ],
+                    orchestrator_config=OrchestratorConfig(
+                        allowed_adapters=("claude-code",)
+                    ),
+                )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_ADAPTER_NOT_ALLOWED",
+        )
+
+    def test_adapter_allowlist_is_independent_from_agent_id(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            inventory = host_executor_inventory()
+            inventory[0]["agentId"] = "codex-worker"
+            inventory[0]["adapterId"] = "codex"
+
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=inventory,
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-service"))
+                ],
+                host_adapter_id="codex",
+            )["assignments"][0]
+
+        self.assertEqual(assignment["agent"]["id"], "codex-worker")
+        self.assertEqual(assignment["agent"]["adapterId"], "codex")
+
+    def test_cross_delivery_plans_share_atomic_host_slots(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared_deliveries = []
+            for delivery_id, task_id in (
+                ("d-first", "t-first"),
+                ("d-second", "t-second"),
+            ):
+                workspace = Path(root, f"worktree-{delivery_id}")
+                workspace.mkdir()
+                hierarchy = task_hierarchy()
+                hierarchy["delivery"]["id"] = delivery_id
+                hierarchy["root"]["definition"]["id"] = task_id
+                prepared = prepare_hierarchy(
+                    root=root,
+                    hierarchy=hierarchy,
+                    workspace_root=str(workspace),
+                )
+                freeze_hierarchy(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    expected_hierarchy_fingerprint=(
+                        prepared["hierarchyFingerprint"]
+                    ),
+                    execution_mode="active",
+                    confirmed=True,
+                    confirmed_by="human",
+                )
+                prepared_deliveries.append((prepared, task_id))
+
+            first, first_task = prepared_deliveries[0]
+            second, second_task = prepared_deliveries[1]
+            first_plan = plan_dispatch_batch(
+                root=root,
+                root_id=first["rootId"],
+                expected_graph_fingerprint=first["graphFingerprint"],
+                executor_inventory=host_executor_inventory(slots=1),
+                node_requirements=[
+                    agent_requirement(loop_node_id(first_task))
+                ],
+            )
+            first_assignment = first_plan["assignments"][0]
+            dispatch_loop(
+                root=root,
+                root_id=first["rootId"],
+                node_id=first_assignment["nodeId"],
+                owner="codex-first-receiver",
+                agent_id=first_assignment["agent"]["id"],
+                model_id=first_assignment["model"]["id"],
+                receiver_context_id="codex-first-context",
+                dispatch_mode="AUTO",
+                dispatch_transport=first_assignment["dispatchTransport"],
+                dispatch_reservation_id=first_assignment[
+                    "dispatchReservationId"
+                ],
+                dispatch_reasoning_class=first_assignment[
+                    "reasoningClass"
+                ],
+                dispatch_decision_fingerprint=first_assignment[
+                    "decisionFingerprint"
+                ],
+                operation_id="op-first-claimed-slot",
+            )
+            second_plan = plan_dispatch_batch(
+                root=root,
+                root_id=second["rootId"],
+                expected_graph_fingerprint=second["graphFingerprint"],
+                executor_inventory=host_executor_inventory(slots=1),
+                node_requirements=[
+                    agent_requirement(loop_node_id(second_task))
+                ],
+            )
+
+        self.assertEqual(first_plan["summary"]["dispatchable"], 1)
+        self.assertEqual(second_plan["summary"]["dispatchable"], 0)
+        self.assertEqual(
+            second_plan["deferred"][0]["code"],
+            "DISPATCH_AGENT_CAPACITY_RESERVED",
+        )
+
+    def test_trusted_host_adapter_limits_native_agent_inventory(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            arguments = {
+                "root_id": prepared["rootId"],
+                "expected_graph_fingerprint": prepared[
+                    "graphFingerprint"
+                ],
+                "executor_inventory": claude_host_executor_inventory(),
+                "node_requirements": [
+                    agent_requirement(loop_node_id("t-service"))
+                ],
+            }
+            with self.assertRaises(GatedLoopError) as caught:
+                call_tool(
+                    "plan_dispatch_batch",
+                    arguments,
+                    root=root,
+                    trusted_host_adapter="codex",
+                    client_info={"name": "claude-code", "version": "1"},
+                )
+            with self.assertRaises(GatedLoopError) as missing:
+                call_tool(
+                    "plan_dispatch_batch",
+                    arguments,
+                    root=root,
+                    client_info={"name": "claude-code", "version": "1"},
+                )
+            claude_plan = call_tool(
+                "plan_dispatch_batch",
+                arguments,
+                root=root,
+                trusted_host_adapter="claude-code",
+                client_info={"name": "codex", "version": "1"},
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_HOST_NATIVE_INVENTORY_MISMATCH",
+        )
+        self.assertEqual(
+            missing.exception.code,
+            "SCHEDULER_HOST_NATIVE_INVENTORY_MISMATCH",
+        )
+        self.assertEqual(
+            claude_plan["assignments"][0]["agent"]["id"],
+            "claude-code",
+        )
+
+    def test_mcp_dispatch_consumes_host_attestation_once(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                execution_mode="manual",
+                confirmed=True,
+                confirmed_by="human",
+            )
+            node_id = loop_node_id("t-service")
+            arguments = {
+                "root_id": prepared["rootId"],
+                "node_id": node_id,
+                "owner": "claude-child",
+                "agent_id": "claude-code",
+                "model_id": "claude-sonnet",
+                "dispatch_mode": "MANUAL",
+                "receiver_context_id": "agent-child-1",
+                "operation_id": "op-attested-child",
+            }
+            with self.assertRaises(GatedLoopError) as missing:
+                call_tool(
+                    "dispatch_loop",
+                    {
+                        **arguments,
+                        "receiver_attestation_id": "missing-attestation",
+                    },
+                    root=root,
+                    trusted_host_adapter="claude-code",
+                )
+            attestation = attest_loop_receiver(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=node_id,
+                receiver_context_id="agent-child-1",
+                parent_context_id="session-parent",
+                host_adapter_id="claude-code",
+            )
+            claimed = call_tool(
+                "dispatch_loop",
+                {
+                    **arguments,
+                    "receiver_attestation_id": attestation[
+                        "receiverAttestationId"
+                    ],
+                },
+                root=root,
+                trusted_host_adapter="claude-code",
+            )
+            with self.assertRaises(GatedLoopError) as replayed:
+                call_tool(
+                    "dispatch_loop",
+                    {
+                        **arguments,
+                        "operation_id": "op-attestation-replay",
+                        "receiver_attestation_id": attestation[
+                            "receiverAttestationId"
+                        ],
+                    },
+                    root=root,
+                    trusted_host_adapter="claude-code",
+                )
+
+        self.assertEqual(
+            missing.exception.code,
+            "SCHEDULER_RECEIVER_ATTESTATION_MISSING",
+        )
+        self.assertEqual(claimed["receiverContextId"], "agent-child-1")
+        self.assertEqual(
+            replayed.exception.code,
+            "SCHEDULER_RECEIVER_ATTESTATION_CONSUMED",
+        )
+
+    def test_codex_identity_cannot_cross_delivery_workspaces(self) -> None:
+        with TemporaryDirectory() as root:
+            deliveries = []
+            for delivery_id, task_id in (
+                ("d-codex-first", "t-codex-first"),
+                ("d-codex-second", "t-codex-second"),
+            ):
+                workspace = Path(root, f"workspace-{delivery_id}")
+                workspace.mkdir()
+                hierarchy = task_hierarchy()
+                hierarchy["delivery"]["id"] = delivery_id
+                hierarchy["root"]["definition"]["id"] = task_id
+                prepared = prepare_hierarchy(
+                    root=root,
+                    hierarchy=hierarchy,
+                    workspace_root=str(workspace),
+                )
+                freeze_hierarchy(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    expected_hierarchy_fingerprint=(
+                        prepared["hierarchyFingerprint"]
+                    ),
+                    execution_mode="active",
+                    confirmed=True,
+                    confirmed_by="human",
+                )
+                assignment = plan_dispatch_batch(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    expected_graph_fingerprint=prepared[
+                        "graphFingerprint"
+                    ],
+                    executor_inventory=host_executor_inventory(),
+                    node_requirements=[
+                        agent_requirement(loop_node_id(task_id))
+                    ],
+                )["assignments"][0]
+                deliveries.append(
+                    (prepared, assignment, str(workspace))
+                )
+
+            first, first_assignment, first_workspace = deliveries[0]
+            second, second_assignment, _second_workspace = deliveries[1]
+            claim_codex_subagent_receiver(
+                root=root,
+                root_id=first["rootId"],
+                workspace_root=first_workspace,
+                receiver_context_id="codex-first-child",
+                parent_context_id="codex-orchestrator",
+                model_id=first_assignment["model"]["id"],
+                dispatch_reservation_id=first_assignment[
+                    "dispatchReservationId"
+                ],
+            )
+            with self.assertRaises(GatedLoopError) as crossed:
+                claim_codex_subagent_receiver(
+                    root=root,
+                    root_id=second["rootId"],
+                    workspace_root=first_workspace,
+                    receiver_context_id="codex-first-child",
+                    parent_context_id="codex-orchestrator",
+                    model_id=second_assignment["model"]["id"],
+                    dispatch_reservation_id=second_assignment[
+                        "dispatchReservationId"
+                    ],
+                )
+
+        self.assertEqual(
+            crossed.exception.code,
+            "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH",
+        )
+
+    def test_parallel_codex_children_cannot_swap_reservations(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(
+                root,
+                parallel_group_hierarchy(),
+            )
+            assignments = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared[
+                    "graphFingerprint"
+                ],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-api")),
+                    agent_requirement(loop_node_id("t-core")),
+                ],
+            )["assignments"]
+            claimed = []
+            for index, assignment in enumerate(assignments):
+                claimed.append(
+                    claim_codex_subagent_receiver(
+                        root=root,
+                        root_id=prepared["rootId"],
+                        workspace_root=root,
+                        receiver_context_id=f"codex-child-{index}",
+                        parent_context_id="codex-orchestrator",
+                        model_id=assignment["model"]["id"],
+                        dispatch_reservation_id=assignment[
+                            "dispatchReservationId"
+                        ],
+                    )
+                )
+
+            _first_assignment, second_assignment = assignments
+            with self.assertRaises(GatedLoopError) as swapped:
+                claim_codex_subagent_receiver(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    workspace_root=root,
+                    receiver_context_id="codex-child-0",
+                    parent_context_id="codex-orchestrator",
+                    model_id=second_assignment["model"]["id"],
+                    dispatch_reservation_id=second_assignment[
+                        "dispatchReservationId"
+                    ],
+                )
+
+        self.assertEqual(
+            swapped.exception.code,
+            "SCHEDULER_CODEX_RECEIVER_RESERVATION_MISSING",
+        )
+        self.assertEqual(
+            {item["nodeId"] for item in claimed},
+            {assignment["nodeId"] for assignment in assignments},
+        )
+        self.assertTrue(all(item["receiverAttested"] for item in claimed))
+
+    def test_first_successful_codex_claim_pins_orchestrator_parent(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(
+                root,
+                parallel_group_hierarchy(),
+            )
+            assignments = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared[
+                    "graphFingerprint"
+                ],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-api")),
+                    agent_requirement(loop_node_id("t-core")),
+                ],
+            )["assignments"]
+            first, second = assignments
+            claim_codex_subagent_receiver(
+                root=root,
+                root_id=prepared["rootId"],
+                workspace_root=root,
+                receiver_context_id="codex-first-child",
+                parent_context_id="codex-orchestrator",
+                model_id=first["model"]["id"],
+                dispatch_reservation_id=first[
+                    "dispatchReservationId"
+                ],
+            )
+            with self.assertRaises(GatedLoopError) as untrusted:
+                claim_codex_subagent_receiver(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    workspace_root=root,
+                    receiver_context_id="codex-wrong-parent-child",
+                    parent_context_id="another-codex-session",
+                    model_id=second["model"]["id"],
+                    dispatch_reservation_id=second[
+                        "dispatchReservationId"
+                    ],
+                )
+            accepted = claim_codex_subagent_receiver(
+                root=root,
+                root_id=prepared["rootId"],
+                workspace_root=root,
+                receiver_context_id="codex-second-child",
+                parent_context_id="codex-orchestrator",
+                model_id=second["model"]["id"],
+                dispatch_reservation_id=second[
+                    "dispatchReservationId"
+                ],
+            )
+
+        self.assertEqual(
+            untrusted.exception.code,
+            "SCHEDULER_RECEIVER_PARENT_UNTRUSTED",
+        )
+        self.assertEqual(accepted["nodeId"], second["nodeId"])
+
+    def test_codex_claim_recovers_after_projection_failure(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared[
+                    "graphFingerprint"
+                ],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-service"))
+                ],
+            )["assignments"][0]
+            with mock.patch.object(
+                SchedulerRepository,
+                "write_projections",
+                side_effect=OSError("projection unavailable"),
+            ):
+                claimed = claim_codex_subagent_receiver(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    workspace_root=root,
+                    receiver_context_id="codex-projection-child",
+                    parent_context_id="codex-orchestrator",
+                    model_id=assignment["model"]["id"],
+                    dispatch_reservation_id=assignment[
+                        "dispatchReservationId"
+                    ],
+                )
+            replayed = claim_codex_subagent_receiver(
+                root=root,
+                root_id=prepared["rootId"],
+                workspace_root=root,
+                receiver_context_id="codex-projection-child",
+                parent_context_id="codex-orchestrator",
+                model_id=assignment["model"]["id"],
+                dispatch_reservation_id=assignment[
+                    "dispatchReservationId"
+                ],
+            )
+
+        self.assertEqual(claimed["nodeId"], assignment["nodeId"])
+        self.assertEqual(claimed["operationId"], replayed["operationId"])
+        self.assertTrue(claimed["receiverAttested"])
+
+    def test_failed_codex_claim_transaction_does_not_pin_root(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared[
+                    "graphFingerprint"
+                ],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-service"))
+                ],
+            )["assignments"][0]
+            repository = SchedulerRepository(root)
+            with self.assertRaises(RuntimeError):
+                with repository.transaction() as connection:
+                    reservation = connection.execute(
+                        "SELECT * FROM dispatch_reservations "
+                        "WHERE reservation_id = ?",
+                        (assignment["dispatchReservationId"],),
+                    ).fetchone()
+                    identity = repository.issue_host_receiver_identity(
+                        connection,
+                        run_id=reservation["run_id"],
+                        root_id=prepared["rootId"],
+                        node_id=reservation["node_id"],
+                        attempt=reservation["attempt"],
+                        reservation_id=reservation["reservation_id"],
+                        host_adapter_id="codex",
+                        agent_id="codex",
+                        model_id=reservation["model_id"],
+                        receiver_context_id="codex-rolled-back-child",
+                        parent_context_id="codex-rolled-back-parent",
+                        at=reservation["reserved_at"],
+                    )
+                    repository.consume_receiver_attestation(
+                        connection,
+                        attestation_id=identity,
+                        run_id=reservation["run_id"],
+                        root_id=prepared["rootId"],
+                        node_id=reservation["node_id"],
+                        attempt=reservation["attempt"],
+                        receiver_context_id="codex-rolled-back-child",
+                        host_adapter_id="codex",
+                        agent_id="codex",
+                        model_id=reservation["model_id"],
+                        reservation_id=reservation["reservation_id"],
+                        operation_id="codex-rolled-back-operation",
+                        at=reservation["reserved_at"],
+                    )
+                    raise RuntimeError("force claim rollback")
+            with repository.transaction() as connection:
+                root_count = connection.execute(
+                    "SELECT COUNT(*) FROM run_receiver_roots"
+                ).fetchone()[0]
+                identity_count = connection.execute(
+                    "SELECT COUNT(*) FROM host_receiver_identities"
+                ).fetchone()[0]
+
+        self.assertEqual(root_count, 0)
+        self.assertEqual(identity_count, 0)
 
     def test_every_ready_loop_requires_agent_reasoning_analysis(
         self,
@@ -520,7 +1200,163 @@ class HostDispatchPlanningTests(unittest.TestCase):
 
         self.assertEqual(
             caught.exception.code,
-            "SCHEDULER_RESOURCE_CONFLICT",
+            "SCHEDULER_EXECUTION_MODE_MISMATCH",
+        )
+
+    def test_active_execution_rejects_manual_or_implicit_claims(self) -> None:
+        for dispatch_mode in (None, "MANUAL"):
+            with self.subTest(dispatch_mode=dispatch_mode):
+                with TemporaryDirectory() as root:
+                    prepared = self.prepare_and_freeze(
+                        root,
+                        task_hierarchy(),
+                    )
+                    with self.assertRaises(GatedLoopError) as caught:
+                        dispatch_loop(
+                            root=root,
+                            root_id=prepared["rootId"],
+                            node_id=loop_node_id("t-service"),
+                            owner="unplanned-receiver",
+                            agent_id="claude-code",
+                            model_id="unplanned-model",
+                            dispatch_mode=dispatch_mode,
+                            operation_id=(
+                                f"op-unplanned-{dispatch_mode or 'none'}"
+                            ),
+                        )
+                    self.assertEqual(
+                        caught.exception.code,
+                        "SCHEDULER_EXECUTION_MODE_MISMATCH",
+                    )
+
+    def test_review_rejects_the_upstream_receiving_context(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                execution_mode="manual",
+                confirmed=True,
+                confirmed_by="human",
+            )
+            task_node_id = loop_node_id("t-service")
+            review_node_id = task_review_node_id("t-service")
+            dispatch_loop(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=task_node_id,
+                owner="task-agent",
+                receiver_context_id="context-shared",
+                operation_id="op-task-context",
+            )
+            record_loop_result(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=task_node_id,
+                operation_id="op-task-context",
+                outcome=success("implemented"),
+            )
+
+            with self.assertRaises(GatedLoopError) as caught:
+                dispatch_loop(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    node_id=review_node_id,
+                    owner="review-agent",
+                    receiver_context_id="context-shared",
+                    operation_id="op-review-context",
+                )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_REVIEW_CONTEXT_NOT_INDEPENDENT",
+        )
+
+    def test_receiver_attestation_rejects_non_orchestrator_parent(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                execution_mode="manual",
+                confirmed=True,
+                confirmed_by="human",
+            )
+            task_node_id = loop_node_id("t-service")
+            task_attestation = attest_loop_receiver(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=task_node_id,
+                receiver_context_id="context-implementation",
+                parent_context_id="context-orchestrator",
+                host_adapter_id="claude-code",
+            )
+            call_tool(
+                "dispatch_loop",
+                {
+                    "root_id": prepared["rootId"],
+                    "node_id": task_node_id,
+                    "owner": "claude-implementation",
+                    "agent_id": "claude-code",
+                    "model_id": "claude-sonnet",
+                    "dispatch_mode": "MANUAL",
+                    "receiver_context_id": "context-implementation",
+                    "receiver_attestation_id": task_attestation[
+                        "receiverAttestationId"
+                    ],
+                    "operation_id": "op-attested-implementation",
+                },
+                root=root,
+                trusted_host_adapter="claude-code",
+            )
+            record_loop_result(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=task_node_id,
+                operation_id="op-attested-implementation",
+                outcome=success("implemented"),
+            )
+            review_node_id = task_review_node_id("t-service")
+            with self.assertRaises(GatedLoopError) as caught:
+                attest_loop_receiver(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    node_id=review_node_id,
+                    receiver_context_id="context-review-child",
+                    parent_context_id="context-intermediate-child",
+                    host_adapter_id="claude-code",
+                )
+            with self.assertRaises(GatedLoopError) as cross_adapter:
+                attest_loop_receiver(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    node_id=review_node_id,
+                    receiver_context_id="context-codex-review",
+                    parent_context_id="context-codex-orchestrator",
+                    host_adapter_id="codex",
+                )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_RECEIVER_PARENT_UNTRUSTED",
+        )
+        self.assertEqual(
+            cross_adapter.exception.code,
+            "SCHEDULER_RECEIVER_PARENT_UNTRUSTED",
         )
 
     def test_review_ignores_external_codex_and_reports_context_only(
@@ -630,6 +1466,60 @@ class HostDispatchPlanningTests(unittest.TestCase):
             "Cross-module architecture",
             assignment["reasoningRequirement"]["reason"],
         )
+
+    def test_routine_task_uses_efficient_model_and_can_be_claimed(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(
+                        loop_node_id("t-service"),
+                        reasoning_class="ROUTINE",
+                        reason=(
+                            "The change is explicit, repeatable, and has "
+                            "a deterministic verification path."
+                        ),
+                    )
+                ],
+            )["assignments"][0]
+
+            dispatch_loop(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=assignment["nodeId"],
+                owner="codex-luna-receiver",
+                agent_id=assignment["agent"]["id"],
+                model_id=assignment["model"]["id"],
+                dispatch_mode="AUTO",
+                dispatch_transport=assignment["dispatchTransport"],
+                dispatch_reservation_id=assignment[
+                    "dispatchReservationId"
+                ],
+                dispatch_reasoning_class=assignment["reasoningClass"],
+                dispatch_decision_fingerprint=(
+                    assignment["decisionFingerprint"]
+                ),
+                operation_id="op-routine-luna",
+            )
+            state = graph_status(root=root, root_id=prepared["rootId"])
+
+        claimed = next(
+            node
+            for node in state["nodes"]
+            if node["nodeId"] == assignment["nodeId"]
+        )
+        self.assertEqual(assignment["model"]["id"], "gpt-5.6-luna")
+        self.assertEqual(assignment["model"]["tier"], "EFFICIENT")
+        self.assertEqual(assignment["reasoningClass"], "ROUTINE")
+        self.assertEqual(claimed["modelId"], "gpt-5.6-luna")
+        self.assertEqual(claimed["dispatchReasoningClass"], "ROUTINE")
 
     def test_model_tiers_are_mapped_by_each_host_inventory(self) -> None:
         cases = (
@@ -1060,6 +1950,9 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 node_requirements=[
                     agent_requirement(loop_node_id("t-service"))
                 ],
+                orchestrator_config=OrchestratorConfig(
+                    allow_cross_adapter_dispatch=True
+                ),
             )["assignments"][0]
             dispatch_loop(
                 root=root,
@@ -1102,6 +1995,9 @@ class HostDispatchPlanningTests(unittest.TestCase):
                         reasoning_class="HIGH",
                     )
                 ],
+                orchestrator_config=OrchestratorConfig(
+                    allow_cross_adapter_dispatch=True
+                ),
             )["assignments"][0]
 
         self.assertEqual(review["agent"]["id"], "claude-code")
@@ -1131,6 +2027,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                     ],
                 },
                 root=root,
+                trusted_host_adapter="codex",
             )
 
         self.assertEqual(plan["binding"], "HOST_NATIVE_DISPATCH_PLAN")

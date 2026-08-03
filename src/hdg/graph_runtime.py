@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -45,6 +46,15 @@ IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,191}$")
 CAPACITY_SCOPES = frozenset({"EXECUTOR", "HOST"})
 DISPATCH_MODES = frozenset({"AUTO", "MANUAL"})
 SHA256_FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
+HOST_ADAPTER_AGENTS = {
+    "claude-code": "claude-code",
+    "codex": "codex",
+}
+HOST_CAPACITY_KEYS = {
+    "claude-code": "claude-code:default",
+    "codex": "codex:default",
+}
+MAX_HOST_CAPACITY_RESET = timedelta(hours=24)
 
 
 def _identity(value: object, field: str) -> str:
@@ -153,12 +163,17 @@ def _loaded(
         "AND status = 'FROZEN'",
         (root_id,),
     ).fetchone()
+    if hierarchy is None:
+        fail(
+            "SCHEDULER_RUN_MISSING",
+            f"Frozen scheduler run is missing: {root_id}",
+        )
     run = connection.execute(
         "SELECT * FROM runs WHERE root_id = ? "
         "AND revision = ?",
         (root_id, hierarchy["revision"]),
     ).fetchone()
-    if hierarchy is None or run is None:
+    if run is None:
         fail(
             "SCHEDULER_RUN_MISSING",
             f"Frozen scheduler run is missing: {root_id}",
@@ -210,6 +225,34 @@ def _assert_graph_not_replanning(
             "additional Loop work",
             nodeIds=replan_nodes,
         )
+
+
+def _upstream_receiver_context_ids(
+    graph: dict[str, Any],
+    nodes: list[dict[str, Any]],
+    node_id: str,
+) -> set[str]:
+    incoming: dict[str, list[str]] = {
+        node["id"]: [] for node in graph["nodes"]
+    }
+    for edge in graph["edges"]:
+        incoming[edge["target"]].append(edge["source"])
+    states = {node["nodeId"]: node for node in nodes}
+    contexts: set[str] = set()
+    pending = list(incoming.get(node_id, []))
+    visited: set[str] = set()
+    while pending:
+        upstream_id = pending.pop()
+        if upstream_id in visited:
+            continue
+        visited.add(upstream_id)
+        state = states.get(upstream_id)
+        if state is not None:
+            context_id = state.get("receiverContextId")
+            if isinstance(context_id, str):
+                contexts.add(context_id)
+        pending.extend(incoming.get(upstream_id, []))
+    return contexts
 
 
 def _active_claim(
@@ -340,6 +383,94 @@ def advance_graph(
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
         at = _locked_timestamp(now, run["updated_at"])
+        if (
+            run["host_capacity_reset_at"] is not None
+            and _parse_timestamp(run["host_capacity_reset_at"])
+            <= _parse_timestamp(at)
+        ):
+            capacity_key = run["host_capacity_key"]
+            reset_at = run["host_capacity_reset_at"]
+            capacity_report = connection.execute(
+                "SELECT report_id, reported_at FROM "
+                "host_capacity_breakers WHERE capacity_key = ? "
+                "AND reset_at = ?",
+                (capacity_key, reset_at),
+            ).fetchone()
+            report_id = (
+                capacity_report["report_id"]
+                if capacity_report is not None
+                else None
+            )
+            reported_at = (
+                capacity_report["reported_at"]
+                if capacity_report is not None
+                else None
+            )
+            if report_id is None:
+                exhausted_event = connection.execute(
+                    "SELECT payload_json, recorded_at FROM graph_events "
+                    "WHERE run_id = ? AND event_type = "
+                    "'HOST_CAPACITY_EXHAUSTED' ORDER BY event_id DESC "
+                    "LIMIT 1",
+                    (run["run_id"],),
+                ).fetchone()
+                if exhausted_event is not None:
+                    exhausted_payload = json.loads(
+                        exhausted_event["payload_json"]
+                    )
+                    if (
+                        exhausted_payload.get("capacityKey") == capacity_key
+                        and exhausted_payload.get("resetAt") == reset_at
+                    ):
+                        event_report_id = exhausted_payload.get("reportId")
+                        if isinstance(event_report_id, str):
+                            report_id = event_report_id
+                        event_reported_at = exhausted_payload.get(
+                            "reportedAt"
+                        )
+                        reported_at = (
+                            event_reported_at
+                            if isinstance(event_reported_at, str)
+                            else exhausted_event["recorded_at"]
+                        )
+            connection.execute(
+                "UPDATE runs SET host_capacity_key = NULL, "
+                "host_capacity_reset_at = NULL, "
+                "host_capacity_reported_at = NULL, "
+                "host_capacity_reason = NULL WHERE run_id = ?",
+                (run["run_id"],),
+            )
+            connection.execute(
+                "UPDATE host_capacity_breakers SET status = 'RESTORED', "
+                "restored_at = ? WHERE capacity_key = ? "
+                "AND status = 'OPEN' AND reset_at = ? "
+                "AND (? IS NULL OR report_id = ?)",
+                (at, capacity_key, reset_at, report_id, report_id),
+            )
+            repository.append_event(
+                connection,
+                run_id=run["run_id"],
+                node_id=None,
+                attempt=None,
+                event_type="HOST_CAPACITY_RESTORED",
+                actor="CONTROLLER",
+                operation_id=None,
+                payload={
+                    "capacityKey": capacity_key,
+                    "resetAt": reset_at,
+                    **(
+                        {"reportId": report_id}
+                        if report_id is not None
+                        else {}
+                    ),
+                    **(
+                        {"reportedAt": reported_at}
+                        if reported_at is not None
+                        else {}
+                    ),
+                },
+                at=at,
+            )
         for node in nodes:
             resume_at = node.get("resumeAt")
             if (
@@ -625,11 +756,17 @@ def dispatch_loop(
     operation_id: str,
     agent_id: str | None = None,
     model_id: str | None = None,
-    dispatch_mode: str | None = None,
+    receiver_context_id: str | None = None,
+    receiver_attestation_id: str | None = None,
+    dispatch_mode: str | None = "MANUAL",
     dispatch_transport: str | None = None,
     dispatch_reservation_id: str | None = None,
     dispatch_reasoning_class: str | None = None,
     dispatch_decision_fingerprint: str | None = None,
+    host_native_agent_ids: tuple[str, ...] | None = None,
+    host_adapter_id: str | None = None,
+    require_receiver_attestation: bool = False,
+    host_receiver_parent_context_id: str | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
@@ -652,6 +789,64 @@ def dispatch_loop(
         if model_id is not None
         else None
     )
+    actual_receiver_context_id = (
+        _identity(receiver_context_id, "receiver_context_id")
+        if receiver_context_id is not None
+        else owner
+    )
+    actual_receiver_attestation_id = (
+        _identity(
+            receiver_attestation_id,
+            "receiver_attestation_id",
+        )
+        if receiver_attestation_id is not None
+        else None
+    )
+    actual_host_receiver_parent_context_id = (
+        _identity(
+            host_receiver_parent_context_id,
+            "host_receiver_parent_context_id",
+        )
+        if host_receiver_parent_context_id is not None
+        else None
+    )
+    if (
+        actual_host_receiver_parent_context_id is not None
+        and not require_receiver_attestation
+    ):
+        fail(
+            "SCHEDULER_RECEIVER_ATTESTATION_INVALID",
+            "Host-side identity issuance requires attested dispatch",
+        )
+    if require_receiver_attestation:
+        if (
+            actual_receiver_attestation_id is None
+            and actual_host_receiver_parent_context_id is None
+        ):
+            fail(
+                "SCHEDULER_RECEIVER_ATTESTATION_REQUIRED",
+                "MCP dispatch requires a host-issued receiver attestation",
+            )
+        if (
+            actual_receiver_attestation_id is not None
+            and actual_host_receiver_parent_context_id is not None
+        ):
+            fail(
+                "SCHEDULER_RECEIVER_ATTESTATION_INVALID",
+                "Receiver identity may be supplied or host-issued, not both",
+            )
+        if host_adapter_id not in HOST_ADAPTER_AGENTS:
+            fail(
+                "SCHEDULER_HOST_ADAPTER_UNTRUSTED",
+                "MCP dispatch requires an exact trusted host adapter",
+            )
+        if actual_agent_id != HOST_ADAPTER_AGENTS[host_adapter_id]:
+            fail(
+                "SCHEDULER_HOST_NATIVE_EXECUTOR_MISMATCH",
+                "The attesting host cannot create the reported Agent",
+                hostAdapterId=host_adapter_id,
+                suppliedAgentId=actual_agent_id,
+            )
     if dispatch_mode is not None and dispatch_mode not in DISPATCH_MODES:
         fail(
             "SCHEDULER_DISPATCH_MODE_INVALID",
@@ -693,8 +888,8 @@ def dispatch_loop(
         fail(
             "SCHEDULER_DISPATCH_REASONING_REQUIRED",
             (
-                "Automatic dispatch requires the STANDARD, HIGH, or "
-                "UNCLASSIFIED reasoning class returned by the host "
+                "Automatic dispatch requires the ROUTINE, STANDARD, HIGH, "
+                "or UNCLASSIFIED reasoning class returned by the host "
                 "dispatch plan"
             ),
         )
@@ -743,8 +938,32 @@ def dispatch_loop(
             "SCHEDULER_EXECUTOR_METADATA_INVALID",
             "Automatic dispatch requires actual agent and model IDs",
         )
+    if (
+        dispatch_mode == "AUTO"
+        and host_native_agent_ids is not None
+        and actual_agent_id not in host_native_agent_ids
+    ):
+        fail(
+            "SCHEDULER_HOST_NATIVE_EXECUTOR_MISMATCH",
+            "The current MCP host cannot natively create the reported Agent",
+            supportedAgentIds=sorted(host_native_agent_ids),
+            suppliedAgentId=actual_agent_id,
+        )
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
+        expected_dispatch_mode = (
+            "AUTO"
+            if run["execution_mode"] == "active"
+            else "MANUAL"
+        )
+        if dispatch_mode != expected_dispatch_mode:
+            fail(
+                "SCHEDULER_EXECUTION_MODE_MISMATCH",
+                "Loop claims must match the frozen execution mode",
+                executionMode=run["execution_mode"],
+                requiredDispatchMode=expected_dispatch_mode,
+                suppliedDispatchMode=dispatch_mode,
+            )
         if dispatch_mode == "AUTO":
             expected_dispatch_decision = (
                 automatic_dispatch_decision_fingerprint(
@@ -768,8 +987,103 @@ def dispatch_loop(
                     ),
                 )
         at = _locked_timestamp(now, run["updated_at"])
+        if actual_agent_id is not None:
+            global_breaker = repository.open_host_capacity_breaker(
+                connection,
+                agent_id=actual_agent_id,
+                at=at,
+            )
+            if global_breaker is not None:
+                fail(
+                    "SCHEDULER_HOST_CAPACITY_EXHAUSTED",
+                    "Dispatch is paused by a shared host capacity breaker",
+                    **global_breaker,
+                )
+        if (
+            run["host_capacity_reset_at"] is not None
+            and _parse_timestamp(run["host_capacity_reset_at"])
+            > _parse_timestamp(at)
+        ):
+            fail(
+                "SCHEDULER_HOST_CAPACITY_EXHAUSTED",
+                "Automatic dispatch is paused by the host capacity breaker",
+                capacityKey=run["host_capacity_key"],
+                resetAt=run["host_capacity_reset_at"],
+            )
         _assert_graph_not_replanning(nodes)
         definition, state = _node(graph, nodes, node_id)
+        receiver_attestation = None
+        if require_receiver_attestation:
+            if actual_host_receiver_parent_context_id is not None:
+                if (
+                    dispatch_mode != "AUTO"
+                    or host_adapter_id != "codex"
+                    or actual_reservation_id is None
+                ):
+                    fail(
+                        "SCHEDULER_RECEIVER_ATTESTATION_INVALID",
+                        "Host-side identity issuance is Codex AUTO only",
+                    )
+                reservation = connection.execute(
+                    "SELECT d.* FROM dispatch_reservations d "
+                    "LEFT JOIN host_receiver_identities h "
+                    "ON h.reservation_id = d.reservation_id "
+                    "WHERE d.reservation_id = ? AND d.run_id = ? "
+                    "AND d.root_id = ? AND d.node_id = ? "
+                    "AND d.attempt = ? AND d.agent_id = 'codex' "
+                    "AND d.model_id = ? AND d.status = 'RESERVED' "
+                    "AND d.expires_at >= ? "
+                    "AND h.attestation_digest IS NULL LIMIT 1",
+                    (
+                        actual_reservation_id,
+                        run["run_id"],
+                        root_id,
+                        node_id,
+                        state["attempt"],
+                        actual_model_id,
+                        at,
+                    ),
+                ).fetchone()
+                if reservation is None:
+                    fail(
+                        "SCHEDULER_CODEX_RECEIVER_RESERVATION_MISSING",
+                        "Codex SubagentStart has no matching live reservation",
+                    )
+                actual_receiver_attestation_id = (
+                    repository.issue_host_receiver_identity(
+                        connection,
+                        run_id=run["run_id"],
+                        root_id=root_id,
+                        node_id=node_id,
+                        attempt=state["attempt"],
+                        reservation_id=actual_reservation_id,
+                        host_adapter_id="codex",
+                        agent_id="codex",
+                        model_id=str(actual_model_id),
+                        receiver_context_id=actual_receiver_context_id,
+                        parent_context_id=(
+                            actual_host_receiver_parent_context_id
+                        ),
+                        at=at,
+                    )
+                )
+            receiver_attestation = (
+                repository.consume_receiver_attestation(
+                    connection,
+                    attestation_id=actual_receiver_attestation_id,
+                    run_id=run["run_id"],
+                    root_id=root_id,
+                    node_id=node_id,
+                    attempt=state["attempt"],
+                    receiver_context_id=actual_receiver_context_id,
+                    host_adapter_id=str(host_adapter_id),
+                    agent_id=str(actual_agent_id),
+                    model_id=str(actual_model_id),
+                    reservation_id=actual_reservation_id,
+                    operation_id=operation_id,
+                    at=at,
+                )
+            )
         if (
             definition["kind"] not in LOOP_NODE_KINDS
             or state["status"] != "READY"
@@ -778,6 +1092,39 @@ def dispatch_loop(
                 "SCHEDULER_LOOP_NOT_READY",
                 f"{node_id} is not ready for dispatch",
             )
+        if definition["kind"].endswith("_REVIEW_LOOP"):
+            upstream_context_ids = _upstream_receiver_context_ids(
+                graph,
+                nodes,
+                node_id,
+            )
+            if not upstream_context_ids:
+                fail(
+                    "SCHEDULER_REVIEW_CONTEXT_UNVERIFIED",
+                    "Review dispatch requires upstream context evidence",
+                    nodeId=node_id,
+                )
+            if actual_receiver_context_id in upstream_context_ids:
+                fail(
+                    "SCHEDULER_REVIEW_CONTEXT_NOT_INDEPENDENT",
+                    "Review must use a receiving context distinct from all "
+                    "upstream implementation and review contexts",
+                    nodeId=node_id,
+                    receiverContextId=actual_receiver_context_id,
+                )
+            if (
+                receiver_attestation is not None
+                and receiver_attestation["parentContextId"]
+                in upstream_context_ids
+            ):
+                fail(
+                    "SCHEDULER_REVIEW_CONTEXT_NOT_INDEPENDENT",
+                    "Review receiver cannot be spawned by an upstream Loop context",
+                    nodeId=node_id,
+                    parentContextId=receiver_attestation[
+                        "parentContextId"
+                    ],
+                )
         if definition["kind"] == "TASK_LOOP":
             task_requirement = connection.execute(
                 "SELECT status FROM task_requirement_states "
@@ -903,6 +1250,20 @@ def dispatch_loop(
             operation_id=operation_id,
             payload={
                 "leaseExpiresAt": expires,
+                "receiverContextId": actual_receiver_context_id,
+                "receiverAttested": receiver_attestation is not None,
+                **(
+                    {
+                        "receiverParentContextId": receiver_attestation[
+                            "parentContextId"
+                        ],
+                        "hostAdapterId": receiver_attestation[
+                            "hostAdapterId"
+                        ],
+                    }
+                    if receiver_attestation is not None
+                    else {}
+                ),
                 **(
                     {
                         "agentId": actual_agent_id,
@@ -947,6 +1308,8 @@ def dispatch_loop(
         "owner": owner,
         "agentId": actual_agent_id,
         "modelId": actual_model_id,
+        "receiverContextId": actual_receiver_context_id,
+        "receiverAttested": receiver_attestation is not None,
         "dispatchMode": dispatch_mode,
         "dispatchTransport": dispatch_transport,
         "dispatchReservationId": actual_reservation_id,
@@ -956,6 +1319,404 @@ def dispatch_loop(
         ),
         "operationId": operation_id,
         "leaseExpiresAt": expires,
+    }
+
+
+def attest_loop_receiver(
+    *,
+    root: str,
+    root_id: str,
+    node_id: str,
+    receiver_context_id: str,
+    parent_context_id: str,
+    host_adapter_id: str,
+    dispatch_reservation_id: str | None = None,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    """Issue a one-time claim grant from a model-external host adapter."""
+
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    receiver_context_id = _identity(
+        receiver_context_id,
+        "receiver_context_id",
+    )
+    parent_context_id = _identity(parent_context_id, "parent_context_id")
+    if host_adapter_id not in HOST_ADAPTER_AGENTS:
+        fail(
+            "SCHEDULER_HOST_ADAPTER_UNTRUSTED",
+            "Receiver attestations require an exact trusted host adapter",
+        )
+    reservation_id = (
+        _identity(dispatch_reservation_id, "dispatch_reservation_id")
+        if dispatch_reservation_id is not None
+        else None
+    )
+    with repository.transaction() as connection:
+        graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
+        _, state = _node(graph, nodes, node_id)
+        if state["status"] != "READY":
+            fail(
+                "SCHEDULER_RECEIVER_ATTESTATION_NOT_READY",
+                "Only a ready Loop can receive a host attestation",
+                nodeId=node_id,
+                status=state["status"],
+            )
+        if run["execution_mode"] == "active":
+            reservation = connection.execute(
+                "SELECT * FROM dispatch_reservations "
+                "WHERE reservation_id = ?",
+                (reservation_id,),
+            ).fetchone()
+            if (
+                reservation is None
+                or reservation["status"] != "RESERVED"
+                or reservation["expires_at"] < at
+                or reservation["run_id"] != run["run_id"]
+                or reservation["node_id"] != node_id
+                or reservation["attempt"] != state["attempt"]
+            ):
+                fail(
+                    "SCHEDULER_RECEIVER_ATTESTATION_RESERVATION_INVALID",
+                    "Automatic receiver attestation requires its live reservation",
+                )
+        elif reservation_id is not None:
+            fail(
+                "SCHEDULER_RECEIVER_ATTESTATION_RESERVATION_INVALID",
+                "Manual receiver attestations do not accept reservations",
+            )
+        attestation_id = repository.issue_receiver_attestation(
+            connection,
+            run_id=run["run_id"],
+            root_id=root_id,
+            node_id=node_id,
+            attempt=state["attempt"],
+            receiver_context_id=receiver_context_id,
+            parent_context_id=parent_context_id,
+            host_adapter_id=host_adapter_id,
+            reservation_id=reservation_id,
+            at=at,
+        )
+    return {
+        "rootId": root_id,
+        "nodeId": node_id,
+        "receiverContextId": receiver_context_id,
+        "receiverAttestationId": attestation_id,
+        "hostAdapterId": host_adapter_id,
+    }
+
+
+def claim_codex_subagent_receiver(
+    *,
+    root: str,
+    root_id: str,
+    workspace_root: str,
+    receiver_context_id: str,
+    parent_context_id: str,
+    model_id: str,
+    dispatch_reservation_id: str,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    """Atomically claim or recover one Codex-native AUTO assignment."""
+
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    repository.assert_delivery_workspace(root_id, workspace_root)
+    receiver_context_id = _identity(
+        receiver_context_id,
+        "receiver_context_id",
+    )
+    parent_context_id = _identity(parent_context_id, "parent_context_id")
+    actual_model_id = _executor_descriptor(model_id, "model_id")
+    reservation_id = _identity(
+        dispatch_reservation_id,
+        "dispatch_reservation_id",
+    )
+
+    def committed_assignment(connection: Any) -> dict[str, Any] | None:
+        row = connection.execute(
+            "SELECT h.operation_id, d.node_id, d.reasoning_class, "
+            "d.decision_fingerprint, n.lease_expires_at "
+            "FROM host_receiver_identities h "
+            "JOIN dispatch_reservations d "
+            "ON d.reservation_id = h.reservation_id "
+            "JOIN node_runs n ON n.run_id = h.run_id "
+            "AND n.node_id = h.node_id AND n.attempt = h.attempt "
+            "WHERE h.root_id = ? AND h.reservation_id = ? "
+            "AND h.host_adapter_id = 'codex' "
+            "AND h.agent_id = 'codex' AND h.model_id = ? "
+            "AND h.receiver_context_id = ? "
+            "AND h.parent_context_id = ? AND h.status = 'CONSUMED' "
+            "AND n.status = 'CLAIMED' "
+            "AND n.operation_id = h.operation_id LIMIT 1",
+            (
+                root_id,
+                reservation_id,
+                actual_model_id,
+                receiver_context_id,
+                parent_context_id,
+            ),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "rootId": root_id,
+            "nodeId": row["node_id"],
+            "agentId": "codex",
+            "modelId": actual_model_id,
+            "receiverContextId": receiver_context_id,
+            "receiverAttested": True,
+            "dispatchMode": "AUTO",
+            "dispatchTransport": HOST_NATIVE_DISPATCH_TRANSPORT,
+            "dispatchReservationId": reservation_id,
+            "dispatchReasoningClass": row["reasoning_class"],
+            "dispatchDecisionFingerprint": row[
+                "decision_fingerprint"
+            ],
+            "operationId": row["operation_id"],
+            "leaseExpiresAt": row["lease_expires_at"],
+        }
+
+    with repository.transaction() as connection:
+        _graph, run, _nodes = _loaded(connection, root_id)
+        recovered = committed_assignment(connection)
+        if recovered is not None:
+            return recovered
+        at = _locked_timestamp(now, run["updated_at"])
+        if run["execution_mode"] != "active":
+            fail(
+                "SCHEDULER_CODEX_RECEIVER_RESERVATION_MISSING",
+                "Codex SubagentStart claim requires active execution",
+            )
+        repository.expire_dispatch_reservations(connection, at=at)
+        reservation = connection.execute(
+            "SELECT d.* FROM dispatch_reservations d "
+            "LEFT JOIN host_receiver_identities h "
+            "ON h.reservation_id = d.reservation_id "
+            "WHERE d.reservation_id = ? AND d.run_id = ? "
+            "AND d.root_id = ? AND d.agent_id = 'codex' "
+            "AND d.model_id = ? AND d.status = 'RESERVED' "
+            "AND d.expires_at >= ? AND h.attestation_digest IS NULL "
+            "LIMIT 1",
+            (
+                reservation_id,
+                run["run_id"],
+                root_id,
+                actual_model_id,
+                at,
+            ),
+        ).fetchone()
+        if reservation is None:
+            fail(
+                "SCHEDULER_CODEX_RECEIVER_RESERVATION_MISSING",
+                "Codex SubagentStart has no matching live AUTO reservation",
+            )
+        reservation_values = dict(reservation)
+
+    operation_id = "codex-claim-" + secrets.token_hex(24)
+    try:
+        return dispatch_loop(
+            root=root,
+            root_id=root_id,
+            node_id=reservation_values["node_id"],
+            owner=receiver_context_id,
+            operation_id=operation_id,
+            agent_id="codex",
+            model_id=actual_model_id,
+            receiver_context_id=receiver_context_id,
+            dispatch_mode="AUTO",
+            dispatch_transport=HOST_NATIVE_DISPATCH_TRANSPORT,
+            dispatch_reservation_id=reservation_id,
+            dispatch_reasoning_class=reservation_values[
+                "reasoning_class"
+            ],
+            dispatch_decision_fingerprint=reservation_values[
+                "decision_fingerprint"
+            ],
+            host_native_agent_ids=("codex",),
+            host_adapter_id="codex",
+            require_receiver_attestation=True,
+            host_receiver_parent_context_id=parent_context_id,
+            explicit_dogfood=explicit_dogfood,
+            now=now,
+        )
+    except Exception:
+        with repository.transaction() as connection:
+            recovered = committed_assignment(connection)
+        if recovered is not None:
+            return recovered
+        raise
+
+
+def authorize_codex_subagent_operation(
+    *,
+    root: str,
+    root_id: str,
+    node_id: str,
+    workspace_root: str,
+    receiver_context_id: str,
+    parent_context_id: str,
+    model_id: str,
+    dispatch_reservation_id: str,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    """Resolve a claimed Codex child operation for a PreToolUse hook."""
+
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    repository.assert_delivery_workspace(root_id, workspace_root)
+    receiver_context_id = _identity(
+        receiver_context_id,
+        "receiver_context_id",
+    )
+    parent_context_id = _identity(parent_context_id, "parent_context_id")
+    actual_model_id = _executor_descriptor(model_id, "model_id")
+    reservation_id = _identity(
+        dispatch_reservation_id,
+        "dispatch_reservation_id",
+    )
+    with repository.transaction() as connection:
+        _graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
+        _definition, state = _node(_graph, nodes, node_id)
+        if (
+            not _active_claim(
+                state,
+                operation_id=state["operationId"],
+                at=at,
+            )
+            or state["owner"] != receiver_context_id
+        ):
+            fail(
+                "SCHEDULER_CODEX_RECEIVER_OPERATION_UNAUTHORIZED",
+                "The current Codex context does not own this live Loop",
+            )
+        identity = connection.execute(
+            "SELECT 1 FROM host_receiver_identities "
+            "WHERE run_id = ? AND root_id = ? AND node_id = ? "
+            "AND attempt = ? AND reservation_id = ? "
+            "AND host_adapter_id = 'codex' AND agent_id = 'codex' "
+            "AND model_id = ? AND receiver_context_id = ? "
+            "AND parent_context_id = ? AND status = 'CONSUMED' "
+            "AND operation_id = ? LIMIT 1",
+            (
+                run["run_id"],
+                root_id,
+                node_id,
+                state["attempt"],
+                reservation_id,
+                actual_model_id,
+                receiver_context_id,
+                parent_context_id,
+                state["operationId"],
+            ),
+        ).fetchone()
+        if identity is None:
+            fail(
+                "SCHEDULER_CODEX_RECEIVER_OPERATION_UNAUTHORIZED",
+                "The current Codex context has no attested Loop operation",
+            )
+    return {
+        "rootId": root_id,
+        "nodeId": node_id,
+        "receiverContextId": receiver_context_id,
+        "operationId": state["operationId"],
+    }
+
+
+def authorize_claude_subagent_operation(
+    *,
+    root: str,
+    root_id: str,
+    node_id: str,
+    workspace_root: str,
+    receiver_context_id: str,
+    parent_context_id: str,
+    model_id: str,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    """Resolve a claimed Claude child operation for a PreToolUse hook."""
+
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    repository.assert_delivery_workspace(root_id, workspace_root)
+    receiver_context_id = _identity(
+        receiver_context_id,
+        "receiver_context_id",
+    )
+    parent_context_id = _identity(parent_context_id, "parent_context_id")
+    actual_model_id = _executor_descriptor(model_id, "model_id")
+    with repository.transaction() as connection:
+        graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
+        _definition, state = _node(graph, nodes, node_id)
+        if not _active_claim(
+            state,
+            operation_id=state["operationId"],
+            at=at,
+        ):
+            fail(
+                "SCHEDULER_CLAUDE_RECEIVER_OPERATION_UNAUTHORIZED",
+                "The current Claude context has no live Loop",
+            )
+        attestation = connection.execute(
+            "SELECT 1 FROM receiver_attestations "
+            "WHERE run_id = ? AND root_id = ? AND node_id = ? "
+            "AND attempt = ? AND receiver_context_id = ? "
+            "AND parent_context_id = ? "
+            "AND host_adapter_id = 'claude-code' "
+            "AND status = 'CONSUMED' AND operation_id = ? LIMIT 1",
+            (
+                run["run_id"],
+                root_id,
+                node_id,
+                state["attempt"],
+                receiver_context_id,
+                parent_context_id,
+                state["operationId"],
+            ),
+        ).fetchone()
+        claimed_event = connection.execute(
+            "SELECT payload_json FROM graph_events "
+            "WHERE run_id = ? AND node_id = ? AND attempt = ? "
+            "AND event_type = 'LOOP_CLAIMED' AND operation_id = ? "
+            "ORDER BY event_id DESC LIMIT 1",
+            (
+                run["run_id"],
+                node_id,
+                state["attempt"],
+                state["operationId"],
+            ),
+        ).fetchone()
+        payload = (
+            json.loads(claimed_event["payload_json"])
+            if claimed_event is not None
+            else None
+        )
+        if (
+            attestation is None
+            or not isinstance(payload, dict)
+            or payload.get("receiverContextId") != receiver_context_id
+            or payload.get("receiverParentContextId")
+            != parent_context_id
+            or payload.get("hostAdapterId") != "claude-code"
+            or payload.get("agentId") != "claude-code"
+            or payload.get("modelId") != actual_model_id
+        ):
+            fail(
+                "SCHEDULER_CLAUDE_RECEIVER_OPERATION_UNAUTHORIZED",
+                "The current Claude context does not own this Loop",
+            )
+    return {
+        "rootId": root_id,
+        "nodeId": node_id,
+        "receiverContextId": receiver_context_id,
+        "operationId": state["operationId"],
     }
 
 
@@ -1416,6 +2177,250 @@ def pause_loop(
         explicit_dogfood=explicit_dogfood,
         now=now,
     )
+
+
+def report_host_capacity_exhausted(
+    *,
+    root: str,
+    root_id: str,
+    node_id: str,
+    reset_at: str,
+    host_adapter_id: str,
+    receiver_context_id: str,
+    report_id: str,
+    reason: str,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    """Trip a host-side hard-quota breaker without a live model call."""
+
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    if host_adapter_id not in HOST_ADAPTER_AGENTS:
+        fail(
+            "SCHEDULER_HOST_ADAPTER_UNTRUSTED",
+            "Hard quota reports require an exact trusted host adapter",
+        )
+    receiver_context_id = _identity(
+        receiver_context_id,
+        "receiver_context_id",
+    )
+    report_id = _identity(report_id, "report_id")
+    capacity_key = HOST_CAPACITY_KEYS[host_adapter_id]
+    affected_agent_id = HOST_ADAPTER_AGENTS[host_adapter_id]
+    if not isinstance(reason, str) or not reason.strip():
+        fail(
+            "SCHEDULER_HOST_CAPACITY_REPORT_INVALID",
+            "reason must describe the observed host capacity failure",
+        )
+    normalized_reason = reason.strip()
+    if len(normalized_reason) > 1024:
+        fail(
+            "SCHEDULER_HOST_CAPACITY_REPORT_INVALID",
+            "reason must not exceed 1024 characters",
+        )
+    with repository.transaction() as connection:
+        graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
+        normalized_reset_at = _future_timestamp(reset_at, at=at)
+        if (
+            _parse_timestamp(normalized_reset_at) - _parse_timestamp(at)
+            > MAX_HOST_CAPACITY_RESET
+        ):
+            fail(
+                "SCHEDULER_HOST_CAPACITY_REPORT_INVALID",
+                "Host capacity reset time cannot exceed 24 hours",
+            )
+        replay = connection.execute(
+            "SELECT * FROM host_capacity_breakers WHERE report_id = ?",
+            (report_id,),
+        ).fetchone()
+        if replay is not None:
+            return {
+                "rootId": root_id,
+                "status": replay["status"],
+                "capacityKey": replay["capacity_key"],
+                "resetAt": replay["reset_at"],
+                "affectedNodeIds": [],
+                "cancelRecurringMonitors": True,
+                "wakeMode": "HOST_NATIVE_ONE_SHOT",
+                "idempotentReplay": True,
+            }
+        existing = connection.execute(
+            "SELECT * FROM host_capacity_breakers "
+            "WHERE capacity_key = ? AND status = 'OPEN'",
+            (capacity_key,),
+        ).fetchone()
+        if existing is not None:
+            if _parse_timestamp(normalized_reset_at) > _parse_timestamp(
+                existing["reset_at"]
+            ):
+                fail(
+                    "SCHEDULER_HOST_CAPACITY_REPORT_INVALID",
+                    "A later report cannot extend an open capacity breaker",
+                )
+            return {
+                "rootId": root_id,
+                "status": "OPEN",
+                "capacityKey": capacity_key,
+                "resetAt": existing["reset_at"],
+                "affectedNodeIds": [],
+                "cancelRecurringMonitors": True,
+                "wakeMode": "HOST_NATIVE_ONE_SHOT",
+                "idempotentReplay": True,
+            }
+        _, target = _node(graph, nodes, node_id)
+        if (
+            target["status"] != "CLAIMED"
+            or target.get("agentId") != affected_agent_id
+            or target.get("receiverContextId") != receiver_context_id
+        ):
+            fail(
+                "SCHEDULER_HOST_CAPACITY_REPORT_INVALID",
+                "Hard quota evidence must match the claimed host receiver",
+                nodeId=node_id,
+                status=target["status"],
+            )
+        connection.execute(
+            "INSERT INTO host_capacity_breakers("
+            "capacity_key, host_adapter_id, agent_id, reset_at, report_id, "
+            "status, reported_at, reason) "
+            "VALUES (?, ?, ?, ?, ?, 'OPEN', ?, ?) "
+            "ON CONFLICT(capacity_key) DO UPDATE SET "
+            "host_adapter_id = excluded.host_adapter_id, "
+            "agent_id = excluded.agent_id, reset_at = excluded.reset_at, "
+            "report_id = excluded.report_id, status = 'OPEN', "
+            "reported_at = excluded.reported_at, restored_at = NULL, "
+            "reason = excluded.reason",
+            (
+                capacity_key,
+                host_adapter_id,
+                affected_agent_id,
+                normalized_reset_at,
+                report_id,
+                at,
+                normalized_reason,
+            ),
+        )
+        pause_metadata = json.dumps(
+            {"schedulerPause": {"capacityScope": "HOST"}},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        affected_by_run: dict[str, list[str]] = {}
+        active_runs = connection.execute(
+            "SELECT * FROM runs WHERE status NOT IN "
+            "('COMPLETED', 'CANCELLED', 'SUPERSEDED')"
+        ).fetchall()
+        for affected_run in active_runs:
+            affected_nodes = repository.latest_nodes(
+                connection,
+                affected_run["run_id"],
+            )
+            matching_nodes = [
+                state
+                for state in affected_nodes
+                if state["status"] == "CLAIMED"
+                and state.get("agentId") == affected_agent_id
+            ]
+            if not matching_nodes:
+                continue
+            revision = connection.execute(
+                "SELECT * FROM delivery_revisions "
+                "WHERE root_id = ? AND revision = ?",
+                (affected_run["root_id"], affected_run["revision"]),
+            ).fetchone()
+            if revision is None:
+                fail(
+                    "SCHEDULER_STATE_INVALID",
+                    "Capacity breaker found a run without its revision",
+                )
+            _, affected_graph = _validated_stored_definition(revision)
+            repository.append_event(
+                connection,
+                run_id=affected_run["run_id"],
+                node_id=None,
+                attempt=None,
+                event_type="HOST_CAPACITY_EXHAUSTED",
+                actor=host_adapter_id,
+                operation_id=None,
+                payload={
+                    "capacityKey": capacity_key,
+                    "resetAt": normalized_reset_at,
+                    "reportedAt": at,
+                    "reason": normalized_reason,
+                    "reportId": report_id,
+                    "affectedNodeIds": sorted(
+                        state["nodeId"] for state in matching_nodes
+                    ),
+                },
+                at=at,
+            )
+            for state in matching_nodes:
+                connection.execute(
+                    "UPDATE node_runs SET status = 'PAUSED', "
+                    "finished_at = ?, lease_expires_at = NULL, "
+                    "outcome_json = ? WHERE run_id = ? AND node_id = ? "
+                    "AND attempt = ?",
+                    (
+                        normalized_reset_at,
+                        pause_metadata,
+                        affected_run["run_id"],
+                        state["nodeId"],
+                        state["attempt"],
+                    ),
+                )
+                repository.append_event(
+                    connection,
+                    run_id=affected_run["run_id"],
+                    node_id=state["nodeId"],
+                    attempt=state["attempt"],
+                    event_type="NODE_PAUSED",
+                    actor=host_adapter_id,
+                    operation_id=state["operationId"],
+                    payload={
+                        "resumeAt": normalized_reset_at,
+                        "capacityScope": "HOST",
+                        "hard429": True,
+                        "capacityKey": capacity_key,
+                    },
+                    at=at,
+                )
+            connection.execute(
+                "UPDATE runs SET host_capacity_key = ?, "
+                "host_capacity_reset_at = ?, host_capacity_reported_at = ?, "
+                "host_capacity_reason = ?, updated_at = ? WHERE run_id = ?",
+                (
+                    capacity_key,
+                    normalized_reset_at,
+                    at,
+                    normalized_reason,
+                    at,
+                    affected_run["run_id"],
+                ),
+            )
+            repository.refresh_ready(
+                connection,
+                affected_graph,
+                affected_run["run_id"],
+                at=at,
+            )
+            affected_by_run[affected_run["root_id"]] = sorted(
+                state["nodeId"] for state in matching_nodes
+            )
+        affected = affected_by_run.get(root_id, [])
+    for affected_root_id in affected_by_run:
+        repository.write_projections(affected_root_id)
+    return {
+        "rootId": root_id,
+        "status": "OPEN",
+        "capacityKey": capacity_key,
+        "resetAt": normalized_reset_at,
+        "affectedNodeIds": affected,
+        "cancelRecurringMonitors": True,
+        "wakeMode": "HOST_NATIVE_ONE_SHOT",
+    }
 
 
 def _change_claimed_loop(
@@ -1970,6 +2975,9 @@ def _rebuild_graph_run_locked(
     }
     completed_at: str | None = None
     cancelled_at: str | None = None
+    execution_mode = current_run["executionMode"]
+    host_capacity: dict[str, str] | None = None
+    restored_capacity_events: dict[str, dict[str, str]] = {}
 
     for event in events:
         event_type = event["eventType"]
@@ -1977,6 +2985,64 @@ def _rebuild_graph_run_locked(
         at = event["recordedAt"]
         payload = event["payload"]
         if event_type == "GRAPH_RUN_STARTED":
+            event_execution_mode = payload.get("executionMode")
+            if event_execution_mode in {"active", "manual"}:
+                execution_mode = event_execution_mode
+            continue
+        if event_type == "HOST_CAPACITY_EXHAUSTED":
+            required_capacity_fields = (
+                "capacityKey",
+                "resetAt",
+                "reason",
+            )
+            if not all(
+                isinstance(payload.get(field), str)
+                for field in required_capacity_fields
+            ):
+                fail(
+                    "SCHEDULER_EVENT_REPLAY_INVALID",
+                    "Host capacity event is missing breaker metadata",
+                )
+            host_adapter_id = event["actor"]
+            if host_adapter_id not in HOST_ADAPTER_AGENTS:
+                fail(
+                    "SCHEDULER_EVENT_REPLAY_INVALID",
+                    "Host capacity event has an unknown host adapter",
+                )
+            host_capacity = {
+                "capacityKey": payload["capacityKey"],
+                "resetAt": payload["resetAt"],
+                "reportedAt": (
+                    payload.get("reportedAt")
+                    if isinstance(payload.get("reportedAt"), str)
+                    else at
+                ),
+                "reason": payload["reason"],
+                "hostAdapterId": host_adapter_id,
+                "agentId": HOST_ADAPTER_AGENTS[host_adapter_id],
+                "reportId": (
+                    payload.get("reportId")
+                    if isinstance(payload.get("reportId"), str)
+                    else event["eventUuid"]
+                ),
+            }
+            continue
+        if event_type == "HOST_CAPACITY_RESTORED":
+            restored_key = payload.get("capacityKey")
+            restored_reset_at = payload.get("resetAt")
+            restored_report_id = payload.get("reportId")
+            if (
+                isinstance(restored_key, str)
+                and isinstance(restored_reset_at, str)
+                and isinstance(restored_report_id, str)
+            ):
+                restored_capacity_events[restored_key] = {
+                    "capacityKey": restored_key,
+                    "resetAt": restored_reset_at,
+                    "reportId": restored_report_id,
+                    "restoredAt": at,
+                }
+            host_capacity = None
             continue
         if event_type == "GRAPH_RUN_CANCELLED":
             cancelled_at = at
@@ -2185,6 +3251,44 @@ def _rebuild_graph_run_locked(
         else current_run["startedAt"]
     )
     with repository.transaction() as connection:
+        for restored_capacity in restored_capacity_events.values():
+            connection.execute(
+                "UPDATE host_capacity_breakers SET status = 'RESTORED', "
+                "restored_at = ? WHERE capacity_key = ? "
+                "AND report_id = ? AND reset_at = ? AND status = 'OPEN'",
+                (
+                    restored_capacity["restoredAt"],
+                    restored_capacity["capacityKey"],
+                    restored_capacity["reportId"],
+                    restored_capacity["resetAt"],
+                ),
+            )
+        if host_capacity is not None:
+            connection.execute(
+                "INSERT INTO host_capacity_breakers("
+                "capacity_key, host_adapter_id, agent_id, reset_at, "
+                "report_id, status, reported_at, reason) "
+                "VALUES (?, ?, ?, ?, ?, 'OPEN', ?, ?) "
+                "ON CONFLICT(capacity_key) DO UPDATE SET "
+                "host_adapter_id = excluded.host_adapter_id, "
+                "agent_id = excluded.agent_id, reset_at = excluded.reset_at, "
+                "report_id = excluded.report_id, status = 'OPEN', "
+                "reported_at = excluded.reported_at, restored_at = NULL, "
+                "reason = excluded.reason "
+                "WHERE (host_capacity_breakers.report_id = "
+                "excluded.report_id AND host_capacity_breakers.status = "
+                "'OPEN') OR host_capacity_breakers.reported_at < "
+                "excluded.reported_at",
+                (
+                    host_capacity["capacityKey"],
+                    host_capacity["hostAdapterId"],
+                    host_capacity["agentId"],
+                    host_capacity["resetAt"],
+                    host_capacity["reportId"],
+                    host_capacity["reportedAt"],
+                    host_capacity["reason"],
+                ),
+            )
         connection.execute(
             "DELETE FROM node_runs WHERE run_id = ?",
             (current_run["runId"],),
@@ -2257,13 +3361,37 @@ def _rebuild_graph_run_locked(
                 ),
             )
         connection.execute(
-            "UPDATE runs SET status = ?, updated_at = ?, "
-            "completed_at = ?, cancelled_at = ? WHERE run_id = ?",
+            "UPDATE runs SET status = ?, execution_mode = ?, "
+            "updated_at = ?, completed_at = ?, cancelled_at = ?, "
+            "host_capacity_key = ?, host_capacity_reset_at = ?, "
+            "host_capacity_reported_at = ?, host_capacity_reason = ? "
+            "WHERE run_id = ?",
             (
                 run_status,
+                execution_mode,
                 updated_at,
                 completed_at,
                 cancelled_at,
+                (
+                    host_capacity["capacityKey"]
+                    if host_capacity is not None
+                    else None
+                ),
+                (
+                    host_capacity["resetAt"]
+                    if host_capacity is not None
+                    else None
+                ),
+                (
+                    host_capacity["reportedAt"]
+                    if host_capacity is not None
+                    else None
+                ),
+                (
+                    host_capacity["reason"]
+                    if host_capacity is not None
+                    else None
+                ),
                 current_run["runId"],
             ),
         )
@@ -2293,13 +3421,16 @@ def rebuild_graph_run(
 
 __all__ = (
     "advance_graph",
+    "attest_loop_receiver",
     "cancel_graph_run",
+    "claim_codex_subagent_receiver",
     "dispatch_loop",
     "graph_events",
     "graph_status",
     "heartbeat_loop",
     "loop_context",
     "pause_loop",
+    "report_host_capacity_exhausted",
     "refreeze_task_requirement",
     "record_loop_result",
     "record_user_confirmation",

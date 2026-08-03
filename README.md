@@ -2,7 +2,7 @@
 
 `layered-delivery` 把已经确认的需求冻结为递归 Delivery Graph，再协调多个独立 Agent/WorkLoop 完成实现、逐层审查和最终验收。
 
-当前版本：**0.28.9**
+当前版本：**0.30.0**
 
 ## 核心流程
 
@@ -66,27 +66,29 @@ Plugin 激活后，在 Codex 或 Claude Code 的新会话中提出需求，并�
 
 1. 读取工作区状态和当前 schema v3 契约。
 2. 与用户沟通需求并准备 Delivery Graph。
-3. 展示完整计划、Agent/模型建议，以及“自动执行 / 手动交接”两个选项。
-4. 用户选择后冻结 Graph；未选择时不开始开发。
-5. 自动模式持续消费 frontier，并发调度当前可运行的独立 WorkLoop。
-6. 所有 Review 完成后展示验收报告，等待用户最终确认。
+3. 展示完整计划，以及“自动执行 / 手动交接”两个选项；选择前不混入模型建议。
+4. 用户选择后展示对应路由：自动执行只展示当前宿主 Agent 的原生模型分档；手动交接展示目标开发 Agent，并由目标 Agent 接收后重新生成本地模型表。路由展示不增加第二次确认，随后冻结 Graph；未选择时不开始开发。
+5. 自动模式对正式 Ready 批次展示中文模型表和默认 30 秒路由调整窗口；用户可直接改为其他可用原生模型，不再回答确认问题，超时后自动预留并派遣。
+6. 自动模式持续消费 frontier，并发调度当前可运行的独立 WorkLoop。
+7. 所有 Review 完成后展示验收报告，等待用户最终确认。
 
 执行方式的区别：
 
 | 模式 | 冻结后行为 |
 |---|---|
 | 自动执行 | 当前宿主继续规划并派遣可证明为 `HOST_NATIVE` 的 Agent |
-| 手动交接 | 冻结后输出稳定 `rootId`，由其他会话或宿主继续消费 frontier |
+| 手动交接 | 冻结后输出稳定 `rootId`，并为目标开发 Agent 创建独立接收会话；Codex 目标进入新 Codex 任务，Claude Code 目标进入新 Claude 会话 |
 
 新业务目标默认创建新 Delivery。一个工作区最多绑定一个未结束 Delivery；并行需求使用独立对话工作区，Git 项目优先使用 linked worktree。只有用户明确要求继续同一需求，或当前 Loop 返回 `REPLAN_REQUIRED`，才在原 `delivery.id` 上创建下一 Revision。
 
 ## Agent、模型与并发
 
-Agent 发现、普通建议和自动派遣是三件不同的事：
+Agent 发现、两类路由建议和自动派遣是不同的事：
 
-- `available_agents` 只发现本机终端和非敏感模型信息。
-- `recommend_executors` 返回非绑定建议，不启动 Agent。
-- `plan_dispatch_batch` 只接受宿主正式 Agent API 证明为 `HOST_NATIVE` 的容量，并返回可并发 assignment。
+- `available_agents` 只为人工交接发现本机终端和非敏感模型信息。
+- `recommend_executors(AUTOMATIC)` 只在当前宿主 Agent 内按原生 tier 生成全 Graph 只读预览，并与正式派遣复用路由决策。
+- `recommend_executors(MANUAL_HANDOFF)` 才允许指定另一 TASK 开发 Agent；它只生成外部人工交接信息，当前总调度会话不代替接收方开发。
+- `plan_dispatch_batch` 只接受宿主正式 Agent API 证明为 `HOST_NATIVE` 的容量；先返回无预留的 `HOST_NATIVE_ROUTE_REVIEW` 和 30 秒调整窗口，到期重调后才返回可并发 assignment。
 - assignment 只使用 Claude/Codex 原生 `modelId` 派遣；本机配置在原生调用后如何转发与本项目无关。宿主可把观测到的结果记录为展示用 `actualModelId`，但它不参与选模、指纹、预留、授权或 Review 多样性。
 
 自动选模由调度 Agent 分析当前 Loop：
@@ -98,6 +100,8 @@ Agent 发现、普通建议和自动派遣是三件不同的事：
 | `HIGH` | `FRONTIER` | 高风险、跨边界、复杂审查或不确定任务 |
 
 Controller 不用 Python 做本地语义判断。某个节点缺少 Agent 分析时，只能回退到宿主明确报告的当前 Agent/模型；两者都缺失时，该节点暂不自动派遣。
+
+用户不认可默认模型时，可在 30 秒窗口内为尚未 claim 的节点指定当前宿主 inventory 中的精确 `preferredNativeModelId`；建议预览和派遣计划共同遵守该原生 selector，不重新冻结，也不新增确认，变化节点重新获得 30 秒调整时间。GLM、DeepSeek 等转发后模型不能作为 override。
 
 ## 中央编排器设置
 

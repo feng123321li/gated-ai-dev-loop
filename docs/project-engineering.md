@@ -123,7 +123,7 @@ Graph 编译遵循以下终态规则：
 
 工具分为六组：
 
-- 发现、建议与派遣计划：`available_agents`、`recommend_executors`、`plan_dispatch_batch`
+- 发现、分模式建议与派遣计划：`available_agents`、`recommend_executors`、`plan_dispatch_batch`。自动模式的正式路由先进入 30 秒 `HOST_NATIVE_ROUTE_REVIEW` 调整窗口，超时后才预留；手动交接由目标 Agent 的独立会话继续。
 - 规划：`workspace_status`、`hierarchy_contract`、`prepare_hierarchy`、`freeze_hierarchy`
 - Delivery 修订：`delivery_revision_history`、`prepare_delivery_revision`
 - 需求修订：`unfreeze_task_requirement`、`refreeze_task_requirement`

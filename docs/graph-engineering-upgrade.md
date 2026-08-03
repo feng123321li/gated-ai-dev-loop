@@ -79,23 +79,16 @@ Delivery: d-commerce
 
 ## Agent 与模型晚绑定
 
-Frozen Graph 表达“哪个 TASK/Review 何时可运行”，不表达“某台主机上的哪个 Agent/模型必须运行”。v0.22.0 在 Graph 外提供动态建议：
+Frozen Graph 表达“哪个 TASK/Review 何时可运行”，不表达“某台主机上的哪个 Agent/模型必须运行”。Graph 外按用户已经选择的开发方式提供两条分离路径：
 
 ```text
-Frozen Graph Loop 角色
-        +
-当前主机 available_agents
-        +
-用户本地 Profile 优先级
-        ↓
-recommend_executors
-        ↓
-Agent + 当前模型 + 备选 + 原因
+自动执行：当前宿主原生 inventory → 原生模型 tier 预览 → 30 秒路由调整窗口 → 宿主原生派遣
+手动交接：available_agents → 目标开发 Agent → 目标 Agent 独立接收会话 → 接收方本地模型表
 ```
 
-建议不修改 hierarchy、Graph、SQLite、事件链、claim 或 owner。TASK 只匹配开发能力；Review 优先避开上游开发建议中的 Agent，并在无法满足异构 Agent 独立性时明确降级置信度。推荐器不解析不透明 payload，因此不会把模型路由策略重新塞进外层业务 schema。
+建议不修改 hierarchy、Graph、事件链、claim 或 owner。自动建议只在当前宿主 Agent 内按原生 tier 选择模型，不因为发现另一 CLI 而生成跨 Agent 建议；手动交接才可切换 TASK 开发 Agent。目标为 Codex 时创建新的 Codex 任务，目标为 Claude Code 时创建新的 Claude 会话；原总调度会话只跟踪交接。推荐器不解析不透明 payload，因此不会把模型路由策略重新塞进外层业务 schema。
 
-手工配置、任意本机修改器、PATH 或用户 Profile 改变后重新发现即可；同一 Frozen Graph 可在不同主机得到不同建议。普通建议继续保持 `ADVISORY / EXTERNAL_PROCESS`。自动模式另行由 `plan_dispatch_batch` 消费宿主明确提供且 `dispatchTransport=HOST_NATIVE` 的原生 Agent 容量、原生模型 selector 与选择能力，为当前 frontier 生成 `HOST_NATIVE_DISPATCH_PLAN`；Agent 分析完整时按 tier 选择子 Agent 的原生模型名，缺少节点分析时可在独立子上下文沿用宿主明确报告的当前 Agent/原生模型并标记 `UNCLASSIFIED`。本机配置在原生调用后转发到哪个实际模型与编排无关；宿主观测值只作为 `actualModelId` 展示。计划先原子签发短租约派遣预留，再按槽位并发创建接收上下文；第二个调度器只能等待接收方 claim 或预留过期。PATH 中发现的 CLI 不自动取得启动授权，计划工具也不启动 Agent 或 claim。
+手工配置、任意本机修改器、PATH 或用户 Profile 改变后重新发现即可；同一 Frozen Graph 可在不同主机得到不同展示。人工交接发现保持 `ADVISORY / EXTERNAL_PROCESS`。自动模式由 `plan_dispatch_batch` 消费宿主明确提供且 `dispatchTransport=HOST_NATIVE` 的原生 Agent 容量、原生模型 selector 与选择能力；Agent 分析完整时按 tier 选择子 Agent 的原生模型名，缺少节点分析时可沿用宿主明确报告的当前 Agent/原生模型并标记 `UNCLASSIFIED`。正式 Ready 批次的首次稳定路由返回 `HOST_NATIVE_ROUTE_REVIEW`，持久化 30 秒调整窗口但不预留；主 Agent 用中文表格展示路由，用户可直接修改 `preferredNativeModelId`，不再询问确认。到期后宿主自动重调，相同决策才原子签发短租约并返回 `HOST_NATIVE_DISPATCH_PLAN`；变化节点重新计时。本机配置在原生调用后转发到哪个实际模型与编排无关，宿主观测值只作为 `actualModelId` 展示。随后按槽位并发创建接收上下文；第二个调度器只能等待接收方 claim 或预留过期。PATH 中发现的 CLI 不自动取得启动授权，计划工具也不启动 Agent 或 claim。
 
 运行中的容量故障不写回 Frozen Graph。执行 Agent 限额使用 `EXECUTOR` 暂停并等待原 Agent 的宿主原生一次性恢复提示；调度宿主自身限额使用 `HOST` 暂停。两种限额等待都不调用建议或派遣计划，也不自动换 Agent。Controller 在下一次调用时自动恢复节点，但不承担常驻定时或进程启动。
 

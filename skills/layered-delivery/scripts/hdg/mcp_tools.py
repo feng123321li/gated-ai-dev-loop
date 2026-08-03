@@ -173,6 +173,11 @@ DISPATCH_NODE_REQUIREMENT = _object(
         "reason": _string(
             "Why this current frontier node needs the reasoning class."
         ),
+        "preferredNativeModelId": _string(
+            "Optional exact host-native selector explicitly requested by "
+            "the user. Valid only with source USER_POLICY; forwarded or "
+            "effective model IDs are not accepted."
+        ),
     },
     required=["nodeId", "reasoningClass", "source", "reason"],
 )
@@ -451,15 +456,56 @@ TOOLS = (
     _tool(
         "recommend_executors",
         (
-            "Return non-binding local Agent and model recommendations, "
-            "alternatives, confidence, and reasons for every TASK and "
-            "Review Loop in one prepared or frozen Graph. Never claim or "
-            "dispatch a Loop, and do not use recommendations for quota "
-            "recovery."
+            "Return non-binding execution recommendations for every Loop. "
+            "AUTOMATIC uses only the current host Agent and its native "
+            "model tiers, sharing the later dispatch routing policy. "
+            "MANUAL_HANDOFF may recommend or accept an explicit different "
+            "development Agent, but remains external manual advice. Never "
+            "claim or dispatch a Loop."
         ),
         _object(
-            {"root_id": ROOT_ID},
-            required=["root_id"],
+            {
+                "root_id": ROOT_ID,
+                "recommendation_mode": {
+                    "type": "string",
+                    "enum": ["AUTOMATIC", "MANUAL_HANDOFF"],
+                    "description": (
+                        "AUTOMATIC stays within the current execution "
+                        "Agent. MANUAL_HANDOFF may switch the TASK "
+                        "development Agent by explicit human handoff."
+                    ),
+                },
+                "executor_inventory": {
+                    "type": "array",
+                    "items": HOST_EXECUTOR,
+                    "minItems": 1,
+                    "maxItems": 64,
+                    "description": (
+                        "Required only for AUTOMATIC; current host-native "
+                        "Agent catalog using native model selectors."
+                    ),
+                },
+                "node_requirements": {
+                    "type": "array",
+                    "items": DISPATCH_NODE_REQUIREMENT,
+                    "maxItems": 256,
+                    "description": (
+                        "Required only for AUTOMATIC and covers every Loop "
+                        "being previewed."
+                    ),
+                },
+                "current_executor": {
+                    **CURRENT_EXECUTOR,
+                    "description": (
+                        "Optional AUTOMATIC fallback when a reasoning "
+                        "analysis is unavailable."
+                    ),
+                },
+                "manual_development_agent_id": _string(
+                    "Optional MANUAL_HANDOFF target Agent for TASK development."
+                ),
+            },
+            required=["root_id", "recommendation_mode"],
         ),
     ),
     _tool(
@@ -472,10 +518,13 @@ TOOLS = (
             "UNCLASSIFIED. Applies the user-level central orchestrator "
             "switches, Adapter allowlist, cross-Adapter permission, "
             "concurrency limit, quota policy, and Review preference. "
-            "Atomically reserves every returned assignment "
-            "before host Agent creation and returns model-selection "
-            "instructions and decision fingerprints; never starts Agents "
-            "or claims Loops."
+            "The first stable route opens a persisted 30-second adjustment "
+            "window and returns HOST_NATIVE_ROUTE_REVIEW without a second "
+            "confirmation. Repeating the call after expiry atomically "
+            "reserves every returned assignment before host Agent creation; "
+            "a user-native model change restarts that node's window. Returns "
+            "model-selection instructions and decision fingerprints; never "
+            "starts Agents or claims Loops."
         ),
         _object(
             {

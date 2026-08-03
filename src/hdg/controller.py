@@ -167,15 +167,21 @@ class LayeredDeliveryController:
             "prepare_delivery_revision",
         }:
             arguments_value["workspace_root"] = workspace_root
-        if name in {"plan_dispatch_batch", "dispatch_loop"}:
+        if name in {
+            "recommend_executors",
+            "plan_dispatch_batch",
+            "dispatch_loop",
+        }:
             arguments_value["host_native_agent_ids"] = (
                 context.host_native_agent_ids
             )
-        if name == "plan_dispatch_batch":
+        if name in {"recommend_executors", "plan_dispatch_batch"}:
             arguments_value["host_adapter_id"] = context.host_adapter_id
             arguments_value["orchestrator_config"] = (
                 context.orchestrator_config
             )
+        if name == "plan_dispatch_batch":
+            arguments_value["enforce_route_review_window"] = True
         if name in {
             "open_orchestrator_settings",
             "update_orchestrator_settings",

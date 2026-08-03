@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -148,13 +148,23 @@ def agent_requirement(
     *,
     reasoning_class: str = "STANDARD",
     reason: str = "Host Agent classified this Loop for dispatch.",
+    preferred_native_model_id: str | None = None,
 ) -> dict:
-    return {
+    requirement = {
         "nodeId": node_id,
         "reasoningClass": reasoning_class,
-        "source": "PLANNING",
+        "source": (
+            "USER_POLICY"
+            if preferred_native_model_id is not None
+            else "PLANNING"
+        ),
         "reason": reason,
     }
+    if preferred_native_model_id is not None:
+        requirement["preferredNativeModelId"] = (
+            preferred_native_model_id
+        )
+    return requirement
 
 
 class HostDispatchPlanningTests(unittest.TestCase):
@@ -235,6 +245,180 @@ class HostDispatchPlanningTests(unittest.TestCase):
                     loop_node_id("t-core"),
                 }
             )
+        )
+
+    def test_host_route_review_waits_30_seconds_then_reserves(self) -> None:
+        started_at = datetime(2030, 8, 3, 1, 0, tzinfo=timezone.utc)
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            arguments = {
+                "root": root,
+                "root_id": prepared["rootId"],
+                "expected_graph_fingerprint": prepared[
+                    "graphFingerprint"
+                ],
+                "executor_inventory": host_executor_inventory(),
+                "node_requirements": [
+                    agent_requirement(loop_node_id("t-service"))
+                ],
+                "enforce_route_review_window": True,
+            }
+            first = plan_dispatch_batch(now=started_at, **arguments)
+            before_expiry = plan_dispatch_batch(
+                now=started_at + timedelta(seconds=29),
+                **arguments,
+            )
+            expired = plan_dispatch_batch(
+                now=started_at + timedelta(seconds=30),
+                **arguments,
+            )
+
+        self.assertEqual(first["binding"], "HOST_NATIVE_ROUTE_REVIEW")
+        self.assertFalse(first["assignments"])
+        self.assertEqual(len(first["reviewing"]), 1)
+        self.assertEqual(first["routeReview"]["windowSeconds"], 30)
+        self.assertEqual(first["routeReview"]["remainingSeconds"], 30)
+        self.assertEqual(
+            first["routeReview"]["expiresAt"],
+            "2030-08-03T01:00:30Z",
+        )
+        self.assertFalse(before_expiry["assignments"])
+        self.assertEqual(
+            before_expiry["routeReview"]["remainingSeconds"],
+            1,
+        )
+        self.assertEqual(
+            expired["binding"],
+            "HOST_NATIVE_DISPATCH_PLAN",
+        )
+        self.assertEqual(len(expired["assignments"]), 1)
+        self.assertEqual(expired["assignments"][0]["model"]["id"], (
+            "gpt-5.6-terra"
+        ))
+
+    def test_user_model_override_resets_the_30_second_window(self) -> None:
+        started_at = datetime(2030, 8, 3, 2, 0, tzinfo=timezone.utc)
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            base = {
+                "root": root,
+                "root_id": prepared["rootId"],
+                "expected_graph_fingerprint": prepared[
+                    "graphFingerprint"
+                ],
+                "executor_inventory": host_executor_inventory(),
+                "enforce_route_review_window": True,
+            }
+            plan_dispatch_batch(
+                now=started_at,
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-service"))
+                ],
+                **base,
+            )
+            changed = plan_dispatch_batch(
+                now=started_at + timedelta(seconds=10),
+                node_requirements=[
+                    agent_requirement(
+                        loop_node_id("t-service"),
+                        reasoning_class="HIGH",
+                        preferred_native_model_id="gpt-5.6-sol",
+                    )
+                ],
+                **base,
+            )
+            old_expiry = plan_dispatch_batch(
+                now=started_at + timedelta(seconds=30),
+                node_requirements=[
+                    agent_requirement(
+                        loop_node_id("t-service"),
+                        reasoning_class="HIGH",
+                        preferred_native_model_id="gpt-5.6-sol",
+                    )
+                ],
+                **base,
+            )
+            new_expiry = plan_dispatch_batch(
+                now=started_at + timedelta(seconds=40),
+                node_requirements=[
+                    agent_requirement(
+                        loop_node_id("t-service"),
+                        reasoning_class="HIGH",
+                        preferred_native_model_id="gpt-5.6-sol",
+                    )
+                ],
+                **base,
+            )
+
+        self.assertEqual(
+            changed["routeReview"]["expiresAt"],
+            "2030-08-03T02:00:40Z",
+        )
+        self.assertEqual(
+            changed["reviewing"][0]["model"]["id"],
+            "gpt-5.6-sol",
+        )
+        self.assertFalse(old_expiry["assignments"])
+        self.assertEqual(
+            old_expiry["routeReview"]["remainingSeconds"],
+            10,
+        )
+        self.assertEqual(
+            new_expiry["assignments"][0]["model"]["id"],
+            "gpt-5.6-sol",
+        )
+
+    def test_user_can_override_recommended_native_model_before_claim(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            plan = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(
+                        loop_node_id("t-service"),
+                        reasoning_class="HIGH",
+                        preferred_native_model_id="gpt-5.6-sol",
+                    )
+                ],
+            )
+
+        assignment = plan["assignments"][0]
+        self.assertEqual(assignment["model"]["id"], "gpt-5.6-sol")
+        self.assertEqual(
+            assignment["reasoningRequirement"][
+                "preferredNativeModelId"
+            ],
+            "gpt-5.6-sol",
+        )
+        self.assertIn(
+            "USER_NATIVE_MODEL_OVERRIDE",
+            {reason["code"] for reason in assignment["reasons"]},
+        )
+
+    def test_forwarded_model_cannot_be_used_as_native_override(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            plan = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(
+                        loop_node_id("t-service"),
+                        reasoning_class="STANDARD",
+                        preferred_native_model_id="glm-5.2",
+                    )
+                ],
+            )
+
+        self.assertFalse(plan["assignments"])
+        self.assertEqual(
+            plan["deferred"][0]["code"],
+            "PREFERRED_NATIVE_MODEL_UNAVAILABLE",
         )
 
     def test_default_orchestrator_policy_is_safe_and_visible(self) -> None:
@@ -518,8 +702,12 @@ class HostDispatchPlanningTests(unittest.TestCase):
             "SCHEDULER_HOST_NATIVE_INVENTORY_MISMATCH",
         )
         self.assertEqual(
-            claude_plan["assignments"][0]["agent"]["id"],
+            claude_plan["reviewing"][0]["agent"]["id"],
             "claude-code",
+        )
+        self.assertEqual(
+            claude_plan["binding"],
+            "HOST_NATIVE_ROUTE_REVIEW",
         )
 
     def test_mcp_dispatch_consumes_host_attestation_once(self) -> None:
@@ -2302,7 +2490,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
         self.assertTrue(review["independence"]["agentDiverse"])
         self.assertTrue(review["independence"]["modelDiverse"])
 
-    def test_mcp_tool_returns_a_host_dispatch_plan(self) -> None:
+    def test_mcp_tool_opens_route_review_before_dispatch(self) -> None:
         with TemporaryDirectory() as root:
             prepared = self.prepare_and_freeze(root, task_hierarchy())
 
@@ -2327,9 +2515,14 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 trusted_host_adapter="codex",
             )
 
-        self.assertEqual(plan["binding"], "HOST_NATIVE_DISPATCH_PLAN")
+        self.assertEqual(plan["binding"], "HOST_NATIVE_ROUTE_REVIEW")
+        self.assertFalse(plan["assignments"])
+        self.assertEqual(plan["routeReview"]["windowSeconds"], 30)
+        self.assertFalse(
+            plan["routeReview"]["secondConfirmationRequired"]
+        )
         self.assertEqual(
-            plan["assignments"][0]["model"]["id"],
+            plan["reviewing"][0]["model"]["id"],
             "gpt-5.6-sol",
         )
 

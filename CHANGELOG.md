@@ -6,7 +6,7 @@
 
 ## 0.30.0 — 2026-08-03
 
-发布提交：待发布
+发布提交：`ede8782`
 
 - 派遣模型身份拆分为权威原生 `modelId` 与展示用 `actualModelId`：inventory、tier、Review 多样性、reservation、决策指纹和 claim 授权全部只使用 Claude/Codex 原生模型名；本机配置或任意修改器在原生调用后的转发行为不进入编排。
 - `modelOverrideSupported` 更名为 `nativeModelSelectionSupported`，`EXPLICIT_OVERRIDE` 更名为 `NATIVE_MODEL_SELECTOR`，避免把宿主原生角色选择误解为对 GLM、DeepSeek 等实际提供方模型做 override；路由策略升级为 `HOST_NATIVE_MODEL_ROUTING_V4`。

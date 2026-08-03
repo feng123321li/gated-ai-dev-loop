@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -11,11 +12,14 @@ from hdg.errors import GatedLoopError
 from hdg.graph_frontier import get_graph_frontier
 from hdg.graph_model import loop_node_id, task_review_node_id
 from hdg.graph_runtime import (
+    advance_graph,
     attest_loop_receiver,
     claim_codex_subagent_receiver,
     dispatch_loop,
     graph_events,
     graph_status,
+    heartbeat_loop,
+    rebuild_graph_run,
     record_loop_result,
 )
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
@@ -776,6 +780,252 @@ class HostDispatchPlanningTests(unittest.TestCase):
         )
         self.assertEqual(accepted["nodeId"], second["nodeId"])
 
+    def test_worker_lost_retry_rotates_dead_claude_orchestrator_root(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            first_assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=claude_host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-service"))
+                ],
+            )["assignments"][0]
+            first_attestation = attest_loop_receiver(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=first_assignment["nodeId"],
+                receiver_context_id="claude-first-child",
+                parent_context_id="claude-dead-session",
+                host_adapter_id="claude-code",
+                dispatch_reservation_id=first_assignment[
+                    "dispatchReservationId"
+                ],
+            )
+            first_claim = dispatch_loop(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=first_assignment["nodeId"],
+                owner="claude-first-child",
+                operation_id="claude-first-operation",
+                agent_id="claude-code",
+                model_id=first_assignment["model"]["id"],
+                receiver_context_id="claude-first-child",
+                receiver_attestation_id=first_attestation[
+                    "receiverAttestationId"
+                ],
+                dispatch_mode="AUTO",
+                dispatch_transport="HOST_NATIVE",
+                dispatch_reservation_id=first_assignment[
+                    "dispatchReservationId"
+                ],
+                dispatch_reasoning_class=first_assignment[
+                    "reasoningClass"
+                ],
+                dispatch_decision_fingerprint=first_assignment[
+                    "decisionFingerprint"
+                ],
+                host_adapter_id="claude-code",
+                require_receiver_attestation=True,
+            )
+            retry_at = datetime.fromisoformat(
+                first_claim["leaseExpiresAt"].replace("Z", "+00:00")
+            ) + timedelta(seconds=1)
+            advanced = advance_graph(
+                root=root,
+                root_id=prepared["rootId"],
+                now=retry_at,
+            )
+            retried = next(
+                item
+                for item in advanced["nodes"]
+                if item["nodeId"] == first_assignment["nodeId"]
+                and item["attempt"] == 2
+            )
+            self.assertEqual(retried["status"], "READY")
+
+            second_assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=claude_host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(first_assignment["nodeId"])
+                ],
+                now=retry_at + timedelta(seconds=1),
+            )["assignments"][0]
+            with self.assertRaises(GatedLoopError) as cross_adapter:
+                attest_loop_receiver(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    node_id=second_assignment["nodeId"],
+                    receiver_context_id="codex-cross-adapter-child",
+                    parent_context_id="codex-recovery-session",
+                    host_adapter_id="codex",
+                    dispatch_reservation_id=second_assignment[
+                        "dispatchReservationId"
+                    ],
+                    now=retry_at + timedelta(seconds=2),
+                )
+            second_attestation = attest_loop_receiver(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=second_assignment["nodeId"],
+                receiver_context_id="claude-recovery-child",
+                parent_context_id="claude-recovery-session",
+                host_adapter_id="claude-code",
+                dispatch_reservation_id=second_assignment[
+                    "dispatchReservationId"
+                ],
+                now=retry_at + timedelta(seconds=3),
+            )
+            recovered = dispatch_loop(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=second_assignment["nodeId"],
+                owner="claude-recovery-child",
+                operation_id="claude-recovery-operation",
+                agent_id="claude-code",
+                model_id=second_assignment["model"]["id"],
+                receiver_context_id="claude-recovery-child",
+                receiver_attestation_id=second_attestation[
+                    "receiverAttestationId"
+                ],
+                dispatch_mode="AUTO",
+                dispatch_transport="HOST_NATIVE",
+                dispatch_reservation_id=second_assignment[
+                    "dispatchReservationId"
+                ],
+                dispatch_reasoning_class=second_assignment[
+                    "reasoningClass"
+                ],
+                dispatch_decision_fingerprint=second_assignment[
+                    "decisionFingerprint"
+                ],
+                host_adapter_id="claude-code",
+                require_receiver_attestation=True,
+                now=retry_at + timedelta(seconds=4),
+            )
+            events = graph_events(
+                root=root,
+                root_id=prepared["rootId"],
+            )["events"]
+            rotations = [
+                event
+                for event in events
+                if event["eventType"] == "RECEIVER_ROOT_ROTATED"
+            ]
+            rebuilt = rebuild_graph_run(
+                root=root,
+                root_id=prepared["rootId"],
+            )
+
+        self.assertEqual(recovered["nodeId"], second_assignment["nodeId"])
+        self.assertEqual(
+            cross_adapter.exception.code,
+            "SCHEDULER_RECEIVER_PARENT_UNTRUSTED",
+        )
+        self.assertEqual(len(rotations), 1)
+        self.assertEqual(rotations[0]["attempt"], 2)
+        self.assertEqual(
+            rotations[0]["payload"]["reason"],
+            "WORKER_LOST_RETRY",
+        )
+        self.assertNotIn(
+            "claude-dead-session",
+            str(rotations[0]["payload"]),
+        )
+        rebuilt_attempt = next(
+            item
+            for item in rebuilt["nodes"]
+            if item["nodeId"] == second_assignment["nodeId"]
+            and item["attempt"] == 2
+        )
+        self.assertEqual(rebuilt_attempt["status"], "CLAIMED")
+
+    def test_worker_lost_retry_cannot_rotate_while_another_loop_is_claimed(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(
+                root,
+                parallel_group_hierarchy(),
+            )
+            assignments = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-api")),
+                    agent_requirement(loop_node_id("t-core")),
+                ],
+            )["assignments"]
+            first, second = assignments
+            first_claim = claim_codex_subagent_receiver(
+                root=root,
+                root_id=prepared["rootId"],
+                workspace_root=root,
+                receiver_context_id="codex-first-worker",
+                parent_context_id="codex-original-session",
+                model_id=first["model"]["id"],
+                dispatch_reservation_id=first["dispatchReservationId"],
+            )
+            second_claim = claim_codex_subagent_receiver(
+                root=root,
+                root_id=prepared["rootId"],
+                workspace_root=root,
+                receiver_context_id="codex-second-worker",
+                parent_context_id="codex-original-session",
+                model_id=second["model"]["id"],
+                dispatch_reservation_id=second["dispatchReservationId"],
+            )
+            first_expiry = datetime.fromisoformat(
+                first_claim["leaseExpiresAt"].replace("Z", "+00:00")
+            )
+            heartbeat_loop(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=second["nodeId"],
+                operation_id=second_claim["operationId"],
+                now=first_expiry - timedelta(seconds=1),
+            )
+            retry_at = first_expiry + timedelta(seconds=1)
+            advance_graph(
+                root=root,
+                root_id=prepared["rootId"],
+                now=retry_at,
+            )
+            retry_assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[agent_requirement(first["nodeId"])],
+                now=retry_at + timedelta(seconds=1),
+            )["assignments"][0]
+            with self.assertRaises(GatedLoopError) as caught:
+                claim_codex_subagent_receiver(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    workspace_root=root,
+                    receiver_context_id="codex-takeover-worker",
+                    parent_context_id="codex-takeover-session",
+                    model_id=retry_assignment["model"]["id"],
+                    dispatch_reservation_id=retry_assignment[
+                        "dispatchReservationId"
+                    ],
+                    now=retry_at + timedelta(seconds=2),
+                )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_RECEIVER_PARENT_UNTRUSTED",
+        )
+
     def test_codex_claim_recovers_after_projection_failure(self) -> None:
         with TemporaryDirectory() as root:
             prepared = self.prepare_and_freeze(root, task_hierarchy())
@@ -884,6 +1134,38 @@ class HostDispatchPlanningTests(unittest.TestCase):
 
         self.assertEqual(root_count, 0)
         self.assertEqual(identity_count, 0)
+
+    def test_unconsumed_claude_attestation_does_not_pin_root(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                execution_mode="manual",
+                confirmed=True,
+                confirmed_by="human",
+            )
+            attest_loop_receiver(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=loop_node_id("t-service"),
+                receiver_context_id="claude-unconsumed-child",
+                parent_context_id="claude-unconsumed-session",
+                host_adapter_id="claude-code",
+            )
+            repository = SchedulerRepository(root)
+            with repository.read() as connection:
+                root_count = connection.execute(
+                    "SELECT COUNT(*) FROM run_receiver_roots"
+                ).fetchone()[0]
+
+        self.assertEqual(root_count, 0)
 
     def test_every_ready_loop_requires_agent_reasoning_analysis(
         self,

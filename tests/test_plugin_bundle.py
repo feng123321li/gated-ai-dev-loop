@@ -350,6 +350,7 @@ class PluginBundleTests(unittest.TestCase):
             / "references"
             / "orchestrator-configuration.md"
         ).read_text(encoding="utf-8")
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("`plan_dispatch_batch`", main)
         self.assertIn("显式模型 assignment 必须覆盖", execution)
@@ -379,6 +380,15 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn('"maxConcurrentExecutors": 4', orchestrator)
         self.assertIn("%APPDATA%", orchestrator)
         self.assertIn("XDG_CONFIG_HOME", orchestrator)
+        self.assertIn(
+            "ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE",
+            orchestrator,
+        )
+        self.assertIn("设置工具不依赖 Delivery 工作区", orchestrator)
+        self.assertIn("打开中央编排器设置", readme)
+        self.assertIn("当前跨 Adapter 限制", readme)
+        self.assertIn("RECEIVER_ROOT_ROTATED", execution)
+        self.assertIn("无需重冻", readme)
 
     def test_skill_uses_native_soft_stop_and_hard_429_breaker(
         self,

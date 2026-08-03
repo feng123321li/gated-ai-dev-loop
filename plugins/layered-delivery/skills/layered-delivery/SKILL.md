@@ -76,7 +76,7 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 
 - 需要展示本机候选或建议时读取[agent-recommendations.md](references/agent-recommendations.md)。`available_agents` / `recommend_executors` 只读且非绑定，不启动 Agent、不切换模型、不写执行事实。
 - 自动编排、自动选模、跨 Adapter、最大并发、额度策略和 Review 多样性由用户级配置控制；读取[orchestrator-configuration.md](references/orchestrator-configuration.md)。
-- 跨 Adapter 默认关闭；即使开启，也只有中央宿主能证明可创建、可认证、有容量且属于同一可信编排根的 Adapter 才可派遣。
+- 跨 Adapter 当前未开放修改；面板和保存工具都以 `ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE` fail closed。只有中央宿主未来能证明可创建、可认证、有容量且属于同一可信编排根的多个 Adapter 时才可开放。
 - 只有宿主提供结构化利用率和真实 `resetAt` 时才可提前暂停；不得从文本猜测额度。
 - 硬 429 由模型外宿主容量回调处理，不等待失败模型反馈。收到容量等待 action 后不调用推荐器或静默换 Agent，只按宿主提供的一次性恢复方式等待。
 
@@ -85,6 +85,7 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 - `PAUSED` 或 `RESUME_LOOP_IN_INDEPENDENT_CONTEXT`：路由到新的独立接收上下文，调用 `resume_loop` 后重新取得 dispatch；不要重新 prepare/freeze。
 - 容量等待：到恢复时间后由原调度或执行 Agent 重新消费 frontier；不生成业务 outcome。
 - 租约过期或基础设施失败：交给 `advance_graph`；旧 operation 不得 heartbeat、pause 或提交结果。
+- `WORKER_LOST` 生成新 attempt 后，同一 Adapter 的新编排会话可在下一次成功 claim 时轮换已失联的接收方信任根；控制器记录 `RECEIVER_ROOT_ROTATED`，无需重新 prepare/freeze 或直接改库。跨 Adapter、仍有已认领 Loop 或冲突的有效接收凭据时保持拒绝。
 - 物化状态损坏：调用 `rebuild_graph_run` 从已校验事件链重建，不修改事件。
 - 外层契约变化：记录 `REPLAN_REQUIRED`，等待用户决定是否准备同一 Delivery 的下一 Revision。
 

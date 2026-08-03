@@ -235,13 +235,20 @@ class ProjectRootBinding:
         meta: object,
         *,
         stateless: bool,
+        require_sandbox_metadata: bool = True,
     ) -> ProjectRootResolution:
         metadata_root = _project_root_from_sandbox_meta(meta)
         if metadata_root is None:
-            if self.from_sandbox_meta:
+            if self.from_sandbox_meta and require_sandbox_metadata:
                 raise GatedLoopError(
                     "PROJECT_ROOT_UNAVAILABLE",
                     "Codex sandbox metadata is required on every MCP request",
+                )
+            if self.from_sandbox_meta:
+                workspace_root = _resolve_project_root(None)
+                return ProjectRootResolution(
+                    project_root=_git_control_root(workspace_root),
+                    workspace_root=workspace_root,
                 )
             if self._configured_root is None:
                 raise GatedLoopError(

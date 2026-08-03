@@ -2,7 +2,7 @@
 
 `layered-delivery` 把已经确认的需求冻结为递归 Delivery Graph，再协调多个独立 Agent/WorkLoop 完成实现、逐层审查和最终验收。
 
-当前版本：**0.28.7**
+当前版本：**0.28.8**
 
 ## 核心流程
 
@@ -97,7 +97,27 @@ Agent 发现、普通建议和自动派遣是三件不同的事：
 
 Controller 不用 Python 做本地语义判断。某个节点缺少 Agent 分析时，只能回退到宿主明确报告的当前 Agent/模型；两者都缺失时，该节点暂不自动派遣。
 
-用户级中央编排器配置默认开启自动编排和自动选模、关闭跨 Adapter、最大并发 4，并在额度耗尽时暂停等待恢复。配置文件位于 Plugin 安装目录之外，Marketplace 升级不会覆盖。详见[中央编排器配置](skills/layered-delivery/references/orchestrator-configuration.md)。
+## 中央编排器设置
+
+向 Agent 说“打开中央编排器设置”，或直接调用 `open_orchestrator_settings`，可以查看当前用户级策略、配置来源和 Adapter 状态。支持 MCP Apps 的宿主显示内嵌面板；其他宿主返回同一份结构化摘要。面板保存或 Agent 直接保存都会调用需审批的 `update_orchestrator_settings`。
+
+设置工具不依赖 Delivery 工作区，不创建 `.layered-delivery` 运行状态，也不要求 Codex MCP Apps 的保存请求携带项目 sandbox metadata。其他 Graph 工具仍严格要求当前工作区身份，不能借设置入口绕过项目隔离。
+
+默认配置开启自动编排和自动选模、关闭跨 Adapter、允许 `codex` 与 `claude-code`、最大并发为 4，并在额度耗尽时暂停等待恢复。配置文件位于 Plugin 安装目录之外，Marketplace 升级不会覆盖：
+
+| 平台 | 默认路径 |
+|---|---|
+| Windows | `%APPDATA%\layered-delivery\orchestrator.json` |
+| macOS | `~/Library/Application Support/layered-delivery/orchestrator.json` |
+| Linux | `${XDG_CONFIG_HOME:-~/.config}/layered-delivery/orchestrator.json` |
+
+通过面板保存后当前 MCP 连接立即刷新；手动编辑文件后需要新建 Codex 或 Claude Code 会话。已经签发的 reservation 和已经认领的 Loop 不会被追溯改写。
+
+### 当前跨 Adapter 限制
+
+当前 Plugin 只接受本次会话宿主能够原生创建和认证的 Adapter。面板会把跨 Adapter 开关和 `SWITCH_ADAPTER` 额度策略锁定，并返回 `ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE`；保存工具同样拒绝启用它们。PATH 中检测到 Claude Code 或 Codex CLI 只会显示“仅检测到本机终端”，不会升级成可信执行器。
+
+未来必须由中央宿主提供原生多 Adapter API、容量事实和同一编排根下的 receiver attestation 后，这些选项才会开放。完整字段、默认 JSON、环境变量覆盖和故障处理见[中央编排器配置](skills/layered-delivery/references/orchestrator-configuration.md)。
 
 ## 状态、隔离与恢复
 
@@ -107,6 +127,7 @@ Controller 不用 Python 做本地语义判断。某个节点缺少 Agent 分析
 - 多项目 Delivery 的可写仓库使用同名 feature 分支，并分别冻结自己的基线提交。
 - 软额度阈值可提前暂停；结构化硬 429 由宿主容量回调暂停同一容量域，并在真实恢复时间后一次性唤醒。
 - 租约过期、执行器失联和物化状态损坏分别由 frontier、`advance_graph` 和事件重建处理。
+- `WORKER_LOST` 自动重试可由同一 Adapter 的新编排会话安全接管接收方信任根，并记录 `RECEIVER_ROOT_ROTATED` 审计事件；恢复无需重冻，也无需直接修改 `scheduler.db`。不同 Adapter、仍有已认领 Loop 或旧接收凭据仍有效时继续 fail closed。
 
 完整执行和恢复规则见[执行快速说明](skills/layered-delivery/references/execution-quickstart.md)与[MCP、状态和投影](skills/layered-delivery/references/mcp-transport.md)。
 
@@ -117,7 +138,7 @@ Controller 不用 Python 做本地语义判断。某个节点缺少 Agent 分析
 - Codex：MCP Server、`SubagentStart` 与 Loop mutation Hook。
 - Claude Code：MCP Server、PreToolUse 与结构化限额失败 Hook。
 
-宿主原生能力决定当前会话实际能派遣哪些 Agent。跨 Adapter 开关只表示用户授权，不能把外部 CLI 自动升级为可信执行器。安装或升级 Plugin 后应新建会话，使 Skill、MCP 和 Hook 重新加载。
+宿主原生能力决定当前会话实际能派遣哪些 Agent。当前版本尚未开放跨 Adapter 保存和自动派遣；外部 CLI 不会被升级为可信执行器。安装或升级 Plugin 后应新建会话，使 Skill、MCP 和 Hook 重新加载。
 
 ## 项目结构
 

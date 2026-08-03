@@ -86,6 +86,15 @@ class OrchestratorSettingsTests(unittest.TestCase):
         self.assertEqual(by_id["claude-code"]["registrationState"], "TERMINAL_ONLY")
         self.assertEqual(by_id["gemini"]["registrationState"], "NOT_DETECTED")
         self.assertTrue(result["dispatchBoundary"]["terminalDiscoveryDoesNotImplyNativeDispatch"])
+        cross_adapter = result["featureAvailability"][
+            "crossAdapterDispatch"
+        ]
+        self.assertFalse(cross_adapter["supported"])
+        self.assertFalse(cross_adapter["mutable"])
+        self.assertEqual(
+            cross_adapter["code"],
+            "ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE",
+        )
 
     def test_resources_expose_self_contained_mcp_app(self) -> None:
         with TemporaryDirectory() as root:
@@ -120,6 +129,8 @@ class OrchestratorSettingsTests(unittest.TestCase):
         self.assertEqual(content["mimeType"], MCP_APP_MIME_TYPE)
         self.assertIn('request("ui/initialize"', content["text"])
         self.assertIn('name: "update_orchestrator_settings"', content["text"])
+        self.assertIn('id="cross-adapter-notice"', content["text"])
+        self.assertIn("crossCapability.mutable", content["text"])
         self.assertEqual(content["_meta"]["ui"]["csp"]["connectDomains"], [])
 
     def test_approved_update_persists_and_refreshes_current_connection(self) -> None:
@@ -131,7 +142,6 @@ class OrchestratorSettingsTests(unittest.TestCase):
                 orchestrator_config=OrchestratorConfig(config_path=str(path)),
             )
             updated = _policy(
-                allowCrossAdapterDispatch=True,
                 maxConcurrentExecutors=8,
                 quotaExhaustionPolicy="ASK_USER",
             )
@@ -157,8 +167,141 @@ class OrchestratorSettingsTests(unittest.TestCase):
             self.assertTrue(payload["ok"])
             self.assertTrue(payload["result"]["saved"])
             self.assertEqual(json.loads(path.read_text(encoding="utf-8")), updated)
-            self.assertTrue(connection.orchestrator_config.allow_cross_adapter_dispatch)
+            self.assertFalse(connection.orchestrator_config.allow_cross_adapter_dispatch)
             self.assertEqual(connection.orchestrator_config.max_concurrent_executors, 8)
+
+    def test_project_independent_update_does_not_require_codex_sandbox_metadata(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            path = Path(root, "user", "orchestrator.json")
+            connection = McpConnection(
+                project_root=ProjectRootBinding.from_startup(
+                    None,
+                    from_sandbox_meta=True,
+                ),
+                trusted_host_adapter="codex",
+                orchestrator_config=OrchestratorConfig(
+                    config_path=str(path)
+                ),
+            )
+            updated = _policy(maxConcurrentExecutors=6)
+            with patch.dict(
+                os.environ,
+                {ORCHESTRATOR_CONFIG_ENV: str(path)},
+            ):
+                response = handle_message(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "update-without-sandbox",
+                        "method": "tools/call",
+                        "params": {
+                            "name": "update_orchestrator_settings",
+                            "arguments": {"config": updated},
+                            "_meta": _modern_meta(),
+                        },
+                    },
+                    connection=connection,
+                )
+
+            payload = response["result"]["structuredContent"]
+            self.assertTrue(payload["ok"])
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8")), updated)
+            self.assertIsNone(connection.project_root.bound_root)
+
+            graph_response = handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "graph-without-sandbox",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "workspace_status",
+                        "arguments": {},
+                        "_meta": _modern_meta(),
+                    },
+                },
+                connection=connection,
+            )
+            graph_payload = graph_response["result"]["structuredContent"]
+            self.assertFalse(graph_payload["ok"])
+            self.assertEqual(
+                graph_payload["error"]["code"],
+                "PROJECT_ROOT_UNAVAILABLE",
+            )
+
+    def test_update_rejects_unavailable_cross_adapter_policy(self) -> None:
+        with TemporaryDirectory() as root:
+            path = Path(root, "user", "orchestrator.json")
+            connection = McpConnection(
+                project_root=ProjectRootBinding.from_startup(root),
+                trusted_host_adapter="codex",
+                orchestrator_config=OrchestratorConfig(
+                    config_path=str(path)
+                ),
+            )
+            updated = _policy(allowCrossAdapterDispatch=True)
+            with patch.dict(
+                os.environ,
+                {ORCHESTRATOR_CONFIG_ENV: str(path)},
+            ):
+                response = handle_message(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "unsupported-cross-adapter",
+                        "method": "tools/call",
+                        "params": {
+                            "name": "update_orchestrator_settings",
+                            "arguments": {"config": updated},
+                            "_meta": _modern_meta(),
+                        },
+                    },
+                    connection=connection,
+                )
+
+            payload = response["result"]["structuredContent"]
+            self.assertFalse(payload["ok"])
+            self.assertEqual(
+                payload["error"]["code"],
+                "ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE",
+            )
+            self.assertFalse(path.exists())
+
+    def test_update_rejects_adapter_switch_quota_policy(self) -> None:
+        with TemporaryDirectory() as root:
+            path = Path(root, "user", "orchestrator.json")
+            connection = McpConnection(
+                project_root=ProjectRootBinding.from_startup(root),
+                trusted_host_adapter="codex",
+                orchestrator_config=OrchestratorConfig(
+                    config_path=str(path)
+                ),
+            )
+            updated = _policy(quotaExhaustionPolicy="SWITCH_ADAPTER")
+            with patch.dict(
+                os.environ,
+                {ORCHESTRATOR_CONFIG_ENV: str(path)},
+            ):
+                response = handle_message(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "unsupported-adapter-switch",
+                        "method": "tools/call",
+                        "params": {
+                            "name": "update_orchestrator_settings",
+                            "arguments": {"config": updated},
+                            "_meta": _modern_meta(),
+                        },
+                    },
+                    connection=connection,
+                )
+
+            payload = response["result"]["structuredContent"]
+            self.assertFalse(payload["ok"])
+            self.assertEqual(
+                payload["error"]["code"],
+                "ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE",
+            )
+            self.assertFalse(path.exists())
 
     def test_controller_config_read_does_not_create_scheduler_runtime(self) -> None:
         with TemporaryDirectory() as root, patch(

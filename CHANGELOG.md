@@ -4,6 +4,14 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.28.7 — 2026-08-03
+
+发布提交：`4ec6dd6`
+
+- 修复 Claude Code Loop mutation Hook 对不存在的 PreToolUse `model` 字段的依赖；heartbeat、pause 与 result 现在从当前宿主 transcript 的精确 `tool_use_id` 提取实际模型。
+- transcript 校验同时绑定 child `agentId`、编排根 `sessionId`、工具名与完整输入，并继续与已消费 receiver attestation 和 claim 事件核对；伪造顶层模型、错模型、错上下文或错工具调用保持 fail closed。
+- 真实 Claude 2.1.220 事件形状回归测试覆盖无顶层模型的正常授权与 transcript 模型不匹配拒绝。Python 全量 205 项测试、编译检查、Skill 校验和 `git diff --check` 通过。
+
 ## 0.28.6 — 2026-08-03
 
 发布提交：`fb85e17`

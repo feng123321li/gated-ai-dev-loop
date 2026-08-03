@@ -4,7 +4,9 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
-## Unreleased
+## 0.28.8 — 2026-08-03
+
+发布提交：`cbcd883`
 
 - 修复中央编排器设置工具在 Codex MCP Apps 保存时错误要求项目 sandbox metadata 的问题；设置读写保持用户级、与 Delivery 工作区无关，其他 Graph 工具仍严格校验工作区身份。
 - 在中央编排器面板和保存接口中显式锁定尚不可用的跨 Adapter 调度与 `SWITCH_ADAPTER` 策略，并返回 `ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE`；README 新增配置路径、刷新语义和当前能力边界。

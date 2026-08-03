@@ -1,0 +1,116 @@
+{
+  "delivery": {
+    "id": "d-parallel-standard",
+    "title": "并行交付服务与文档",
+    "summary": "并行完成两个独立结果并执行分层审查",
+    "assuranceProfile": "STANDARD",
+    "assuranceRationale": "交付包含多个可并行结果和汇合边界，必须使用完整分层审查。",
+    "reviewLoop": {
+      "ref": "team/delivery-review-loop@1",
+      "payload": {
+        "goal": "独立检查汇合后的完整交付"
+      },
+      "resourceClaims": []
+    }
+  },
+  "root": {
+    "schemaVersion": 3,
+    "skillHints": [],
+    "definition": {
+      "schemaVersion": 3,
+      "id": "g-release",
+      "kind": "GROUP",
+      "parentId": null,
+      "title": "协调并行交付",
+      "summary": "汇合实现与文档结果",
+      "decomposition": {
+        "dependsOn": []
+      },
+      "children": [
+        {
+          "id": "t-service",
+          "kind": "TASK",
+          "title": "实现服务修改"
+        },
+        {
+          "id": "t-docs",
+          "kind": "TASK",
+          "title": "更新团队文档"
+        }
+      ]
+    },
+    "reviewLoop": {
+      "ref": "team/group-review-loop@1",
+      "payload": {
+        "goal": "审查直接子结果的汇合质量"
+      },
+      "resourceClaims": []
+    },
+    "children": [
+      {
+        "definition": {
+          "schemaVersion": 3,
+          "id": "t-service",
+          "kind": "TASK",
+          "parentId": "g-release",
+          "title": "实现服务修改",
+          "summary": "返回经过验证的服务修改",
+          "execution": {
+            "dependsOn": [],
+            "loop": {
+              "ref": "team/service-loop@1",
+              "payload": {
+                "goal": "实现服务修改并运行相关测试"
+              },
+              "resourceClaims": [
+                "repo:catalog-service"
+              ]
+            }
+          }
+        },
+        "reviewLoop": {
+          "ref": "team/task-review-loop@1",
+          "payload": {
+            "goal": "独立审查服务修改"
+          },
+          "resourceClaims": [
+            "repo:catalog-service"
+          ]
+        },
+        "children": []
+      },
+      {
+        "definition": {
+          "schemaVersion": 3,
+          "id": "t-docs",
+          "kind": "TASK",
+          "parentId": "g-release",
+          "title": "更新团队文档",
+          "summary": "返回可操作的团队文档",
+          "execution": {
+            "dependsOn": [],
+            "loop": {
+              "ref": "team/docs-loop@1",
+              "payload": {
+                "goal": "更新安装、恢复和使用说明"
+              },
+              "resourceClaims": [
+                "repo:team-docs"
+              ]
+            }
+          }
+        },
+        "reviewLoop": {
+          "ref": "team/task-review-loop@1",
+          "payload": {
+            "goal": "独立审查文档准确性和可执行性"
+          },
+          "resourceClaims": [
+            "repo:team-docs"
+          ]
+        },
+        "children": []
+      }
+    ]
+  }
+}

@@ -167,6 +167,34 @@ def agent_requirement(
     return requirement
 
 
+def claim_assignment(
+    *,
+    root: str,
+    root_id: str,
+    assignment: dict,
+    owner: str,
+    operation_id: str,
+    receiver_context_id: str | None = None,
+) -> dict:
+    """Claim one planned assignment without host-attestation policy."""
+
+    return dispatch_loop(
+        root=root,
+        root_id=root_id,
+        node_id=assignment["nodeId"],
+        owner=owner,
+        agent_id=assignment["agent"]["id"],
+        model_id=assignment["model"]["id"],
+        receiver_context_id=receiver_context_id,
+        dispatch_mode="AUTO",
+        dispatch_transport=assignment["dispatchTransport"],
+        dispatch_reservation_id=assignment["dispatchReservationId"],
+        dispatch_reasoning_class=assignment["reasoningClass"],
+        dispatch_decision_fingerprint=assignment["decisionFingerprint"],
+        operation_id=operation_id,
+    )
+
+
 class HostDispatchPlanningTests(unittest.TestCase):
     def prepare_and_freeze(self, root: str, hierarchy: dict) -> dict:
         prepared = prepare_hierarchy(root=root, hierarchy=hierarchy)
@@ -176,7 +204,6 @@ class HostDispatchPlanningTests(unittest.TestCase):
             expected_hierarchy_fingerprint=(
                 prepared["hierarchyFingerprint"]
             ),
-            execution_mode="active",
             confirmed=True,
             confirmed_by="human",
         )
@@ -601,7 +628,6 @@ class HostDispatchPlanningTests(unittest.TestCase):
                     expected_hierarchy_fingerprint=(
                         prepared["hierarchyFingerprint"]
                     ),
-                    execution_mode="active",
                     confirmed=True,
                     confirmed_by="human",
                 )
@@ -722,18 +748,34 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 expected_hierarchy_fingerprint=(
                     prepared["hierarchyFingerprint"]
                 ),
-                execution_mode="manual",
                 confirmed=True,
                 confirmed_by="human",
             )
             node_id = loop_node_id("t-service")
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=claude_host_executor_inventory(),
+                node_requirements=[agent_requirement(node_id)],
+            )["assignments"][0]
             arguments = {
                 "root_id": prepared["rootId"],
                 "node_id": node_id,
                 "owner": "claude-child",
-                "agent_id": "claude-code",
-                "model_id": "claude-sonnet",
-                "dispatch_mode": "MANUAL",
+                "agent_id": assignment["agent"]["id"],
+                "model_id": assignment["model"]["id"],
+                "dispatch_mode": "AUTO",
+                "dispatch_transport": assignment["dispatchTransport"],
+                "dispatch_reservation_id": assignment[
+                    "dispatchReservationId"
+                ],
+                "dispatch_reasoning_class": assignment[
+                    "reasoningClass"
+                ],
+                "dispatch_decision_fingerprint": assignment[
+                    "decisionFingerprint"
+                ],
                 "receiver_context_id": "agent-child-1",
                 "operation_id": "op-attested-child",
             }
@@ -754,6 +796,9 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 receiver_context_id="agent-child-1",
                 parent_context_id="session-parent",
                 host_adapter_id="claude-code",
+                dispatch_reservation_id=assignment[
+                    "dispatchReservationId"
+                ],
             )
             claimed = call_tool(
                 "dispatch_loop",
@@ -813,7 +858,6 @@ class HostDispatchPlanningTests(unittest.TestCase):
                     expected_hierarchy_fingerprint=(
                         prepared["hierarchyFingerprint"]
                     ),
-                    execution_mode="active",
                     confirmed=True,
                     confirmed_by="human",
                 )
@@ -1348,10 +1392,18 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 expected_hierarchy_fingerprint=(
                     prepared["hierarchyFingerprint"]
                 ),
-                execution_mode="manual",
                 confirmed=True,
                 confirmed_by="human",
             )
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=claude_host_executor_inventory(),
+                node_requirements=[
+                    agent_requirement(loop_node_id("t-service"))
+                ],
+            )["assignments"][0]
             attest_loop_receiver(
                 root=root,
                 root_id=prepared["rootId"],
@@ -1359,6 +1411,9 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 receiver_context_id="claude-unconsumed-child",
                 parent_context_id="claude-unconsumed-session",
                 host_adapter_id="claude-code",
+                dispatch_reservation_id=assignment[
+                    "dispatchReservationId"
+                ],
             )
             repository = SchedulerRepository(root)
             with repository.read() as connection:
@@ -1671,21 +1726,33 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 else loop_node_id("t-api")
             )
 
+            frontier = get_graph_frontier(
+                root=root,
+                root_id=prepared["rootId"],
+            )
+            competing = next(
+                item
+                for item in frontier["readyLoops"]
+                if item["nodeId"] == other_node
+            )
             with self.assertRaises(GatedLoopError) as caught:
-                dispatch_loop(
+                plan_dispatch_batch(
                     root=root,
                     root_id=prepared["rootId"],
-                    node_id=other_node,
-                    owner="manual-competing-receiver",
-                    agent_id="codex",
-                    model_id="gpt-5.6-terra",
-                    dispatch_mode="MANUAL",
-                    operation_id="op-manual-competing-reservation",
+                    expected_graph_fingerprint=prepared[
+                        "graphFingerprint"
+                    ],
+                    executor_inventory=host_executor_inventory(),
+                    node_requirements=[agent_requirement(other_node)],
                 )
 
         self.assertEqual(
+            competing["resourceConflicts"],
+            [f"{prepared['rootId']}/{first['nodeId']}"],
+        )
+        self.assertEqual(
             caught.exception.code,
-            "SCHEDULER_EXECUTION_MODE_MISMATCH",
+            "SCHEDULER_DISPATCH_REQUIREMENT_STALE",
         )
 
     def test_active_execution_rejects_manual_or_implicit_claims(self) -> None:
@@ -1711,7 +1778,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                         )
                     self.assertEqual(
                         caught.exception.code,
-                        "SCHEDULER_EXECUTION_MODE_MISMATCH",
+                        "SCHEDULER_DISPATCH_MODE_INVALID",
                     )
 
     def test_review_rejects_the_upstream_receiving_context(self) -> None:
@@ -1726,16 +1793,22 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 expected_hierarchy_fingerprint=(
                     prepared["hierarchyFingerprint"]
                 ),
-                execution_mode="manual",
                 confirmed=True,
                 confirmed_by="human",
             )
             task_node_id = loop_node_id("t-service")
             review_node_id = task_review_node_id("t-service")
-            dispatch_loop(
+            task_assignment = plan_dispatch_batch(
                 root=root,
                 root_id=prepared["rootId"],
-                node_id=task_node_id,
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[agent_requirement(task_node_id)],
+            )["assignments"][0]
+            claim_assignment(
+                root=root,
+                root_id=prepared["rootId"],
+                assignment=task_assignment,
                 owner="task-agent",
                 receiver_context_id="context-shared",
                 operation_id="op-task-context",
@@ -1747,12 +1820,19 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 operation_id="op-task-context",
                 outcome=success("implemented"),
             )
+            review_assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory(),
+                node_requirements=[agent_requirement(review_node_id)],
+            )["assignments"][0]
 
             with self.assertRaises(GatedLoopError) as caught:
-                dispatch_loop(
+                claim_assignment(
                     root=root,
                     root_id=prepared["rootId"],
-                    node_id=review_node_id,
+                    assignment=review_assignment,
                     owner="review-agent",
                     receiver_context_id="context-shared",
                     operation_id="op-review-context",
@@ -1777,11 +1857,17 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 expected_hierarchy_fingerprint=(
                     prepared["hierarchyFingerprint"]
                 ),
-                execution_mode="manual",
                 confirmed=True,
                 confirmed_by="human",
             )
             task_node_id = loop_node_id("t-service")
+            task_assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=claude_host_executor_inventory(),
+                node_requirements=[agent_requirement(task_node_id)],
+            )["assignments"][0]
             task_attestation = attest_loop_receiver(
                 root=root,
                 root_id=prepared["rootId"],
@@ -1789,6 +1875,9 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 receiver_context_id="context-implementation",
                 parent_context_id="context-orchestrator",
                 host_adapter_id="claude-code",
+                dispatch_reservation_id=task_assignment[
+                    "dispatchReservationId"
+                ],
             )
             call_tool(
                 "dispatch_loop",
@@ -1796,9 +1885,21 @@ class HostDispatchPlanningTests(unittest.TestCase):
                     "root_id": prepared["rootId"],
                     "node_id": task_node_id,
                     "owner": "claude-implementation",
-                    "agent_id": "claude-code",
-                    "model_id": "claude-sonnet",
-                    "dispatch_mode": "MANUAL",
+                    "agent_id": task_assignment["agent"]["id"],
+                    "model_id": task_assignment["model"]["id"],
+                    "dispatch_mode": "AUTO",
+                    "dispatch_transport": task_assignment[
+                        "dispatchTransport"
+                    ],
+                    "dispatch_reservation_id": task_assignment[
+                        "dispatchReservationId"
+                    ],
+                    "dispatch_reasoning_class": task_assignment[
+                        "reasoningClass"
+                    ],
+                    "dispatch_decision_fingerprint": task_assignment[
+                        "decisionFingerprint"
+                    ],
                     "receiver_context_id": "context-implementation",
                     "receiver_attestation_id": task_attestation[
                         "receiverAttestationId"
@@ -1816,6 +1917,13 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 outcome=success("implemented"),
             )
             review_node_id = task_review_node_id("t-service")
+            review_assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=claude_host_executor_inventory(),
+                node_requirements=[agent_requirement(review_node_id)],
+            )["assignments"][0]
             with self.assertRaises(GatedLoopError) as caught:
                 attest_loop_receiver(
                     root=root,
@@ -1824,6 +1932,9 @@ class HostDispatchPlanningTests(unittest.TestCase):
                     receiver_context_id="context-review-child",
                     parent_context_id="context-intermediate-child",
                     host_adapter_id="claude-code",
+                    dispatch_reservation_id=review_assignment[
+                        "dispatchReservationId"
+                    ],
                 )
             with self.assertRaises(GatedLoopError) as cross_adapter:
                 attest_loop_receiver(
@@ -1833,6 +1944,9 @@ class HostDispatchPlanningTests(unittest.TestCase):
                     receiver_context_id="context-codex-review",
                     parent_context_id="context-codex-orchestrator",
                     host_adapter_id="codex",
+                    dispatch_reservation_id=review_assignment[
+                        "dispatchReservationId"
+                    ],
                 )
 
         self.assertEqual(

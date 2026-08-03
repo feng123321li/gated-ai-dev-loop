@@ -35,10 +35,12 @@ from .orchestrator_settings import (
     update_orchestrator_settings,
 )
 from .planning import (
+    create_manual_handoff,
     delivery_revision_history,
     freeze_hierarchy,
     prepare_delivery_revision,
     prepare_hierarchy,
+    preview_hierarchy,
     workspace_status,
 )
 from .repository import SchedulerRepository
@@ -52,6 +54,8 @@ CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "workspace_status": workspace_status,
     "available_agents": available_agents,
     "hierarchy_contract": hierarchy_contract,
+    "preview_hierarchy": preview_hierarchy,
+    "create_manual_handoff": create_manual_handoff,
     "prepare_hierarchy": prepare_hierarchy,
     "prepare_delivery_revision": prepare_delivery_revision,
     "delivery_revision_history": delivery_revision_history,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .graph_model import LOOP_NODE_KINDS
+from .graph_model import LOOP_NODE_KINDS, graph_assurance_profile
 from .graph_runtime import advance_graph
 from .loop_contracts import (
     loop_execution_policy,
@@ -49,6 +49,7 @@ def build_graph_frontier(
         for state in run["nodes"]
         if state["status"] == "CLAIMED"
     ]
+    claimed_node_ids = {state["nodeId"] for state in claimed}
     actions: list[dict[str, Any]] = []
     ready_loops: list[dict[str, Any]] = []
     active_loops: list[dict[str, Any]] = []
@@ -74,6 +75,10 @@ def build_graph_frontier(
             reservation["resourceClaims"],
         )
         for reservation in (dispatch_reservations or [])
+        if not (
+            reservation["rootId"] == run["rootId"]
+            and reservation["nodeId"] in claimed_node_ids
+        )
     )
     local_dispatch_reservations = {
         reservation["nodeId"]: reservation
@@ -84,6 +89,11 @@ def build_graph_frontier(
     for state in sorted(run["nodes"], key=lambda item: item["nodeId"]):
         definition = definitions[state["nodeId"]]
         kind = definition["kind"]
+        execution_policy = (
+            loop_execution_policy(graph_assurance_profile(graph))
+            if kind in LOOP_NODE_KINDS
+            else None
+        )
         if state["status"] == "READY" and kind in LOOP_NODE_KINDS:
             task_requirement = (
                 task_requirements.get(definition["workItemId"])
@@ -157,14 +167,14 @@ def build_graph_frontier(
                     }
                 )
                 continue
-            conflicts = sorted(
+            conflicts = sorted({
                 reserved_node_id
                 for reserved_node_id, claims in reserved_claims
                 if resource_claims_overlap(
                     definition["loop"]["resourceClaims"],
                     claims,
                 )
-            )
+            })
             record = {
                 "nodeId": state["nodeId"],
                 "kind": kind,
@@ -188,7 +198,7 @@ def build_graph_frontier(
                         "action": "DISPATCH_LOOP",
                         "nodeId": state["nodeId"],
                         "loopRef": definition["loop"]["ref"],
-                        "executionPolicy": loop_execution_policy(),
+                        "executionPolicy": execution_policy,
                     }
                 )
         elif state["status"] == "CLAIMED":
@@ -213,7 +223,7 @@ def build_graph_frontier(
                     "action": "CONTINUE_OR_HEARTBEAT_LOOP",
                     "nodeId": state["nodeId"],
                     "operationId": state["operationId"],
-                    "executionPolicy": loop_execution_policy(),
+                    "executionPolicy": execution_policy,
                 }
             )
         elif state["status"] == "PAUSED" and kind in LOOP_NODE_KINDS:
@@ -239,7 +249,7 @@ def build_graph_frontier(
                             "action": "WAIT_FOR_HOST_CAPACITY",
                             "nodeId": state["nodeId"],
                             "resumeAt": resume_at,
-                            "executionPolicy": loop_execution_policy(),
+                            "executionPolicy": execution_policy,
                         }
                     )
                 else:
@@ -248,7 +258,7 @@ def build_graph_frontier(
                             "action": "WAIT_FOR_EXECUTOR_CAPACITY",
                             "nodeId": state["nodeId"],
                             "resumeAt": resume_at,
-                            "executionPolicy": loop_execution_policy(),
+                            "executionPolicy": execution_policy,
                         }
                     )
             else:
@@ -256,7 +266,7 @@ def build_graph_frontier(
                     {
                         "action": "RESUME_LOOP_IN_INDEPENDENT_CONTEXT",
                         "nodeId": state["nodeId"],
-                        "executionPolicy": loop_execution_policy(),
+                        "executionPolicy": execution_policy,
                     }
                 )
         elif state["status"] in {"BLOCKED", "CANCELLED"}:

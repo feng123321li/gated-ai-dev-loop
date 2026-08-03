@@ -1,6 +1,6 @@
 # 递归 Graph 执行
 
-用于冻结图的运行、恢复与阻断处理。
+用于自动执行路径中已冻结 Graph 的运行、恢复与阻断处理。手动交接只生成文件，不进入本执行循环。
 
 ## Frontier
 
@@ -17,13 +17,13 @@
 - `RESOLVE_LOOP_BLOCK`：展示 Loop 返回的摘要和不透明 result，等待外部条件或人工决定。
 - `REPLAN_HIERARCHY`：展示外层契约变化及当前 Revision 无法继续的原因，等待用户决定。用户明确要求修改且尚未最终验收时，保持同一 `delivery.id` 调用 `prepare_delivery_revision`；重新评审、授权项目并冻结后，旧 run 自动成为 `SUPERSEDED`。
 - `REFREEZE_TASK_REQUIREMENT`：该未开始 TASK 的需求处于解冻编辑态，当前不可派遣。按用户已经明确提出的修改完成 `unfreeze_task_requirement → refreeze_task_requirement`，再重新读取 frontier。
-- `RECORD_USER_CONFIRMATION`：Review Loop 已成功；读取 [acceptance.md](acceptance.md)，等待用户最终接受。
+- `RECORD_USER_CONFIRMATION`：`STANDARD` 的全部 Review 已成功，或 `LIGHT` 的唯一 TASK 已完成定向验证；读取 [acceptance.md](acceptance.md)，等待用户最终接受。
 
 不要自行增加 TASK/Gate 节点，也不要根据 payload 内容改变 frontier 顺序。
 
-开发方式确认前不展示模型建议。用户选择自动执行后，按当前宿主 Agent 的真实原生 inventory 与全部 Loop 的临时风险分析调用 `recommend_executors(recommendation_mode=AUTOMATIC)`，用中文表格展示当前 Agent 内的模型分档；该预览不需要第二次确认，随后直接 freeze 并让 `plan_dispatch_batch` 复用同一分析。正式 Ready 批次的第一次计划调用开启持久化 30 秒路由调整窗口，并按 `节点 | 执行 Agent | 原生模型角色 | 原生 modelId | 实际代理模型 | 剩余时间 | 状态` 展示 `reviewing`；实际模型未知时写“未报告”。主 Agent 不再提问，保持可接收用户消息，并在 `routeReview.expiresAt` 自动重复计划调用。用户选择手动交接后才调用 `recommend_executors(recommendation_mode=MANUAL_HANDOFF)`，可由宿主指定 `manual_development_agent_id`；交接前只展示目标 Agent。冻结后必须为目标开发 Agent 创建独立接收会话：目标是 Codex 就创建新的 Codex 任务，目标是 Claude Code 就创建新的 Claude 会话；当前编排会话只保留跟踪职责，不在原会话内代写代码。目标 Agent 接收后再依据自己的原生 inventory 生成开发模型表。接收方重新生成列表不改变 manual run，也不自动派遣。
+开发方式确认前不展示模型建议。用户选择自动执行后，先在实际开发工作区完成 prepare，再按当前宿主 Agent 的真实原生 inventory 与全部 Loop 的临时风险分析调用 `recommend_executors(recommendation_mode=AUTOMATIC)`，用中文表格展示当前 Agent 内的模型分档；该预览不需要第二次确认，随后直接 freeze 并让 `plan_dispatch_batch` 复用同一分析。正式 Ready 批次的第一次计划调用开启持久化 30 秒路由调整窗口，并按 `节点 | 执行 Agent | 原生模型角色 | 原生 modelId | 实际代理模型 | 剩余时间 | 状态` 展示 `reviewing`；实际模型未知时写“未报告”。主 Agent 不再提问，保持可接收用户消息，并在 `routeReview.expiresAt` 自动重复计划调用。用户选择手动交接时不进入本文件描述的执行流程：只调用 `create_manual_handoff`，交接前不指定 Agent/模型，不创建接收会话或 worktree，也不产生 manual run。
 
-推荐工具不得启动外部 CLI、切换模型、改变 owner、提前 claim、绕过宿主原生 Agent 容量或接管限额恢复。自动建议不跨 Agent；人工交接建议可以跨 Agent，但只能形成交接信息。手工配置、任意本机修改器或容量变化后可以重新调用，旧建议不作为缓存权威。路由无法保持且必须改换开发 Agent、扩大项目范围或改变冻结需求时才重新请求用户决定；同一 Agent 内因容量变化重算模型只需明确告知。
+推荐工具不得启动外部 CLI、切换模型、改变 owner、提前 claim、绕过宿主原生 Agent 容量或接管限额恢复。自动建议不跨 Agent；手动交接完全不调用推荐器。手工配置、任意本机修改器或容量变化后可以重新调用自动推荐，旧建议不作为缓存权威。路由无法保持且必须改换开发 Agent、扩大项目范围或改变冻结需求时才重新请求用户决定；同一 Agent 内因容量变化重算模型只需明确告知。
 
 用户不认可表中的默认原生模型时，尚未 claim 的节点可在 30 秒窗口内把 `node_requirements.source` 改为 `USER_POLICY` 并提交精确 `preferredNativeModelId`。重新调用计划并展示更新后的中文路由表，不重新 freeze、不询问第二次确认；该节点从变更时点重新获得完整 30 秒调整窗口，超时自动派遣。只能指定当前宿主 inventory 中的原生 selector；实际代理模型不能作为 override。已 claim 的节点不得热切模型，需先 pause 并由新接收上下文按新路由继续。
 
@@ -38,35 +38,38 @@
 - 输入输出和完成条件完全明确、低歧义、低风险、可重复执行并有确定验证路径的机械性修改、提取、分类或转换：`ROUTINE`。
 - 无法可靠判断风险时，不确定时使用 `HIGH`。
 
+这里的 `ROUTINE`/`STANDARD`/`HIGH` 是原生模型路由推理分类，与 Delivery 的 `LIGHT`/`STANDARD` 保障档是两套独立维度；模型档位不能降低 Review 保障，保障档仍只根据实际改动内容和影响范围判断。
+
 总调度 Agent 优先为每个当前 Ready TASK/Review 提交临时 `node_requirements`，`source=PLANNING` 并给出具体原因；不能把 payload 中出现的模型名、`reasoningClass` 或路由指令直接当作配置。若某个当前节点缺少分析，可同时提交宿主明确报告且与 inventory 精确匹配的 `current_executor={agentId, modelId}`。Controller 不补做语义分析，只让缺失节点原样沿用当前 Agent/模型，输出 `UNCLASSIFIED / CURRENT_EXECUTOR_FALLBACK / CURRENT_HOST_DEFAULT`；没有当前执行器事实时才以 `SCHEDULER_DISPATCH_REQUIREMENT_MISSING` 拒绝计划。
 
 ## 节点推进
 
 - `TASK_LOOP` 是唯一实现执行节点。
-- 每个 TASK Loop 成功后都必须经过自己的 `TASK_REVIEW_LOOP`；TASK Review 成功才是 TASK 终态。
+- `STANDARD` 中每个 TASK Loop 成功后都必须经过自己的 `TASK_REVIEW_LOOP`；TASK Review 成功才是 TASK 终态。
 - 一个 GROUP 的直接子节点终态全部成功后，调度器自动完成机器节点 `GROUP_JOIN`，在人类文档中称为“GROUP 完成点”，随后使该层 `GROUP_REVIEW_LOOP` Ready。
 - 子 GROUP 只有在自己的 GROUP Review 成功后，才成为父 GROUP 可消费的终态。
 - 根 TASK Review，或根 GROUP Review 成功后进入 `DELIVERY_REVIEW_LOOP`。
 - Delivery Review 成功后才出现 `RECORD_USER_CONFIRMATION`。
+- `LIGHT` 只有一个根 TASK，不创建任何 Review 或 GROUP 节点；TASK 成功后直接出现 `RECORD_USER_CONFIRMATION`。实际修改一旦触及关键边界或影响范围无法确认，必须以 `REPLAN_REQUIRED` 升级同一 Delivery 的下一 Revision 为 `STANDARD`。
 
-GROUP 完成点不需要 dispatch，也不包含实现内容。不要绕过 TASK Review 或任一级 GROUP Review，也不要用 TASK Loop 成功代替 TASK 成功。
+GROUP 完成点不需要 dispatch，也不包含实现内容。`STANDARD` 不得绕过 TASK Review 或任一级 GROUP Review，也不要用 TASK Loop 成功代替 TASK 成功。
 
 ## 执行 Loop
 
 1. 总调度上下文只读取 frontier 和路由 action，不直接执行 Loop。
 2. 对当前批次调用 `plan_dispatch_batch`。`binding=HOST_NATIVE_ROUTE_REVIEW` 时没有预留：展示 `reviewing` 中文表格和 30 秒倒计时，不创建 Agent、不询问确认；若用户直接修改原生模型，用 `USER_POLICY + preferredNativeModelId` 重调并重置该节点窗口；若无修改，在 `routeReview.expiresAt` 自动重调。取得 `HOST_NATIVE_DISPATCH_PLAN` 后，才按 `concurrentDispatchGroups` 并发创建独立宿主原生 Agent。预留转为 claim 后仍占用跨 Delivery 槽位，直到 Loop 暂停或终态；全部 Delivery 的未过期预留和已 claim 执行器还共同受 `maxConcurrentExecutors` 限制。`HOST_NATIVE` 集合由 MCP Server 启动配置中的精确适配器与用户 `allowedAdapters` 共同限制，协议 `clientInfo` 和本机 CLI 发现不参与授权；跨 Adapter 默认关闭，只有用户明确开启且中央编排器能证明目标 Adapter 属于同一可信编排根时才可选择。显式模型 assignment 必须覆盖子 Agent 模型，不能继承总调度 Agent 的模型；Codex 还必须把 assignment 的 `hostTaskName` 原样作为 `task_name`。
-3. 每个 assignment 都先预留、再创建接收 Agent。Claude 最后由接收方 claim；Codex 由 `SubagentStart` Hook 在 child 上下文可见前完成 host-side claim。只向接收方传 `rootId`、`nodeId`、`dispatchReservationId` 与 `decisionFingerprint`，不要复制规划上下文、payload 或旧 operation。单个创建失败不影响已创建的同批 Agent，也不 claim 失败节点；等待预留过期后刷新 frontier 与 inventory，最多重算一次，仍失败则生成该节点的人工交接。
+3. 每个 assignment 都先预留、再立即创建接收 Agent，不得在取得 reservation 后继续读文档、检查实现或做额外分析；当前 reservation 只有 300 秒，接收方必须优先 claim。Claude 最后由接收方 claim；Codex 由 `SubagentStart` Hook 在 child 上下文可见前完成 host-side claim。只向接收方传 `rootId`、`nodeId`、`dispatchReservationId` 与 `decisionFingerprint`，不要复制规划上下文、payload 或旧 operation。单个创建失败不影响已创建的同批 Agent，也不 claim 失败节点；等待预留过期后刷新 frontier 与 inventory，最多重算一次，仍失败则生成该节点的人工交接。
 4. 接收方原生进入 layered-delivery，使用精确 `nodeId` 调用 `loop_context`。TASK、TASK Review 与 GROUP Review Loop 同时取得控制器生成的 `humanArtifacts.workItem` baseline/progress/acceptance 路径；TASK 与 TASK Review 继续取得 `humanArtifacts.taskBaseline` 便捷路径，接口型 TASK 的 workItem 还包含自己的 `interfaces`。机器输入仍以 MCP 响应为准。
-5. Claude dispatch PreToolUse Hook 把真实 context 与 node/attempt/adapter/预留直接绑定，接收方连同原生 Agent/模型选择器、AUTO、HOST_NATIVE、推理等级、预留和决策指纹调用 `dispatch_loop`。Codex `SubagentStart` Hook 不接受调用方指定的会话根，只接受操作系统账户默认 `~/.codex/sessions` 内 child/parent/role 与 `hostTaskName` 一致的 transcript，在单一事务内签发/消费内部身份、固定首次成功编排根、消费 reservation 并完成唯一 claim；未被消费的 Claude attestation 不固定信任根。宿主观测到的转发后模型只记为 `actualModelId` 供展示，不参与 reservation 或授权。`additionalContext` 不写 receiver/operation bearer，child 不再调用 `dispatch_loop`。Codex 调用 heartbeat、pause、result 时省略 `operation_id`，mutation PreToolUse Hook 依据当前 child transcript 注入并拒绝 root/helper 的普通工具调用。跨平台 adapter 只有能证明同一宿主编排根时才继续，否则 fail closed。Codex Hook 安装或变更后需在 `/hooks` 审阅并信任；覆盖 `CODEX_HOME`、普通 helper、工作区伪造 transcript、缺失 Hook、错 task、无预留和重放均保持拒绝。该 Hook 是正常宿主工具路径上的生命周期 guardrail；能手工执行 Hook/控制器或改写 transcript/SQLite 的恶意编排 Agent 需要宿主不可伪造的 caller-context 才能进一步防御。
+5. Claude child 进入后只读取一次 `loop_context`，随即调用 `dispatch_loop`；`owner` 没有宿主专用标签时直接使用 `claude-code`。模型必须省略 `receiver_context_id` 与 `receiver_attestation_id`，不得生成占位值；Claude dispatch PreToolUse Hook 会把真实 context 与 node/attempt/adapter/预留直接绑定并注入这两个字段。接收方只提交原生 Agent/模型选择器、AUTO、HOST_NATIVE、推理等级、预留、决策指纹和新的 operation。Codex `SubagentStart` Hook 不接受调用方指定的会话根，只接受操作系统账户默认 `~/.codex/sessions` 内 child/parent/role 与 `hostTaskName` 一致的 transcript，在单一事务内签发/消费内部身份、固定首次成功编排根、消费 reservation 并完成唯一 claim；未被消费的 Claude attestation 不固定信任根。宿主观测到的转发后模型只记为 `actualModelId` 供展示，不参与 reservation 或授权。`additionalContext` 不写 receiver/operation bearer，child 不再调用 `dispatch_loop`。两类接收方均在 claim 后读取一次 `loop_context`，随即在任何代码检查、分析、读写或测试前提交首次独立 `heartbeat_loop`；claim 自带的初始租约不算 heartbeat。Codex 调用 heartbeat、pause、result 时省略 `operation_id`，mutation PreToolUse Hook 依据当前 child transcript 注入并拒绝 root/helper 的普通工具调用。跨平台 adapter 只有能证明同一宿主编排根时才继续，否则 fail closed。Codex Hook 安装或变更后需在 `/hooks` 审阅并信任；覆盖 `CODEX_HOME`、普通 helper、工作区伪造 transcript、缺失 Hook、错 task、无预留和重放均保持拒绝。该 Hook 是正常宿主工具路径上的生命周期 guardrail；能手工执行 Hook/控制器或改写 transcript/SQLite 的恶意编排 Agent 需要宿主不可伪造的 caller-context 才能进一步防御。
 6. 按 `loop.ref` 启动对应内部 TASK、TASK Review、GROUP Review 或 Delivery Review Loop，并把 `payload` 和共享 `skillHints` 原样交给该 Loop。
-   - 并行 Active Delivery 必须使用不同对话工作区；每个 Git Delivery 使用独立 linked worktree 和最终 feature 分支。控制器把 linked worktree 映射到主 checkout 的共享调度根，同时以不同 `workspaceKey` 隔离 Delivery，并校验各自 `gitBinding.branchRef`，禁止一个工作区或 feature 分支冒充另一个 Delivery。
+   - 并行 Active Delivery 必须使用不同对话工作区；每个 Git Delivery 在开始实际开发时使用独立 linked worktree 和最终 feature 分支。控制器把 linked worktree 映射到主 checkout 的共享调度根，同时以不同 `workspaceKey` 隔离 Delivery，并校验各自 `gitBinding.branchRef`，禁止一个工作区或 feature 分支冒充另一个 Delivery。
    - 新的独立 Delivery 一律从 `main`（不存在时 `master`）创建 feature worktree，不从当前 Delivery feature HEAD 创建。主线在创建后继续前进不改变已冻结 `baseCommit`；最终集成前由 Delivery 自己解决与最新主线的差异。
-   - 同一 Delivery 可以在 `projectScopes` 中覆盖多个本地仓库，例如主需求在 `erp-pm`，同时修改 `erp-order` 与 `erp-supplier`。所有 `READ_WRITE` Git 项目使用相同的 `branchRef`，但各自保留独立 `baseCommit`；Loop 只能访问当前 Revision 已授权的项目范围。所有 TASK 共享该 Delivery 在各仓库中的同名分支；TASK Agent 不创建、绑定或切换内部 Git 分支。获得相应 Git 写入授权后，TASK 可按各自 scope 单独执行 `git add` 和 `git commit`，在 Delivery 分支上形成独立 TASK commit；必须使用显式 pathspec 只暂存本 TASK 变更，提交前检查 staged/working-tree 状态，且同一 worktree 的 Git index/commit 写入不可并发。互不冲突的 TASK 实现可按 frontier 并行执行，会触及同一共享模块或外部环境的 TASK 必须声明相同精确 `resourceClaims` 以串行化。不要复制 `.layered-delivery` 或启动第二套 scheduler。worktree 不隔离数据库、端口或部署环境，所有 Delivery/TASK 继续遵守全局 `resourceClaims`。合并、删除 worktree、提交、推送和发布仍按各自授权边界执行。
+   - 同一 Delivery 可以在 `projectScopes` 中覆盖多个本地仓库，例如主需求位于 `project-api`，同时修改 `project-provider` 与 `project-consumer`。所有 `READ_WRITE` Git 项目使用相同的 `branchRef`，但各自保留独立 `baseCommit`；Loop 只能访问当前 Revision 已授权的项目范围。所有 TASK 共享该 Delivery 在各仓库中的同名分支；TASK Agent 不创建、绑定或切换内部 Git 分支。获得相应 Git 写入授权后，TASK 可按各自 scope 单独执行 `git add` 和 `git commit`，在 Delivery 分支上形成独立 TASK commit；必须使用显式 pathspec 只暂存本 TASK 变更，提交前检查 staged/working-tree 状态，且同一 worktree 的 Git index/commit 写入不可并发。互不冲突的 TASK 实现可按 frontier 并行执行，会触及同一共享模块或外部环境的 TASK 必须声明相同精确 `resourceClaims` 以串行化。不要复制 `.layered-delivery` 或启动第二套 scheduler。worktree 不隔离数据库、端口或部署环境，所有 Delivery/TASK 继续遵守全局 `resourceClaims`。合并、删除 worktree、提交、推送和发布仍按各自授权边界执行。
 7. 内部 Loop 先识别当前任务与宿主可用 Skill，再优先原生触发适用的 Skill Hint；不要因为 hierarchy 提供了提示，就假定每条提示都适用于当前 Loop。
 8. 让内部 Loop 自己选择其他必要 Skill。payload 是目标、明确约束和已知验收点的输入，不是完整实现规约；Loop 要结合真实代码、契约和数据链路推导当前 scope 的必要条件。冻结 Graph 不冻结内部实现计划。TASK Loop 自主管理实现、文件、测试、Gate 和修正；Review Loop 自主管理独立发现、修正协调、Gate 和复审。
 9. 当前目标内可修复的实现缺陷、测试失败、数据完整性或边界问题都留在当前 Loop：调整内部计划，完成修正，再重新验证。Review 可以自行修正或使用宿主内部执行容量派遣修正上下文，但必须保留独立复核；不要把“Review 未通过”提交成 `BLOCKED`。
-10. 当前 Loop 在领取、代码检查完成、运行测试、发现问题、修复、复审和最终验证等有意义的阶段调用 `report_loop_progress`。`summary_zh`、`completed_zh` 与 `next_step_zh` 使用简体中文，测试结果使用结构化计数；禁止提交原始终端日志或内部推理。进度事件是可观测事实，不是 Graph 状态迁移，也不续租。
-11. 长任务持续调用 `heartbeat_loop`。Codex 与 Claude 原生 child 对 heartbeat、progress、pause、result 均省略 `operation_id`，由共享 PreToolUse 校验各自宿主身份后注入；其他适配器在获得等价宿主授权通道前不能自动变更 Loop。检测到上下文容量压力或高轮次 Hook 摩擦且工作仍可继续时，不提交失败结果；在租约有效期内调用普通 `pause_loop`。
+10. `STANDARD` Loop 在领取、代码检查完成、运行测试、发现问题、修复、复审和最终验证等有意义的阶段调用 `report_loop_progress`。`LIGHT` 只在发现问题和最终验证时上报，执行时间很短且没有问题时可只报最终验证。`summary_zh`、`completed_zh` 与 `next_step_zh` 使用用户当前语言，测试结果使用结构化计数；字段名为现有 schema v3 契约，不代表内容必须包含中文字符。禁止提交原始终端日志或内部推理。进度事件是可观测事实，不是 Graph 状态迁移，也不续租。
+11. 首次独立 heartbeat 之后，长任务继续按租约调用 `heartbeat_loop`。Codex 与 Claude 原生 child 对 heartbeat、progress、pause、result 均省略 `operation_id`，由共享 PreToolUse 校验各自宿主身份后注入；其他适配器在获得等价宿主授权通道前不能自动变更 Loop。检测到上下文容量压力或高轮次 Hook 摩擦且工作仍可继续时，不提交失败结果；在租约有效期内调用普通 `pause_loop`。
 12. 宿主明确报告剩余额度不高于 5% 且提供真实未来 `resetAt` 时，停止启动新 Loop，并在额度耗尽前保存当前工作。已 claim 的执行 Agent 在租约有效期内调用 `pause_loop(resume_at=resetAt, capacity_scope=EXECUTOR)`；总调度宿主受限时使用 `capacity_scope=HOST` 暂停其正在承载的 claimed Loop。两者都释放租约和资源占用、保留同一 attempt；不得估算剩余额度或猜测 `resetAt`。
 13. 软阈值 pause 成功后，使用当前宿主的原生计划能力创建一次性恢复提示。Claude Code 2.1.72+ 使用当前会话的一次性 Cron，CLI 必须保持运行；Codex Desktop 使用当前任务计划，电脑和应用必须保持运行。为避免恢复窗口边界抖动，计划时间应晚于 `resetAt` 一小段安全余量。提示只要求原 Agent 调用 `workspace_status → graph_frontier → loop_context` 并重新 dispatch；不调用推荐器、不自动换 Agent。
 14. 宿主直接观察到硬 429 且结构化响应提供真实未来 `resetAt` 时，由模型外宿主适配器私有回调处理，不等待失败 Loop。Claude `StopFailure` 只读取 `error_details`，不读取渲染消息或模型输出；回调精确匹配 claimed receiver、限制 reset 最远 24 小时、用 report ID 幂等防重放，并暂停共享容量域内跨 Delivery 的同 Agent Loop。该回调不是 MCP 工具。宿主消费 `cancelRecurringMonitors=true`，按 `wakeMode=HOST_NATIVE_ONE_SHOT` 只建立 reset 后一次唤醒。
@@ -146,8 +149,8 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 2. 将完整新范围传给 `prepare_delivery_revision`，同时提交当前 revision、变更原因、真实请求人和连续性依据。用户明确要求继续同一 Delivery 时传 `continuity_basis=USER_EXPLICIT_SAME_DELIVERY`；只有当前 Graph 已记录 `REPLAN_REQUIRED` 才传 `ACTIVE_LOOP_REPLAN`。工作区、路径、分支或旧 Delivery 仍处于 Active 都不能充当连续性。该调用只写候选 Revision，不替换当前 hierarchy/run，也不应触发宿主通用确认弹窗；可重复 prepare 尚未冻结的同一新 Revision，但不能修改旧 Revision。
 3. 检查响应中的 `carryForwardTaskIds`。只有 TASK definition、依赖、Loop、资源声明与 TASK Review 完全未变，而且旧 Revision 的实现及 Review 都成功，才会成为携带候选；GROUP 与 Delivery Review 不携带。
 4. 展示完整新范围、Revision 编号、携带候选和 `requiredProjectAuthorizations`。跨项目 scope 必须包含当前工作区，所有可写 Git 项目使用同名 feature 分支。
-5. 用户选择自动执行或手动交接是本 Revision 唯一一次业务确认。确认后调用 `freeze_hierarchy`，同时提交精确 `expected_delivery_revision`、新 fingerprint 和与准备结果完全一致的 `authorized_project_ids`。缺项目、额外项目或重复项目都应在 MCP/Controller 边界拒绝。
-6. 冻结成功后旧 run 标记为 `SUPERSEDED`，新 run 继续同一 Delivery 的验收；`revisions.md` 与 `delivery_revision_history` 保留审计链。
+5. 用户选择自动执行或手动交接是本 Revision 唯一一次业务确认。自动执行调用 `freeze_hierarchy`，同时提交精确 `expected_delivery_revision`、新 fingerprint 和与准备结果完全一致的 `authorized_project_ids`。手动交接调用 `create_manual_handoff` 输出修订后的完整开发内容文件，但不替换当前 run；接收方真正开始开发前需再次确认如何承接该活动 Delivery。
+6. 只有自动冻结成功后，旧 run 才标记为 `SUPERSEDED`，新 run 继续同一 Delivery 的验收；`revisions.md` 与 `delivery_revision_history` 保留审计链。
 
 ## 恢复
 

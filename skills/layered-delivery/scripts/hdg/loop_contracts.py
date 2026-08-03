@@ -14,6 +14,7 @@ LOOP_TERMINAL_STATUSES = (
     "REPLAN_REQUIRED",
     "CANCELLED",
 )
+LOOP_ASSURANCE_PROFILES = ("LIGHT", "STANDARD")
 
 LOOP_REFERENCE = re.compile(r"^[a-z0-9][a-z0-9._:/@-]{0,191}$")
 RESOURCE_CLAIM = re.compile(r"^[a-z0-9][a-z0-9._:/@-]{0,255}$")
@@ -33,7 +34,7 @@ _LOOP_EXECUTION_POLICY = {
     },
     "progressReporting": {
         "tool": "report_loop_progress",
-        "language": "SIMPLIFIED_CHINESE",
+        "language": "USER_PREFERRED",
         "heartbeatRenewsLease": True,
         "progressRenewsLease": False,
         "reportAt": [
@@ -217,23 +218,60 @@ def resource_claims_overlap(
     return bool(set(left) & set(right))
 
 
-def loop_execution_policy() -> dict[str, Any]:
-    """Return mutually exclusive dispatch, handoff, and lease recovery rules."""
+def validate_loop_assurance_profile(profile: object) -> str:
+    if profile not in LOOP_ASSURANCE_PROFILES:
+        fail(
+            "LOOP_POLICY_INVALID",
+            "Loop assurance profile is invalid",
+            allowed=list(LOOP_ASSURANCE_PROFILES),
+        )
+    return str(profile)
 
-    return deepcopy(_LOOP_EXECUTION_POLICY)
+
+def loop_execution_policy(
+    assurance_profile: str = "STANDARD",
+) -> dict[str, Any]:
+    """Return dispatch, observability, handoff, and recovery rules."""
+
+    profile = validate_loop_assurance_profile(assurance_profile)
+    policy = deepcopy(_LOOP_EXECUTION_POLICY)
+    policy["assuranceProfile"] = profile
+    policy["reviewTopology"] = "TASK_GROUP_AND_DELIVERY_REVIEWS"
+    if profile == "LIGHT":
+        policy["reviewTopology"] = "NO_INDEPENDENT_REVIEW_LOOPS"
+        policy["progressReporting"]["reportAt"] = [
+            "ISSUE_FOUND",
+            "FINAL_VERIFICATION",
+        ]
+        policy["progressReporting"]["shortLoopMayReportOnlyFinal"] = True
+    return policy
 
 
-def loop_completion_policy() -> dict[str, Any]:
+def loop_completion_policy(
+    assurance_profile: str = "STANDARD",
+) -> dict[str, Any]:
     """Return the boundary between internal rework and terminal outcomes."""
 
-    return deepcopy(_LOOP_COMPLETION_POLICY)
+    profile = validate_loop_assurance_profile(assurance_profile)
+    policy = deepcopy(_LOOP_COMPLETION_POLICY)
+    policy["assuranceProfile"] = profile
+    policy["verificationScope"] = "FULL_DECLARED_ACCEPTANCE"
+    if profile == "LIGHT":
+        policy["verificationScope"] = "TARGETED_FOR_DECLARED_CHANGE"
+        policy["reviewCycle"] = (
+            "FOCUSED_REVIEW_RESOLVE_VERIFY_AND_REREVIEW_IF_NEEDED"
+        )
+        policy["expandedImpact"] = "REPLAN_REQUIRED_TO_STANDARD"
+    return policy
 
 
 __all__ = (
+    "LOOP_ASSURANCE_PROFILES",
     "LOOP_TERMINAL_STATUSES",
     "loop_completion_policy",
     "loop_execution_policy",
     "resource_claims_overlap",
+    "validate_loop_assurance_profile",
     "validate_loop_descriptor",
     "validate_loop_outcome",
 )

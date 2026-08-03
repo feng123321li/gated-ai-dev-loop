@@ -7,6 +7,7 @@ from hdg.errors import GatedLoopError
 from hdg.graph_model import (
     compile_delivery_graph,
     confirmation_node_id,
+    graph_assurance_profile,
     graph_fingerprint,
     graph_summary,
     group_review_node_id,
@@ -321,6 +322,7 @@ class SchedulerGraphTests(unittest.TestCase):
                 confirmation_node_id("d-service"),
             },
         )
+        self.assertEqual(graph_assurance_profile(graph), "STANDARD")
         self.assertEqual(
             graph_summary(graph),
             {
@@ -335,6 +337,60 @@ class SchedulerGraphTests(unittest.TestCase):
         )
         self.assertEqual(validate_delivery_graph(graph), graph)
         self.assertRegex(graph_fingerprint(graph), r"^[0-9a-f]{64}$")
+
+    def test_light_delivery_compiles_to_task_and_confirmation_only(
+        self,
+    ) -> None:
+        hierarchy = task_hierarchy()
+        hierarchy["delivery"].update(
+            {
+                "assuranceProfile": "LIGHT",
+                "assuranceRationale": (
+                    "The actual diff is confined to one internal helper and "
+                    "has no interface, data, permission, or deployment impact."
+                ),
+                "reviewLoop": None,
+            }
+        )
+        hierarchy["root"]["reviewLoop"] = None
+
+        graph = self.compile(hierarchy)
+
+        self.assertEqual(graph_assurance_profile(graph), "LIGHT")
+        self.assertEqual(
+            {item["id"] for item in graph["nodes"]},
+            {
+                loop_node_id("t-service"),
+                confirmation_node_id("d-service"),
+            },
+        )
+        self.assertEqual(len(graph["edges"]), 1)
+        self.assertEqual(graph_summary(graph)["reviewLoops"], 0)
+
+    def test_light_delivery_rejects_group_or_review_loops(self) -> None:
+        group = group_hierarchy()
+        group["delivery"].update(
+            {
+                "assuranceProfile": "LIGHT",
+                "assuranceRationale": "The requested change appears small.",
+                "reviewLoop": None,
+            }
+        )
+        with self.assertRaises(GatedLoopError) as caught:
+            validate_hierarchy_definition(group)
+        self.assertEqual(caught.exception.code, "DELIVERY_ASSURANCE_INVALID")
+
+        task = task_hierarchy()
+        task["delivery"].update(
+            {
+                "assuranceProfile": "LIGHT",
+                "assuranceRationale": "The actual change is locally scoped.",
+                "reviewLoop": None,
+            }
+        )
+        with self.assertRaises(GatedLoopError) as caught:
+            validate_hierarchy_definition(task)
+        self.assertEqual(caught.exception.code, "DELIVERY_ASSURANCE_INVALID")
 
     def test_root_task_may_add_review_without_a_group(self) -> None:
         source = task_hierarchy()

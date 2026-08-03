@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timezone
-import re
 from types import MappingProxyType
 from typing import Any
 
@@ -66,7 +65,6 @@ STATE_HEALTH_TEXT = MappingProxyType(
 FIRST_HEARTBEAT_WARNING_SECONDS = 90
 PROGRESS_WARNING_SECONDS = 5 * 60
 RECOMMENDED_POLL_SECONDS = 30
-_CHINESE_CHARACTER = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 
 
 def _human_text(
@@ -78,7 +76,7 @@ def _human_text(
     if not isinstance(value, str):
         fail(
             "SCHEDULER_PROGRESS_INVALID",
-            f"{field} must be a Chinese progress description",
+            f"{field} must be a user-visible progress description",
             field=field,
         )
     normalized = value.strip()
@@ -93,12 +91,6 @@ def _human_text(
         fail(
             "SCHEDULER_PROGRESS_INVALID",
             f"{field} is empty, too long, or contains control characters",
-            field=field,
-        )
-    if _CHINESE_CHARACTER.search(normalized) is None:
-        fail(
-            "SCHEDULER_PROGRESS_LANGUAGE_REQUIRED",
-            f"{field} must be written for users in Simplified Chinese",
             field=field,
         )
     return normalized
@@ -129,7 +121,7 @@ def normalize_progress_payload(
     elif not isinstance(completed_zh, list) or len(completed_zh) > 8:
         fail(
             "SCHEDULER_PROGRESS_INVALID",
-            "completed_zh must contain at most eight Chinese milestones",
+            "completed_zh must contain at most eight milestones",
             field="completed_zh",
         )
     else:

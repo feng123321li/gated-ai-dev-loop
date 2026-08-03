@@ -148,14 +148,27 @@ def main() -> int:
     )
 
     session_meta = None
+    codex_receiver_context_id = None
     if isinstance(transcript_path, str) and transcript_path:
-        try:
-            session_meta = _session_meta_from_transcript(
-                transcript_path,
-                session_id=session_id,
-            )
-        except (json.JSONDecodeError, KeyError, OSError, ValueError):
-            session_meta = None
+        candidate_context_ids = [session_id]
+        hook_agent_id = hook_input.get("agent_id")
+        if (
+            isinstance(hook_agent_id, str)
+            and hook_agent_id
+            and hook_agent_id != session_id
+        ):
+            candidate_context_ids.append(hook_agent_id)
+        for candidate_context_id in candidate_context_ids:
+            try:
+                session_meta = _session_meta_from_transcript(
+                    transcript_path,
+                    session_id=candidate_context_id,
+                )
+            except (json.JSONDecodeError, KeyError, OSError, ValueError):
+                session_meta = None
+            if session_meta is not None:
+                codex_receiver_context_id = candidate_context_id
+                break
 
     host_adapter_id: str
     receiver_context_id: str
@@ -166,17 +179,19 @@ def main() -> int:
         model_id = hook_input.get("model")
         if not isinstance(model_id, str) or not model_id:
             return _deny("Loop mutation lacks a host receiver context")
+        if codex_receiver_context_id is None:
+            return _deny("Loop mutation lacks a host receiver context")
         try:
             metadata = _subagent_claim_metadata(
                 transcript_path,
-                receiver_context_id=session_id,
+                receiver_context_id=codex_receiver_context_id,
             )
         except (json.JSONDecodeError, KeyError, OSError, ValueError):
             metadata = None
         if metadata is None:
             return _deny("Only the assigned Codex child may mutate this Loop")
         host_adapter_id = "codex"
-        receiver_context_id = session_id
+        receiver_context_id = codex_receiver_context_id
         parent_context_id = metadata["parentContextId"]
         dispatch_reservation_id = metadata["dispatchReservationId"]
     else:
@@ -244,7 +259,12 @@ def main() -> int:
                 receiver_context_id=receiver_context_id,
                 parent_context_id=parent_context_id,
             )
-    except (GatedLoopError, OSError, ValueError):
+    except GatedLoopError as error:
+        return _deny(
+            "The current host context does not own this Loop "
+            f"({error.code})"
+        )
+    except (OSError, ValueError):
         return _deny("The current host context does not own this Loop")
 
     updated_input = dict(tool_input)

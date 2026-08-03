@@ -1,0 +1,42 @@
+{
+  "delivery": {
+    "id": "d-light-change",
+    "title": "交付一个低风险内部修改",
+    "summary": "完成局部修改、定向验证并等待用户确认",
+    "assuranceProfile": "LIGHT",
+    "assuranceRationale": "真实改动仅限一个内部帮助函数，不改变公共接口、数据结构、权限、部署配置或共享资源，且有一项定向测试覆盖。",
+    "reviewLoop": null
+  },
+  "root": {
+    "schemaVersion": 3,
+    "skillHints": [],
+    "definition": {
+      "schemaVersion": 3,
+      "id": "t-light-change",
+      "kind": "TASK",
+      "parentId": null,
+      "title": "完成局部内部修改",
+      "summary": "返回修改内容和定向验证结果",
+      "execution": {
+        "dependsOn": [],
+        "loop": {
+          "ref": "team/light-change-loop@1",
+          "payload": {
+            "goal": "完成已经确认的局部内部修改",
+            "constraints": [
+              "保持现有公共接口和数据结构不变",
+              "影响范围扩大时返回 REPLAN_REQUIRED"
+            ],
+            "acceptance": [
+              "定向测试通过",
+              "实际 diff 与 LIGHT 判断依据一致"
+            ]
+          },
+          "resourceClaims": []
+        }
+      }
+    },
+    "reviewLoop": null,
+    "children": []
+  }
+}

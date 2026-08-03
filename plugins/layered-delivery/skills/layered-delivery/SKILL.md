@@ -1,6 +1,6 @@
 ---
 name: layered-delivery
-description: "规划、冻结、调度或恢复多项目、多模块交付 Graph。用于把已确认需求组织为递归 GROUP/TASK，自动或手动派遣独立 WorkLoop，执行必需的 TASK/GROUP/Delivery Review，并在最后等待用户验收；也用于恢复暂停、失联、额度耗尽或需要 Revision 的既有 Delivery。"
+description: "规划、冻结、调度或恢复多项目、多模块交付 Graph。用于把已确认需求组织为递归 GROUP/TASK，自动派遣独立 WorkLoop，或生成不绑定 Agent 的手动开发内容交接文件；也用于执行分层 Review、等待最终验收并恢复暂停、失联、额度耗尽或需要 Revision 的既有 Delivery。"
 ---
 
 # Layered Delivery
@@ -8,8 +8,11 @@ description: "规划、冻结、调度或恢复多项目、多模块交付 Graph
 把本 Skill 作为外层交付协调器：治理“何时、由谁运行哪个 Loop”，不规定 Loop 内部“怎样完成工作”。
 
 ```text
-确认需求 → 准备 Graph → 用户选择执行方式并冻结
-→ TASK/Review WorkLoop → 分层汇合与 Review → 用户最终验收
+确认需求 → 检查真实代码与影响 → 只读预览 Graph → 用户选择执行方式
+├─ 自动执行：创建开发工作区 → 准备并冻结
+│  ├─ LIGHT：单一 TASK WorkLoop → 用户确认
+│  └─ STANDARD：TASK/分层 Review WorkLoop → 用户确认
+└─ 手动交接：只生成一个自包含交接文件 → 接收后再开始开发
 ```
 
 ## 不可违反的边界
@@ -19,7 +22,7 @@ description: "规划、冻结、调度或恢复多项目、多模块交付 Graph
 - 只使用 schema v3；准备前调用 `hierarchy_contract` 获取当前精确契约，不从源码、旧会话或示例猜参数。
 - SQLite 与事件链是机器权威。Markdown 投影只用于沟通、进度和验收。
 - 一个对话工作区最多绑定一个未结束 Delivery。新业务目标默认创建新 Delivery；不得因为工作区已有旧 Delivery 就把新需求写成旧 Delivery 的 Revision。
-- 并行 Delivery 使用独立宿主工作区；Git 场景优先使用独立 linked worktree。不要复制调度数据库或启动第二套控制面。
+- 并行 Delivery 真正开始开发时使用独立宿主工作区；Git 场景优先使用独立 linked worktree。预览和手动交接文件阶段不创建 worktree。不要复制调度数据库或启动第二套控制面。
 - 总调度上下文只规划和路由，不在自身上下文内实现 TASK 或 Review。每个执行与 Review Loop 使用独立接收上下文。
 - Git 创建/切换分支、commit、merge、push、发布、迁移和新增外部权限始终需要各自授权；Graph 的项目范围不替代这些授权。
 - 最终完成必须取得真实用户确认。
@@ -43,13 +46,13 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 规划新 Delivery 或 Revision 时，完整遵循[planning-quickstart.md](references/planning-quickstart.md)：
 
 1. 与用户确认目标、边界、验收点、项目范围、依赖和排他资源。
-2. 用 `GROUP` 表达真实的并行汇合或分层 Review；可以递归，也可以完全省略。不要为单个 TASK 制造形式层级。
-3. 用 `TASK` 表达唯一执行叶子；每个 TASK 必须配置独立 TASK Review，每个 GROUP 必须配置本层 GROUP Review，Delivery 必须配置最终 Review。
+2. 根据真实代码、预计或已有 diff 和影响范围选择保障档；不确定时使用 `STANDARD`。`LIGHT` 只适用于单一根 TASK、局部内部改动、定向验证明确且不涉及接口、数据、权限、安全、生产部署或不可逆副作用；必须写入 `assuranceRationale`，并把 TASK/Delivery `reviewLoop` 设为 `null`。
+3. `STANDARD` 用 `GROUP` 表达真实的并行汇合或分层 Review；可以递归，也可以完全省略。每个 TASK 配置独立 TASK Review，每个 GROUP 配置本层 GROUP Review，Delivery 配置最终 Review。不要为单个 TASK 制造形式层级。
 4. 把实现目标和明确约束放入不透明 `loop.payload`。调度器不解释实现计划、测试、Gate 或内部 Skill 流程。
 5. 用精确 `resourceClaims` 表达跨 Delivery 排他资源；worktree 不能替代数据库、端口或环境锁。
 6. 用户提供的 Skill 只登记为共享 `root.skillHints`，由各 Loop 根据真实上下文决定是否触发。
-7. 准备后展示完整计划，并且只提供“自动执行 / 手动交接”两个冻结选项；同时允许用户直接提出修改意见。未明确选择时不冻结。
-8. 用户选择后立即以返回的 fingerprint、Revision 和精确项目授权调用 `freeze_hierarchy`。不要追加第二次通用 Yes/No。
+7. 先调用 `preview_hierarchy`，展示保障档、判断依据和完整计划，并且只提供“自动执行 / 手动交接”两个选项；同时允许用户直接提出修改意见。预览不创建控制状态或工作区，也不为保障档增加第二次确认。
+8. 用户选择自动执行后，才在实际开发工作区调用 `prepare_hierarchy`，以返回的 fingerprint、Revision 和精确项目授权调用 `freeze_hierarchy`；不要追加第二次通用 Yes/No。用户选择手动交接后，直接以预览 fingerprint、原 hierarchy 和精确项目授权调用 `create_manual_handoff`，只返回文件，不 prepare、不 freeze。
 
 需求连续性规则：
 
@@ -62,13 +65,13 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 冻结后持续读取 `graph_frontier`，完整消费当前批次的 action。精确参数、claim 顺序、租约与恢复规则以[execution-quickstart.md](references/execution-quickstart.md)为准。
 
 1. `REFREEZE_TASK_REQUIREMENT`：停止派遣该 TASK，按当前 requirement revision 完成用户授权的修改并重新读取 frontier。
-2. `DISPATCH_LOOP`：手动模式为目标开发 Agent 创建独立接收会话并生成交接；自动模式先读取每个 Ready 节点的 `loop_context`，再调用 `plan_dispatch_batch`。首次稳定路由返回 `HOST_NATIVE_ROUTE_REVIEW` 时，用中文表格展示当前批次和 30 秒倒计时，不询问确认；用户可在窗口内直接指定其他可用原生模型。倒计时结束后自动用同一输入再次调用计划工具并派遣，路由发生变化的节点重新开始 30 秒窗口。
+2. `DISPATCH_LOOP`：只存在于已经开始的自动执行 Graph。先读取每个 Ready 节点的 `loop_context`，再调用 `plan_dispatch_batch`。首次稳定路由返回 `HOST_NATIVE_ROUTE_REVIEW` 时，用中文表格展示当前批次和 30 秒倒计时，不询问确认；用户可在窗口内直接指定其他可用原生模型。倒计时结束后自动用同一输入再次调用计划工具并派遣，路由发生变化的节点重新开始 30 秒窗口。
 3. 自动选模由总调度 Agent 分析任务风险并提交 `ROUTINE`、`STANDARD` 或 `HIGH`；Controller 不用 Python 做语义判级。缺少分析时只可回退宿主明确报告且与 inventory 匹配的当前 Agent/模型；两者都缺失时保持 deferred。
 4. 自动 assignment 只接受宿主正式 Agent API 证明的 `HOST_NATIVE` 容量。PATH、CLI、exec、subprocess 或 companion bridge 一律是 `EXTERNAL_PROCESS`，不得伪装成自动派遣能力。
 5. 只消费 `HOST_NATIVE_DISPATCH_PLAN` 的 `concurrentDispatchGroups`，并发创建同批独立接收 Agent；`HOST_NATIVE_ROUTE_REVIEW` 没有预留，不得提前创建 Agent。严格把 assignment 的 `model.id` 当作 Claude/Codex 原生模型选择器，并使用 assignment 的宿主原生推理参数、工作区、预留 ID、决策指纹和宿主任务名。任何本机转发或模型替换都在原生调用之后发生，不得把转发后的实际模型倒填为派遣选择器。不得先创建普通 helper 再抢占预留，也不得跨 Delivery 复用上下文或工作区。
-6. 严格遵循宿主接收协议：Claude 由真实子 Agent 消费一次性 attestation 后 claim；Codex 由 `SubagentStart` Hook 校验真实 child/parent/task 并在 child 可见前 claim。claim 的 `modelId` 来自 reservation 中的原生选择器；宿主若能观测转发后的模型，只将其记录为展示用 `actualModelId`。Hook、预留或宿主身份无法证明时 fail closed。
-7. 接收方从 `loop_context` 获取冻结输入，自主管理分析、实现、测试、Gate 与修正；领取、代码检查完成、运行测试、发现问题、修复、复审和最终验证等阶段调用 `report_loop_progress`，只提交简体中文结构化摘要，不提交原始日志或内部推理。进度上报不续租，长运行仍须在租约到期前 heartbeat。
-8. TASK Review、GROUP Review 和 Delivery Review 在各自 Loop 内完成独立发现、修正、验证和复审。P0/P1 未关闭不得成功；P2 必须保留。详见[验收说明](references/acceptance.md)。
+6. 严格遵循宿主接收协议：Claude 由真实子 Agent 消费一次性 attestation 后 claim；Codex 由 `SubagentStart` Hook 校验真实 child/parent/task 并在 child 可见前 claim。claim 成功后，接收方读取一次 `loop_context`，随即在任何代码检查、分析、读写或测试前提交首次独立 `heartbeat_loop`；不得把 claim 自带租约当成首次 heartbeat。claim 的 `modelId` 来自 reservation 中的原生选择器；宿主若能观测转发后的模型，只将其记录为展示用 `actualModelId`。Hook、预留或宿主身份无法证明时 fail closed。
+7. 接收方从 `loop_context` 获取冻结输入，自主管理分析、实现、测试、Gate 与修正。`STANDARD` 在领取、代码检查完成、测试、修复、复审和最终验证等阶段上报进度；`LIGHT` 只在发现问题和最终验证时上报，短 Loop 可只报最终验证。进度不续租，长运行仍须在租约到期前 heartbeat。
+8. `STANDARD` 的 TASK Review、GROUP Review 和 Delivery Review 在各自 Loop 内完成独立发现、修正、验证和复审。`LIGHT` 不创建这些 Review 节点，TASK 成功后直接等待用户确认；若实际 diff 或影响扩大，必须提交 `REPLAN_REQUIRED` 并升级同一 Delivery 的下一 Revision 为 `STANDARD`。详见[验收说明](references/acceptance.md)。
 9. 只向 `record_loop_result` 提交真实业务终态：`SUCCEEDED`、`BLOCKED`、`REPLAN_REQUIRED` 或 `CANCELLED`。内部 Gate 失败、可修复 finding、容量交接和限额等待都不是 Loop outcome。
 10. frontier 返回 `RECORD_USER_CONFIRMATION` 时，展示分层验收结果并等待真实用户确认。
 
@@ -76,7 +79,7 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 
 ## Agent、模型与容量
 
-- `available_agents` / `recommend_executors` 只读且非绑定。开发方式确认前不展示模型建议。确认自动执行后，`recommend_executors(AUTOMATIC)` 只在当前宿主 Agent 内按原生 tier 生成只读预览；正式 Ready 批次由 `plan_dispatch_batch` 开启持久化 30 秒路由调整窗口，超时自动派遣。确认手动交接后，`recommend_executors(MANUAL_HANDOFF)` 才允许宿主指定或建议另一 TASK 开发 Agent；交给 Codex 就创建独立 Codex 任务，交给 Claude Code 就创建独立 Claude 会话，当前总调度会话不代替接收方开发。目标 Agent 接收后再生成自己的本地开发模型表。两类建议都不启动 Agent、不切换模型、不写执行事实，展示后不增加第二次确认。详见[agent-recommendations.md](references/agent-recommendations.md)。
+- `available_agents` 仅用于通用本机发现，不参与手动交接路由；`recommend_executors` 只接受 `AUTOMATIC`，并且只在当前宿主 Agent 内按原生 tier 生成只读预览。正式 Ready 批次由 `plan_dispatch_batch` 开启持久化 30 秒路由调整窗口，超时自动派遣。手动交接只调用 `create_manual_handoff`：交接前不指定 Agent、模型或接收会话，也不创建任务/worktree；接收宿主读取文件并真正开始开发时，才确定执行 Agent、创建或选择工作区并展示自己的本地模型表。详见[agent-recommendations.md](references/agent-recommendations.md)。
 - 所有派遣、tier 匹配、Review 多样性、reservation、claim 授权与决策指纹只使用宿主原生 `modelId`。`actualModelId` 是原生调用完成后的可选宿主观测，只用于中文状态和进度表；未知时显示“未报告”，不得读取特定修改器、猜测对应关系或据此改变编排。
 - 自动编排、自动选模、跨 Adapter、最大并发、额度策略和 Review 多样性由用户级配置控制；读取[orchestrator-configuration.md](references/orchestrator-configuration.md)。
 - 跨 Adapter 当前未开放修改；面板和保存工具都以 `ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE` fail closed。只有中央宿主未来能证明可创建、可认证、有容量且属于同一可信编排根的多个 Adapter 时才可开放。

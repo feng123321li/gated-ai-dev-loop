@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 import posixpath
 from string import Template
 from types import MappingProxyType
@@ -1259,10 +1260,8 @@ def render_scheduling_plan(
 ) -> str:
     """Render the concise Delivery overview and projection navigation."""
 
-    definitions = [
-        node["definition"]
-        for node in iter_hierarchy_nodes(hierarchy)
-    ]
+    hierarchy_nodes = iter_hierarchy_nodes(hierarchy)
+    definitions = [node["definition"] for node in hierarchy_nodes]
     tasks = [
         definition
         for definition in definitions
@@ -1278,9 +1277,10 @@ def render_scheduling_plan(
         for node in (run or {}).get("nodes", [])
     }
     completed_tasks = sum(
-        states.get(task_review_node_id(task["id"]))
+        states.get(_work_item_terminal_node_id(node))
         in {"SUCCEEDED", "COMPLETED"}
-        for task in tasks
+        for node in hierarchy_nodes
+        if node["definition"]["kind"] == "TASK"
     )
     status = (
         run["status"]
@@ -1331,7 +1331,11 @@ def _projection_states(
 def _work_item_terminal_node_id(node: dict[str, Any]) -> str:
     definition = node["definition"]
     if definition["kind"] == "TASK":
-        return task_review_node_id(definition["id"])
+        return (
+            task_review_node_id(definition["id"])
+            if node["reviewLoop"] is not None
+            else loop_node_id(definition["id"])
+        )
     return group_review_node_id(definition["id"])
 
 
@@ -1469,11 +1473,19 @@ def _acceptance_state_table(
 
 def _render_loop_baseline(
     label: str,
-    loop: dict[str, Any],
+    loop: dict[str, Any] | None,
     *,
     heading_level: int,
 ) -> str:
     heading = "#" * max(1, min(heading_level, 6))
+    if loop is None:
+        return "\n".join(
+            [
+                f"{heading} {label}",
+                "",
+                "- LIGHT 保障档不创建此独立 Review Loop。",
+            ]
+        )
     payload_level = max(1, min(heading_level + 2, 6))
     claims = (
         "、".join(
@@ -1513,7 +1525,16 @@ def _delivery_projection_status(
         f"- 交付标识：{_markdown_text(delivery['id'])}",
         f"- 标题：{_markdown_text(delivery['title'])}",
         f"- 摘要：{_markdown_text(delivery['summary'])}",
+        (
+            "- 保障档："
+            f"{_markdown_text(delivery.get('assuranceProfile', 'STANDARD'))}"
+        ),
     ]
+    if delivery.get("assuranceRationale") is not None:
+        lines.append(
+            "- 保障判断："
+            f"{_markdown_text(delivery['assuranceRationale'])}"
+        )
     lines.extend(
         [
             f"- 数据结构版本：{hierarchy['root']['schemaVersion']}",
@@ -1721,6 +1742,217 @@ def render_delivery_baseline(
     )
 
 
+def render_manual_handoff(
+    hierarchy: dict[str, Any],
+    *,
+    hierarchy_fingerprint: str,
+    graph_fingerprint: str,
+    confirmed_by: str,
+    created_at: str,
+) -> str:
+    """Render one portable, self-contained development handoff file."""
+
+    delivery = hierarchy["delivery"]
+    indexed_nodes: list[tuple[dict[str, Any], str]] = []
+    pending = [
+        (
+            hierarchy["root"],
+            hierarchy["root"]["definition"]["id"],
+        )
+    ]
+    while pending:
+        node, path = pending.pop()
+        indexed_nodes.append((node, path))
+        pending.extend(
+            (
+                child,
+                f"{path}/{child['definition']['id']}",
+            )
+            for child in reversed(node["children"])
+        )
+
+    item_rows: list[str] = []
+    item_details: list[str] = []
+    for node, path in indexed_nodes:
+        definition = node["definition"]
+        dependencies = (
+            definition["execution"]["dependsOn"]
+            if definition["kind"] == "TASK"
+            else definition["decomposition"]["dependsOn"]
+        )
+        item_rows.append(
+            _table_row(
+                [
+                    path,
+                    KIND_TEXT[definition["kind"]],
+                    definition["id"],
+                    definition["parentId"] or "无",
+                    "、".join(dependencies) or "无",
+                    definition["title"],
+                    definition["summary"],
+                ]
+            )
+        )
+        item_details.extend(
+            [
+                f"### {KIND_TEXT[definition['kind']]}："
+                f"{_markdown_text(definition['id'])}",
+                "",
+                f"- 层级路径：{_markdown_text(path)}",
+                f"- 标题：{_markdown_text(definition['title'])}",
+                f"- 摘要：{_markdown_text(definition['summary'])}",
+                f"- 上级：{_markdown_text(definition['parentId'] or '无')}",
+                (
+                    "- 前置依赖："
+                    + (
+                        "、".join(
+                            _markdown_text(item)
+                            for item in dependencies
+                        )
+                        or "无"
+                    )
+                ),
+                "",
+            ]
+        )
+        if definition["kind"] == "TASK":
+            item_details.extend(
+                [
+                    _render_loop_baseline(
+                        "执行 Loop",
+                        definition["execution"]["loop"],
+                        heading_level=4,
+                    ),
+                    "",
+                    _render_loop_baseline(
+                        "TASK Review Loop",
+                        node["reviewLoop"],
+                        heading_level=4,
+                    ),
+                    "",
+                ]
+            )
+        else:
+            item_details.extend(
+                [
+                    "#### 直接子节点",
+                    "",
+                    (
+                        "、".join(
+                            _markdown_text(child["definition"]["id"])
+                            for child in node["children"]
+                        )
+                        or "无"
+                    ),
+                    "",
+                    _render_loop_baseline(
+                        "GROUP Review Loop",
+                        node["reviewLoop"],
+                        heading_level=4,
+                    ),
+                    "",
+                ]
+            )
+
+    hints = hierarchy["root"]["skillHints"]
+    skill_lines = [
+        f"- {_markdown_text(item['name'])}："
+        f"{_markdown_text(item['purpose'])}"
+        for item in hints
+    ] or ["- 无"]
+    machine_hierarchy = json.dumps(
+        hierarchy,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+    return "\n".join(
+        [
+            "# 开发内容交接",
+            "",
+            "## 交接状态",
+            "",
+            "| 项目 | 当前结论 |",
+            "|---|---|",
+            f"| Delivery | {_markdown_text(delivery['id'])} |",
+            f"| 标题 | {_markdown_text(delivery['title'])} |",
+            f"| 确认人 | {_markdown_text(confirmed_by)} |",
+            f"| 生成时间（UTC+8） | {_utc_plus_8(created_at)} |",
+            "| 调度状态 | 未 prepare、未冻结、未创建 Graph Run |",
+            "| 接收执行者与模型 | 交接前不指定；由接收宿主开始开发时确定并展示 |",
+            "| 开发工作区 | 交接阶段不创建；开始实际开发时再创建或选择 |",
+            "",
+            "本文件只交接开发内容，不创建接收任务、不认领 Loop，也不预先"
+            "绑定任何 Agent、原生模型或实际代理模型。",
+            "",
+            "## 完整性标识",
+            "",
+            f"- 数据结构版本：{hierarchy['root']['schemaVersion']}",
+            f"- 层级指纹：{hierarchy_fingerprint}",
+            f"- 调度图指纹：{graph_fingerprint}",
+            "",
+            "## Delivery 目标",
+            "",
+            f"- 标题：{_markdown_text(delivery['title'])}",
+            f"- 摘要：{_markdown_text(delivery['summary'])}",
+            "",
+            "### 规划时 Git 信息",
+            "",
+            _render_git_binding_baseline(delivery),
+            "",
+            "### 规划时项目范围",
+            "",
+            _render_project_scopes(delivery),
+            "",
+            "接收方开始开发时必须按实际工作区重新校准路径、Git 分支绑定"
+            "和项目授权；交接文件中的规划时路径不等于已创建开发环境。",
+            "",
+            "## GROUP/TASK 总览",
+            "",
+            "| 层级路径 | 类型 | 标识 | 上级 | 前置依赖 | 标题 | 摘要 |",
+            "|---|---|---|---|---|---|---|",
+            *item_rows,
+            "",
+            "## GROUP/TASK 开发输入",
+            "",
+            *item_details,
+            "## Delivery Review 输入",
+            "",
+            _render_loop_baseline(
+                "Delivery Review Loop",
+                delivery["reviewLoop"],
+                heading_level=3,
+            ),
+            "",
+            "## 共享 Skill 提示",
+            "",
+            *skill_lines,
+            "",
+            "## 接收后开始开发",
+            "",
+            "1. 接收宿主读取本文件；此时才知道实际使用的 Agent 与本机模型映射。",
+            "2. 选择实际开发工作区；需要 Git 隔离时，在这一步创建 linked worktree。",
+            "3. 根据新工作区校准下方 schema v3 中的 projectScopes 与 gitBinding。",
+            "4. 在开发工作区调用 `workspace_status`，确认不会覆盖无关 Delivery。",
+            "5. 调用 `prepare_hierarchy` 写入校准后的层级，再调用 `freeze_hierarchy` 启动开发。",
+            "6. 从 `graph_frontier` 读取首批可执行 Loop；此后才生成并展示本宿主的模型路由。",
+            "",
+            "如果宿主创建 worktree 返回排队标识，这只表示开发环境仍在初始化；"
+            "不要宣称 Graph 已启动，也不要重复创建同一接收任务。",
+            "",
+            "## 机器可读 schema v3",
+            "",
+            "以下附录与上面的开发内容属于同一个交接文件。接收方可读取后"
+            "校准工作区字段，不应把规划时 Agent 或模型补写进 hierarchy。",
+            "",
+            "```json",
+            machine_hierarchy,
+            "```",
+            "",
+        ]
+    )
+
+
 def render_delivery_progress(
     hierarchy: dict[str, Any],
     *,
@@ -1758,22 +1990,23 @@ def render_delivery_progress(
             ")"
         )
         if definition["kind"] == "TASK":
-            task_rows.extend(
-                [
-                    _progress_state_row(
-                        states,
-                        loop_node_id(definition["id"]),
-                        prefix=[path, "TASK"],
-                        suffix=[progress_link],
-                    ),
+            task_rows.append(
+                _progress_state_row(
+                    states,
+                    loop_node_id(definition["id"]),
+                    prefix=[path, "TASK"],
+                    suffix=[progress_link],
+                )
+            )
+            if node["reviewLoop"] is not None:
+                task_rows.append(
                     _progress_state_row(
                         states,
                         task_review_node_id(definition["id"]),
                         prefix=[path, "TASK Review"],
                         suffix=[progress_link],
-                    ),
-                ]
-            )
+                    )
+                )
             continue
         group_rows.append(
             _progress_state_row(
@@ -1799,16 +2032,38 @@ def render_delivery_progress(
     table_separator = (
         "|---|---|---|---|---|---|---:|---|---|---|"
     )
-    delivery_review_lines = [
-        table_header,
-        table_separator,
-        _progress_state_row(
-            states,
-            review_node_id(hierarchy["delivery"]["id"]),
-            prefix=[hierarchy["delivery"]["id"], "Delivery Review"],
-            suffix=["[查看验收](acceptance.md)"],
-        ),
-    ]
+    delivery_review_lines = [table_header, table_separator]
+    if hierarchy["delivery"]["reviewLoop"] is None:
+        delivery_review_lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _markdown_text(hierarchy["delivery"]["id"]),
+                    "LIGHT：不创建独立 Delivery Review",
+                    "不适用",
+                    "不适用",
+                    "不适用",
+                    "不适用",
+                    "0",
+                    "不适用",
+                    "由用户直接确认",
+                    "[查看验收](acceptance.md)",
+                ]
+            )
+            + " |"
+        )
+    else:
+        delivery_review_lines.append(
+            _progress_state_row(
+                states,
+                review_node_id(hierarchy["delivery"]["id"]),
+                prefix=[
+                    hierarchy["delivery"]["id"],
+                    "Delivery Review",
+                ],
+                suffix=["[查看验收](acceptance.md)"],
+            )
+        )
     progress_monitor = (
         run.get("progressMonitor", {}).get("markdownTable")
         if isinstance(run, dict)
@@ -2005,24 +2260,32 @@ def render_delivery_acceptance(
         ]
     )
     delivery = hierarchy["delivery"]
-    delivery_lines = [
-        "### Delivery Review",
-        "",
-        "#### 审查输入",
-        "",
-        _render_payload_markdown(
-            delivery["reviewLoop"]["payload"],
-            heading_level=5,
-        ),
-        "",
-        "#### 审查结果",
-        "",
-        *_acceptance_result_lines(
-            states,
-            review_node_id(delivery["id"]),
-            include_review_findings=True,
-        ),
-    ]
+    if delivery["reviewLoop"] is None:
+        delivery_lines = [
+            "### Delivery Review",
+            "",
+            "- LIGHT 保障档不创建 Delivery Review Loop；TASK 定向验证"
+            "完成后直接进入用户确认。",
+        ]
+    else:
+        delivery_lines = [
+            "### Delivery Review",
+            "",
+            "#### 审查输入",
+            "",
+            _render_payload_markdown(
+                delivery["reviewLoop"]["payload"],
+                heading_level=5,
+            ),
+            "",
+            "#### 审查结果",
+            "",
+            *_acceptance_result_lines(
+                states,
+                review_node_id(delivery["id"]),
+                include_review_findings=True,
+            ),
+        ]
     confirmation_lines = _acceptance_result_lines(
         states,
         confirmation_node_id(delivery["id"]),
@@ -2083,22 +2346,28 @@ def render_work_item_progress(
     )
     progress_separator = "|---|---|---|---|---|---:|---|---|"
     if definition["kind"] == "TASK":
+        task_progress_rows = [
+            _progress_state_row(
+                states,
+                loop_node_id(definition["id"]),
+                prefix=["TASK"],
+            )
+        ]
+        if node["reviewLoop"] is not None:
+            task_progress_rows.append(
+                _progress_state_row(
+                    states,
+                    task_review_node_id(definition["id"]),
+                    prefix=["TASK Review"],
+                )
+            )
         sections = "\n".join(
             [
                 "## TASK Loop 状态",
                 "",
                 progress_header,
                 progress_separator,
-                _progress_state_row(
-                    states,
-                    loop_node_id(definition["id"]),
-                    prefix=["TASK"],
-                ),
-                _progress_state_row(
-                    states,
-                    task_review_node_id(definition["id"]),
-                    prefix=["TASK Review"],
-                ),
+                *task_progress_rows,
             ]
         )
     else:
@@ -2179,42 +2448,55 @@ def render_work_item_acceptance(
         acceptance = _acceptance_payload(
             definition["execution"]["loop"]["payload"]
         )
-        sections = "\n".join(
-            [
-                "## 已知验收输入",
-                "",
-                (
-                    _render_payload_markdown(
-                        acceptance,
-                        heading_level=3,
-                    )
-                    if acceptance
-                    else "- 未显式提供"
-                ),
-                "",
-                "## TASK 结果与证据",
-                "",
-                *_acceptance_result_lines(
-                    states,
-                    loop_node_id(definition["id"]),
-                ),
-                "",
-                "## TASK Review 输入",
-                "",
+        task_sections = [
+            "## 已知验收输入",
+            "",
+            (
                 _render_payload_markdown(
-                    node["reviewLoop"]["payload"],
+                    acceptance,
                     heading_level=3,
-                ),
-                "",
-                "## TASK Review 结果与证据",
-                "",
-                *_acceptance_result_lines(
-                    states,
-                    task_review_node_id(definition["id"]),
-                    include_review_findings=True,
-                ),
-            ]
-        )
+                )
+                if acceptance
+                else "- 未显式提供"
+            ),
+            "",
+            "## TASK 结果与证据",
+            "",
+            *_acceptance_result_lines(
+                states,
+                loop_node_id(definition["id"]),
+            ),
+        ]
+        if node["reviewLoop"] is None:
+            task_sections.extend(
+                [
+                    "",
+                    "## 独立 Review",
+                    "",
+                    "- LIGHT 保障档不创建 TASK Review Loop；由用户直接确认结果。",
+                ]
+            )
+        else:
+            task_sections.extend(
+                [
+                    "",
+                    "## TASK Review 输入",
+                    "",
+                    _render_payload_markdown(
+                        node["reviewLoop"]["payload"],
+                        heading_level=3,
+                    ),
+                    "",
+                    "## TASK Review 结果与证据",
+                    "",
+                    *_acceptance_result_lines(
+                        states,
+                        task_review_node_id(definition["id"]),
+                        include_review_findings=True,
+                    ),
+                ]
+            )
+        sections = "\n".join(task_sections)
     else:
         child_rows = []
         for child in node["children"]:
@@ -2704,6 +2986,7 @@ __all__ = (
     "render_delivery_baseline",
     "render_delivery_progress",
     "render_group_baseline",
+    "render_manual_handoff",
     "render_projection_documents",
     "render_scheduling_plan",
     "render_task_interface_documents",

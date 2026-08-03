@@ -265,8 +265,9 @@ def main() -> int:
     additional_context = (
         "The host already claimed one exact Layered Delivery AUTO Loop for "
         "this Codex-native context before exposing this message. Do not call "
-        "dispatch_loop. Load the assigned node with loop_context, execute it, "
-        "and omit operation_id from heartbeat_loop, pause_loop, and "
+        "dispatch_loop. Load the assigned node with loop_context, immediately "
+        "call heartbeat_loop once before any other tool, then execute it. "
+        "Omit operation_id from heartbeat_loop, pause_loop, and "
         "record_loop_result because PreToolUse injects it for this child. "
         "This message contains no receiver or operation bearer.\n"
         "LAYERED_DELIVERY_ASSIGNMENT="

@@ -6,6 +6,8 @@
 
 调用 `graph_frontier` 并执行全部 action：
 
+- 每次响应同时读取 `progressMonitor`。后台 Agent 运行期间按 `recommendedPollSeconds` 继续刷新；仅在进度表或预警变化时，把 `markdownTable` 原样作为中文表格展示到主 Agent 窗口。`graph_events` 是诊断接口，不把原始事件、operation 或 reservation 日志直接展示给普通用户。
+
 - `DISPATCH_LOOP`：自动模式下先用宿主真实 inventory 调用 `plan_dispatch_batch`，原子预留后按计划创建接收 Agent；接收方读取 `loop_context` 后凭预留 claim。
 - `WAIT_FOR_DISPATCH_RECEIVER`：另一个调度器已为该 Ready Loop 取得短租约派遣预留；不得重复创建 Agent，等待接收方 claim 或预留过期。
 - `CONTINUE_OR_HEARTBEAT_LOOP`：继续当前 Loop，并在租约到期前 heartbeat。
@@ -59,12 +61,24 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。不要绕过 TASK
 7. 内部 Loop 先识别当前任务与宿主可用 Skill，再优先原生触发适用的 Skill Hint；不要因为 hierarchy 提供了提示，就假定每条提示都适用于当前 Loop。
 8. 让内部 Loop 自己选择其他必要 Skill。payload 是目标、明确约束和已知验收点的输入，不是完整实现规约；Loop 要结合真实代码、契约和数据链路推导当前 scope 的必要条件。冻结 Graph 不冻结内部实现计划。TASK Loop 自主管理实现、文件、测试、Gate 和修正；Review Loop 自主管理独立发现、修正协调、Gate 和复审。
 9. 当前目标内可修复的实现缺陷、测试失败、数据完整性或边界问题都留在当前 Loop：调整内部计划，完成修正，再重新验证。Review 可以自行修正或使用宿主内部执行容量派遣修正上下文，但必须保留独立复核；不要把“Review 未通过”提交成 `BLOCKED`。
-10. 长任务持续调用 `heartbeat_loop`。Codex 与 Claude 原生 child 对 heartbeat、pause、result 均省略 `operation_id`，由共享 PreToolUse 校验各自宿主身份后注入；其他适配器在获得等价宿主授权通道前不能自动变更 Loop。检测到上下文容量压力或高轮次 Hook 摩擦且工作仍可继续时，不提交失败结果；在租约有效期内调用普通 `pause_loop`。
-11. 宿主明确报告剩余额度不高于 5% 且提供真实未来 `resetAt` 时，停止启动新 Loop，并在额度耗尽前保存当前工作。已 claim 的执行 Agent 在租约有效期内调用 `pause_loop(resume_at=resetAt, capacity_scope=EXECUTOR)`；总调度宿主受限时使用 `capacity_scope=HOST` 暂停其正在承载的 claimed Loop。两者都释放租约和资源占用、保留同一 attempt；不得估算剩余额度或猜测 `resetAt`。
-12. 软阈值 pause 成功后，使用当前宿主的原生计划能力创建一次性恢复提示。Claude Code 2.1.72+ 使用当前会话的一次性 Cron，CLI 必须保持运行；Codex Desktop 使用当前任务计划，电脑和应用必须保持运行。为避免恢复窗口边界抖动，计划时间应晚于 `resetAt` 一小段安全余量。提示只要求原 Agent 调用 `workspace_status → graph_frontier → loop_context` 并重新 dispatch；不调用推荐器、不自动换 Agent。
-13. 宿主直接观察到硬 429 且结构化响应提供真实未来 `resetAt` 时，由模型外宿主适配器私有回调处理，不等待失败 Loop。Claude `StopFailure` 只读取 `error_details`，不读取渲染消息或模型输出；回调精确匹配 claimed receiver、限制 reset 最远 24 小时、用 report ID 幂等防重放，并暂停共享容量域内跨 Delivery 的同 Agent Loop。该回调不是 MCP 工具。宿主消费 `cancelRecurringMonitors=true`，按 `wakeMode=HOST_NATIVE_ONE_SHOT` 只建立 reset 后一次唤醒。
-14. 普通 `pause_loop` 返回固定 handoff 数据。优先自动派遣新的接收 Agent；没有容量时输出人工交接。接收方使用同一 `rootId/nodeId` 调用 `resume_loop`，重新读取 frontier 和 `loop_context`，再以新 owner/operation dispatch；不重新 prepare/freeze。
-15. 只有真实业务终态才用 `record_loop_result` 提交标准结果。
+10. 当前 Loop 在领取、代码检查完成、运行测试、发现问题、修复、复审和最终验证等有意义的阶段调用 `report_loop_progress`。`summary_zh`、`completed_zh` 与 `next_step_zh` 使用简体中文，测试结果使用结构化计数；禁止提交原始终端日志或内部推理。进度事件是可观测事实，不是 Graph 状态迁移，也不续租。
+11. 长任务持续调用 `heartbeat_loop`。Codex 与 Claude 原生 child 对 heartbeat、progress、pause、result 均省略 `operation_id`，由共享 PreToolUse 校验各自宿主身份后注入；其他适配器在获得等价宿主授权通道前不能自动变更 Loop。检测到上下文容量压力或高轮次 Hook 摩擦且工作仍可继续时，不提交失败结果；在租约有效期内调用普通 `pause_loop`。
+12. 宿主明确报告剩余额度不高于 5% 且提供真实未来 `resetAt` 时，停止启动新 Loop，并在额度耗尽前保存当前工作。已 claim 的执行 Agent 在租约有效期内调用 `pause_loop(resume_at=resetAt, capacity_scope=EXECUTOR)`；总调度宿主受限时使用 `capacity_scope=HOST` 暂停其正在承载的 claimed Loop。两者都释放租约和资源占用、保留同一 attempt；不得估算剩余额度或猜测 `resetAt`。
+13. 软阈值 pause 成功后，使用当前宿主的原生计划能力创建一次性恢复提示。Claude Code 2.1.72+ 使用当前会话的一次性 Cron，CLI 必须保持运行；Codex Desktop 使用当前任务计划，电脑和应用必须保持运行。为避免恢复窗口边界抖动，计划时间应晚于 `resetAt` 一小段安全余量。提示只要求原 Agent 调用 `workspace_status → graph_frontier → loop_context` 并重新 dispatch；不调用推荐器、不自动换 Agent。
+14. 宿主直接观察到硬 429 且结构化响应提供真实未来 `resetAt` 时，由模型外宿主适配器私有回调处理，不等待失败 Loop。Claude `StopFailure` 只读取 `error_details`，不读取渲染消息或模型输出；回调精确匹配 claimed receiver、限制 reset 最远 24 小时、用 report ID 幂等防重放，并暂停共享容量域内跨 Delivery 的同 Agent Loop。该回调不是 MCP 工具。宿主消费 `cancelRecurringMonitors=true`，按 `wakeMode=HOST_NATIVE_ONE_SHOT` 只建立 reset 后一次唤醒。
+15. 普通 `pause_loop` 返回固定 handoff 数据。优先自动派遣新的接收 Agent；没有容量时输出人工交接。接收方使用同一 `rootId/nodeId` 调用 `resume_loop`，重新读取 frontier 和 `loop_context`，再以新 owner/operation dispatch；不重新 prepare/freeze。
+16. 只有真实业务终态才用 `record_loop_result` 提交标准结果。
+
+## 后台进度与失联预警
+
+- `report_loop_progress` 只写入 `LOOP_PROGRESS_REPORTED` 可观测事件，不改变节点状态、不更新 `lastHeartbeatAt`、不延长 `leaseExpiresAt`。
+- `graph_status` 与 `graph_frontier` 返回中文 `progressMonitor.markdownTable`，包含节点、attempt、Agent/模型、阶段、摘要、已完成、下一步、测试、心跳/租约和健康状态。
+- claim 后 90 秒仍无首次独立 heartbeat：`SUSPECT_NOT_STARTED / 疑似未启动`。
+- 已有 progress 但 90 秒仍无首次独立 heartbeat：`HEARTBEAT_MISSING / 已开始但无独立心跳`。
+- heartbeat 仍在预期窗口内，但超过 5 分钟没有 progress：`ALIVE_WITHOUT_PROGRESS / 存活但无可见进展`。
+- heartbeat 与 progress 均超过 `heartbeatSeconds + graceSeconds`：`SUSPECT_LOST / 疑似失联`。
+- lease 到期后，下一次 `graph_frontier` 先调用 `advance_graph`，记录 `CLAIM_LEASE_EXPIRED / WORKER_LOST` 并在重试预算内生成新 attempt。
+- mutation Hook 拒绝 heartbeat、progress、pause 或 result 时，主 Agent 不得代交结果或手填 operation。等待 lease 回收，修复宿主 Hook/child/model 身份后再派遣新 attempt；新接收方复用工作区成果并重新验证。
 
 不要合并以下恢复分支：
 

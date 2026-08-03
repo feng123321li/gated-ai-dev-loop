@@ -67,10 +67,12 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 4. 自动 assignment 只接受宿主正式 Agent API 证明的 `HOST_NATIVE` 容量。PATH、CLI、exec、subprocess 或 companion bridge 一律是 `EXTERNAL_PROCESS`，不得伪装成自动派遣能力。
 5. 按 `concurrentDispatchGroups` 并发创建同批独立接收 Agent，严格使用 assignment 的模型、推理强度、工作区、预留 ID、决策指纹和宿主任务名。不得先创建普通 helper 再抢占预留，也不得跨 Delivery 复用上下文或工作区。
 6. 严格遵循宿主接收协议：Claude 由真实子 Agent 消费一次性 attestation 后 claim；Codex 由 `SubagentStart` Hook 校验真实 child/parent/task/model 并在 child 可见前 claim。Hook、预留或宿主身份无法证明时 fail closed。
-7. 接收方从 `loop_context` 获取冻结输入，自主管理分析、实现、测试、Gate 与修正；长运行在租约到期前 heartbeat。
+7. 接收方从 `loop_context` 获取冻结输入，自主管理分析、实现、测试、Gate 与修正；领取、代码检查完成、运行测试、发现问题、修复、复审和最终验证等阶段调用 `report_loop_progress`，只提交简体中文结构化摘要，不提交原始日志或内部推理。进度上报不续租，长运行仍须在租约到期前 heartbeat。
 8. TASK Review、GROUP Review 和 Delivery Review 在各自 Loop 内完成独立发现、修正、验证和复审。P0/P1 未关闭不得成功；P2 必须保留。详见[验收说明](references/acceptance.md)。
 9. 只向 `record_loop_result` 提交真实业务终态：`SUCCEEDED`、`BLOCKED`、`REPLAN_REQUIRED` 或 `CANCELLED`。内部 Gate 失败、可修复 finding、容量交接和限额等待都不是 Loop outcome。
 10. frontier 返回 `RECORD_USER_CONFIRMATION` 时，展示分层验收结果并等待真实用户确认。
+
+后台 Loop 运行期间，总调度 Agent 按 `progressMonitor.recommendedPollSeconds` 持续读取 `graph_frontier`，仅在表格内容或预警变化时把 `progressMonitor.markdownTable` 展示到主 Agent 窗口。普通用户界面不展开 `graph_events`、operation、reservation 或原始英文状态；这些信息只保留给诊断。领取后 90 秒无首次独立心跳显示“疑似未启动”，心跳正常但超过 5 分钟无进度显示“存活但无可见进展”，心跳和进度均超过预期窗口显示“疑似失联”；租约到期由下一次 `graph_frontier` 自动按 `WORKER_LOST` 回收。
 
 ## Agent、模型与容量
 

@@ -74,7 +74,14 @@ SERVER_INSTRUCTIONS = (
     "the execution leaf, while every GROUP joins and reviews its child "
     "subtree before succeeding. Start with workspace_status. Prepare "
     "and explicitly freeze a hierarchy, then follow every graph_frontier "
-    "action. Each TASK or Review Loop owns its internal plan, tests, "
+    "action. While native child Agents run in the background, the main "
+    "orchestrator keeps polling graph_frontier at the returned progress "
+    "monitor interval and shows progressMonitor.markdownTable in its user "
+    "commentary whenever progress or alerts change. Each claimed Loop calls "
+    "report_loop_progress at meaningful milestones using concise Simplified "
+    "Chinese summaries; heartbeat remains lease-only and raw graph events "
+    "remain diagnostic-only. Each TASK or Review Loop owns its internal "
+    "plan, tests, "
     "gates, rework, and Skill usage. A payload carries goals, explicit "
     "constraints, and known acceptance input rather than a complete "
     "implementation specification. The Loop derives and validates other "
@@ -268,13 +275,47 @@ def _tool_result(
     modern: bool,
 ) -> dict[str, Any]:
     safe_payload = redact(payload)
-    text = json.dumps(
-        safe_payload,
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
+    business_result = safe_payload.get("result")
+    progress_monitor = (
+        business_result.get("progressMonitor")
+        if isinstance(business_result, dict)
+        else None
     )
+    markdown_table = (
+        progress_monitor.get("markdownTable")
+        if isinstance(progress_monitor, dict)
+        else None
+    )
+    if not is_error and isinstance(markdown_table, str) and markdown_table:
+        alerts = progress_monitor.get("alerts", [])
+        alert_lines = [
+            f"- ⚠️ {item['messageZh']}"
+            for item in alerts
+            if isinstance(item, dict)
+            and isinstance(item.get("messageZh"), str)
+        ]
+        text = "\n".join(
+            [
+                "## 后台执行进度",
+                "",
+                *alert_lines,
+                *([""] if alert_lines else []),
+                markdown_table,
+                "",
+                (
+                    "主 Agent 应按建议间隔继续刷新；原始事件仅用于"
+                    "展开诊断。"
+                ),
+            ]
+        )
+    else:
+        text = json.dumps(
+            safe_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
     result: dict[str, Any] = {
         "content": [{"type": "text", "text": text}],
         "structuredContent": safe_payload,

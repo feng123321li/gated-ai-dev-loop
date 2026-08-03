@@ -40,6 +40,7 @@ from .model_rendering import (
     render_work_item_projection_documents,
     render_workspace_overview,
 )
+from .progress_reporting import attach_progress_monitor
 
 
 GOVERNANCE_DIRECTORY = ".layered-delivery"
@@ -2836,6 +2837,8 @@ class SchedulerRepository:
         run_id: str,
     ) -> list[dict[str, Any]]:
         executor_metadata: dict[tuple[str, int], dict[str, Any]] = {}
+        first_heartbeats: dict[tuple[str, int], str] = {}
+        latest_progress: dict[tuple[str, int], dict[str, Any]] = {}
         claim_rows = connection.execute(
             """
             SELECT node_id, attempt, payload_json
@@ -2850,6 +2853,37 @@ class SchedulerRepository:
             executor_metadata[
                 (claim_row["node_id"], claim_row["attempt"])
             ] = payload if isinstance(payload, dict) else {}
+        heartbeat_rows = connection.execute(
+            """
+            SELECT node_id, attempt, MIN(recorded_at) AS first_heartbeat_at
+            FROM graph_events
+            WHERE run_id = ? AND event_type = 'LOOP_HEARTBEAT'
+            GROUP BY node_id, attempt
+            """,
+            (run_id,),
+        ).fetchall()
+        for heartbeat_row in heartbeat_rows:
+            first_heartbeats[
+                (heartbeat_row["node_id"], heartbeat_row["attempt"])
+            ] = heartbeat_row["first_heartbeat_at"]
+        progress_rows = connection.execute(
+            """
+            SELECT event_id, node_id, attempt, payload_json, recorded_at
+            FROM graph_events
+            WHERE run_id = ? AND event_type = 'LOOP_PROGRESS_REPORTED'
+            ORDER BY event_id
+            """,
+            (run_id,),
+        ).fetchall()
+        for progress_row in progress_rows:
+            payload = json.loads(progress_row["payload_json"])
+            latest_progress[
+                (progress_row["node_id"], progress_row["attempt"])
+            ] = {
+                **(payload if isinstance(payload, dict) else {}),
+                "eventId": progress_row["event_id"],
+                "reportedAt": progress_row["recorded_at"],
+            }
         rows = connection.execute(
             """
             SELECT n.* FROM node_runs n
@@ -2911,6 +2945,9 @@ class SchedulerRepository:
                 "operationId": row["operation_id"],
                 "claimedAt": row["claimed_at"],
                 "lastHeartbeatAt": row["last_heartbeat_at"],
+                "firstHeartbeatAt": first_heartbeats.get(
+                    (row["node_id"], row["attempt"])
+                ),
                 "leaseExpiresAt": (
                     row["lease_expires_at"]
                     if row["status"] == "CLAIMED"
@@ -2932,6 +2969,9 @@ class SchedulerRepository:
                     else stored_outcome
                 ),
                 "failureClass": row["failure_class"],
+                "progress": latest_progress.get(
+                    (row["node_id"], row["attempt"])
+                ),
             }
             capacity_scope = pause_metadata.get("capacityScope")
             if capacity_scope in {"EXECUTOR", "HOST"}:
@@ -3222,6 +3262,12 @@ class SchedulerRepository:
                     != "SCHEDULER_RUN_MISSING"
                 ):
                     raise
+            if run is not None:
+                run = attach_progress_monitor(
+                    run,
+                    definition["graph"],
+                    observed_at=timestamp(self.now),
+                )
             projection_root = safe_path(self.control_root, root_id)
             revision_history = self.revision_history(root_id)
             documents = render_projection_documents(

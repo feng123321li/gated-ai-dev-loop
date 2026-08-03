@@ -25,6 +25,7 @@ from hdg.mcp_adapter import (
     McpConnection,
     PROTOCOL_VERSION_META_KEY,
     SUPPORTED_PROTOCOL_VERSIONS,
+    _tool_result,
     handle_message,
 )
 from hdg.mcp_tools import (
@@ -538,6 +539,37 @@ class HierarchyContractTests(unittest.TestCase):
 
 
 class McpSurfaceTests(unittest.TestCase):
+    def test_progress_tool_result_defaults_to_a_chinese_table(self) -> None:
+        result = _tool_result(
+            {
+                "ok": True,
+                "result": {
+                    "progressMonitor": {
+                        "alerts": [
+                            {
+                                "code": "SUSPECT_NOT_STARTED",
+                                "messageZh": "领取后仍没有首次独立心跳。",
+                            }
+                        ],
+                        "markdownTable": (
+                            "| 节点 | 当前阶段 |\n"
+                            "|---|---|\n"
+                            "| provider review | 运行测试 |"
+                        ),
+                    }
+                },
+            },
+            is_error=False,
+            modern=True,
+        )
+
+        rendered = result["content"][0]["text"]
+        self.assertIn("## 后台执行进度", rendered)
+        self.assertIn("领取后仍没有首次独立心跳", rendered)
+        self.assertIn("| provider review | 运行测试 |", rendered)
+        self.assertNotIn("SUSPECT_NOT_STARTED", rendered)
+        self.assertIn("progressMonitor", result["structuredContent"]["result"])
+
     def test_shared_controller_executes_without_mcp_context(self) -> None:
         with TemporaryDirectory() as root:
             controller = LayeredDeliveryController()
@@ -586,6 +618,25 @@ class McpSurfaceTests(unittest.TestCase):
             },
         )
         by_name = {tool["name"]: tool for tool in tools}
+        progress_tool = by_name["report_loop_progress"]
+        self.assertFalse(progress_tool["annotations"]["readOnlyHint"])
+        self.assertEqual(
+            progress_tool["inputSchema"]["properties"]["phase"]["enum"],
+            [
+                "STARTING",
+                "INSPECTING",
+                "TESTING",
+                "INVESTIGATING",
+                "FIXING",
+                "REVIEWING",
+                "VERIFYING",
+                "WAITING",
+            ],
+        )
+        self.assertIn(
+            "Simplified Chinese",
+            progress_tool["inputSchema"]["properties"]["summary_zh"]["description"],
+        )
         open_settings = by_name["open_orchestrator_settings"]
         self.assertTrue(open_settings["annotations"]["readOnlyHint"])
         self.assertEqual(
@@ -2095,7 +2146,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 26)
+            self.assertEqual(len(listed["result"]["tools"]), 27)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

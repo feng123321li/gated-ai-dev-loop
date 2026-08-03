@@ -9,6 +9,7 @@ from .loop_contracts import (
     resource_claims_overlap,
 )
 from .repository import SchedulerRepository, timestamp
+from .progress_reporting import attach_progress_monitor
 
 
 def build_graph_frontier(
@@ -30,6 +31,7 @@ def build_graph_frontier(
             "nextWakeAt": None,
             "workspaceIsolation": run.get("workspaceIsolation"),
             "actions": [],
+            "progressMonitor": run.get("progressMonitor"),
         }
         if run.get("gitBinding") is not None:
             result["gitBinding"] = run["gitBinding"]
@@ -196,8 +198,12 @@ def build_graph_frontier(
                 "workItemId": definition["workItemId"],
                 "attempt": state["attempt"],
                 "owner": state["owner"],
+                "agentId": state.get("agentId"),
+                "modelId": state.get("modelId"),
                 "operationId": state["operationId"],
                 "leaseExpiresAt": state["leaseExpiresAt"],
+                "progress": state.get("progress"),
+                "monitor": state.get("monitor"),
             }
             active_loops.append(record)
             actions.append(
@@ -346,6 +352,7 @@ def build_graph_frontier(
         ),
         "workspaceIsolation": run.get("workspaceIsolation"),
         "actions": actions,
+        "progressMonitor": run.get("progressMonitor"),
     }
     if host_capacity is not None:
         result["hostCapacity"] = host_capacity
@@ -376,6 +383,11 @@ def get_graph_frontier(
     repository = SchedulerRepository(root, now=now)
     graph = repository.hierarchy(root_id)["graph"]
     observation_at = max(timestamp(now), run["updatedAt"])
+    run = attach_progress_monitor(
+        run,
+        graph,
+        observed_at=observation_at,
+    )
     with repository.read() as connection:
         external_reservations = (
             repository.claimed_resource_reservations(

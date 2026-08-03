@@ -31,6 +31,23 @@ _LOOP_EXECUTION_POLICY = {
         "action": "PAUSE_AND_HANDOFF",
         "loopOutcome": "NONE",
     },
+    "progressReporting": {
+        "tool": "report_loop_progress",
+        "language": "SIMPLIFIED_CHINESE",
+        "heartbeatRenewsLease": True,
+        "progressRenewsLease": False,
+        "reportAt": [
+            "LOOP_START",
+            "CODE_INSPECTION_COMPLETE",
+            "TEST_RUN",
+            "ISSUE_FOUND",
+            "FIX_APPLIED",
+            "REREVIEW",
+            "FINAL_VERIFICATION",
+        ],
+        "rawLogsAllowed": False,
+        "hiddenReasoningAllowed": False,
+    },
     "providerRateLimit": {
         "softStopTrigger": (
             "KNOWN_REMAINING_CAPACITY_AT_OR_BELOW_5_PERCENT"

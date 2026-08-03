@@ -857,7 +857,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertEqual(len(operation_hooks), 1)
         self.assertEqual(
             operation_hooks[0]["matcher"],
-            "^mcp__.*__(heartbeat_loop|pause_loop|record_loop_result)$",
+            "^mcp__.*__(heartbeat_loop|report_loop_progress|pause_loop|record_loop_result)$",
         )
         environment = dict(os.environ)
         environment["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN)
@@ -1445,7 +1445,11 @@ class PluginBundleTests(unittest.TestCase):
         )
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
-        self.assertEqual(len(tool_definitions()), 26)
+        self.assertEqual(len(tool_definitions()), 27)
+        self.assertIn(
+            "report_loop_progress",
+            {tool["name"] for tool in tool_definitions()},
+        )
         self.assertNotIn(
             "report_host_capacity_exhausted",
             {tool["name"] for tool in tool_definitions()},
@@ -1549,7 +1553,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-                26,
+                27,
         )
         discovery = responses[2]["result"]["structuredContent"]["result"]
         self.assertFalse(
@@ -1630,7 +1634,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-                26,
+                27,
         )
 
 

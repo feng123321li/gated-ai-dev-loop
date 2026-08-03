@@ -128,7 +128,9 @@ Graph 编译遵循以下终态规则：
 - Delivery 修订：`delivery_revision_history`、`prepare_delivery_revision`
 - 需求修订：`unfreeze_task_requirement`、`refreeze_task_requirement`
 - 查询：`graph_frontier`、`graph_status`、`graph_events`、`loop_context`
-- Loop 控制：`dispatch_loop`、`heartbeat_loop`、`pause_loop`、`resume_loop`、`record_loop_result`
+- Loop 控制：`dispatch_loop`、`heartbeat_loop`、`report_loop_progress`、`pause_loop`、`resume_loop`、`record_loop_result`
+
+`report_loop_progress` 写入有界的 `LOOP_PROGRESS_REPORTED` 可观测事件，不参与 Graph FSM、不续租。`graph_status` 与会先推进租约的 `graph_frontier` 返回 `progressMonitor`：结构化行用于宿主监控，`markdownTable` 用简体中文汇总 attempt、Agent/模型、当前阶段、摘要、里程碑、下一步、测试、心跳/租约和健康预警。主 Agent 默认展示该表格，不把原始事件名、operation、reservation 或终端日志直接暴露给普通用户。
 - 恢复：`advance_graph`、`rebuild_graph_run`
 - 终态：`record_user_confirmation`、`cancel_graph_run`
 

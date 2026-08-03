@@ -24,9 +24,11 @@ from hdg.graph_runtime import (
     dispatch_loop,
     graph_events,
     graph_status,
+    heartbeat_loop,
     loop_context,
     pause_loop,
     report_host_capacity_exhausted,
+    report_loop_progress,
     rebuild_graph_run,
     record_loop_result,
     record_user_confirmation,
@@ -920,6 +922,23 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "requiresLiveLease": True,
                     "action": "PAUSE_AND_HANDOFF",
                     "loopOutcome": "NONE",
+                },
+                "progressReporting": {
+                    "tool": "report_loop_progress",
+                    "language": "SIMPLIFIED_CHINESE",
+                    "heartbeatRenewsLease": True,
+                    "progressRenewsLease": False,
+                    "reportAt": [
+                        "LOOP_START",
+                        "CODE_INSPECTION_COMPLETE",
+                        "TEST_RUN",
+                        "ISSUE_FOUND",
+                        "FIX_APPLIED",
+                        "REREVIEW",
+                        "FINAL_VERIFICATION",
+                    ],
+                    "rawLogsAllowed": False,
+                    "hiddenReasoningAllowed": False,
                 },
                 "providerRateLimit": {
                     "softStopTrigger": (
@@ -3979,6 +3998,226 @@ class SchedulerRuntimeTests(unittest.TestCase):
             active_progress,
             r"2026-01-01T\d{2}:\d{2}:\d{2}(?:Z|\+08:00)",
         )
+
+    def test_loop_progress_is_audited_without_renewing_its_lease(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        claimed = dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="claude-reviewer",
+            agent_id="claude-code",
+            model_id="glm-5.2",
+            operation_id="op-progress",
+            now=at(2),
+        )
+
+        reported = report_loop_progress(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id="op-progress",
+            phase="TESTING",
+            summary_zh="正在运行测试，准备检查接口兼容性。",
+            completed_zh=["已完成代码检查"],
+            next_step_zh="检查接口兼容性",
+            progress_percent=70,
+            tests={
+                "passed": 74,
+                "failed": 0,
+                "skipped": 0,
+                "total": 74,
+            },
+            now=at(2) + timedelta(seconds=30),
+        )
+
+        self.assertEqual(reported["phaseZh"], "运行测试")
+        self.assertEqual(reported["leaseExpiresAt"], claimed["leaseExpiresAt"])
+        events = graph_events(root=self.root, root_id=root_id)["events"]
+        progress_event = next(
+            event
+            for event in events
+            if event["eventType"] == "LOOP_PROGRESS_REPORTED"
+        )
+        self.assertEqual(progress_event["payload"]["summaryZh"], "正在运行测试，准备检查接口兼容性。")
+        self.assertFalse(
+            any(event["eventType"] == "LOOP_HEARTBEAT" for event in events)
+        )
+
+        status = graph_status(
+            root=self.root,
+            root_id=root_id,
+            now=at(2) + timedelta(seconds=48),
+        )
+        state = next(
+            item for item in status["nodes"] if item["nodeId"] == node_id
+        )
+        self.assertEqual(state["progress"]["progressPercent"], 70)
+        table = status["progressMonitor"]["markdownTable"]
+        self.assertIn("| 节点 | 执行器 | 当前阶段 |", table)
+        self.assertIn("t-service · 任务执行", table)
+        self.assertIn("第 1 轮 · claude-code / glm-5.2", table)
+        self.assertIn("运行测试", table)
+        self.assertIn("74/74 通过", table)
+        self.assertIn("准备检查接口兼容性", table)
+        self.assertIn("尚无独立心跳", table)
+        self.assertNotIn("LOOP_PROGRESS_REPORTED", table)
+        self.assertNotIn("op-progress", table)
+
+        heartbeat_missing = graph_status(
+            root=self.root,
+            root_id=root_id,
+            now=at(2) + timedelta(seconds=91),
+        )["progressMonitor"]
+        self.assertEqual(
+            heartbeat_missing["alerts"][0]["code"],
+            "HEARTBEAT_MISSING",
+        )
+        self.assertIn("已开始但无独立心跳", heartbeat_missing["markdownTable"])
+
+        projection = (
+            Path(self.root)
+            / ".layered-delivery"
+            / root_id
+            / "progress.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("## 实时进度监控", projection)
+        self.assertIn("74/74 通过", projection)
+        self.assertNotIn("op-progress", projection)
+
+        rebuilt = rebuild_graph_run(root=self.root, root_id=root_id)
+        rebuilt_state = next(
+            item for item in rebuilt["nodes"] if item["nodeId"] == node_id
+        )
+        self.assertEqual(
+            rebuilt_state["progress"]["summaryZh"],
+            "正在运行测试，准备检查接口兼容性。",
+        )
+
+    def test_loop_progress_requires_chinese_human_text_and_live_claim(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="agent-progress",
+            operation_id="op-progress-validation",
+            now=at(2),
+        )
+
+        with self.assertRaises(GatedLoopError) as caught:
+            report_loop_progress(
+                root=self.root,
+                root_id=root_id,
+                node_id=node_id,
+                operation_id="op-progress-validation",
+                phase="INSPECTING",
+                summary_zh="Inspecting source code.",
+                now=at(2) + timedelta(seconds=1),
+            )
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_PROGRESS_LANGUAGE_REQUIRED",
+        )
+
+        with self.assertRaises(GatedLoopError) as caught:
+            report_loop_progress(
+                root=self.root,
+                root_id=root_id,
+                node_id=node_id,
+                operation_id="op-other",
+                phase="INSPECTING",
+                summary_zh="正在检查源代码。",
+                now=at(2) + timedelta(seconds=2),
+            )
+        self.assertEqual(caught.exception.code, "SCHEDULER_OPERATION_INVALID")
+
+        with self.assertRaises(GatedLoopError) as caught:
+            report_loop_progress(
+                root=self.root,
+                root_id=root_id,
+                node_id=node_id,
+                operation_id="op-progress-validation",
+                phase="VERIFYING",
+                summary_zh="正在执行最终验证。",
+                now=at(33),
+            )
+        self.assertEqual(caught.exception.code, "SCHEDULER_OPERATION_INVALID")
+
+    def test_progress_monitor_localizes_silence_and_recovers_expired_lease(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        operation_id = "op-progress-monitor"
+        claimed_at = at(2)
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="background-agent",
+            agent_id="claude-code",
+            model_id="glm-5.2",
+            operation_id=operation_id,
+            now=claimed_at,
+        )
+
+        not_started = graph_status(
+            root=self.root,
+            root_id=root_id,
+            now=claimed_at + timedelta(seconds=91),
+        )["progressMonitor"]
+        self.assertEqual(not_started["alerts"][0]["code"], "SUSPECT_NOT_STARTED")
+        self.assertIn("疑似未启动", not_started["markdownTable"])
+
+        heartbeat_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id=operation_id,
+            now=claimed_at + timedelta(minutes=2),
+        )
+        alive_without_progress = graph_status(
+            root=self.root,
+            root_id=root_id,
+            now=claimed_at + timedelta(minutes=5, seconds=1),
+        )["progressMonitor"]
+        self.assertEqual(
+            alive_without_progress["alerts"][0]["code"],
+            "ALIVE_WITHOUT_PROGRESS",
+        )
+        self.assertIn("存活但无可见进展", alive_without_progress["markdownTable"])
+
+        suspect_lost = graph_status(
+            root=self.root,
+            root_id=root_id,
+            now=claimed_at + timedelta(minutes=10),
+        )["progressMonitor"]
+        self.assertEqual(suspect_lost["alerts"][0]["code"], "SUSPECT_LOST")
+        self.assertIn("疑似失联", suspect_lost["markdownTable"])
+
+        frontier = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=claimed_at + timedelta(minutes=33),
+        )
+        self.assertEqual(frontier["progressMonitor"]["recommendedPollSeconds"], 30)
+        events = graph_events(root=self.root, root_id=root_id)["events"]
+        expired = next(
+            event
+            for event in events
+            if event["eventType"] == "CLAIM_LEASE_EXPIRED"
+        )
+        self.assertEqual(expired["payload"]["failureClass"], "WORKER_LOST")
 
     def test_materialized_state_can_be_rebuilt_from_events(self) -> None:
         prepared = self.prepare_and_freeze(task_hierarchy())

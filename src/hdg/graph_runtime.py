@@ -40,6 +40,12 @@ from .repository import (
     _validated_stored_definition,
     timestamp,
 )
+from .progress_reporting import (
+    PROGRESS_PHASE_TEXT,
+    attach_progress_monitor,
+    normalize_progress_payload,
+    validate_progress_event_payload,
+)
 
 
 IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,191}$")
@@ -557,8 +563,9 @@ def graph_status(
     root: str,
     root_id: str,
     explicit_dogfood: bool = False,
+    now: object = None,
 ) -> dict[str, Any]:
-    repository = SchedulerRepository(root)
+    repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     definition = repository.hierarchy(root_id)
     run = repository.run(root_id)
@@ -566,7 +573,7 @@ def graph_status(
         node["id"]: node
         for node in definition["graph"]["nodes"]
     }
-    return {
+    result = {
         **run,
         "nodes": [
             {
@@ -579,6 +586,12 @@ def graph_status(
             for state in run["nodes"]
         ],
     }
+    observation_at = max(timestamp(now), result["updatedAt"])
+    return attach_progress_monitor(
+        result,
+        definition["graph"],
+        observed_at=observation_at,
+    )
 
 
 def loop_context(
@@ -2154,6 +2167,89 @@ def heartbeat_loop(
     }
 
 
+def report_loop_progress(
+    *,
+    root: str,
+    root_id: str,
+    node_id: str,
+    operation_id: str,
+    phase: str,
+    summary_zh: str,
+    completed_zh: list[str] | None = None,
+    next_step_zh: str | None = None,
+    progress_percent: int | None = None,
+    tests: dict[str, int] | None = None,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    """Record bounded Chinese business progress without renewing a lease."""
+
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    payload = normalize_progress_payload(
+        phase=phase,
+        summary_zh=summary_zh,
+        completed_zh=completed_zh,
+        next_step_zh=next_step_zh,
+        progress_percent=progress_percent,
+        tests=tests,
+    )
+    with repository.transaction() as connection:
+        graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
+        definition, state = _node(graph, nodes, node_id)
+        if definition["kind"] not in LOOP_NODE_KINDS or not _active_claim(
+            state,
+            operation_id=operation_id,
+            at=at,
+        ):
+            fail(
+                "SCHEDULER_OPERATION_INVALID",
+                "Loop claim is missing, mismatched, or expired",
+            )
+        event = repository.append_event(
+            connection,
+            run_id=run["run_id"],
+            node_id=node_id,
+            attempt=state["attempt"],
+            event_type="LOOP_PROGRESS_REPORTED",
+            actor=state["owner"],
+            operation_id=operation_id,
+            payload=payload,
+            at=at,
+        )
+        connection.execute(
+            "UPDATE runs SET updated_at = ? WHERE run_id = ?",
+            (at, run["run_id"]),
+        )
+        lease_expires_at = state["leaseExpiresAt"]
+    repository.write_projections(root_id)
+    return {
+        "rootId": root_id,
+        "nodeId": node_id,
+        "attempt": event["attempt"],
+        "eventUuid": event["eventUuid"],
+        "reportedAt": event["recordedAt"],
+        "phase": payload["phase"],
+        "phaseZh": PROGRESS_PHASE_TEXT[payload["phase"]],
+        "summaryZh": payload["summaryZh"],
+        "completedZh": payload["completedZh"],
+        **(
+            {"nextStepZh": payload["nextStepZh"]}
+            if "nextStepZh" in payload
+            else {}
+        ),
+        **(
+            {"progressPercent": payload["progressPercent"]}
+            if "progressPercent" in payload
+            else {}
+        ),
+        **({"tests": payload["tests"]} if "tests" in payload else {}),
+        "leaseExpiresAt": lease_expires_at,
+        "leaseRenewed": False,
+    }
+
+
 def pause_loop(
     *,
     root: str,
@@ -3187,6 +3283,17 @@ def _rebuild_graph_run_locked(
         elif event_type == "LOOP_HEARTBEAT":
             state["lastHeartbeatAt"] = at
             state["leaseExpiresAt"] = payload["leaseExpiresAt"]
+        elif event_type == "LOOP_PROGRESS_REPORTED":
+            if (
+                state["status"] != "CLAIMED"
+                or event["operationId"] != state["operationId"]
+                or event["actor"] != state["owner"]
+            ):
+                fail(
+                    "SCHEDULER_EVENT_REPLAY_INVALID",
+                    "Loop progress event does not belong to the live claim",
+                )
+            validate_progress_event_payload(payload)
         elif event_type == "NODE_PAUSED":
             state.update(
                 {
@@ -3458,6 +3565,7 @@ __all__ = (
     "loop_context",
     "pause_loop",
     "report_host_capacity_exhausted",
+    "report_loop_progress",
     "refreeze_task_requirement",
     "record_loop_result",
     "record_user_confirmation",

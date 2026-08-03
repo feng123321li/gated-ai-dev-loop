@@ -9,6 +9,7 @@ import sys
 PROTECTED_TOOLS = frozenset(
     {
         "heartbeat_loop",
+        "report_loop_progress",
         "pause_loop",
         "record_loop_result",
     }

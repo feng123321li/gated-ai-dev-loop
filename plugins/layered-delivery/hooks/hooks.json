@@ -62,7 +62,7 @@
         ]
       },
       {
-        "matcher": "^mcp__.*__(heartbeat_loop|pause_loop|record_loop_result)$",
+        "matcher": "^mcp__.*__(heartbeat_loop|report_loop_progress|pause_loop|record_loop_result)$",
         "hooks": [
           {
             "type": "command",

@@ -42,8 +42,9 @@ ROOT_ID = _string("Frozen Delivery and Graph run ID.")
 NODE_ID = _string("Exact graph node ID from graph_frontier.")
 OPERATION_ID = _string(
     "Globally unique Loop operation ID. Codex-native children omit it for "
-    "heartbeat, pause, and result calls so their PreToolUse Hook can inject "
-    "the attested value; every other caller must supply the claim value."
+    "heartbeat, progress, pause, and result calls so their PreToolUse Hook "
+    "can inject the attested value; every other caller must supply the claim "
+    "value."
 )
 FINGERPRINT = {
     "type": "string",
@@ -800,6 +801,105 @@ TOOLS = (
             },
             required=["root_id", "node_id"],
         ),
+    ),
+    _tool(
+        "report_loop_progress",
+        (
+            "Report bounded, user-visible business progress for one claimed "
+            "Loop without renewing its lease. Human-facing text must be in "
+            "Simplified Chinese; raw terminal logs and hidden reasoning are "
+            "not accepted."
+        ),
+        _object(
+            {
+                "root_id": ROOT_ID,
+                "node_id": NODE_ID,
+                "operation_id": OPERATION_ID,
+                "phase": {
+                    "type": "string",
+                    "enum": [
+                        "STARTING",
+                        "INSPECTING",
+                        "TESTING",
+                        "INVESTIGATING",
+                        "FIXING",
+                        "REVIEWING",
+                        "VERIFYING",
+                        "WAITING",
+                    ],
+                    "description": (
+                        "Current user-visible Loop phase; the controller "
+                        "renders it as a Chinese label."
+                    ),
+                },
+                "summary_zh": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "description": (
+                        "Concise current progress written in Simplified "
+                        "Chinese for the main Agent window."
+                    ),
+                },
+                "completed_zh": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                    },
+                    "maxItems": 8,
+                    "description": (
+                        "Completed milestones written in Simplified Chinese."
+                    ),
+                },
+                "next_step_zh": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "description": (
+                        "Next action written in Simplified Chinese."
+                    ),
+                },
+                "progress_percent": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100,
+                },
+                "tests": _object(
+                    {
+                        "passed": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1_000_000,
+                        },
+                        "failed": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1_000_000,
+                        },
+                        "skipped": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1_000_000,
+                        },
+                        "total": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 1_000_000,
+                        },
+                    },
+                    required=["passed", "failed", "skipped", "total"],
+                ),
+            },
+            required=["root_id", "node_id", "phase", "summary_zh"],
+        ),
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": False,
+        },
     ),
     _tool(
         "pause_loop",

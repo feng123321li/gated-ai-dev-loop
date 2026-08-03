@@ -324,8 +324,12 @@ class PluginBundleTests(unittest.TestCase):
             with self.subTest(tool_name=tool_name):
                 self.assertIn(f"`{tool_name}`", main)
                 self.assertIn(f"`{tool_name}`", recommendations)
-        self.assertIn("不会启动、切换或派遣", planning)
-        self.assertIn("不得据此启动外部 CLI", execution)
+        self.assertIn("不再次询问确认", planning)
+        self.assertIn("30 秒调整窗口", planning)
+        self.assertIn("自动用同一输入重调", planning)
+        self.assertIn("创建新 Codex 任务", planning)
+        self.assertIn("创建新 Claude 会话", planning)
+        self.assertIn("推荐工具不得启动外部 CLI", execution)
         self.assertIn("dispatchAllowed=false", recommendations)
         self.assertIn("不解析 `loop.payload`", recommendations)
         self.assertIn(
@@ -370,11 +374,13 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("不确定时使用 `HIGH`", execution)
         self.assertIn("只用于路由判级", execution)
         self.assertIn("HOST_NATIVE_DISPATCH_PLAN", recommendations)
+        self.assertIn("HOST_NATIVE_ROUTE_REVIEW", recommendations)
+        self.assertIn("30 秒", main + execution + recommendations)
         self.assertIn("dispatchTransport=HOST_NATIVE", main + execution)
         self.assertIn("EXTERNAL_PROCESS", main + execution + recommendations)
         self.assertIn("codex-companion", recommendations)
         self.assertIn("UNSAFE_EXECUTOR_TRANSPORT", recommendations)
-        self.assertIn("diversityLevel=CONTEXT_ONLY", main + recommendations)
+        self.assertIn("`diversityLevel`", main + recommendations)
         self.assertIn('"autoSelectModel": true', orchestrator)
         self.assertIn('"allowCrossAdapterDispatch": false', orchestrator)
         self.assertIn('"maxConcurrentExecutors": 4', orchestrator)
@@ -1554,7 +1560,10 @@ class PluginBundleTests(unittest.TestCase):
                 "method": "tools/call",
                 "params": {
                     "name": "recommend_executors",
-                    "arguments": {"root_id": "d-service"},
+                    "arguments": {
+                        "root_id": "d-service",
+                        "recommendation_mode": "MANUAL_HANDOFF",
+                    },
                     "_meta": request_meta,
                 },
             },

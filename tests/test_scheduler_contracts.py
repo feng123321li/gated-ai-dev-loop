@@ -673,7 +673,7 @@ class McpSurfaceTests(unittest.TestCase):
         )
         self.assertEqual(
             by_name["recommend_executors"]["inputSchema"]["required"],
-            ["root_id"],
+            ["root_id", "recommendation_mode"],
         )
         self.assertEqual(
             set(
@@ -681,7 +681,19 @@ class McpSurfaceTests(unittest.TestCase):
                     "properties"
                 ]
             ),
-            {"root_id"},
+            {
+                "root_id",
+                "recommendation_mode",
+                "executor_inventory",
+                "node_requirements",
+                "current_executor",
+                "manual_development_agent_id",
+            },
+        )
+        self.assertEqual(
+            by_name["recommend_executors"]["inputSchema"]
+            ["properties"]["recommendation_mode"]["enum"],
+            ["AUTOMATIC", "MANUAL_HANDOFF"],
         )
         self.assertNotIn("_meta", by_name["available_agents"])
         self.assertNotIn("_meta", by_name["recommend_executors"])
@@ -717,6 +729,11 @@ class McpSurfaceTests(unittest.TestCase):
             dispatch_plan_schema["properties"]["node_requirements"]
             ["items"]["properties"]["reasoningClass"]["enum"],
             ["ROUTINE", "STANDARD", "HIGH"],
+        )
+        self.assertIn(
+            "preferredNativeModelId",
+            dispatch_plan_schema["properties"]["node_requirements"]
+            ["items"]["properties"],
         )
         executor_schema = dispatch_plan_schema["properties"][
             "executor_inventory"
@@ -2048,8 +2065,8 @@ class McpSurfaceTests(unittest.TestCase):
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "available_agents and recommend_executors expose live, "
-                "non-binding",
+                "After automatic execution is chosen, "
+                "recommend_executors uses only the current host Agent",
                 initialized["result"]["instructions"],
             )
             self.assertIn(

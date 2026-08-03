@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 import re
+from datetime import datetime
 from typing import Any
 
 from .dispatch_contracts import (
@@ -22,6 +24,7 @@ from .repository import SchedulerRepository, timestamp
 
 
 DISPATCH_RESERVATION_SECONDS = 300
+DISPATCH_ROUTE_REVIEW_SECONDS = 30
 
 
 MODEL_TIERS = ("EFFICIENT", "BALANCED", "FRONTIER")
@@ -248,6 +251,54 @@ def _validate_inventory(value: object) -> list[dict[str, Any]]:
     return sorted(executors, key=lambda executor: executor["agentId"])
 
 
+def _validate_dispatch_inventory(
+    value: object,
+    *,
+    configuration: OrchestratorConfig,
+    host_native_agent_ids: tuple[str, ...] | None,
+) -> list[dict[str, Any]]:
+    executors = _validate_inventory(value)
+    disallowed_native_adapters = sorted(
+        {
+            executor["adapterId"]
+            for executor in executors
+            if (
+                executor["dispatchTransport"]
+                == HOST_NATIVE_DISPATCH_TRANSPORT
+                and executor["adapterId"]
+                not in set(configuration.allowed_adapters)
+            )
+        }
+    )
+    if disallowed_native_adapters:
+        fail(
+            "SCHEDULER_ADAPTER_NOT_ALLOWED",
+            "Host-native inventory contains Adapters that user configuration does not allow",
+            allowedAdapters=list(configuration.allowed_adapters),
+            disallowedAdapters=disallowed_native_adapters,
+        )
+    if host_native_agent_ids is not None:
+        allowed_native_agents = set(host_native_agent_ids)
+        unsupported_native_agents = sorted(
+            executor["agentId"]
+            for executor in executors
+            if (
+                executor["dispatchTransport"]
+                == HOST_NATIVE_DISPATCH_TRANSPORT
+                and executor["agentId"] not in allowed_native_agents
+            )
+        )
+        if unsupported_native_agents:
+            fail(
+                "SCHEDULER_HOST_NATIVE_INVENTORY_MISMATCH",
+                "Host-native inventory contains Agents this MCP client "
+                "cannot create through its native Agent API",
+                supportedAgentIds=sorted(allowed_native_agents),
+                unsupportedAgentIds=unsupported_native_agents,
+            )
+    return executors
+
+
 def _validate_node_requirements(
     value: object,
 ) -> dict[str, dict[str, str]]:
@@ -259,12 +310,18 @@ def _validate_node_requirements(
     requirements: dict[str, dict[str, str]] = {}
     for index, raw in enumerate(value):
         field = f"node_requirements[{index}]"
-        if not isinstance(raw, dict) or set(raw) != {
+        required_fields = {
             "nodeId",
             "reasoningClass",
             "source",
             "reason",
-        }:
+        }
+        allowed_fields = required_fields | {"preferredNativeModelId"}
+        if (
+            not isinstance(raw, dict)
+            or set(raw) - allowed_fields
+            or not required_fields <= set(raw)
+        ):
             fail(
                 "SCHEDULER_DISPATCH_REQUIREMENT_INVALID",
                 f"{field} fields are invalid",
@@ -281,12 +338,24 @@ def _validate_node_requirements(
                 "SCHEDULER_DISPATCH_REQUIREMENT_INVALID",
                 f"{field} is invalid or duplicated",
             )
-        requirements[node_id] = {
+        preferred_model_id = raw.get("preferredNativeModelId")
+        if preferred_model_id is not None and source != "USER_POLICY":
+            fail(
+                "SCHEDULER_DISPATCH_REQUIREMENT_INVALID",
+                f"{field}.preferredNativeModelId requires USER_POLICY",
+            )
+        requirement = {
             "nodeId": node_id,
             "reasoningClass": reasoning_class,
             "source": source,
             "reason": _safe_text(raw["reason"], f"{field}.reason"),
         }
+        if preferred_model_id is not None:
+            requirement["preferredNativeModelId"] = _safe_text(
+                preferred_model_id,
+                f"{field}.preferredNativeModelId",
+            )
+        requirements[node_id] = requirement
     return requirements
 
 
@@ -570,6 +639,9 @@ def _assignment(
     else:
         diversity_level = "CONTEXT_ONLY"
     reasoning_class = reasoning_requirement["reasoningClass"]
+    preferred_model_id = reasoning_requirement.get(
+        "preferredNativeModelId"
+    )
     model_selection = dispatch_model_selection(reasoning_class)
     if routing_basis == "CURRENT_EXECUTOR_FALLBACK":
         routing_reasons = [
@@ -590,15 +662,32 @@ def _assignment(
             },
         ]
     else:
+        preferred_model_id = reasoning_requirement.get(
+            "preferredNativeModelId"
+        )
         routing_reasons = [
-            {
-                "code": "EXPLICIT_MODEL_TIER_MATCH",
-                "message": (
-                    f"{model['id']} is the best available "
-                    f"{_desired_model_tier(reasoning_class).lower()} "
-                    "model-tier match."
-                ),
-            },
+            *(
+                [
+                    {
+                        "code": "USER_NATIVE_MODEL_OVERRIDE",
+                        "message": (
+                            f"The user explicitly selected native model "
+                            f"{preferred_model_id}."
+                        ),
+                    }
+                ]
+                if preferred_model_id is not None
+                else [
+                    {
+                        "code": "EXPLICIT_MODEL_TIER_MATCH",
+                        "message": (
+                            f"{model['id']} is the best available "
+                            f"{_desired_model_tier(reasoning_class).lower()} "
+                            "model-tier match."
+                        ),
+                    }
+                ]
+            ),
             {
                 "code": "REASONING_REQUIREMENT_APPLIED",
                 "message": (
@@ -687,6 +776,426 @@ def _assignment(
     }
 
 
+def _route_assignment(
+    *,
+    node: dict[str, Any],
+    graph_fingerprint: str,
+    executors: list[dict[str, Any]],
+    remaining_slots: dict[str, int],
+    reasoning_requirement: dict[str, str] | None,
+    fallback_executor: tuple[dict[str, Any], dict[str, Any]] | None,
+    host_adapter_id: str | None,
+    configuration: OrchestratorConfig,
+    upstream_agents: list[str],
+    upstream_adapters: list[str],
+    upstream_models: list[str],
+    upstream_model_families: list[str],
+) -> tuple[dict[str, Any] | None, dict[str, str] | None]:
+    """Select one native route shared by preview and real dispatch."""
+
+    node_id = node["id"]
+    role = _role(node["kind"])
+    capability = _required_capability(role)
+    routing_basis = "AGENT_ANALYSIS"
+    if reasoning_requirement is None:
+        if fallback_executor is None:
+            fail(
+                "SCHEDULER_CURRENT_EXECUTOR_REQUIRED",
+                "A missing reasoning analysis requires the exact current Agent and model",
+                nodeId=node_id,
+            )
+        fallback_reason = (
+            "Automatic model selection is disabled by user configuration; "
+            "use the exact current Agent and model."
+            if not configuration.auto_select_model
+            else (
+                "Agent analysis unavailable; use the exact current Agent "
+                "and model reported by the host."
+            )
+        )
+        reasoning_requirement = {
+            "nodeId": node_id,
+            "reasoningClass": "UNCLASSIFIED",
+            "source": "CURRENT_EXECUTOR_FALLBACK",
+            "reason": fallback_reason,
+        }
+        routing_basis = "CURRENT_EXECUTOR_FALLBACK"
+    reasoning_class = reasoning_requirement["reasoningClass"]
+    preferred_model_id = reasoning_requirement.get(
+        "preferredNativeModelId"
+    )
+    candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    cross_adapter_blocked = False
+    if routing_basis == "CURRENT_EXECUTOR_FALLBACK":
+        executor, model = fallback_executor
+        if (
+            executor["dispatchTransport"]
+            == HOST_NATIVE_DISPATCH_TRANSPORT
+            and capability in executor["capabilities"]
+            and remaining_slots[executor["agentId"]] > 0
+        ):
+            candidates.append((executor, model))
+    else:
+        for executor in executors:
+            if (
+                executor["dispatchTransport"]
+                != HOST_NATIVE_DISPATCH_TRANSPORT
+                or capability not in executor["capabilities"]
+                or not executor["nativeModelSelectionSupported"]
+                or remaining_slots[executor["agentId"]] <= 0
+                or (
+                    reasoning_class == "HIGH"
+                    and not any(
+                        model["tier"] == "FRONTIER"
+                        for model in executor["models"]
+                    )
+                )
+            ):
+                continue
+            model = (
+                next(
+                    (
+                        candidate_model
+                        for candidate_model in executor["models"]
+                        if candidate_model["id"] == preferred_model_id
+                    ),
+                    None,
+                )
+                if preferred_model_id is not None
+                else _select_model(
+                    executor,
+                    desired_tier=_desired_model_tier(reasoning_class),
+                )
+            )
+            if model is None or (
+                reasoning_class == "HIGH"
+                and model["tier"] != "FRONTIER"
+            ):
+                continue
+            candidates.append((executor, model))
+    if candidates and not configuration.allow_cross_adapter_dispatch:
+        candidate_adapter_ids = {
+            candidate[0]["adapterId"] for candidate in candidates
+        }
+        same_adapter_id = None
+        if host_adapter_id in candidate_adapter_ids:
+            same_adapter_id = host_adapter_id
+        elif (
+            fallback_executor is not None
+            and fallback_executor[0]["adapterId"] in candidate_adapter_ids
+        ):
+            same_adapter_id = fallback_executor[0]["adapterId"]
+        else:
+            upstream_candidate_ids = (
+                set(upstream_adapters) & candidate_adapter_ids
+            )
+            if len(upstream_candidate_ids) == 1:
+                same_adapter_id = next(iter(upstream_candidate_ids))
+            elif len(candidate_adapter_ids) == 1:
+                same_adapter_id = next(iter(candidate_adapter_ids))
+        if same_adapter_id is None:
+            candidates = []
+            cross_adapter_blocked = True
+        else:
+            candidates = [
+                candidate
+                for candidate in candidates
+                if candidate[0]["adapterId"] == same_adapter_id
+            ]
+    if not candidates:
+        if cross_adapter_blocked:
+            code = "CROSS_ADAPTER_DISPATCH_DISABLED"
+            message = (
+                "Multiple eligible native Adapters remain, but cross-"
+                "Adapter dispatch is disabled and no current Adapter can "
+                "be determined."
+            )
+        elif routing_basis == "CURRENT_EXECUTOR_FALLBACK":
+            executor, _ = fallback_executor
+            if (
+                executor["dispatchTransport"]
+                != HOST_NATIVE_DISPATCH_TRANSPORT
+            ):
+                code = "CURRENT_EXECUTOR_UNSAFE_TRANSPORT"
+                message = (
+                    "The current Agent was reported through an external "
+                    "process transport; automatic fallback requires the "
+                    "host-native Agent API."
+                )
+            elif capability not in executor["capabilities"]:
+                code = "CURRENT_EXECUTOR_CAPABILITY_MISMATCH"
+                message = (
+                    "The current host Agent does not advertise the "
+                    f"required {capability} capability."
+                )
+            else:
+                code = "CURRENT_EXECUTOR_NO_CAPACITY"
+                message = (
+                    "The current host Agent has no available child "
+                    "execution slot."
+                )
+        elif preferred_model_id is not None:
+            preferred_models = [
+                model
+                for executor in executors
+                for model in executor["models"]
+                if model["id"] == preferred_model_id
+            ]
+            if (
+                reasoning_class == "HIGH"
+                and preferred_models
+                and all(
+                    model["tier"] != "FRONTIER"
+                    for model in preferred_models
+                )
+            ):
+                code = "PREFERRED_NATIVE_MODEL_TIER_CONFLICT"
+                message = (
+                    f"The user-selected native model {preferred_model_id} "
+                    "is not a FRONTIER model and cannot satisfy a HIGH "
+                    "reasoning requirement."
+                )
+            else:
+                code = "PREFERRED_NATIVE_MODEL_UNAVAILABLE"
+                message = (
+                    f"The user-selected native model "
+                    f"{preferred_model_id} is not available from the "
+                    "current host Agent inventory. Forwarded or effective "
+                    "model IDs cannot be used as native dispatch selectors."
+                )
+        else:
+            code, message = _deferred_code(
+                executors,
+                capability=capability,
+                remaining_slots=remaining_slots,
+                reasoning_class=reasoning_class,
+            )
+        return None, {"code": code, "message": message}
+    candidates.sort(
+        key=lambda candidate: (
+            (
+                candidate[0]["adapterId"] in set(upstream_adapters)
+                if (
+                    role == "INDEPENDENT_REVIEW"
+                    and configuration.prefer_different_adapter_for_review
+                )
+                else False
+            ),
+            (
+                (candidate[1]["family"] or candidate[1]["id"])
+                in set(upstream_model_families)
+                if role == "INDEPENDENT_REVIEW"
+                else False
+            ),
+            -candidate[0]["priority"],
+            -candidate[1]["priority"],
+            candidate[0]["agentId"],
+            candidate[1]["id"],
+        )
+    )
+    executor, model = candidates[0]
+    return (
+        _assignment(
+            node=node,
+            role=role,
+            executor=executor,
+            model=model,
+            graph_fingerprint=graph_fingerprint,
+            upstream_agents=upstream_agents,
+            upstream_adapters=upstream_adapters,
+            upstream_models=upstream_models,
+            upstream_model_families=upstream_model_families,
+            reasoning_requirement=reasoning_requirement,
+            routing_basis=routing_basis,
+        ),
+        None,
+    )
+
+
+def _topological_node_ids(graph: dict[str, Any]) -> list[str]:
+    incoming_count = {node["id"]: 0 for node in graph["nodes"]}
+    outgoing = {node["id"]: [] for node in graph["nodes"]}
+    for edge in graph["edges"]:
+        incoming_count[edge["target"]] += 1
+        outgoing[edge["source"]].append(edge["target"])
+    ready = sorted(
+        node_id
+        for node_id, count in incoming_count.items()
+        if count == 0
+    )
+    ordered: list[str] = []
+    while ready:
+        node_id = ready.pop(0)
+        ordered.append(node_id)
+        for target in sorted(outgoing[node_id]):
+            incoming_count[target] -= 1
+            if incoming_count[target] == 0:
+                ready.append(target)
+                ready.sort()
+    return ordered
+
+
+def preview_dispatch_routes(
+    *,
+    graph: dict[str, Any],
+    graph_fingerprint: str,
+    executor_inventory: list[dict[str, Any]],
+    node_requirements: list[dict[str, Any]],
+    current_executor: dict[str, str] | None = None,
+    host_native_agent_ids: tuple[str, ...] | None = None,
+    host_adapter_id: str | None = None,
+    orchestrator_config: OrchestratorConfig | None = None,
+) -> dict[str, Any]:
+    """Preview every Loop route without reserving, claiming, or dispatching."""
+
+    configuration = orchestrator_config or built_in_orchestrator_config()
+    if not configuration.automatic_orchestration:
+        fail(
+            "SCHEDULER_AUTOMATIC_ORCHESTRATION_DISABLED",
+            "Automatic orchestration is disabled by user configuration",
+            orchestratorConfig=configuration.public_summary(),
+        )
+    if host_adapter_id is None or not host_native_agent_ids:
+        fail(
+            "SCHEDULER_HOST_EXECUTOR_CONTEXT_REQUIRED",
+            "Automatic recommendations require the trusted current host Agent context",
+        )
+    executors = _validate_dispatch_inventory(
+        executor_inventory,
+        configuration=configuration,
+        host_native_agent_ids=host_native_agent_ids,
+    )
+    current_native_executors = [
+        executor
+        for executor in executors
+        if (
+            executor["dispatchTransport"]
+            == HOST_NATIVE_DISPATCH_TRANSPORT
+            and executor["adapterId"] == host_adapter_id
+            and executor["agentId"] in set(host_native_agent_ids)
+        )
+    ]
+    if not current_native_executors:
+        fail(
+            "SCHEDULER_CURRENT_HOST_INVENTORY_MISSING",
+            "Automatic recommendations require the current host-native Agent inventory",
+            hostAdapterId=host_adapter_id,
+            supportedAgentIds=sorted(host_native_agent_ids),
+        )
+    executors = current_native_executors
+    requirements = _validate_node_requirements(node_requirements)
+    fallback_executor = _validate_current_executor(
+        current_executor,
+        executors=executors,
+    )
+    definitions = {node["id"]: node for node in graph["nodes"]}
+    loop_node_ids = {
+        node["id"]
+        for node in graph["nodes"]
+        if node["kind"].endswith("_LOOP")
+    }
+    stale_requirements = set(requirements) - loop_node_ids
+    if stale_requirements:
+        fail(
+            "SCHEDULER_DISPATCH_REQUIREMENT_STALE",
+            "node_requirements must target Loops in this Graph",
+            nodeIds=sorted(stale_requirements),
+        )
+    missing_requirements = loop_node_ids - set(requirements)
+    if (
+        configuration.auto_select_model
+        and missing_requirements
+        and fallback_executor is None
+    ):
+        fail(
+            "SCHEDULER_DISPATCH_REQUIREMENT_MISSING",
+            "Every Loop recommendation requires an Agent-provided reasoning analysis",
+            nodeIds=sorted(missing_requirements),
+        )
+    if not configuration.auto_select_model and fallback_executor is None:
+        fail(
+            "SCHEDULER_CURRENT_EXECUTOR_REQUIRED",
+            "Disabling automatic model selection requires the exact current Agent and model",
+        )
+    remaining_slots = {
+        executor["agentId"]: executor["availableSlots"]
+        for executor in executors
+    }
+    incoming = _incoming_edges(graph)
+    predicted_states: dict[str, dict[str, Any]] = {}
+    assignments: list[dict[str, Any]] = []
+    deferred: list[dict[str, Any]] = []
+    for node_id in _topological_node_ids(graph):
+        if node_id not in loop_node_ids:
+            continue
+        node = definitions[node_id]
+        upstream_agents, upstream_models = _upstream_native_executors(
+            node_id=node_id,
+            incoming=incoming,
+            states=predicted_states,
+        )
+        upstream_adapters = _adapter_ids(upstream_agents, executors)
+        upstream_model_families = _model_families(
+            upstream_models,
+            executors,
+        )
+        assignment, rejection = _route_assignment(
+            node=node,
+            graph_fingerprint=graph_fingerprint,
+            executors=executors,
+            remaining_slots=remaining_slots,
+            reasoning_requirement=(
+                requirements.get(node_id)
+                if configuration.auto_select_model
+                else None
+            ),
+            fallback_executor=fallback_executor,
+            host_adapter_id=host_adapter_id,
+            configuration=configuration,
+            upstream_agents=upstream_agents,
+            upstream_adapters=upstream_adapters,
+            upstream_models=upstream_models,
+            upstream_model_families=upstream_model_families,
+        )
+        if assignment is None:
+            deferred.append(
+                {
+                    "nodeId": node_id,
+                    "kind": node["kind"],
+                    "workItemId": node["workItemId"],
+                    **rejection,
+                }
+            )
+            continue
+        assignment["contextInput"]["rootId"] = graph["rootId"]
+        assignments.append(assignment)
+        predicted_states[node_id] = {
+            "agentId": assignment["agent"]["id"],
+            "modelId": assignment["model"]["id"],
+        }
+    preview_material = {
+        "policyVersion": DISPATCH_POLICY_VERSION,
+        "rootId": graph["rootId"],
+        "graphFingerprint": graph_fingerprint,
+        "inventory": executors,
+        "nodeRequirements": [
+            requirements[node_id] for node_id in sorted(requirements)
+        ],
+        "assignments": assignments,
+        "deferred": deferred,
+    }
+    return {
+        "binding": "HOST_NATIVE_DISPATCH_PREVIEW",
+        "previewFingerprint": fingerprint(preview_material),
+        "assignments": assignments,
+        "deferred": deferred,
+        "summary": {
+            "loopRecommendations": len(assignments),
+            "unavailable": len(deferred),
+        },
+    }
+
+
 def plan_dispatch_batch(
     *,
     root: str,
@@ -698,6 +1207,7 @@ def plan_dispatch_batch(
     host_native_agent_ids: tuple[str, ...] | None = None,
     host_adapter_id: str | None = None,
     orchestrator_config: OrchestratorConfig | None = None,
+    enforce_route_review_window: bool = False,
     explicit_dogfood: bool = False,
     now: object = None,
     **_: Any,
@@ -723,45 +1233,11 @@ def plan_dispatch_batch(
             expectedGraphFingerprint=expected_graph_fingerprint,
             actualGraphFingerprint=stored["graphFingerprint"],
         )
-    executors = _validate_inventory(executor_inventory)
-    disallowed_native_adapters = sorted(
-        {
-            executor["adapterId"]
-            for executor in executors
-            if (
-                executor["dispatchTransport"]
-                == HOST_NATIVE_DISPATCH_TRANSPORT
-                and executor["adapterId"]
-                not in set(configuration.allowed_adapters)
-            )
-        }
+    executors = _validate_dispatch_inventory(
+        executor_inventory,
+        configuration=configuration,
+        host_native_agent_ids=host_native_agent_ids,
     )
-    if disallowed_native_adapters:
-        fail(
-            "SCHEDULER_ADAPTER_NOT_ALLOWED",
-            "Host-native inventory contains Adapters that user configuration does not allow",
-            allowedAdapters=list(configuration.allowed_adapters),
-            disallowedAdapters=disallowed_native_adapters,
-        )
-    if host_native_agent_ids is not None:
-        allowed_native_agents = set(host_native_agent_ids)
-        unsupported_native_agents = sorted(
-            executor["agentId"]
-            for executor in executors
-            if (
-                executor["dispatchTransport"]
-                == HOST_NATIVE_DISPATCH_TRANSPORT
-                and executor["agentId"] not in allowed_native_agents
-            )
-        )
-        if unsupported_native_agents:
-            fail(
-                "SCHEDULER_HOST_NATIVE_INVENTORY_MISMATCH",
-                "Host-native inventory contains Agents this MCP client "
-                "cannot create through its native Agent API",
-                supportedAgentIds=sorted(allowed_native_agents),
-                unsupportedAgentIds=unsupported_native_agents,
-            )
     requirements = _validate_node_requirements(node_requirements)
     fallback_executor = _validate_current_executor(
         current_executor,
@@ -882,32 +1358,6 @@ def plan_dispatch_batch(
     )
     for node_id in routing_node_ids:
         node = definitions[node_id]
-        role = _role(node["kind"])
-        capability = _required_capability(role)
-        reasoning_requirement = (
-            requirements.get(node_id)
-            if configuration.auto_select_model
-            else None
-        )
-        routing_basis = "AGENT_ANALYSIS"
-        if reasoning_requirement is None:
-            fallback_reason = (
-                "Automatic model selection is disabled by user "
-                "configuration; use the exact current Agent and model."
-                if not configuration.auto_select_model
-                else (
-                    "Agent analysis unavailable; use the exact current "
-                    "Agent and model reported by the host."
-                )
-            )
-            reasoning_requirement = {
-                "nodeId": node_id,
-                "reasoningClass": "UNCLASSIFIED",
-                "source": "CURRENT_EXECUTOR_FALLBACK",
-                "reason": fallback_reason,
-            }
-            routing_basis = "CURRENT_EXECUTOR_FALLBACK"
-        reasoning_class = reasoning_requirement["reasoningClass"]
         upstream_agents, upstream_models = _upstream_native_executors(
             node_id=node_id,
             incoming=incoming,
@@ -918,162 +1368,131 @@ def plan_dispatch_batch(
             upstream_models,
             executors,
         )
-        candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
-        cross_adapter_blocked = False
-        if routing_basis == "CURRENT_EXECUTOR_FALLBACK":
-            executor, model = fallback_executor
-            if (
-                executor["dispatchTransport"]
-                == HOST_NATIVE_DISPATCH_TRANSPORT
-                and capability in executor["capabilities"]
-                and remaining_slots[executor["agentId"]] > 0
-            ):
-                candidates.append((executor, model))
-        else:
-            for executor in executors:
-                if (
-                    executor["dispatchTransport"]
-                    != HOST_NATIVE_DISPATCH_TRANSPORT
-                    or capability not in executor["capabilities"]
-                    or not executor["nativeModelSelectionSupported"]
-                    or remaining_slots[executor["agentId"]] <= 0
-                    or (
-                        reasoning_class == "HIGH"
-                        and not any(
-                            model["tier"] == "FRONTIER"
-                            for model in executor["models"]
-                        )
-                    )
-                ):
-                    continue
-                model = _select_model(
-                    executor,
-                    desired_tier=_desired_model_tier(reasoning_class),
-                )
-                candidates.append((executor, model))
-        if candidates and not configuration.allow_cross_adapter_dispatch:
-            candidate_adapter_ids = {
-                candidate[0]["adapterId"] for candidate in candidates
-            }
-            same_adapter_id = None
-            if host_adapter_id in candidate_adapter_ids:
-                same_adapter_id = host_adapter_id
-            elif (
-                fallback_executor is not None
-                and fallback_executor[0]["adapterId"]
-                in candidate_adapter_ids
-            ):
-                same_adapter_id = fallback_executor[0]["adapterId"]
-            else:
-                upstream_candidate_ids = (
-                    set(upstream_adapters) & candidate_adapter_ids
-                )
-                if len(upstream_candidate_ids) == 1:
-                    same_adapter_id = next(iter(upstream_candidate_ids))
-                elif len(candidate_adapter_ids) == 1:
-                    same_adapter_id = next(iter(candidate_adapter_ids))
-            if same_adapter_id is None:
-                candidates = []
-                cross_adapter_blocked = True
-            else:
-                candidates = [
-                    candidate
-                    for candidate in candidates
-                    if candidate[0]["adapterId"] == same_adapter_id
-                ]
-        if not candidates:
-            if cross_adapter_blocked:
-                code = "CROSS_ADAPTER_DISPATCH_DISABLED"
-                message = (
-                    "Multiple eligible native Adapters remain, but cross-"
-                    "Adapter dispatch is disabled and no current Adapter "
-                    "can be determined."
-                )
-            elif routing_basis == "CURRENT_EXECUTOR_FALLBACK":
-                executor, _ = fallback_executor
-                if (
-                    executor["dispatchTransport"]
-                    != HOST_NATIVE_DISPATCH_TRANSPORT
-                ):
-                    code = "CURRENT_EXECUTOR_UNSAFE_TRANSPORT"
-                    message = (
-                        "The current Agent was reported through an "
-                        "external process transport; automatic fallback "
-                        "requires the host-native Agent API."
-                    )
-                elif capability not in executor["capabilities"]:
-                    code = "CURRENT_EXECUTOR_CAPABILITY_MISMATCH"
-                    message = (
-                        "The current host Agent does not advertise the "
-                        f"required {capability} capability."
-                    )
-                else:
-                    code = "CURRENT_EXECUTOR_NO_CAPACITY"
-                    message = (
-                        "The current host Agent has no available child "
-                        "execution slot."
-                    )
-            else:
-                code, message = _deferred_code(
-                    executors,
-                    capability=capability,
-                    remaining_slots=remaining_slots,
-                    reasoning_class=reasoning_class,
-                )
+        assignment, rejection = _route_assignment(
+            node=node,
+            graph_fingerprint=stored["graphFingerprint"],
+            executors=executors,
+            remaining_slots=remaining_slots,
+            reasoning_requirement=(
+                requirements.get(node_id)
+                if configuration.auto_select_model
+                else None
+            ),
+            fallback_executor=fallback_executor,
+            host_adapter_id=host_adapter_id,
+            configuration=configuration,
+            upstream_agents=upstream_agents,
+            upstream_adapters=upstream_adapters,
+            upstream_models=upstream_models,
+            upstream_model_families=upstream_model_families,
+        )
+        if assignment is None:
             deferred.append(
                 {
                     "nodeId": node_id,
                     "kind": node["kind"],
                     "workItemId": node["workItemId"],
-                    "code": code,
-                    "message": message,
+                    **rejection,
                     "claimCreated": False,
                 }
             )
             continue
-        candidates.sort(
-            key=lambda candidate: (
-                (
-                    candidate[0]["adapterId"]
-                    in set(upstream_adapters)
-                    if (
-                        role == "INDEPENDENT_REVIEW"
-                        and configuration.prefer_different_adapter_for_review
-                    )
-                    else False
-                ),
-                (
-                    (
-                        candidate[1]["family"]
-                        or candidate[1]["id"]
-                    )
-                    in set(upstream_model_families)
-                    if role == "INDEPENDENT_REVIEW"
-                    else False
-                ),
-                -candidate[0]["priority"],
-                -candidate[1]["priority"],
-                candidate[0]["agentId"],
-                candidate[1]["id"],
-            )
-        )
-        executor, model = candidates[0]
-        remaining_slots[executor["agentId"]] -= 1
-        assignment = _assignment(
-            node=node,
-            role=role,
-            executor=executor,
-            model=model,
-            graph_fingerprint=stored["graphFingerprint"],
-            upstream_agents=upstream_agents,
-            upstream_adapters=upstream_adapters,
-            upstream_models=upstream_models,
-            upstream_model_families=upstream_model_families,
-            reasoning_requirement=reasoning_requirement,
-            routing_basis=routing_basis,
-        )
+        remaining_slots[assignment["agent"]["id"]] -= 1
         assignment["contextInput"]["rootId"] = root_id
         assignments.append(assignment)
+    reviewing: list[dict[str, Any]] = []
+    route_review: dict[str, Any] | None = None
+    if enforce_route_review_window and assignments:
+        review_result = repository.review_dispatch_assignments(
+            root_id=root_id,
+            graph_fingerprint=stored["graphFingerprint"],
+            assignments=assignments,
+            review_seconds=DISPATCH_ROUTE_REVIEW_SECONDS,
+        )
+        observed_value = datetime.fromisoformat(
+            review_result["observedAt"].replace("Z", "+00:00")
+        )
+        reviewed_ids = set(review_result["reviewed"])
+        reviewed_assignments: list[dict[str, Any]] = []
+        for assignment in assignments:
+            node_id = assignment["nodeId"]
+            waiting = review_result["waiting"].get(node_id)
+            if waiting is not None:
+                expires_value = datetime.fromisoformat(
+                    waiting["routeReviewExpiresAt"].replace(
+                        "Z", "+00:00"
+                    )
+                )
+                reviewing.append(
+                    {
+                        **assignment,
+                        **waiting,
+                        "dispatchAllowed": False,
+                        "routeReviewStatus": (
+                            "WAITING_FOR_USER_ADJUSTMENT"
+                        ),
+                        "remainingSeconds": max(
+                            0,
+                            math.ceil(
+                                (expires_value - observed_value)
+                                .total_seconds()
+                            ),
+                        ),
+                    }
+                )
+                continue
+            if node_id in reviewed_ids:
+                reviewed_assignments.append(assignment)
+                continue
+            rejection = review_result["rejected"][node_id]
+            deferred.append(
+                {
+                    "nodeId": node_id,
+                    "kind": assignment["kind"],
+                    "workItemId": assignment["workItemId"],
+                    **rejection,
+                    "claimCreated": False,
+                }
+            )
+        assignments = reviewed_assignments
+        review_records = [
+            *review_result["waiting"].values(),
+            *review_result["reviewed"].values(),
+        ]
+        if reviewing:
+            next_expiry = min(
+                item["routeReviewExpiresAt"] for item in reviewing
+            )
+            next_expiry_value = datetime.fromisoformat(
+                next_expiry.replace("Z", "+00:00")
+            )
+            route_review = {
+                "status": "WAITING_FOR_USER_ADJUSTMENT",
+                "windowSeconds": DISPATCH_ROUTE_REVIEW_SECONDS,
+                "observedAt": review_result["observedAt"],
+                "expiresAt": next_expiry,
+                "remainingSeconds": max(
+                    0,
+                    math.ceil(
+                        (next_expiry_value - observed_value).total_seconds()
+                    ),
+                ),
+                "automaticDispatchAfterExpiry": True,
+                "secondConfirmationRequired": False,
+            }
+        elif review_records:
+            route_review = {
+                "status": "ELAPSED_AUTO_DISPATCH",
+                "windowSeconds": DISPATCH_ROUTE_REVIEW_SECONDS,
+                "observedAt": review_result["observedAt"],
+                "expiresAt": max(
+                    item["routeReviewExpiresAt"]
+                    for item in review_records
+                ),
+                "remainingSeconds": 0,
+                "automaticDispatchAfterExpiry": True,
+                "secondConfirmationRequired": False,
+            }
     reservations = repository.reserve_dispatch_assignments(
         root_id=root_id,
         graph_fingerprint=stored["graphFingerprint"],
@@ -1135,6 +1554,8 @@ def plan_dispatch_batch(
             else None
         ),
         "orchestratorConfig": configuration.policy(),
+        "routeReview": route_review,
+        "reviewing": reviewing,
         "assignments": assignments,
         "deferred": deferred,
     }
@@ -1142,8 +1563,22 @@ def plan_dispatch_batch(
         "rootId": root_id,
         "graphFingerprint": stored["graphFingerprint"],
         "policyVersion": DISPATCH_POLICY_VERSION,
-        "binding": "HOST_NATIVE_DISPATCH_PLAN",
+        "binding": (
+            "HOST_NATIVE_DISPATCH_PLAN"
+            if assignments
+            else (
+                "HOST_NATIVE_ROUTE_REVIEW"
+                if reviewing
+                else "HOST_NATIVE_DISPATCH_PLAN"
+            )
+        ),
         "planFingerprint": fingerprint(plan_material),
+        "reviewing": reviewing,
+        **(
+            {"routeReview": route_review}
+            if route_review is not None
+            else {}
+        ),
         "assignments": assignments,
         "deferred": deferred,
         "concurrentDispatchGroups": (
@@ -1154,6 +1589,7 @@ def plan_dispatch_batch(
         "summary": {
             "frontierDispatchLoops": len(dispatch_node_ids),
             "dispatchable": len(assignments),
+            "routeReviewPending": len(reviewing),
             "deferred": len(deferred),
             "concurrent": len(assignments) > 1,
         },
@@ -1182,6 +1618,15 @@ def plan_dispatch_batch(
             "analyzedRoutesRequireNativeModelSelection": (
                 configuration.auto_select_model
             ),
+            "userNativeModelOverrideAllowed": True,
+            "routeReviewWindowEnforced": enforce_route_review_window,
+            "routeReviewWindowSeconds": (
+                DISPATCH_ROUTE_REVIEW_SECONDS
+                if enforce_route_review_window
+                else 0
+            ),
+            "routeReviewSecondConfirmationRequired": False,
+            "routeReviewAutoDispatchAfterExpiry": True,
             "actualModelAffectsDispatch": False,
             "currentExecutorFallbackAllowed": True,
             "fallbackModelSelection": "CURRENT_HOST_DEFAULT",
@@ -1207,4 +1652,5 @@ def plan_dispatch_batch(
 __all__ = (
     "DISPATCH_POLICY_VERSION",
     "plan_dispatch_batch",
+    "preview_dispatch_routes",
 )

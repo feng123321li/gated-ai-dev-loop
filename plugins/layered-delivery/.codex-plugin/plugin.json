@@ -1,7 +1,7 @@
 {
   "name": "layered-delivery",
-  "version": "0.30.0",
-  "description": "调度递归 GROUP/TASK、原生模型派遣、实际模型展示、中文进度与失联预警",
+  "version": "0.31.0",
+  "description": "调度递归 GROUP/TASK、原生模型分档、30 秒路由调整、独立交接与中文进度",
   "author": {
     "name": "layered-delivery contributors",
     "url": "https://github.com/feng123321li/layered-delivery"
@@ -57,8 +57,8 @@
   },
   "interface": {
     "displayName": "递归交付调度",
-    "shortDescription": "递归 Graph 与 Agent/Model 自动派遣",
-    "longDescription": "每个 Delivery 使用稳定身份和不可变 Revision 管理验收前的需求调整；内部递归调度 GROUP 与 TASK，并按宿主真实容量为当前 frontier 选择 Claude/Codex 原生模型名、并发创建原生 Agent；转发后的实际模型只读展示，同时以中文表格汇总后台进度、测试、心跳、剩余租约和失联预警。",
+    "shortDescription": "递归 Graph、原生模型路由与独立交接",
+    "longDescription": "每个 Delivery 使用稳定身份和不可变 Revision 管理验收前的需求调整；自动模式只在当前宿主 Agent 内按 Claude/Codex 原生模型分档路由，通过 30 秒可调整窗口后并发派遣；手动模式为目标开发 Agent 创建独立接收会话。转发后的实际模型只读展示，同时以中文表格汇总后台进度、测试、心跳、剩余租约和失联预警。",
     "developerName": "layered-delivery contributors",
     "category": "Productivity",
     "capabilities": [
@@ -67,7 +67,7 @@
     ],
     "websiteURL": "https://github.com/feng123321li/layered-delivery",
     "defaultPrompt": [
-      "使用 layered-delivery 恢复或创建递归 GROUP/TASK 交付 Graph；自动模式按宿主容量选择原生模型名并并发派遣原生 Agent，实际模型只作展示。"
+      "使用 layered-delivery 恢复或创建递归 GROUP/TASK 交付 Graph；自动模式在当前宿主内选择原生模型并提供 30 秒调整窗口，手动模式创建目标 Agent 的独立接收会话。"
     ],
     "brandColor": "#2563EB"
   }

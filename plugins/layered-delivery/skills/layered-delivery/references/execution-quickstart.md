@@ -8,7 +8,7 @@
 
 - 每次响应同时读取 `progressMonitor`。后台 Agent 运行期间按 `recommendedPollSeconds` 继续刷新；仅在进度表或预警变化时，把 `markdownTable` 原样作为中文表格展示到主 Agent 窗口。`graph_events` 是诊断接口，不把原始事件、operation 或 reservation 日志直接展示给普通用户。
 
-- `DISPATCH_LOOP`：自动模式下先用宿主真实 inventory 调用 `plan_dispatch_batch`，原子预留后按计划创建接收 Agent；接收方读取 `loop_context` 后凭预留 claim。
+- `DISPATCH_LOOP`：自动模式下先用宿主真实 inventory 调用 `plan_dispatch_batch`。首次稳定路由返回 `HOST_NATIVE_ROUTE_REVIEW`，先展示 30 秒调整窗口；窗口到期后自动重调，只有 `HOST_NATIVE_DISPATCH_PLAN` 才已原子预留并可创建接收 Agent。接收方读取 `loop_context` 后凭预留 claim。
 - `WAIT_FOR_DISPATCH_RECEIVER`：另一个调度器已为该 Ready Loop 取得短租约派遣预留；不得重复创建 Agent，等待接收方 claim 或预留过期。
 - `CONTINUE_OR_HEARTBEAT_LOOP`：继续当前 Loop，并在租约到期前 heartbeat。
 - `RESUME_LOOP_IN_INDEPENDENT_CONTEXT`：把暂停节点路由给新的接收上下文；接收方 resume 后重新读取 frontier 并 dispatch。
@@ -21,7 +21,11 @@
 
 不要自行增加 TASK/Gate 节点，也不要根据 payload 内容改变 frontier 顺序。
 
-需要展示当前节点的执行建议时，调用 `available_agents` 和 `recommend_executors`，按 `nodeId` 选择对应建议。推荐工具不得据此启动外部 CLI、切换模型、改变 owner、提前 claim、绕过宿主原生 Agent 容量或接管限额恢复；自动执行由总调度器在工具返回后使用宿主原生 Agent 完成。手工配置、任意本机修改器或容量变化后可以重新调用，旧建议不作为缓存权威。
+开发方式确认前不展示模型建议。用户选择自动执行后，按当前宿主 Agent 的真实原生 inventory 与全部 Loop 的临时风险分析调用 `recommend_executors(recommendation_mode=AUTOMATIC)`，用中文表格展示当前 Agent 内的模型分档；该预览不需要第二次确认，随后直接 freeze 并让 `plan_dispatch_batch` 复用同一分析。正式 Ready 批次的第一次计划调用开启持久化 30 秒路由调整窗口，并按 `节点 | 执行 Agent | 原生模型角色 | 原生 modelId | 实际代理模型 | 剩余时间 | 状态` 展示 `reviewing`；实际模型未知时写“未报告”。主 Agent 不再提问，保持可接收用户消息，并在 `routeReview.expiresAt` 自动重复计划调用。用户选择手动交接后才调用 `recommend_executors(recommendation_mode=MANUAL_HANDOFF)`，可由宿主指定 `manual_development_agent_id`；交接前只展示目标 Agent。冻结后必须为目标开发 Agent 创建独立接收会话：目标是 Codex 就创建新的 Codex 任务，目标是 Claude Code 就创建新的 Claude 会话；当前编排会话只保留跟踪职责，不在原会话内代写代码。目标 Agent 接收后再依据自己的原生 inventory 生成开发模型表。接收方重新生成列表不改变 manual run，也不自动派遣。
+
+推荐工具不得启动外部 CLI、切换模型、改变 owner、提前 claim、绕过宿主原生 Agent 容量或接管限额恢复。自动建议不跨 Agent；人工交接建议可以跨 Agent，但只能形成交接信息。手工配置、任意本机修改器或容量变化后可以重新调用，旧建议不作为缓存权威。路由无法保持且必须改换开发 Agent、扩大项目范围或改变冻结需求时才重新请求用户决定；同一 Agent 内因容量变化重算模型只需明确告知。
+
+用户不认可表中的默认原生模型时，尚未 claim 的节点可在 30 秒窗口内把 `node_requirements.source` 改为 `USER_POLICY` 并提交精确 `preferredNativeModelId`。重新调用计划并展示更新后的中文路由表，不重新 freeze、不询问第二次确认；该节点从变更时点重新获得完整 30 秒调整窗口，超时自动派遣。只能指定当前宿主 inventory 中的原生 selector；实际代理模型不能作为 override。已 claim 的节点不得热切模型，需先 pause 并由新接收上下文按新路由继续。
 
 自动模式不直接消费终端建议来启动进程。Plugin MCP Server 启动时先读取用户级中央编排器配置；配置文件不存在时默认开启自动编排与自动选模、关闭跨 Adapter、只允许 `codex`/`claude-code`、最多并发 4 个执行器、额度耗尽暂停恢复并优先用不同 Adapter Review。当前跨 Adapter 开关和 `SWITCH_ADAPTER` 保存均以 `ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE` fail closed；宿主原生多 Adapter 桥接开放前只能使用当前宿主 Adapter。非法配置 fail closed，配置不进入 Delivery schema 或 SQLite；路径和手动修改方法见 [orchestrator-configuration.md](orchestrator-configuration.md)。总调度器从宿主明确暴露的原生 Agent catalog 构造 `executor_inventory`：每项必须包含宿主证明的 `dispatchTransport=HOST_NATIVE`，可以用 `adapterId` 区分中央宿主 Adapter（省略时等于 `agentId`），并只登记真实 `availableSlots`、`development`/`review` 能力、可显式选择的模型、模型 tier、reasoning effort 与优先级；不包含 Token、Base URL、命令参数，也不把 PATH 中存在的 CLI 当成自动启动授权。PATH、CLI、exec、subprocess 或 companion bridge 必须标为 `EXTERNAL_PROCESS`，只会得到安全 deferred，不能进入 assignment。以当前 `graphFingerprint` 调用 `plan_dispatch_batch` 后，只消费 `binding=HOST_NATIVE_DISPATCH_PLAN` 的 assignments。计划工具不启动 Agent、不 claim、不保存完整 inventory/requirements；提供方限额恢复也不调用它。
 
@@ -50,7 +54,7 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。不要绕过 TASK
 ## 执行 Loop
 
 1. 总调度上下文只读取 frontier 和路由 action，不直接执行 Loop。
-2. 对当前批次调用 `plan_dispatch_batch`，取得短租约后按 `concurrentDispatchGroups` 并发创建独立宿主原生 Agent。预留转为 claim 后仍占用跨 Delivery 槽位，直到 Loop 暂停或终态；全部 Delivery 的未过期预留和已 claim 执行器还共同受 `maxConcurrentExecutors` 限制。`HOST_NATIVE` 集合由 MCP Server 启动配置中的精确适配器与用户 `allowedAdapters` 共同限制，协议 `clientInfo` 和本机 CLI 发现不参与授权；跨 Adapter 默认关闭，只有用户明确开启且中央编排器能证明目标 Adapter 属于同一可信编排根时才可选择。显式模型 assignment 必须覆盖子 Agent 模型，不能继承总调度 Agent 的模型；Codex 还必须把 assignment 的 `hostTaskName` 原样作为 `task_name`。
+2. 对当前批次调用 `plan_dispatch_batch`。`binding=HOST_NATIVE_ROUTE_REVIEW` 时没有预留：展示 `reviewing` 中文表格和 30 秒倒计时，不创建 Agent、不询问确认；若用户直接修改原生模型，用 `USER_POLICY + preferredNativeModelId` 重调并重置该节点窗口；若无修改，在 `routeReview.expiresAt` 自动重调。取得 `HOST_NATIVE_DISPATCH_PLAN` 后，才按 `concurrentDispatchGroups` 并发创建独立宿主原生 Agent。预留转为 claim 后仍占用跨 Delivery 槽位，直到 Loop 暂停或终态；全部 Delivery 的未过期预留和已 claim 执行器还共同受 `maxConcurrentExecutors` 限制。`HOST_NATIVE` 集合由 MCP Server 启动配置中的精确适配器与用户 `allowedAdapters` 共同限制，协议 `clientInfo` 和本机 CLI 发现不参与授权；跨 Adapter 默认关闭，只有用户明确开启且中央编排器能证明目标 Adapter 属于同一可信编排根时才可选择。显式模型 assignment 必须覆盖子 Agent 模型，不能继承总调度 Agent 的模型；Codex 还必须把 assignment 的 `hostTaskName` 原样作为 `task_name`。
 3. 每个 assignment 都先预留、再创建接收 Agent。Claude 最后由接收方 claim；Codex 由 `SubagentStart` Hook 在 child 上下文可见前完成 host-side claim。只向接收方传 `rootId`、`nodeId`、`dispatchReservationId` 与 `decisionFingerprint`，不要复制规划上下文、payload 或旧 operation。单个创建失败不影响已创建的同批 Agent，也不 claim 失败节点；等待预留过期后刷新 frontier 与 inventory，最多重算一次，仍失败则生成该节点的人工交接。
 4. 接收方原生进入 layered-delivery，使用精确 `nodeId` 调用 `loop_context`。TASK、TASK Review 与 GROUP Review Loop 同时取得控制器生成的 `humanArtifacts.workItem` baseline/progress/acceptance 路径；TASK 与 TASK Review 继续取得 `humanArtifacts.taskBaseline` 便捷路径，接口型 TASK 的 workItem 还包含自己的 `interfaces`。机器输入仍以 MCP 响应为准。
 5. Claude dispatch PreToolUse Hook 把真实 context 与 node/attempt/adapter/预留直接绑定，接收方连同原生 Agent/模型选择器、AUTO、HOST_NATIVE、推理等级、预留和决策指纹调用 `dispatch_loop`。Codex `SubagentStart` Hook 不接受调用方指定的会话根，只接受操作系统账户默认 `~/.codex/sessions` 内 child/parent/role 与 `hostTaskName` 一致的 transcript，在单一事务内签发/消费内部身份、固定首次成功编排根、消费 reservation 并完成唯一 claim；未被消费的 Claude attestation 不固定信任根。宿主观测到的转发后模型只记为 `actualModelId` 供展示，不参与 reservation 或授权。`additionalContext` 不写 receiver/operation bearer，child 不再调用 `dispatch_loop`。Codex 调用 heartbeat、pause、result 时省略 `operation_id`，mutation PreToolUse Hook 依据当前 child transcript 注入并拒绝 root/helper 的普通工具调用。跨平台 adapter 只有能证明同一宿主编排根时才继续，否则 fail closed。Codex Hook 安装或变更后需在 `/hooks` 审阅并信任；覆盖 `CODEX_HOME`、普通 helper、工作区伪造 transcript、缺失 Hook、错 task、无预留和重放均保持拒绝。该 Hook 是正常宿主工具路径上的生命周期 guardrail；能手工执行 Hook/控制器或改写 transcript/SQLite 的恶意编排 Agent 需要宿主不可伪造的 caller-context 才能进一步防御。

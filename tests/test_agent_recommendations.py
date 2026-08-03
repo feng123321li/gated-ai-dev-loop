@@ -22,6 +22,9 @@ from hdg.model_core import (
 )
 from hdg.mcp_tools import call_tool
 from hdg.planning import prepare_hierarchy
+from hdg.planning import freeze_hierarchy
+from hdg.dispatch_planning import plan_dispatch_batch
+from hdg.repository import SchedulerRepository
 
 from .test_loop_architecture import group_hierarchy
 
@@ -63,6 +66,60 @@ def discovered_agent(
             "source": "UNRESOLVED" if model_id is None else "PROFILE",
         },
     }
+
+
+def host_executor_inventory(agent_id: str) -> list[dict]:
+    if agent_id == "codex":
+        models = [
+            ("gpt-5.6-luna", "EFFICIENT", "low", 30),
+            ("gpt-5.6-terra", "BALANCED", "medium", 20),
+            ("gpt-5.6-sol", "FRONTIER", "high", 10),
+        ]
+        display_name = "Codex"
+    else:
+        models = [
+            ("claude-haiku", "EFFICIENT", "low", 30),
+            ("claude-sonnet", "BALANCED", "medium", 20),
+            ("claude-opus", "FRONTIER", "high", 10),
+        ]
+        display_name = "Claude Code"
+    return [
+        {
+            "agentId": agent_id,
+            "adapterId": agent_id,
+            "displayName": display_name,
+            "dispatchTransport": "HOST_NATIVE",
+            "capabilities": ["development", "review"],
+            "availableSlots": 4,
+            "priority": 20,
+            "nativeModelSelectionSupported": True,
+            "models": [
+                {
+                    "id": model_id,
+                    "family": agent_id,
+                    "tier": tier,
+                    "reasoningEffort": effort,
+                    "priority": priority,
+                }
+                for model_id, tier, effort, priority in models
+            ],
+        }
+    ]
+
+
+def graph_requirements(graph: dict) -> list[dict]:
+    return [
+        {
+            "nodeId": node["id"],
+            "reasoningClass": (
+                "ROUTINE" if node["kind"] == "TASK_LOOP" else "HIGH"
+            ),
+            "source": "PLANNING",
+            "reason": "按工作类型选择当前执行 Agent 的原生模型档位。",
+        }
+        for node in graph["nodes"]
+        if node["kind"].endswith("_LOOP")
+    ]
 
 
 class AgentDiscoveryTests(unittest.TestCase):
@@ -383,50 +440,206 @@ class AgentRecommendationTests(unittest.TestCase):
                 root=root,
                 hierarchy=group_hierarchy(),
             )
-            discovery = {
-                "agents": [
-                    discovered_agent(
-                        "codex",
-                        model_id="gpt-5.6-terra",
-                    )
-                ],
-                "warnings": [],
-            }
-            with patch(
-                "hdg.agent_recommendation.discover_available_agents",
-                return_value=discovery,
-            ):
-                result = recommend_executors(
-                    root=root,
-                    root_id=prepared["rootId"],
-                )
+            graph = SchedulerRepository(root).hierarchy(
+                prepared["rootId"]
+            )["graph"]
+            result = recommend_executors(
+                root=root,
+                root_id=prepared["rootId"],
+                recommendation_mode="AUTOMATIC",
+                executor_inventory=host_executor_inventory("codex"),
+                node_requirements=graph_requirements(graph),
+                host_native_agent_ids=("codex",),
+                host_adapter_id="codex",
+            )
 
         self.assertEqual(
             result["graphFingerprint"],
             prepared["graphFingerprint"],
         )
         self.assertEqual(
-            result["recommendationPolicy"],
-            {
-                "binding": "ADVISORY",
-                "dispatchAllowed": False,
-                "availabilityScope": "LOCAL_TERMINAL",
-                "hostInventoryEligible": False,
-                "dispatchTransport": "EXTERNAL_PROCESS",
-                "persisted": False,
-                "payloadInterpreted": False,
-            },
+            result["recommendationPolicy"]["selectionScope"],
+            "CURRENT_EXECUTION_AGENT_ONLY",
+        )
+        self.assertFalse(
+            result["recommendationPolicy"][
+                "crossAgentRecommendationAllowed"
+            ]
         )
         self.assertTrue(result["recommendations"])
+        self.assertEqual(
+            {
+                item["recommended"]["agentId"]
+                for item in result["recommendations"]
+            },
+            {"codex"},
+        )
+        task_models = {
+            item["recommended"]["model"]["id"]
+            for item in result["recommendations"]
+            if item["role"] == "DEVELOPMENT"
+        }
+        review_models = {
+            item["recommended"]["model"]["id"]
+            for item in result["recommendations"]
+            if item["role"] == "INDEPENDENT_REVIEW"
+        }
+        self.assertEqual(task_models, {"gpt-5.6-luna"})
+        self.assertEqual(review_models, {"gpt-5.6-sol"})
         self.assertRegex(graph_fingerprint(self.graph()), r"^[0-9a-f]{64}$")
 
-    def test_mcp_tools_expose_discovery_and_advice_only(self) -> None:
+    def test_automatic_recommendation_matches_later_dispatch_route(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=group_hierarchy(),
+            )
+            stored = SchedulerRepository(root).hierarchy(
+                prepared["rootId"]
+            )
+            requirements = graph_requirements(stored["graph"])
+            preview = recommend_executors(
+                root=root,
+                root_id=prepared["rootId"],
+                recommendation_mode="AUTOMATIC",
+                executor_inventory=host_executor_inventory("codex"),
+                node_requirements=requirements,
+                host_native_agent_ids=("codex",),
+                host_adapter_id="codex",
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                execution_mode="active",
+                confirmed=True,
+                confirmed_by="human",
+            )
+            task_preview = next(
+                item
+                for item in preview["recommendations"]
+                if item["role"] == "DEVELOPMENT"
+                and item["nodeId"]
+                in {
+                    requirement["nodeId"]
+                    for requirement in requirements
+                }
+            )
+            plan = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                executor_inventory=host_executor_inventory("codex"),
+                node_requirements=[
+                    requirement
+                    for requirement in requirements
+                    if requirement["nodeId"] == task_preview["nodeId"]
+                ],
+                host_native_agent_ids=("codex",),
+                host_adapter_id="codex",
+            )
+
+        assignment = plan["assignments"][0]
+        self.assertEqual(
+            assignment["agent"]["id"],
+            task_preview["recommended"]["agentId"],
+        )
+        self.assertEqual(
+            assignment["model"]["id"],
+            task_preview["recommended"]["model"]["id"],
+        )
+        self.assertEqual(
+            assignment["decisionFingerprint"],
+            task_preview["decisionFingerprint"],
+        )
+
+    def test_claude_automatic_recommendation_uses_native_roles_only(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=group_hierarchy(),
+            )
+            graph = SchedulerRepository(root).hierarchy(
+                prepared["rootId"]
+            )["graph"]
+            result = recommend_executors(
+                root=root,
+                root_id=prepared["rootId"],
+                recommendation_mode="AUTOMATIC",
+                executor_inventory=host_executor_inventory("claude-code"),
+                node_requirements=graph_requirements(graph),
+                host_native_agent_ids=("claude-code",),
+                host_adapter_id="claude-code",
+            )
+
+        self.assertEqual(
+            {
+                item["recommended"]["agentId"]
+                for item in result["recommendations"]
+            },
+            {"claude-code"},
+        )
+        self.assertEqual(
+            {
+                item["recommended"]["model"]["id"]
+                for item in result["recommendations"]
+                if item["role"] == "DEVELOPMENT"
+            },
+            {"claude-haiku"},
+        )
+        self.assertNotIn("actualModelId", json.dumps(result))
+
+    def test_manual_receiver_can_regenerate_native_model_list_read_only(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=group_hierarchy(),
+            )
+            graph = SchedulerRepository(root).hierarchy(
+                prepared["rootId"]
+            )["graph"]
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                execution_mode="manual",
+                confirmed=True,
+                confirmed_by="human",
+            )
+            result = recommend_executors(
+                root=root,
+                root_id=prepared["rootId"],
+                recommendation_mode="AUTOMATIC",
+                executor_inventory=host_executor_inventory("codex"),
+                node_requirements=graph_requirements(graph),
+                host_native_agent_ids=("codex",),
+                host_adapter_id="codex",
+            )
+
+        self.assertEqual(result["executionMode"], "manual")
+        self.assertFalse(
+            result["recommendationPolicy"]["automaticDispatchAllowed"]
+        )
+        self.assertEqual(
+            result["recommendationPolicy"]["use"],
+            "RECEIVER_LOCAL_EXECUTION_PREVIEW",
+        )
+
+    def test_manual_handoff_recommends_a_different_development_agent(self) -> None:
         discovery = {
             "agents": [
                 discovered_agent(
                     "codex",
                     model_id="gpt-5.6-terra",
-                )
+                ),
+                discovered_agent(
+                    "claude-code",
+                    model_id="glm-5.2",
+                ),
             ],
             "warnings": [],
             "discoveryFingerprint": "f" * 64,
@@ -448,18 +661,36 @@ class AgentRecommendationTests(unittest.TestCase):
                 )
                 advice = call_tool(
                     "recommend_executors",
-                    {"root_id": prepared["rootId"]},
+                    {
+                        "root_id": prepared["rootId"],
+                        "recommendation_mode": "MANUAL_HANDOFF",
+                        "manual_development_agent_id": "claude-code",
+                    },
                     root=root,
+                    host_adapter_id="codex",
                 )
 
         self.assertEqual(agents, discovery)
         self.assertTrue(advice["recommendations"])
         self.assertTrue(
             all(
-                item["recommended"]["agentId"] == "codex"
+                item["recommended"]["agentId"] == "claude-code"
                 and not item["dispatchAllowed"]
                 for item in advice["recommendations"]
+                if item["role"] == "DEVELOPMENT"
             )
+        )
+        self.assertEqual(
+            advice["recommendationPolicy"]["binding"],
+            "MANUAL_HANDOFF_ADVISORY",
+        )
+        self.assertTrue(
+            advice["recommendationPolicy"][
+                "crossAgentRecommendationAllowed"
+            ]
+        )
+        self.assertFalse(
+            advice["recommendationPolicy"]["automaticDispatchAllowed"]
         )
 
 

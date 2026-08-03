@@ -420,6 +420,22 @@ class SchedulerRepository:
             active_dispatch_reservation_by_node
             ON dispatch_reservations(run_id, node_id, attempt)
             WHERE status = 'RESERVED';
+            CREATE TABLE IF NOT EXISTS dispatch_route_reviews (
+                run_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                attempt INTEGER NOT NULL,
+                graph_fingerprint TEXT NOT NULL,
+                decision_fingerprint TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                reasoning_class TEXT NOT NULL,
+                status TEXT NOT NULL,
+                opened_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                PRIMARY KEY(run_id, node_id, attempt),
+                FOREIGN KEY(run_id) REFERENCES runs(run_id)
+            );
             CREATE TABLE IF NOT EXISTS receiver_attestations (
                 attestation_id TEXT PRIMARY KEY,
                 run_id TEXT NOT NULL,
@@ -2568,6 +2584,145 @@ class SchedulerRepository:
             "resetAt": row["reset_at"],
             "reportedAt": row["reported_at"],
             "reason": row["reason"],
+        }
+
+    def review_dispatch_assignments(
+        self,
+        *,
+        root_id: str,
+        graph_fingerprint: str,
+        assignments: list[dict[str, Any]],
+        review_seconds: int,
+    ) -> dict[str, Any]:
+        """Open or advance the host-visible route adjustment window."""
+
+        with self.transaction() as connection:
+            hierarchy_row = connection.execute(
+                "SELECT * FROM hierarchies WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if hierarchy_row is None:
+                fail(
+                    "SCHEDULER_HIERARCHY_MISSING",
+                    f"Scheduler hierarchy is missing: {root_id}",
+                )
+            if hierarchy_row["graph_fingerprint"] != graph_fingerprint:
+                fail(
+                    "SCHEDULER_GRAPH_FINGERPRINT_MISMATCH",
+                    "The expected Graph fingerprint is stale",
+                )
+            run = connection.execute(
+                "SELECT * FROM runs WHERE root_id = ? AND revision = ?",
+                (root_id, hierarchy_row["revision"]),
+            ).fetchone()
+            if run is None:
+                fail(
+                    "SCHEDULER_RUN_MISSING",
+                    f"Scheduler run is missing: {root_id}",
+                )
+            at = _commit_timestamp(self.now, run["updated_at"])
+            at_value = datetime.fromisoformat(at.replace("Z", "+00:00"))
+            states = {
+                item["nodeId"]: item
+                for item in self.latest_nodes(connection, run["run_id"])
+            }
+            reviewed: dict[str, dict[str, Any]] = {}
+            waiting: dict[str, dict[str, Any]] = {}
+            rejected: dict[str, dict[str, Any]] = {}
+            for assignment in assignments:
+                node_id = assignment["nodeId"]
+                state = states.get(node_id)
+                if state is None or state["status"] != "READY":
+                    rejected[node_id] = {
+                        "code": "DISPATCH_ROUTE_REVIEW_NOT_READY",
+                        "message": (
+                            "The Loop is no longer ready for route review."
+                        ),
+                    }
+                    continue
+                attempt = state["attempt"]
+                decision_fingerprint = assignment[
+                    "decisionFingerprint"
+                ]
+                existing = connection.execute(
+                    "SELECT * FROM dispatch_route_reviews "
+                    "WHERE run_id = ? AND node_id = ? AND attempt = ?",
+                    (run["run_id"], node_id, attempt),
+                ).fetchone()
+                same_decision = (
+                    existing is not None
+                    and existing["graph_fingerprint"] == graph_fingerprint
+                    and existing["decision_fingerprint"]
+                    == decision_fingerprint
+                )
+                if same_decision:
+                    expires_at = existing["expires_at"]
+                    expires_value = datetime.fromisoformat(
+                        expires_at.replace("Z", "+00:00")
+                    )
+                    if expires_value <= at_value:
+                        connection.execute(
+                            "UPDATE dispatch_route_reviews SET "
+                            "status = 'REVIEWED', updated_at = ? "
+                            "WHERE run_id = ? AND node_id = ? "
+                            "AND attempt = ?",
+                            (at, run["run_id"], node_id, attempt),
+                        )
+                        reviewed[node_id] = {
+                            "routeReviewOpenedAt": existing["opened_at"],
+                            "routeReviewExpiresAt": expires_at,
+                        }
+                        continue
+                    waiting[node_id] = {
+                        "routeReviewOpenedAt": existing["opened_at"],
+                        "routeReviewExpiresAt": expires_at,
+                    }
+                    continue
+                expires_at = (
+                    at_value + timedelta(seconds=review_seconds)
+                ).isoformat().replace("+00:00", "Z")
+                connection.execute(
+                    """
+                    INSERT INTO dispatch_route_reviews(
+                        run_id, node_id, attempt, graph_fingerprint,
+                        decision_fingerprint, agent_id, model_id,
+                        reasoning_class, status, opened_at, updated_at,
+                        expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'REVIEWING', ?, ?, ?)
+                    ON CONFLICT(run_id, node_id, attempt) DO UPDATE SET
+                        graph_fingerprint = excluded.graph_fingerprint,
+                        decision_fingerprint = excluded.decision_fingerprint,
+                        agent_id = excluded.agent_id,
+                        model_id = excluded.model_id,
+                        reasoning_class = excluded.reasoning_class,
+                        status = 'REVIEWING',
+                        opened_at = excluded.opened_at,
+                        updated_at = excluded.updated_at,
+                        expires_at = excluded.expires_at
+                    """,
+                    (
+                        run["run_id"],
+                        node_id,
+                        attempt,
+                        graph_fingerprint,
+                        decision_fingerprint,
+                        assignment["agent"]["id"],
+                        assignment["model"]["id"],
+                        assignment["reasoningClass"],
+                        at,
+                        at,
+                        expires_at,
+                    ),
+                )
+                waiting[node_id] = {
+                    "routeReviewOpenedAt": at,
+                    "routeReviewExpiresAt": expires_at,
+                }
+        return {
+            "observedAt": at,
+            "reviewed": reviewed,
+            "waiting": waiting,
+            "rejected": rejected,
         }
 
     def reserve_dispatch_assignments(

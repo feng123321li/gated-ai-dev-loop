@@ -41,12 +41,12 @@ Delivery
 - 把跨项目、跨模块需求拆成可恢复的递归 `GROUP` / `TASK` Graph。
 - 为 TASK、GROUP 和 Delivery 提供强制分层 Review 与最终人工验收。
 - 在同一批 frontier 中并发派遣互不冲突的宿主原生 Agent。
-- 根据 Agent 对任务风险的分析动态选择高效、平衡或前沿模型。
+- 根据 Agent 对任务风险的分析动态选择高效、平衡或前沿的宿主原生模型名。
 - 用 claim、heartbeat、lease、重试和容量断路器处理长时间运行与失联。
 - 支持一个 Delivery 覆盖多个本地 Git 项目，并冻结各项目的基线与权限上限。
 - 用不可变 Delivery Revision 管理验收前的需求调整和安全结果携带。
 - 以 SQLite 和哈希事件链保存机器状态，同时生成可读的中文进度与验收投影。
-- 后台 Loop 在代码检查、测试、问题修复和复审等阶段上报结构化中文进度；主 Agent 以表格持续展示 Agent/模型、测试、心跳、剩余租约及失联预警，原始事件仅用于诊断。
+- 后台 Loop 在代码检查、测试、问题修复和复审等阶段上报结构化中文进度；主 Agent 以表格持续展示 Agent、原生模型与宿主观测到的实际模型、测试、心跳、剩余租约及失联预警，原始事件仅用于诊断。
 
 ## 能力边界
 
@@ -87,6 +87,7 @@ Agent 发现、普通建议和自动派遣是三件不同的事：
 - `available_agents` 只发现本机终端和非敏感模型信息。
 - `recommend_executors` 返回非绑定建议，不启动 Agent。
 - `plan_dispatch_batch` 只接受宿主正式 Agent API 证明为 `HOST_NATIVE` 的容量，并返回可并发 assignment。
+- assignment 只使用 Claude/Codex 原生 `modelId` 派遣；本机配置在原生调用后如何转发与本项目无关。宿主可把观测到的结果记录为展示用 `actualModelId`，但它不参与选模、指纹、预留、授权或 Review 多样性。
 
 自动选模由调度 Agent 分析当前 Loop：
 

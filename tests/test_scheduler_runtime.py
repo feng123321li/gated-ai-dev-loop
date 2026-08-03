@@ -4011,7 +4011,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
             node_id=node_id,
             owner="claude-reviewer",
             agent_id="claude-code",
-            model_id="glm-5.2",
+            model_id="sonnet",
+            actual_model_id="glm-5.2",
             operation_id="op-progress",
             now=at(2),
         )
@@ -4057,10 +4058,16 @@ class SchedulerRuntimeTests(unittest.TestCase):
             item for item in status["nodes"] if item["nodeId"] == node_id
         )
         self.assertEqual(state["progress"]["progressPercent"], 70)
+        self.assertEqual(state["modelId"], "sonnet")
+        self.assertEqual(state["actualModelId"], "glm-5.2")
+        self.assertEqual(state["actualModelSource"], "HOST_REPORTED")
         table = status["progressMonitor"]["markdownTable"]
         self.assertIn("| 节点 | 执行器 | 当前阶段 |", table)
         self.assertIn("t-service · 任务执行", table)
-        self.assertIn("第 1 轮 · claude-code / glm-5.2", table)
+        self.assertIn(
+            "第 1 轮 · claude-code · 原生 sonnet → 实际 glm-5.2",
+            table,
+        )
         self.assertIn("运行测试", table)
         self.assertIn("74/74 通过", table)
         self.assertIn("准备检查接口兼容性", table)

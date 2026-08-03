@@ -25,6 +25,8 @@ def _claude_model_from_transcript(
     tool_input: dict[str, object],
     tool_use_id: str,
 ) -> str | None:
+    """Read a display-only actual model after the tool use is persisted."""
+
     transcript = Path(transcript_path).expanduser().resolve(strict=True)
     if (
         transcript.suffix != ".jsonl"
@@ -179,35 +181,20 @@ def main() -> int:
         dispatch_reservation_id = metadata["dispatchReservationId"]
     else:
         claude_agent_id = hook_input.get("agent_id")
-        tool_use_id = hook_input.get("tool_use_id")
         if (
             not isinstance(claude_agent_id, str)
             or not claude_agent_id
-            or not isinstance(transcript_path, str)
-            or not transcript_path
-            or not isinstance(tool_use_id, str)
-            or not tool_use_id
         ):
             return _deny("Loop mutation lacks an attested host child")
         host_adapter_id = "claude-code"
         receiver_context_id = claude_agent_id
         parent_context_id = session_id
         dispatch_reservation_id = None
-        try:
-            model_id = _claude_model_from_transcript(
-                transcript_path,
-                receiver_context_id=receiver_context_id,
-                parent_context_id=parent_context_id,
-                tool_name=tool_name,
-                tool_input=tool_input,
-                tool_use_id=tool_use_id,
-            )
-        except (json.JSONDecodeError, OSError, ValueError):
-            model_id = None
-        if model_id is None:
-            return _deny(
-                "The current Claude tool use is not host-attested"
-            )
+        # Claude may append the current tool_use only after PreToolUse
+        # returns. The consumed claim-time receiver attestation is the
+        # durable authority for subsequent Loop mutations, so do not race
+        # the transcript here.
+        model_id = None
 
     root_id = tool_input.get("root_id")
     node_id = tool_input.get("node_id")
@@ -243,7 +230,7 @@ def main() -> int:
                 workspace_root=resolution.workspace_root,
                 receiver_context_id=receiver_context_id,
                 parent_context_id=parent_context_id,
-                model_id=model_id,
+                actual_model_id=model_id,
                 dispatch_reservation_id=str(
                     dispatch_reservation_id
                 ),
@@ -256,7 +243,6 @@ def main() -> int:
                 workspace_root=resolution.workspace_root,
                 receiver_context_id=receiver_context_id,
                 parent_context_id=parent_context_id,
-                model_id=model_id,
             )
     except (GatedLoopError, OSError, ValueError):
         return _deny("The current host context does not own this Loop")

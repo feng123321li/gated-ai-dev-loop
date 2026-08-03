@@ -722,6 +722,14 @@ class McpSurfaceTests(unittest.TestCase):
             "executor_inventory"
         ]["items"]
         self.assertIn("dispatchTransport", executor_schema["required"])
+        self.assertIn(
+            "nativeModelSelectionSupported",
+            executor_schema["required"],
+        )
+        self.assertNotIn(
+            "modelOverrideSupported",
+            executor_schema["properties"],
+        )
         self.assertIn("adapterId", executor_schema["properties"])
         self.assertNotIn("adapterId", executor_schema["required"])
         self.assertEqual(
@@ -744,6 +752,16 @@ class McpSurfaceTests(unittest.TestCase):
                 "operation_id",
             ],
         )
+        self.assertNotIn(
+            "actual_model_id",
+            dispatch_schema["required"],
+        )
+        self.assertIn(
+            "never routes",
+            dispatch_schema["properties"]["actual_model_id"][
+                "description"
+            ],
+        )
         self.assertEqual(
             set(dispatch_schema["properties"]),
             {
@@ -752,6 +770,7 @@ class McpSurfaceTests(unittest.TestCase):
                 "owner",
                 "agent_id",
                 "model_id",
+                "actual_model_id",
                 "dispatch_mode",
                 "dispatch_transport",
                 "dispatch_reservation_id",

@@ -65,8 +65,8 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 2. `DISPATCH_LOOP`：手动模式生成交接；自动模式先读取每个 Ready 节点的 `loop_context`，再调用 `plan_dispatch_batch`。
 3. 自动选模由总调度 Agent 分析任务风险并提交 `ROUTINE`、`STANDARD` 或 `HIGH`；Controller 不用 Python 做语义判级。缺少分析时只可回退宿主明确报告且与 inventory 匹配的当前 Agent/模型；两者都缺失时保持 deferred。
 4. 自动 assignment 只接受宿主正式 Agent API 证明的 `HOST_NATIVE` 容量。PATH、CLI、exec、subprocess 或 companion bridge 一律是 `EXTERNAL_PROCESS`，不得伪装成自动派遣能力。
-5. 按 `concurrentDispatchGroups` 并发创建同批独立接收 Agent，严格使用 assignment 的模型、推理强度、工作区、预留 ID、决策指纹和宿主任务名。不得先创建普通 helper 再抢占预留，也不得跨 Delivery 复用上下文或工作区。
-6. 严格遵循宿主接收协议：Claude 由真实子 Agent 消费一次性 attestation 后 claim；Codex 由 `SubagentStart` Hook 校验真实 child/parent/task/model 并在 child 可见前 claim。Hook、预留或宿主身份无法证明时 fail closed。
+5. 按 `concurrentDispatchGroups` 并发创建同批独立接收 Agent，严格把 assignment 的 `model.id` 当作 Claude/Codex 原生模型选择器，并使用 assignment 的宿主原生推理参数、工作区、预留 ID、决策指纹和宿主任务名。任何本机转发或模型替换都在原生调用之后发生，不得把转发后的实际模型倒填为派遣选择器。不得先创建普通 helper 再抢占预留，也不得跨 Delivery 复用上下文或工作区。
+6. 严格遵循宿主接收协议：Claude 由真实子 Agent 消费一次性 attestation 后 claim；Codex 由 `SubagentStart` Hook 校验真实 child/parent/task 并在 child 可见前 claim。claim 的 `modelId` 来自 reservation 中的原生选择器；宿主若能观测转发后的模型，只将其记录为展示用 `actualModelId`。Hook、预留或宿主身份无法证明时 fail closed。
 7. 接收方从 `loop_context` 获取冻结输入，自主管理分析、实现、测试、Gate 与修正；领取、代码检查完成、运行测试、发现问题、修复、复审和最终验证等阶段调用 `report_loop_progress`，只提交简体中文结构化摘要，不提交原始日志或内部推理。进度上报不续租，长运行仍须在租约到期前 heartbeat。
 8. TASK Review、GROUP Review 和 Delivery Review 在各自 Loop 内完成独立发现、修正、验证和复审。P0/P1 未关闭不得成功；P2 必须保留。详见[验收说明](references/acceptance.md)。
 9. 只向 `record_loop_result` 提交真实业务终态：`SUCCEEDED`、`BLOCKED`、`REPLAN_REQUIRED` 或 `CANCELLED`。内部 Gate 失败、可修复 finding、容量交接和限额等待都不是 Loop outcome。
@@ -77,6 +77,7 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 ## Agent、模型与容量
 
 - 需要展示本机候选或建议时读取[agent-recommendations.md](references/agent-recommendations.md)。`available_agents` / `recommend_executors` 只读且非绑定，不启动 Agent、不切换模型、不写执行事实。
+- 所有派遣、tier 匹配、Review 多样性、reservation、claim 授权与决策指纹只使用宿主原生 `modelId`。`actualModelId` 是原生调用完成后的可选宿主观测，只用于中文状态和进度表；未知时显示“未报告”，不得读取特定修改器、猜测对应关系或据此改变编排。
 - 自动编排、自动选模、跨 Adapter、最大并发、额度策略和 Review 多样性由用户级配置控制；读取[orchestrator-configuration.md](references/orchestrator-configuration.md)。
 - 跨 Adapter 当前未开放修改；面板和保存工具都以 `ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE` fail closed。只有中央宿主未来能证明可创建、可认证、有容量且属于同一可信编排根的多个 Adapter 时才可开放。
 - 只有宿主提供结构化利用率和真实 `resetAt` 时才可提前暂停；不得从文本猜测额度。

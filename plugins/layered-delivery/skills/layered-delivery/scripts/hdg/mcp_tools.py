@@ -55,7 +55,10 @@ FINGERPRINT = {
 
 HOST_MODEL = _object(
     {
-        "id": _string("Model ID accepted by the host-native Agent."),
+        "id": _string(
+            "Native model name accepted by the host Agent API. This is "
+            "the dispatch selector, never a forwarded/effective model."
+        ),
         "family": _string(
             "Optional model family used for Review diversity."
         ),
@@ -112,11 +115,12 @@ HOST_EXECUTOR = _object(
             "minimum": -100,
             "maximum": 100,
         },
-        "modelOverrideSupported": {
+        "nativeModelSelectionSupported": {
             "type": "boolean",
             "description": (
-                "Whether child Agent creation can explicitly select one "
-                "advertised model instead of inheriting the orchestrator."
+                "Whether child creation can select one advertised native "
+                "model name. Local forwarding or model replacement is "
+                "outside the orchestration contract."
             ),
         },
         "models": {
@@ -133,7 +137,7 @@ HOST_EXECUTOR = _object(
         "capabilities",
         "availableSlots",
         "priority",
-        "modelOverrideSupported",
+        "nativeModelSelectionSupported",
         "models",
     ],
 )
@@ -144,7 +148,7 @@ CURRENT_EXECUTOR = _object(
             "Exact current host-native Agent ID from executor inventory."
         ),
         "modelId": _string(
-            "Exact current model ID advertised by that Agent."
+            "Exact current native model name advertised by that Agent."
         ),
     },
     required=["agentId", "modelId"],
@@ -497,7 +501,8 @@ TOOLS = (
                 "current_executor": {
                     **CURRENT_EXECUTOR,
                     "description": (
-                        "Exact current host Agent/model used only for "
+                        "Exact current host Agent/native model used only "
+                        "for "
                         "nodes lacking Agent analysis. It must match "
                         "executor_inventory."
                     ),
@@ -697,9 +702,9 @@ TOOLS = (
         (
             "Claim one ready TASK, TASK Review, GROUP Review, or Delivery "
             "Review Loop "
-            "for its receiving isolated executor, recording the actual "
-            "Agent and model used by that executor and subject to exact "
-            "resource locks."
+            "for its receiving isolated executor, recording the native "
+            "Agent/model selector plus any display-only host observation "
+            "and subject to exact resource locks."
         ),
         _object(
             {
@@ -721,8 +726,21 @@ TOOLS = (
                     "minLength": 1,
                     "maxLength": 256,
                     "description": (
-                        "Actual model ID used by the receiving Agent. This "
-                        "is execution evidence, not a recommended model."
+                        "Native model name selected through the receiving "
+                        "Agent API. Automatic dispatch must use the exact "
+                        "modelId from its assignment."
+                    ),
+                },
+                "actual_model_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "description": (
+                        "Optional model actually observed by the host after "
+                        "native dispatch. It is display-only evidence: the "
+                        "controller never routes, authorizes, fingerprints, "
+                        "or evaluates capability from this value. Do not "
+                        "guess it."
                     ),
                 },
                 "dispatch_mode": {

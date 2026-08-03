@@ -237,7 +237,7 @@ def main() -> int:
             workspace_root=resolution.workspace_root,
             receiver_context_id=receiver_context_id,
             parent_context_id=parent_session_id,
-            model_id=model_id,
+            actual_model_id=model_id,
             dispatch_reservation_id=dispatch_reservation_id,
         )
     except (GatedLoopError, OSError, ValueError):

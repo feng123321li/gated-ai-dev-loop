@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.30.0 — 2026-08-03
+
+发布提交：待发布
+
+- 派遣模型身份拆分为权威原生 `modelId` 与展示用 `actualModelId`：inventory、tier、Review 多样性、reservation、决策指纹和 claim 授权全部只使用 Claude/Codex 原生模型名；本机配置或任意修改器在原生调用后的转发行为不进入编排。
+- `modelOverrideSupported` 更名为 `nativeModelSelectionSupported`，`EXPLICIT_OVERRIDE` 更名为 `NATIVE_MODEL_SELECTOR`，避免把宿主原生角色选择误解为对 GLM、DeepSeek 等实际提供方模型做 override；路由策略升级为 `HOST_NATIVE_MODEL_ROUTING_V4`。
+- Claude dispatch Hook 与 Codex `SubagentStart` Hook 可把宿主观测到的运行模型记录为 `actualModelId` / `HOST_REPORTED`，但实际模型变化不再导致 reservation、claim 或后续 Loop mutation 授权失败；中文进度表展示“原生模型 → 实际模型”，未知时明确显示“未报告”。
+- 修复 Claude `PreToolUse` 早于当前 `tool_use` transcript 落盘时误报 `not host-attested` 的竞态：后续 heartbeat、进度、暂停和结果登记改用领取时已消费的 receiver attestation 与宿主 child/parent 上下文绑定授权；未领取的子 Agent 和父上下文仍保持拒绝。共享授权 Hook 同步更名为 `authorize_loop_operation.py`，准确反映 Claude/Codex 双宿主职责。
+- 这是当前 schema v3 内的派遣协议更新，不新增旧字段兼容入口。调用 `plan_dispatch_batch` 的宿主 inventory 必须改用 `nativeModelSelectionSupported`，并确保 `model.id` 是宿主原生 Agent API 接受的模型名或角色选择器。
+
 ## 0.29.0 — 2026-08-03
 
 发布提交：`17aea7f`

@@ -8,6 +8,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from hdg.graph_model import (
     compile_delivery_graph,
@@ -18,7 +19,9 @@ from hdg.mcp_tools import tool_definitions
 from hdg.model_core import validate_hierarchy_definition
 from hdg.planning import freeze_hierarchy
 from scripts.host_smoke import (
+    _codex_plugin_available,
     _find_smoke_artifact,
+    _host_command,
     _prepare_workspace,
     _prompt,
 )
@@ -121,6 +124,55 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         self.assertEqual(result["pluginVersion"], "0.32.0")
         self.assertEqual(result["toolCount"], 29)
 
+    def test_codex_probe_finds_candidate_alongside_installed_old_version(
+        self,
+    ) -> None:
+        installed = {
+            "installed": [
+                {"name": "layered-delivery", "version": "0.31.0"},
+                {"name": "layered-delivery", "version": "0.32.0"},
+            ]
+        }
+        completed = subprocess.CompletedProcess(
+            ["codex", "plugin", "list", "--json"],
+            0,
+            stdout=json.dumps(installed),
+            stderr="",
+        )
+        with patch("scripts.host_smoke.shutil.which", return_value="codex"):
+            with patch(
+                "scripts.host_smoke.subprocess.run",
+                return_value=completed,
+            ):
+                self.assertTrue(_codex_plugin_available())
+
+    def test_codex_smoke_disables_competing_version_for_one_invocation(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary:
+            with patch(
+                "scripts.host_smoke._codex_plugin_state",
+                return_value=(
+                    True,
+                    ["layered-delivery@majorbio-skills"],
+                ),
+            ):
+                with patch(
+                    "scripts.host_smoke.shutil.which",
+                    return_value="codex",
+                ):
+                    command = _host_command(
+                        "codex",
+                        workspace=Path(temporary),
+                        scenario="light",
+                        model=None,
+                    )
+        self.assertIn(
+            'plugins."layered-delivery@majorbio-skills".enabled=false',
+            command,
+        )
+        self.assertNotIn("--ephemeral", command)
+
     def test_host_smoke_workspace_starts_on_an_isolated_feature_branch(
         self,
     ) -> None:
@@ -154,10 +206,26 @@ class TeamReleaseReadinessTests(unittest.TestCase):
             )
             self.assertEqual(_find_smoke_artifact(workspace), artifact)
 
+    def test_host_smoke_accepts_readme_only_after_this_run_changes_it(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            _prepare_workspace(workspace)
+            self.assertIsNone(_find_smoke_artifact(workspace))
+            readme = workspace / "README.md"
+            readme.write_text(
+                "# Layered Delivery host smoke\n"
+                "- LIGHT real-host smoke: PASS\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(_find_smoke_artifact(workspace), readme)
+
     def test_host_smoke_prompt_forbids_cross_agent_dispatch(self) -> None:
         prompt = _prompt("light")
         self.assertIn("current-host dispatch only", prompt)
         self.assertIn("never dispatch to another Agent", prompt)
+        self.assertIn("Do not read prior Codex/Claude", prompt)
 
     def test_release_surfaces_and_public_automatic_contract_match(self) -> None:
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -117,6 +118,11 @@ def _prompt(scenario: str) -> str:
         every assignment must contain only the host that started this session;
         never dispatch to another Agent even if another CLI is discovered.
 
+        Treat this run as fresh and isolated. Do not read prior Codex/Claude
+        sessions, history, caches, user configuration, or earlier smoke output;
+        they are not evidence for this run. Use only this prompt, the installed
+        Skill/MCP contract, and files inside the disposable workspace.
+
         The harness has already initialized the disposable development workspace
         on `feature/m_lf_host_smoke` from `main`. Use that current feature branch
         and its discovered gitBinding; do not create another branch or worktree.
@@ -154,10 +160,10 @@ def _prompt(scenario: str) -> str:
     ).strip()
 
 
-def _codex_plugin_available() -> bool:
+def _codex_plugin_state() -> tuple[bool, list[str]]:
     executable = shutil.which("codex")
     if executable is None:
-        return False
+        return False, []
     completed = subprocess.run(
         [executable, "plugin", "list", "--json"],
         text=True,
@@ -168,17 +174,37 @@ def _codex_plugin_available() -> bool:
         check=False,
     )
     if completed.returncode != 0:
-        return False
+        return False, []
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError:
-        return False
+        return False, []
+    candidate_available = False
+    competing_plugin_ids: list[str] = []
     for plugin in payload.get("installed", []):
         if isinstance(plugin, str) and plugin == "layered-delivery":
-            return True
-        if isinstance(plugin, dict) and plugin.get("name") == "layered-delivery":
-            return plugin.get("version") in (None, __version__)
-    return False
+            candidate_available = True
+            continue
+        if not isinstance(plugin, dict):
+            continue
+        if plugin.get("name") != "layered-delivery":
+            continue
+        if plugin.get("enabled") is False:
+            continue
+        if plugin.get("version") in (None, __version__):
+            candidate_available = True
+            continue
+        plugin_id = plugin.get("pluginId")
+        if isinstance(plugin_id, str) and re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._@/-]{0,255}",
+            plugin_id,
+        ):
+            competing_plugin_ids.append(plugin_id)
+    return candidate_available, sorted(set(competing_plugin_ids))
+
+
+def _codex_plugin_available() -> bool:
+    return _codex_plugin_state()[0]
 
 
 def _host_command(
@@ -230,22 +256,31 @@ def _host_command(
         executable = shutil.which("codex")
         if executable is None:
             raise RuntimeError("Codex CLI is not available on PATH")
-        if not _codex_plugin_available():
+        candidate_available, competing_plugin_ids = _codex_plugin_state()
+        if not candidate_available:
             raise RuntimeError(
                 "layered-delivery 0.32.0 must be installed in Codex before "
                 "running the real-host smoke test"
             )
-        command = [
-            executable,
-            "exec",
-            "--json",
-            "--ephemeral",
-            "--dangerously-bypass-hook-trust",
-            "--sandbox",
-            "workspace-write",
-            "--cd",
-            str(workspace),
-        ]
+        command = [executable]
+        for plugin_id in competing_plugin_ids:
+            command.extend(
+                [
+                    "-c",
+                    f'plugins."{plugin_id}".enabled=false',
+                ]
+            )
+        command.extend(
+            [
+                "exec",
+                "--json",
+                "--dangerously-bypass-hook-trust",
+                "--sandbox",
+                "workspace-write",
+                "--cd",
+                str(workspace),
+            ]
+        )
         if model:
             command.extend(["--model", model])
         command.append(prompt)
@@ -256,11 +291,20 @@ def _host_command(
 def _find_smoke_artifact(workspace: Path) -> Path | None:
     ignored_roots = {".git", ".layered-delivery"}
     for path in sorted(workspace.rglob("*")):
-        if not path.is_file() or path.name == "README.md":
+        if not path.is_file():
             continue
         relative = path.relative_to(workspace)
         if relative.parts and relative.parts[0] in ignored_roots:
             continue
+        if path.name == "README.md":
+            changed = subprocess.run(
+                ["git", "diff", "--quiet", "--", relative.as_posix()],
+                cwd=workspace,
+                capture_output=True,
+                check=False,
+            )
+            if changed.returncode != 1:
+                continue
         try:
             if path.stat().st_size > 64 * 1024:
                 continue

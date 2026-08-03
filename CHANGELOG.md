@@ -6,7 +6,7 @@
 
 ## 0.32.0 — 2026-08-03
 
-发布提交：待发布
+发布提交：`158f7a7`
 
 - 手动交接改为纯开发内容导出：新增只读 `preview_hierarchy` 与 `create_manual_handoff`，生成一个同时包含中文需求、全部 GROUP/TASK/Review 输入和机器可读 schema v3 附录的 Markdown 文件；不 prepare、不 freeze、不创建 Graph Run。
 - 交接前不再发现、推荐或绑定接收 Agent/模型，也不创建接收任务、会话或 worktree。`recommend_executors` 只接受 `AUTOMATIC`；MCP `freeze_hierarchy` 只用于自动执行，宿主不再提交 `execution_mode`。
@@ -21,6 +21,8 @@
 - 0.32.0 宿主冒烟只验证当前 Agent 的原生子上下文：Claude 运行只允许 `claude-code` claim，Codex 运行只允许 `codex` claim，并从事件库硬校验 claimed Agent 集合。跨 Agent 冒烟留到可信多 Adapter 桥接实际实现后再新增，不因本机发现另一 CLI 提前宣称支持。
 - 真实 Claude 冒烟暴露的 reservation 延迟与字段猜测一并收紧：取得 300 秒预留后必须立即创建 child，child 在实现前先 claim；MCP schema 允许模型省略由 PreToolUse 注入的 receiver context/attestation，并明确禁止伪造占位值。
 - Windows 真实宿主完成后允许候选 MCP 进程短暂释放 SQLite 句柄；临时目录清理改为两秒等待和 best-effort，不再把已经取得完整成功事件的运行因瞬时 `WinError 32` 误判成业务失败。
+- Codex 真实宿主冒烟不再使用会隐藏父 rollout 的 `--ephemeral`；mutation Hook 同时识别 Codex 0.146 提供的父 `session_id` 与子 `agent_id`，再以受信 child transcript、reservation task name 和已消费身份注入 operation。拒绝信息附带稳定调度错误码，便于区分 owner、lease 与身份记录问题。
+- 原生接收协议要求 claim 后读取一次 `loop_context` 并立即提交首次独立 heartbeat，再开始代码检查、分析、读写或测试；Codex `SubagentStart` additional context 直接携带该顺序，避免短 Loop 虽已执行却被 90 秒监控标为“疑似未启动”。
 
 ## 0.31.0 — 2026-08-03
 

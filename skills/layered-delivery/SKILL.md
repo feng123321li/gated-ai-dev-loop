@@ -69,7 +69,7 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 3. 自动选模由总调度 Agent 分析任务风险并提交 `ROUTINE`、`STANDARD` 或 `HIGH`；Controller 不用 Python 做语义判级。缺少分析时只可回退宿主明确报告且与 inventory 匹配的当前 Agent/模型；两者都缺失时保持 deferred。
 4. 自动 assignment 只接受宿主正式 Agent API 证明的 `HOST_NATIVE` 容量。PATH、CLI、exec、subprocess 或 companion bridge 一律是 `EXTERNAL_PROCESS`，不得伪装成自动派遣能力。
 5. 只消费 `HOST_NATIVE_DISPATCH_PLAN` 的 `concurrentDispatchGroups`，并发创建同批独立接收 Agent；`HOST_NATIVE_ROUTE_REVIEW` 没有预留，不得提前创建 Agent。严格把 assignment 的 `model.id` 当作 Claude/Codex 原生模型选择器，并使用 assignment 的宿主原生推理参数、工作区、预留 ID、决策指纹和宿主任务名。任何本机转发或模型替换都在原生调用之后发生，不得把转发后的实际模型倒填为派遣选择器。不得先创建普通 helper 再抢占预留，也不得跨 Delivery 复用上下文或工作区。
-6. 严格遵循宿主接收协议：Claude 由真实子 Agent 消费一次性 attestation 后 claim；Codex 由 `SubagentStart` Hook 校验真实 child/parent/task 并在 child 可见前 claim。claim 的 `modelId` 来自 reservation 中的原生选择器；宿主若能观测转发后的模型，只将其记录为展示用 `actualModelId`。Hook、预留或宿主身份无法证明时 fail closed。
+6. 严格遵循宿主接收协议：Claude 由真实子 Agent 消费一次性 attestation 后 claim；Codex 由 `SubagentStart` Hook 校验真实 child/parent/task 并在 child 可见前 claim。claim 成功后，接收方读取一次 `loop_context`，随即在任何代码检查、分析、读写或测试前提交首次独立 `heartbeat_loop`；不得把 claim 自带租约当成首次 heartbeat。claim 的 `modelId` 来自 reservation 中的原生选择器；宿主若能观测转发后的模型，只将其记录为展示用 `actualModelId`。Hook、预留或宿主身份无法证明时 fail closed。
 7. 接收方从 `loop_context` 获取冻结输入，自主管理分析、实现、测试、Gate 与修正。`STANDARD` 在领取、代码检查完成、测试、修复、复审和最终验证等阶段上报进度；`LIGHT` 只在发现问题和最终验证时上报，短 Loop 可只报最终验证。进度不续租，长运行仍须在租约到期前 heartbeat。
 8. `STANDARD` 的 TASK Review、GROUP Review 和 Delivery Review 在各自 Loop 内完成独立发现、修正、验证和复审。`LIGHT` 不创建这些 Review 节点，TASK 成功后直接等待用户确认；若实际 diff 或影响扩大，必须提交 `REPLAN_REQUIRED` 并升级同一 Delivery 的下一 Revision 为 `STANDARD`。详见[验收说明](references/acceptance.md)。
 9. 只向 `record_loop_result` 提交真实业务终态：`SUCCEEDED`、`BLOCKED`、`REPLAN_REQUIRED` 或 `CANCELLED`。内部 Gate 失败、可修复 finding、容量交接和限额等待都不是 Loop outcome。

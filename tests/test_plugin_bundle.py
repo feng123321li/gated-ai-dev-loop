@@ -985,6 +985,10 @@ class PluginBundleTests(unittest.TestCase):
             additional_context = json.loads(completed.stdout)[
                 "hookSpecificOutput"
             ]["additionalContext"]
+            self.assertIn(
+                "immediately call heartbeat_loop once before any other tool",
+                additional_context,
+            )
             marker = "LAYERED_DELIVERY_ASSIGNMENT="
             assignment_context = json.loads(
                 additional_context.split(marker, maxsplit=1)[1].splitlines()[0]
@@ -994,7 +998,8 @@ class PluginBundleTests(unittest.TestCase):
             self.assertNotIn("operation_id", assignment_context)
             operation_event = {
                 "hook_event_name": "PreToolUse",
-                "session_id": hook_event["agent_id"],
+                "session_id": hook_event["session_id"],
+                "agent_id": hook_event["agent_id"],
                 "turn_id": "codex-child-turn",
                 "tool_use_id": "codex-child-tool",
                 "tool_name": (
@@ -1060,7 +1065,8 @@ class PluginBundleTests(unittest.TestCase):
             )
             denied_event = {
                 **operation_event,
-                "session_id": helper_event["agent_id"],
+                "session_id": helper_event["session_id"],
+                "agent_id": helper_event["agent_id"],
                 "transcript_path": helper_event["transcript_path"],
                 "tool_input": {
                     **operation_event["tool_input"],

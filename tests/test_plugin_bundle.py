@@ -254,20 +254,15 @@ class PluginBundleTests(unittest.TestCase):
             SKILL / "references" / "mcp-transport.md"
         ).read_text(encoding="utf-8")
 
-        self.assertIn(
-            "需求未变时保留当前准备结果，不重复 prepare",
-            main,
-        )
-        self.assertIn(
-            "只有需求实际变化时才重新 prepare",
-            main,
-        )
+        self.assertIn("`PREPARED`", main)
+        self.assertIn("需求未变时不要重复 prepare", main + planning)
+        self.assertIn("初次冻结前用户修改需求时", planning)
         self.assertIn(
             "回答后保留当前 fingerprint",
             planning,
         )
         self.assertIn("`prepare_delivery_revision`", main)
-        self.assertIn("保持原 `delivery.id`", main)
+        self.assertIn("保持相同 `delivery.id`", planning + execution)
         self.assertIn("不要创建新的 Delivery ID", execution)
         self.assertIn("旧 run 自动成为 `SUPERSEDED`", execution)
         self.assertIn(
@@ -307,10 +302,11 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("入参", planning)
         self.assertIn("出参", planning)
         self.assertIn("humanArtifacts.workItems", planning)
-        self.assertIn("work-items/<root-id>/", main)
+        self.assertIn("work-items/", transport)
+        self.assertIn("<root-id>/", transport)
         self.assertIn(
-            "不生成 `hierarchy.json`、`graph.json` 或 `state.json` 副本",
-            main,
+            "不生成 hierarchy、Graph 或运行状态 JSON 副本",
+            transport,
         )
 
     def test_skill_keeps_agent_recommendations_advisory(self) -> None:
@@ -356,7 +352,7 @@ class PluginBundleTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("`plan_dispatch_batch`", main)
-        self.assertIn("显式模型覆盖", main)
+        self.assertIn("显式模型 assignment 必须覆盖", execution)
         self.assertIn("并发创建", main)
         self.assertIn(
             "Codex 由 `SubagentStart` Hook 在 child 上下文可见前完成 host-side claim",
@@ -375,7 +371,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("HOST_NATIVE_DISPATCH_PLAN", recommendations)
         self.assertIn("dispatchTransport=HOST_NATIVE", main + execution)
         self.assertIn("EXTERNAL_PROCESS", main + execution + recommendations)
-        self.assertIn("codex-companion", main + execution)
+        self.assertIn("codex-companion", recommendations)
         self.assertIn("UNSAFE_EXECUTOR_TRANSPORT", recommendations)
         self.assertIn("diversityLevel=CONTEXT_ONLY", main + recommendations)
         self.assertIn('"autoSelectModel": true', orchestrator)
@@ -425,8 +421,8 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("REFREEZE_TASK_REQUIREMENT", execution)
         self.assertIn("revision 1", planning)
         self.assertIn("不得修改依赖", execution)
-        self.assertIn("优先 `main`", main)
-        self.assertIn("回退 `master`", main)
+        self.assertIn("优先选择本地 `main`", planning)
+        self.assertIn("回退 `master`", planning)
         self.assertIn(
             "不得从当前 feature HEAD 分叉",
             planning,
@@ -446,8 +442,8 @@ class PluginBundleTests(unittest.TestCase):
             planning + execution,
         )
         self.assertIn(
-            "TASK 共享同一 Delivery",
-            main + execution,
+            "所有 TASK 共享该 Delivery",
+            execution,
         )
         self.assertIn("projectScopes", main + planning + execution)
         self.assertIn("同名", main + planning + execution)
@@ -457,9 +453,26 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertNotIn("临时 task branch", main + execution)
 
+    def test_entry_docs_use_progressive_disclosure(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertLessEqual(len(readme.splitlines()), 200)
+        self.assertLessEqual(len(main.splitlines()), 120)
+        self.assertNotIn("```json", readme)
+        for reference in (
+            "planning-quickstart.md",
+            "execution-quickstart.md",
+            "agent-recommendations.md",
+            "acceptance.md",
+            "mcp-transport.md",
+            "orchestrator-configuration.md",
+        ):
+            with self.subTest(reference=reference):
+                self.assertIn(reference, main)
+
     def test_documented_hierarchy_examples_are_valid(self) -> None:
         documents = (
-            ROOT / "README.md",
             SKILL / "references" / "planning-quickstart.md",
         )
         examples = 0
@@ -478,7 +491,7 @@ class PluginBundleTests(unittest.TestCase):
                     continue
                 validate_hierarchy_definition(value)
                 examples += 1
-        self.assertGreaterEqual(examples, 3)
+        self.assertGreaterEqual(examples, 2)
 
     def test_runtime_is_an_exact_source_copy_without_cli(self) -> None:
         source_files = {

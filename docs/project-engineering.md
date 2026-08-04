@@ -91,6 +91,7 @@ hierarchy
 .layered-delivery/
 ├── scheduler.db
 ├── d-order/
+│   ├── handoff-<fingerprint>.md  # 手动交接时按需
 │   ├── overview.md
 │   ├── baseline.md
 │   ├── progress.md
@@ -116,7 +117,7 @@ hierarchy
     └── acceptance.md
 ```
 
-`scheduler.db` 是唯一机器权威；各 `<delivery-id>` 目录只保存可重建的人类投影。稳定 `delivery.id` 下可以有多个不可变 Revision；`revisions.md` 默认展示当前 Revision 并串联旧 run 的 `SUPERSEDED` 审计状态。新用户需求不能因为当前路径恢复了旧 Delivery 就隐式进入其 Revision；`prepare_delivery_revision` 必须提交 `USER_EXPLICIT_SAME_DELIVERY`，或在已有 `REPLAN_REQUIRED` 事件时提交 `ACTIVE_LOOP_REPLAN`。候选只写 `delivery_revisions`，不会移动 `hierarchies` 当前指针，旧 run 直到候选 freeze 时才被原子取代。同一 `workspaceKey` 已有未结束 run 时，第二个 Delivery 在 `prepare` 写入前即被拒绝并返回 `CREATE_INDEPENDENT_WORKTREE_TASK`，避免留下无法冻结或迁移的 PREPARED 状态。`projectScopes` 允许一个需求覆盖多个本地仓库，冻结时要求精确项目 ID 授权；所有可写 Git 项目使用同名 feature 分支，但分别绑定自己的主线与 `baseCommit`。TASK Agent 不创建内部分支；Git stage/commit/push 仍需各自授权。`work-items/<root-id>/children/...` 镜像逻辑父子关系，但不表达文件授权。
+`scheduler.db` 是 Graph 的唯一机器权威；每个需求只使用稳定的 `.layered-delivery/<delivery-id>/`。自动与手动开发都生成 overview、baseline、progress、acceptance、revisions 和同结构 work-items，手动路径另含 `handoff-<fingerprint>.md`。手动包不属于 SQLite 控制状态；`requirementSnapshotStatus=FROZEN` 只表示内容由双 fingerprint 锁定，仅存在该目录也不表示 Graph 已 prepare、freeze 或运行。稳定 `delivery.id` 下可以有多个不可变 Revision；`revisions.md` 默认展示当前 Revision 并串联旧 run 的 `SUPERSEDED` 审计状态。新用户需求不能因为当前路径恢复了旧 Delivery 就隐式进入其 Revision；`prepare_delivery_revision` 必须提交 `USER_EXPLICIT_SAME_DELIVERY`，或在已有 `REPLAN_REQUIRED` 事件时提交 `ACTIVE_LOOP_REPLAN`。候选只写 `delivery_revisions`，不会移动 `hierarchies` 当前指针，旧 run 直到候选 freeze 时才被原子取代。同一 `workspaceKey` 已有未结束 run 时，第二个 Delivery 在 `prepare` 写入前即被拒绝并返回 `CREATE_INDEPENDENT_WORKTREE_TASK`，避免留下无法冻结或迁移的 PREPARED 状态。`projectScopes` 允许一个需求覆盖多个本地仓库，冻结时要求精确项目 ID 授权；所有可写 Git 项目使用同名 feature 分支，但分别绑定自己的主线与 `baseCommit`。TASK Agent 不创建内部分支；Git stage/commit/push 仍需各自授权。`work-items/<root-id>/children/...` 镜像逻辑父子关系，但不表达文件授权。
 
 工作区根 `overview.md` 只列 Delivery 标识、标题、状态、更新时间和详情；Delivery `overview.md` 才展示本交付的 TASK 完成度、GROUP 数量与导航。顶层 `baseline.md` 保存基线树和节点链接，`progress.md` 聚合运行进展，`acceptance.md` 只完整展示 Delivery 本层 Review 与用户确认，并以摘要和链接串联根工作项报告。每个 GROUP/TASK 在递归节点目录下拥有自己的 baseline、progress 和 acceptance；GROUP baseline 链接直接子节点，TASK baseline 展示冻结 Loop 输入。TASK 验收只展开本 TASK 与 TASK Review；GROUP 验收只展开本层完成点与 Review，对直接子节点只显示状态、简要结果和验收链接。任何下层输入、证据或 Review findings 都不向上重复复制。progress 状态表显示 claim 事件记录的执行代理、原生模型、宿主观测到的实际模型、认领身份和执行轮次；acceptance 摘要、子节点结果和 Review P0/P1/P2 问题使用表格。只有 TASK payload 显式声明接口时，才在该 TASK 目录生成 `interfaces.md` 索引和 `interfaces/` 下每接口一份详情。完整 before/after 契约会被确定性比较：入参表展示类型、必填和说明，出参表不展示必填；删除值使用 Markdown 删除线，新增或删除字段只显示存在的一侧，真正修改的属性才使用“修改前 → 修改后”。`protocol` 为开放字符串，HTTP、Dubbo、gRPC、GraphQL、消息等只是示例，通用协议可用 `identifier` 定位。无声明时不生成。代码可辅助提取和校验，但不是动态投影源。所有文件绑定双指纹并可随权威状态重建；`workspace_status` 会为早期 schema v3 Delivery 补建当前适用的投影树，但不迁移数据库或 Graph。所有固定文案和状态保持中文，标明 UTC+8 的人类时间使用 `YYYY-MM-DD HH:mm:ss`；机器权威仍使用 UTC。
 
@@ -124,14 +125,14 @@ hierarchy
 
 工具分为六组：
 
-- 发现、自动建议与派遣计划：`available_agents`、`recommend_executors`、`plan_dispatch_batch`。自动模式的正式路由先进入 30 秒 `HOST_NATIVE_ROUTE_REVIEW` 调整窗口，超时后才预留；手动交接不经过推荐器。
-- 规划与交接：`workspace_status`、`hierarchy_contract`、`preview_hierarchy`、`create_manual_handoff`、`prepare_hierarchy`、`freeze_hierarchy`。手动交接只生成一个自包含文件，接收后开始开发时才创建 worktree 并准备 Graph。
+- 发现、自动建议与派遣计划：`available_agents`、`recommend_executors`、`plan_dispatch_batch`。自动模式的正式路由先进入 30 秒 `HOST_NATIVE_ROUTE_REVIEW` 调整窗口，超时后才预留；手动开发不经过推荐器。
+- 规划与交接：`workspace_status`、`hierarchy_contract`、`preview_hierarchy`、`create_manual_handoff`、`prepare_hierarchy`、`freeze_hierarchy`。手动开发在本需求的 `<delivery-id>` 目录生成完整冻结内容包；接收方开始开发时才创建 worktree，并可直接按内容开发而不准备 Graph。
 - Delivery 修订：`delivery_revision_history`、`prepare_delivery_revision`
 - 需求修订：`unfreeze_task_requirement`、`refreeze_task_requirement`
 - 查询：`graph_frontier`、`graph_status`、`graph_events`、`loop_context`
 - Loop 控制：`dispatch_loop`、`heartbeat_loop`、`report_loop_progress`、`pause_loop`、`resume_loop`、`record_loop_result`
 
-Graph Run 只有自动执行一种模式：MCP 与 Python `freeze_hierarchy` 均不接收 `execution_mode`，Repository 冻结只写入 `active`；`dispatch_loop` 必须显式提交 `dispatch_mode=AUTO` 及对应的宿主原生 reservation/decision，`MANUAL` 会在 schema 和运行时同时被拒绝。手动交接是 `create_manual_handoff` 生成文件的独立流程，不创建 Graph Run，也不存在可供第三方调用的 manual claim 兼容入口。
+Graph Run 只有自动执行一种模式：MCP 与 Python `freeze_hierarchy` 均不接收 `execution_mode`，Repository 冻结只写入 `active`；`dispatch_loop` 必须显式提交 `dispatch_mode=AUTO` 及对应的宿主原生 reservation/decision，`MANUAL` 会在 schema 和运行时同时被拒绝。手动开发是 `create_manual_handoff` 冻结内容文件的独立流程，不创建 Graph Run，也不存在可供第三方调用的 manual claim 兼容入口。
 
 `report_loop_progress` 写入有界的 `LOOP_PROGRESS_REPORTED` 可观测事件，不参与 Graph FSM、不续租。摘要、里程碑和下一步使用用户当前语言，不强制包含中文字符。`graph_status` 与会先推进租约的 `graph_frontier` 返回 `progressMonitor`：结构化行用于宿主监控，`markdownTable` 使用中文固定表头与状态标签汇总 attempt、Agent、原生/实际模型、当前阶段、摘要、里程碑、下一步、测试、心跳/租约和健康预警。主 Agent 默认展示该表格，不把原始事件名、operation、reservation 或终端日志直接暴露给普通用户。
 - 恢复：`advance_graph`、`rebuild_graph_run`

@@ -1,6 +1,6 @@
 # 团队安装与运维
 
-本文面向团队管理员和普通使用者，覆盖 `layered-delivery` 0.32.0 的安装、升级、恢复、卸载与回滚。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 标准库。
+本文面向团队管理员和普通使用者，覆盖 `layered-delivery` 0.33.0 的安装、升级、恢复、卸载与回滚。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 标准库。
 
 ## 安装前检查
 
@@ -41,7 +41,7 @@ claude plugin list --json
 python scripts/host_smoke.py probe --json
 ```
 
-结果必须报告 Plugin 版本 0.32.0 和 29 个 MCP 工具，并如实标记本机已安装的宿主。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器，普通成员也不需要重复付费冒烟。
+结果必须报告 Plugin 版本 0.33.0 和 29 个 MCP 工具，并如实标记本机已安装的宿主。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器，普通成员也不需要重复付费冒烟。
 
 真实冒烟默认先只展示计划，必须显式增加 `--execute` 才调用模型。两个宿主分别运行，绝不从一个终端跨调另一个 Agent：
 
@@ -53,7 +53,7 @@ python scripts/host_smoke.py run --host codex --scenario light
 python scripts/host_smoke.py run --host codex --scenario light --execute
 ```
 
-Claude 命令从当前源码候选的 `--plugin-dir` 加载包；Codex 命令要求 0.32.0 候选已经从 Marketplace 安装。发布前的最小门禁可用 LIGHT 验证同宿主 claim/heartbeat/progress/result；发布管理员需要覆盖 Review 时再把 `--scenario light` 改成 `--scenario standard`。任何输出中的 `claimedAgents` 都必须只含命令指定的当前宿主。
+Claude 命令从当前源码候选的 `--plugin-dir` 加载包；Codex 命令要求 0.33.0 候选已经从 Marketplace 安装。发布前的最小门禁可用 LIGHT 验证同宿主 claim/heartbeat/progress/result；发布管理员需要覆盖 Review 时再把 `--scenario light` 改成 `--scenario standard`。任何输出中的 `claimedAgents` 都必须只含命令指定的当前宿主。
 
 Codex 冒烟不能使用 `--ephemeral`：`SubagentStart` attestation 必须从宿主持久化 transcript 校验 parent/child/task。冒烟会留下一个可审计的 Codex 会话记录，但业务工作区仍位于自动清理的临时目录；若宿主无法提供该 transcript，claim 必须 fail closed。
 
@@ -62,7 +62,7 @@ Codex 冒烟不能使用 `--ephemeral`：`SubagentStart` attestation 必须从�
 ### 升级前
 
 1. 记录当前 `codex plugin list --json` 或 `claude plugin list --json` 输出中的版本。
-2. 对 0.31 及更早版本的 manual Graph run，先在旧版本完成或取消。0.32 不再提供 manual Graph claim；手动交接只生成文件。
+2. 对 0.31 及更早版本的 manual Graph run，先在旧版本完成或取消。0.32 不再提供 manual Graph claim；手动开发只生成冻结内容包。
 3. 自动 schema v3 Graph 可在新会话通过 `workspace_status → graph_frontier` 恢复。升级前仍建议让正在写结果的 Loop 完成，避免恰好跨越 Hook 重载窗口。
 4. 不删除项目中的 `.layered-delivery`，也不直接修改 `scheduler.db`。
 
@@ -119,4 +119,4 @@ claude plugin uninstall layered-delivery@majorbio-skills --scope user
 
 团队回滚由 Marketplace 管理员执行：把 Codex 与 Claude 两份 Marketplace manifest 同时重新固定到最后已验证的 tag 和 40 位提交 SHA，然后让用户刷新 Marketplace、重新安装/更新 Plugin 并新建会话。
 
-回滚到 0.31.0 前应先完成或取消 0.32.0 的 LIGHT Delivery；0.31.0 不认识 LIGHT 拓扑。STANDARD schema v3 运行也应优先在当前版本完成，避免在活动 claim 期间跨版本切换 Hook。回滚不修改项目数据库，不通过删除 cache 伪造版本切换。
+回滚到 0.32.0 前应先保存 0.33.0 手动开发包中的 progress/acceptance；0.32.0 不会生成完整冻结内容包，也不识别 `requirementSnapshotStatus`。自动 schema v3 Graph 仍应优先在当前版本完成，避免在活动 claim 期间跨版本切换 Hook。回滚不修改项目数据库，不通过删除 cache 伪造版本切换。

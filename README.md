@@ -2,7 +2,7 @@
 
 `layered-delivery` 把已经确认的需求冻结为递归 Delivery Graph，再协调多个独立 Agent/WorkLoop 完成实现、逐层审查和最终验收。
 
-当前版本：**0.32.0**
+当前版本：**0.33.0**
 
 ## 核心流程
 
@@ -10,9 +10,9 @@
 沟通并确认需求
   → 检查真实改动内容和影响范围，选择 LIGHT / STANDARD
   → 只读预览 Delivery Graph 计划
-  → 用户选择“自动执行”或“手动交接”
+  → 用户选择“自动执行”或“手动开发”
   → 自动执行：创建开发工作区、准备并冻结 Graph、并发调度 TASK WorkLoop
-  → 手动交接：只生成一个自包含开发内容文件，接收后再创建开发工作区
+  → 手动开发：冻结同结构内容包、不启动 Graph，切换任意 CLI 直接开发
   → LIGHT：单一 TASK 定向验证
   → STANDARD：TASK Review → 逐层 GROUP Review → Delivery Review
   → 用户最终验收
@@ -68,9 +68,9 @@ Plugin 激活后，在 Codex 或 Claude Code 的新会话中提出需求，并�
 
 1. 读取工作区状态和当前 schema v3 契约。
 2. 与用户沟通需求，检查真实代码、预计或已有 diff 和影响范围；无法可靠判断时使用 STANDARD。然后调用 `preview_hierarchy` 只读预览 Delivery Graph。
-3. 展示完整计划，以及“自动执行 / 手动交接”两个选项；选择前不混入模型建议。
+3. 展示完整计划，以及“自动执行 / 手动开发”两个选项；选择前不混入模型建议。
 4. 用户选择自动执行后，才创建或选择实际开发工作区，调用 `prepare_hierarchy` 与 `freeze_hierarchy`，并展示当前宿主 Agent 的原生模型分档；路由展示不增加第二次确认。
-5. 用户选择手动交接后，调用 `create_manual_handoff` 只生成一个自包含交接文件；交接前不指定 Agent、模型或接收会话，也不创建任务或 worktree。
+5. 用户选择手动开发后，调用 `create_manual_handoff`，在 `.layered-delivery/<delivery-id>/` 生成与自动开发同结构的 overview、baseline、progress、acceptance、revisions、work-items，以及自包含 `handoff-<fingerprint>.md`。需求内容由双 fingerprint 冻结；不启动 Graph，不指定 Agent、模型或接收会话，也不创建任务或 worktree。用户可切换任意 CLI 直接按该目录开发。
 6. 自动模式对正式 Ready 批次展示中文模型表和默认 30 秒路由调整窗口；用户可直接改为其他可用原生模型，不再回答确认问题，超时后自动预留并派遣。
 7. 自动模式持续消费 frontier，并发调度当前可运行的独立 WorkLoop。
 8. STANDARD 在所有 Review 完成后展示验收报告；LIGHT 在唯一 TASK 定向验证完成后展示改动与影响依据。两者都等待用户最终确认。
@@ -80,17 +80,17 @@ Plugin 激活后，在 Codex 或 Claude Code 的新会话中提出需求，并�
 | 模式 | 选择后的行为 |
 |---|---|
 | 自动执行 | 开始实际开发：按需创建 worktree，准备并冻结 Graph，再由当前宿主派遣可证明为 `HOST_NATIVE` 的 Agent |
-| 手动交接 | 只输出一个包含完整开发内容和 schema v3 附录的 Markdown 文件；不冻结 Graph、不选 Agent、不建任务/worktree |
+| 手动开发 | 冻结与自动路径同结构的需求内容包并附带 schema v3 交接文件；不启动 Graph、不选 Agent、不建任务/worktree，可切换任意 CLI 直接开发并记录 progress/acceptance |
 
-新业务目标默认创建新 Delivery。一个工作区最多绑定一个未结束 Delivery；并行需求真正开始开发时使用独立对话工作区，Git 项目优先使用 linked worktree。只读预览或生成手动交接文件不需要提前创建 worktree。只有用户明确要求继续同一需求，或当前 Loop 返回 `REPLAN_REQUIRED`，才在原 `delivery.id` 上创建下一 Revision。
+新业务目标默认创建新 Delivery。自动与手动开发使用同一个稳定的 `.layered-delivery/<delivery-id>/` 和同结构投影，不再创建共享 `handoffs` 目录。手动响应的 `requirementSnapshotStatus=FROZEN` 只表示需求内容已冻结；目录仍不代表 Graph 已 prepare、freeze 或创建 Run。一个工作区最多绑定一个未结束 Delivery；并行需求真正开始开发时使用独立对话工作区，Git 项目优先使用 linked worktree。只读预览或生成手动内容包不需要提前创建 worktree。只有用户明确要求继续同一需求，或当前 Loop 返回 `REPLAN_REQUIRED`，才在原 `delivery.id` 上创建下一 Revision。
 
 ## Agent、模型与并发
 
 Agent 发现、自动路由建议和手动内容交接是不同的事：
 
-- `available_agents` 只提供通用本机终端与非敏感模型发现，不参与手动交接选择。
+- `available_agents` 只提供通用本机终端与非敏感模型发现，不参与手动开发选择。
 - `recommend_executors(AUTOMATIC)` 只在当前宿主 Agent 内按原生 tier 生成全 Graph 只读预览，并与正式派遣复用路由决策。
-- `create_manual_handoff` 只生成开发内容文件，不调用推荐器、不绑定接收 Agent/模型；接收后开始实际开发时，宿主才确定执行者和本机模型映射。
+- `create_manual_handoff` 在本需求的 `.layered-delivery/<delivery-id>/` 中生成冻结内容包，不调用推荐器、不绑定接收 Agent/模型；切换到任意 CLI 并开始实际开发时，宿主才确定执行者和本机模型映射。
 - `plan_dispatch_batch` 只接受宿主正式 Agent API 证明为 `HOST_NATIVE` 的容量；先返回无预留的 `HOST_NATIVE_ROUTE_REVIEW` 和 30 秒调整窗口，到期重调后才返回可并发 assignment。
 - assignment 只使用 Claude/Codex 原生 `modelId` 派遣；本机配置在原生调用后如何转发与本项目无关。宿主可把观测到的结果记录为展示用 `actualModelId`，但它不参与选模、指纹、预留、授权或 Review 多样性。
 

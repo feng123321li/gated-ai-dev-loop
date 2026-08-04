@@ -115,7 +115,7 @@ Plugin 源码、Marketplace manifest 或 Plugin 缓存目录。
 ### `automaticOrchestration`
 
 - `true`：允许生成自动派遣计划。
-- `false`：`plan_dispatch_batch` 拒绝自动编排；手动交接不受影响。
+- `false`：`plan_dispatch_batch` 拒绝自动编排；手动开发内容冻结不受影响。
 
 ### `autoSelectModel`
 

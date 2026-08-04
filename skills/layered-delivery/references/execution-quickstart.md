@@ -1,6 +1,6 @@
 # 递归 Graph 执行
 
-用于自动执行路径中已冻结 Graph 的运行、恢复与阻断处理。手动交接只生成文件，不进入本执行循环。
+用于自动执行路径中已冻结 Graph 的运行、恢复与阻断处理。手动开发只生成冻结内容包，不创建 Graph Run，也不进入本执行循环。
 
 ## Frontier
 
@@ -21,9 +21,9 @@
 
 不要自行增加 TASK/Gate 节点，也不要根据 payload 内容改变 frontier 顺序。
 
-开发方式确认前不展示模型建议。用户选择自动执行后，先在实际开发工作区完成 prepare，再按当前宿主 Agent 的真实原生 inventory 与全部 Loop 的临时风险分析调用 `recommend_executors(recommendation_mode=AUTOMATIC)`，用中文表格展示当前 Agent 内的模型分档；该预览不需要第二次确认，随后直接 freeze 并让 `plan_dispatch_batch` 复用同一分析。正式 Ready 批次的第一次计划调用开启持久化 30 秒路由调整窗口，并按 `节点 | 执行 Agent | 原生模型角色 | 原生 modelId | 实际代理模型 | 剩余时间 | 状态` 展示 `reviewing`；实际模型未知时写“未报告”。主 Agent 不再提问，保持可接收用户消息，并在 `routeReview.expiresAt` 自动重复计划调用。用户选择手动交接时不进入本文件描述的执行流程：只调用 `create_manual_handoff`，交接前不指定 Agent/模型，不创建接收会话或 worktree，也不产生 manual run。
+开发方式确认前不展示模型建议。用户选择自动执行后，先在实际开发工作区完成 prepare，再按当前宿主 Agent 的真实原生 inventory 与全部 Loop 的临时风险分析调用 `recommend_executors(recommendation_mode=AUTOMATIC)`，用中文表格展示当前 Agent 内的模型分档；该预览不需要第二次确认，随后直接 freeze 并让 `plan_dispatch_batch` 复用同一分析。正式 Ready 批次的第一次计划调用开启持久化 30 秒路由调整窗口，并按 `节点 | 执行 Agent | 原生模型角色 | 原生 modelId | 实际代理模型 | 剩余时间 | 状态` 展示 `reviewing`；实际模型未知时写“未报告”。主 Agent 不再提问，保持可接收用户消息，并在 `routeReview.expiresAt` 自动重复计划调用。用户选择手动开发时不进入本文件描述的执行流程：只调用 `create_manual_handoff` 生成冻结内容包，交接前不指定 Agent/模型，不创建接收会话或 worktree，也不产生 manual run；用户可在任意 CLI 中直接按该包开发。
 
-推荐工具不得启动外部 CLI、切换模型、改变 owner、提前 claim、绕过宿主原生 Agent 容量或接管限额恢复。自动建议不跨 Agent；手动交接完全不调用推荐器。手工配置、任意本机修改器或容量变化后可以重新调用自动推荐，旧建议不作为缓存权威。路由无法保持且必须改换开发 Agent、扩大项目范围或改变冻结需求时才重新请求用户决定；同一 Agent 内因容量变化重算模型只需明确告知。
+推荐工具不得启动外部 CLI、切换模型、改变 owner、提前 claim、绕过宿主原生 Agent 容量或接管限额恢复。自动建议不跨 Agent；手动开发完全不调用推荐器。手工配置、任意本机修改器或容量变化后可以重新调用自动推荐，旧建议不作为缓存权威。路由无法保持且必须改换开发 Agent、扩大项目范围或改变冻结需求时才重新请求用户决定；同一 Agent 内因容量变化重算模型只需明确告知。
 
 用户不认可表中的默认原生模型时，尚未 claim 的节点可在 30 秒窗口内把 `node_requirements.source` 改为 `USER_POLICY` 并提交精确 `preferredNativeModelId`。重新调用计划并展示更新后的中文路由表，不重新 freeze、不询问第二次确认；该节点从变更时点重新获得完整 30 秒调整窗口，超时自动派遣。只能指定当前宿主 inventory 中的原生 selector；实际代理模型不能作为 override。已 claim 的节点不得热切模型，需先 pause 并由新接收上下文按新路由继续。
 
@@ -149,7 +149,7 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 2. 将完整新范围传给 `prepare_delivery_revision`，同时提交当前 revision、变更原因、真实请求人和连续性依据。用户明确要求继续同一 Delivery 时传 `continuity_basis=USER_EXPLICIT_SAME_DELIVERY`；只有当前 Graph 已记录 `REPLAN_REQUIRED` 才传 `ACTIVE_LOOP_REPLAN`。工作区、路径、分支或旧 Delivery 仍处于 Active 都不能充当连续性。该调用只写候选 Revision，不替换当前 hierarchy/run，也不应触发宿主通用确认弹窗；可重复 prepare 尚未冻结的同一新 Revision，但不能修改旧 Revision。
 3. 检查响应中的 `carryForwardTaskIds`。只有 TASK definition、依赖、Loop、资源声明与 TASK Review 完全未变，而且旧 Revision 的实现及 Review 都成功，才会成为携带候选；GROUP 与 Delivery Review 不携带。
 4. 展示完整新范围、Revision 编号、携带候选和 `requiredProjectAuthorizations`。跨项目 scope 必须包含当前工作区，所有可写 Git 项目使用同名 feature 分支。
-5. 用户选择自动执行或手动交接是本 Revision 唯一一次业务确认。自动执行调用 `freeze_hierarchy`，同时提交精确 `expected_delivery_revision`、新 fingerprint 和与准备结果完全一致的 `authorized_project_ids`。手动交接调用 `create_manual_handoff` 输出修订后的完整开发内容文件，但不替换当前 run；接收方真正开始开发前需再次确认如何承接该活动 Delivery。
+5. 用户选择自动执行或手动开发是本 Revision 唯一一次业务确认。自动执行调用 `freeze_hierarchy`，同时提交精确 `expected_delivery_revision`、新 fingerprint 和与准备结果完全一致的 `authorized_project_ids`。手动开发调用 `create_manual_handoff` 输出修订后的完整冻结内容包，但不替换当前 run；接收方真正开始开发前需再次确认如何承接该活动 Delivery。
 6. 只有自动冻结成功后，旧 run 才标记为 `SUPERSEDED`，新 run 继续同一 Delivery 的验收；`revisions.md` 与 `delivery_revision_history` 保留审计链。
 
 ## 恢复

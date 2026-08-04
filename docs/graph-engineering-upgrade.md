@@ -83,10 +83,10 @@ Delivery: d-commerce
 
 ```text
 自动执行：当前宿主原生 inventory → 原生模型 tier 预览 → 30 秒路由调整窗口 → 宿主原生派遣
-手动交接：只读 hierarchy 预览 → 一个自包含开发内容文件 → 接收后才选择宿主与工作区
+手动开发：只读 hierarchy 预览 → 同结构冻结内容包 → 切换任意 CLI 选择宿主与工作区并直接开发
 ```
 
-建议不修改 hierarchy、Graph、事件链、claim 或 owner。自动建议只在当前宿主 Agent 内按原生 tier 选择模型，不因为发现另一 CLI 而生成跨 Agent 建议。手动交接不调用 Agent 推荐器、不创建接收任务/worktree、不冻结 Graph；具体 Agent 与模型只有接收宿主开始实际开发后才知道。推荐器不解析不透明 payload，因此不会把模型路由策略重新塞进外层业务 schema。
+建议不修改 hierarchy、Graph、事件链、claim 或 owner。自动建议只在当前宿主 Agent 内按原生 tier 选择模型，不因为发现另一 CLI 而生成跨 Agent 建议。手动开发不调用 Agent 推荐器、不创建接收任务/worktree、不冻结 Graph；它只用双 fingerprint 冻结内容快照，具体 Agent 与模型只有接收宿主开始实际开发后才知道。推荐器不解析不透明 payload，因此不会把模型路由策略重新塞进外层业务 schema。
 
 手工配置、任意本机修改器、PATH 或用户 Profile 改变后重新发现即可；同一 Frozen Graph 可在不同主机得到不同展示。人工交接发现保持 `ADVISORY / EXTERNAL_PROCESS`。自动模式由 `plan_dispatch_batch` 消费宿主明确提供且 `dispatchTransport=HOST_NATIVE` 的原生 Agent 容量、原生模型 selector 与选择能力；Agent 分析完整时按 tier 选择子 Agent 的原生模型名，缺少节点分析时可沿用宿主明确报告的当前 Agent/原生模型并标记 `UNCLASSIFIED`。正式 Ready 批次的首次稳定路由返回 `HOST_NATIVE_ROUTE_REVIEW`，持久化 30 秒调整窗口但不预留；主 Agent 用中文表格展示路由，用户可直接修改 `preferredNativeModelId`，不再询问确认。到期后宿主自动重调，相同决策才原子签发短租约并返回 `HOST_NATIVE_DISPATCH_PLAN`；变化节点重新计时。本机配置在原生调用后转发到哪个实际模型与编排无关，宿主观测值只作为 `actualModelId` 展示。随后按槽位并发创建接收上下文；第二个调度器只能等待接收方 claim 或预留过期。PATH 中发现的 CLI 不自动取得启动授权，计划工具也不启动 Agent 或 claim。
 
@@ -179,7 +179,7 @@ Review 沿层级逐层向上收敛，但不会把同一个 Review 节点重复�
 
 冻结 Revision 只固定当前外层目标、依赖、资源声明、项目范围和拓扑，不固定 Loop 内部实现计划；显式 payload 也不是工程正确性的穷举清单。Gate 失败、普通实现缺陷或 Review finding 只要能在当前 scope 和权限内修正，就由当前 Loop 调整方案、修正并重新验证。`BLOCKED` 仅用于当前 Loop 已无可行的 scope 内路径，并要求显式 failure class；只有冻结的依赖、资源、项目范围或拓扑必须改变时才返回 `REPLAN_REQUIRED`。最终用户验收前的 replan 保持同一 `delivery.id` 并生成下一不可变 Revision，不再用取消旧 run 加新 Delivery ID 表达同一需求。
 
-Revision 连续性必须来自用户明确说明，而不是来自工作区恰好恢复了哪个 Active Delivery。不同工单或独立业务目标默认建立新 Delivery。`preview_hierarchy` 和 `create_manual_handoff` 不绑定工作区；同一物理工作区已有未结束 Delivery 时，只有真正开始自动开发的初始 prepare 才返回 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED / CREATE_INDEPENDENT_WORKTREE_TASK`。宿主此时才从主线创建 worktree；若只返回排队标识，则保持 `WORKTREE_SETUP_QUEUED`，不重复创建，也不宣称 Graph 已冻结。`prepare_delivery_revision` 只准备候选，不触发宿主通用确认；用户选择自动执行或手动交接文件是该 Revision 唯一一次业务确认。
+Revision 连续性必须来自用户明确说明，而不是来自工作区恰好恢复了哪个 Active Delivery。不同工单或独立业务目标默认建立新 Delivery。`preview_hierarchy` 和 `create_manual_handoff` 不绑定工作区；同一物理工作区已有未结束 Delivery 时，只有真正开始自动开发的初始 prepare 才返回 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED / CREATE_INDEPENDENT_WORKTREE_TASK`。宿主此时才从主线创建 worktree；若只返回排队标识，则保持 `WORKTREE_SETUP_QUEUED`，不重复创建，也不宣称 Graph 已冻结。`prepare_delivery_revision` 只准备候选，不触发宿主通用确认；用户选择自动执行或手动冻结内容包是该 Revision 唯一一次业务确认。
 
 ## 逻辑递归与物理布局
 
@@ -189,6 +189,7 @@ GROUP/TASK 的递归存在于冻结 hierarchy 和编译 Graph 中，并镜像到
 .layered-delivery/
 ├── scheduler.db
 ├── d-commerce/
+│   ├── handoff-<fingerprint>.md  # 手动交接时按需
 │   ├── overview.md
 │   ├── baseline.md
 │   ├── progress.md
@@ -218,7 +219,7 @@ GROUP/TASK 的递归存在于冻结 hierarchy 和编译 Graph 中，并镜像到
     └── acceptance.md
 ```
 
-`scheduler.db` 是唯一机器权威；Delivery 目录只保留分离的需求基线、执行进展和验收记录，不再生成 hierarchy、编译 Graph 或当前状态 JSON 副本。Delivery baseline 链接全部节点 baseline；每个 GROUP/TASK 在 `work-items/<root-id>/children/...` 的对应节点目录拥有 baseline、progress 和 acceptance。只有 TASK 显式声明接口时才在自己的目录增加接口契约投影；协议字段保持开放，HTTP、Dubbo、gRPC、GraphQL、消息等均可表达。目录名使用不可变 ID，不使用可修改标题；物理递归只镜像父子关系，不重新引入文件 scope，兄弟执行顺序仍由 `dependsOn` 控制。
+`scheduler.db` 是 Graph 的唯一机器权威；一个需求的自动与手动开发都进入同一个稳定 Delivery 目录并使用同结构人类投影，不再使用共享 `handoffs` 目录。手动包另含 `handoff-<fingerprint>.md`；它是双 fingerprint 锁定、无控制状态的内容快照，仅存在该文件或目录不表示 Graph 已 prepare、freeze 或运行。Graph 投影只保留分离的需求基线、执行进展和验收记录，不再生成 hierarchy、编译 Graph 或当前状态 JSON 副本。Delivery baseline 链接全部节点 baseline；每个 GROUP/TASK 在 `work-items/<root-id>/children/...` 的对应节点目录拥有 baseline、progress 和 acceptance。只有 TASK 显式声明接口时才在自己的目录增加接口契约投影；协议字段保持开放，HTTP、Dubbo、gRPC、GraphQL、消息等均可表达。目录名使用不可变 ID，不使用可修改标题；物理递归只镜像父子关系，不重新引入文件 scope，兄弟执行顺序仍由 `dependsOn` 控制。
 
 人类投影集合必须足以完成冻结前评审、运行中跟踪和最终验收：工作区 `overview.md` 只列 Delivery 入口，Delivery `overview.md` 展示本交付状态与内部统计；Delivery 投影负责聚合与串联；节点投影覆盖双指纹、summary、`dependsOn`、Loop 引用、资源锁、不透明 payload、运行状态、Loop 结果和证据。验收内容按层归属：TASK 只完整展开本 TASK 与 TASK Review，GROUP 只完整展开本层完成点与 GROUP Review，Delivery 只完整展开 Delivery Review 和用户确认；向上一层只提供直接下层或根工作项的状态、简要结果和报告链接，不复制下层输入、证据或 findings。进度表使用中文字段展示实际执行代理、执行模型、认领身份和执行轮次；验收摘要、子节点结果和 P0/P1/P2 问题使用表格。P0/P1 只在修复、验证和独立复审后关闭，P2 非阻断但必须列示。新增、调整或删除接口的 TASK 通过 `payload.interfaces` 显式提供 `changeType`、协议、名称、简介以及完整 before/after 快照；控制器生成 `interfaces.md` 索引，并在 `interfaces/` 下为每个接口生成一份详情。入参表比较类型、必填和说明，出参表不展示必填；删除值使用 Markdown 删除线，新增或删除字段只显示存在的一侧。代码可辅助准备和验证契约，但不成为动态投影源，接口内容也不参与 Graph 决策。固定展示使用中文，标明 UTC+8 的时间使用 `YYYY-MM-DD HH:mm:ss`；SQLite 继续保持机器 UTC。
 

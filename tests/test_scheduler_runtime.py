@@ -351,7 +351,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         return prepared
 
-    def test_manual_handoff_is_one_file_without_starting_development(
+    def test_manual_handoff_materializes_development_bundle_without_starting(
         self,
     ) -> None:
         first = prepare_hierarchy(
@@ -399,8 +399,12 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(handoff["status"], "HANDOFF_READY")
         self.assertEqual(
+            handoff["requirementSnapshotStatus"],
+            "FROZEN",
+        )
+        self.assertEqual(
             handoff["nextAction"],
-            "DELIVER_MANUAL_HANDOFF_FILE",
+            "OPEN_FROZEN_BUNDLE_IN_ANY_CLI",
         )
         self.assertFalse(handoff["controlStateCreated"])
         self.assertFalse(handoff["graphRunCreated"])
@@ -415,13 +419,70 @@ class SchedulerRuntimeTests(unittest.TestCase):
         handoff_root = Path(
             self.root,
             ".layered-delivery",
-            "handoffs",
+            "d-second",
         )
-        files = list(handoff_root.glob("*.md"))
+        files = list(handoff_root.glob("handoff-*.md"))
         self.assertEqual(len(files), 1)
+        self.assertEqual(
+            {path.name for path in handoff_root.iterdir()},
+            {
+                "acceptance.md",
+                "baseline.md",
+                files[0].name,
+                "overview.md",
+                "progress.md",
+                "revisions.md",
+                "work-items",
+            },
+        )
         self.assertEqual(
             files[0].relative_to(Path(self.root)).as_posix(),
             handoff["manualHandoff"]["path"],
+        )
+        self.assertEqual(
+            set(handoff["humanArtifacts"]),
+            {
+                "overview",
+                "baseline",
+                "progress",
+                "acceptance",
+                "revisions",
+                "taskBaselines",
+                "workItems",
+            },
+        )
+        self.assertNotIn(
+            "workspaceOverview",
+            handoff["humanArtifacts"],
+        )
+        for artifact_name in (
+            "overview",
+            "baseline",
+            "progress",
+            "acceptance",
+            "revisions",
+        ):
+            with self.subTest(artifact=artifact_name):
+                self.assertTrue(
+                    Path(
+                        self.root,
+                        handoff["humanArtifacts"][artifact_name],
+                    ).is_file()
+                )
+        task_artifacts = handoff["humanArtifacts"]["workItems"][
+            "t-second"
+        ]
+        self.assertEqual(task_artifacts["kind"], "TASK")
+        for artifact_name in ("baseline", "progress", "acceptance"):
+            with self.subTest(task_artifact=artifact_name):
+                self.assertTrue(
+                    Path(
+                        self.root,
+                        task_artifacts[artifact_name],
+                    ).is_file()
+                )
+        self.assertFalse(
+            Path(self.root, ".layered-delivery", "handoffs").exists()
         )
         content = files[0].read_text(encoding="utf-8")
         for expected in (
@@ -433,10 +494,9 @@ class SchedulerRuntimeTests(unittest.TestCase):
             preview["graphFingerprint"],
             "交接前不指定",
             "开始实际开发时再创建",
-            "workspace_status",
-            "prepare_hierarchy",
-            "freeze_hierarchy",
-            "graph_frontier",
+            "需求内容快照已冻结",
+            "切换到任意 CLI",
+            "直接按冻结内容开发",
             '"id": "d-second"',
         ):
             with self.subTest(expected=expected):
@@ -447,9 +507,34 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "Claude Code",
             "glm-5.2",
             "gpt-5.6",
+            "prepare_hierarchy",
+            "freeze_hierarchy",
+            "graph_frontier",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, content)
+
+        for projection_name in (
+            "overview.md",
+            "baseline.md",
+            "progress.md",
+            "acceptance.md",
+        ):
+            with self.subTest(projection=projection_name):
+                projection = Path(
+                    handoff_root,
+                    projection_name,
+                ).read_text(encoding="utf-8")
+                self.assertIn(
+                    "需求已冻结（手动开发，调度未启动）",
+                    projection,
+                )
+        revisions = Path(
+            handoff_root,
+            "revisions.md",
+        ).read_text(encoding="utf-8")
+        self.assertIn("HANDOFF\\_READY", revisions)
+        self.assertIn("已冻结，未创建 Graph Run", revisions)
 
         active = workspace_status(root=self.root)
         self.assertEqual(active["rootId"], "d-first")
@@ -461,6 +546,199 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "SCHEDULER_HIERARCHY_MISSING",
         )
         self.assertFalse(Path(self.root, "worktrees").exists())
+
+    def test_manual_handoff_shares_directory_with_later_projections(
+        self,
+    ) -> None:
+        hierarchy = delivery_task_hierarchy("d-shared", "t-shared")
+        preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        handoff = create_manual_handoff(
+            root=self.root,
+            hierarchy=hierarchy,
+            expected_hierarchy_fingerprint=(
+                preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=preview["graphFingerprint"],
+            authorized_project_ids=[],
+            confirmed=True,
+            confirmed_by="human",
+            now=at(1),
+        )
+        handoff_path = Path(
+            self.root,
+            handoff["manualHandoff"]["path"],
+        )
+        manual_overview = handoff_path.with_name("overview.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "需求已冻结（手动开发，调度未启动）",
+            manual_overview,
+        )
+
+        prepared = prepare_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(2),
+        )
+
+        self.assertEqual(prepared["rootId"], "d-shared")
+        self.assertTrue(handoff_path.is_file())
+        delivery_root = handoff_path.parent
+        prepared_overview = Path(
+            delivery_root,
+            "overview.md",
+        ).read_text(encoding="utf-8")
+        self.assertIn("待冻结", prepared_overview)
+        self.assertNotIn(
+            "需求已冻结（手动开发，调度未启动）",
+            prepared_overview,
+        )
+        for projection in (
+            "overview.md",
+            "baseline.md",
+            "progress.md",
+            "acceptance.md",
+            "revisions.md",
+            "work-items",
+        ):
+            with self.subTest(projection=projection):
+                self.assertTrue(Path(delivery_root, projection).exists())
+        self.assertFalse(
+            Path(self.root, ".layered-delivery", "handoffs").exists()
+        )
+
+    def test_manual_and_automatic_delivery_trees_share_structure(
+        self,
+    ) -> None:
+        hierarchy = interface_hierarchy()
+        root_id = hierarchy["delivery"]["id"]
+        with TemporaryDirectory() as automatic_root:
+            prepare_hierarchy(
+                root=automatic_root,
+                hierarchy=hierarchy,
+                now=at(0),
+            )
+            automatic_delivery = Path(
+                automatic_root,
+                ".layered-delivery",
+                root_id,
+            )
+            automatic_files = {
+                path.relative_to(automatic_delivery).as_posix()
+                for path in automatic_delivery.rglob("*")
+                if path.is_file()
+            }
+
+        with TemporaryDirectory() as manual_root:
+            preview = preview_hierarchy(
+                root=manual_root,
+                hierarchy=hierarchy,
+                now=at(0),
+            )
+            create_manual_handoff(
+                root=manual_root,
+                hierarchy=hierarchy,
+                expected_hierarchy_fingerprint=(
+                    preview["hierarchyFingerprint"]
+                ),
+                expected_graph_fingerprint=preview[
+                    "graphFingerprint"
+                ],
+                authorized_project_ids=[],
+                confirmed=True,
+                confirmed_by="human",
+                now=at(1),
+            )
+            manual_delivery = Path(
+                manual_root,
+                ".layered-delivery",
+                root_id,
+            )
+            manual_files = {
+                path.relative_to(manual_delivery).as_posix()
+                for path in manual_delivery.rglob("*")
+                if path.is_file()
+                and not path.name.startswith("handoff-")
+            }
+            handoff_files = list(
+                manual_delivery.glob("handoff-*.md")
+            )
+
+        self.assertEqual(manual_files, automatic_files)
+        self.assertEqual(len(handoff_files), 1)
+        self.assertTrue(
+            any(path.startswith("work-items/") for path in manual_files)
+        )
+        self.assertTrue(
+            any("/interfaces/" in path for path in manual_files)
+        )
+
+    def test_manual_handoff_preserves_matching_graph_projections(
+        self,
+    ) -> None:
+        hierarchy = delivery_task_hierarchy(
+            "d-existing",
+            "t-existing",
+        )
+        prepared = prepare_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        freeze_hierarchy(
+            root=self.root,
+            root_id=prepared["rootId"],
+            expected_hierarchy_fingerprint=(
+                prepared["hierarchyFingerprint"]
+            ),
+            confirmed=True,
+            confirmed_by="human",
+            now=at(1),
+        )
+        preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(2),
+        )
+
+        handoff = create_manual_handoff(
+            root=self.root,
+            hierarchy=hierarchy,
+            expected_hierarchy_fingerprint=(
+                preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=preview["graphFingerprint"],
+            authorized_project_ids=[],
+            confirmed=True,
+            confirmed_by="human",
+            now=at(3),
+        )
+
+        delivery_root = Path(
+            self.root,
+            ".layered-delivery",
+            "d-existing",
+        )
+        overview = Path(delivery_root, "overview.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("运行中", overview)
+        self.assertNotIn(
+            "需求已冻结（手动开发，调度未启动）",
+            overview,
+        )
+        self.assertTrue(
+            Path(self.root, handoff["manualHandoff"]["path"]).is_file()
+        )
+        self.assertEqual(
+            workspace_status(root=self.root)["status"],
+            "ACTIVE",
+        )
 
     def test_task_and_review_are_uniform_loops_until_confirmation(
         self,

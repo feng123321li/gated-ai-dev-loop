@@ -5,7 +5,7 @@
 - **核心契约**：Python Controller、schema、SQLite、生成产物、Hook 单元测试和 stdio MCP 握手通过。
 - **真实宿主**：实际 Codex 或 Claude Code 会话加载候选 Plugin，创建原生子 Agent，并完成 claim、progress、heartbeat、result，最后到达待用户确认门禁；冒烟程序不得代替用户确认。
 
-## 0.33.3 发布矩阵
+## 0.33.4 发布矩阵
 
 | 环境 | Python | 核心契约 | 真实宿主 | 发布用途 |
 |---|---:|---|---|---|
@@ -17,7 +17,7 @@
 
 发布管理员完成真实冒烟后，应在发布记录中填写准确宿主版本和结果；矩阵中的“CI 自动”不等于已经验证模型账户、Keyring、Hook 信任或原生 Agent 容量。
 
-当前矩阵只验证同宿主原生派遣：Claude 终端的全部 claim 必须是 `claude-code`，Codex 终端的全部 claim 必须是 `codex`。即使 PATH 发现另一 CLI，也不得加入 `HOST_NATIVE` inventory。可信多 Adapter 桥接尚未实现，因此 0.33.3 不建立跨 Agent 冒烟任务；未来实现后应作为独立矩阵维度增加，不能复用当前结果宣称支持。
+当前矩阵只验证同宿主原生派遣：Claude 终端的全部 claim 必须是 `claude-code`，Codex 终端的全部 claim 必须是 `codex`。即使 PATH 发现另一 CLI，也不得加入 `HOST_NATIVE` inventory。可信多 Adapter 桥接尚未实现，因此 0.33.4 不建立跨 Agent 冒烟任务；未来实现后应作为独立矩阵维度增加，不能复用当前结果宣称支持。
 
 ## 当前候选基线
 
@@ -26,7 +26,7 @@
 | Codex | codex-cli 0.146.0 | 从候选 Marketplace 安装 | 30 工具、Controller 交互契约、`SubagentStart`、mutation Hook、原生 modelId、待用户确认状态 |
 | Claude Code | 2.1.220 | `--plugin-dir` 候选包及最终 Marketplace 安装 | 30 工具、Controller 交互契约、dispatch attestation、progress/heartbeat/result、StopFailure 兼容 |
 
-上述版本是 0.33.3 候选基线，不是永久兼容承诺。宿主升级后若 Hook 事件字段、Plugin manifest 或 MCP 工具命名发生变化，应先在自托管 Runner 重跑真实宿主冒烟，再更新本矩阵。
+上述版本是 0.33.4 候选基线，不是永久兼容承诺。宿主升级后若 Hook 事件字段、Plugin manifest 或 MCP 工具命名发生变化，应先在自托管 Runner 重跑真实宿主冒烟，再更新本矩阵。
 
 ## 模型与转发兼容
 

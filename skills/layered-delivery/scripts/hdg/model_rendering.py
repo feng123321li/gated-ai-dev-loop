@@ -41,6 +41,7 @@ STATUS_TEXT = {
     "NOT_STARTED": "未启动",
     "UNKNOWN": "未知",
     "UNAVAILABLE": "不可用",
+    "STATE_INVALID": "调度状态异常",
 }
 FAILURE_CLASS_TEXT = {
     "RETRYABLE_INFRA": "可重试的基础设施故障",
@@ -165,7 +166,7 @@ PAYLOAD_FIELD_ORDER = MappingProxyType(
     }
 )
 UTC_PLUS_8 = timezone(timedelta(hours=8))
-PROJECTION_TEMPLATE_VERSION = 13
+PROJECTION_TEMPLATE_VERSION = 14
 WORK_ITEM_DIRECTORY = "work-items"
 WORKSPACE_OVERVIEW_PROJECTION_TEMPLATE = Template(
     """# 全部交付调度与进度总览
@@ -1196,7 +1197,8 @@ def render_workspace_overview(
     )
     rows: list[str] = []
     for item in ordered:
-        hierarchy = item["hierarchy"]
+        state_error = item.get("stateError")
+        hierarchy = item.get("hierarchy")
         run = item.get("run")
         status = (
             run["status"]
@@ -1210,12 +1212,20 @@ def render_workspace_overview(
         )
         cells = [
             item["rootId"],
-            hierarchy["delivery"]["title"],
+            (
+                "调度状态不可读取"
+                if state_error is not None
+                else hierarchy["delivery"]["title"]
+            ),
             _status_text(status),
             _utc_plus_8(updated_at),
         ]
         detail_link = (
-            f"[查看交付详情]({item['rootId']}/overview.md)"
+            _markdown_text(
+                f"需修复 SQLite 状态（{state_error['code']}）"
+            )
+            if state_error is not None
+            else f"[查看交付详情]({item['rootId']}/overview.md)"
         )
         rows.append(
             "| "

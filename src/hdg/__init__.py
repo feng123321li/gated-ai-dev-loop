@@ -4,4 +4,4 @@ The package intentionally depends only on the Python standard library so the sam
 MCP controller can run from the repository or from an installed Plugin payload.
 """
 
-__version__ = "0.33.3"
+__version__ = "0.33.4"

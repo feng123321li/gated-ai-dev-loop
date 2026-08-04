@@ -2353,6 +2353,43 @@ class McpSurfaceTests(unittest.TestCase):
             caught.exception.code,
             "SCHEDULER_STATE_INVALID",
         )
+        self.assertEqual(
+            caught.exception.details["rootId"],
+            prepared["rootId"],
+        )
+
+    def test_state_contract_mismatch_is_rejected_before_state_access(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+                now=at(0),
+            )
+            database = Path(root, ".layered-delivery", "scheduler.db")
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    "UPDATE scheduler_metadata SET value = ? "
+                    "WHERE key = 'state_contract'",
+                    ("schema-v3-incompatible-generator",),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            with self.assertRaises(GatedLoopError) as caught:
+                SchedulerRepository(root).hierarchy(prepared["rootId"])
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_STATE_CONTRACT_MISMATCH",
+        )
+        self.assertEqual(
+            caught.exception.details["actualStateContract"],
+            "schema-v3-incompatible-generator",
+        )
 
     def test_schema_valid_graph_tamper_is_rejected_before_mutation(
         self,

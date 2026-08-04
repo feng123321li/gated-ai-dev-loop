@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.33.4 — 2026-08-04
+
+发布提交：`3b94213`
+
+- 修复共享 `scheduler.db` 中一个 Delivery 的损坏状态阻断其他健康 Delivery 的跨域故障：当前 `graph_frontier`、状态查询和投影刷新只以目标 `rootId` 的完整性作为成败边界。
+- 全局 `overview.md` 对每个 Delivery 独立校验，损坏记录显示“调度状态异常”；其他 Delivery 的数据库或投影目录问题通过 `projectionIssues` 报告，不再拖死当前 Delivery。
+- `Stored scheduler graph changed` 等存储校验错误补充实际损坏的 `rootId`，避免把其他需求的坏记录误判为当前 Graph 或普通 Git HEAD 前进问题。
+- 新增 schema v3 Graph 生成契约标识 `scheduler_metadata.state_contract`，不兼容生成器共同访问同一数据库时 fail closed；现有 schema v3 数据库自动登记当前契约，无需人工修改 SQLite。
+- 投影模板升级到版本 14；新增跨 Delivery 数据损坏、投影文件损坏和生成契约不匹配回归。Python 全量 267 项测试、编译检查、发布候选校验、Skill 校验和 `git diff --check` 通过。
+
 ## 0.33.3 — 2026-08-04
 
 发布提交：`348922c`

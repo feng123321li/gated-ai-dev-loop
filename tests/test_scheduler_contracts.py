@@ -249,6 +249,32 @@ class HierarchyContractTests(unittest.TestCase):
             "REJECT_DIFFERENT_DELIVERY_ID",
         )
 
+    def test_execution_interaction_is_controller_owned_and_exact(self) -> None:
+        interaction = hierarchy_contract(root_kind="TASK")[
+            "projectionGuidance"
+        ]["executionInteraction"]
+
+        self.assertEqual(interaction["owner"], "CONTROLLER")
+        self.assertEqual(
+            interaction["artifactGate"],
+            "CHOICE_READY_ARTIFACTS_READY",
+        )
+        self.assertEqual(interaction["hostMapping"], "MECHANICAL_NO_REWRITE")
+        self.assertEqual(
+            interaction["selectionTool"],
+            "select_execution_mode",
+        )
+        choice = interaction["executionChoice"]
+        self.assertEqual(choice["defaultOptionId"], "AUTOMATIC")
+        self.assertEqual(
+            [option["id"] for option in choice["options"]],
+            ["AUTOMATIC", "MANUAL"],
+        )
+        self.assertEqual(
+            interaction["directTextAction"],
+            "CONTINUE_REQUIREMENT_DISCUSSION",
+        )
+
     def test_every_contract_example_is_valid(self) -> None:
         for root_kind in ("TASK", "GROUP"):
             with self.subTest(root_kind=root_kind):
@@ -808,6 +834,29 @@ class McpSurfaceTests(unittest.TestCase):
         self.assertEqual(
             by_name["preview_hierarchy"]["inputSchema"]["required"],
             ["hierarchy"],
+        )
+        self.assertEqual(
+            by_name["select_execution_mode"]["inputSchema"]["required"],
+            [
+                "root_id",
+                "selection",
+                "expected_hierarchy_fingerprint",
+                "expected_graph_fingerprint",
+                "authorized_project_ids",
+                "confirmed_by",
+            ],
+        )
+        selection_properties = by_name["select_execution_mode"][
+            "inputSchema"
+        ]["properties"]
+        self.assertEqual(
+            selection_properties["selection"]["enum"],
+            ["AUTOMATIC", "MANUAL"],
+        )
+        self.assertNotIn("confirmed", selection_properties)
+        self.assertIn(
+            "without another confirmation",
+            by_name["select_execution_mode"]["description"],
         )
         self.assertEqual(
             by_name["create_manual_handoff"]["inputSchema"]["required"],
@@ -1370,6 +1419,95 @@ class McpSurfaceTests(unittest.TestCase):
         self.assertEqual(
             frozen["executionMode"],
             status["executionMode"],
+        )
+
+    def test_execution_choice_adapter_applies_both_modes_without_reconfirm(
+        self,
+    ) -> None:
+        hierarchy = task_hierarchy()
+        for selection, expected_status in (
+            ("AUTOMATIC", "ACTIVE"),
+            ("MANUAL", "HANDOFF_READY"),
+        ):
+            with (
+                self.subTest(selection=selection),
+                TemporaryDirectory() as root,
+            ):
+                preview = call_tool(
+                    "preview_hierarchy",
+                    {"hierarchy": hierarchy},
+                    root=root,
+                )
+                selected = call_tool(
+                    "select_execution_mode",
+                    {
+                        "root_id": preview["rootId"],
+                        "selection": selection,
+                        "expected_hierarchy_fingerprint": (
+                            preview["hierarchyFingerprint"]
+                        ),
+                        "expected_graph_fingerprint": (
+                            preview["graphFingerprint"]
+                        ),
+                        "authorized_project_ids": [],
+                        "confirmed_by": "human",
+                    },
+                    root=root,
+                )
+
+                self.assertEqual(selected["status"], expected_status)
+                self.assertEqual(selected["selection"], selection)
+                if selection == "AUTOMATIC":
+                    self.assertTrue(selected["automaticDispatchRequested"])
+                else:
+                    self.assertIn(
+                        selected["manualHandoff"]["receiverPrompt"],
+                        Path(
+                            root,
+                            selected["manualHandoff"]["path"],
+                        ).read_text(encoding="utf-8"),
+                    )
+
+    def test_repeated_automatic_choice_keeps_workspace_isolation(self) -> None:
+        hierarchy = task_hierarchy()
+        with TemporaryDirectory() as root:
+            workspace_a = Path(root, "workspace-a")
+            workspace_b = Path(root, "workspace-b")
+            workspace_a.mkdir()
+            workspace_b.mkdir()
+            preview = call_tool(
+                "preview_hierarchy",
+                {"hierarchy": hierarchy},
+                root=root,
+            )
+            arguments = {
+                "root_id": preview["rootId"],
+                "selection": "AUTOMATIC",
+                "expected_hierarchy_fingerprint": (
+                    preview["hierarchyFingerprint"]
+                ),
+                "expected_graph_fingerprint": preview["graphFingerprint"],
+                "authorized_project_ids": [],
+                "confirmed_by": "human",
+            }
+            call_tool(
+                "select_execution_mode",
+                arguments,
+                root=root,
+                workspace_root=str(workspace_a),
+            )
+
+            with self.assertRaises(GatedLoopError) as caught:
+                call_tool(
+                    "select_execution_mode",
+                    arguments,
+                    root=root,
+                    workspace_root=str(workspace_b),
+                )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH",
         )
 
     def test_handoff_adapter_injects_strict_boolean_confirmation(
@@ -2486,7 +2624,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 29)
+            self.assertEqual(len(listed["result"]["tools"]), 30)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

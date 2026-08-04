@@ -21,7 +21,7 @@
 
 不要自行增加 TASK/Gate 节点，也不要根据 payload 内容改变 frontier 顺序。
 
-开发方式确认前不展示模型建议。用户选择自动执行后，先在实际开发工作区完成 prepare，再按当前宿主 Agent 的真实原生 inventory 与全部 Loop 的临时风险分析调用 `recommend_executors(recommendation_mode=AUTOMATIC)`，用中文表格展示当前 Agent 内的模型分档；该预览不需要第二次确认，随后直接 freeze 并让 `plan_dispatch_batch` 复用同一分析。正式 Ready 批次的第一次计划调用开启持久化 30 秒路由调整窗口，并按 `节点 | 执行 Agent | 原生模型角色 | 原生 modelId | 实际代理模型 | 剩余时间 | 状态` 展示 `reviewing`；实际模型未知时写“未报告”。主 Agent 不再提问，保持可接收用户消息，并在 `routeReview.expiresAt` 自动重复计划调用。用户选择手动开发时不进入本文件描述的执行流程：只调用 `create_manual_handoff` 生成冻结内容包，交接前不指定 Agent/模型，不创建接收会话或 worktree，也不产生 manual run；用户可在任意 CLI 中直接按该包开发。
+开发方式确认前不展示模型建议。用户选择自动执行时，`select_execution_mode(AUTOMATIC)` 已在实际开发工作区完成 prepare 和 freeze，并要求宿主立即进入本执行循环；不得再次询问或重放 prepare/freeze。随后按当前宿主 Agent 的真实原生 inventory 与全部 Loop 的临时风险分析调用 `recommend_executors(recommendation_mode=AUTOMATIC)`，再让 `plan_dispatch_batch` 复用同一分析。正式 Ready 批次的第一次计划调用开启持久化 30 秒路由调整窗口，并按 `节点 | 执行 Agent | 原生模型角色 | 原生 modelId | 实际代理模型 | 剩余时间 | 状态` 展示 `reviewing`；实际模型未知时写“未报告”。主 Agent 不再提问，保持可接收用户消息，并在 `routeReview.expiresAt` 自动重复计划调用。用户选择手动开发时不进入本文件描述的执行流程：`select_execution_mode(MANUAL)` 生成冻结内容包与嵌入的接收提示词，交接前不指定 Agent/模型，不创建接收会话或 worktree，也不产生 manual run；用户可在任意 CLI 中直接按该包开发。
 
 推荐工具不得启动外部 CLI、切换模型、改变 owner、提前 claim、绕过宿主原生 Agent 容量或接管限额恢复。自动建议不跨 Agent；手动开发完全不调用推荐器。手工配置、任意本机修改器或容量变化后可以重新调用自动推荐，旧建议不作为缓存权威。路由无法保持且必须改换开发 Agent、扩大项目范围或改变冻结需求时才重新请求用户决定；同一 Agent 内因容量变化重算模型只需明确告知。
 

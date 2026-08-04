@@ -15,6 +15,10 @@ from .graph_model import (
     graph_fingerprint,
     graph_summary,
 )
+from .interaction_contract import (
+    execution_choice_contract,
+    manual_receiver_prompt,
+)
 from .model_core import (
     hierarchy_fingerprint,
     iter_hierarchy_nodes,
@@ -188,19 +192,32 @@ def preview_hierarchy(
     root: str,
     hierarchy: object,
     explicit_dogfood: bool = False,
+    now: object = None,
     **_: Any,
 ) -> dict[str, Any]:
-    """Validate and fingerprint a plan without creating controller state."""
+    """Validate a plan and stage artifacts before mode selection."""
 
-    repository = SchedulerRepository(root)
+    repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     normalized, graph, hierarchy_value, graph_value = _preview_values(
         hierarchy
     )
-    repository.assert_delivery_requirement_available(normalized)
-    return {
+    staged = repository.record_choice_ready(
+        normalized,
+        graph,
+        hierarchy_fingerprint=hierarchy_value,
+        graph_fingerprint=graph_value,
+    )
+    artifacts_ready = staged["artifactsReady"]
+    choice_ready = artifacts_ready and staged["status"] == "CHOICE_READY"
+    next_actions = {
+        "HANDOFF_READY": "OPEN_FROZEN_BUNDLE_IN_ANY_CLI",
+        "PREPARED": "FREEZE_PREPARED_HIERARCHY",
+        "FROZEN": "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH",
+    }
+    result = {
         "rootId": normalized["delivery"]["id"],
-        "status": "PREVIEW",
+        "status": staged["status"],
         "hierarchyFingerprint": hierarchy_value,
         "graphFingerprint": graph_value,
         "graphSummary": graph_summary(graph),
@@ -208,11 +225,22 @@ def preview_hierarchy(
             "projectScopes",
             [],
         ),
-        "controlStateCreated": False,
+        "controlStateCreated": staged["controlStateCreated"],
+        "artifactsReady": artifacts_ready,
         "nextAction": (
-            "SELECT_AUTOMATIC_EXECUTION_OR_MANUAL_HANDOFF"
+            "PRESENT_CONTROLLER_EXECUTION_CHOICE"
+            if choice_ready
+            else next_actions.get(
+                staged["status"],
+                "REGENERATE_ARTIFACTS_BEFORE_EXECUTION_CHOICE",
+            )
         ),
     }
+    if artifacts_ready:
+        result["humanArtifacts"] = _human_artifacts(normalized)
+    if choice_ready:
+        result["executionChoice"] = execution_choice_contract()
+    return result
 
 
 def _assert_exact_project_authorization(
@@ -306,6 +334,7 @@ def create_manual_handoff(
         f"{GOVERNANCE_DIRECTORY}/{root_id}/"
         f"handoff-{hierarchy_value[:12]}.md"
     )
+    receiver_prompt = manual_receiver_prompt(relative_path)
     registration = repository.record_manual_handoff(
         normalized,
         graph,
@@ -324,6 +353,7 @@ def create_manual_handoff(
         graph_fingerprint=graph_value,
         confirmed_by=confirmed_by.strip(),
         created_at=created_at,
+        receiver_prompt=receiver_prompt,
     )
     atomic_write(safe_path(root, relative_path), content)
     return {
@@ -340,6 +370,7 @@ def create_manual_handoff(
             "path": relative_path,
             "format": "MARKDOWN",
             "selfContained": True,
+            "receiverPrompt": receiver_prompt,
         },
         "humanArtifacts": _human_artifacts(
             normalized,
@@ -563,6 +594,144 @@ def freeze_hierarchy(
     }
 
 
+def select_execution_mode(
+    *,
+    root: str,
+    root_id: str,
+    selection: str,
+    expected_hierarchy_fingerprint: str,
+    expected_graph_fingerprint: str,
+    authorized_project_ids: list[str] | None,
+    confirmed_by: str,
+    workspace_root: str | None = None,
+    explicit_dogfood: bool = False,
+    now: object = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """Apply the controller-owned automatic or manual execution choice."""
+
+    if selection not in {"AUTOMATIC", "MANUAL"}:
+        fail(
+            "SCHEDULER_EXECUTION_CHOICE_INVALID",
+            "selection must be AUTOMATIC or MANUAL",
+            selection=selection,
+        )
+    if not isinstance(confirmed_by, str) or not confirmed_by.strip():
+        fail(
+            "SCHEDULER_USER_CONFIRMATION_REQUIRED",
+            "confirmed_by must identify the confirming human",
+        )
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    stored = repository.hierarchy(root_id)
+    if (
+        stored["hierarchyFingerprint"]
+        != expected_hierarchy_fingerprint
+        or stored["graphFingerprint"] != expected_graph_fingerprint
+    ):
+        fail(
+            "SCHEDULER_EXECUTION_CHOICE_STALE",
+            "The selected execution choice does not match the generated "
+            "baseline",
+            rootId=root_id,
+            actualHierarchyFingerprint=stored["hierarchyFingerprint"],
+            actualGraphFingerprint=stored["graphFingerprint"],
+        )
+    hierarchy = stored["hierarchy"]
+    if selection == "MANUAL":
+        if stored["status"] not in {
+            "CHOICE_READY",
+            "HANDOFF_READY",
+        }:
+            fail(
+                "SCHEDULER_EXECUTION_CHOICE_CONFLICT",
+                "Automatic execution has already started for this choice",
+                rootId=root_id,
+                status=stored["status"],
+                selected=selection,
+            )
+        handoff = create_manual_handoff(
+            root=root,
+            hierarchy=hierarchy,
+            expected_hierarchy_fingerprint=(
+                expected_hierarchy_fingerprint
+            ),
+            expected_graph_fingerprint=expected_graph_fingerprint,
+            authorized_project_ids=authorized_project_ids,
+            confirmed=True,
+            confirmed_by=confirmed_by,
+            explicit_dogfood=explicit_dogfood,
+            now=now,
+        )
+        return {
+            **handoff,
+            "selection": "MANUAL",
+            "selectionAlreadyApplied": (
+                stored["status"] == "HANDOFF_READY"
+            ),
+        }
+
+    if stored["status"] == "FROZEN":
+        run = repository.run(root_id)
+        return {
+            **run,
+            "selection": "AUTOMATIC",
+            "selectionAlreadyApplied": True,
+            "automaticDispatchRequested": True,
+            "nextAction": "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH",
+        }
+    if stored["status"] == "HANDOFF_READY":
+        fail(
+            "SCHEDULER_EXECUTION_CHOICE_CONFLICT",
+            "Manual development has already been selected for this choice",
+            rootId=root_id,
+            status=stored["status"],
+            selected=selection,
+        )
+    if stored["status"] == "CHOICE_READY":
+        prepared = prepare_hierarchy(
+            root=root,
+            hierarchy=hierarchy,
+            workspace_root=workspace_root or root,
+            explicit_dogfood=explicit_dogfood,
+            now=now,
+        )
+    elif stored["status"] == "PREPARED":
+        prepared = {
+            "rootId": root_id,
+            "deliveryRevision": stored["deliveryRevision"],
+            "hierarchyFingerprint": stored["hierarchyFingerprint"],
+        }
+    else:
+        fail(
+            "SCHEDULER_EXECUTION_CHOICE_CONFLICT",
+            "The Delivery is not waiting for an execution choice",
+            rootId=root_id,
+            status=stored["status"],
+            selected=selection,
+        )
+    frozen = freeze_hierarchy(
+        root=root,
+        root_id=root_id,
+        expected_delivery_revision=prepared["deliveryRevision"],
+        expected_hierarchy_fingerprint=(
+            prepared["hierarchyFingerprint"]
+        ),
+        authorized_project_ids=authorized_project_ids,
+        confirmed=True,
+        confirmed_by=confirmed_by,
+        explicit_dogfood=explicit_dogfood,
+        now=now,
+    )
+    return {
+        **frozen,
+        "selection": "AUTOMATIC",
+        "selectionAlreadyApplied": False,
+        "automaticDispatchRequested": True,
+        "nextAction": "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH",
+    }
+
+
 __all__ = (
     "create_manual_handoff",
     "delivery_revision_history",
@@ -570,5 +739,6 @@ __all__ = (
     "prepare_delivery_revision",
     "prepare_hierarchy",
     "preview_hierarchy",
+    "select_execution_mode",
     "workspace_status",
 )

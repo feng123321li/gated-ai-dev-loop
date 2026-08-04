@@ -1,7 +1,7 @@
 interface:
   display_name: "递归交付调度"
   short_description: "预览递归 Graph，自动调度或生成开发内容交接文件"
-  default_prompt: "使用 $layered-delivery 只读预览递归交付 Graph；自动执行时再创建开发 worktree、准备冻结并按宿主容量与 Agent 分析选择原生模型；手动开发时生成与自动路径同结构、不绑定 Agent/模型的冻结内容包，供任意 CLI 直接接管。"
+  default_prompt: "使用 $layered-delivery 先生成递归交付 Graph 的基线与关联文档，再原样展示 Controller 返回的自动/手动选项；自动选择立即准备、冻结并进入自动派遣，手动选择生成带接收提示词的 handoff，直接输入文字则继续需求沟通。"
 
 policy:
   allow_implicit_invocation: true

@@ -310,6 +310,40 @@ def _manual_handoff_tool_schema() -> dict[str, Any]:
     return tool_schema
 
 
+def _execution_choice_tool_schema() -> dict[str, Any]:
+    return _object(
+        {
+            "root_id": ROOT_ID,
+            "selection": {
+                "type": "string",
+                "enum": ["AUTOMATIC", "MANUAL"],
+                "description": (
+                    "Exact option ID from preview.executionChoice.options."
+                ),
+            },
+            "expected_hierarchy_fingerprint": FINGERPRINT,
+            "expected_graph_fingerprint": FINGERPRINT,
+            "authorized_project_ids": {
+                "type": "array",
+                "items": ROOT_ID,
+                "uniqueItems": True,
+                "description": (
+                    "Exact project IDs authorized for the selected mode."
+                ),
+            },
+            "confirmed_by": _string("Human selector identity."),
+        },
+        required=[
+            "root_id",
+            "selection",
+            "expected_hierarchy_fingerprint",
+            "expected_graph_fingerprint",
+            "authorized_project_ids",
+            "confirmed_by",
+        ],
+    )
+
+
 def _prepare_revision_tool_schema() -> dict[str, Any]:
     hierarchy_schema = hierarchy_input_schema()
     definitions = hierarchy_schema.pop("$defs")
@@ -486,18 +520,35 @@ TOOLS = (
     _tool(
         "preview_hierarchy",
         (
-            "Validate and fingerprint a proposed hierarchy without writing "
-            "scheduler state, freezing a Graph, or creating a workspace. "
-            "Use this before the user chooses automatic execution or a "
-            "manual development-content handoff."
+            "Validate and fingerprint a proposed hierarchy, register its "
+            "CHOICE_READY snapshot, and generate scheduler.db, root overview, "
+            "baseline, progress, acceptance, revisions, and work-item "
+            "artifacts before returning the controller-owned execution "
+            "choice. It does not bind a workspace, freeze a Graph, create a "
+            "run, or create a worktree."
         ),
         _prepare_hierarchy_tool_schema(),
     ),
     _tool(
+        "select_execution_mode",
+        (
+            "Apply one exact option returned by executionChoice. AUTOMATIC "
+            "immediately prepares and freezes the staged snapshot, then "
+            "returns the automatic dispatch next action without another "
+            "confirmation. MANUAL creates the handoff and returns the exact "
+            "receiver prompt embedded in that file. Direct dialog text is "
+            "not a tool option and continues requirement discussion."
+        ),
+        _execution_choice_tool_schema(),
+    ),
+    _tool(
         "create_manual_handoff",
         (
-            "After the user selects manual development, freeze the confirmed "
-            "requirement snapshot as a portable bundle under "
+            "Create a later explicit manual revision, or serve the "
+            "controller-owned selection operation internally. For the "
+            "initial execution choice, hosts must call "
+            "select_execution_mode(MANUAL), not this low-level tool. Freeze "
+            "the confirmed requirement snapshot as a portable bundle under "
             ".layered-delivery/<delivery-id>/. The bundle contains one "
             "self-contained .layered-delivery/<delivery-id>/"
             "handoff-<fingerprint>.md plus the same overview, baseline, "
@@ -521,7 +572,10 @@ TOOLS = (
     _tool(
         "prepare_hierarchy",
         (
-            "Validate and prepare an outer scheduling graph; shared Skill "
+            "Validate and prepare an outer scheduling graph for an explicit "
+            "revision or controller-owned selection. For the initial "
+            "execution choice, hosts call select_execution_mode(AUTOMATIC) "
+            "instead of this low-level tool. Shared Skill "
             "hints remain advisory, Loop payloads stay opaque, and a Git "
             "Delivery feature-branch binding is verified read-only. Reject "
             "a different Delivery before writing when this workspace "
@@ -660,9 +714,10 @@ TOOLS = (
     _tool(
         "freeze_hierarchy",
         (
-            "Freeze a prepared graph after the user selects automatic "
-            "execution. Manual handoff uses create_manual_handoff instead "
-            "and does not create a Graph run."
+            "Freeze an explicitly prepared later revision. The initial "
+            "automatic button calls select_execution_mode(AUTOMATIC), not "
+            "this low-level tool. Manual revisions use "
+            "create_manual_handoff and do not create a Graph run."
         ),
         _object(
             {

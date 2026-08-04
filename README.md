@@ -2,17 +2,17 @@
 
 `layered-delivery` 把已经确认的需求冻结为递归 Delivery Graph，再协调多个独立 Agent/WorkLoop 完成实现、逐层审查和最终验收。
 
-当前版本：**0.33.2**
+当前版本：**0.33.3**
 
 ## 核心流程
 
 ```text
 沟通并确认需求
   → 检查真实改动内容和影响范围，选择 LIGHT / STANDARD
-  → 只读预览 Delivery Graph 计划
-  → 用户选择“自动执行”或“手动开发”
-  → 自动执行：创建开发工作区、准备并冻结 Graph、并发调度 TASK WorkLoop
-  → 手动开发：冻结同结构内容包、不启动 Graph，切换任意 CLI 直接开发
+  → 生成 Delivery Graph 基线与全部关联文档
+  → Controller 提供“自动执行（默认）/ 手动开发”统一交互
+  → 自动执行：立即准备并冻结 Graph，进入 TASK WorkLoop 自动派遣
+  → 手动开发：生成含接收提示词的 handoff，供任意 CLI 直接开发
   → LIGHT：单一 TASK 定向验证
   → STANDARD：TASK Review → 逐层 GROUP Review → Delivery Review
   → 用户最终验收
@@ -67,10 +67,10 @@ Delivery
 Plugin 激活后，在 Codex 或 Claude Code 的新会话中提出需求，并要求使用 `layered-delivery`。Agent 会按当前工作区状态选择创建、继续或恢复：
 
 1. 读取工作区状态和当前 schema v3 契约。
-2. 与用户沟通需求，检查真实代码、预计或已有 diff 和影响范围；无法可靠判断时使用 STANDARD。然后调用 `preview_hierarchy` 只读预览 Delivery Graph。
-3. 展示完整计划，以及“自动执行 / 手动开发”两个选项；选择前不混入模型建议。
-4. 用户选择自动执行后，才创建或选择实际开发工作区，调用 `prepare_hierarchy` 与 `freeze_hierarchy`，并展示当前宿主 Agent 的原生模型分档；路由展示不增加第二次确认。
-5. 用户选择手动开发后，调用 `create_manual_handoff`，生成共享 `.layered-delivery/scheduler.db`、根 `overview.md`，把需求登记为 `HANDOFF_READY`，并在 `<delivery-id>/` 生成与自动开发同结构的标准投影和自包含 handoff。需求内容由双 fingerprint 冻结；不创建 Graph Run、workspace 绑定、任务或 worktree，也不选择 Agent/模型。用户可切换任意 CLI 直接开发。
+2. 与用户沟通需求，检查真实代码、预计或已有 diff 和影响范围；无法可靠判断时使用 STANDARD。调用 `preview_hierarchy` 登记 `CHOICE_READY`，先生成共享数据库、根总览、baseline 及全部关联文档。
+3. 只有 `artifactsReady=true` 后，宿主才原样或机械映射 Controller 返回的 `executionChoice`。交互只有“自动执行（默认）/ 手动开发”两个按钮；直接输入文字继续需求沟通，不创建“其他”按钮。
+4. 用户选择自动执行后调用一次 `select_execution_mode(AUTOMATIC)`；Controller 立即完成 prepare、freeze 并要求宿主进入 frontier 自动派遣，不增加第二次确认。
+5. 用户选择手动开发后调用一次 `select_execution_mode(MANUAL)`；Controller 把需求转为 `HANDOFF_READY`，生成自包含 handoff，并返回已嵌入文件的 `manualHandoff.receiverPrompt`。不创建 Graph Run、workspace 绑定、任务或 worktree。
 6. 自动模式对正式 Ready 批次展示中文模型表和默认 30 秒路由调整窗口；用户可直接改为其他可用原生模型，不再回答确认问题，超时后自动预留并派遣。
 7. 自动模式持续消费 frontier，并发调度当前可运行的独立 WorkLoop。
 8. STANDARD 在所有 Review 完成后展示验收报告；LIGHT 在唯一 TASK 定向验证完成后展示改动与影响依据。两者都等待用户最终确认。
@@ -82,7 +82,7 @@ Plugin 激活后，在 Codex 或 Claude Code 的新会话中提出需求，并�
 | 自动执行 | 开始实际开发：按需创建 worktree，准备并冻结 Graph，再由当前宿主派遣可证明为 `HOST_NATIVE` 的 Agent |
 | 手动开发 | 在 SQLite 登记 `HANDOFF_READY`、刷新根总览并生成同结构内容包；不创建 Graph Run、workspace 绑定、任务或 worktree，可切换任意 CLI 直接开发并记录 progress/acceptance |
 
-新业务目标默认创建新 Delivery。自动与手动开发使用同一个稳定的 `.layered-delivery/<delivery-id>/` 和同结构投影，不再创建共享 `handoffs` 目录。手动响应的 `controlStateCreated=true` 表示 SQLite 与根总览已生成，`requirementSnapshotStatus=FROZEN` 表示需求内容已冻结；它仍不代表 Graph 已 prepare、freeze 或创建 Run。一个工作区最多绑定一个未结束 Delivery；并行需求真正开始开发时使用独立对话工作区，Git 项目优先使用 linked worktree。只读预览或生成手动内容包不需要提前创建 worktree。只有用户明确要求继续同一需求，或当前 Loop 返回 `REPLAN_REQUIRED`，才在原 `delivery.id` 上创建下一 Revision。
+新业务目标默认创建新 Delivery。自动与手动开发使用同一个稳定的 `.layered-delivery/<delivery-id>/` 和同结构投影，不再创建共享 `handoffs` 目录。选择前的 `CHOICE_READY` 已创建 SQLite、根总览与全部基线文档，但未绑定 workspace、创建 Run 或 worktree；手动响应的 `requirementSnapshotStatus=FROZEN` 表示需求内容已冻结，仍不代表 Graph 已 prepare、freeze 或创建 Run。一个工作区最多绑定一个未结束 Delivery；并行需求真正开始开发时使用独立对话工作区，Git 项目优先使用 linked worktree。只有用户明确要求继续同一需求，或当前 Loop 返回 `REPLAN_REQUIRED`，才在原 `delivery.id` 上创建下一 Revision。
 
 ## Agent、模型与并发
 

@@ -51,6 +51,7 @@ from hdg.planning import (
     freeze_hierarchy,
     prepare_hierarchy,
     preview_hierarchy,
+    select_execution_mode,
     workspace_status,
 )
 from hdg.repository import SchedulerRepository
@@ -351,6 +352,278 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         return prepared
 
+    def test_preview_materializes_artifacts_before_controller_owned_choice(
+        self,
+    ) -> None:
+        hierarchy = delivery_task_hierarchy("d-choice", "t-choice")
+
+        preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+
+        self.assertEqual(preview["status"], "CHOICE_READY")
+        self.assertTrue(preview["controlStateCreated"])
+        self.assertTrue(preview["artifactsReady"])
+        self.assertEqual(
+            preview["nextAction"],
+            "PRESENT_CONTROLLER_EXECUTION_CHOICE",
+        )
+        choice = preview["executionChoice"]
+        self.assertEqual(choice["schemaVersion"], 1)
+        self.assertEqual(choice["owner"], "CONTROLLER")
+        self.assertEqual(choice["kind"], "EXECUTION_MODE")
+        self.assertTrue(choice["selectionRequired"])
+        self.assertEqual(choice["defaultOptionId"], "AUTOMATIC")
+        self.assertEqual(choice["recommendedOptionId"], "AUTOMATIC")
+        self.assertTrue(choice["hostQuestionToolAllowed"])
+        self.assertEqual(
+            choice["freeformInput"],
+            {
+                "allowed": True,
+                "nextAction": "CONTINUE_REQUIREMENT_DISCUSSION",
+            },
+        )
+        self.assertEqual(
+            [item["id"] for item in choice["options"]],
+            ["AUTOMATIC", "MANUAL"],
+        )
+        self.assertEqual(
+            [item["label"] for item in choice["options"]],
+            ["自动执行", "手动开发"],
+        )
+        self.assertEqual(
+            [item["description"] for item in choice["options"]],
+            ["立即开始自动开发。", "生成 handoff，供任意 CLI 开发。"],
+        )
+        self.assertTrue(choice["options"][0]["recommended"])
+        self.assertFalse(choice["options"][1]["recommended"])
+        self.assertEqual(
+            [item["nextAction"] for item in choice["options"]],
+            [
+                "PREPARE_FREEZE_AND_DISPATCH_AUTOMATICALLY",
+                "CREATE_HANDOFF_AND_PRESENT_RECEIVER_PROMPT",
+            ],
+        )
+        self.assertFalse(
+            choice["options"][0]["requiresAdditionalConfirmation"]
+        )
+        self.assertFalse(
+            choice["options"][1]["requiresAdditionalConfirmation"]
+        )
+        self.assertIn("默认：自动执行", choice["markdown"])
+        self.assertLess(
+            choice["markdown"].index("1. 自动执行"),
+            choice["markdown"].index("2. 手动开发"),
+        )
+        self.assertIn("直接输入修改意见", choice["markdown"])
+        self.assertNotIn("Type something", choice["markdown"])
+
+        for artifact_name in (
+            "workspaceOverview",
+            "overview",
+            "baseline",
+            "progress",
+            "acceptance",
+            "revisions",
+        ):
+            with self.subTest(artifact=artifact_name):
+                self.assertTrue(
+                    Path(
+                        self.root,
+                        preview["humanArtifacts"][artifact_name],
+                    ).is_file()
+                )
+        task_artifacts = preview["humanArtifacts"]["workItems"][
+            "t-choice"
+        ]
+        for artifact_name in ("baseline", "progress", "acceptance"):
+            with self.subTest(task_artifact=artifact_name):
+                self.assertTrue(
+                    Path(
+                        self.root,
+                        task_artifacts[artifact_name],
+                    ).is_file()
+                )
+        self.assertTrue(
+            Path(
+                self.root,
+                ".layered-delivery",
+                "scheduler.db",
+            ).is_file()
+        )
+        self.assertFalse(Path(self.root, "worktrees").exists())
+        stored = SchedulerRepository(self.root).hierarchy("d-choice")
+        self.assertEqual(stored["status"], "CHOICE_READY")
+
+    def test_choice_ready_snapshot_can_enter_automatic_execution(self) -> None:
+        hierarchy = delivery_task_hierarchy("d-choice-auto", "t-choice")
+        preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+
+        prepared = prepare_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(1),
+        )
+        frozen = freeze_hierarchy(
+            root=self.root,
+            root_id=prepared["rootId"],
+            expected_hierarchy_fingerprint=(
+                prepared["hierarchyFingerprint"]
+            ),
+            confirmed=True,
+            confirmed_by="human",
+            now=at(2),
+        )
+
+        self.assertEqual(preview["status"], "CHOICE_READY")
+        self.assertEqual(prepared["status"], "PREPARED")
+        self.assertEqual(frozen["status"], "ACTIVE")
+        self.assertEqual(frozen["deliveryRevision"], 1)
+
+    def test_changed_freeform_requirement_regenerates_choice_ready_artifacts(
+        self,
+    ) -> None:
+        hierarchy = delivery_task_hierarchy("d-discussion", "t-discussion")
+        first = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        baseline_path = Path(
+            self.root,
+            first["humanArtifacts"]["baseline"],
+        )
+        first_content = baseline_path.read_text(encoding="utf-8")
+
+        hierarchy["delivery"]["summary"] = "需求沟通后的新范围"
+        second = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(1),
+        )
+        second_content = baseline_path.read_text(encoding="utf-8")
+
+        self.assertEqual(second["status"], "CHOICE_READY")
+        self.assertTrue(second["artifactsReady"])
+        self.assertNotEqual(
+            second["hierarchyFingerprint"],
+            first["hierarchyFingerprint"],
+        )
+        self.assertNotEqual(second_content, first_content)
+        self.assertIn("需求沟通后的新范围", second_content)
+        self.assertEqual(
+            second["executionChoice"],
+            first["executionChoice"],
+        )
+
+    def test_controller_selection_starts_automatic_graph_without_reconfirm(
+        self,
+    ) -> None:
+        hierarchy = delivery_task_hierarchy("d-select-auto", "t-choice")
+        preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+
+        selected = select_execution_mode(
+            root=self.root,
+            root_id="d-select-auto",
+            selection="AUTOMATIC",
+            expected_hierarchy_fingerprint=(
+                preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=preview["graphFingerprint"],
+            authorized_project_ids=[],
+            confirmed_by="human",
+            now=at(1),
+        )
+        repeated = select_execution_mode(
+            root=self.root,
+            root_id="d-select-auto",
+            selection="AUTOMATIC",
+            expected_hierarchy_fingerprint=(
+                preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=preview["graphFingerprint"],
+            authorized_project_ids=[],
+            confirmed_by="human",
+            now=at(2),
+        )
+
+        self.assertEqual(selected["selection"], "AUTOMATIC")
+        self.assertEqual(selected["status"], "ACTIVE")
+        self.assertTrue(selected["automaticDispatchRequested"])
+        self.assertEqual(
+            selected["nextAction"],
+            "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH",
+        )
+        frontier = get_graph_frontier(
+            root=self.root,
+            root_id="d-select-auto",
+            now=at(2),
+        )
+        self.assertIn(
+            "DISPATCH_LOOP",
+            {action["action"] for action in frontier["actions"]},
+        )
+        self.assertEqual(repeated["runId"], selected["runId"])
+        self.assertTrue(repeated["selectionAlreadyApplied"])
+
+    def test_controller_manual_selection_returns_embedded_receiver_prompt(
+        self,
+    ) -> None:
+        hierarchy = delivery_task_hierarchy("d-select-manual", "t-choice")
+        preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+
+        selected = select_execution_mode(
+            root=self.root,
+            root_id="d-select-manual",
+            selection="MANUAL",
+            expected_hierarchy_fingerprint=(
+                preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=preview["graphFingerprint"],
+            authorized_project_ids=[],
+            confirmed_by="human",
+            now=at(1),
+        )
+
+        self.assertEqual(selected["selection"], "MANUAL")
+        self.assertEqual(selected["status"], "HANDOFF_READY")
+        self.assertFalse(selected["graphRunCreated"])
+        prompt = selected["manualHandoff"]["receiverPrompt"]
+        handoff_path = Path(
+            self.root,
+            selected["manualHandoff"]["path"],
+        )
+        self.assertTrue(handoff_path.is_file())
+        self.assertIn(
+            prompt,
+            handoff_path.read_text(encoding="utf-8"),
+        )
+        repeated_preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(2),
+        )
+        self.assertEqual(repeated_preview["status"], "HANDOFF_READY")
+        self.assertNotIn("executionChoice", repeated_preview)
+        self.assertEqual(
+            repeated_preview["nextAction"],
+            "OPEN_FROZEN_BUNDLE_IN_ANY_CLI",
+        )
+
     def test_manual_handoff_materializes_development_bundle_without_starting(
         self,
     ) -> None:
@@ -392,10 +665,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
             now=at(3),
         )
 
-        self.assertEqual(preview["status"], "PREVIEW")
+        self.assertEqual(preview["status"], "CHOICE_READY")
         self.assertEqual(
             preview["nextAction"],
-            "SELECT_AUTOMATIC_EXECUTION_OR_MANUAL_HANDOFF",
+            "PRESENT_CONTROLLER_EXECUTION_CHOICE",
         )
         self.assertEqual(handoff["status"], "HANDOFF_READY")
         self.assertEqual(
@@ -411,10 +684,15 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertFalse(handoff["workspaceCreated"])
         self.assertEqual(
             set(handoff["manualHandoff"]),
-            {"path", "format", "selfContained"},
+            {"path", "format", "selfContained", "receiverPrompt"},
         )
         self.assertEqual(handoff["manualHandoff"]["format"], "MARKDOWN")
         self.assertTrue(handoff["manualHandoff"]["selfContained"])
+        receiver_prompt = handoff["manualHandoff"]["receiverPrompt"]
+        self.assertIn(handoff["manualHandoff"]["path"], receiver_prompt)
+        self.assertIn("完整读取", receiver_prompt)
+        self.assertIn("直接开发", receiver_prompt)
+        self.assertIn("不要重新规划", receiver_prompt)
 
         handoff_root = Path(
             self.root,
@@ -483,6 +761,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
             Path(self.root, ".layered-delivery", "handoffs").exists()
         )
         content = files[0].read_text(encoding="utf-8")
+        self.assertIn("## 接收 CLI 启动提示词", content)
+        self.assertIn(receiver_prompt, content)
         for expected in (
             "# 开发内容交接",
             "d-second",
@@ -639,7 +919,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             ).exists()
         )
 
-    def test_manual_handoff_rechecks_stale_preview_for_requirement_conflict(
+    def test_choice_ready_registration_prevents_stale_requirement_race(
         self,
     ) -> None:
         original = delivery_task_hierarchy("d-original", "t-original")
@@ -651,51 +931,34 @@ class SchedulerRuntimeTests(unittest.TestCase):
             hierarchy=duplicate,
             now=at(0),
         )
-        original_preview = preview_hierarchy(
-            root=self.root,
-            hierarchy=original,
-            now=at(1),
-        )
-        create_manual_handoff(
-            root=self.root,
-            hierarchy=original,
-            expected_hierarchy_fingerprint=(
-                original_preview["hierarchyFingerprint"]
-            ),
-            expected_graph_fingerprint=(
-                original_preview["graphFingerprint"]
-            ),
-            authorized_project_ids=[],
-            confirmed=True,
-            confirmed_by="human",
-            now=at(2),
-        )
-
         with self.assertRaises(GatedLoopError) as caught:
-            create_manual_handoff(
+            preview_hierarchy(
                 root=self.root,
-                hierarchy=duplicate,
-                expected_hierarchy_fingerprint=(
-                    duplicate_preview["hierarchyFingerprint"]
-                ),
-                expected_graph_fingerprint=(
-                    duplicate_preview["graphFingerprint"]
-                ),
-                authorized_project_ids=[],
-                confirmed=True,
-                confirmed_by="human",
-                now=at(3),
+                hierarchy=original,
+                now=at(1),
             )
 
+        self.assertEqual(duplicate_preview["status"], "CHOICE_READY")
         self.assertEqual(
             caught.exception.code,
             "SCHEDULER_DELIVERY_REQUIREMENT_CONFLICT",
+        )
+        self.assertEqual(
+            caught.exception.details["existingRootId"],
+            "d-duplicate",
+        )
+        self.assertTrue(
+            Path(
+                self.root,
+                ".layered-delivery",
+                "d-duplicate",
+            ).exists()
         )
         self.assertFalse(
             Path(
                 self.root,
                 ".layered-delivery",
-                "d-duplicate",
+                "d-original",
             ).exists()
         )
 

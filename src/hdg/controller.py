@@ -41,6 +41,7 @@ from .planning import (
     prepare_delivery_revision,
     prepare_hierarchy,
     preview_hierarchy,
+    select_execution_mode,
     workspace_status,
 )
 from .repository import SchedulerRepository
@@ -55,6 +56,7 @@ CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "available_agents": available_agents,
     "hierarchy_contract": hierarchy_contract,
     "preview_hierarchy": preview_hierarchy,
+    "select_execution_mode": select_execution_mode,
     "create_manual_handoff": create_manual_handoff,
     "prepare_hierarchy": prepare_hierarchy,
     "prepare_delivery_revision": prepare_delivery_revision,
@@ -126,14 +128,26 @@ class LayeredDeliveryController:
         git_workspace = None
         if isinstance(root_id, str):
             repository = SchedulerRepository(context.project_root)
-            repository.assert_delivery_workspace(
-                root_id,
-                workspace_root,
-                allow_unbound_manual=(name == "workspace_status"),
-            )
+            if name == "select_execution_mode":
+                selected = repository.hierarchy(root_id)
+                if selected["status"] not in {
+                    "CHOICE_READY",
+                    "HANDOFF_READY",
+                }:
+                    repository.assert_delivery_workspace(
+                        root_id,
+                        workspace_root,
+                    )
+            else:
+                repository.assert_delivery_workspace(
+                    root_id,
+                    workspace_root,
+                    allow_unbound_manual=(name == "workspace_status"),
+                )
             if name not in {
                 "workspace_status",
                 "prepare_delivery_revision",
+                "select_execution_mode",
             }:
                 stored = repository.hierarchy(root_id)
                 git_binding = stored["hierarchy"]["delivery"].get(
@@ -170,6 +184,7 @@ class LayeredDeliveryController:
             "workspace_status",
             "prepare_hierarchy",
             "prepare_delivery_revision",
+            "select_execution_mode",
         }:
             arguments_value["workspace_root"] = workspace_root
         if name in {

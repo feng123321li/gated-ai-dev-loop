@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.34.2 — 2026-08-04
+
+发布提交：`968ea53`
+
+- 修复 Codex 与 Claude Code 因共享用户级 `orchestrator.json` 仍为 schema v1 而在工具注册前同时退出的问题；MCP Server 不再读取该外部文件，残留配置不参与启动、派遣、授权或指纹。
+- 移除中央设置 MCP Apps、`open_orchestrator_settings`、`update_orchestrator_settings` 及配置读写实现；外层 receiver 最大并发 4 和固定 `PAUSE_AND_RESUME` 策略改由 Plugin 内置，工具面收敛为 27 个。
+- 保留 Controller 的中央协调事务：reservation、已 claim receiver、资源锁和容量断路器仍约束重复、冲突与超量派遣；新增真实旧配置 stdio 启动回归。
+- 重新构建规范 Skill runtime 和 Plugin 内嵌 Skill，Python 全量 215 项测试、编译检查、0.34.2 发布候选校验、Skill/Plugin 校验、双宿主本地探测和 `git diff --check` 通过。
+
 ## 0.34.1 — 2026-08-04
 
 发布提交：`eac0435`

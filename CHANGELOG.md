@@ -4,6 +4,14 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.34.1 — 2026-08-04
+
+发布提交：`eac0435`
+
+- 修复 manual Graph 在 TASK 实现完成后没有继续进入分层审查的问题：Codex `SubagentStart` Hook 接受受治理的 active/manual Delivery，宿主未报告模型时仍可完成 Review receiver 认证；手动交接响应明确要求接收 CLI 先启动同一 Graph，后续 TASK/GROUP/Delivery Review 完整复用自动派遣流程。
+- 彻底移除 `available_agents`、三份 `agent_discovery.py`、Plugin 发现关键词、外部进程 transport 常量和旧模型路由字段；MCP 工具总数收敛为 29，SQLite 自动清除当前 schema v3 中已经废弃的模型列，宿主实际模型只保留为非权威观测遥测。
+- 重新构建规范 Skill runtime 和 Plugin 内嵌 Skill，Python 全量 230 项测试、编译检查、0.34.1 发布候选校验、Skill/Plugin 校验和 `git diff --check` 通过。
+
 ## 0.34.0 — 2026-08-04
 
 发布提交：`6bba7a3`

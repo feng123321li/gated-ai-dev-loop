@@ -9,6 +9,8 @@
 - 当前上下文仍保留最近一次 `preview_hierarchy` 响应和原始 hierarchy 时，复用其中的双 fingerprint 与完整清单；需求未变时不要重复 preview，回答用户问题后重新展示同一组选项。
 - 初次开发前用户修改需求时，更新 hierarchy 并重新调用 `preview_hierarchy`；只使用新响应的 fingerprint，不复用旧值。`prepare_hierarchy` 只在用户已经选择自动执行且实际开发工作区就绪后调用。
 - 初次冻结后、最终用户验收前用户修改依赖、项目范围、资源或拓扑时，保持相同 `delivery.id` 调用 `prepare_delivery_revision`，不得重新调用初始 prepare，也不得创建另一个 Delivery ID。用户明确要求继续同一 Delivery 时提交 `continuity_basis=USER_EXPLICIT_SAME_DELIVERY`；只有当前 Graph 已记录 `REPLAN_REQUIRED` 时提交 `ACTIVE_LOOP_REPLAN`。路径、分支和旧 Delivery 状态都不是连续性依据。
+- 用户给出工单号、需求号等稳定外部标识时，将其规范化写入 `delivery.requirementKey`。同一 key 只能映射一个稳定 `delivery.id`；Controller 还会从 Delivery ID/标题识别常见 `PROJECT-123` 工单号，在 preview 与最终写入两处拒绝换 ID 后重复冻结。
+- `HANDOFF_READY` 手动需求变化时不创建新 Delivery，也不调用只适用于自动 Graph 的 `prepare_delivery_revision`。保持相同 `delivery.id` 重新 preview 后，再调用 `create_manual_handoff`，同时提交 `expected_current_revision`、`continuity_basis=USER_EXPLICIT_SAME_DELIVERY` 和非空 `revision_reason`；旧手动 Revision 标记为 `SUPERSEDED`，新 handoff 与当前投影继续位于原目录。
 - `prepare_delivery_revision` 只生成待确认候选，不替换当前 hierarchy 或旧 run，不应触发宿主通用确认弹窗；用户在完整范围和授权清单上选择自动执行或手动开发，才是该 Revision 唯一一次业务确认。
 - 当前上下文不再持有精确 fingerprint 或原始 hierarchy 时，不从旧投影反推机器输入，也不猜测旧值；重新收集需求并 preview 后再请求执行方式确认。
 
@@ -47,6 +49,7 @@
 {
   "delivery": {
     "id": "d-order",
+    "requirementKey": "ORDER-123",
     "title": "交付订单能力",
     "summary": "完成订单能力并取得最终验收",
     "reviewLoop": {
@@ -84,7 +87,7 @@
 }
 ```
 
-`delivery.id` 是稳定的 Delivery/Graph 标识，也是需求投影目录的 namespace。工作区全部 Delivery 的入口位于 `.layered-delivery/overview.md`，这里只列 Delivery 标识、标题、状态、更新时间和详情链接；该 Delivery 自己的 TASK 进度与 GROUP 数量位于 `.layered-delivery/<delivery-id>/overview.md`。`STANDARD` 的 `delivery.reviewLoop` 在根终态之后执行；`LIGHT` 将其设为 `null`，根 TASK 成功后直接进入用户确认。
+`delivery.requirementKey` 是可选但在用户提供外部工单号时必须声明的业务身份；它与 `delivery.id` 一对一绑定。`delivery.id` 是稳定的 Delivery/Graph 标识，也是需求投影目录的 namespace。工作区全部 Delivery 的入口位于 `.layered-delivery/overview.md`，这里只列 Delivery 标识、标题、状态、更新时间和详情链接；该 Delivery 自己的 TASK 进度与 GROUP 数量位于 `.layered-delivery/<delivery-id>/overview.md`。`STANDARD` 的 `delivery.reviewLoop` 在根终态之后执行；`LIGHT` 将其设为 `null`，根 TASK 成功后直接进入用户确认。
 
 同一需求的所有人类文件共用 `.layered-delivery/<delivery-id>/`。自动与手动开发都生成 overview、baseline、progress、acceptance、revisions 和同结构 work-items；手动开发另有 `.layered-delivery/<delivery-id>/handoff-<fingerprint>.md`，包含完整 schema v3。不得创建跨需求共享的 `.layered-delivery/handoffs/`。手动包以双 fingerprint 冻结需求内容并在 SQLite 登记为 `HANDOFF_READY`，但不构成 Graph Run 状态；Graph 是否 prepare、freeze 或运行仍只以 MCP 返回和 SQLite 事件链为准。
 
@@ -290,14 +293,24 @@ TASK、TASK Review、GROUP Review 和 Delivery Review 使用相同 Loop 描述�
 - `protocol` 是开放字符串；HTTP、Dubbo、gRPC、GraphQL、消息等只是示例；
 - `changeType` 使用 `CREATE`、`MODIFY` 或 `DELETE`；
 - 每个适用的 before/after 快照都包含完整入参 `request` 与出参 `response`；
+- `request`/`response` 的标准字段形状是字段列表
+  `[{name,type,required?,maxLength?,description?,example?}]`，或带整体类型的
+  `{type,description?,fields|properties:[...]}`；字段名必须是实际契约字段，
+  不要把分类或包装元数据伪装成业务字段；
+- 无入参或无出参使用空列表 `[]`，投影分别明确显示“无入参”或“无出参”；
+- HTTP 请求可按 `headers`、`pathParameters`、`queryParameters`、`body` 等
+  位置组织实际字段，投影会展开非空字段并忽略空容器；Controller 契约也可用
+  `controllerReturnType`、`controllerReturnFields`，投影会转换成 VO 整体类型
+  与实际字段；`wireType`、`frameworkEnvelope`、`wrapping` 和 `Rs` 包装信息
+  一律忽略，不输出成字段或接口说明；
 - 通用快照可用 `identifier` 保存稳定、可定位的调用标识；
 - HTTP 快照另带 `method` 与 `path`；
-- Dubbo 快照另带 `service` 与 `method`。
+- Dubbo 快照另带 `service`、`method`，并可显式提供 `signature`。
 
 需求分析时可以从真实代码、OpenAPI、Controller/DTO、IDL 或服务定义提取
 before 候选，并根据需求形成 after；确认 TASK 时必须把两者作为显式契约
 评审。每个适用快照的 `request` 和 `response` 都应给出完整契约，包括可
-核对的参数名称、类型、是否必填和简介，不得只列变化字段，也不得只写
+核对的参数名称、类型、是否必填、最大长度、简介和示例值，不得只列变化字段，也不得只写
 “参考代码”或“待实现”。`CREATE` 的 before、`DELETE` 的 after 使用空值。
 调用标识保持可定位：HTTP 可使用 `method + path`，Dubbo 可使用
 `service + method`，其他协议使用 `identifier`。规划时以 `hierarchy_contract` 返回的
@@ -308,10 +321,16 @@ before 候选，并根据需求形成 after；确认 TASK 时必须把两者作�
 每个接口生成一份字段级详情；TASK baseline 与 Delivery baseline 只串联索引。
 完全没有声明的 TASK 不生成这些文件、目录和导航。控制器不动态扫描实现代码
 或隐式推算契约；TASK/Review Loop 可用真实代码验证 after。接口详情在完整
-请求和响应表中逐字段比较 before/after，标记新增、修改、删除或未变。入参表
-展示类型、必填性和说明，出参表不展示必填性；只有真正修改的属性使用“修改前
+请求和响应表中逐字段比较 before/after，标记新增、修改、删除或未变。HTTP
+按 Path、Query、请求头、请求体和响应参数分区；Dubbo 按接口、方法、调用参数
+和返回结果分区，并展示最大长度。入参表展示类型、必填性、说明和示例值，出参
+表不展示必填性；只有真正修改的属性使用“修改前
 → 修改后”，新增或删除字段只显示存在的一侧，删除值使用 Markdown 删除线。
 字段仍是 Loop 的不透明输入，不参与依赖、资源锁或 Graph 调度。
+
+冻结 baseline 中的 after 是开发接口和后续 Torna 发布的唯一事实来源。实现与
+Torna 必须保持相同的方法、路径或签名、字段层级、类型、必填、最大长度、说明
+和示例值；不得在开发完成后从另一套输入生成内容不同的接口文档。
 
 ## Skill Hint 晚绑定
 

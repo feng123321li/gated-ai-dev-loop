@@ -568,6 +568,417 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "需求已冻结（手动开发，调度未启动）",
             workspace_overview,
         )
+
+    def test_preview_rejects_duplicate_external_requirement_under_new_id(
+        self,
+    ) -> None:
+        original = delivery_task_hierarchy(
+            "d-mprotein-443-original",
+            "t-mprotein-443-original",
+        )
+        original["delivery"]["title"] = (
+            "MPROTEIN-443 移除蛋白上机原样剩余信息"
+        )
+        preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=original,
+            now=at(0),
+        )
+        create_manual_handoff(
+            root=self.root,
+            hierarchy=original,
+            expected_hierarchy_fingerprint=(
+                preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=preview["graphFingerprint"],
+            authorized_project_ids=[],
+            confirmed=True,
+            confirmed_by="human",
+            now=at(1),
+        )
+
+        duplicate = delivery_task_hierarchy(
+            "mprotein-443-regenerated",
+            "t-mprotein-443-regenerated",
+        )
+        duplicate["delivery"]["title"] = (
+            "退役蛋白上机样品原样剩余量字段（MPROTEIN-443）"
+        )
+        with self.assertRaises(GatedLoopError) as caught:
+            preview_hierarchy(
+                root=self.root,
+                hierarchy=duplicate,
+                now=at(2),
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_DELIVERY_REQUIREMENT_CONFLICT",
+        )
+        self.assertEqual(
+            caught.exception.details["requirementKey"],
+            "MPROTEIN-443",
+        )
+        self.assertEqual(
+            caught.exception.details["existingRootId"],
+            "d-mprotein-443-original",
+        )
+        self.assertEqual(
+            caught.exception.details["requestedRootId"],
+            "mprotein-443-regenerated",
+        )
+        self.assertEqual(
+            caught.exception.details["nextAction"],
+            "REUSE_EXISTING_DELIVERY_ID_AND_CREATE_REVISION",
+        )
+        self.assertFalse(
+            Path(
+                self.root,
+                ".layered-delivery",
+                "mprotein-443-regenerated",
+            ).exists()
+        )
+
+    def test_manual_handoff_rechecks_stale_preview_for_requirement_conflict(
+        self,
+    ) -> None:
+        original = delivery_task_hierarchy("d-original", "t-original")
+        original["delivery"]["requirementKey"] = "MPROTEIN-443"
+        duplicate = delivery_task_hierarchy("d-duplicate", "t-duplicate")
+        duplicate["delivery"]["requirementKey"] = "mprotein-443"
+        duplicate_preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=duplicate,
+            now=at(0),
+        )
+        original_preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=original,
+            now=at(1),
+        )
+        create_manual_handoff(
+            root=self.root,
+            hierarchy=original,
+            expected_hierarchy_fingerprint=(
+                original_preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=(
+                original_preview["graphFingerprint"]
+            ),
+            authorized_project_ids=[],
+            confirmed=True,
+            confirmed_by="human",
+            now=at(2),
+        )
+
+        with self.assertRaises(GatedLoopError) as caught:
+            create_manual_handoff(
+                root=self.root,
+                hierarchy=duplicate,
+                expected_hierarchy_fingerprint=(
+                    duplicate_preview["hierarchyFingerprint"]
+                ),
+                expected_graph_fingerprint=(
+                    duplicate_preview["graphFingerprint"]
+                ),
+                authorized_project_ids=[],
+                confirmed=True,
+                confirmed_by="human",
+                now=at(3),
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_DELIVERY_REQUIREMENT_CONFLICT",
+        )
+        self.assertFalse(
+            Path(
+                self.root,
+                ".layered-delivery",
+                "d-duplicate",
+            ).exists()
+        )
+
+    def test_preview_rejects_requirement_key_change_for_same_delivery(
+        self,
+    ) -> None:
+        hierarchy = delivery_task_hierarchy("d-stable", "t-stable")
+        hierarchy["delivery"]["requirementKey"] = "MPROTEIN-443"
+        first_preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        create_manual_handoff(
+            root=self.root,
+            hierarchy=hierarchy,
+            expected_hierarchy_fingerprint=(
+                first_preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=(
+                first_preview["graphFingerprint"]
+            ),
+            authorized_project_ids=[],
+            confirmed=True,
+            confirmed_by="human",
+            now=at(1),
+        )
+        revised = deepcopy(hierarchy)
+        revised["delivery"]["requirementKey"] = "MPROTEIN-444"
+
+        with self.assertRaises(GatedLoopError) as caught:
+            preview_hierarchy(
+                root=self.root,
+                hierarchy=revised,
+                now=at(2),
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_DELIVERY_REQUIREMENT_KEY_IMMUTABLE",
+        )
+        self.assertEqual(
+            caught.exception.details["existingRequirementKey"],
+            "MPROTEIN-443",
+        )
+        self.assertEqual(
+            caught.exception.details["requestedRequirementKey"],
+            "MPROTEIN-444",
+        )
+
+    def test_manual_handoff_revision_reuses_the_original_directory(
+        self,
+    ) -> None:
+        hierarchy = delivery_task_hierarchy(
+            "d-mprotein-445-reminder",
+            "t-mprotein-445-reminder",
+        )
+        hierarchy["delivery"]["title"] = (
+            "MPROTEIN-445 系统公共异常暂停提醒"
+        )
+        first_preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        first = create_manual_handoff(
+            root=self.root,
+            hierarchy=hierarchy,
+            expected_hierarchy_fingerprint=(
+                first_preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=(
+                first_preview["graphFingerprint"]
+            ),
+            authorized_project_ids=[],
+            confirmed=True,
+            confirmed_by="human",
+            now=at(1),
+        )
+
+        revised = deepcopy(hierarchy)
+        revised["delivery"]["title"] = (
+            "MPROTEIN-445 当前菜单异常暂停提醒"
+        )
+        revised["delivery"]["summary"] = (
+            "按当前菜单参数统计系统公共异常暂停数量。"
+        )
+        revised["root"]["definition"]["execution"]["loop"][
+            "payload"
+        ]["goal"] = "增加必填 taskCurrStep 参数并按当前菜单统计。"
+        second_preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=revised,
+            now=at(2),
+        )
+        second = create_manual_handoff(
+            root=self.root,
+            hierarchy=revised,
+            expected_hierarchy_fingerprint=(
+                second_preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=(
+                second_preview["graphFingerprint"]
+            ),
+            authorized_project_ids=[],
+            expected_current_revision=1,
+            continuity_basis="USER_EXPLICIT_SAME_DELIVERY",
+            revision_reason="用户把系统范围统计调整为当前菜单统计。",
+            confirmed=True,
+            confirmed_by="human",
+            now=at(3),
+        )
+
+        self.assertEqual(first["deliveryRevision"], 1)
+        self.assertEqual(second["deliveryRevision"], 2)
+        self.assertEqual(second["previousRevision"], 1)
+        self.assertEqual(
+            second["rootId"],
+            "d-mprotein-445-reminder",
+        )
+        history = SchedulerRepository(self.root).revision_history(
+            second["rootId"]
+        )
+        self.assertEqual(history["currentRevision"], 2)
+        self.assertEqual(
+            [item["status"] for item in history["revisions"]],
+            ["SUPERSEDED", "HANDOFF_READY"],
+        )
+        self.assertEqual(
+            history["revisions"][1]["continuityBasis"],
+            "USER_EXPLICIT_SAME_DELIVERY",
+        )
+        self.assertEqual(
+            history["revisions"][1]["reason"],
+            "用户把系统范围统计调整为当前菜单统计。",
+        )
+        handoff_root = Path(
+            self.root,
+            ".layered-delivery",
+            second["rootId"],
+        )
+        self.assertEqual(len(list(handoff_root.glob("handoff-*.md"))), 2)
+        self.assertFalse(
+            Path(
+                self.root,
+                ".layered-delivery",
+                "d-mprotein-445-current-menu-reminder",
+            ).exists()
+        )
+        revisions = (handoff_root / "revisions.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("| 1 | SUPERSEDED |", revisions)
+        self.assertIn("| 2 | HANDOFF\\_READY |", revisions)
+
+    def test_changed_manual_handoff_requires_explicit_revision_continuity(
+        self,
+    ) -> None:
+        hierarchy = delivery_task_hierarchy(
+            "d-mprotein-445",
+            "t-mprotein-445",
+        )
+        first_preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        create_manual_handoff(
+            root=self.root,
+            hierarchy=hierarchy,
+            expected_hierarchy_fingerprint=(
+                first_preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=(
+                first_preview["graphFingerprint"]
+            ),
+            authorized_project_ids=[],
+            confirmed=True,
+            confirmed_by="human",
+            now=at(1),
+        )
+        revised = deepcopy(hierarchy)
+        revised["delivery"]["summary"] = "修订后的需求范围。"
+        second_preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=revised,
+            now=at(2),
+        )
+
+        with self.assertRaises(GatedLoopError) as caught:
+            create_manual_handoff(
+                root=self.root,
+                hierarchy=revised,
+                expected_hierarchy_fingerprint=(
+                    second_preview["hierarchyFingerprint"]
+                ),
+                expected_graph_fingerprint=(
+                    second_preview["graphFingerprint"]
+                ),
+                authorized_project_ids=[],
+                confirmed=True,
+                confirmed_by="human",
+                now=at(3),
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_MANUAL_REVISION_CONTINUITY_REQUIRED",
+        )
+
+    def test_latest_manual_revision_can_enter_automatic_execution(self) -> None:
+        hierarchy = delivery_task_hierarchy("d-manual-rev", "t-manual-rev")
+        first_preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        create_manual_handoff(
+            root=self.root,
+            hierarchy=hierarchy,
+            expected_hierarchy_fingerprint=(
+                first_preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=(
+                first_preview["graphFingerprint"]
+            ),
+            authorized_project_ids=[],
+            confirmed=True,
+            confirmed_by="human",
+            now=at(1),
+        )
+        revised = deepcopy(hierarchy)
+        revised["delivery"]["summary"] = "手动 Revision 2。"
+        second_preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=revised,
+            now=at(2),
+        )
+        create_manual_handoff(
+            root=self.root,
+            hierarchy=revised,
+            expected_hierarchy_fingerprint=(
+                second_preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=(
+                second_preview["graphFingerprint"]
+            ),
+            authorized_project_ids=[],
+            expected_current_revision=1,
+            continuity_basis="USER_EXPLICIT_SAME_DELIVERY",
+            revision_reason="修订手动需求。",
+            confirmed=True,
+            confirmed_by="human",
+            now=at(3),
+        )
+
+        prepared = prepare_hierarchy(
+            root=self.root,
+            hierarchy=revised,
+            now=at(4),
+        )
+        frozen = freeze_hierarchy(
+            root=self.root,
+            root_id=prepared["rootId"],
+            expected_delivery_revision=2,
+            expected_hierarchy_fingerprint=(
+                prepared["hierarchyFingerprint"]
+            ),
+            authorized_project_ids=[],
+            confirmed=True,
+            confirmed_by="human",
+            now=at(5),
+        )
+
+        self.assertEqual(prepared["deliveryRevision"], 2)
+        self.assertEqual(frozen["deliveryRevision"], 2)
+        history = SchedulerRepository(self.root).revision_history(
+            prepared["rootId"]
+        )
+        self.assertEqual(
+            [item["status"] for item in history["revisions"]],
+            ["SUPERSEDED", "FROZEN"],
+        )
         self.assertFalse(Path(self.root, "worktrees").exists())
 
     def test_manual_progress_survives_controller_projection_refresh(
@@ -3981,38 +4392,41 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertIn(
             (
                 "| ~~legacyCustomerNo~~ | 删除 | ~~string~~ | "
-                "~~是~~ | ~~原客户编号~~ |"
+                "~~是~~ | ~~原客户编号~~ | ~~—~~ |"
             ),
             create_order_detail,
         )
         self.assertIn(
             (
                 "| customerId | 新增 | string | "
-                "是 | 客户标识 |"
+                "是 | 客户标识 | — |"
             ),
             create_order_detail,
         )
         self.assertIn(
             (
                 "| quantity | 修改 | integer | 否 → 是 | "
-                "商品数量 → 必须大于零的商品数量 |"
+                "商品数量 → 必须大于零的商品数量 | — |"
             ),
             create_order_detail,
         )
         self.assertIn(
             (
-                "| channel | 未变 | string | 否 | 下单渠道 |"
+                "| channel | 未变 | string | 否 | 下单渠道 | — |"
             ),
             create_order_detail,
         )
         response_section = create_order_detail.split("## 出参", 1)[1]
         self.assertNotIn("必填", response_section)
         self.assertIn(
-            "| ~~orderNo~~ | 删除 | ~~string~~ | ~~原订单编号~~ |",
+            (
+                "| ~~orderNo~~ | 删除 | ~~string~~ | "
+                "~~原订单编号~~ | ~~—~~ |"
+            ),
             response_section,
         )
         self.assertIn(
-            "| orderId | 新增 | string | 订单标识 |",
+            "| orderId | 新增 | string | 订单标识 | — |",
             response_section,
         )
         self.assertNotIn("— →", all_interface_details)
@@ -4055,6 +4469,323 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertNotIn("创建订单", task_baseline)
         self.assertNotIn("legacyCustomerNo", task_baseline)
+
+    def test_interface_projection_renders_actual_wrapped_http_contract(
+        self,
+    ) -> None:
+        hierarchy = task_hierarchy()
+        hierarchy["root"]["definition"]["execution"]["loop"][
+            "payload"
+        ]["interfaces"] = [
+            {
+                "protocol": "HTTP",
+                "name": "蛋白制备系统公共异常暂停数量",
+                "summary": "无入参，只返回系统异常暂停数量。",
+                "changeType": "CREATE",
+                "before": None,
+                "after": {
+                    "method": "GET",
+                    "path": "/taskReminder/preparation",
+                    "request": {
+                        "headers": [],
+                        "pathParameters": [],
+                        "queryParameters": [],
+                        "body": None,
+                        "businessParameters": [],
+                        "contextDependencies": [],
+                    },
+                    "response": {
+                        "controllerReturnType": (
+                            "PreparationTaskMenuReminderRespVO"
+                        ),
+                        "controllerReturnFields": [
+                            {
+                                "name": "abnormalPausedCount",
+                                "type": "Long",
+                                "description": (
+                                    "系统全部蛋白制备任务中的异常暂停数量，"
+                                    "无数据时为 0。"
+                                ),
+                            }
+                        ],
+                        "wireType": (
+                            "Rs<PreparationTaskMenuReminderRespVO>"
+                        ),
+                        "frameworkEnvelope": "Rs",
+                        "wrapping": (
+                            "Controller 直接返回 RespVO，由框架自动包装。"
+                        ),
+                    },
+                },
+            }
+        ]
+
+        prepared = prepare_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        detail = (
+            Path(self.root)
+            / ".layered-delivery"
+            / prepared["rootId"]
+            / WORK_ITEM_DIRECTORY
+            / "t-service"
+            / "interfaces"
+            / "001-http-get-taskreminder-preparation.md"
+        ).read_text(encoding="utf-8")
+        request_section, response_section = detail.split("## 出参", 1)
+
+        self.assertIn("## 入参\n\n无", request_section)
+        for metadata_key in (
+            "headers",
+            "pathParameters",
+            "queryParameters",
+            "body |",
+            "businessParameters",
+            "contextDependencies",
+        ):
+            with self.subTest(request_metadata=metadata_key):
+                self.assertNotIn(metadata_key, request_section)
+        self.assertIn(
+            "- 返回类型：PreparationTaskMenuReminderRespVO",
+            request_section,
+        )
+        self.assertNotIn("| （整体） |", response_section)
+        self.assertIn("### 响应参数", response_section)
+        self.assertIn(
+            (
+                "| abnormalPausedCount | 新增 | Long | "
+                "系统全部蛋白制备任务中的异常暂停数量，无数据时为 0。 | — |"
+            ),
+            response_section,
+        )
+        self.assertNotIn("Rs&lt;", response_section)
+        for metadata_key in (
+            "controllerReturnType",
+            "controllerReturnFields",
+            "wireType",
+            "frameworkEnvelope",
+            "wrapping",
+        ):
+            with self.subTest(response_metadata=metadata_key):
+                self.assertNotIn(metadata_key, response_section)
+
+    def test_interface_projection_flattens_real_request_locations(
+        self,
+    ) -> None:
+        hierarchy = task_hierarchy()
+        hierarchy["root"]["definition"]["execution"]["loop"][
+            "payload"
+        ]["interfaces"] = [
+            {
+                "protocol": "HTTP",
+                "name": "查询菜单异常暂停数量",
+                "summary": "按调用方实际提供的菜单编码查询。",
+                "changeType": "CREATE",
+                "before": None,
+                "after": {
+                    "method": "GET",
+                    "path": "/taskReminder/{menuCode}",
+                    "request": {
+                        "pathParameters": [
+                            {
+                                "name": "menuCode",
+                                "type": "String",
+                                "required": True,
+                                "description": "菜单编码。",
+                            }
+                        ],
+                        "queryParameters": [
+                            {
+                                "name": "includeChildren",
+                                "type": "Boolean",
+                                "required": False,
+                                "description": "是否包含子菜单。",
+                            }
+                        ],
+                        "body": None,
+                    },
+                    "response": {
+                        "type": "TaskMenuReminderRespVO",
+                        "fields": [
+                            {
+                                "name": "abnormalPausedCount",
+                                "type": "Long",
+                                "description": "对应菜单的异常暂停数量。",
+                            }
+                        ],
+                    },
+                },
+            }
+        ]
+
+        prepared = prepare_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        detail = next(
+            (
+                Path(self.root)
+                / ".layered-delivery"
+                / prepared["rootId"]
+                / WORK_ITEM_DIRECTORY
+                / "t-service"
+                / "interfaces"
+            ).glob("*.md")
+        ).read_text(encoding="utf-8")
+        request_section = detail.split("## 出参", 1)[0]
+
+        self.assertIn(
+            "### Path 参数",
+            request_section,
+        )
+        self.assertIn(
+            (
+                "| menuCode | 新增 | String | 是 | 菜单编码。 | — |"
+            ),
+            request_section,
+        )
+        self.assertIn("### Query 参数", request_section)
+        self.assertIn(
+            (
+                "| includeChildren | 新增 | Boolean | 否 | "
+                "是否包含子菜单。 | — |"
+            ),
+            request_section,
+        )
+        self.assertNotIn("pathParameters", request_section)
+        self.assertNotIn("queryParameters", request_section)
+
+    def test_dubbo_interface_projection_matches_torna_contract_sections(
+        self,
+    ) -> None:
+        hierarchy = task_hierarchy()
+        hierarchy["root"]["definition"]["execution"]["loop"][
+            "payload"
+        ]["interfaces"] = [
+            {
+                "protocol": "DUBBO",
+                "name": "获取核酸孔位列表",
+                "summary": "获取核酸孔位列表。",
+                "changeType": "CREATE",
+                "before": None,
+                "after": {
+                    "service": (
+                        "com.majorbio.service.erp.scs.api.api.box."
+                        "BoxDubboService"
+                    ),
+                    "method": "getBoxNucleicPosition",
+                    "request": {
+                        "name": "boxNucleicPositionReqVO",
+                        "type": "BoxNucleicPositionReqVO",
+                        "required": True,
+                        "fields": [
+                            {
+                                "name": "systemSource",
+                                "type": "Integer",
+                                "required": False,
+                                "maxLength": 16,
+                                "description": "系统来源。",
+                                "example": "SCS",
+                            }
+                        ],
+                    },
+                    "response": {
+                        "type": "BoxNucleicPositionRespVO",
+                        "fields": [
+                            {
+                                "name": "boList",
+                                "type": "List<BoxNucleicPositionBO>",
+                                "required": False,
+                                "description": "核酸孔位列表。",
+                                "fields": [
+                                    {
+                                        "name": "positionCode",
+                                        "type": "String",
+                                        "required": True,
+                                        "maxLength": 32,
+                                        "description": "孔位编码。",
+                                        "example": "A01",
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                },
+            }
+        ]
+
+        prepared = prepare_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        detail = next(
+            (
+                Path(self.root)
+                / ".layered-delivery"
+                / prepared["rootId"]
+                / WORK_ITEM_DIRECTORY
+                / "t-service"
+                / "interfaces"
+            ).glob("*.md")
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            (
+                "- 接口：com.majorbio.service.erp.scs.api.api.box."
+                "BoxDubboService"
+            ),
+            detail,
+        )
+        self.assertIn(
+            (
+                "- 方法：BoxNucleicPositionRespVO "
+                "getBoxNucleicPosition("
+                "BoxNucleicPositionReqVO boxNucleicPositionReqVO)"
+            ),
+            detail,
+        )
+        self.assertIn("### 调用参数", detail)
+        self.assertIn(
+            (
+                "| 字段路径 | 变更 | 类型（修改前 → 修改后） | "
+                "必填（修改前 → 修改后） | 最大长度（修改前 → 修改后） | "
+                "说明（修改前 → 修改后） | 示例值（修改前 → 修改后） |"
+            ),
+            detail,
+        )
+        self.assertIn(
+            (
+                "| boxNucleicPositionReqVO | 新增 | "
+                "BoxNucleicPositionReqVO | 是 | — | 未声明 | — |"
+            ),
+            detail,
+        )
+        self.assertIn(
+            (
+                "| boxNucleicPositionReqVO.systemSource | 新增 | Integer | "
+                "否 | 16 | 系统来源。 | SCS |"
+            ),
+            detail,
+        )
+        self.assertIn(
+            (
+                "| boList.positionCode | 新增 | String | 是 | 32 | "
+                "孔位编码。 | A01 |"
+            ),
+            detail,
+        )
+        self.assertIn("### 返回结果", detail)
+        self.assertIn(
+            (
+                "| boList | 新增 | List&lt;BoxNucleicPositionBO&gt; | "
+                "否 | — | 核酸孔位列表。 | — |"
+            ),
+            detail,
+        )
 
     def test_workspace_status_backfills_projection_files_for_stored_deliveries(
         self,

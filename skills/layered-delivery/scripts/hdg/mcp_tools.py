@@ -277,6 +277,25 @@ def _manual_handoff_tool_schema() -> dict[str, Any]:
                     "empty array when projectScopes is absent."
                 ),
             },
+            "expected_current_revision": {
+                "type": "integer",
+                "minimum": 1,
+                "description": (
+                    "Current HANDOFF_READY revision when explicitly "
+                    "revising the same manual Delivery. Omit for Revision 1."
+                ),
+            },
+            "continuity_basis": {
+                "type": "string",
+                "enum": ["USER_EXPLICIT_SAME_DELIVERY"],
+                "description": (
+                    "Required with changed manual content to prove the user "
+                    "explicitly continued the same Delivery."
+                ),
+            },
+            "revision_reason": _string(
+                "Required explanation of the changed manual requirement."
+            ),
             "confirmed_by": _string("Human confirmer identity."),
         },
         required=[
@@ -486,6 +505,12 @@ TOOLS = (
             "used by automatic development. It also registers the frozen "
             "HANDOFF_READY snapshot in the shared scheduler.db and refreshes "
             "the root overview.md. Never create a shared handoffs directory. "
+            "If the user explicitly changes an existing HANDOFF_READY "
+            "requirement, retain its delivery.id and provide the current "
+            "revision, USER_EXPLICIT_SAME_DELIVERY continuity, and a reason; "
+            "the controller creates the next immutable manual revision in "
+            "the same directory. A requirementKey already mapped to another "
+            "delivery.id is rejected. "
             "This does not prepare, freeze, or start a Graph run; do not "
             "choose an Agent/model, create a receiving task, bind a workspace, "
             "or initialize a worktree. The user may open the bundle in any "

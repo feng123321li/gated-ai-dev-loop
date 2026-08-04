@@ -197,6 +197,7 @@ def preview_hierarchy(
     normalized, graph, hierarchy_value, graph_value = _preview_values(
         hierarchy
     )
+    repository.assert_delivery_requirement_available(normalized)
     return {
         "rootId": normalized["delivery"]["id"],
         "status": "PREVIEW",
@@ -256,6 +257,9 @@ def create_manual_handoff(
     authorized_project_ids: list[str] | None,
     confirmed: bool,
     confirmed_by: str,
+    expected_current_revision: int | None = None,
+    continuity_basis: str | None = None,
+    revision_reason: str | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
     **_: Any,
@@ -308,6 +312,9 @@ def create_manual_handoff(
         hierarchy_fingerprint=hierarchy_value,
         graph_fingerprint=graph_value,
         authorized_project_ids=list(authorized_project_ids or []),
+        expected_current_revision=expected_current_revision,
+        continuity_basis=continuity_basis,
+        revision_reason=revision_reason,
         confirmed_by=confirmed_by.strip(),
     )
     created_at = registration["recordedAt"]
@@ -322,6 +329,8 @@ def create_manual_handoff(
     return {
         "rootId": root_id,
         "status": "HANDOFF_READY",
+        "deliveryRevision": registration["deliveryRevision"],
+        "previousRevision": registration["previousRevision"],
         "requirementSnapshotStatus": "FROZEN",
         "hierarchyFingerprint": hierarchy_value,
         "graphFingerprint": graph_value,

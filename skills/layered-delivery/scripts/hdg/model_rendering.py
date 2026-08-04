@@ -52,6 +52,19 @@ INTERFACE_CHANGE_TYPE_TEXT = {
     "MODIFY": "修改",
     "DELETE": "删除",
 }
+INTERFACE_REQUEST_LOCATION_PREFIXES = MappingProxyType(
+    {
+        "headers": "header",
+        "pathParameters": "path",
+        "queryParameters": "query",
+        "body": "body",
+        "businessParameters": "business",
+        "contextDependencies": "context",
+        "contextDerived": "context",
+        "contextualInputs": "context",
+        "parameters": "",
+    }
+)
 REVIEW_FINDING_STATUS_TEXT = {
     "RESOLVED": "已修复",
     "ACCEPTED": "已接受",
@@ -151,7 +164,7 @@ PAYLOAD_FIELD_ORDER = MappingProxyType(
     }
 )
 UTC_PLUS_8 = timezone(timedelta(hours=8))
-PROJECTION_TEMPLATE_VERSION = 12
+PROJECTION_TEMPLATE_VERSION = 13
 WORK_ITEM_DIRECTORY = "work-items"
 WORKSPACE_OVERVIEW_PROJECTION_TEMPLATE = Template(
     """# 全部交付调度与进度总览
@@ -692,7 +705,11 @@ def _interface_required_text(value: object) -> str:
     return "未声明"
 
 
-def _interface_field_rows(value: object) -> list[dict[str, str]]:
+def _interface_field_rows(
+    value: object,
+    *,
+    section: str,
+) -> list[dict[str, str]]:
     """Normalize common interface field declarations for table rendering."""
 
     rows: list[dict[str, str]] = []
@@ -715,7 +732,9 @@ def _interface_field_rows(value: object) -> list[dict[str, str]]:
         *,
         field_type: object = None,
         required: object = None,
+        max_length: object = None,
         description: object = None,
+        example: object = None,
     ) -> None:
         rows.append(
             {
@@ -725,9 +744,17 @@ def _interface_field_rows(value: object) -> list[dict[str, str]]:
                     fallback="未声明",
                 ),
                 "required": _interface_required_text(required),
+                "maxLength": _interface_scalar(
+                    max_length,
+                    fallback="—",
+                ),
                 "description": _interface_scalar(
                     description,
                     fallback="未声明",
+                ),
+                "example": _interface_scalar(
+                    example,
+                    fallback="—",
                 ),
             }
         )
@@ -767,9 +794,17 @@ def _interface_field_rows(value: object) -> list[dict[str, str]]:
                 if isinstance(nested_required, bool)
                 else required_override
             ),
+            max_length=specification.get(
+                "maxLength",
+                specification.get("max_length"),
+            ),
             description=specification.get(
                 "description",
                 specification.get("summary"),
+            ),
+            example=specification.get(
+                "example",
+                specification.get("exampleValue"),
             ),
         )
         if nested is not None:
@@ -840,9 +875,73 @@ def _interface_field_rows(value: object) -> list[dict[str, str]]:
             description=collection,
         )
 
+    def first_declared(
+        specification: dict[str, Any],
+        keys: tuple[str, ...],
+    ) -> object:
+        for key in keys:
+            if key in specification:
+                return specification[key]
+        return None
+
+    def parse_request_locations(specification: dict[str, Any]) -> bool:
+        if not any(
+            key in specification
+            for key in INTERFACE_REQUEST_LOCATION_PREFIXES
+        ):
+            return False
+        for key, prefix in INTERFACE_REQUEST_LOCATION_PREFIXES.items():
+            if key not in specification:
+                continue
+            collection = specification[key]
+            if collection is None or collection == [] or collection == {}:
+                continue
+            if key == "body" and isinstance(collection, dict):
+                parse_named("body", collection, prefix="")
+            else:
+                parse_collection(collection, prefix=prefix)
+        return True
+
+    def normalize_response_aliases(
+        specification: dict[str, Any],
+    ) -> dict[str, Any]:
+        uses_controller_alias = any(
+            key in specification
+            for key in (
+                "controllerReturnType",
+                "controllerReturnFields",
+            )
+        )
+        if not uses_controller_alias:
+            return specification
+        normalized: dict[str, Any] = {}
+        response_type = first_declared(
+            specification,
+            ("type", "controllerReturnType"),
+        )
+        response_fields = first_declared(
+            specification,
+            ("fields", "properties", "controllerReturnFields"),
+        )
+        response_description = first_declared(
+            specification,
+            ("description", "summary"),
+        )
+        if response_type is not None:
+            normalized["type"] = response_type
+        if response_fields is not None:
+            normalized["fields"] = response_fields
+        if response_description is not None:
+            normalized["description"] = response_description
+        return normalized
+
     if isinstance(value, list):
         parse_collection(value, prefix="")
     elif isinstance(value, dict):
+        if section == "request" and parse_request_locations(value):
+            return rows
+        if section == "response":
+            value = normalize_response_aliases(value)
         nested = value.get("properties", value.get("fields"))
         looks_like_schema = nested is not None or any(
             key in value
@@ -904,10 +1003,67 @@ def _interface_change_table(
     before: object,
     after: object,
     *,
+    section: str,
     include_required: bool = True,
+    include_max_length: bool = False,
+    include_example: bool = False,
+    path_group: str | None = None,
+    strip_path_group: bool = False,
+    omit_container_rows: bool = False,
+    render_empty: bool = True,
 ) -> list[str]:
-    before_rows = _interface_field_rows(before) if before is not None else []
-    after_rows = _interface_field_rows(after) if after is not None else []
+    before_rows = (
+        _interface_field_rows(before, section=section)
+        if before is not None
+        else []
+    )
+    after_rows = (
+        _interface_field_rows(after, section=section)
+        if after is not None
+        else []
+    )
+    location_prefixes = tuple(
+        prefix
+        for prefix in INTERFACE_REQUEST_LOCATION_PREFIXES.values()
+        if prefix
+    )
+
+    def in_path_group(path: str) -> bool:
+        if path_group is None:
+            return True
+        if path_group == "":
+            return not any(
+                path == prefix or path.startswith(f"{prefix}.")
+                for prefix in location_prefixes
+            )
+        return path == path_group or path.startswith(f"{path_group}.")
+
+    before_rows = [
+        row for row in before_rows if in_path_group(row["path"])
+    ]
+    after_rows = [
+        row for row in after_rows if in_path_group(row["path"])
+    ]
+    if omit_container_rows:
+        all_paths = {
+            row["path"] for row in [*before_rows, *after_rows]
+        }
+
+        def is_container(path: str) -> bool:
+            return len(all_paths) > 1 and (
+                path == "（整体）"
+                or (
+                    path_group not in (None, "")
+                    and path == path_group
+                )
+            )
+
+        before_rows = [
+            row for row in before_rows if not is_container(row["path"])
+        ]
+        after_rows = [
+            row for row in after_rows if not is_container(row["path"])
+        ]
     before_by_path = {row["path"]: row for row in before_rows}
     after_by_path = {row["path"]: row for row in after_rows}
     paths = [
@@ -922,23 +1078,34 @@ def _interface_change_table(
     for path in paths:
         before_row = before_by_path.get(path)
         after_row = after_by_path.get(path)
+        comparison_fields = ["type"]
+        if include_required:
+            comparison_fields.append("required")
+        if include_max_length:
+            comparison_fields.append("maxLength")
+        comparison_fields.append("description")
+        if include_example:
+            comparison_fields.append("example")
         if before_row is None:
             change = "新增"
         elif after_row is None:
             change = "删除"
         elif any(
             before_row[field] != after_row[field]
-            for field in (
-                ("type", "required", "description")
-                if include_required
-                else ("type", "description")
-            )
+            for field in comparison_fields
         ):
             change = "修改"
         else:
             change = "未变"
+        rendered_path = path
+        if strip_path_group and path_group:
+            rendered_path = (
+                "（整体）"
+                if path == path_group
+                else path.removeprefix(f"{path_group}.")
+            )
         values = [
-            path,
+            rendered_path,
             change,
             _interface_transition(before_row, after_row, "type"),
         ]
@@ -950,6 +1117,14 @@ def _interface_change_table(
                     "required",
                 )
             )
+        if include_max_length:
+            values.append(
+                _interface_transition(
+                    before_row,
+                    after_row,
+                    "maxLength",
+                )
+            )
         values.append(
             _interface_transition(
                 before_row,
@@ -957,6 +1132,14 @@ def _interface_change_table(
                 "description",
             )
         )
+        if include_example:
+            values.append(
+                _interface_transition(
+                    before_row,
+                    after_row,
+                    "example",
+                )
+            )
         if before_row is not None and after_row is None:
             values = [
                 value if index == 1 else f"~~{value}~~"
@@ -965,21 +1148,32 @@ def _interface_change_table(
         rendered_rows.append(
             _table_row(values)
         )
+    if not rendered_rows and not render_empty:
+        return []
+    columns = [
+        "字段路径",
+        "变更",
+        "类型（修改前 → 修改后）",
+    ]
     if include_required:
-        header = (
-            "| 字段路径 | 变更 | 类型（修改前 → 修改后） | "
-            "必填（修改前 → 修改后） | 说明（修改前 → 修改后） |"
-        )
-        separator = "|---|---|---|---|---|"
-        empty_row = "| （整体） | 未声明 | 未声明 | 未声明 | 未声明 |"
-    else:
-        header = (
-            "| 字段路径 | 变更 | 类型（修改前 → 修改后） | "
-            "说明（修改前 → 修改后） |"
-        )
-        separator = "|---|---|---|---|"
-        empty_row = "| （整体） | 未声明 | 未声明 | 未声明 |"
-    return [header, separator, *(rendered_rows or [empty_row])]
+        columns.append("必填（修改前 → 修改后）")
+    if include_max_length:
+        columns.append("最大长度（修改前 → 修改后）")
+    columns.append("说明（修改前 → 修改后）")
+    if include_example:
+        columns.append("示例值（修改前 → 修改后）")
+    header = _table_row(columns)
+    separator = f"|{'---|' * len(columns)}"
+    empty_values = [
+        "（无）",
+        "无入参" if section == "request" else "无出参",
+        *(["—"] * (len(columns) - 2)),
+    ]
+    return [
+        header,
+        separator,
+        *(rendered_rows or [_table_row(empty_values)]),
+    ]
 
 
 def render_workspace_overview(
@@ -1532,6 +1726,12 @@ def _delivery_projection_status(
             f"{_markdown_text(delivery.get('assuranceProfile', 'STANDARD'))}"
         ),
     ]
+    if delivery.get("requirementKey") is not None:
+        lines.insert(
+            1,
+            "- 外部需求标识："
+            f"{_markdown_text(delivery['requirementKey'])}",
+        )
     if delivery.get("assuranceRationale") is not None:
         lines.append(
             "- 保障判断："
@@ -2644,6 +2844,173 @@ def _interface_document_filename(
     return f"{position:03d}-{slug or 'interface'}.md"
 
 
+def _interface_schema_type(value: object) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    for key in ("type", "controllerReturnType"):
+        candidate = value.get(key)
+        if isinstance(candidate, (str, int, float)) and str(candidate).strip():
+            return str(candidate).strip()
+    return None
+
+
+def _dubbo_method_signature(snapshot: dict[str, Any]) -> str:
+    explicit = snapshot.get("signature")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+    method = _interface_scalar(
+        snapshot.get("method"),
+        fallback="未声明方法",
+    )
+    response_type = _interface_schema_type(snapshot.get("response"))
+    request = snapshot.get("request")
+    parameters: list[str] = []
+    if isinstance(request, dict):
+        request_type = _interface_schema_type(request)
+        request_name = request.get("name")
+        if request_type is not None:
+            parameters.append(
+                " ".join(
+                    part
+                    for part in (
+                        request_type,
+                        (
+                            str(request_name).strip()
+                            if isinstance(request_name, str)
+                            and request_name.strip()
+                            else ""
+                        ),
+                    )
+                    if part
+                )
+            )
+    elif isinstance(request, list):
+        for parameter in request:
+            if not isinstance(parameter, dict):
+                continue
+            parameter_type = _interface_scalar(
+                parameter.get("type"),
+                fallback="Object",
+            )
+            parameter_name = _interface_scalar(
+                parameter.get("name"),
+                fallback="arg",
+            )
+            parameters.append(f"{parameter_type} {parameter_name}")
+    return (
+        f"{response_type or '未声明返回类型'} {method}"
+        f"({', '.join(parameters)})"
+    )
+
+
+def _interface_protocol_metadata(
+    values: dict[str, Any],
+) -> list[str]:
+    snapshot = values["after"] or values["before"]
+    if snapshot is None:
+        return []
+    protocol = values["protocol"]
+    if protocol == "HTTP":
+        lines = [
+            (
+                "- 方法："
+                f"{_markdown_text(_interface_scalar(snapshot.get('method'), fallback='未声明'))}"
+            ),
+            (
+                "- 路径："
+                f"{_markdown_text(_interface_scalar(snapshot.get('path'), fallback='未声明'))}"
+            ),
+        ]
+        content_type = snapshot.get("contentType")
+        if isinstance(content_type, str) and content_type.strip():
+            lines.append(f"- Content-Type：{_markdown_text(content_type)}")
+        response_type = _interface_schema_type(snapshot.get("response"))
+        if response_type is not None:
+            lines.append(f"- 返回类型：{_markdown_text(response_type)}")
+        return lines
+    if protocol == "DUBBO":
+        return [
+            (
+                "- 接口："
+                f"{_markdown_text(_interface_scalar(snapshot.get('service'), fallback='未声明'))}"
+            ),
+            f"- 方法：{_markdown_text(_dubbo_method_signature(snapshot))}",
+        ]
+    return []
+
+
+def _interface_table_section(
+    heading: str,
+    table: list[str],
+) -> str:
+    return "\n".join([f"### {heading}", "", *table])
+
+
+def _http_request_contract(
+    before: object,
+    after: object,
+) -> str:
+    sections: list[str] = []
+    for path_group, heading in (
+        ("path", "Path 参数"),
+        ("query", "Query 参数"),
+        ("header", "请求头"),
+        ("body", "请求体"),
+        ("business", "业务参数"),
+        ("context", "上下文参数"),
+        ("", "请求参数"),
+    ):
+        table = _interface_change_table(
+            before,
+            after,
+            section="request",
+            include_example=True,
+            path_group=path_group,
+            strip_path_group=bool(path_group),
+            omit_container_rows=True,
+            render_empty=False,
+        )
+        if table:
+            sections.append(_interface_table_section(heading, table))
+    return "\n\n".join(sections) if sections else "无"
+
+
+def _http_response_contract(
+    before: object,
+    after: object,
+) -> str:
+    table = _interface_change_table(
+        before,
+        after,
+        section="response",
+        include_required=False,
+        include_example=True,
+        omit_container_rows=True,
+        render_empty=False,
+    )
+    return _interface_table_section("响应参数", table) if table else "无"
+
+
+def _dubbo_contract_table(
+    before: object,
+    after: object,
+    *,
+    section: str,
+    heading: str,
+) -> str:
+    table = _interface_change_table(
+        before,
+        after,
+        section=section,
+        include_required=True,
+        include_max_length=True,
+        include_example=True,
+        omit_container_rows=True,
+        render_empty=False,
+    )
+    return _interface_table_section(heading, table) if table else "无"
+
+
 def _render_task_interface_detail(
     definition: dict[str, Any],
     values: dict[str, Any],
@@ -2662,33 +3029,65 @@ def _render_task_interface_detail(
                 f"{_markdown_text(values['beforeIdentifier'])} → "
                 f"{_markdown_text(values['afterIdentifier'])}"
             ),
+            *_interface_protocol_metadata(values),
         ]
     )
+    before_request = (
+        before.get("request", "未声明") if before is not None else None
+    )
+    after_request = (
+        after.get("request", "未声明") if after is not None else None
+    )
+    before_response = (
+        before.get("response", "未声明") if before is not None else None
+    )
+    after_response = (
+        after.get("response", "未声明") if after is not None else None
+    )
+    if values["protocol"] == "HTTP":
+        request_table = _http_request_contract(
+            before_request,
+            after_request,
+        )
+        response_table = _http_response_contract(
+            before_response,
+            after_response,
+        )
+    elif values["protocol"] == "DUBBO":
+        request_table = _dubbo_contract_table(
+            before_request,
+            after_request,
+            section="request",
+            heading="调用参数",
+        )
+        response_table = _dubbo_contract_table(
+            before_response,
+            after_response,
+            section="response",
+            heading="返回结果",
+        )
+    else:
+        request_table = "\n".join(
+            _interface_change_table(
+                before_request,
+                after_request,
+                section="request",
+            )
+        )
+        response_table = "\n".join(
+            _interface_change_table(
+                before_response,
+                after_response,
+                section="response",
+                include_required=False,
+            )
+        )
     return INTERFACE_DETAIL_PROJECTION_TEMPLATE.substitute(
         protocol=_markdown_text(values["protocol"]),
         name=_markdown_text(values["name"]),
         interface_metadata=metadata,
-        request_table="\n".join(
-            _interface_change_table(
-                before.get("request", "未声明")
-                if before is not None
-                else None,
-                after.get("request", "未声明")
-                if after is not None
-                else None,
-            )
-        ),
-        response_table="\n".join(
-            _interface_change_table(
-                before.get("response", "未声明")
-                if before is not None
-                else None,
-                after.get("response", "未声明")
-                if after is not None
-                else None,
-                include_required=False,
-            )
-        ),
+        request_table=request_table,
+        response_table=response_table,
     )
 
 

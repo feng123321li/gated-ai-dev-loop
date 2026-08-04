@@ -34,6 +34,9 @@ PLACEHOLDER = re.compile(
 CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 GIT_COMMIT = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 GIT_REF_FORBIDDEN = re.compile(r"[\x00-\x20\x7f~^:?*[\]\\]")
+REQUIREMENT_KEY = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,127}$"
+)
 
 
 def _exact_keys(value: object, expected: set[str]) -> bool:
@@ -377,6 +380,21 @@ def validate_work_item_definition(
     return normalized
 
 
+def _requirement_key(value: object) -> str:
+    field = "hierarchy.delivery.requirementKey"
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or not REQUIREMENT_KEY.fullmatch(value.strip())
+    ):
+        fail(
+            "DELIVERY_REQUIREMENT_KEY_INVALID",
+            "requirementKey must be a stable external requirement key",
+            field=field,
+        )
+    return value.strip().upper()
+
+
 def work_item_dependencies(definition: dict[str, Any]) -> list[str]:
     return (
         definition["execution"]["dependsOn"]
@@ -390,6 +408,7 @@ def _delivery_definition(value: object) -> dict[str, Any]:
     expected = required | {
         "assuranceProfile",
         "assuranceRationale",
+        "requirementKey",
         "gitBinding",
         "projectScopes",
     }
@@ -451,6 +470,10 @@ def _delivery_definition(value: object) -> dict[str, Any]:
         normalized["assuranceProfile"] = assurance_profile
     if assurance_rationale is not None:
         normalized["assuranceRationale"] = assurance_rationale
+    if "requirementKey" in value:
+        normalized["requirementKey"] = _requirement_key(
+            value["requirementKey"]
+        )
     if "gitBinding" in value:
         normalized["gitBinding"] = _git_binding(
             value["gitBinding"],

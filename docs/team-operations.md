@@ -64,7 +64,8 @@ Codex 冒烟不能使用 `--ephemeral`：`SubagentStart` attestation 必须从�
 1. 记录当前 `codex plugin list --json` 或 `claude plugin list --json` 输出中的版本。
 2. 对 0.31 及更早版本的 manual Graph run，先在旧版本完成或取消。0.32 不再提供 manual Graph claim；手动开发只生成冻结内容包。
 3. 自动 schema v3 Graph 可在新会话通过 `workspace_status → graph_frontier` 恢复。升级前仍建议让正在写结果的 Loop 完成，避免恰好跨越 Hook 重载窗口。
-4. 不删除项目中的 `.layered-delivery`，也不直接修改 `scheduler.db`。
+4. 已由早期 0.33.0 生成、但缺少根 `scheduler.db`/`overview.md` 的手动内容包不会从 Markdown 反向迁移。升级后应在仍持有原 hierarchy 与双 fingerprint 的需求会话中重新调用 `create_manual_handoff` 完成 SQLite 登记；不要手工创建数据库或拼接总览。
+5. 不删除项目中的 `.layered-delivery`，也不直接修改 `scheduler.db`。
 
 ### Codex 升级
 

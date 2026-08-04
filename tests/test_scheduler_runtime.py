@@ -406,7 +406,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             handoff["nextAction"],
             "OPEN_FROZEN_BUNDLE_IN_ANY_CLI",
         )
-        self.assertFalse(handoff["controlStateCreated"])
+        self.assertTrue(handoff["controlStateCreated"])
         self.assertFalse(handoff["graphRunCreated"])
         self.assertFalse(handoff["workspaceCreated"])
         self.assertEqual(
@@ -442,6 +442,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(
             set(handoff["humanArtifacts"]),
             {
+                "workspaceOverview",
                 "overview",
                 "baseline",
                 "progress",
@@ -451,11 +452,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "workItems",
             },
         )
-        self.assertNotIn(
-            "workspaceOverview",
-            handoff["humanArtifacts"],
-        )
         for artifact_name in (
+            "workspaceOverview",
             "overview",
             "baseline",
             "progress",
@@ -539,13 +537,109 @@ class SchedulerRuntimeTests(unittest.TestCase):
         active = workspace_status(root=self.root)
         self.assertEqual(active["rootId"], "d-first")
         self.assertEqual(active["status"], "ACTIVE")
-        with self.assertRaises(GatedLoopError) as caught:
-            SchedulerRepository(self.root).hierarchy("d-second")
+        stored_manual = SchedulerRepository(self.root).hierarchy(
+            "d-second"
+        )
+        self.assertEqual(stored_manual["status"], "HANDOFF_READY")
         self.assertEqual(
-            caught.exception.code,
-            "SCHEDULER_HIERARCHY_MISSING",
+            stored_manual["hierarchyFingerprint"],
+            preview["hierarchyFingerprint"],
+        )
+        connection = sqlite3.connect(
+            Path(self.root, ".layered-delivery", "scheduler.db")
+        )
+        try:
+            run_count = connection.execute(
+                "SELECT COUNT(*) FROM runs WHERE root_id = ?",
+                ("d-second",),
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        self.assertEqual(run_count, 0)
+        workspace_overview = Path(
+            self.root,
+            ".layered-delivery",
+            "overview.md",
+        ).read_text(encoding="utf-8")
+        self.assertIn("交付数量：2", workspace_overview)
+        self.assertIn("d-first", workspace_overview)
+        self.assertIn("d-second", workspace_overview)
+        self.assertIn(
+            "需求已冻结（手动开发，调度未启动）",
+            workspace_overview,
         )
         self.assertFalse(Path(self.root, "worktrees").exists())
+
+    def test_manual_progress_survives_controller_projection_refresh(
+        self,
+    ) -> None:
+        hierarchy = delivery_task_hierarchy("d-manual", "t-manual")
+        preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        create_manual_handoff(
+            root=self.root,
+            hierarchy=hierarchy,
+            expected_hierarchy_fingerprint=(
+                preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=preview["graphFingerprint"],
+            authorized_project_ids=[],
+            confirmed=True,
+            confirmed_by="human",
+            now=at(1),
+        )
+        delivery_root = Path(
+            self.root,
+            ".layered-delivery",
+            "d-manual",
+        )
+        progress = Path(delivery_root, "progress.md")
+        acceptance = Path(delivery_root, "acceptance.md")
+        task_progress = Path(
+            delivery_root,
+            "work-items",
+            "t-manual",
+            "progress.md",
+        )
+        task_acceptance = task_progress.with_name("acceptance.md")
+        baseline = Path(delivery_root, "baseline.md")
+        progress.write_text("manual delivery progress", encoding="utf-8")
+        acceptance.write_text(
+            "manual delivery acceptance",
+            encoding="utf-8",
+        )
+        task_progress.write_text("manual task progress", encoding="utf-8")
+        task_acceptance.write_text(
+            "manual task acceptance",
+            encoding="utf-8",
+        )
+        baseline.write_text("tampered baseline", encoding="utf-8")
+
+        SchedulerRepository(self.root).write_projections("d-manual")
+
+        self.assertEqual(
+            progress.read_text(encoding="utf-8"),
+            "manual delivery progress",
+        )
+        self.assertEqual(
+            acceptance.read_text(encoding="utf-8"),
+            "manual delivery acceptance",
+        )
+        self.assertEqual(
+            task_progress.read_text(encoding="utf-8"),
+            "manual task progress",
+        )
+        self.assertEqual(
+            task_acceptance.read_text(encoding="utf-8"),
+            "manual task acceptance",
+        )
+        self.assertNotEqual(
+            baseline.read_text(encoding="utf-8"),
+            "tampered baseline",
+        )
 
     def test_manual_handoff_shares_directory_with_later_projections(
         self,
@@ -611,6 +705,72 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertFalse(
             Path(self.root, ".layered-delivery", "handoffs").exists()
         )
+
+    def test_concurrent_manual_handoffs_share_database_and_root_overview(
+        self,
+    ) -> None:
+        errors: list[BaseException] = []
+        results: dict[str, dict[str, object]] = {}
+        result_lock = Lock()
+
+        def create_handoff(index: int) -> None:
+            try:
+                root_id = f"d-manual-{index}"
+                hierarchy = delivery_task_hierarchy(
+                    root_id,
+                    f"t-manual-{index}",
+                )
+                preview = preview_hierarchy(
+                    root=self.root,
+                    hierarchy=hierarchy,
+                    now=at(index),
+                )
+                handoff = create_manual_handoff(
+                    root=self.root,
+                    hierarchy=hierarchy,
+                    expected_hierarchy_fingerprint=(
+                        preview["hierarchyFingerprint"]
+                    ),
+                    expected_graph_fingerprint=(
+                        preview["graphFingerprint"]
+                    ),
+                    authorized_project_ids=[],
+                    confirmed=True,
+                    confirmed_by="human",
+                    now=at(index + 10),
+                )
+                with result_lock:
+                    results[root_id] = handoff
+            except BaseException as error:
+                with result_lock:
+                    errors.append(error)
+
+        threads = [
+            Thread(target=create_handoff, args=(index,))
+            for index in range(4)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 4)
+        control_root = Path(self.root, ".layered-delivery")
+        self.assertTrue(Path(control_root, "scheduler.db").is_file())
+        workspace_overview = Path(
+            control_root,
+            "overview.md",
+        ).read_text(encoding="utf-8")
+        self.assertIn("交付数量：4", workspace_overview)
+        for index in range(4):
+            root_id = f"d-manual-{index}"
+            with self.subTest(root_id=root_id):
+                self.assertIn(root_id, workspace_overview)
+                self.assertTrue(results[root_id]["controlStateCreated"])
+                stored = SchedulerRepository(self.root).hierarchy(root_id)
+                self.assertEqual(stored["status"], "HANDOFF_READY")
 
     def test_manual_and_automatic_delivery_trees_share_structure(
         self,

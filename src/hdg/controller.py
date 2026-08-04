@@ -129,6 +129,7 @@ class LayeredDeliveryController:
             repository.assert_delivery_workspace(
                 root_id,
                 workspace_root,
+                allow_unbound_manual=(name == "workspace_status"),
             )
             if name not in {
                 "workspace_status",

@@ -47,7 +47,7 @@ Delivery
 - 用 claim、heartbeat、lease、重试和容量断路器处理长时间运行与失联。
 - 支持一个 Delivery 覆盖多个本地 Git 项目，并冻结各项目的基线与权限上限。
 - 用不可变 Delivery Revision 管理验收前的需求调整和安全结果携带。
-- 以 SQLite 和哈希事件链保存机器状态，同时生成可读的中文进度与验收投影。
+- 以 SQLite 保存需求与调度状态，Graph 运行后再用哈希事件链记录历史，同时生成可读的中文进度与验收投影。
 - 后台 Loop 在代码检查、测试、问题修复和复审等阶段使用用户当前语言上报结构化进度；主 Agent 以表格持续展示 Agent、原生模型与宿主观测到的实际模型、测试、心跳、剩余租约及失联预警，原始事件仅用于诊断。
 
 ## 能力边界
@@ -70,7 +70,7 @@ Plugin 激活后，在 Codex 或 Claude Code 的新会话中提出需求，并�
 2. 与用户沟通需求，检查真实代码、预计或已有 diff 和影响范围；无法可靠判断时使用 STANDARD。然后调用 `preview_hierarchy` 只读预览 Delivery Graph。
 3. 展示完整计划，以及“自动执行 / 手动开发”两个选项；选择前不混入模型建议。
 4. 用户选择自动执行后，才创建或选择实际开发工作区，调用 `prepare_hierarchy` 与 `freeze_hierarchy`，并展示当前宿主 Agent 的原生模型分档；路由展示不增加第二次确认。
-5. 用户选择手动开发后，调用 `create_manual_handoff`，在 `.layered-delivery/<delivery-id>/` 生成与自动开发同结构的 overview、baseline、progress、acceptance、revisions、work-items，以及自包含 `handoff-<fingerprint>.md`。需求内容由双 fingerprint 冻结；不启动 Graph，不指定 Agent、模型或接收会话，也不创建任务或 worktree。用户可切换任意 CLI 直接按该目录开发。
+5. 用户选择手动开发后，调用 `create_manual_handoff`，生成共享 `.layered-delivery/scheduler.db`、根 `overview.md`，把需求登记为 `HANDOFF_READY`，并在 `<delivery-id>/` 生成与自动开发同结构的标准投影和自包含 handoff。需求内容由双 fingerprint 冻结；不创建 Graph Run、workspace 绑定、任务或 worktree，也不选择 Agent/模型。用户可切换任意 CLI 直接开发。
 6. 自动模式对正式 Ready 批次展示中文模型表和默认 30 秒路由调整窗口；用户可直接改为其他可用原生模型，不再回答确认问题，超时后自动预留并派遣。
 7. 自动模式持续消费 frontier，并发调度当前可运行的独立 WorkLoop。
 8. STANDARD 在所有 Review 完成后展示验收报告；LIGHT 在唯一 TASK 定向验证完成后展示改动与影响依据。两者都等待用户最终确认。
@@ -80,9 +80,9 @@ Plugin 激活后，在 Codex 或 Claude Code 的新会话中提出需求，并�
 | 模式 | 选择后的行为 |
 |---|---|
 | 自动执行 | 开始实际开发：按需创建 worktree，准备并冻结 Graph，再由当前宿主派遣可证明为 `HOST_NATIVE` 的 Agent |
-| 手动开发 | 冻结与自动路径同结构的需求内容包并附带 schema v3 交接文件；不启动 Graph、不选 Agent、不建任务/worktree，可切换任意 CLI 直接开发并记录 progress/acceptance |
+| 手动开发 | 在 SQLite 登记 `HANDOFF_READY`、刷新根总览并生成同结构内容包；不创建 Graph Run、workspace 绑定、任务或 worktree，可切换任意 CLI 直接开发并记录 progress/acceptance |
 
-新业务目标默认创建新 Delivery。自动与手动开发使用同一个稳定的 `.layered-delivery/<delivery-id>/` 和同结构投影，不再创建共享 `handoffs` 目录。手动响应的 `requirementSnapshotStatus=FROZEN` 只表示需求内容已冻结；目录仍不代表 Graph 已 prepare、freeze 或创建 Run。一个工作区最多绑定一个未结束 Delivery；并行需求真正开始开发时使用独立对话工作区，Git 项目优先使用 linked worktree。只读预览或生成手动内容包不需要提前创建 worktree。只有用户明确要求继续同一需求，或当前 Loop 返回 `REPLAN_REQUIRED`，才在原 `delivery.id` 上创建下一 Revision。
+新业务目标默认创建新 Delivery。自动与手动开发使用同一个稳定的 `.layered-delivery/<delivery-id>/` 和同结构投影，不再创建共享 `handoffs` 目录。手动响应的 `controlStateCreated=true` 表示 SQLite 与根总览已生成，`requirementSnapshotStatus=FROZEN` 表示需求内容已冻结；它仍不代表 Graph 已 prepare、freeze 或创建 Run。一个工作区最多绑定一个未结束 Delivery；并行需求真正开始开发时使用独立对话工作区，Git 项目优先使用 linked worktree。只读预览或生成手动内容包不需要提前创建 worktree。只有用户明确要求继续同一需求，或当前 Loop 返回 `REPLAN_REQUIRED`，才在原 `delivery.id` 上创建下一 Revision。
 
 ## Agent、模型与并发
 
@@ -130,7 +130,7 @@ Controller 不用 Python 做本地语义判断。某个节点缺少 Agent 分析
 
 ## 状态、隔离与恢复
 
-- `.layered-delivery/scheduler.db` 和事件链是唯一机器权威；Markdown 仅供人类查看。
+- `.layered-delivery/scheduler.db` 是需求与调度状态的机器权威；Graph 启动后事件链记录运行历史，Markdown 仅供人类查看。
 - Agent 只能通过 Plugin MCP 读取和改变调度状态，不能直接修改数据库或投影。
 - linked worktree 共享同一控制数据库，但使用独立 `workspaceKey` 隔离 Delivery。
 - 多项目 Delivery 的可写仓库使用同名 feature 分支，并分别冻结自己的基线提交。

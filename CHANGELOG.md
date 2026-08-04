@@ -4,6 +4,12 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 未发布
+
+- 手动开发冻结快照现在必须登记到共享 `scheduler.db`，状态为 `HANDOFF_READY`，并同步生成根级 `overview.md`；多个窗口同时创建手动需求时通过 scheduler lock 串行提交并汇总到同一总览。
+- 手动路径返回 `controlStateCreated=true`，但仍保持 `graphRunCreated=false`、`workspaceCreated=false`，不创建 `runs`、事件链、workspace 绑定、Agent、任务或 worktree。
+- SQLite 成为自动与手动需求状态的统一机器权威；控制器重建手动投影时保留接收 CLI 写入的 progress/acceptance，同时恢复被冻结的 handoff、overview、baseline、revisions 与接口输入。
+
 ## 0.33.0 — 2026-08-04
 
 发布提交：`4104083`

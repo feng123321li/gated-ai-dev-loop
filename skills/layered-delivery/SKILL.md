@@ -18,9 +18,9 @@ description: "规划、冻结、调度或恢复多项目、多模块交付 Graph
 ## 不可违反的边界
 
 - 只调用 Plugin 注册的 MCP 工具。MCP 不可用时报告 `PLUGIN_MCP_UNAVAILABLE`，停止所有治理写入。
-- 只从 MCP 响应读取 Graph 状态。不得用 Shell、Python 或其他连接读写 `scheduler.db`，也不得自行创建、修改或修补控制器拥有的 Graph 投影。唯一例外是 `controlStateCreated=false` 的手动冻结内容包：接收 CLI 可记录 progress/acceptance，但 handoff、overview、baseline、revisions、接口契约和双 fingerprint 保持只读。
+- 只从 MCP 响应读取 Graph 状态。不得用 Shell、Python 或其他连接读写 `scheduler.db`，也不得自行创建、修改或修补控制器拥有的 Graph 投影。手动冻结内容包也登记为 SQLite `HANDOFF_READY`，但不创建 Graph Run；接收 CLI 可记录 progress/acceptance，控制器刷新时保留这些人工记录，handoff、overview、baseline、revisions、接口契约和双 fingerprint 保持只读。
 - 只使用 schema v3；准备前调用 `hierarchy_contract` 获取当前精确契约，不从源码、旧会话或示例猜参数。
-- SQLite 与事件链是机器权威。Markdown 投影只用于沟通、进度和验收。
+- SQLite 是需求与调度状态的机器权威；Graph 启动后由事件链记录运行历史。Markdown 投影只用于沟通、进度和验收。
 - 一个对话工作区最多绑定一个未结束 Delivery。新业务目标默认创建新 Delivery；不得因为工作区已有旧 Delivery 就把新需求写成旧 Delivery 的 Revision。
 - 一个需求只使用一个稳定的 `.layered-delivery/<delivery-id>/` 目录。自动与手动开发均生成 overview、baseline、progress、acceptance、revisions 和同结构 work-items；手动开发额外包含自包含 handoff 文件。不得创建共享 `.layered-delivery/handoffs/`。手动包的需求内容已由双指纹冻结，但它不是 Graph `FROZEN`：未 prepare、未创建 Graph Run。
 - 并行 Delivery 真正开始开发时使用独立宿主工作区；Git 场景优先使用独立 linked worktree。预览和手动内容冻结阶段不创建 worktree。不要复制调度数据库或启动第二套控制面。
@@ -35,6 +35,7 @@ description: "规划、冻结、调度或恢复多项目、多模块交付 Graph
 | 状态 | 下一步 |
 |---|---|
 | `ABSENT` | 用户要求新交付时读取[规划说明](references/planning-quickstart.md)；只读问答不创建状态 |
+| `HANDOFF_READY` | 报告手动需求快照已登记、Graph Run 未创建；按 handoff 直接开发，不调用 frontier |
 | `PREPARED` | 读取规划说明并续接已有方案；需求未变时不要重复 prepare |
 | `ACTIVE` / `BLOCKED` / `PAUSED` | 读取[执行说明](references/execution-quickstart.md)，从 `graph_frontier` 恢复 |
 | `COMPLETED` | 报告终态；新目标使用新 Delivery |
@@ -53,7 +54,7 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 5. 用精确 `resourceClaims` 表达跨 Delivery 排他资源；worktree 不能替代数据库、端口或环境锁。
 6. 用户提供的 Skill 只登记为共享 `root.skillHints`，由各 Loop 根据真实上下文决定是否触发。
 7. 先调用 `preview_hierarchy`，展示保障档、判断依据和完整计划，并且只提供“自动执行 / 手动开发”两个选项；同时允许用户直接提出修改意见。预览不创建控制状态或工作区，也不为保障档增加第二次确认。
-8. 用户选择自动执行后，才在实际开发工作区调用 `prepare_hierarchy`，以返回的 fingerprint、Revision 和精确项目授权调用 `freeze_hierarchy`；不要追加第二次通用 Yes/No。用户选择手动开发后，直接以预览 fingerprint、原 hierarchy 和精确项目授权调用 `create_manual_handoff`，冻结同一需求内容并生成 `.layered-delivery/<delivery-id>/` 完整开发包；不 prepare Graph、不创建 Graph Run。返回 `requirementSnapshotStatus=FROZEN` 只表示内容快照冻结，接收方可切换任意 CLI 直接开发。
+8. 用户选择自动执行后，才在实际开发工作区调用 `prepare_hierarchy`，以返回的 fingerprint、Revision 和精确项目授权调用 `freeze_hierarchy`；不要追加第二次通用 Yes/No。用户选择手动开发后，直接以预览 fingerprint、原 hierarchy 和精确项目授权调用 `create_manual_handoff`，冻结同一需求内容并生成 `.layered-delivery/<delivery-id>/` 完整开发包，同时登记 SQLite `HANDOFF_READY` 并刷新工作区总览；不 prepare Graph、不创建 Graph Run 或工作区绑定。返回 `requirementSnapshotStatus=FROZEN` 只表示内容快照冻结，接收方可切换任意 CLI 直接开发。
 
 需求连续性规则：
 

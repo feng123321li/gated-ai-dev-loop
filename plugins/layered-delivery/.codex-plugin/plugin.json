@@ -1,6 +1,6 @@
 {
   "name": "layered-delivery",
-  "version": "0.33.1",
+  "version": "0.33.2",
   "description": "预览和调度递归 GROUP/TASK、原生模型分档、任意 CLI 可接管的冻结开发包与中文进度",
   "author": {
     "name": "layered-delivery contributors",

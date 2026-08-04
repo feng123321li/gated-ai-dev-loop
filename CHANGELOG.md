@@ -4,7 +4,9 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
-## 未发布
+## 0.33.2 — 2026-08-04
+
+发布提交：`063198b`
 
 - 修复同一工单可通过更换 `delivery.id` 重复生成冻结目录的卡控缺口：新增可选 `delivery.requirementKey`，并从 ID/标题兜底识别常见工单号，在 preview 与最终事务写入两层拒绝重复映射；同一 Delivery 的 requirementKey 在 Revision 间保持不可变。
 - `HANDOFF_READY` 手动需求现在可在原目录创建不可变 Revision：调用方显式提交当前 Revision、`USER_EXPLICIT_SAME_DELIVERY` 和修订原因，旧 Revision 标记为 `SUPERSEDED`，新 handoff、baseline 与 work-items 继续使用原 `delivery.id`，不再被迫换 ID。
@@ -12,6 +14,7 @@
 - HTTP 详情按 Torna 的 Path、Query、请求头、请求体和响应参数分区，Dubbo 详情按接口、方法、调用参数和返回结果分区；支持字段必填、最大长度、说明和示例值，并可由类型与参数名生成 Dubbo 方法签名。
 - 冻结 baseline 的 after 明确成为实际开发接口和后续 Torna 发布的唯一事实来源，方法、路径或签名以及字段层级和属性必须一致，不再从另一套输入生成不同接口文档。
 - 投影模板升级到版本 13；新增无参 VO、路径/查询参数位置展开、HTTP 包装忽略和 Dubbo 协议版式回归，实时 `hierarchy_contract` 同步公开支持的字段形状、别名和包装忽略策略。
+- Python 全量 256 项测试、编译检查、0.33.2 发布候选校验、Skill/Plugin 校验、host smoke 和 `git diff --check` 通过。
 
 ## 0.33.1 — 2026-08-04
 

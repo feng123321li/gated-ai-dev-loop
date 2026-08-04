@@ -23,6 +23,7 @@ KIND_TEXT = {
     "TASK": "任务",
 }
 STATUS_TEXT = {
+    "CHOICE_READY": "基线已生成，待选择开发方式",
     "HANDOFF_READY": "需求已冻结（手动开发，调度未启动）",
     "PREPARED": "待冻结",
     "FROZEN": "已冻结",
@@ -1951,6 +1952,7 @@ def render_manual_handoff(
     graph_fingerprint: str,
     confirmed_by: str,
     created_at: str,
+    receiver_prompt: str,
 ) -> str:
     """Render one portable, self-contained development handoff file."""
 
@@ -2087,6 +2089,10 @@ def render_manual_handoff(
             "",
             "需求内容快照已冻结。本文件只交接开发内容，不创建接收任务、"
             "不认领 Loop，也不预先绑定任何 Agent、原生模型或实际代理模型。",
+            "",
+            "## 接收 CLI 启动提示词",
+            "",
+            receiver_prompt,
             "",
             "## 完整性标识",
             "",

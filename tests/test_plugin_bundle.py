@@ -227,28 +227,19 @@ class PluginBundleTests(unittest.TestCase):
             stderr=stderr.getvalue(),
         )
 
-    def test_freeze_confirmation_copy_has_only_two_options(self) -> None:
+    def test_execution_choice_copy_is_owned_by_controller(self) -> None:
         text = (
             SKILL / "references" / "planning-quickstart.md"
         ).read_text(encoding="utf-8")
-        expected_copy = (
-            "请选择下一步：",
-            (
-                "**自动执行**：创建或选择实际开发工作区，准备并冻结后"
-                "开始实现、测试和独立审查"
-            ),
-            (
-                "**手动开发**：冻结同结构开发内容包，不创建 Graph、任务或"
-                "工作区；可切换任意 CLI 直接开发"
-            ),
-            "如需继续调整需求，请直接回复修改意见；当前方案不会冻结。",
-        )
-        for line in expected_copy:
-            with self.subTest(line=line):
-                self.assertIn(line, text)
-        self.assertNotIn("**其他内容**", text)
-        self.assertNotIn("**其他反馈**", text)
-        self.assertNotIn("**调整需求", text)
+        self.assertIn("`executionChoice.markdown`", text)
+        self.assertIn("机械映射到 `AskUserQuestion`", text)
+        self.assertIn("机械映射到 `request_user_input`", text)
+        self.assertIn("Controller 是交互文案的唯一所有者", text)
+        self.assertIn("`AUTOMATIC`", text)
+        self.assertIn("`MANUAL`", text)
+        self.assertIn("`freeformInput.nextAction`", text)
+        self.assertIn("立即进入 prepare、freeze 和自动派遣", text)
+        self.assertIn("展示 `manualHandoff.receiverPrompt`", text)
 
     def test_skill_routes_prepared_and_replan_safely(self) -> None:
         main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
@@ -1548,7 +1539,7 @@ class PluginBundleTests(unittest.TestCase):
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
         tool_count = len(tool_definitions())
-        self.assertEqual(tool_count, 29)
+        self.assertEqual(tool_count, 30)
         self.assertIn(
             "report_loop_progress",
             {tool["name"] for tool in tool_definitions()},
@@ -1680,7 +1671,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            29,
+            30,
         )
         discovery = responses[2]["result"]["structuredContent"]["result"]
         self.assertFalse(
@@ -1689,7 +1680,8 @@ class PluginBundleTests(unittest.TestCase):
         preview_result = responses[3]["result"]["structuredContent"][
             "result"
         ]
-        self.assertEqual(preview_result["status"], "PREVIEW")
+        self.assertEqual(preview_result["status"], "CHOICE_READY")
+        self.assertTrue(preview_result["artifactsReady"])
         handoff = responses[4]["result"]["structuredContent"]["result"]
         self.assertEqual(handoff["status"], "HANDOFF_READY")
         self.assertEqual(handoff["requirementSnapshotStatus"], "FROZEN")
@@ -1761,7 +1753,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            29,
+            30,
         )
 
 

@@ -4,6 +4,7 @@ from typing import Any
 
 from .constants import MAX_IDENTIFIER_LENGTH, SCHEMA_VERSION
 from .errors import fail
+from .interaction_contract import execution_choice_contract
 
 
 def _object(
@@ -531,6 +532,22 @@ def hierarchy_contract(
         "inputSchema": input_schema,
         "example": _example(root_kind),
         "projectionGuidance": {
+            "executionInteraction": {
+                "owner": "CONTROLLER",
+                "artifactGate": "CHOICE_READY_ARTIFACTS_READY",
+                "hostMapping": "MECHANICAL_NO_REWRITE",
+                "selectionTool": "select_execution_mode",
+                "directTextAction": "CONTINUE_REQUIREMENT_DISCUSSION",
+                "executionChoice": execution_choice_contract(),
+                "description": (
+                    "Generate baseline and associated projections before "
+                    "showing this controller-owned choice. Hosts preserve "
+                    "the option order, default, labels, descriptions, and "
+                    "freeform behavior exactly; skills do not reconstruct "
+                    "or add options. Selecting AUTOMATIC immediately "
+                    "prepares, freezes, and enters automatic dispatch."
+                ),
+            },
             "deliveryContinuity": {
                 "identity": "requirementKey -> delivery.id",
                 "fallbackDetection": "ID_OR_TITLE_TICKET_REFERENCE",

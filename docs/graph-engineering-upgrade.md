@@ -179,7 +179,7 @@ Review 沿层级逐层向上收敛，但不会把同一个 Review 节点重复�
 
 冻结 Revision 只固定当前外层目标、依赖、资源声明、项目范围和拓扑，不固定 Loop 内部实现计划；显式 payload 也不是工程正确性的穷举清单。Gate 失败、普通实现缺陷或 Review finding 只要能在当前 scope 和权限内修正，就由当前 Loop 调整方案、修正并重新验证。`BLOCKED` 仅用于当前 Loop 已无可行的 scope 内路径，并要求显式 failure class；只有冻结的依赖、资源、项目范围或拓扑必须改变时才返回 `REPLAN_REQUIRED`。最终用户验收前的 replan 保持同一 `delivery.id` 并生成下一不可变 Revision，不再用取消旧 run 加新 Delivery ID 表达同一需求。
 
-Revision 连续性必须来自用户明确说明，而不是来自工作区恰好恢复了哪个 Active Delivery。不同工单或独立业务目标默认建立新 Delivery。`preview_hierarchy` 和 `create_manual_handoff` 不绑定工作区；同一物理工作区已有未结束 Delivery 时，只有真正开始自动开发的初始 prepare 才返回 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED / CREATE_INDEPENDENT_WORKTREE_TASK`。宿主此时才从主线创建 worktree；若只返回排队标识，则保持 `WORKTREE_SETUP_QUEUED`，不重复创建，也不宣称 Graph 已冻结。`prepare_delivery_revision` 只准备候选，不触发宿主通用确认；用户选择自动执行或手动冻结内容包是该 Revision 唯一一次业务确认。
+Revision 连续性必须来自用户明确说明，而不是来自工作区恰好恢复了哪个 Active Delivery。不同工单或独立业务目标默认建立新 Delivery。`preview_hierarchy` 先登记不绑定工作区的 `CHOICE_READY`，并在显示选项前生成数据库、总览、基线与关联投影；手动选择同样不绑定工作区。同一物理工作区已有未结束 Delivery 时，只有 `select_execution_mode(AUTOMATIC)` 内真正开始开发的 prepare 才返回 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED / CREATE_INDEPENDENT_WORKTREE_TASK`。宿主此时才从主线创建 worktree；若只返回排队标识，则保持 `WORKTREE_SETUP_QUEUED`，不重复创建，也不宣称 Graph 已冻结。初始自动或手动按钮选择由 Controller 一次应用，不触发第二次通用确认。
 
 ## 逻辑递归与物理布局
 

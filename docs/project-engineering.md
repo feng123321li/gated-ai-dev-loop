@@ -127,7 +127,7 @@ hierarchy
 工具分为六组：
 
 - 发现、自动建议与派遣计划：`available_agents`、`recommend_executors`、`plan_dispatch_batch`。自动模式的正式路由先进入 30 秒 `HOST_NATIVE_ROUTE_REVIEW` 调整窗口，超时后才预留；手动开发不经过推荐器。
-- 规划与交接：`workspace_status`、`hierarchy_contract`、`preview_hierarchy`、`create_manual_handoff`、`prepare_hierarchy`、`freeze_hierarchy`。手动开发在本需求的 `<delivery-id>` 目录生成完整冻结内容包；接收方开始开发时才创建 worktree，并可直接按内容开发而不准备 Graph。
+- 规划与交接：`workspace_status`、`hierarchy_contract`、`preview_hierarchy`、`select_execution_mode`、`create_manual_handoff`、`prepare_hierarchy`、`freeze_hierarchy`。preview 先登记 `CHOICE_READY` 并生成数据库、总览、基线和全部关联投影；`select_execution_mode` 原子应用 Controller 返回的自动/手动选项。手动开发在本需求的 `<delivery-id>` 目录生成完整冻结内容包；接收方开始开发时才创建 worktree，并可直接按内容开发而不准备 Graph。
 - Delivery 修订：`delivery_revision_history`、`prepare_delivery_revision`
 - 需求修订：`unfreeze_task_requirement`、`refreeze_task_requirement`
 - 查询：`graph_frontier`、`graph_status`、`graph_events`、`loop_context`
@@ -145,7 +145,7 @@ Plugin MCP 工具不接收业务 `root` 参数。Adapter 从宿主配置或请�
 
 `loop_context.completionPolicy` 明确输入和终态边界：payload 是目标、明确约束和已知验收点的输入，Loop 在运行时从真实代码、契约和数据链路推导 scope 内必要条件；冻结 Graph 不冻结内部实现计划，可修复 finding 必须在当前 Loop 内调整方案、修正并复验。STANDARD 执行完整声明验收并保留分层 Review；LIGHT 对已声明改动做定向验证，并在实际内容或影响超出判断依据时以 `REPLAN_REQUIRED` 退出，不能继续借轻量档绕过 Review。初始 freeze 同时为所有 TASK 建立 revision 1 冻结记录；`unfreeze_task_requirement` 只接受未开始 TASK，`refreeze_task_requirement` 只替换标题、摘要和 payload，并原子更新 hierarchy/graph 双指纹、事件链和人类投影。`record_loop_result` 的 `BLOCKED` 要求显式 failure class，只用于当前 scope 和权限内没有继续路径的真实终态；调度器仍不解释不透明 finding，也不为返工创建 Graph 环。
 
-`controller.py` 是唯一共享应用入口；`mcp_tools.py` 把 29 个模型可调用工具映射到 Controller。接收凭证签发和硬额度熔断是模型外宿主回调，不进入 MCP 工具目录。该数量由契约测试与真实工具目录同步校验，避免文档漂移。`mcp_adapter.py` 负责协议、精确启动适配器身份与宿主策略。
+`controller.py` 是唯一共享应用入口；`mcp_tools.py` 把 30 个模型可调用工具映射到 Controller。接收凭证签发和硬额度熔断是模型外宿主回调，不进入 MCP 工具目录。该数量由契约测试与真实工具目录同步校验，避免文档漂移。`mcp_adapter.py` 负责协议、精确启动适配器身份与宿主策略。
 
 `agent_discovery.py` 只读取 PATH、终端 `--version`、非敏感模型字段和用户本地 Profile，不启动开发命令或返回绝对路径、凭据与服务地址。`agent_recommendation.py` 只按 `TASK_LOOP`/Review 角色、显式 Profile 优先级、可用性和上游开发 Agent 多样性排序；发现候选固定标记为 `LOCAL_TERMINAL / EXTERNAL_PROCESS / hostDispatchEligible=false`，不读取 Loop payload，不持久化结果，也不调用 `dispatch_loop`。因此手工配置或任意本机修改器的变化无需重建 Frozen Graph，项目也不依赖修改器类型。
 

@@ -8,11 +8,11 @@ description: "规划、冻结、调度或恢复多项目、多模块交付 Graph
 把本 Skill 作为外层交付协调器：治理“何时、由谁运行哪个 Loop”，不规定 Loop 内部“怎样完成工作”。
 
 ```text
-确认需求 → 检查真实代码与影响 → 只读预览 Graph → 用户选择执行方式
-├─ 自动执行：创建开发工作区 → 准备并冻结
+确认需求 → 检查真实代码与影响 → 生成基线与关联文档 → Controller 提供执行方式
+├─ 自动执行（默认）：准备、冻结并立即进入自动派遣
 │  ├─ LIGHT：单一 TASK WorkLoop → 用户确认
 │  └─ STANDARD：TASK/分层 Review WorkLoop → 用户确认
-└─ 手动开发：冻结同结构内容包，不启动 Graph → 切换任意 CLI 直接开发
+└─ 手动开发：生成 handoff → 任意 CLI 直接开发
 ```
 
 ## 不可违反的边界
@@ -23,7 +23,7 @@ description: "规划、冻结、调度或恢复多项目、多模块交付 Graph
 - SQLite 是需求与调度状态的机器权威；Graph 启动后由事件链记录运行历史。Markdown 投影只用于沟通、进度和验收。
 - 一个对话工作区最多绑定一个未结束 Delivery。新业务目标默认创建新 Delivery；不得因为工作区已有旧 Delivery 就把新需求写成旧 Delivery 的 Revision。
 - 一个需求只使用一个稳定的 `.layered-delivery/<delivery-id>/` 目录。用户提供工单号等外部需求标识时写入 `delivery.requirementKey`；同一 key 不得换 `delivery.id`，Controller 也会从 ID/标题识别常见工单号并阻断重复目录。自动与手动开发均生成 overview、baseline、progress、acceptance、revisions 和同结构 work-items；手动开发额外包含自包含 handoff 文件。不得创建共享 `.layered-delivery/handoffs/`。手动包的需求内容已由双指纹冻结，但它不是 Graph `FROZEN`：未 prepare、未创建 Graph Run。
-- 并行 Delivery 真正开始开发时使用独立宿主工作区；Git 场景优先使用独立 linked worktree。预览和手动内容冻结阶段不创建 worktree。不要复制调度数据库或启动第二套控制面。
+- 并行 Delivery 真正开始开发时使用独立宿主工作区；Git 场景优先使用独立 linked worktree。`preview_hierarchy` 会先创建共享 `scheduler.db`、根总览和 Delivery 基线/关联文档并登记 `CHOICE_READY`，但不绑定 workspace、不创建 Graph Run 或 worktree。手动内容冻结阶段同样不创建 worktree。不要复制调度数据库或启动第二套控制面。
 - 总调度上下文只规划和路由，不在自身上下文内实现 TASK 或 Review。每个执行与 Review Loop 使用独立接收上下文。
 - Git 创建/切换分支、commit、merge、push、发布、迁移和新增外部权限始终需要各自授权；Graph 的项目范围不替代这些授权。
 - 最终完成必须取得真实用户确认。
@@ -35,6 +35,7 @@ description: "规划、冻结、调度或恢复多项目、多模块交付 Graph
 | 状态 | 下一步 |
 |---|---|
 | `ABSENT` | 用户要求新交付时读取[规划说明](references/planning-quickstart.md)；只读问答不创建状态 |
+| `CHOICE_READY` | 基线与关联文档已生成；原样展示 Controller 返回的执行方式交互 |
 | `HANDOFF_READY` | 报告手动需求快照已登记、Graph Run 未创建；按 handoff 直接开发，不调用 frontier |
 | `PREPARED` | 读取规划说明并续接已有方案；需求未变时不要重复 prepare |
 | `ACTIVE` / `BLOCKED` / `PAUSED` | 读取[执行说明](references/execution-quickstart.md)，从 `graph_frontier` 恢复 |
@@ -53,8 +54,8 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 4. 把实现目标和明确约束放入不透明 `loop.payload`。调度器不解释实现计划、测试、Gate 或内部 Skill 流程。
 5. 用精确 `resourceClaims` 表达跨 Delivery 排他资源；worktree 不能替代数据库、端口或环境锁。
 6. 用户提供的 Skill 只登记为共享 `root.skillHints`，由各 Loop 根据真实上下文决定是否触发。
-7. 先调用 `preview_hierarchy`，展示保障档、判断依据和完整计划，并且只提供“自动执行 / 手动开发”两个选项；同时允许用户直接提出修改意见。预览不创建控制状态或工作区，也不为保障档增加第二次确认。
-8. 用户选择自动执行后，才在实际开发工作区调用 `prepare_hierarchy`，以返回的 fingerprint、Revision 和精确项目授权调用 `freeze_hierarchy`；不要追加第二次通用 Yes/No。用户选择手动开发后，直接以预览 fingerprint、原 hierarchy 和精确项目授权调用 `create_manual_handoff`，冻结同一需求内容并生成 `.layered-delivery/<delivery-id>/` 完整开发包，同时登记 SQLite `HANDOFF_READY` 并刷新工作区总览；不 prepare Graph、不创建 Graph Run 或工作区绑定。返回 `requirementSnapshotStatus=FROZEN` 只表示内容快照冻结，接收方可切换任意 CLI 直接开发。
+7. 调用 `preview_hierarchy`。只有响应为 `CHOICE_READY` 且 `artifactsReady=true`，确认共享数据库、根总览、baseline、progress、acceptance、revisions 与 work-items 已生成后，才展示执行方式。Controller 是交互文案的唯一所有者；宿主必须原样或机械映射 `executionChoice` 的顺序、默认项、标签、说明和自由输入行为，Skill 不得重写、猜测或增加第三个选项。
+8. 用户点选按钮后只调用一次 `select_execution_mode`。选择默认的 `AUTOMATIC` 时，Controller 立即 prepare、freeze 并返回自动派遣动作；不再询问通用 Yes/No，宿主立刻进入 frontier 自动派遣循环。选择 `MANUAL` 时，Controller 生成 handoff、登记 `HANDOFF_READY`，宿主原样展示 `manualHandoff.receiverPrompt`；该提示词也已嵌入 handoff。用户直接输入修改意见时不调用选择工具，继续需求沟通；需求变化后用同一 Delivery 重新生成基线与关联文档。
 
 需求连续性规则：
 
@@ -82,7 +83,7 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 
 ## Agent、模型与容量
 
-- `available_agents` 仅用于通用本机发现，不参与手动开发路由；`recommend_executors` 只接受 `AUTOMATIC`，并且只在当前宿主 Agent 内按原生 tier 生成只读预览。正式 Ready 批次由 `plan_dispatch_batch` 开启持久化 30 秒路由调整窗口，超时自动派遣。手动开发只调用 `create_manual_handoff`：生成冻结内容包时不指定 Agent、模型或接收会话，也不创建任务/worktree；用户切换任意 CLI、读取该目录并开始实际开发时，才确定执行 Agent、创建或选择工作区并展示自己的本地模型表。详见[agent-recommendations.md](references/agent-recommendations.md)。
+- `available_agents` 仅用于通用本机发现，不参与手动开发路由；`recommend_executors` 只接受 `AUTOMATIC`，并且只在当前宿主 Agent 内按原生 tier 生成只读预览。正式 Ready 批次由 `plan_dispatch_batch` 开启持久化 30 秒路由调整窗口，超时自动派遣。初始手动选择通过 `select_execution_mode(MANUAL)` 生成冻结内容包；后续手动 Revision 才直接调用 `create_manual_handoff`。两者都不指定 Agent、模型或接收会话，也不创建任务/worktree；用户切换任意 CLI、读取该目录并开始实际开发时，才确定执行 Agent、创建或选择工作区并展示自己的本地模型表。详见[agent-recommendations.md](references/agent-recommendations.md)。
 - 所有派遣、tier 匹配、Review 多样性、reservation、claim 授权与决策指纹只使用宿主原生 `modelId`。`actualModelId` 是原生调用完成后的可选宿主观测，只用于中文状态和进度表；未知时显示“未报告”，不得读取特定修改器、猜测对应关系或据此改变编排。
 - 自动编排、自动选模、跨 Adapter、最大并发、额度策略和 Review 多样性由用户级配置控制；读取[orchestrator-configuration.md](references/orchestrator-configuration.md)。
 - 跨 Adapter 当前未开放修改；面板和保存工具都以 `ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE` fail closed。只有中央宿主未来能证明可创建、可认证、有容量且属于同一可信编排根的多个 Adapter 时才可开放。

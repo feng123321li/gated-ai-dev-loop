@@ -23,8 +23,8 @@
 
 | 宿主 | 候选验证版本 | Plugin 加载方式 | 必须验证 |
 |---|---|---|---|
-| Codex | codex-cli 0.146.0 | 从候选 Marketplace 安装 | 29 工具、`SubagentStart`、mutation Hook、原生 modelId、待用户确认状态 |
-| Claude Code | 2.1.220 | `--plugin-dir` 候选包及最终 Marketplace 安装 | 29 工具、dispatch attestation、progress/heartbeat/result、StopFailure 兼容 |
+| Codex | codex-cli 0.146.0 | 从候选 Marketplace 安装 | 30 工具、Controller 交互契约、`SubagentStart`、mutation Hook、原生 modelId、待用户确认状态 |
+| Claude Code | 2.1.220 | `--plugin-dir` 候选包及最终 Marketplace 安装 | 30 工具、Controller 交互契约、dispatch attestation、progress/heartbeat/result、StopFailure 兼容 |
 
 上述版本是 0.33.2 候选基线，不是永久兼容承诺。宿主升级后若 Hook 事件字段、Plugin manifest 或 MCP 工具命名发生变化，应先在自托管 Runner 重跑真实宿主冒烟，再更新本矩阵。
 

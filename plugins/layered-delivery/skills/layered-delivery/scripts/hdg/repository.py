@@ -1046,10 +1046,8 @@ class SchedulerRepository:
                     row
                     for row in candidates
                     if row["root_id"] in bound_ids
-                    or (
-                        root_id is not None
-                        and row["status"] == "HANDOFF_READY"
-                    )
+                    or row["status"]
+                    in {"CHOICE_READY", "HANDOFF_READY"}
                 ]
             if root_id is None:
                 active_ids = {
@@ -1114,7 +1112,12 @@ class SchedulerRepository:
         if run is not None:
             result["executionMode"] = run["execution_mode"]
         if workspace_root is not None:
-            if state == "HANDOFF_READY":
+            if state == "CHOICE_READY":
+                result["workspaceIsolation"] = {
+                    "mode": "UNBOUND_EXECUTION_CHOICE",
+                    "workspaceKey": None,
+                }
+            elif state == "HANDOFF_READY":
                 result["workspaceIsolation"] = {
                     "mode": "UNBOUND_MANUAL_HANDOFF",
                     "workspaceKey": None,
@@ -1131,6 +1134,134 @@ class SchedulerRepository:
             [],
         )
         return result
+
+    def record_choice_ready(
+        self,
+        hierarchy: dict[str, Any],
+        graph: dict[str, Any],
+        *,
+        hierarchy_fingerprint: str,
+        graph_fingerprint: str,
+    ) -> dict[str, Any]:
+        """Stage initial human artifacts before execution-mode selection."""
+
+        root_id = graph["rootId"]
+        hierarchy_json = canonical_json(hierarchy)
+        graph_json = canonical_json(graph)
+        staged = False
+        with self.transaction() as connection:
+            self._assert_delivery_requirement_available(
+                connection,
+                hierarchy,
+            )
+            existing = connection.execute(
+                "SELECT * FROM hierarchies WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if existing is None:
+                at = timestamp(self.now)
+                connection.execute(
+                    """
+                    INSERT INTO hierarchies(
+                        root_id, revision, hierarchy_fingerprint,
+                        graph_fingerprint, hierarchy_json, graph_json,
+                        status, created_at, updated_at
+                    ) VALUES (?, 1, ?, ?, ?, ?, 'CHOICE_READY', ?, ?)
+                    """,
+                    (
+                        root_id,
+                        hierarchy_fingerprint,
+                        graph_fingerprint,
+                        hierarchy_json,
+                        graph_json,
+                        at,
+                        at,
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO delivery_revisions(
+                        root_id, revision, hierarchy_fingerprint,
+                        graph_fingerprint, hierarchy_json, graph_json,
+                        status, reason, created_at, updated_at
+                    ) VALUES (
+                        ?, 1, ?, ?, ?, ?, 'CHOICE_READY', ?, ?, ?
+                    )
+                    """,
+                    (
+                        root_id,
+                        hierarchy_fingerprint,
+                        graph_fingerprint,
+                        hierarchy_json,
+                        graph_json,
+                        "已生成基线，待选择自动执行或手动开发",
+                        at,
+                        at,
+                    ),
+                )
+                staged = True
+                status = "CHOICE_READY"
+            else:
+                _validated_stored_definition(existing)
+                content_matches = (
+                    existing["hierarchy_fingerprint"]
+                    == hierarchy_fingerprint
+                    and existing["graph_fingerprint"]
+                    == graph_fingerprint
+                )
+                if existing["status"] == "CHOICE_READY":
+                    at = _commit_timestamp(
+                        self.now,
+                        existing["updated_at"],
+                    )
+                    connection.execute(
+                        "UPDATE hierarchies SET hierarchy_fingerprint = ?, "
+                        "graph_fingerprint = ?, hierarchy_json = ?, "
+                        "graph_json = ?, updated_at = ? WHERE root_id = ?",
+                        (
+                            hierarchy_fingerprint,
+                            graph_fingerprint,
+                            hierarchy_json,
+                            graph_json,
+                            at,
+                            root_id,
+                        ),
+                    )
+                    connection.execute(
+                        "UPDATE delivery_revisions SET "
+                        "hierarchy_fingerprint = ?, graph_fingerprint = ?, "
+                        "hierarchy_json = ?, graph_json = ?, status = "
+                        "'CHOICE_READY', reason = ?, updated_at = ? "
+                        "WHERE root_id = ? AND revision = ?",
+                        (
+                            hierarchy_fingerprint,
+                            graph_fingerprint,
+                            hierarchy_json,
+                            graph_json,
+                            "需求沟通后已重新生成基线，待选择开发方式",
+                            at,
+                            root_id,
+                            existing["revision"],
+                        ),
+                    )
+                    staged = True
+                    status = "CHOICE_READY"
+                elif content_matches:
+                    at = existing["updated_at"]
+                    staged = True
+                    status = existing["status"]
+                else:
+                    at = timestamp(self.now)
+                    status = "PREVIEW"
+        if staged and status == "CHOICE_READY":
+            self.write_projections(root_id)
+        return {
+            "rootId": root_id,
+            "status": status,
+            "artifactsReady": staged,
+            "controlStateCreated": existing is not None or staged,
+            "recordedAt": at,
+        }
 
     def record_manual_handoff(
         self,
@@ -1151,6 +1282,7 @@ class SchedulerRepository:
         hierarchy_json = canonical_json(hierarchy)
         graph_json = canonical_json(graph)
         previous_revision: int | None = None
+        preserve_manual_updates = True
         with self.transaction() as connection:
             self._assert_delivery_requirement_available(
                 connection,
@@ -1283,7 +1415,48 @@ class SchedulerRepository:
                             expectedRevision=expected_current_revision,
                             actualRevision=delivery_revision,
                         )
-                    if existing["status"] == "HANDOFF_READY":
+                    if existing["status"] == "CHOICE_READY":
+                        preserve_manual_updates = False
+                        if any(
+                            value is not None
+                            for value in (
+                                expected_current_revision,
+                                continuity_basis,
+                                revision_reason,
+                            )
+                        ):
+                            fail(
+                                "SCHEDULER_REVISION_CONFLICT",
+                                "An initial staged choice cannot declare a "
+                                "previous Delivery revision",
+                                rootId=root_id,
+                            )
+                        at = _commit_timestamp(
+                            self.now,
+                            existing["updated_at"],
+                        )
+                        connection.execute(
+                            "UPDATE hierarchies SET status = "
+                            "'HANDOFF_READY', updated_at = ? "
+                            "WHERE root_id = ?",
+                            (at, root_id),
+                        )
+                        connection.execute(
+                            "UPDATE delivery_revisions SET status = "
+                            "'HANDOFF_READY', reason = ?, confirmed_by = ?, "
+                            "authorized_project_ids_json = ?, "
+                            "updated_at = ? WHERE root_id = ? "
+                            "AND revision = ?",
+                            (
+                                "手动开发需求快照（已冻结，未创建 Graph Run）",
+                                confirmed_by,
+                                canonical_json(authorized_project_ids),
+                                at,
+                                root_id,
+                                delivery_revision,
+                            ),
+                        )
+                    elif existing["status"] == "HANDOFF_READY":
                         at = _commit_timestamp(
                             self.now,
                             existing["updated_at"],
@@ -1366,7 +1539,10 @@ class SchedulerRepository:
                         at,
                     ),
                 )
-        self.write_projections(root_id)
+        self.write_projections(
+            root_id,
+            preserve_manual_updates=preserve_manual_updates,
+        )
         return {
             "rootId": root_id,
             "status": "HANDOFF_READY",
@@ -3834,7 +4010,12 @@ class SchedulerRepository:
                 (at, run_id),
             )
 
-    def write_projections(self, root_id: str) -> None:
+    def write_projections(
+        self,
+        root_id: str,
+        *,
+        preserve_manual_updates: bool = True,
+    ) -> None:
         """Regenerate controller-owned projections from SQLite state."""
 
         with exclusive_file_lock(self.lock_path):
@@ -3863,6 +4044,7 @@ class SchedulerRepository:
             )
             manual_snapshot = (
                 definition["status"] == "HANDOFF_READY" and run is None
+                and preserve_manual_updates
             )
             for legacy_filename in (
                 "hierarchy.json",

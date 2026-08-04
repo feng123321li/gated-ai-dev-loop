@@ -8,7 +8,7 @@
 
 1. 自动执行已选定、hierarchy 已 `PREPARED` 或 Graph 已冻结时，总调度 Agent 先为全部 Loop 给出 `ROUTINE`、`STANDARD` 或 `HIGH` 的临时分析。
 2. 默认调用 `recommend_executors(recommendation_mode=AUTOMATIC)`，同时传入当前宿主真实 `executor_inventory`、覆盖全部 Loop 的 `node_requirements`，以及必要时的 `current_executor`。该模式只接受当前执行 Agent：Codex 中只建议 Codex 原生 Luna/Terra/Sol 等 selector；Claude Code 中只建议 Claude 原生 Haiku/Sonnet/Opus 等 selector。
-3. 用户选择手动开发时，不调用 `available_agents` 或 `recommend_executors`；改用 `create_manual_handoff`。
+3. 用户选择手动开发时，不调用 `available_agents` 或 `recommend_executors`；初始选择调用 `select_execution_mode(MANUAL)`，只有后续手动 Revision 才直接调用 `create_manual_handoff`。
 4. `available_agents` 的本机终端快照不构成宿主原生派遣 inventory，也不能用于预先判断手动开发包的接收方。
 
 本机配置可能由用户直接修改，也可能由任意本机工具维护；本项目不识别或依赖具体修改器。自动派遣只使用宿主原生 selector；GLM、DeepSeek 等转发后的实际模型只在宿主观测到后展示。
@@ -21,7 +21,7 @@
 
 ## 手动开发冻结内容包
 
-`preview_hierarchy` 先对原 hierarchy 做只读校验并返回双 fingerprint，不创建 scheduler 状态。用户选择手动开发后，`create_manual_handoff` 校验原 hierarchy、双 fingerprint 与精确项目授权，在 `.layered-delivery/<delivery-id>/` 生成与自动开发相同结构的 overview、baseline、progress、acceptance、revisions、work-items，并增加自包含 `handoff-<fingerprint>.md`。该文件同时包含中文开发内容和机器可读 schema v3 附录；不创建共享 `handoffs` 目录。
+`preview_hierarchy` 校验 hierarchy 和双 fingerprint，先登记 `CHOICE_READY` 并生成 scheduler、根总览以及与自动开发相同结构的 overview、baseline、progress、acceptance、revisions 和 work-items。用户选择手动开发后，`select_execution_mode(MANUAL)` 校验 staged fingerprint 与精确项目授权，把状态转为 `HANDOFF_READY` 并增加自包含 `handoff-<fingerprint>.md`。该文件包含中文开发内容、机器可读 schema v3 附录和 Controller 返回的同一接收提示词；不创建共享 `handoffs` 目录。
 
 该路径返回 `requirementSnapshotStatus=FROZEN`，表示需求内容由双 fingerprint 锁定；`controlStateCreated=true` 表示控制器已生成共享 `scheduler.db`、根 `overview.md` 并把快照登记为 `HANDOFF_READY`，同时固定 `graphRunCreated=false`、`workspaceCreated=false`。因此它不表示 Graph `FROZEN`，也不创建接收任务/会话、不初始化 worktree、不选择 Agent 或模型。用户可切换到任意 CLI；接收方真正开始开发时再创建或选择工作区、校准 projectScopes/gitBinding，然后直接按冻结内容开发并维护 progress/acceptance。只有用户后来明确改为自动 Graph 执行，才进入独立的 prepare/freeze 流程。
 

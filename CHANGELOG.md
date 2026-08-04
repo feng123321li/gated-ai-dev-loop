@@ -4,6 +4,12 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 未发布
+
+- 规划交互改由 Controller 唯一拥有：`preview_hierarchy` 在返回选项前登记 `CHOICE_READY`，生成共享 `scheduler.db`、根总览、Delivery 基线/关联文档及递归 work-items，再返回固定的自动/手动双选项和自由输入行为；Skill 与宿主只允许原样显示或机械映射。
+- 新增 `select_execution_mode`：默认 `AUTOMATIC` 一次完成 prepare、freeze 并要求宿主立即进入自动派遣，不增加第二次确认；`MANUAL` 生成 handoff，并把同一 `receiverPrompt` 同时写入响应和文件，供任意 CLI 直接开发。
+- Codex 与 Claude Code 使用相同选项顺序、默认项、精简说明和状态转换；自由文本直接继续需求沟通，不再制造第三个“其他”选项。MCP 工具面由 29 项增至 30 项。
+
 ## 0.33.2 — 2026-08-04
 
 发布提交：`063198b`

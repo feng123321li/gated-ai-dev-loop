@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from .errors import fail
+from .errors import GatedLoopError, fail
 from .fs_safe import (
     atomic_replace_directory,
     atomic_write,
@@ -46,6 +46,7 @@ from .progress_reporting import attach_progress_monitor
 
 GOVERNANCE_DIRECTORY = ".layered-delivery"
 DATABASE_FILE = "scheduler.db"
+SCHEDULER_STATE_CONTRACT = "schema-v3-graph-compiler-v1"
 RECEIVER_ATTESTATION_SECONDS = 300
 MANUAL_WRITABLE_PROJECTIONS = frozenset(
     {"progress.md", "acceptance.md"}
@@ -119,6 +120,8 @@ def _projection_tree_matches(
 def _validated_stored_graph(
     graph_json: object,
     graph_fingerprint: object,
+    *,
+    root_id: str,
 ) -> dict[str, Any]:
     if not isinstance(graph_json, str) or not isinstance(
         graph_fingerprint,
@@ -127,6 +130,7 @@ def _validated_stored_graph(
         fail(
             "SCHEDULER_STATE_INVALID",
             "Stored scheduler graph metadata is invalid",
+            rootId=root_id,
         )
     try:
         graph = json.loads(graph_json)
@@ -134,50 +138,70 @@ def _validated_stored_graph(
         fail(
             "SCHEDULER_STATE_INVALID",
             "Stored scheduler graph JSON is invalid",
+            rootId=root_id,
         )
     if fingerprint(graph) != graph_fingerprint:
         fail(
             "SCHEDULER_STATE_INVALID",
             "Stored scheduler graph changed",
+            rootId=root_id,
         )
-    return validate_delivery_graph(graph)
+    try:
+        return validate_delivery_graph(graph)
+    except GatedLoopError as error:
+        error.details.setdefault("rootId", root_id)
+        raise
 
 
 def _validated_stored_definition(
     row: sqlite3.Row,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    root_id = row["root_id"]
     try:
         hierarchy = json.loads(row["hierarchy_json"])
     except (json.JSONDecodeError, RecursionError):
         fail(
             "SCHEDULER_STATE_INVALID",
             "Stored scheduler hierarchy JSON is invalid",
+            rootId=root_id,
         )
     if fingerprint(hierarchy) != row["hierarchy_fingerprint"]:
         fail(
             "SCHEDULER_STATE_INVALID",
             "Stored scheduler hierarchy changed",
+            rootId=root_id,
         )
     if not isinstance(hierarchy, dict) or "delivery" not in hierarchy:
         fail(
             "SCHEDULER_STATE_INCOMPATIBLE",
             "Stored scheduler state predates the recursive GROUP/TASK "
             "Delivery contract; archive it before creating a new Graph",
+            rootId=root_id,
         )
-    normalized = validate_hierarchy_definition(hierarchy)
+    try:
+        normalized = validate_hierarchy_definition(hierarchy)
+    except GatedLoopError as error:
+        error.details.setdefault("rootId", root_id)
+        raise
     if normalized != hierarchy:
         fail(
             "SCHEDULER_STATE_INVALID",
             "Stored scheduler hierarchy is not canonical",
+            rootId=root_id,
         )
     graph = _validated_stored_graph(
         row["graph_json"],
         row["graph_fingerprint"],
+        root_id=root_id,
     )
-    expected_graph = compile_delivery_graph(
-        normalized,
-        hierarchy_fingerprint=row["hierarchy_fingerprint"],
-    )
+    try:
+        expected_graph = compile_delivery_graph(
+            normalized,
+            hierarchy_fingerprint=row["hierarchy_fingerprint"],
+        )
+    except GatedLoopError as error:
+        error.details.setdefault("rootId", root_id)
+        raise
     if (
         row["root_id"] != normalized["delivery"]["id"]
         or graph["rootId"] != normalized["delivery"]["id"]
@@ -189,6 +213,7 @@ def _validated_stored_definition(
         fail(
             "SCHEDULER_STATE_INVALID",
             "Stored scheduler graph is not bound to its hierarchy",
+            rootId=root_id,
         )
     return normalized, graph
 
@@ -309,10 +334,14 @@ class SchedulerRepository:
             self.database_path,
             timeout=30,
         )
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA journal_mode = WAL")
-        self._initialize(connection)
+        try:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA journal_mode = WAL")
+            self._initialize(connection)
+        except Exception:
+            connection.close()
+            raise
         return connection
 
     @staticmethod
@@ -329,6 +358,10 @@ class SchedulerRepository:
                 status TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS scheduler_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS runs (
                 run_id TEXT PRIMARY KEY,
@@ -522,7 +555,31 @@ class SchedulerRepository:
             );
             """
         )
+        SchedulerRepository._verify_state_contract(connection)
         SchedulerRepository._upgrade_revision_storage(connection)
+
+    @staticmethod
+    def _verify_state_contract(connection: sqlite3.Connection) -> None:
+        """Reject writers using an incompatible scheduler state contract."""
+
+        row = connection.execute(
+            "SELECT value FROM scheduler_metadata WHERE key = ?",
+            ("state_contract",),
+        ).fetchone()
+        if row is None:
+            connection.execute(
+                "INSERT INTO scheduler_metadata(key, value) VALUES (?, ?)",
+                ("state_contract", SCHEDULER_STATE_CONTRACT),
+            )
+            return
+        if row["value"] != SCHEDULER_STATE_CONTRACT:
+            fail(
+                "SCHEDULER_STATE_CONTRACT_MISMATCH",
+                "Scheduler state was created by an incompatible graph "
+                "generator contract",
+                expectedStateContract=SCHEDULER_STATE_CONTRACT,
+                actualStateContract=row["value"],
+            )
 
     @staticmethod
     def _upgrade_revision_storage(
@@ -1097,8 +1154,38 @@ class SchedulerRepository:
         # Projection templates are rebuildable views, not stored schema.
         # Refresh every stored schema-v3 Delivery so workspaces created by an
         # earlier plugin release receive the current fixed projection set.
+        projection_issues: list[dict[str, str]] = []
         for row in rows:
-            self.write_projections(row["root_id"])
+            projection_root_id = row["root_id"]
+            try:
+                self.write_projections(
+                    projection_root_id,
+                    refresh_workspace_overview=False,
+                )
+            except (GatedLoopError, OSError) as error:
+                if projection_root_id == latest["root_id"]:
+                    raise
+                code = (
+                    error.code
+                    if isinstance(error, GatedLoopError)
+                    else "SCHEDULER_PROJECTION_REFRESH_FAILED"
+                )
+                message = (
+                    error.message
+                    if isinstance(error, GatedLoopError)
+                    else (
+                        "Controller could not refresh this Delivery "
+                        "projection"
+                    )
+                )
+                projection_issues.append(
+                    {
+                        "rootId": projection_root_id,
+                        "code": code,
+                        "message": message,
+                    }
+                )
+        self.write_workspace_overview()
         result = {
             "status": (
                 "PREPARED"
@@ -1126,6 +1213,8 @@ class SchedulerRepository:
                 result["workspaceIsolation"] = self.workspace_binding(
                     latest["root_id"]
                 )
+        if projection_issues:
+            result["projectionIssues"] = projection_issues
         git_binding = latest_hierarchy["delivery"].get("gitBinding")
         if git_binding is not None:
             result["gitBinding"] = git_binding
@@ -4015,6 +4104,7 @@ class SchedulerRepository:
         root_id: str,
         *,
         preserve_manual_updates: bool = True,
+        refresh_workspace_overview: bool = True,
     ) -> None:
         """Regenerate controller-owned projections from SQLite state."""
 
@@ -4119,12 +4209,22 @@ class SchedulerRepository:
                 shutil.rmtree(legacy_task_baselines)
             elif legacy_task_baselines.exists():
                 legacy_task_baselines.unlink()
-            atomic_write(
-                safe_path(self.control_root, "overview.md"),
-                render_workspace_overview(
-                    self._workspace_projection_sources()
-                ),
-            )
+            if refresh_workspace_overview:
+                self._write_workspace_overview()
+
+    def _write_workspace_overview(self) -> None:
+        atomic_write(
+            safe_path(self.control_root, "overview.md"),
+            render_workspace_overview(
+                self._workspace_projection_sources()
+            ),
+        )
+
+    def write_workspace_overview(self) -> None:
+        """Refresh the cross-Delivery overview without coupling projections."""
+
+        with exclusive_file_lock(self.lock_path):
+            self._write_workspace_overview()
 
     def _workspace_projection_sources(self) -> list[dict[str, Any]]:
         """Load every Delivery summary from SQLite for the root overview."""
@@ -4135,7 +4235,22 @@ class SchedulerRepository:
             ).fetchall()
             sources: list[dict[str, Any]] = []
             for row in rows:
-                hierarchy, graph = _validated_stored_definition(row)
+                try:
+                    hierarchy, graph = _validated_stored_definition(row)
+                except GatedLoopError as error:
+                    sources.append(
+                        {
+                            "rootId": row["root_id"],
+                            "status": "STATE_INVALID",
+                            "createdAt": row["created_at"],
+                            "updatedAt": row["updated_at"],
+                            "stateError": {
+                                "code": error.code,
+                                "message": error.message,
+                            },
+                        }
+                    )
+                    continue
                 run_row = connection.execute(
                     "SELECT * FROM runs "
                     "WHERE root_id = ? AND revision = ?",

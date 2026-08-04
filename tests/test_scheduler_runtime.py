@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 import shutil
 import sqlite3
@@ -5140,6 +5141,145 @@ class SchedulerRuntimeTests(unittest.TestCase):
             else:
                 self.assertFalse(interface_projection.exists())
                 self.assertFalse((item_root / "interfaces").exists())
+
+    def test_invalid_delivery_does_not_block_another_delivery_frontier(
+        self,
+    ) -> None:
+        damaged = prepare_hierarchy(
+            root=self.root,
+            hierarchy=delivery_task_hierarchy(
+                "d-damaged",
+                "t-damaged",
+            ),
+            now=at(0),
+        )
+        healthy = prepare_hierarchy(
+            root=self.root,
+            hierarchy=delivery_task_hierarchy(
+                "d-healthy",
+                "t-healthy",
+            ),
+            now=at(1),
+        )
+        freeze_hierarchy(
+            root=self.root,
+            root_id=healthy["rootId"],
+            expected_hierarchy_fingerprint=(
+                healthy["hierarchyFingerprint"]
+            ),
+            confirmed=True,
+            confirmed_by="human",
+            now=at(2),
+        )
+        database = Path(
+            self.root,
+            ".layered-delivery",
+            "scheduler.db",
+        )
+        connection = sqlite3.connect(database)
+        try:
+            row = connection.execute(
+                "SELECT graph_json FROM hierarchies WHERE root_id = ?",
+                (damaged["rootId"],),
+            ).fetchone()
+            graph = json.loads(row[0])
+            graph["runtime"]["retryPolicy"]["maxAttempts"] = 99
+            connection.execute(
+                "UPDATE hierarchies SET graph_json = ? "
+                "WHERE root_id = ?",
+                (
+                    json.dumps(graph, separators=(",", ":")),
+                    damaged["rootId"],
+                ),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        frontier = get_graph_frontier(
+            root=self.root,
+            root_id=healthy["rootId"],
+            now=at(3),
+        )
+        status = workspace_status(
+            root=self.root,
+            root_id=healthy["rootId"],
+        )
+
+        self.assertEqual(frontier["rootId"], healthy["rootId"])
+        self.assertEqual(
+            status["projectionIssues"],
+            [
+                {
+                    "rootId": damaged["rootId"],
+                    "code": "SCHEDULER_STATE_INVALID",
+                    "message": "Stored scheduler graph changed",
+                }
+            ],
+        )
+        workspace_overview = Path(
+            self.root,
+            ".layered-delivery",
+            "overview.md",
+        ).read_text(encoding="utf-8")
+        self.assertIn(damaged["rootId"], workspace_overview)
+        self.assertIn("调度状态异常", workspace_overview)
+        self.assertIn("SCHEDULER\\_STATE\\_INVALID", workspace_overview)
+
+        with self.assertRaises(GatedLoopError) as caught:
+            SchedulerRepository(self.root).hierarchy(damaged["rootId"])
+        self.assertEqual(
+            caught.exception.details["rootId"],
+            damaged["rootId"],
+        )
+
+    def test_foreign_projection_damage_does_not_block_workspace_status(
+        self,
+    ) -> None:
+        foreign = prepare_hierarchy(
+            root=self.root,
+            hierarchy=delivery_task_hierarchy(
+                "d-foreign-files",
+                "t-foreign-files",
+            ),
+            now=at(0),
+        )
+        current = prepare_hierarchy(
+            root=self.root,
+            hierarchy=delivery_task_hierarchy(
+                "d-current-files",
+                "t-current-files",
+            ),
+            now=at(1),
+        )
+        foreign_baseline = Path(
+            self.root,
+            ".layered-delivery",
+            foreign["rootId"],
+            "baseline.md",
+        )
+        foreign_baseline.unlink()
+        foreign_baseline.mkdir()
+
+        status = workspace_status(
+            root=self.root,
+            root_id=current["rootId"],
+        )
+
+        self.assertEqual(status["rootId"], current["rootId"])
+        self.assertEqual(
+            status["projectionIssues"],
+            [
+                {
+                    "rootId": foreign["rootId"],
+                    "code": "SCHEDULER_PROJECTION_REFRESH_FAILED",
+                    "message": (
+                        "Controller could not refresh this Delivery "
+                        "projection"
+                    ),
+                }
+            ],
+        )
 
     def test_reprepare_without_interfaces_removes_optional_projection(
         self,

@@ -12,7 +12,6 @@ from hdg.graph_runtime import (
     dispatch_loop,
     graph_status,
 )
-from hdg.orchestrator_config import OrchestratorConfig
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
 
 from .test_loop_architecture import group_hierarchy, task_hierarchy
@@ -47,7 +46,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
         *,
         adapter_id: str = "codex",
         receiver_agent_id: str = "codex",
-        config: OrchestratorConfig | None = None,
+        max_concurrent_executors: int = 4,
     ) -> dict:
         return plan_dispatch_batch(
             root=root,
@@ -55,7 +54,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
             expected_graph_fingerprint=prepared["graphFingerprint"],
             host_adapter_id=adapter_id,
             host_native_agent_ids=(receiver_agent_id,),
-            orchestrator_config=config,
+            max_concurrent_executors=max_concurrent_executors,
         )
 
     def test_trusted_host_reserves_without_model_recommendation_inputs(
@@ -185,7 +184,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
             plan = self.plan(
                 root,
                 prepared,
-                config=OrchestratorConfig(max_concurrent_executors=1),
+                max_concurrent_executors=1,
             )
 
         self.assertEqual(len(plan["assignments"]), 1)

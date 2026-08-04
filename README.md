@@ -93,21 +93,11 @@ Plugin 激活后，在 Codex 或 Claude Code 的新会话中提出需求，并�
 - 新增 Worker 供应商无需修改 Layered Delivery；只有要让供应商直接领取 Graph 时，才需要实现一个能证明宿主生命周期和 receiver 身份的可信外层 Adapter。
 - 最终 `outcome.result.workerTelemetry` 可按 phase 报告内部 Worker 的 `agent`、`model` 和 `reasoningEffort`。未知写 `unreported`；这些值只用于展示、成本分析和 Review，不参与路由、授权、指纹或重试。
 
-## 中央编排器设置
+## Plugin 内置协调策略
 
-向 Agent 说“打开中央编排器设置”，或直接调用 `open_orchestrator_settings`，可以查看当前用户级策略、配置来源和 Adapter 状态。支持 MCP Apps 的宿主显示内嵌面板；其他宿主返回同一份结构化摘要。面板保存或 Agent 直接保存都会调用需审批的 `update_orchestrator_settings`。
+外层 receiver 的最大并发固定为 4，额度耗尽固定采用 `PAUSE_AND_RESUME`。策略随 Plugin 版本发布，不读取用户级 `orchestrator.json`，也不提供中央设置工具或 MCP Apps 面板。Codex 与 Claude 因此不会再被机器上残留的旧配置阻断 MCP 启动。
 
-设置工具不依赖 Delivery 工作区，不创建 `.layered-delivery` 运行状态，也不要求 Codex MCP Apps 的保存请求携带项目 sandbox metadata。其他 Graph 工具仍严格要求当前工作区身份，不能借设置入口绕过项目隔离。
-
-配置 schema v2 只管理外层 receiver 最大并发与额度恢复。默认最大并发为 4，额度策略固定 `PAUSE_AND_RESUME`。配置文件位于 Plugin 安装目录之外，Marketplace 升级不会覆盖：
-
-| 平台 | 默认路径 |
-|---|---|
-| Windows | `%APPDATA%\layered-delivery\orchestrator.json` |
-| macOS | `~/Library/Application Support/layered-delivery/orchestrator.json` |
-| Linux | `${XDG_CONFIG_HOME:-~/.config}/layered-delivery/orchestrator.json` |
-
-等价配置为 `{"schemaVersion":2,"maxConcurrentExecutors":4,"quotaExhaustionPolicy":"PAUSE_AND_RESUME"}`。通过面板保存后当前 MCP 连接立即刷新；手动编辑文件后需要新建宿主会话。已经签发的 reservation 和已经认领的 Loop 不会被追溯改写。模型、Worker、Adapter allowlist 与 Review 多样性都不是编排器设置。完整契约见[中央编排器配置](skills/layered-delivery/references/orchestrator-configuration.md)。
+中央协调本身仍由 Controller 事务维护：未过期 reservation、已 claim receiver、`resourceClaims` 和容量断路器继续限制重复或冲突派遣。模型、Worker、Adapter allowlist 与 Review 多样性仍不属于控制面配置。
 
 ## 状态、隔离与恢复
 
@@ -137,7 +127,7 @@ Plugin 激活后，在 Codex 或 Claude Code 的新会话中提出需求，并�
 | `src/hdg/` | Python Controller、Graph Runtime、Repository 与 MCP Adapter 源码 |
 | `skills/layered-delivery/` | 规范 Skill、按需 references 和生成的运行包 |
 | `plugins/layered-delivery/` | Codex / Claude Code 双宿主 Plugin 产物 |
-| `tests/` | schema、调度、并发、Hook、配置与投影测试 |
+| `tests/` | schema、调度、并发、Hook 与投影测试 |
 | `examples/team-loops/` | 可校验的团队 LIGHT / STANDARD hierarchy 模板 |
 | `scripts/build_skill.py` | 从源码重建 Skill 和 Plugin 运行包 |
 | `scripts/validate_release.py` | 无网络发布候选一致性校验 |
@@ -165,7 +155,6 @@ git diff --check
 - [Frontier、并发、租约与恢复](skills/layered-delivery/references/execution-quickstart.md)
 - [分层 Review 与最终验收](skills/layered-delivery/references/acceptance.md)
 - [MCP、状态权威与人类投影](skills/layered-delivery/references/mcp-transport.md)
-- [中央编排器配置](skills/layered-delivery/references/orchestrator-configuration.md)
 - [Graph Engineering 架构](docs/graph-engineering-upgrade.md)
 - [项目实现结构](docs/project-engineering.md)
 - [团队安装、升级、恢复、卸载与回滚](docs/team-operations.md)

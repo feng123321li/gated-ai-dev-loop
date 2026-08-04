@@ -88,7 +88,7 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 
 - Layered Delivery 只调度可信外层 receiver，并始终继承当前宿主模型；不发现、推荐、选择或切换派遣模型。完整边界见[外层接收与 Loop 内 Worker](references/agent-execution-boundary.md)。
 - 内部 Worker 是 Loop 实现细节。Codex、Claude、Grok、DeepSeek 或其他供应商都可由 receiver 按宿主能力使用；只有要成为 Graph receiver 的供应商才需要新增可信外层 Adapter。
-- 用户级配置 schema v2 只包含 `maxConcurrentExecutors` 和固定的 `quotaExhaustionPolicy=PAUSE_AND_RESUME`；读取[orchestrator-configuration.md](references/orchestrator-configuration.md)。
+- 外层 receiver 最大并发和额度恢复策略由 Plugin 内置；不得读取、创建或要求用户修复用户级编排配置。
 - 只有宿主提供结构化利用率和真实 `resetAt` 时才可提前暂停；不得从文本猜测额度，也不得因额度问题静默换模型、Worker 或 Adapter。
 - 硬 429 由模型外宿主容量回调处理，不等待失败模型反馈；收到容量等待 action 后只按宿主提供的一次性恢复方式等待。
 
@@ -108,4 +108,3 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 - 外层 receiver、Loop 内 Worker、权限边界与遥测：[agent-execution-boundary.md](references/agent-execution-boundary.md)
 - TASK/GROUP/Delivery Review 和最终确认：[acceptance.md](references/acceptance.md)
 - MCP 断连、工作区绑定、SQLite 权威与投影：[mcp-transport.md](references/mcp-transport.md)
-- 中央编排器并发与额度配置：[orchestrator-configuration.md](references/orchestrator-configuration.md)

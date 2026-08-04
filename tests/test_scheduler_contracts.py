@@ -774,7 +774,6 @@ class McpSurfaceTests(unittest.TestCase):
                 "cancel_graph_run",
                 "refreeze_task_requirement",
                 "unfreeze_task_requirement",
-                "update_orchestrator_settings",
             },
         )
         by_name = {tool["name"]: tool for tool in tools}
@@ -804,24 +803,6 @@ class McpSurfaceTests(unittest.TestCase):
             progress_tool["inputSchema"]["properties"]["summary_zh"][
                 "description"
             ],
-        )
-        open_settings = by_name["open_orchestrator_settings"]
-        self.assertTrue(open_settings["annotations"]["readOnlyHint"])
-        self.assertEqual(
-            open_settings["_meta"]["ui"]["resourceUri"],
-            "ui://layered-delivery/orchestrator-settings.html",
-        )
-        update_settings = by_name["update_orchestrator_settings"]
-        self.assertFalse(update_settings["annotations"]["readOnlyHint"])
-        self.assertEqual(
-            update_settings["inputSchema"]["required"],
-            ["config"],
-        )
-        self.assertEqual(
-            update_settings["inputSchema"]["properties"]["config"][
-                "properties"
-            ]["quotaExhaustionPolicy"]["enum"],
-            ["PAUSE_AND_RESUME"],
         )
         self.assertEqual(
             set(
@@ -2636,7 +2617,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 29)
+            self.assertEqual(len(listed["result"]["tools"]), 27)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

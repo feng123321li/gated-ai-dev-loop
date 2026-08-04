@@ -52,16 +52,6 @@
         ]
       },
       {
-        "matcher": "mcp__plugin_layered-delivery_layered-delivery__update_orchestrator_settings",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python -X utf8 -c \"import os,runpy;runpy.run_path(os.path.join(os.environ['CLAUDE_PLUGIN_ROOT'],'hooks','require_sensitive_tool_approval.py'),run_name='__main__')\"",
-            "timeout": 10
-          }
-        ]
-      },
-      {
         "matcher": "^mcp__.*__(heartbeat_loop|report_loop_progress|pause_loop|record_loop_result)$",
         "hooks": [
           {

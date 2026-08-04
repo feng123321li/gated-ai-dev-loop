@@ -28,11 +28,6 @@ from .graph_runtime import (
     unfreeze_task_requirement,
 )
 from .hierarchy_contract import hierarchy_contract
-from .orchestrator_config import OrchestratorConfig
-from .orchestrator_settings import (
-    open_orchestrator_settings,
-    update_orchestrator_settings,
-)
 from .planning import (
     create_manual_handoff,
     delivery_revision_history,
@@ -50,8 +45,6 @@ from .repository import SchedulerRepository
 ControllerOperation = Callable[..., dict[str, Any]]
 
 CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
-    "open_orchestrator_settings": open_orchestrator_settings,
-    "update_orchestrator_settings": update_orchestrator_settings,
     "workspace_status": workspace_status,
     "hierarchy_contract": hierarchy_contract,
     "preview_hierarchy": preview_hierarchy,
@@ -91,7 +84,6 @@ class ControllerContext:
     explicit_dogfood: bool = False
     host_native_agent_ids: tuple[str, ...] | None = None
     host_adapter_id: str | None = None
-    orchestrator_config: OrchestratorConfig | None = None
 
 
 class LayeredDeliveryController:
@@ -202,18 +194,6 @@ class LayeredDeliveryController:
             )
         if name == "plan_dispatch_batch":
             arguments_value["host_adapter_id"] = context.host_adapter_id
-            arguments_value["orchestrator_config"] = (
-                context.orchestrator_config
-            )
-        if name in {
-            "open_orchestrator_settings",
-            "update_orchestrator_settings",
-        }:
-            arguments_value["host_adapter_id"] = context.host_adapter_id
-        if name == "open_orchestrator_settings":
-            arguments_value["orchestrator_config"] = (
-                context.orchestrator_config
-            )
         if name == "dispatch_loop":
             arguments_value["host_adapter_id"] = context.host_adapter_id
             arguments_value["require_receiver_attestation"] = (

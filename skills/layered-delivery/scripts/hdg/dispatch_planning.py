@@ -12,14 +12,12 @@ from .dispatch_contracts import (
 from .errors import fail
 from .graph_frontier import get_graph_frontier
 from .jsonio import fingerprint
-from .orchestrator_config import (
-    OrchestratorConfig,
-    built_in_orchestrator_config,
-)
 from .repository import SchedulerRepository, timestamp
 
 
 DISPATCH_RESERVATION_SECONDS = 300
+MAX_CONCURRENT_EXECUTORS = 4
+QUOTA_EXHAUSTION_POLICY = "PAUSE_AND_RESUME"
 SAFE_HOST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$")
 
 
@@ -124,7 +122,7 @@ def plan_dispatch_batch(
     expected_graph_fingerprint: str,
     host_native_agent_ids: tuple[str, ...] | None = None,
     host_adapter_id: str | None = None,
-    orchestrator_config: OrchestratorConfig | None = None,
+    max_concurrent_executors: int = MAX_CONCURRENT_EXECUTORS,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
@@ -132,9 +130,6 @@ def plan_dispatch_batch(
 
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
-    configuration = (
-        orchestrator_config or built_in_orchestrator_config()
-    )
     actual_host_adapter_id, receiver_agent_id = _trusted_host_receiver(
         host_adapter_id=host_adapter_id,
         host_native_agent_ids=host_native_agent_ids,
@@ -211,9 +206,9 @@ def plan_dispatch_batch(
         graph_fingerprint=stored["graphFingerprint"],
         assignments=assignments,
         agent_slot_limits={
-            receiver_agent_id: configuration.max_concurrent_executors
+            receiver_agent_id: max_concurrent_executors
         },
-        orchestrator_slot_limit=configuration.max_concurrent_executors,
+        orchestrator_slot_limit=max_concurrent_executors,
         reservation_seconds=DISPATCH_RESERVATION_SECONDS,
     )
     reserved_assignments: list[dict[str, Any]] = []
@@ -269,7 +264,10 @@ def plan_dispatch_batch(
         "dispatchNodeIds": dispatch_node_ids,
         "assignments": reserved_assignments,
         "deferred": deferred,
-        "orchestratorConfig": configuration.policy(),
+        "dispatchPolicy": {
+            "maxConcurrentExecutors": max_concurrent_executors,
+            "quotaExhaustionPolicy": QUOTA_EXHAUSTION_POLICY,
+        },
     }
     return {
         "rootId": root_id,
@@ -291,9 +289,9 @@ def plan_dispatch_batch(
             "concurrent": len(reserved_assignments) > 1,
         },
         "dispatchPolicy": {
-            "maxConcurrentExecutors": configuration.max_concurrent_executors,
-            "quotaExhaustionPolicy": configuration.quota_exhaustion_policy,
-            "configurationSource": configuration.source,
+            "maxConcurrentExecutors": max_concurrent_executors,
+            "quotaExhaustionPolicy": QUOTA_EXHAUSTION_POLICY,
+            "configurationSource": "PLUGIN_BUILT_IN",
             "hostNativeOnly": True,
             "modelPolicy": "CURRENT_HOST_INHERIT",
             "controllerSelectsDevelopmentModel": False,
@@ -308,5 +306,7 @@ def plan_dispatch_batch(
 
 __all__ = (
     "DISPATCH_POLICY_VERSION",
+    "MAX_CONCURRENT_EXECUTORS",
+    "QUOTA_EXHAUSTION_POLICY",
     "plan_dispatch_batch",
 )

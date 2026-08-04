@@ -48,9 +48,6 @@
         },
         "refreeze_task_requirement": {
           "approval_mode": "prompt"
-        },
-        "update_orchestrator_settings": {
-          "approval_mode": "prompt"
         }
       }
     }

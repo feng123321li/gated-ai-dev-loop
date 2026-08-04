@@ -351,11 +351,6 @@ class PluginBundleTests(unittest.TestCase):
         recommendations = (
             SKILL / "references" / "agent-execution-boundary.md"
         ).read_text(encoding="utf-8")
-        orchestrator = (
-            SKILL
-            / "references"
-            / "orchestrator-configuration.md"
-        ).read_text(encoding="utf-8")
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("`plan_dispatch_batch`", main)
@@ -372,13 +367,9 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("不提供路由调整窗口", recommendations)
         self.assertIn("不接收", recommendations)
         self.assertIn("model inventory", recommendations)
-        self.assertIn("schema v2", orchestrator)
-        self.assertIn('"maxConcurrentExecutors": 4', orchestrator)
-        self.assertIn("%APPDATA%", orchestrator)
-        self.assertIn("XDG_CONFIG_HOME", orchestrator)
-        self.assertIn('"quotaExhaustionPolicy": "PAUSE_AND_RESUME"', orchestrator)
-        self.assertIn("打开中央编排器设置", readme)
-        self.assertIn("设置工具不依赖 Delivery 工作区", readme)
+        self.assertIn("Plugin 内置", execution)
+        self.assertIn("不读取用户级编排配置", execution)
+        self.assertNotIn("打开中央编排器设置", readme)
         self.assertIn("RECEIVER_ROOT_ROTATED", execution)
         self.assertIn("无需重冻", readme)
 
@@ -466,7 +457,6 @@ class PluginBundleTests(unittest.TestCase):
             "agent-execution-boundary.md",
             "acceptance.md",
             "mcp-transport.md",
-            "orchestrator-configuration.md",
         ):
             with self.subTest(reference=reference):
                 self.assertIn(reference, main)
@@ -558,7 +548,6 @@ class PluginBundleTests(unittest.TestCase):
                 "cancel_graph_run",
                 "unfreeze_task_requirement",
                 "refreeze_task_requirement",
-                "update_orchestrator_settings",
             },
         )
         self.assertLessEqual(matchers, names)
@@ -1746,14 +1735,11 @@ class PluginBundleTests(unittest.TestCase):
             approvals["refreeze_task_requirement"]["approval_mode"],
             "prompt",
         )
-        self.assertEqual(
-            approvals["update_orchestrator_settings"]["approval_mode"],
-            "prompt",
-        )
+        self.assertNotIn("update_orchestrator_settings", approvals)
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
         tool_count = len(tool_definitions())
-        self.assertEqual(tool_count, 29)
+        self.assertEqual(tool_count, 27)
         self.assertIn(
             "start_manual_handoff",
             {tool["name"] for tool in tool_definitions()},
@@ -1841,9 +1827,6 @@ class PluginBundleTests(unittest.TestCase):
                 for message in messages
             )
             environment = dict(os.environ)
-            environment["LAYERED_DELIVERY_ORCHESTRATOR_CONFIG"] = str(
-                Path(project_root, "user-config", "orchestrator.json")
-            )
             process = subprocess.Popen(
                 [
                     sys.executable,
@@ -1884,7 +1867,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            29,
+            27,
         )
         preview_result = responses[2]["result"]["structuredContent"][
             "result"
@@ -1895,6 +1878,90 @@ class PluginBundleTests(unittest.TestCase):
         self.assertEqual(handoff["status"], "HANDOFF_READY")
         self.assertEqual(handoff["requirementSnapshotStatus"], "FROZEN")
         self.assertFalse(handoff["graphRunCreated"])
+
+    def test_bundled_mcp_ignores_retired_orchestrator_config(self) -> None:
+        entry = SKILL / "scripts" / "hdg_mcp.py"
+        request_meta = {
+            PROTOCOL_VERSION_META_KEY: MODERN_PROTOCOL_VERSION,
+            CLIENT_CAPABILITIES_META_KEY: {},
+            CLIENT_INFO_META_KEY: {
+                "name": "retired-config-bundle-test",
+                "version": "1.0.0",
+            },
+        }
+        messages = [
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "server/discover",
+                "params": {"_meta": request_meta},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/list",
+                "params": {"_meta": request_meta},
+            },
+        ]
+        request = "".join(
+            json.dumps(message, separators=(",", ":")) + "\n"
+            for message in messages
+        )
+        with TemporaryDirectory() as project_root:
+            config = Path(project_root, "user-config", "orchestrator.json")
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "automaticOrchestration": True,
+                        "autoSelectModel": True,
+                        "allowCrossAdapterDispatch": False,
+                        "allowedAdapters": ["codex", "claude-code"],
+                        "maxConcurrentExecutors": 4,
+                        "quotaExhaustionPolicy": "PAUSE_AND_RESUME",
+                        "preferDifferentAdapterForReview": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            environment = dict(os.environ)
+            environment["LAYERED_DELIVERY_ORCHESTRATOR_CONFIG"] = str(config)
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-X",
+                    "utf8",
+                    str(entry),
+                    "--project-root",
+                    project_root,
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                env=environment,
+            )
+            stdout, stderr = process.communicate(request, timeout=10)
+
+        self.assertEqual(process.returncode, 0, stderr)
+        responses = [
+            json.loads(line)
+            for line in stdout.splitlines()
+            if line
+        ]
+        self.assertEqual(len(responses), 2)
+        tools = responses[1]["result"]["tools"]
+        self.assertEqual(len(tools), 27)
+        self.assertNotIn(
+            "open_orchestrator_settings",
+            {tool["name"] for tool in tools},
+        )
+        self.assertNotIn(
+            "update_orchestrator_settings",
+            {tool["name"] for tool in tools},
+        )
 
     def test_bundled_mcp_keeps_legacy_initialize_fallback(self) -> None:
         entry = SKILL / "scripts" / "hdg_mcp.py"
@@ -1930,9 +1997,6 @@ class PluginBundleTests(unittest.TestCase):
         )
         with TemporaryDirectory() as project_root:
             environment = dict(os.environ)
-            environment["LAYERED_DELIVERY_ORCHESTRATOR_CONFIG"] = str(
-                Path(project_root, "user-config", "orchestrator.json")
-            )
             process = subprocess.Popen(
                 [
                     sys.executable,
@@ -1967,7 +2031,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            29,
+            27,
         )
 
 

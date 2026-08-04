@@ -13,8 +13,6 @@ from .errors import GatedLoopError, fail
 from .hierarchy_contract import hierarchy_input_schema
 from .jsonio import canonical_json
 from .model_core import validate_hierarchy_definition
-from .mcp_apps import ORCHESTRATOR_SETTINGS_RESOURCE_URI
-from .orchestrator_config import OrchestratorConfig
 
 
 def _object(
@@ -325,90 +323,7 @@ def _prepare_revision_tool_schema() -> dict[str, Any]:
     return tool_schema
 
 
-ORCHESTRATOR_POLICY = _object(
-    {
-        "schemaVersion": {
-            "type": "integer",
-            "const": 2,
-        },
-        "maxConcurrentExecutors": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 64,
-        },
-        "quotaExhaustionPolicy": {
-            "type": "string",
-            "enum": [
-                "PAUSE_AND_RESUME",
-            ],
-        },
-    },
-    required=[
-        "schemaVersion",
-        "maxConcurrentExecutors",
-        "quotaExhaustionPolicy",
-    ],
-)
-
-
 TOOLS = (
-    _tool(
-        "open_orchestrator_settings",
-        (
-            "Read the shared user-level central orchestrator policy and "
-            "current trusted Adapter status. Render the settings panel when the "
-            "host supports MCP Apps; otherwise return the same structured "
-            "configuration for text-based inspection. This user-level tool "
-            "does not require a Delivery workspace."
-        ),
-        _object({}),
-        title="打开中央编排器设置",
-        annotations={
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "openWorldHint": False,
-            "idempotentHint": True,
-        },
-        meta={
-            "ui": {
-                "resourceUri": ORCHESTRATOR_SETTINGS_RESOURCE_URI,
-                "visibility": ["model", "app"],
-            },
-            "openai/outputTemplate": ORCHESTRATOR_SETTINGS_RESOURCE_URI,
-            "openai/widgetAccessible": True,
-            "openai/toolInvocation/invoking": "正在读取编排设置…",
-            "openai/toolInvocation/invoked": "编排设置已就绪",
-        },
-    ),
-    _tool(
-        "update_orchestrator_settings",
-        (
-            "Replace the complete shared user-level central orchestrator "
-            "policy after explicit user confirmation. This writes the "
-            "platform-specific orchestrator.json atomically and applies "
-            "the validated policy to the current MCP connection without "
-            "requiring a Delivery workspace. Adapter trust comes from "
-            "Plugin registration and host attestation, never this file."
-        ),
-        _object(
-            {"config": ORCHESTRATOR_POLICY},
-            required=["config"],
-        ),
-        human=True,
-        title="保存中央编排器设置",
-        annotations={
-            "readOnlyHint": False,
-            "destructiveHint": False,
-            "openWorldHint": False,
-            "idempotentHint": True,
-        },
-        meta={
-            "ui": {"visibility": ["model", "app"]},
-            "openai/widgetAccessible": True,
-            "openai/toolInvocation/invoking": "正在保存编排设置…",
-            "openai/toolInvocation/invoked": "编排设置已保存",
-        },
-    ),
     _tool(
         "workspace_status",
         (
@@ -1208,7 +1123,6 @@ def call_tool(
     controller: LayeredDeliveryController = DEFAULT_CONTROLLER,
     client_info: dict[str, Any] | None = None,
     trusted_host_adapter: str | None = None,
-    orchestrator_config: OrchestratorConfig | None = None,
     **_: Any,
 ) -> dict[str, Any]:
     internal_arguments = validate_tool_arguments(name, arguments)
@@ -1225,7 +1139,6 @@ def call_tool(
                 trusted_host_adapter
             ),
             host_adapter_id=trusted_host_adapter,
-            orchestrator_config=orchestrator_config,
         ),
     )
     return result

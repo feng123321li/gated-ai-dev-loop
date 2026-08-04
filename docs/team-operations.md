@@ -1,6 +1,6 @@
 # 团队安装与运维
 
-本文面向团队管理员和普通使用者，覆盖 `layered-delivery` 0.34.1 的安装、升级、恢复、卸载与回滚。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 标准库。
+本文面向团队管理员和普通使用者，覆盖 `layered-delivery` 0.34.2 的安装、升级、恢复、卸载与回滚。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 标准库。
 
 ## 安装前检查
 
@@ -41,7 +41,7 @@ claude plugin list --json
 python scripts/host_smoke.py probe --json
 ```
 
-结果必须报告 Plugin 版本 0.34.1 和 29 个 MCP 工具，并如实标记本机已安装的宿主。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器，普通成员也不需要重复付费冒烟。
+结果必须报告 Plugin 版本 0.34.2 和 27 个 MCP 工具，并如实标记本机已安装的宿主。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器，普通成员也不需要重复付费冒烟。
 
 真实冒烟默认先只展示计划，必须显式增加 `--execute` 才调用模型。两个宿主分别运行，绝不从一个终端跨调另一个 Agent：
 
@@ -53,7 +53,7 @@ python scripts/host_smoke.py run --host codex --scenario light
 python scripts/host_smoke.py run --host codex --scenario light --execute
 ```
 
-Claude 命令从当前源码候选的 `--plugin-dir` 加载包；Codex 命令要求 0.34.1 候选已经从 Marketplace 安装。发布前的最小门禁可用 LIGHT 验证同宿主 claim/heartbeat/progress/result；发布管理员需要覆盖 Review 时再把 `--scenario light` 改成 `--scenario standard`。任何输出中的 `claimedAgents` 都必须只含命令指定的当前宿主。
+Claude 命令从当前源码候选的 `--plugin-dir` 加载包；Codex 命令要求 0.34.2 候选已经从 Marketplace 安装。发布前的最小门禁可用 LIGHT 验证同宿主 claim/heartbeat/progress/result；发布管理员需要覆盖 Review 时再把 `--scenario light` 改成 `--scenario standard`。任何输出中的 `claimedAgents` 都必须只含命令指定的当前宿主。
 
 Codex 冒烟不能使用 `--ephemeral`：`SubagentStart` attestation 必须从宿主持久化 transcript 校验 parent/child/task。冒烟会留下一个可审计的 Codex 会话记录，但业务工作区仍位于自动清理的临时目录；若宿主无法提供该 transcript，claim 必须 fail closed。
 
@@ -62,7 +62,7 @@ Codex 冒烟不能使用 `--ephemeral`：`SubagentStart` attestation 必须从�
 ### 升级前
 
 1. 记录当前 `codex plugin list --json` 或 `claude plugin list --json` 输出中的版本。
-2. 若用户级 `orchestrator.json` 仍为 schema v1，升级前将其明确改为 `{"schemaVersion":2,"maxConcurrentExecutors":4,"quotaExhaustionPolicy":"PAUSE_AND_RESUME"}`，其中并发值可保留原配置。v2 不再接受模型选择、Adapter allowlist、跨 Adapter 或 Review 多样性字段；旧文件会 fail closed，不会静默迁移。
+2. 0.34.2 不再读取用户级 `orchestrator.json`；机器上残留的 schema v1/v2 文件不会阻断 MCP，也不参与派遣。无需在升级前编辑或删除它。
 3. 对 0.31 及更早版本的旧式 manual Graph run，先在旧版本完成或取消。当前版本的 manual Graph 只能由 `start_manual_handoff` 从精确 `HANDOFF_READY` 快照创建，且 MANUAL 只允许 TASK；不要把旧 run 当作新协议恢复。
 4. 自动 schema v3 Graph 可在新会话通过 `workspace_status → graph_frontier` 恢复。升级前仍建议让正在写结果的 Loop 完成，避免恰好跨越 Hook 重载窗口。
 5. 已由早期 0.33.0 生成、但缺少根 `scheduler.db`/`overview.md` 的手动内容包不会从 Markdown 反向迁移。升级后应在仍持有原 hierarchy 与双 fingerprint 的需求会话中重新调用 `create_manual_handoff` 完成 SQLite 登记；不要手工创建数据库或拼接总览。
@@ -92,6 +92,7 @@ Claude Code 更新后必须重启会话。若宿主提示命令名称不同，�
 | 现象 | 安全恢复方式 |
 |---|---|
 | 新会话不知道旧任务状态 | 在同一工作区调用 `workspace_status`，对返回的 `rootId` 调用 `graph_frontier` |
+| 0.34.0/0.34.1 因旧 `orchestrator.json` 无法启动 MCP | 升级到 0.34.2；新版本不读取该文件，无需修改 Graph 状态 |
 | MCP 连接中断，写操作结果未知 | 先重连并读取 `workspace_status`、`graph_status` 或 `graph_frontier`，不要重放未知写操作 |
 | Loop 心跳和进度停止 | 等待租约回收；下一次 `graph_frontier` 触发 `WORKER_LOST`，随后使用新 attempt 和新接收上下文 |
 | Projection 缺失或损坏 | 对已校验事件链调用 `rebuild_graph_run`；不要直接写 Markdown 或 SQLite |
@@ -115,7 +116,7 @@ codex plugin remove layered-delivery@majorbio-skills --json
 claude plugin uninstall layered-delivery@majorbio-skills --scope user
 ```
 
-卸载后新建会话，并用宿主的 Plugin 列表确认已移除。卸载 Plugin 不等于删除项目交付记录：项目中的 `.layered-delivery` 和用户级中央编排器配置默认保留，便于审计或重新安装后恢复。需要清理这些数据时应单独评审精确路径、确认没有活动 Delivery，并使用可恢复方式处理。
+卸载后新建会话，并用宿主的 Plugin 列表确认已移除。卸载 Plugin 不等于删除项目交付记录：项目中的 `.layered-delivery` 默认保留，便于审计或重新安装后恢复。需要清理这些数据时应单独评审精确路径、确认没有活动 Delivery，并使用可恢复方式处理。
 
 ## 回滚
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Mapping
 
 from . import __version__
@@ -13,16 +13,10 @@ from .host_policy import (
     ProjectRootBinding,
 )
 from .jsonio import redact
-from .mcp_apps import read_resource, resource_definitions
 from .mcp_tools import (
     call_tool,
     tool_definitions,
     validate_tool_arguments,
-)
-from .orchestrator_config import (
-    OrchestratorConfig,
-    built_in_orchestrator_config,
-    load_orchestrator_config,
 )
 
 
@@ -135,18 +129,12 @@ SERVER_INSTRUCTIONS = (
     "coordinates: each manual TASK runs in an independent receiving context "
     "that reports its receiver identity and claims with MANUAL provenance; every "
     "subsequent Review returns to automatic host-native planning. Automatic "
-    "execution also obeys one user-level central orchestrator configuration "
-    "shared by local host products: only the global concurrency cap and "
-    "quota pause/resume policy are configurable. Adapter trust comes from "
-    "Plugin registration and model-external host attestation, never a user "
-    "allowlist. Grok, DeepSeek, or another Agent integrates by adding one "
-    "trusted outer Adapter lifecycle; its models and internal workers remain "
-    "outside the Graph contract. For automatic "
-    "configuration, open_orchestrator_settings returns a portable MCP Apps "
-    "panel plus complete structured fallback data. "
-    "update_orchestrator_settings requires explicit host approval, "
-    "atomically replaces the per-user file, and refreshes the current MCP "
-    "connection. UI support never changes dispatch authority. For automatic "
+    "execution uses Plugin-owned fixed concurrency and quota pause/resume "
+    "policies. Adapter trust comes from Plugin registration and model-"
+    "external host attestation, never a user file or allowlist. Grok, "
+    "DeepSeek, or another Agent integrates by adding one trusted outer "
+    "Adapter lifecycle; its models and internal workers remain outside the "
+    "Graph contract. For automatic "
     "execution, plan_dispatch_batch atomically reserves each selected Loop "
     "and its cross-Delivery host Agent slot, then returns concurrent outer-"
     "receiver assignments with CURRENT_HOST_INHERIT model policy. A second "
@@ -190,14 +178,6 @@ _USER_INTERACTION_TOOLS = frozenset(
     if tool.get("_meta", {}).get("anthropic/requiresUserInteraction") is True
 )
 
-_PROJECT_ROOT_INDEPENDENT_TOOLS = frozenset(
-    {
-        "open_orchestrator_settings",
-        "update_orchestrator_settings",
-    }
-)
-
-
 @dataclass
 class McpConnection:
     """Transport connection plus legacy-only handshake state."""
@@ -208,9 +188,6 @@ class McpConnection:
     legacy_initialized: bool = False
     legacy_client_info: dict[str, object] | None = None
     trusted_host_adapter: str | None = None
-    orchestrator_config: OrchestratorConfig = field(
-        default_factory=built_in_orchestrator_config
-    )
 
 
 @dataclass(frozen=True)
@@ -231,10 +208,6 @@ def _server_info() -> dict[str, str]:
 def _server_capabilities() -> dict[str, object]:
     return {
         "tools": {"listChanged": False},
-        "resources": {
-            "subscribe": False,
-            "listChanged": False,
-        },
         "experimental": {
             CODEX_SANDBOX_META_KEY: {},
         },
@@ -540,46 +513,6 @@ def _validate_call_params(
     return name, arguments
 
 
-def _validate_resource_read_params(
-    params: Mapping[str, object],
-) -> str | None:
-    if set(params) - {"uri", "_meta"}:
-        return None
-    uri = params.get("uri")
-    request_meta = params.get("_meta")
-    if (
-        not isinstance(uri, str)
-        or not uri
-        or (
-            request_meta is not None
-            and not isinstance(request_meta, dict)
-        )
-    ):
-        return None
-    return uri
-
-
-def _read_mcp_resource(
-    *,
-    request_id: object,
-    params: Mapping[str, object],
-    modern: bool,
-) -> dict[str, Any]:
-    uri = _validate_resource_read_params(params)
-    if uri is None:
-        return _invalid_params(request_id)
-    try:
-        result = read_resource(uri)
-    except GatedLoopError as error:
-        return _rpc_error(
-            request_id,
-            -32002,
-            error.message,
-            data={"code": error.code, "details": error.details},
-        )
-    return _rpc_result(request_id, result, modern=modern)
-
-
 def _call_scheduler_tool(
     *,
     request_id: object,
@@ -615,9 +548,7 @@ def _call_scheduler_tool(
         root_resolution = connection.project_root.resolve_request(
             params.get("_meta"),
             stateless=modern,
-            require_sandbox_metadata=(
-                name not in _PROJECT_ROOT_INDEPENDENT_TOOLS
-            ),
+            require_sandbox_metadata=True,
         )
         business_result = call_tool(
             name,
@@ -627,10 +558,7 @@ def _call_scheduler_tool(
             explicit_dogfood=explicit_dogfood,
             client_info=(dict(client_info) if client_info else None),
             trusted_host_adapter=connection.trusted_host_adapter,
-            orchestrator_config=connection.orchestrator_config,
         )
-        if name == "update_orchestrator_settings":
-            connection.orchestrator_config = load_orchestrator_config()
         payload = {
             "ok": True,
             "result": business_result,
@@ -703,26 +631,6 @@ def _handle_modern_request(
                 "ttlMs": TOOLS_TTL_MS,
                 "cacheScope": CACHE_SCOPE,
             },
-            modern=True,
-        )
-
-    if method == "resources/list":
-        if not _validate_list_params(params):
-            return _invalid_params(request_id)
-        return _rpc_result(
-            request_id,
-            {
-                "resources": resource_definitions(),
-                "ttlMs": TOOLS_TTL_MS,
-                "cacheScope": CACHE_SCOPE,
-            },
-            modern=True,
-        )
-
-    if method == "resources/read":
-        return _read_mcp_resource(
-            request_id=request_id,
-            params=params,
             modern=True,
         )
 
@@ -802,22 +710,6 @@ def _handle_legacy_request(
         return _rpc_result(
             request_id,
             {"tools": tool_definitions()},
-            modern=False,
-        )
-
-    if method == "resources/list":
-        if not _validate_list_params(params):
-            return _invalid_params(request_id)
-        return _rpc_result(
-            request_id,
-            {"resources": resource_definitions()},
-            modern=False,
-        )
-
-    if method == "resources/read":
-        return _read_mcp_resource(
-            request_id=request_id,
-            params=params,
             modern=False,
         )
 

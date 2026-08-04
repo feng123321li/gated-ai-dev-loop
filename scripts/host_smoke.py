@@ -259,8 +259,8 @@ def _host_command(
         candidate_available, competing_plugin_ids = _codex_plugin_state()
         if not candidate_available:
             raise RuntimeError(
-                "layered-delivery 0.32.0 must be installed in Codex before "
-                "running the real-host smoke test"
+                f"layered-delivery {__version__} must be installed in "
+                "Codex before running the real-host smoke test"
             )
         command = [executable]
         for plugin_id in competing_plugin_ids:

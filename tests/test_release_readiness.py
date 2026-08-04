@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+from hdg import __version__
 from hdg.graph_model import (
     compile_delivery_graph,
     graph_assurance_profile,
@@ -121,7 +122,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         result = json.loads(completed.stdout)
         self.assertEqual(set(result["hosts"]), {"codex", "claude-code"})
         self.assertFalse(result["modelInvocationStarted"])
-        self.assertEqual(result["pluginVersion"], "0.32.0")
+        self.assertEqual(result["pluginVersion"], __version__)
         self.assertEqual(result["toolCount"], 29)
 
     def test_codex_probe_finds_candidate_alongside_installed_old_version(
@@ -130,7 +131,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         installed = {
             "installed": [
                 {"name": "layered-delivery", "version": "0.31.0"},
-                {"name": "layered-delivery", "version": "0.32.0"},
+                {"name": "layered-delivery", "version": __version__},
             ]
         }
         completed = subprocess.CompletedProcess(

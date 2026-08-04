@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.33.0 — 2026-08-04
+
+发布提交：`4104083`
+
+- 手动开发由单一交接文件升级为无控制状态的冻结内容包：`create_manual_handoff` 复用自动开发渲染器，在稳定 `.layered-delivery/<delivery-id>/` 下生成 overview、baseline、progress、acceptance、revisions、递归 work-items 和接口详情，并保留自包含 handoff 文件。
+- 新增 `requirementSnapshotStatus=FROZEN`，明确区分“需求内容已由双 fingerprint 锁定”和 Graph `FROZEN/ACTIVE`；手动路径继续保持 `controlStateCreated=false`、`graphRunCreated=false`、`workspaceCreated=false`，不选择 Agent/模型、不创建任务或 worktree。
+- 接收方可切换到任意 CLI 直接按冻结 baseline/work-items 开发，仅维护 progress/acceptance；handoff、overview、baseline、revisions、接口契约和双 fingerprint 保持只读，需求变化必须生成新快照。
+- 同一 fingerprint 后续进入自动开发时，控制器原位接管标准投影并保留 handoff；已有匹配的 Active Delivery 只补交接文件并重建权威投影，不会被“手动调度未启动”状态覆盖。相同 `delivery.id` 但 fingerprint 不一致时 fail closed，要求新 Delivery 或显式 Revision。
+- 新增完整目录、接口树、MCP 返回、已有 Active 状态保护和自动/手动结构一致性回归；Python 全量 244 项测试、编译检查、发布候选校验、Skill/Plugin 校验、双宿主只读探测和 `git diff --check` 通过。
+
 ## 0.32.0 — 2026-08-03
 
 发布提交：`158f7a7`

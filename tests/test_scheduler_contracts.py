@@ -217,6 +217,38 @@ def bind_delivery_to_git(
 
 
 class HierarchyContractTests(unittest.TestCase):
+    def test_requirement_key_is_stable_and_exposed_for_delivery_continuity(
+        self,
+    ) -> None:
+        hierarchy = task_hierarchy()
+        hierarchy["delivery"]["requirementKey"] = "mprotein-443"
+
+        normalized = validate_hierarchy_definition(hierarchy)
+        contract = hierarchy_contract(root_kind="TASK")
+
+        self.assertEqual(
+            normalized["delivery"]["requirementKey"],
+            "MPROTEIN-443",
+        )
+        self.assertIn(
+            "requirementKey",
+            contract["inputSchema"]["properties"]["delivery"][
+                "properties"
+            ],
+        )
+        self.assertEqual(
+            contract["projectionGuidance"]["deliveryContinuity"][
+                "identity"
+            ],
+            "requirementKey -> delivery.id",
+        )
+        self.assertEqual(
+            contract["projectionGuidance"]["deliveryContinuity"][
+                "duplicatePolicy"
+            ],
+            "REJECT_DIFFERENT_DELIVERY_ID",
+        )
+
     def test_every_contract_example_is_valid(self) -> None:
         for root_kind in ("TASK", "GROUP"):
             with self.subTest(root_kind=root_kind):
@@ -428,6 +460,62 @@ class HierarchyContractTests(unittest.TestCase):
             "method",
             interface_guidance["dubboSnapshotFields"],
         )
+        self.assertIn(
+            "signature",
+            interface_guidance["dubboSnapshotFields"],
+        )
+        self.assertEqual(
+            interface_guidance["supportedFieldShapes"],
+            {
+                "fieldList": (
+                    "[{name,type,required?,maxLength?,"
+                    "description?,example?}]"
+                ),
+                "typedObject": (
+                    "{type,description?,fields|properties:[...]}"
+                ),
+                "fieldAttributes": [
+                    "name",
+                    "type",
+                    "required",
+                    "maxLength",
+                    "description",
+                    "example",
+                ],
+                "emptyContract": "[]",
+                "requestLocationContainers": {
+                    "headers": "header",
+                    "pathParameters": "path",
+                    "queryParameters": "query",
+                    "body": "body",
+                    "businessParameters": "business",
+                    "contextDependencies": "context",
+                    "contextDerived": "context",
+                    "contextualInputs": "context",
+                    "parameters": "",
+                },
+                "responseAliases": {
+                    "type": ["type", "controllerReturnType"],
+                    "fields": [
+                        "fields",
+                        "properties",
+                        "controllerReturnFields",
+                    ],
+                    "description": [
+                        "description",
+                        "summary",
+                    ],
+                    "ignoredEnvelopeMetadata": [
+                        "wireType",
+                        "frameworkEnvelope",
+                        "wrapping",
+                    ],
+                },
+                "emptyRequestText": "无入参",
+                "emptyResponseText": "无出参",
+                "metadataPolicy": "CONTAINERS_ARE_NOT_FIELDS",
+            },
+        )
         self.assertEqual(
             interface_guidance["fieldProjection"],
             {
@@ -447,11 +535,32 @@ class HierarchyContractTests(unittest.TestCase):
                     "type",
                     "required",
                     "description",
+                    "example",
                 ],
                 "responseComparisonColumns": [
                     "type",
                     "description",
+                    "example",
                 ],
+                "dubboComparisonColumns": [
+                    "type",
+                    "required",
+                    "maxLength",
+                    "description",
+                    "example",
+                ],
+                "protocolLayouts": {
+                    "HTTP": [
+                        "Path 参数",
+                        "Query 参数",
+                        "请求头",
+                        "请求体",
+                        "响应参数",
+                    ],
+                    "DUBBO": ["接口", "方法", "调用参数", "返回结果"],
+                    "DEFAULT": ["入参", "出参"],
+                },
+                "responseEnvelopePolicy": "IGNORE",
                 "deletedValueStyle": "MARKDOWN_STRIKETHROUGH",
                 "singleSidedChangeStyle": "PRESENT_VALUE_ONLY",
                 "transitionFormat": "BEFORE_TO_AFTER",
@@ -465,6 +574,11 @@ class HierarchyContractTests(unittest.TestCase):
             "has no interface projection or link",
             interface_guidance["description"],
         )
+        self.assertIn(
+            "source of truth",
+            interface_guidance["description"],
+        )
+        self.assertIn("Torna", interface_guidance["description"])
 
     def test_git_binding_normalizes_and_rejects_invalid_contracts(
         self,
@@ -708,6 +822,16 @@ class McpSurfaceTests(unittest.TestCase):
         self.assertNotIn(
             "confirmed",
             by_name["create_manual_handoff"]["inputSchema"]["properties"],
+        )
+        manual_handoff_properties = by_name["create_manual_handoff"][
+            "inputSchema"
+        ]["properties"]
+        self.assertIn("expected_current_revision", manual_handoff_properties)
+        self.assertIn("continuity_basis", manual_handoff_properties)
+        self.assertIn("revision_reason", manual_handoff_properties)
+        self.assertEqual(
+            manual_handoff_properties["continuity_basis"]["enum"],
+            ["USER_EXPLICIT_SAME_DELIVERY"],
         )
         self.assertIn(
             ".layered-delivery/<delivery-id>/handoff-<fingerprint>.md",

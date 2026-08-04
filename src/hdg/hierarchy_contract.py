@@ -477,6 +477,17 @@ def hierarchy_input_schema(
                     "id": _identifier("Delivery and Graph run ID."),
                     "title": _text("Delivery title."),
                     "summary": _text("Delivery outcome summary."),
+                    "requirementKey": {
+                        "type": "string",
+                        "pattern": (
+                            "^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,127}$"
+                        ),
+                        "description": (
+                            "Stable external requirement key such as "
+                            "MPROTEIN-443. The same key must keep one "
+                            "delivery.id and use Delivery Revisions."
+                        ),
+                    },
                     "assuranceProfile": {
                         "type": "string",
                         "enum": ["LIGHT", "STANDARD"],
@@ -520,6 +531,23 @@ def hierarchy_contract(
         "inputSchema": input_schema,
         "example": _example(root_kind),
         "projectionGuidance": {
+            "deliveryContinuity": {
+                "identity": "requirementKey -> delivery.id",
+                "fallbackDetection": "ID_OR_TITLE_TICKET_REFERENCE",
+                "duplicatePolicy": "REJECT_DIFFERENT_DELIVERY_ID",
+                "revisionPolicy": (
+                    "REUSE_DELIVERY_ID_AND_CREATE_IMMUTABLE_REVISION"
+                ),
+                "description": (
+                    "When the user supplies a stable external work-item or "
+                    "requirement identifier, declare it as requirementKey. "
+                    "One requirement key maps to one immutable delivery.id; "
+                    "changed content creates the next revision in the same "
+                    "projection directory. The controller also detects "
+                    "ticket-like keys in the Delivery ID or title so a "
+                    "renamed ID cannot silently create duplicate files."
+                ),
+            },
             "assuranceProfiles": {
                 "default": "STANDARD",
                 "classificationOwner": "PLANNING_AGENT",
@@ -668,8 +696,61 @@ def hierarchy_contract(
                     "request",
                     "response",
                 ],
-                "httpSnapshotFields": ["method", "path"],
-                "dubboSnapshotFields": ["service", "method"],
+                "httpSnapshotFields": ["method", "path", "contentType"],
+                "dubboSnapshotFields": [
+                    "service",
+                    "method",
+                    "signature",
+                ],
+                "supportedFieldShapes": {
+                    "fieldList": (
+                        "[{name,type,required?,maxLength?,"
+                        "description?,example?}]"
+                    ),
+                    "typedObject": (
+                        "{type,description?,fields|properties:[...]}"
+                    ),
+                    "fieldAttributes": [
+                        "name",
+                        "type",
+                        "required",
+                        "maxLength",
+                        "description",
+                        "example",
+                    ],
+                    "emptyContract": "[]",
+                    "requestLocationContainers": {
+                        "headers": "header",
+                        "pathParameters": "path",
+                        "queryParameters": "query",
+                        "body": "body",
+                        "businessParameters": "business",
+                        "contextDependencies": "context",
+                        "contextDerived": "context",
+                        "contextualInputs": "context",
+                        "parameters": "",
+                    },
+                    "responseAliases": {
+                        "type": ["type", "controllerReturnType"],
+                        "fields": [
+                            "fields",
+                            "properties",
+                            "controllerReturnFields",
+                        ],
+                        "description": [
+                            "description",
+                            "summary",
+                        ],
+                        "ignoredEnvelopeMetadata": [
+                            "wireType",
+                            "frameworkEnvelope",
+                            "wrapping",
+                        ],
+                    },
+                    "emptyRequestText": "无入参",
+                    "emptyResponseText": "无出参",
+                    "metadataPolicy": "CONTAINERS_ARE_NOT_FIELDS",
+                },
                 "fieldProjection": {
                     "layout": "REQUEST_RESPONSE_TABLES",
                     "documents": {
@@ -687,11 +768,37 @@ def hierarchy_contract(
                         "type",
                         "required",
                         "description",
+                        "example",
                     ],
                     "responseComparisonColumns": [
                         "type",
                         "description",
+                        "example",
                     ],
+                    "dubboComparisonColumns": [
+                        "type",
+                        "required",
+                        "maxLength",
+                        "description",
+                        "example",
+                    ],
+                    "protocolLayouts": {
+                        "HTTP": [
+                            "Path 参数",
+                            "Query 参数",
+                            "请求头",
+                            "请求体",
+                            "响应参数",
+                        ],
+                        "DUBBO": [
+                            "接口",
+                            "方法",
+                            "调用参数",
+                            "返回结果",
+                        ],
+                        "DEFAULT": ["入参", "出参"],
+                    },
+                    "responseEnvelopePolicy": "IGNORE",
                     "deletedValueStyle": "MARKDOWN_STRIKETHROUGH",
                     "singleSidedChangeStyle": "PRESENT_VALUE_ONLY",
                     "transitionFormat": "BEFORE_TO_AFTER",
@@ -706,9 +813,20 @@ def hierarchy_contract(
                     "protocol-specific call fields. The controller writes "
                     "an index to that TASK's interfaces.md and one field-level "
                     "document per interface under interfaces/. Request tables "
-                    "compare type, required, and description; response tables "
-                    "omit required. Deleted values use Markdown strikethrough, "
+                    "compare type, required, description, and example; response "
+                    "tables omit required, while Dubbo also exposes maximum "
+                    "length. Deleted values use Markdown strikethrough, "
                     "and added or deleted fields show only the present side. "
+                    "Field lists and typed objects render their actual fields. "
+                    "Known request location containers and Controller response "
+                    "aliases are normalized but never rendered as business "
+                    "fields; empty lists explicitly render as no input or no "
+                    "output. "
+                    "This frozen projection is the interface source of truth "
+                    "for implementation and later Torna publication; method, "
+                    "path, signature, field hierarchy, type, requiredness, "
+                    "maximum length, description, and example must stay "
+                    "identical. Framework response envelopes are ignored. "
                     "When a TASK declares no interfaces, its directory has no "
                     "interface projection or link. Code inspection may help "
                     "prepare or verify the declaration, but the controller "

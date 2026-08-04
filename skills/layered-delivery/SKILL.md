@@ -22,7 +22,7 @@ description: "规划、冻结、调度或恢复多项目、多模块交付 Graph
 - 只使用 schema v3；准备前调用 `hierarchy_contract` 获取当前精确契约，不从源码、旧会话或示例猜参数。
 - SQLite 是需求与调度状态的机器权威；Graph 启动后由事件链记录运行历史。Markdown 投影只用于沟通、进度和验收。
 - 一个对话工作区最多绑定一个未结束 Delivery。新业务目标默认创建新 Delivery；不得因为工作区已有旧 Delivery 就把新需求写成旧 Delivery 的 Revision。
-- 一个需求只使用一个稳定的 `.layered-delivery/<delivery-id>/` 目录。自动与手动开发均生成 overview、baseline、progress、acceptance、revisions 和同结构 work-items；手动开发额外包含自包含 handoff 文件。不得创建共享 `.layered-delivery/handoffs/`。手动包的需求内容已由双指纹冻结，但它不是 Graph `FROZEN`：未 prepare、未创建 Graph Run。
+- 一个需求只使用一个稳定的 `.layered-delivery/<delivery-id>/` 目录。用户提供工单号等外部需求标识时写入 `delivery.requirementKey`；同一 key 不得换 `delivery.id`，Controller 也会从 ID/标题识别常见工单号并阻断重复目录。自动与手动开发均生成 overview、baseline、progress、acceptance、revisions 和同结构 work-items；手动开发额外包含自包含 handoff 文件。不得创建共享 `.layered-delivery/handoffs/`。手动包的需求内容已由双指纹冻结，但它不是 Graph `FROZEN`：未 prepare、未创建 Graph Run。
 - 并行 Delivery 真正开始开发时使用独立宿主工作区；Git 场景优先使用独立 linked worktree。预览和手动内容冻结阶段不创建 worktree。不要复制调度数据库或启动第二套控制面。
 - 总调度上下文只规划和路由，不在自身上下文内实现 TASK 或 Review。每个执行与 Review Loop 使用独立接收上下文。
 - Git 创建/切换分支、commit、merge、push、发布、迁移和新增外部权限始终需要各自授权；Graph 的项目范围不替代这些授权。
@@ -60,6 +60,7 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 
 - 未开始 TASK 的 `title`、`summary` 或 `payload` 可在用户明确授权后 `unfreeze_task_requirement → refreeze_task_requirement`；不得借此修改依赖、资源、Loop、Review 或拓扑。
 - 最终验收前需要改变外层范围时，只有用户明确继续同一 `delivery.id`，或已有 Loop 返回 `REPLAN_REQUIRED`，才调用 `prepare_delivery_revision`。
+- 已是 `HANDOFF_READY` 的手动需求发生变化时，保持同一 `delivery.id` 重新 preview，并调用 `create_manual_handoff` 提交当前 Revision、`USER_EXPLICIT_SAME_DELIVERY` 和修订原因；Controller 在原目录生成下一不可变手动 Revision，不调用自动路径的 `prepare_delivery_revision`。
 - 候选 Revision 不替换当前 run；新 Revision 冻结时才原子切换。不要先取消旧 run，也不要为同一需求创建新 Delivery ID。
 
 ## 调度循环

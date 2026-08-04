@@ -23,7 +23,7 @@
 
 `preview_hierarchy` 先对原 hierarchy 做只读校验并返回双 fingerprint，不创建 scheduler 状态。用户选择手动开发后，`create_manual_handoff` 校验原 hierarchy、双 fingerprint 与精确项目授权，在 `.layered-delivery/<delivery-id>/` 生成与自动开发相同结构的 overview、baseline、progress、acceptance、revisions、work-items，并增加自包含 `handoff-<fingerprint>.md`。该文件同时包含中文开发内容和机器可读 schema v3 附录；不创建共享 `handoffs` 目录。
 
-该路径返回 `requirementSnapshotStatus=FROZEN`，表示需求内容由双 fingerprint 锁定；同时固定 `controlStateCreated=false`、`graphRunCreated=false`、`workspaceCreated=false`，因此不表示 Graph `FROZEN`，也不创建接收任务/会话、不初始化 worktree、不选择 Agent 或模型。用户可切换到任意 CLI；接收方真正开始开发时再创建或选择工作区、校准 projectScopes/gitBinding，然后直接按冻结内容开发并维护 progress/acceptance。只有用户后来明确改为自动 Graph 执行，才进入独立的 prepare/freeze 流程。
+该路径返回 `requirementSnapshotStatus=FROZEN`，表示需求内容由双 fingerprint 锁定；`controlStateCreated=true` 表示控制器已生成共享 `scheduler.db`、根 `overview.md` 并把快照登记为 `HANDOFF_READY`，同时固定 `graphRunCreated=false`、`workspaceCreated=false`。因此它不表示 Graph `FROZEN`，也不创建接收任务/会话、不初始化 worktree、不选择 Agent 或模型。用户可切换到任意 CLI；接收方真正开始开发时再创建或选择工作区、校准 projectScopes/gitBinding，然后直接按冻结内容开发并维护 progress/acceptance。只有用户后来明确改为自动 Graph 执行，才进入独立的 prepare/freeze 流程。
 
 如果接收方创建 worktree 时宿主只返回排队标识，状态是 `WORKTREE_SETUP_QUEUED`，不是 Graph 已运行。同一交接只创建一次；得到真实任务 ID 前不重复发起，也不把“内容已冻结”误报为 Graph 已冻结。
 

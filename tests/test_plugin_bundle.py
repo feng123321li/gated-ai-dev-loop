@@ -313,6 +313,9 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("入参", planning)
         self.assertIn("出参", planning)
         self.assertIn("humanArtifacts.workItems", planning)
+        self.assertIn("`controlStateCreated=true`", planning)
+        self.assertIn("共享 `.layered-delivery/scheduler.db`", planning)
+        self.assertIn("`HANDOFF_READY`", main + planning + transport)
         self.assertIn("work-items/", transport)
         self.assertIn("<root-id>/", transport)
         self.assertIn(

@@ -718,6 +718,14 @@ class McpSurfaceTests(unittest.TestCase):
             "and work-items projections",
             by_name["create_manual_handoff"]["description"],
         )
+        self.assertIn(
+            "shared scheduler.db",
+            by_name["create_manual_handoff"]["description"],
+        )
+        self.assertIn(
+            "root overview.md",
+            by_name["create_manual_handoff"]["description"],
+        )
         self.assertNotIn("_meta", by_name["create_manual_handoff"])
         self.assertEqual(
             by_name["recommend_executors"]["inputSchema"]["required"],
@@ -1267,13 +1275,16 @@ class McpSurfaceTests(unittest.TestCase):
             )
 
             control_root = Path(root, ".layered-delivery")
-            self.assertFalse(Path(control_root, "scheduler.db").exists())
+            self.assertTrue(Path(control_root, "scheduler.db").is_file())
+            self.assertTrue(Path(control_root, "overview.md").is_file())
             generated_files = {
                 path.relative_to(control_root).as_posix()
                 for path in control_root.rglob("*")
-                if path.is_file()
+                if path.is_file() and path.name != ".scheduler.lock"
             }
             expected_files = {
+                "scheduler.db",
+                "overview.md",
                 Path(handoff["manualHandoff"]["path"])
                 .relative_to(".layered-delivery")
                 .as_posix(),
@@ -1287,9 +1298,25 @@ class McpSurfaceTests(unittest.TestCase):
                 "d-service/work-items/t-service/acceptance.md",
             }
             self.assertEqual(generated_files, expected_files)
+            self.assertTrue(handoff["controlStateCreated"])
+            self.assertEqual(
+                handoff["humanArtifacts"]["workspaceOverview"],
+                ".layered-delivery/overview.md",
+            )
             self.assertEqual(
                 handoff["nextAction"],
                 "OPEN_FROZEN_BUNDLE_IN_ANY_CLI",
+            )
+            status = call_tool(
+                "workspace_status",
+                {"root_id": handoff["rootId"]},
+                root=root,
+            )
+            self.assertEqual(status["status"], "HANDOFF_READY")
+            self.assertEqual(status["rootId"], handoff["rootId"])
+            self.assertEqual(
+                status["workspaceIsolation"]["mode"],
+                "UNBOUND_MANUAL_HANDOFF",
             )
 
         self.assertEqual(handoff["status"], "HANDOFF_READY")

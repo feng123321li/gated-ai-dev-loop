@@ -18,6 +18,7 @@ from .fs_safe import (
     atomic_replace_directory,
     atomic_write,
     exclusive_file_lock,
+    read_regular_file,
     safe_path,
 )
 from .graph_model import (
@@ -46,6 +47,9 @@ from .progress_reporting import attach_progress_monitor
 GOVERNANCE_DIRECTORY = ".layered-delivery"
 DATABASE_FILE = "scheduler.db"
 RECEIVER_ATTESTATION_SECONDS = 300
+MANUAL_WRITABLE_PROJECTIONS = frozenset(
+    {"progress.md", "acceptance.md"}
+)
 
 
 def _projection_tree_matches(
@@ -872,6 +876,8 @@ class SchedulerRepository:
         self,
         root_id: str,
         workspace_root: str | os.PathLike[str],
+        *,
+        allow_unbound_manual: bool = False,
     ) -> None:
         if not self.database_path.is_file():
             fail(
@@ -879,6 +885,22 @@ class SchedulerRepository:
                 "No layered-delivery scheduler state exists",
             )
         expected = self.workspace_key(workspace_root)
+        if allow_unbound_manual:
+            with self.read() as connection:
+                manual = connection.execute(
+                    "SELECT h.status, w.workspace_key "
+                    "FROM hierarchies h "
+                    "LEFT JOIN delivery_workspaces w "
+                    "ON w.root_id = h.root_id "
+                    "WHERE h.root_id = ?",
+                    (root_id,),
+                ).fetchone()
+            if (
+                manual is not None
+                and manual["status"] == "HANDOFF_READY"
+                and manual["workspace_key"] is None
+            ):
+                return
         binding = self.workspace_binding(root_id)
         if binding["workspaceKey"] != expected:
             fail(
@@ -916,6 +938,10 @@ class SchedulerRepository:
                 else None
             )
             candidates = rows
+            if root_id is not None:
+                candidates = [
+                    row for row in candidates if row["root_id"] == root_id
+                ]
             if workspace_key is not None:
                 bound_ids = {
                     row["root_id"]
@@ -926,13 +952,15 @@ class SchedulerRepository:
                     ).fetchall()
                 }
                 candidates = [
-                    row for row in rows if row["root_id"] in bound_ids
+                    row
+                    for row in candidates
+                    if row["root_id"] in bound_ids
+                    or (
+                        root_id is not None
+                        and row["status"] == "HANDOFF_READY"
+                    )
                 ]
-            if root_id is not None:
-                candidates = [
-                    row for row in candidates if row["root_id"] == root_id
-                ]
-            else:
+            if root_id is None:
                 active_ids = {
                     row["root_id"]
                     for row in connection.execute(
@@ -995,9 +1023,15 @@ class SchedulerRepository:
         if run is not None:
             result["executionMode"] = run["execution_mode"]
         if workspace_root is not None:
-            result["workspaceIsolation"] = self.workspace_binding(
-                latest["root_id"]
-            )
+            if state == "HANDOFF_READY":
+                result["workspaceIsolation"] = {
+                    "mode": "UNBOUND_MANUAL_HANDOFF",
+                    "workspaceKey": None,
+                }
+            else:
+                result["workspaceIsolation"] = self.workspace_binding(
+                    latest["root_id"]
+                )
         git_binding = latest_hierarchy["delivery"].get("gitBinding")
         if git_binding is not None:
             result["gitBinding"] = git_binding
@@ -1006,6 +1040,124 @@ class SchedulerRepository:
             [],
         )
         return result
+
+    def record_manual_handoff(
+        self,
+        hierarchy: dict[str, Any],
+        graph: dict[str, Any],
+        *,
+        hierarchy_fingerprint: str,
+        graph_fingerprint: str,
+        authorized_project_ids: list[str],
+        confirmed_by: str,
+    ) -> dict[str, Any]:
+        """Register a frozen manual snapshot without creating a Graph run."""
+
+        root_id = graph["rootId"]
+        hierarchy_json = canonical_json(hierarchy)
+        graph_json = canonical_json(graph)
+        with self.transaction() as connection:
+            existing = connection.execute(
+                "SELECT * FROM hierarchies WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if existing is not None:
+                _validated_stored_definition(existing)
+                if (
+                    existing["hierarchy_fingerprint"]
+                    != hierarchy_fingerprint
+                    or existing["graph_fingerprint"]
+                    != graph_fingerprint
+                ):
+                    fail(
+                        "SCHEDULER_HANDOFF_CONTROL_STATE_CONFLICT",
+                        "Manual handoff differs from existing controller "
+                        "state",
+                        rootId=root_id,
+                        existingHierarchyFingerprint=existing[
+                            "hierarchy_fingerprint"
+                        ],
+                        requestedHierarchyFingerprint=(
+                            hierarchy_fingerprint
+                        ),
+                        recovery=(
+                            "Use a new Delivery ID or prepare an explicit "
+                            "revision"
+                        ),
+                    )
+                if existing["status"] == "HANDOFF_READY":
+                    at = _commit_timestamp(
+                        self.now,
+                        existing["updated_at"],
+                    )
+                    connection.execute(
+                        "UPDATE hierarchies SET updated_at = ? "
+                        "WHERE root_id = ?",
+                        (at, root_id),
+                    )
+                    connection.execute(
+                        "UPDATE delivery_revisions SET confirmed_by = ?, "
+                        "authorized_project_ids_json = ?, updated_at = ? "
+                        "WHERE root_id = ? AND revision = 1",
+                        (
+                            confirmed_by,
+                            canonical_json(authorized_project_ids),
+                            at,
+                            root_id,
+                        ),
+                    )
+                else:
+                    at = timestamp(self.now)
+            else:
+                at = timestamp(self.now)
+                connection.execute(
+                    """
+                    INSERT INTO hierarchies(
+                        root_id, revision, hierarchy_fingerprint,
+                        graph_fingerprint, hierarchy_json, graph_json,
+                        status, created_at, updated_at
+                    ) VALUES (?, 1, ?, ?, ?, ?, 'HANDOFF_READY', ?, ?)
+                    """,
+                    (
+                        root_id,
+                        hierarchy_fingerprint,
+                        graph_fingerprint,
+                        hierarchy_json,
+                        graph_json,
+                        at,
+                        at,
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO delivery_revisions(
+                        root_id, revision, hierarchy_fingerprint,
+                        graph_fingerprint, hierarchy_json, graph_json,
+                        status, reason, confirmed_by,
+                        authorized_project_ids_json, created_at, updated_at
+                    ) VALUES (
+                        ?, 1, ?, ?, ?, ?, 'HANDOFF_READY', ?, ?, ?, ?, ?
+                    )
+                    """,
+                    (
+                        root_id,
+                        hierarchy_fingerprint,
+                        graph_fingerprint,
+                        hierarchy_json,
+                        graph_json,
+                        "手动开发需求快照（已冻结，未创建 Graph Run）",
+                        confirmed_by,
+                        canonical_json(authorized_project_ids),
+                        at,
+                        at,
+                    ),
+                )
+        self.write_projections(root_id)
+        return {
+            "rootId": root_id,
+            "status": "HANDOFF_READY",
+            "recordedAt": at,
+        }
 
     def prepare(
         self,
@@ -1056,7 +1208,8 @@ class SchedulerRepository:
                     nextAction="CREATE_INDEPENDENT_WORKTREE_TASK",
                 )
             frozen = connection.execute(
-                "SELECT status, revision, updated_at FROM hierarchies "
+                "SELECT status, revision, hierarchy_fingerprint, "
+                "graph_fingerprint, updated_at FROM hierarchies "
                 "WHERE root_id = ?",
                 (root_id,),
             ).fetchone()
@@ -1064,6 +1217,26 @@ class SchedulerRepository:
                 "SELECT 1 FROM runs WHERE root_id = ? LIMIT 1",
                 (root_id,),
             ).fetchone()
+            if (
+                frozen is not None
+                and frozen["status"] == "HANDOFF_READY"
+                and (
+                    frozen["hierarchy_fingerprint"]
+                    != hierarchy_fingerprint
+                    or frozen["graph_fingerprint"]
+                    != graph_fingerprint
+                )
+            ):
+                fail(
+                    "SCHEDULER_HANDOFF_CONTROL_STATE_CONFLICT",
+                    "Prepared hierarchy differs from the frozen manual "
+                    "snapshot",
+                    rootId=root_id,
+                    recovery=(
+                        "Use a new Delivery ID or prepare an explicit "
+                        "revision"
+                    ),
+                )
             if (
                 frozen is not None
                 and (
@@ -1120,7 +1293,15 @@ class SchedulerRepository:
                     hierarchy_json = excluded.hierarchy_json,
                     graph_json = excluded.graph_json,
                     status = 'PREPARED',
-                    updated_at = excluded.updated_at
+                    reason = NULL,
+                    continuity_basis = NULL,
+                    requested_by = NULL,
+                    confirmed_by = NULL,
+                    authorized_project_ids_json = NULL,
+                    execution_mode = NULL,
+                    updated_at = excluded.updated_at,
+                    frozen_at = NULL,
+                    superseded_at = NULL
                 """,
                 (
                     root_id,
@@ -3416,6 +3597,9 @@ class SchedulerRepository:
                 run,
                 revision_history,
             )
+            manual_snapshot = (
+                definition["status"] == "HANDOFF_READY" and run is None
+            )
             for legacy_filename in (
                 "hierarchy.json",
                 "graph.json",
@@ -3432,10 +3616,15 @@ class SchedulerRepository:
                 ):
                     legacy_projection.unlink()
             for filename, content in documents.items():
-                atomic_write(
-                    projection_root / filename,
-                    content,
+                target = projection_root / filename
+                preserve_manual_update = (
+                    manual_snapshot
+                    and filename in MANUAL_WRITABLE_PROJECTIONS
+                    and target.is_file()
+                    and not target.is_symlink()
                 )
+                if not preserve_manual_update:
+                    atomic_write(target, content)
             work_item_root = safe_path(
                 projection_root,
                 WORK_ITEM_DIRECTORY,
@@ -3444,10 +3633,29 @@ class SchedulerRepository:
                 definition,
                 run,
             )
+            preserved_work_item_documents: dict[str, bytes] = {}
+            if manual_snapshot:
+                for filename in work_item_documents:
+                    if (
+                        Path(filename).name
+                        not in MANUAL_WRITABLE_PROJECTIONS
+                    ):
+                        continue
+                    target = work_item_root / filename
+                    if target.is_file() and not target.is_symlink():
+                        preserved_work_item_documents[filename] = (
+                            read_regular_file(work_item_root, filename)
+                        )
 
             def populate_work_items(staging: Path) -> None:
                 for filename, content in work_item_documents.items():
-                    atomic_write(staging / filename, content)
+                    atomic_write(
+                        staging / filename,
+                        preserved_work_item_documents.get(
+                            filename,
+                            content,
+                        ),
+                    )
 
             if not _projection_tree_matches(
                 work_item_root,

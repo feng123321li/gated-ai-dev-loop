@@ -187,6 +187,7 @@ GROUP/TASK 的递归存在于冻结 hierarchy 和编译 Graph 中，并镜像到
 
 ```text
 .layered-delivery/
+├── overview.md
 ├── scheduler.db
 ├── d-commerce/
 │   ├── handoff-<fingerprint>.md  # 手动交接时按需
@@ -219,7 +220,7 @@ GROUP/TASK 的递归存在于冻结 hierarchy 和编译 Graph 中，并镜像到
     └── acceptance.md
 ```
 
-`scheduler.db` 是 Graph 的唯一机器权威；一个需求的自动与手动开发都进入同一个稳定 Delivery 目录并使用同结构人类投影，不再使用共享 `handoffs` 目录。手动包另含 `handoff-<fingerprint>.md`；它是双 fingerprint 锁定、无控制状态的内容快照，仅存在该文件或目录不表示 Graph 已 prepare、freeze 或运行。Graph 投影只保留分离的需求基线、执行进展和验收记录，不再生成 hierarchy、编译 Graph 或当前状态 JSON 副本。Delivery baseline 链接全部节点 baseline；每个 GROUP/TASK 在 `work-items/<root-id>/children/...` 的对应节点目录拥有 baseline、progress 和 acceptance。只有 TASK 显式声明接口时才在自己的目录增加接口契约投影；协议字段保持开放，HTTP、Dubbo、gRPC、GraphQL、消息等均可表达。目录名使用不可变 ID，不使用可修改标题；物理递归只镜像父子关系，不重新引入文件 scope，兄弟执行顺序仍由 `dependsOn` 控制。
+`scheduler.db` 是需求与调度状态的机器权威；一个需求的自动与手动开发都进入同一个稳定 Delivery 目录并使用同结构人类投影，不再使用共享 `handoffs` 目录。手动包另含 `handoff-<fingerprint>.md`，并以 `HANDOFF_READY` 登记到 SQLite、刷新根 `overview.md`；它仍不创建 Graph Run、事件链或 workspace 绑定，也不表示 Graph 已 prepare、freeze 或运行。Graph 投影只保留分离的需求基线、执行进展和验收记录，不再生成 hierarchy、编译 Graph 或当前状态 JSON 副本。Delivery baseline 链接全部节点 baseline；每个 GROUP/TASK 在 `work-items/<root-id>/children/...` 的对应节点目录拥有 baseline、progress 和 acceptance。只有 TASK 显式声明接口时才在自己的目录增加接口契约投影；协议字段保持开放，HTTP、Dubbo、gRPC、GraphQL、消息等均可表达。目录名使用不可变 ID，不使用可修改标题；物理递归只镜像父子关系，不重新引入文件 scope，兄弟执行顺序仍由 `dependsOn` 控制。
 
 人类投影集合必须足以完成冻结前评审、运行中跟踪和最终验收：工作区 `overview.md` 只列 Delivery 入口，Delivery `overview.md` 展示本交付状态与内部统计；Delivery 投影负责聚合与串联；节点投影覆盖双指纹、summary、`dependsOn`、Loop 引用、资源锁、不透明 payload、运行状态、Loop 结果和证据。验收内容按层归属：TASK 只完整展开本 TASK 与 TASK Review，GROUP 只完整展开本层完成点与 GROUP Review，Delivery 只完整展开 Delivery Review 和用户确认；向上一层只提供直接下层或根工作项的状态、简要结果和报告链接，不复制下层输入、证据或 findings。进度表使用中文字段展示实际执行代理、执行模型、认领身份和执行轮次；验收摘要、子节点结果和 P0/P1/P2 问题使用表格。P0/P1 只在修复、验证和独立复审后关闭，P2 非阻断但必须列示。新增、调整或删除接口的 TASK 通过 `payload.interfaces` 显式提供 `changeType`、协议、名称、简介以及完整 before/after 快照；控制器生成 `interfaces.md` 索引，并在 `interfaces/` 下为每个接口生成一份详情。入参表比较类型、必填和说明，出参表不展示必填；删除值使用 Markdown 删除线，新增或删除字段只显示存在的一侧。代码可辅助准备和验证契约，但不成为动态投影源，接口内容也不参与 Graph 决策。固定展示使用中文，标明 UTC+8 的时间使用 `YYYY-MM-DD HH:mm:ss`；SQLite 继续保持机器 UTC。
 

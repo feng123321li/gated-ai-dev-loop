@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .errors import GatedLoopError, fail
-from .fs_safe import atomic_replace_directory, atomic_write, safe_path
+from .errors import fail
+from .fs_safe import atomic_write, safe_path
 from .git_binding import (
     inspect_delivery_git_workspace,
     verify_delivery_git_binding,
@@ -21,10 +21,7 @@ from .model_core import (
     validate_hierarchy_definition,
 )
 from .model_rendering import (
-    WORK_ITEM_DIRECTORY,
     render_manual_handoff,
-    render_projection_documents,
-    render_work_item_projection_documents,
     task_baseline_relative_path,
     task_has_interface_projection,
     work_item_projection_relative_path,
@@ -32,7 +29,6 @@ from .model_rendering import (
 from .repository import (
     GOVERNANCE_DIRECTORY,
     SchedulerRepository,
-    timestamp,
 )
 
 
@@ -98,8 +94,6 @@ def workspace_status(
 
 def _human_artifacts(
     hierarchy: dict[str, Any],
-    *,
-    include_workspace_overview: bool = True,
 ) -> dict[str, Any]:
     projection_root = (
         f".layered-delivery/{hierarchy['delivery']['id']}"
@@ -163,96 +157,10 @@ def _human_artifacts(
         "taskBaselines": task_baselines,
         "workItems": work_items,
     }
-    if include_workspace_overview:
-        return {
-            "workspaceOverview": ".layered-delivery/overview.md",
-            **artifacts,
-        }
-    return artifacts
-
-
-def _existing_hierarchy(
-    repository: SchedulerRepository,
-    root_id: str,
-) -> dict[str, Any] | None:
-    """Read existing controller state without creating a scheduler DB."""
-
-    if not repository.database_path.is_file():
-        return None
-    try:
-        return repository.hierarchy(root_id)
-    except GatedLoopError as error:
-        if error.code in {
-            "SCHEDULER_HIERARCHY_MISSING",
-            "SCHEDULER_STATE_ABSENT",
-        }:
-            return None
-        raise
-
-
-def _write_manual_projection_bundle(
-    *,
-    root: str,
-    hierarchy: dict[str, Any],
-    graph: dict[str, Any],
-    hierarchy_fingerprint: str,
-    graph_fingerprint: str,
-    authorized_project_ids: list[str],
-    created_at: str,
-) -> None:
-    """Write stateless projections a receiving CLI can use directly."""
-
-    root_id = hierarchy["delivery"]["id"]
-    snapshot = {
-        "rootId": root_id,
-        "deliveryRevision": 1,
-        "status": "HANDOFF_READY",
-        "hierarchyFingerprint": hierarchy_fingerprint,
-        "graphFingerprint": graph_fingerprint,
-        "hierarchy": hierarchy,
-        "graph": graph,
-        "createdAt": created_at,
-        "updatedAt": created_at,
+    return {
+        "workspaceOverview": ".layered-delivery/overview.md",
+        **artifacts,
     }
-    revision_history = {
-        "currentRevision": 1,
-        "revisions": [
-            {
-                "revision": 1,
-                "status": "HANDOFF_READY",
-                "runStatus": None,
-                "reason": "手动开发需求快照（已冻结，未创建 Graph Run）",
-                "authorizedProjectIds": list(authorized_project_ids),
-                "updatedAt": created_at,
-            }
-        ],
-    }
-    projection_root = safe_path(
-        root,
-        f"{GOVERNANCE_DIRECTORY}/{root_id}",
-    )
-    documents = render_projection_documents(
-        snapshot,
-        None,
-        revision_history,
-    )
-    for filename, content in documents.items():
-        atomic_write(projection_root / filename, content)
-
-    work_item_documents = render_work_item_projection_documents(
-        snapshot,
-        None,
-    )
-    work_item_root = safe_path(
-        projection_root,
-        WORK_ITEM_DIRECTORY,
-    )
-
-    def populate_work_items(staging: Path) -> None:
-        for filename, content in work_item_documents.items():
-            atomic_write(staging / filename, content)
-
-    atomic_replace_directory(work_item_root, populate_work_items)
 
 
 def _preview_values(hierarchy: object) -> tuple[
@@ -390,28 +298,19 @@ def create_manual_handoff(
         authorized_project_ids,
     )
     root_id = normalized["delivery"]["id"]
-    existing = _existing_hierarchy(repository, root_id)
-    if existing is not None and (
-        existing["hierarchyFingerprint"] != hierarchy_value
-        or existing["graphFingerprint"] != graph_value
-    ):
-        fail(
-            "SCHEDULER_HANDOFF_CONTROL_STATE_CONFLICT",
-            "Manual handoff differs from existing controller state",
-            rootId=root_id,
-            existingHierarchyFingerprint=existing[
-                "hierarchyFingerprint"
-            ],
-            requestedHierarchyFingerprint=hierarchy_value,
-            recovery=(
-                "Use a new Delivery ID or prepare an explicit revision"
-            ),
-        )
     relative_path = (
         f"{GOVERNANCE_DIRECTORY}/{root_id}/"
         f"handoff-{hierarchy_value[:12]}.md"
     )
-    created_at = timestamp(now)
+    registration = repository.record_manual_handoff(
+        normalized,
+        graph,
+        hierarchy_fingerprint=hierarchy_value,
+        graph_fingerprint=graph_value,
+        authorized_project_ids=list(authorized_project_ids or []),
+        confirmed_by=confirmed_by.strip(),
+    )
+    created_at = registration["recordedAt"]
     content = render_manual_handoff(
         normalized,
         hierarchy_fingerprint=hierarchy_value,
@@ -420,18 +319,6 @@ def create_manual_handoff(
         created_at=created_at,
     )
     atomic_write(safe_path(root, relative_path), content)
-    if existing is None:
-        _write_manual_projection_bundle(
-            root=root,
-            hierarchy=normalized,
-            graph=graph,
-            hierarchy_fingerprint=hierarchy_value,
-            graph_fingerprint=graph_value,
-            authorized_project_ids=list(authorized_project_ids or []),
-            created_at=created_at,
-        )
-    else:
-        repository.write_projections(root_id)
     return {
         "rootId": root_id,
         "status": "HANDOFF_READY",
@@ -447,9 +334,8 @@ def create_manual_handoff(
         },
         "humanArtifacts": _human_artifacts(
             normalized,
-            include_workspace_overview=False,
         ),
-        "controlStateCreated": False,
+        "controlStateCreated": True,
         "graphRunCreated": False,
         "workspaceCreated": False,
         "nextAction": "OPEN_FROZEN_BUNDLE_IN_ANY_CLI",

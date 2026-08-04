@@ -483,11 +483,13 @@ TOOLS = (
             "self-contained .layered-delivery/<delivery-id>/"
             "handoff-<fingerprint>.md plus the same overview, baseline, "
             "progress, acceptance, revisions, and work-items projections "
-            "used by automatic development. Never create a shared handoffs "
-            "directory. This freezes content only: do not prepare or freeze "
-            "a Graph, choose an Agent/model, create a receiving task, or "
-            "initialize a worktree. The user may open the bundle in any CLI "
-            "and develop directly from it."
+            "used by automatic development. It also registers the frozen "
+            "HANDOFF_READY snapshot in the shared scheduler.db and refreshes "
+            "the root overview.md. Never create a shared handoffs directory. "
+            "This does not prepare, freeze, or start a Graph run; do not "
+            "choose an Agent/model, create a receiving task, bind a workspace, "
+            "or initialize a worktree. The user may open the bundle in any "
+            "CLI and develop directly from it."
         ),
         _manual_handoff_tool_schema(),
     ),

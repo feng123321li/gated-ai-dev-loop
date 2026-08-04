@@ -151,7 +151,7 @@ PAYLOAD_FIELD_ORDER = MappingProxyType(
     }
 )
 UTC_PLUS_8 = timezone(timedelta(hours=8))
-PROJECTION_TEMPLATE_VERSION = 11
+PROJECTION_TEMPLATE_VERSION = 12
 WORK_ITEM_DIRECTORY = "work-items"
 WORKSPACE_OVERVIEW_PROJECTION_TEMPLATE = Template(
     """# 全部交付调度与进度总览
@@ -186,8 +186,9 @@ ${delivery_status}
 | [验收记录](acceptance.md) | 已知验收输入、执行结果、审查结果与用户确认 |
 | [修订历史](revisions.md) | 同一 Delivery 的历次冻结范围、授权与运行状态 |
 
-实现规范、测试、门禁与 Skill 激活由各 Loop 内部负责。机器权威仍为
-SQLite 与事件链；本目录中的 Markdown 仅为控制器生成的人类投影。
+实现规范、测试、门禁与 Skill 激活由各 Loop 内部负责。SQLite 是需求与
+调度状态的机器权威；Graph 启动后由事件链记录运行历史。本目录中的 Markdown
+仅为控制器生成的人类投影。
 
 """
 )
@@ -2789,7 +2790,7 @@ def render_projection_documents(
     """Render the complete Delivery human projection set.
 
     The definition is either controller-owned SQLite state or a validated,
-    stateless manual-handoff snapshot. Callers cannot supply a template or
+    portable manual-handoff snapshot. Callers cannot supply a template or
     filename.
     """
 

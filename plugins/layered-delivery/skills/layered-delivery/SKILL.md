@@ -1,6 +1,6 @@
 ---
 name: layered-delivery
-description: "规划、冻结、调度或恢复多项目、多模块交付 Graph。用于把已确认需求组织为递归 GROUP/TASK，自动派遣独立 WorkLoop，或生成不绑定 Agent 的手动开发内容交接文件；也用于执行分层 Review、等待最终验收并恢复暂停、失联、额度耗尽或需要 Revision 的既有 Delivery。"
+description: "规划、冻结、调度或恢复多项目、多模块交付 Graph。用于把已确认需求组织为递归 GROUP/TASK，自动派遣独立 WorkLoop，或把冻结的需求内容生成不绑定 Agent、可由任意 CLI 接管的手动开发包；也用于执行分层 Review、等待最终验收并恢复暂停、失联、额度耗尽或需要 Revision 的既有 Delivery。"
 ---
 
 # Layered Delivery
@@ -12,17 +12,18 @@ description: "规划、冻结、调度或恢复多项目、多模块交付 Graph
 ├─ 自动执行：创建开发工作区 → 准备并冻结
 │  ├─ LIGHT：单一 TASK WorkLoop → 用户确认
 │  └─ STANDARD：TASK/分层 Review WorkLoop → 用户确认
-└─ 手动交接：只生成一个自包含交接文件 → 接收后再开始开发
+└─ 手动开发：冻结同结构内容包，不启动 Graph → 切换任意 CLI 直接开发
 ```
 
 ## 不可违反的边界
 
 - 只调用 Plugin 注册的 MCP 工具。MCP 不可用时报告 `PLUGIN_MCP_UNAVAILABLE`，停止所有治理写入。
-- 只从 MCP 响应读取状态。不得用 Shell、Python 或其他连接读写 `scheduler.db`，也不得自行创建、修改或修补人类投影。
+- 只从 MCP 响应读取 Graph 状态。不得用 Shell、Python 或其他连接读写 `scheduler.db`，也不得自行创建、修改或修补控制器拥有的 Graph 投影。唯一例外是 `controlStateCreated=false` 的手动冻结内容包：接收 CLI 可记录 progress/acceptance，但 handoff、overview、baseline、revisions、接口契约和双 fingerprint 保持只读。
 - 只使用 schema v3；准备前调用 `hierarchy_contract` 获取当前精确契约，不从源码、旧会话或示例猜参数。
 - SQLite 与事件链是机器权威。Markdown 投影只用于沟通、进度和验收。
 - 一个对话工作区最多绑定一个未结束 Delivery。新业务目标默认创建新 Delivery；不得因为工作区已有旧 Delivery 就把新需求写成旧 Delivery 的 Revision。
-- 并行 Delivery 真正开始开发时使用独立宿主工作区；Git 场景优先使用独立 linked worktree。预览和手动交接文件阶段不创建 worktree。不要复制调度数据库或启动第二套控制面。
+- 一个需求只使用一个稳定的 `.layered-delivery/<delivery-id>/` 目录。自动与手动开发均生成 overview、baseline、progress、acceptance、revisions 和同结构 work-items；手动开发额外包含自包含 handoff 文件。不得创建共享 `.layered-delivery/handoffs/`。手动包的需求内容已由双指纹冻结，但它不是 Graph `FROZEN`：未 prepare、未创建 Graph Run。
+- 并行 Delivery 真正开始开发时使用独立宿主工作区；Git 场景优先使用独立 linked worktree。预览和手动内容冻结阶段不创建 worktree。不要复制调度数据库或启动第二套控制面。
 - 总调度上下文只规划和路由，不在自身上下文内实现 TASK 或 Review。每个执行与 Review Loop 使用独立接收上下文。
 - Git 创建/切换分支、commit、merge、push、发布、迁移和新增外部权限始终需要各自授权；Graph 的项目范围不替代这些授权。
 - 最终完成必须取得真实用户确认。
@@ -51,8 +52,8 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 4. 把实现目标和明确约束放入不透明 `loop.payload`。调度器不解释实现计划、测试、Gate 或内部 Skill 流程。
 5. 用精确 `resourceClaims` 表达跨 Delivery 排他资源；worktree 不能替代数据库、端口或环境锁。
 6. 用户提供的 Skill 只登记为共享 `root.skillHints`，由各 Loop 根据真实上下文决定是否触发。
-7. 先调用 `preview_hierarchy`，展示保障档、判断依据和完整计划，并且只提供“自动执行 / 手动交接”两个选项；同时允许用户直接提出修改意见。预览不创建控制状态或工作区，也不为保障档增加第二次确认。
-8. 用户选择自动执行后，才在实际开发工作区调用 `prepare_hierarchy`，以返回的 fingerprint、Revision 和精确项目授权调用 `freeze_hierarchy`；不要追加第二次通用 Yes/No。用户选择手动交接后，直接以预览 fingerprint、原 hierarchy 和精确项目授权调用 `create_manual_handoff`，只返回文件，不 prepare、不 freeze。
+7. 先调用 `preview_hierarchy`，展示保障档、判断依据和完整计划，并且只提供“自动执行 / 手动开发”两个选项；同时允许用户直接提出修改意见。预览不创建控制状态或工作区，也不为保障档增加第二次确认。
+8. 用户选择自动执行后，才在实际开发工作区调用 `prepare_hierarchy`，以返回的 fingerprint、Revision 和精确项目授权调用 `freeze_hierarchy`；不要追加第二次通用 Yes/No。用户选择手动开发后，直接以预览 fingerprint、原 hierarchy 和精确项目授权调用 `create_manual_handoff`，冻结同一需求内容并生成 `.layered-delivery/<delivery-id>/` 完整开发包；不 prepare Graph、不创建 Graph Run。返回 `requirementSnapshotStatus=FROZEN` 只表示内容快照冻结，接收方可切换任意 CLI 直接开发。
 
 需求连续性规则：
 
@@ -79,7 +80,7 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 
 ## Agent、模型与容量
 
-- `available_agents` 仅用于通用本机发现，不参与手动交接路由；`recommend_executors` 只接受 `AUTOMATIC`，并且只在当前宿主 Agent 内按原生 tier 生成只读预览。正式 Ready 批次由 `plan_dispatch_batch` 开启持久化 30 秒路由调整窗口，超时自动派遣。手动交接只调用 `create_manual_handoff`：交接前不指定 Agent、模型或接收会话，也不创建任务/worktree；接收宿主读取文件并真正开始开发时，才确定执行 Agent、创建或选择工作区并展示自己的本地模型表。详见[agent-recommendations.md](references/agent-recommendations.md)。
+- `available_agents` 仅用于通用本机发现，不参与手动开发路由；`recommend_executors` 只接受 `AUTOMATIC`，并且只在当前宿主 Agent 内按原生 tier 生成只读预览。正式 Ready 批次由 `plan_dispatch_batch` 开启持久化 30 秒路由调整窗口，超时自动派遣。手动开发只调用 `create_manual_handoff`：生成冻结内容包时不指定 Agent、模型或接收会话，也不创建任务/worktree；用户切换任意 CLI、读取该目录并开始实际开发时，才确定执行 Agent、创建或选择工作区并展示自己的本地模型表。详见[agent-recommendations.md](references/agent-recommendations.md)。
 - 所有派遣、tier 匹配、Review 多样性、reservation、claim 授权与决策指纹只使用宿主原生 `modelId`。`actualModelId` 是原生调用完成后的可选宿主观测，只用于中文状态和进度表；未知时显示“未报告”，不得读取特定修改器、猜测对应关系或据此改变编排。
 - 自动编排、自动选模、跨 Adapter、最大并发、额度策略和 Review 多样性由用户级配置控制；读取[orchestrator-configuration.md](references/orchestrator-configuration.md)。
 - 跨 Adapter 当前未开放修改；面板和保存工具都以 `ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE` fail closed。只有中央宿主未来能证明可创建、可认证、有容量且属于同一可信编排根的多个 Adapter 时才可开放。

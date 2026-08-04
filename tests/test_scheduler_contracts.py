@@ -709,6 +709,15 @@ class McpSurfaceTests(unittest.TestCase):
             "confirmed",
             by_name["create_manual_handoff"]["inputSchema"]["properties"],
         )
+        self.assertIn(
+            ".layered-delivery/<delivery-id>/handoff-<fingerprint>.md",
+            by_name["create_manual_handoff"]["description"],
+        )
+        self.assertIn(
+            "same overview, baseline, progress, acceptance, revisions, "
+            "and work-items projections",
+            by_name["create_manual_handoff"]["description"],
+        )
         self.assertNotIn("_meta", by_name["create_manual_handoff"])
         self.assertEqual(
             by_name["recommend_executors"]["inputSchema"]["required"],
@@ -1259,20 +1268,32 @@ class McpSurfaceTests(unittest.TestCase):
 
             control_root = Path(root, ".layered-delivery")
             self.assertFalse(Path(control_root, "scheduler.db").exists())
+            generated_files = {
+                path.relative_to(control_root).as_posix()
+                for path in control_root.rglob("*")
+                if path.is_file()
+            }
+            expected_files = {
+                Path(handoff["manualHandoff"]["path"])
+                .relative_to(".layered-delivery")
+                .as_posix(),
+                "d-service/overview.md",
+                "d-service/baseline.md",
+                "d-service/progress.md",
+                "d-service/acceptance.md",
+                "d-service/revisions.md",
+                "d-service/work-items/t-service/baseline.md",
+                "d-service/work-items/t-service/progress.md",
+                "d-service/work-items/t-service/acceptance.md",
+            }
+            self.assertEqual(generated_files, expected_files)
             self.assertEqual(
-                [
-                    path.relative_to(control_root).as_posix()
-                    for path in control_root.rglob("*")
-                    if path.is_file()
-                ],
-                [
-                    Path(handoff["manualHandoff"]["path"])
-                    .relative_to(".layered-delivery")
-                    .as_posix()
-                ],
+                handoff["nextAction"],
+                "OPEN_FROZEN_BUNDLE_IN_ANY_CLI",
             )
 
         self.assertEqual(handoff["status"], "HANDOFF_READY")
+        self.assertEqual(handoff["requirementSnapshotStatus"], "FROZEN")
         self.assertEqual(handoff["confirmedBy"], "human")
 
     def test_distinct_conversation_workspaces_run_distinct_deliveries(

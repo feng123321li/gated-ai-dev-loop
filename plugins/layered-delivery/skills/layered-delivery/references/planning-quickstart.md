@@ -9,7 +9,7 @@
 - 当前上下文仍保留最近一次 `preview_hierarchy` 响应和原始 hierarchy 时，复用其中的双 fingerprint 与完整清单；需求未变时不要重复 preview，回答用户问题后重新展示同一组选项。
 - 初次开发前用户修改需求时，更新 hierarchy 并重新调用 `preview_hierarchy`；只使用新响应的 fingerprint，不复用旧值。`prepare_hierarchy` 只在用户已经选择自动执行且实际开发工作区就绪后调用。
 - 初次冻结后、最终用户验收前用户修改依赖、项目范围、资源或拓扑时，保持相同 `delivery.id` 调用 `prepare_delivery_revision`，不得重新调用初始 prepare，也不得创建另一个 Delivery ID。用户明确要求继续同一 Delivery 时提交 `continuity_basis=USER_EXPLICIT_SAME_DELIVERY`；只有当前 Graph 已记录 `REPLAN_REQUIRED` 时提交 `ACTIVE_LOOP_REPLAN`。路径、分支和旧 Delivery 状态都不是连续性依据。
-- `prepare_delivery_revision` 只生成待确认候选，不替换当前 hierarchy 或旧 run，不应触发宿主通用确认弹窗；用户在完整范围和授权清单上选择自动执行或手动交接，才是该 Revision 唯一一次业务确认。
+- `prepare_delivery_revision` 只生成待确认候选，不替换当前 hierarchy 或旧 run，不应触发宿主通用确认弹窗；用户在完整范围和授权清单上选择自动执行或手动开发，才是该 Revision 唯一一次业务确认。
 - 当前上下文不再持有精确 fingerprint 或原始 hierarchy 时，不从旧投影反推机器输入，也不猜测旧值；重新收集需求并 preview 后再请求执行方式确认。
 
 ## 先按真实改动判断保障档
@@ -85,6 +85,8 @@
 ```
 
 `delivery.id` 是稳定的 Delivery/Graph 标识，也是需求投影目录的 namespace。工作区全部 Delivery 的入口位于 `.layered-delivery/overview.md`，这里只列 Delivery 标识、标题、状态、更新时间和详情链接；该 Delivery 自己的 TASK 进度与 GROUP 数量位于 `.layered-delivery/<delivery-id>/overview.md`。`STANDARD` 的 `delivery.reviewLoop` 在根终态之后执行；`LIGHT` 将其设为 `null`，根 TASK 成功后直接进入用户确认。
+
+同一需求的所有人类文件共用 `.layered-delivery/<delivery-id>/`。自动与手动开发都生成 overview、baseline、progress、acceptance、revisions 和同结构 work-items；手动开发另有 `.layered-delivery/<delivery-id>/handoff-<fingerprint>.md`，包含完整 schema v3。不得创建跨需求共享的 `.layered-delivery/handoffs/`。手动包以双 fingerprint 冻结需求内容，但不构成调度控制状态；Graph 是否 prepare、freeze 或运行仍只以 MCP 返回和 SQLite 事件链为准。
 
 一个 `delivery.id` 可以拥有多个不可变 Delivery Revision。Revision 1 是初次冻结范围；用户最终验收前的外层范围调整形成 Revision 2、3……，仍位于同一投影目录并通过 `revisions.md` 串联。旧 Revision 及其 run/event 不覆盖、不删除；新 Revision 冻结时，旧 run 变为 `SUPERSEDED`。
 
@@ -324,15 +326,15 @@ before 候选，并根据需求形成 after；确认 TASK 时必须把两者作�
 
 ## 准备与冻结
 
-`preview_hierarchy` 与 `create_manual_handoff` 不绑定 Delivery 工作区。只有实际开发开始并调用 `prepare_hierarchy` 时，当前宿主工作区才绑定 Delivery。多个窗口同时开发多个 Delivery 时必须使用不同工作区；Git 场景使用“一 Delivery、一 linked worktree、一最终 feature 分支”。linked worktree 共享主 checkout 的调度数据库，但 `workspaceKey` 不同。没有未结束 Delivery 时，一个工作区可以保存多个 PREPARED 方案；一旦工作区已有未结束 Delivery，新的 `prepare_hierarchy` 就以 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED` 在写入前拒绝，并返回 `CREATE_INDEPENDENT_WORKTREE_TASK`。该错误只属于“开始实际开发”的路径，不得让预览或手动交接提前创建 worktree。
+`preview_hierarchy` 与 `create_manual_handoff` 不绑定 Delivery 工作区。自动开发在调用 `prepare_hierarchy` 时绑定当前宿主工作区；手动开发只冻结内容包，用户切换到接收 CLI 并真正开始编码时才选择工作区。多个窗口同时开发多个 Delivery 时必须使用不同工作区；Git 场景使用“一 Delivery、一 linked worktree、一最终 feature 分支”。linked worktree 共享主 checkout 的调度数据库，但 `workspaceKey` 不同。没有未结束 Delivery 时，一个工作区可以保存多个 PREPARED 方案；一旦工作区已有未结束 Delivery，新的 `prepare_hierarchy` 就以 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED` 在写入前拒绝，并返回 `CREATE_INDEPENDENT_WORKTREE_TASK`。该错误只属于自动 Graph 开发路径，不得让预览或手动内容冻结提前创建 worktree。
 
 Git 场景先检查首次 `workspace_status`：
 
 - feature worktree 返回 `gitWorkspace.branchRef/headCommit` 和 `suggestedGitBinding`。把建议中的 `branchRef`、`baseRef`、`baseCommit`、`integrationTarget` 原样写入 `delivery.gitBinding`。控制器优先选择本地 `main`，不存在时回退 `master`，并以 feature HEAD 与主线的 merge-base 作为不可变创建基线。
 - `gitBinding` 只属于 Delivery。同一 Delivery 的全部 TASK 共享该 feature worktree 和分支；不要为 TASK 创建、声明或切换内部 Git 分支。获得相应 Git 写入授权后，各 TASK 可以只 `git add` 并 `git commit` 自身 scope 的变更，在同一 Delivery 分支上形成独立 commit；Git index/commit 写入必须串行。
-- 当前工作区位于 `main` / `master` 时，可以 preview 或生成交接文件；只有用户选择自动执行，或交接接收方明确开始实际开发时，才从主线创建 feature 分支和 linked worktree，再在新工作区调用 `workspace_status` 与 `prepare_hierarchy`。
-- 在某个 Active Delivery 的 feature worktree 中规划另一个独立 Delivery 时，仍可 preview 或生成手动交接文件。若选择自动执行，再从主线创建另一个 worktree；不得从当前 feature HEAD 分叉。只有用户明确要求 stacked delivery 时才允许建立真实的 Delivery 间 Git 依赖。
-- 手动交接只生成一个自包含交接文件，交接前不指定 Agent、模型或接收任务，也不创建 worktree。开发工作区或 worktree 在接收方开始实际开发时才创建或选择。
+- 当前工作区位于 `main` / `master` 时，可以 preview 或生成手动开发包；只有用户选择自动执行，或手动包接收方明确开始实际开发时，才从主线创建 feature 分支和 linked worktree。自动路径随后调用 `workspace_status` 与 `prepare_hierarchy`；手动路径直接按冻结内容开发，不隐式创建 Graph。
+- 在某个 Active Delivery 的 feature worktree 中规划另一个独立 Delivery 时，仍可 preview 或生成手动开发包。若选择自动执行，再从主线创建另一个 worktree；不得从当前 feature HEAD 分叉。只有用户明确要求 stacked delivery 时才允许建立真实的 Delivery 间 Git 依赖。
+- 手动开发生成完整冻结内容包：固定写入本需求的 `.layered-delivery/<delivery-id>/`，包含与自动开发相同的 overview、baseline、progress、acceptance、revisions、work-items，以及自包含 `handoff-<fingerprint>.md`；不创建共享 `handoffs` 目录。冻结内容时不指定 Agent、模型或接收任务，也不创建 worktree。用户切换任意 CLI 后，开发工作区或 worktree 在开始实际开发时才创建或选择，并直接按冻结内容开发。
 - 宿主创建独立 worktree 任务是异步操作时，只返回 `clientThreadId`/排队标识代表 `WORKTREE_SETUP_QUEUED`，不代表已有可跟踪 `threadId`，更不代表 Delivery 已 prepare、freeze 或运行。对同一 Delivery、分支和确定性任务标题只发起一次；排队期间不重试创建。宿主返回真实 `threadId` 后才可跟踪任务并继续 prepare/freeze。
 - Git worktree 缺少 `gitBinding`、当前分支不匹配、HEAD 不继承 `baseCommit`，或主线不再包含该基线时，`prepare_hierarchy` / 运行工具必须停止。控制器不代替宿主运行 `git worktree add`、`switch`、`commit`、`merge` 或 `push`。
 
@@ -398,14 +400,14 @@ Git 场景先检查首次 `workspace_status`：
    >
    > **自动执行**：创建或选择实际开发工作区，准备并冻结后开始实现、测试和独立审查
    >
-   > **手动交接**：只生成开发内容交接文件，不创建任务或工作区
+   > **手动开发**：冻结同结构开发内容包，不创建 Graph、任务或工作区；可切换任意 CLI 直接开发
    >
    > 如需继续调整需求，请直接回复修改意见；当前方案不会冻结。
 
 6. 按用户回复执行：
    - 用户选择**自动执行**后，先创建或选择实际开发工作区，并按该工作区重新校准 `projectScopes`/`gitBinding`；调用 `prepare_hierarchy` 后，向用户提供 `humanArtifacts.workspaceOverview`、Delivery 的 `overview.md`、`baseline.md`、`progress.md`、`acceptance.md`、`revisions.md`，以及 `humanArtifacts.workItems[nodeId]` 中每个节点的 `baseline.md`、`progress.md`、`acceptance.md`（存在接口声明时还包括 `interfaces.md`）。再按当前宿主真实原生 inventory 为全部 Loop 生成临时 `node_requirements`，调用 `recommend_executors(recommendation_mode=AUTOMATIC)`。只展示当前执行 Agent 内的原生模型分档，不因本机发现另一 CLI 而给出跨 Agent 建议。把结果转成中文表格：`节点 | 模式 | 执行 Agent | 原生模型角色 | 原生 modelId | 实际代理模型 | 状态`，执行前实际模型写“未报告”。展示后立即以 prepare 返回的 Revision、fingerprint、精确项目授权和真实确认人调用 `freeze_hierarchy`；MCP 不再接受 `execution_mode`。冻结成功后进入 `graph_frontier` 调度循环，并把同一节点分析交给 `plan_dispatch_batch`。正式 Ready 批次首次返回 `HOST_NATIVE_ROUTE_REVIEW` 时，增加 `剩余时间` 列展示 30 秒调整窗口，不再询问；到期自动重调并派遣。
-   - 用户选择**手动交接**后，不调用 `available_agents`、`recommend_executors`、`prepare_hierarchy` 或 `freeze_hierarchy`。直接把原 hierarchy、`preview_hierarchy` 返回的双 fingerprint、精确 `authorized_project_ids` 和真实确认人传给 `create_manual_handoff`。只展示返回的 `manualHandoff.path`，明确 `controlStateCreated=false`、`graphRunCreated=false`、`workspaceCreated=false`。不要创建任何接收任务、会话或 worktree；具体 Agent 和模型只有接收方读取文件、选择实际开发宿主后才知道。接收方开始开发时，根据文件中的人类内容与 schema v3 附录校准工作区字段，再执行 `workspace_status → prepare_hierarchy → freeze_hierarchy → graph_frontier`。
+   - 用户选择**手动开发**后，不调用 `available_agents`、`recommend_executors`、`prepare_hierarchy` 或 `freeze_hierarchy`。直接把原 hierarchy、`preview_hierarchy` 返回的双 fingerprint、精确 `authorized_project_ids` 和真实确认人传给 `create_manual_handoff`。展示返回的 `.layered-delivery/<delivery-id>/`、`manualHandoff.path` 与 `humanArtifacts`，明确 `requirementSnapshotStatus=FROZEN` 只表示内容冻结，同时 `controlStateCreated=false`、`graphRunCreated=false`、`workspaceCreated=false`。不要创建任何接收任务、会话或 worktree；具体 Agent 和模型只有用户切换到接收 CLI、选择实际开发宿主后才知道。接收 CLI 校验双 fingerprint，按实际工作区校准路径和 Git 绑定，然后直接按冻结的 baseline/work-items 开发并维护 progress/acceptance；不要重新规划或隐式启动 Graph。
    - 用户直接回复修改意见时，不调用 freeze；仅在需求实际变化后重新 preview，并只使用新 fingerprint。
    - 用户询问问题或给出未改变需求的其他回复时，不调用 freeze、不重新 preview；回答后保留当前 fingerprint 并重新展示上述两个选项。
 7. 自动或手动选择本身就是一次性的业务授权。自动选择紧邻 `freeze_hierarchy`，手动选择紧邻 `create_manual_handoff`；两者都不得再询问通用 Yes/No，也不要向 MCP 发送内部 `confirmed` 字段，适配器会注入严格布尔值 `True`。
-8. 自动初次冻结后当前 Delivery Revision 的 Git/project binding、依赖、资源和拓扑固定，所有 TASK requirement revision 1 均为 `FROZEN`。手动交接没有冻结状态；当前会话交付文件后停止，接收方开始开发时才创建自己的控制状态。
+8. 自动初次冻结后当前 Delivery Revision 的 Git/project binding、依赖、资源和拓扑固定，所有 TASK requirement revision 1 均为 `FROZEN`。手动开发把相同需求内容冻结为无控制状态的可移植快照，返回 `requirementSnapshotStatus=FROZEN`；这不等于 Graph `FROZEN`，当前会话生成文件后停止，接收方可以不创建控制状态而直接开发。

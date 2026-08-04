@@ -237,7 +237,10 @@ class PluginBundleTests(unittest.TestCase):
                 "**自动执行**：创建或选择实际开发工作区，准备并冻结后"
                 "开始实现、测试和独立审查"
             ),
-            "**手动交接**：只生成开发内容交接文件，不创建任务或工作区",
+            (
+                "**手动开发**：冻结同结构开发内容包，不创建 Graph、任务或"
+                "工作区；可切换任意 CLI 直接开发"
+            ),
             "如需继续调整需求，请直接回复修改意见；当前方案不会冻结。",
         )
         for line in expected_copy:
@@ -335,8 +338,16 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("不再询问", planning)
         self.assertIn("30 秒调整窗口", planning)
         self.assertIn("到期自动重调", planning)
-        self.assertIn("只生成一个自包含交接文件", planning)
-        self.assertIn("交接前不指定 Agent", planning)
+        self.assertIn("手动开发生成完整冻结内容包", planning)
+        self.assertIn(
+            ".layered-delivery/<delivery-id>/handoff-<fingerprint>.md",
+            planning,
+        )
+        self.assertIn(
+            "不得创建跨需求共享的 `.layered-delivery/handoffs/`",
+            planning,
+        )
+        self.assertIn("冻结内容时不指定 Agent", planning)
         self.assertIn("开始实际开发时才创建", planning)
         self.assertNotIn("创建新 Codex 任务", planning)
         self.assertNotIn("创建新 Claude 会话", planning)
@@ -350,7 +361,7 @@ class PluginBundleTests(unittest.TestCase):
         metadata = (
             SKILL / "agents" / "openai.yaml"
         ).read_text(encoding="utf-8")
-        self.assertIn("开发内容交接文件", metadata)
+        self.assertIn("冻结", metadata)
 
     def test_skill_auto_dispatches_planned_models_in_parallel(self) -> None:
         main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
@@ -561,6 +572,7 @@ class PluginBundleTests(unittest.TestCase):
                 self.assertEqual(manifest["version"], hdg.__version__)
                 self.assertIn("GROUP", manifest["description"])
                 self.assertIn("TASK", manifest["description"])
+                self.assertIn("冻结开发包", manifest["description"])
 
     def test_sensitive_hook_references_only_existing_tools(self) -> None:
         hooks = json.loads(
@@ -1677,6 +1689,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertEqual(preview_result["status"], "PREVIEW")
         handoff = responses[4]["result"]["structuredContent"]["result"]
         self.assertEqual(handoff["status"], "HANDOFF_READY")
+        self.assertEqual(handoff["requirementSnapshotStatus"], "FROZEN")
         self.assertFalse(handoff["graphRunCreated"])
 
     def test_bundled_mcp_keeps_legacy_initialize_fallback(self) -> None:

@@ -23,6 +23,7 @@ KIND_TEXT = {
     "TASK": "任务",
 }
 STATUS_TEXT = {
+    "HANDOFF_READY": "需求已冻结（手动开发，调度未启动）",
     "PREPARED": "待冻结",
     "FROZEN": "已冻结",
     "ACTIVE": "运行中",
@@ -1878,12 +1879,13 @@ def render_manual_handoff(
             f"| 标题 | {_markdown_text(delivery['title'])} |",
             f"| 确认人 | {_markdown_text(confirmed_by)} |",
             f"| 生成时间（UTC+8） | {_utc_plus_8(created_at)} |",
-            "| 调度状态 | 未 prepare、未冻结、未创建 Graph Run |",
+            "| 需求内容快照 | 已冻结（由双指纹锁定） |",
+            "| Graph 调度状态 | 未 prepare、未创建 Graph Run |",
             "| 接收执行者与模型 | 交接前不指定；由接收宿主开始开发时确定并展示 |",
             "| 开发工作区 | 交接阶段不创建；开始实际开发时再创建或选择 |",
             "",
-            "本文件只交接开发内容，不创建接收任务、不认领 Loop，也不预先"
-            "绑定任何 Agent、原生模型或实际代理模型。",
+            "需求内容快照已冻结。本文件只交接开发内容，不创建接收任务、"
+            "不认领 Loop，也不预先绑定任何 Agent、原生模型或实际代理模型。",
             "",
             "## 完整性标识",
             "",
@@ -1930,19 +1932,23 @@ def render_manual_handoff(
             "",
             "## 接收后开始开发",
             "",
-            "1. 接收宿主读取本文件；此时才知道实际使用的 Agent 与本机模型映射。",
-            "2. 选择实际开发工作区；需要 Git 隔离时，在这一步创建 linked worktree。",
-            "3. 根据新工作区校准下方 schema v3 中的 projectScopes 与 gitBinding。",
-            "4. 在开发工作区调用 `workspace_status`，确认不会覆盖无关 Delivery。",
-            "5. 调用 `prepare_hierarchy` 写入校准后的层级，再调用 `freeze_hierarchy` 启动开发。",
-            "6. 从 `graph_frontier` 读取首批可执行 Loop；此后才生成并展示本宿主的模型路由。",
+            "1. 切换到任意 CLI，读取本目录中的 overview、baseline、progress、"
+            "acceptance、revisions、work-items 和本交接文件。",
+            "2. 校验本文件记录的层级指纹与调度图指纹；二者共同标识本次已冻结需求。",
+            "3. 选择实际开发工作区；需要 Git 隔离时，在这一步创建 linked worktree。",
+            "4. 按实际工作区校准 projectScopes、gitBinding 和本地路径，但不得"
+            "静默改变已冻结的业务目标、TASK、依赖或验收标准。",
+            "5. 直接按冻结内容开发，并在 progress、acceptance 和对应 work-items"
+            "中记录实际进展与验证结果。",
+            "6. 若需求范围发生变化，停止使用旧快照并回到需求会话重新生成；"
+            "不要直接改写旧指纹所代表的需求。",
             "",
             "如果宿主创建 worktree 返回排队标识，这只表示开发环境仍在初始化；"
             "不要宣称 Graph 已启动，也不要重复创建同一接收任务。",
             "",
             "## 机器可读 schema v3",
             "",
-            "以下附录与上面的开发内容属于同一个交接文件。接收方可读取后"
+            "以下附录与上面的开发内容属于同一个已冻结快照。接收方可读取后"
             "校准工作区字段，不应把规划时 Agent 或模型补写进 hierarchy。",
             "",
             "```json",
@@ -2780,10 +2786,11 @@ def render_projection_documents(
     run: dict[str, Any] | None,
     revision_history: dict[str, Any] | None = None,
 ) -> dict[str, str]:
-    """Render the complete controller-owned human projection set.
+    """Render the complete Delivery human projection set.
 
-    The stored hierarchy and optional run are already loaded from SQLite by
-    the repository. Callers cannot supply a template or filename.
+    The definition is either controller-owned SQLite state or a validated,
+    stateless manual-handoff snapshot. Callers cannot supply a template or
+    filename.
     """
 
     hierarchy = stored_definition["hierarchy"]
@@ -2875,7 +2882,7 @@ def render_work_item_projection_documents(
     stored_definition: dict[str, Any],
     run: dict[str, Any] | None,
 ) -> dict[str, str]:
-    """Render the exact GROUP/TASK projection tree from SQLite state."""
+    """Render the exact GROUP/TASK tree from validated Delivery state."""
 
     hierarchy = stored_definition["hierarchy"]
     projection_directories = work_item_projection_directories(hierarchy)

@@ -62,7 +62,7 @@ Codex 冒烟不能使用 `--ephemeral`：`SubagentStart` attestation 必须从�
 ### 升级前
 
 1. 记录当前 `codex plugin list --json` 或 `claude plugin list --json` 输出中的版本。
-2. 对 0.31 及更早版本的 manual Graph run，先在旧版本完成或取消。0.32 不再提供 manual Graph claim；手动交接只生成文件。
+2. 对 0.31 及更早版本的 manual Graph run，先在旧版本完成或取消。0.32 不再提供 manual Graph claim；手动开发只生成冻结内容包。
 3. 自动 schema v3 Graph 可在新会话通过 `workspace_status → graph_frontier` 恢复。升级前仍建议让正在写结果的 Loop 完成，避免恰好跨越 Hook 重载窗口。
 4. 不删除项目中的 `.layered-delivery`，也不直接修改 `scheduler.db`。
 

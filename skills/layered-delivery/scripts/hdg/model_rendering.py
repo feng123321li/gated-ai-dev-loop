@@ -2093,12 +2093,13 @@ def render_manual_handoff(
             f"| 确认人 | {_markdown_text(confirmed_by)} |",
             f"| 生成时间（UTC+8） | {_utc_plus_8(created_at)} |",
             "| 需求内容快照 | 已冻结（由双指纹锁定） |",
-            "| Graph 调度状态 | 未 prepare、未创建 Graph Run |",
+            "| Graph 调度状态 | 待接收 CLI 在实际工作区显式启动 |",
             "| 接收执行者与模型 | 交接前不指定；由接收宿主开始开发时确定并展示 |",
             "| 开发工作区 | 交接阶段不创建；开始实际开发时再创建或选择 |",
             "",
-            "需求内容快照已冻结。本文件只交接开发内容，不创建接收任务、"
-            "不认领 Loop，也不预先绑定任何 Agent、原生模型或实际代理模型。",
+            "需求内容快照已冻结。本文件在交接阶段不创建接收任务、不认领 Loop，"
+            "也不预先绑定任何 Agent、原生模型或实际代理模型；接收后必须先启动"
+            "同一 Graph，不能脱离调度直接开发。",
             "",
             "## 接收 CLI 启动提示词",
             "",
@@ -2147,7 +2148,7 @@ def render_manual_handoff(
             "",
             *skill_lines,
             "",
-            "## 接收后开始开发",
+            "## 接收后启动完整交付流程",
             "",
             "1. 切换到任意 CLI，读取本目录中的 overview、baseline、progress、"
             "acceptance、revisions、work-items 和本交接文件。",
@@ -2155,13 +2156,24 @@ def render_manual_handoff(
             "3. 选择实际开发工作区；需要 Git 隔离时，在这一步创建 linked worktree。",
             "4. 按实际工作区校准 projectScopes、gitBinding 和本地路径，但不得"
             "静默改变已冻结的业务目标、TASK、依赖或验收标准。",
-            "5. 直接按冻结内容开发，并在 progress、acceptance 和对应 work-items"
-            "中记录实际进展与验证结果。",
-            "6. 若需求范围发生变化，停止使用旧快照并回到需求会话重新生成；"
+            "5. 在任何代码检查、分析、修改或测试前，使用本文件的 Delivery ID 和"
+            "双指纹调用 start_manual_handoff；该操作绑定实际工作区并创建 manual "
+            "Graph Run。",
+            "6. 总协调上下文只消费 frontier。每个 CLAIM_MANUAL_TASK 在独立接收"
+            "上下文中以 dispatch_mode=MANUAL claim，随后 heartbeat、上报进度、"
+            "完成实现与验证并提交标准结果。",
+            "7. TASK 成功后继续消费 frontier；TASK Review、各层 GROUP Review 和"
+            "Delivery Review 必须使用与自动执行相同的宿主原生自动派遣、独立上下文、"
+            "问题分级闭环和验证协议，全部成功后等待真实用户确认。",
+            "8. progress、acceptance 和 work-items 均由控制器事件投影刷新；不得"
+            "直接编辑，不得用手动记录替代任何 Review Loop。",
+            "9. 若需求范围发生变化，停止使用旧快照并回到需求会话重新生成；"
             "不要直接改写旧指纹所代表的需求。",
             "",
             "如果宿主创建 worktree 返回排队标识，这只表示开发环境仍在初始化；"
-            "不要宣称 Graph 已启动，也不要重复创建同一接收任务。",
+            "不要宣称 Graph 已启动。初始化完成后调用 start_manual_handoff；若调用"
+            "结果未知，先用 workspace_status 核对同一双指纹的 manual run，已启动则"
+            "从 graph_frontier 幂等恢复，不创建重复 TASK。",
             "",
             "## 机器可读 schema v3",
             "",

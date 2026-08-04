@@ -41,59 +41,29 @@ def _modern_meta() -> dict[str, object]:
 
 def _policy(**overrides: object) -> dict[str, object]:
     value: dict[str, object] = {
-        "schemaVersion": 1,
-        "automaticOrchestration": True,
-        "autoSelectModel": True,
-        "allowCrossAdapterDispatch": False,
-        "allowedAdapters": ["codex", "claude-code"],
+        "schemaVersion": 2,
         "maxConcurrentExecutors": 4,
         "quotaExhaustionPolicy": "PAUSE_AND_RESUME",
-        "preferDifferentAdapterForReview": True,
     }
     value.update(overrides)
     return value
 
 
 class OrchestratorSettingsTests(unittest.TestCase):
-    def test_panel_distinguishes_native_terminal_and_missing_adapters(self) -> None:
-        discovery = {
-            "agents": [
-                {
-                    "id": "codex",
-                    "displayName": "Codex",
-                    "model": {"id": "gpt-test"},
-                },
-                {
-                    "id": "claude-code",
-                    "displayName": "Claude Code",
-                    "model": {"id": "claude-test"},
-                },
-            ],
-            "warnings": [],
-        }
-        with patch(
-            "hdg.orchestrator_settings.discover_available_agents",
-            return_value=discovery,
-        ):
-            result = open_orchestrator_settings(
-                root="unused",
-                orchestrator_config=OrchestratorConfig(),
-                host_adapter_id="codex",
-            )
+    def test_panel_returns_only_policy_and_read_only_host_diagnostic(self) -> None:
+        result = open_orchestrator_settings(
+            root="unused",
+            orchestrator_config=OrchestratorConfig(),
+            host_adapter_id="codex",
+        )
 
-        by_id = {item["id"]: item for item in result["adapters"]}
-        self.assertEqual(by_id["codex"]["registrationState"], "CURRENT_HOST_NATIVE")
-        self.assertEqual(by_id["claude-code"]["registrationState"], "TERMINAL_ONLY")
-        self.assertEqual(by_id["gemini"]["registrationState"], "NOT_DETECTED")
-        self.assertTrue(result["dispatchBoundary"]["terminalDiscoveryDoesNotImplyNativeDispatch"])
-        cross_adapter = result["featureAvailability"][
-            "crossAdapterDispatch"
-        ]
-        self.assertFalse(cross_adapter["supported"])
-        self.assertFalse(cross_adapter["mutable"])
+        self.assertEqual(set(result), {"config", "currentHostAdapter"})
+        self.assertEqual(result["currentHostAdapter"], "codex")
+        self.assertEqual(result["config"]["schemaVersion"], 2)
+        self.assertEqual(result["config"]["maxConcurrentExecutors"], 4)
         self.assertEqual(
-            cross_adapter["code"],
-            "ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE",
+            result["config"]["quotaExhaustionPolicy"],
+            "PAUSE_AND_RESUME",
         )
 
     def test_resources_expose_self_contained_mcp_app(self) -> None:
@@ -129,8 +99,18 @@ class OrchestratorSettingsTests(unittest.TestCase):
         self.assertEqual(content["mimeType"], MCP_APP_MIME_TYPE)
         self.assertIn('request("ui/initialize"', content["text"])
         self.assertIn('name: "update_orchestrator_settings"', content["text"])
-        self.assertIn('id="cross-adapter-notice"', content["text"])
-        self.assertIn("crossCapability.mutable", content["text"])
+        self.assertNotIn('id="automatic"', content["text"])
+        self.assertNotIn('id="model"', content["text"])
+        self.assertNotIn('id="cross"', content["text"])
+        self.assertNotIn('id="review"', content["text"])
+        self.assertNotIn('id="adapter-list"', content["text"])
+        self.assertNotIn('id="cross-adapter-notice"', content["text"])
+        self.assertNotIn("crossCapability.mutable", content["text"])
+        self.assertNotIn("automaticOrchestration", content["text"])
+        self.assertNotIn("allowedAdapters", content["text"])
+        self.assertNotIn("autoSelectModel", content["text"])
+        self.assertNotIn("allowCrossAdapterDispatch", content["text"])
+        self.assertNotIn("preferDifferentAdapterForReview", content["text"])
         self.assertEqual(content["_meta"]["ui"]["csp"]["connectDomains"], [])
 
     def test_approved_update_persists_and_refreshes_current_connection(self) -> None:
@@ -143,7 +123,6 @@ class OrchestratorSettingsTests(unittest.TestCase):
             )
             updated = _policy(
                 maxConcurrentExecutors=8,
-                quotaExhaustionPolicy="ASK_USER",
             )
             with patch.dict(
                 os.environ,
@@ -167,7 +146,6 @@ class OrchestratorSettingsTests(unittest.TestCase):
             self.assertTrue(payload["ok"])
             self.assertTrue(payload["result"]["saved"])
             self.assertEqual(json.loads(path.read_text(encoding="utf-8")), updated)
-            self.assertFalse(connection.orchestrator_config.allow_cross_adapter_dispatch)
             self.assertEqual(connection.orchestrator_config.max_concurrent_executors, 8)
 
     def test_project_independent_update_does_not_require_codex_sandbox_metadata(
@@ -229,7 +207,7 @@ class OrchestratorSettingsTests(unittest.TestCase):
                 "PROJECT_ROOT_UNAVAILABLE",
             )
 
-    def test_update_rejects_unavailable_cross_adapter_policy(self) -> None:
+    def test_update_rejects_legacy_cross_adapter_field(self) -> None:
         with TemporaryDirectory() as root:
             path = Path(root, "user", "orchestrator.json")
             connection = McpConnection(
@@ -262,7 +240,7 @@ class OrchestratorSettingsTests(unittest.TestCase):
             self.assertFalse(payload["ok"])
             self.assertEqual(
                 payload["error"]["code"],
-                "ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE",
+                "MCP_TOOL_ARGUMENT_INVALID",
             )
             self.assertFalse(path.exists())
 
@@ -299,15 +277,12 @@ class OrchestratorSettingsTests(unittest.TestCase):
             self.assertFalse(payload["ok"])
             self.assertEqual(
                 payload["error"]["code"],
-                "ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE",
+                "MCP_TOOL_ARGUMENT_INVALID",
             )
             self.assertFalse(path.exists())
 
     def test_controller_config_read_does_not_create_scheduler_runtime(self) -> None:
-        with TemporaryDirectory() as root, patch(
-            "hdg.orchestrator_settings.discover_available_agents",
-            return_value={"agents": [], "warnings": []},
-        ):
+        with TemporaryDirectory() as root:
             result = LayeredDeliveryController().execute(
                 "open_orchestrator_settings",
                 {},

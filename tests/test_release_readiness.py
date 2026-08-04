@@ -266,7 +266,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
             tools["dispatch_loop"]["inputSchema"]["properties"][
                 "dispatch_mode"
             ]["enum"],
-            ["AUTO"],
+            ["AUTO", "MANUAL"],
         )
 
     def test_release_validator_passes_current_candidate(self) -> None:

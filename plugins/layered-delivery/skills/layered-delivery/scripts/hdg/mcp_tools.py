@@ -66,135 +66,6 @@ FINGERPRINT = {
     "description": "Exact SHA-256 fingerprint returned by the controller.",
 }
 
-HOST_MODEL = _object(
-    {
-        "id": _string(
-            "Native model name accepted by the host Agent API. This is "
-            "the dispatch selector, never a forwarded/effective model."
-        ),
-        "family": _string(
-            "Optional model family used for Review diversity."
-        ),
-        "tier": {
-            "type": "string",
-            "enum": ["EFFICIENT", "BALANCED", "FRONTIER"],
-        },
-        "reasoningEffort": _string(
-            "Optional host-native reasoning effort override."
-        ),
-        "priority": {
-            "type": "integer",
-            "minimum": -100,
-            "maximum": 100,
-        },
-    },
-    required=["id", "tier", "priority"],
-)
-
-HOST_EXECUTOR = _object(
-    {
-        "agentId": _string("Host-native Agent ID."),
-        "adapterId": _string(
-            "Optional central host Adapter ID; defaults to agentId."
-        ),
-        "displayName": _string("Host-native Agent display name."),
-        "dispatchTransport": {
-            "type": "string",
-            "enum": ["HOST_NATIVE", "EXTERNAL_PROCESS"],
-            "description": (
-                "HOST_NATIVE means the current host creates the child "
-                "through its built-in Agent API with normal sandbox and "
-                "approval enforcement. EXTERNAL_PROCESS includes CLI, "
-                "exec, subprocess, and companion-script bridges and is "
-                "never eligible for automatic dispatch."
-            ),
-        },
-        "capabilities": {
-            "type": "array",
-            "items": {
-                "type": "string",
-                "enum": ["development", "review"],
-            },
-            "minItems": 1,
-            "uniqueItems": True,
-        },
-        "availableSlots": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 64,
-        },
-        "priority": {
-            "type": "integer",
-            "minimum": -100,
-            "maximum": 100,
-        },
-        "nativeModelSelectionSupported": {
-            "type": "boolean",
-            "description": (
-                "Whether child creation can select one advertised native "
-                "model name. Local forwarding or model replacement is "
-                "outside the orchestration contract."
-            ),
-        },
-        "models": {
-            "type": "array",
-            "items": HOST_MODEL,
-            "minItems": 1,
-            "maxItems": 64,
-        },
-    },
-    required=[
-        "agentId",
-        "displayName",
-        "dispatchTransport",
-        "capabilities",
-        "availableSlots",
-        "priority",
-        "nativeModelSelectionSupported",
-        "models",
-    ],
-)
-
-CURRENT_EXECUTOR = _object(
-    {
-        "agentId": _string(
-            "Exact current host-native Agent ID from executor inventory."
-        ),
-        "modelId": _string(
-            "Exact current native model name advertised by that Agent."
-        ),
-    },
-    required=["agentId", "modelId"],
-)
-
-DISPATCH_NODE_REQUIREMENT = _object(
-    {
-        "nodeId": NODE_ID,
-        "reasoningClass": {
-            "type": "string",
-            "enum": ["ROUTINE", "STANDARD", "HIGH"],
-            "description": (
-                "Host Agent analysis: ROUTINE targets an efficient model; "
-                "STANDARD targets a balanced model; HIGH requires a "
-                "frontier model."
-            ),
-        },
-        "source": {
-            "type": "string",
-            "enum": ["PLANNING", "USER_POLICY", "LOOP_POLICY"],
-        },
-        "reason": _string(
-            "Why this current frontier node needs the reasoning class."
-        ),
-        "preferredNativeModelId": _string(
-            "Optional exact host-native selector explicitly requested by "
-            "the user. Valid only with source USER_POLICY; forwarded or "
-            "effective model IDs are not accepted."
-        ),
-    },
-    required=["nodeId", "reasoningClass", "source", "reason"],
-)
-
 OUTCOME = _object(
     {
         "status": {
@@ -214,7 +85,60 @@ OUTCOME = _object(
         "summary": _string("Concise Loop-owned result summary."),
         "result": {
             "type": "object",
-            "description": "Opaque Loop-owned result payload.",
+            "description": (
+                "Opaque Loop-owned result payload. When the receiving "
+                "Agent used internal workers, workerTelemetry reports "
+                "display-only phase evidence; it never grants Graph "
+                "authority or affects acceptance."
+            ),
+            "properties": {
+                "workerTelemetry": {
+                    "type": "array",
+                    "maxItems": 128,
+                    "items": _object(
+                        {
+                            "phase": _string(
+                                "Loop-internal phase, such as implementation, review, or test."
+                            ),
+                            "agent": _string(
+                                "Observed or self-reported Agent ID; use the literal unreported when unknown."
+                            ),
+                            "model": _string(
+                                "Observed or self-reported model ID; use the literal unreported when unknown."
+                            ),
+                            "reasoningEffort": _string(
+                                "Reported effort, for example low, medium, high, max, or ultra; use unreported when unknown."
+                            ),
+                            "role": _string(
+                                "Optional worker role reported by the outer receiver."
+                            ),
+                            "provenance": {
+                                "type": "string",
+                                "enum": [
+                                    "HOST_EVENT",
+                                    "HOST_TOOL_RESULT",
+                                    "WORKER_SELF_REPORT",
+                                    "LOCAL_CONFIG",
+                                ],
+                            },
+                            "status": _string(
+                                "Phase status reported by the outer receiver."
+                            ),
+                            "summary": _string(
+                                "Bounded display summary without prompts or transcripts."
+                            ),
+                            "displayOnly": {"const": True},
+                            "nonAuthoritative": {"const": True},
+                        },
+                        required=[
+                            "phase",
+                            "agent",
+                            "model",
+                            "reasoningEffort",
+                        ],
+                    ),
+                }
+            },
             "additionalProperties": True,
         },
     },
@@ -344,6 +268,23 @@ def _execution_choice_tool_schema() -> dict[str, Any]:
     )
 
 
+def _manual_start_tool_schema() -> dict[str, Any]:
+    return _object(
+        {
+            "root_id": ROOT_ID,
+            "expected_hierarchy_fingerprint": FINGERPRINT,
+            "expected_graph_fingerprint": FINGERPRINT,
+            "started_by": SCHEDULER_IDENTITY,
+        },
+        required=[
+            "root_id",
+            "expected_hierarchy_fingerprint",
+            "expected_graph_fingerprint",
+            "started_by",
+        ],
+    )
+
+
 def _prepare_revision_tool_schema() -> dict[str, Any]:
     hierarchy_schema = hierarchy_input_schema()
     definitions = hierarchy_schema.pop("$defs")
@@ -388,17 +329,7 @@ ORCHESTRATOR_POLICY = _object(
     {
         "schemaVersion": {
             "type": "integer",
-            "const": 1,
-        },
-        "automaticOrchestration": {"type": "boolean"},
-        "autoSelectModel": {"type": "boolean"},
-        "allowCrossAdapterDispatch": {"type": "boolean"},
-        "allowedAdapters": {
-            "type": "array",
-            "items": _string("Allowed central Adapter ID."),
-            "minItems": 1,
-            "maxItems": 64,
-            "uniqueItems": True,
+            "const": 2,
         },
         "maxConcurrentExecutors": {
             "type": "integer",
@@ -409,21 +340,13 @@ ORCHESTRATOR_POLICY = _object(
             "type": "string",
             "enum": [
                 "PAUSE_AND_RESUME",
-                "SWITCH_ADAPTER",
-                "ASK_USER",
             ],
         },
-        "preferDifferentAdapterForReview": {"type": "boolean"},
     },
     required=[
         "schemaVersion",
-        "automaticOrchestration",
-        "autoSelectModel",
-        "allowCrossAdapterDispatch",
-        "allowedAdapters",
         "maxConcurrentExecutors",
         "quotaExhaustionPolicy",
-        "preferDifferentAdapterForReview",
     ],
 )
 
@@ -464,8 +387,8 @@ TOOLS = (
             "policy after explicit user confirmation. This writes the "
             "platform-specific orchestrator.json atomically and applies "
             "the validated policy to the current MCP connection without "
-            "requiring a Delivery workspace. Cross-Adapter dispatch and "
-            "SWITCH_ADAPTER remain unavailable and are rejected."
+            "requiring a Delivery workspace. Adapter trust comes from "
+            "Plugin registration and host attestation, never this file."
         ),
         _object(
             {"config": ORCHESTRATOR_POLICY},
@@ -565,9 +488,23 @@ TOOLS = (
             "This does not prepare, freeze, or start a Graph run; do not "
             "choose an Agent/model, create a receiving task, bind a workspace, "
             "or initialize a worktree. The user may open the bundle in any "
-            "CLI and develop directly from it."
+            "CLI, but that receiver must call start_manual_handoff before "
+            "code work and then complete the full governed Graph."
         ),
         _manual_handoff_tool_schema(),
+    ),
+    _tool(
+        "start_manual_handoff",
+        (
+            "Start the exact HANDOFF_READY snapshot in the receiving CLI's "
+            "actual development workspace before any implementation work. "
+            "This binds the workspace and creates one governed manual Graph "
+            "run. TASK implementation Loops must be claimed with MANUAL "
+            "provenance; every TASK/GROUP/Delivery Review remains an "
+            "independent host-native automatic Loop, followed by final user "
+            "confirmation. It never weakens or skips STANDARD Review nodes."
+        ),
+        _manual_start_tool_schema(),
     ),
     _tool(
         "prepare_hierarchy",
@@ -606,108 +543,24 @@ TOOLS = (
         ),
     ),
     _tool(
-        "recommend_executors",
-        (
-            "Return non-binding execution recommendations for every Loop. "
-            "AUTOMATIC uses only the current host Agent and its native "
-            "model tiers, sharing the later dispatch routing policy. Never "
-            "use this tool for manual handoff, claim, or dispatch a Loop."
-        ),
-        _object(
-            {
-                "root_id": ROOT_ID,
-                "recommendation_mode": {
-                    "type": "string",
-                    "enum": ["AUTOMATIC"],
-                    "description": (
-                        "AUTOMATIC stays within the current execution "
-                        "Agent and its native model selectors."
-                    ),
-                },
-                "executor_inventory": {
-                    "type": "array",
-                    "items": HOST_EXECUTOR,
-                    "minItems": 1,
-                    "maxItems": 64,
-                    "description": (
-                        "Required only for AUTOMATIC; current host-native "
-                        "Agent catalog using native model selectors."
-                    ),
-                },
-                "node_requirements": {
-                    "type": "array",
-                    "items": DISPATCH_NODE_REQUIREMENT,
-                    "maxItems": 256,
-                    "description": (
-                        "Required only for AUTOMATIC and covers every Loop "
-                        "being previewed."
-                    ),
-                },
-                "current_executor": {
-                    **CURRENT_EXECUTOR,
-                    "description": (
-                        "Optional AUTOMATIC fallback when a reasoning "
-                        "analysis is unavailable."
-                    ),
-                },
-            },
-            required=["root_id", "recommendation_mode"],
-        ),
-    ),
-    _tool(
         "plan_dispatch_batch",
         (
             "Plan one concurrent batch for the current DISPATCH_LOOP "
-            "frontier using ephemeral host-native Agent capacity and "
-            "selectable models. Missing host Agent analysis may use the "
-            "exact current Agent/model reported by the host and remains "
-            "UNCLASSIFIED. Applies the user-level central orchestrator "
-            "switches, Adapter allowlist, cross-Adapter permission, "
-            "concurrency limit, quota policy, and Review preference. "
-            "The first stable route opens a persisted 30-second adjustment "
-            "window and returns HOST_NATIVE_ROUTE_REVIEW without a second "
-            "confirmation. Repeating the call after expiry atomically "
-            "reserves every returned assignment before host Agent creation; "
-            "a user-native model change restarts that node's window. Returns "
-            "model-selection instructions and decision fingerprints; never "
-            "starts Agents or claims Loops."
+            "frontier. It reserves each assignment before the trusted "
+            "current host creates an independent outer receiver. The "
+            "receiver inherits the current host model; Layered Delivery "
+            "does not inspect model inventory, recommend a model, or "
+            "control Loop-internal workers. Returns receiver identities "
+            "and decision fingerprints; never starts Agents or claims Loops."
         ),
         _object(
             {
                 "root_id": ROOT_ID,
                 "expected_graph_fingerprint": FINGERPRINT,
-                "executor_inventory": {
-                    "type": "array",
-                    "items": HOST_EXECUTOR,
-                    "minItems": 1,
-                    "maxItems": 64,
-                },
-                "node_requirements": {
-                    "type": "array",
-                    "items": DISPATCH_NODE_REQUIREMENT,
-                    "maxItems": 256,
-                    "description": (
-                        "Available Host Agent reasoning analyses for current "
-                        "dispatch Loops. Missing nodes require "
-                        "current_executor fallback; the controller never "
-                        "analyzes Loop payloads."
-                    ),
-                },
-                "current_executor": {
-                    **CURRENT_EXECUTOR,
-                    "description": (
-                        "Exact current host Agent/native model used only "
-                        "for "
-                        "nodes lacking Agent analysis. It must match "
-                        "executor_inventory."
-                    ),
-                },
             },
             required=[
                 "root_id",
                 "expected_graph_fingerprint",
-                "executor_inventory",
-                "node_requirements",
             ],
         ),
     ),
@@ -717,7 +570,8 @@ TOOLS = (
             "Freeze an explicitly prepared later revision. The initial "
             "automatic button calls select_execution_mode(AUTOMATIC), not "
             "this low-level tool. Manual revisions use "
-            "create_manual_handoff and do not create a Graph run."
+            "create_manual_handoff; their receiving CLI later creates the "
+            "governed manual run through start_manual_handoff."
         ),
         _object(
             {
@@ -889,9 +743,9 @@ TOOLS = (
         (
             "Claim one ready TASK, TASK Review, GROUP Review, or Delivery "
             "Review Loop "
-            "for its receiving isolated executor, recording the native "
-            "Agent/model selector plus any display-only host observation "
-            "and subject to exact resource locks."
+            "for its isolated outer receiver. The claim authenticates the "
+            "trusted Adapter and receiving context, not a development model. "
+            "Only this receiver may use the returned Loop operation ID."
         ),
         _object(
             {
@@ -913,9 +767,9 @@ TOOLS = (
                     "minLength": 1,
                     "maxLength": 256,
                     "description": (
-                        "Native model name selected through the receiving "
-                        "Agent API. Automatic dispatch must use the exact "
-                        "modelId from its assignment."
+                        "Optional display-only model reported by the outer "
+                        "receiver. It never participates in routing, "
+                        "authorization, fingerprinting, or acceptance."
                     ),
                 },
                 "actual_model_id": {
@@ -932,11 +786,12 @@ TOOLS = (
                 },
                 "dispatch_mode": {
                     "type": "string",
-                    "enum": ["AUTO"],
+                    "enum": ["AUTO", "MANUAL"],
                     "description": (
-                        "Required automatic dispatch provenance. The exact "
-                        "decision fingerprint returned for this node is "
-                        "also required. Manual Graph claims are unsupported."
+                        "AUTO is required for every automatically routed Loop. "
+                        "MANUAL is allowed only for TASK implementation Loops "
+                        "in a Graph started by start_manual_handoff; Review "
+                        "Loops remain AUTO and independent."
                     ),
                 },
                 "receiver_context_id": _string(
@@ -964,19 +819,6 @@ TOOLS = (
                     "Required with dispatch_mode=AUTO. Use the exact "
                     "dispatchReservationId returned for this assignment."
                 ),
-                "dispatch_reasoning_class": {
-                    "type": "string",
-                    "enum": [
-                        "ROUTINE",
-                        "STANDARD",
-                        "HIGH",
-                        "UNCLASSIFIED",
-                    ],
-                    "description": (
-                        "Reasoning class bound into an AUTO decision. "
-                        "UNCLASSIFIED identifies current-executor fallback."
-                    ),
-                },
                 "dispatch_decision_fingerprint": {
                     **FINGERPRINT,
                     "description": (
@@ -991,7 +833,6 @@ TOOLS = (
                 "node_id",
                 "owner",
                 "agent_id",
-                "model_id",
                 "dispatch_mode",
                 "operation_id",
             ],

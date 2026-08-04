@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .dispatch_contracts import (
-    DISPATCH_REASONING_CLASSES,
+    HOST_ADAPTER_RECEIVER_AGENTS,
     HOST_NATIVE_DISPATCH_TRANSPORT,
     automatic_dispatch_decision_fingerprint,
 )
@@ -51,17 +51,30 @@ from .progress_reporting import (
 
 IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,191}$")
 CAPACITY_SCOPES = frozenset({"EXECUTOR", "HOST"})
-DISPATCH_MODES = frozenset({"AUTO"})
+DISPATCH_MODES = frozenset({"AUTO", "MANUAL"})
+GRAPH_EXECUTION_MODES = frozenset({"active", "manual"})
 SHA256_FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
-HOST_ADAPTER_AGENTS = {
-    "claude-code": "claude-code",
-    "codex": "codex",
-}
+HOST_ADAPTER_AGENTS = dict(HOST_ADAPTER_RECEIVER_AGENTS)
 HOST_CAPACITY_KEYS = {
     "claude-code": "claude-code:default",
     "codex": "codex:default",
 }
 MAX_HOST_CAPACITY_RESET = timedelta(hours=24)
+
+
+def _dispatch_mode_allowed(
+    execution_mode: str,
+    node_kind: str,
+    dispatch_mode: str,
+) -> bool:
+    if execution_mode == "active":
+        return dispatch_mode == "AUTO"
+    if execution_mode == "manual":
+        if node_kind == "TASK_LOOP":
+            return dispatch_mode == "MANUAL"
+        if node_kind.endswith("_REVIEW_LOOP"):
+            return dispatch_mode == "AUTO"
+    return False
 
 
 def _identity(value: object, field: str) -> str:
@@ -777,7 +790,6 @@ def dispatch_loop(
     dispatch_mode: str,
     dispatch_transport: str | None = None,
     dispatch_reservation_id: str | None = None,
-    dispatch_reasoning_class: str | None = None,
     dispatch_decision_fingerprint: str | None = None,
     host_native_agent_ids: tuple[str, ...] | None = None,
     host_adapter_id: str | None = None,
@@ -790,12 +802,7 @@ def dispatch_loop(
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     owner = _identity(owner, "owner")
     operation_id = _identity(operation_id, "operation_id")
-    if (agent_id is None) != (model_id is None):
-        fail(
-            "SCHEDULER_EXECUTOR_METADATA_INVALID",
-            "agent_id and model_id must be supplied together",
-        )
-    actual_agent_id = (
+    supplied_agent_id = (
         _executor_descriptor(agent_id, "agent_id")
         if agent_id is not None
         else None
@@ -810,11 +817,33 @@ def dispatch_loop(
         if actual_model_id is not None
         else None
     )
-    if observed_actual_model_id is not None and native_model_id is None:
+    if dispatch_mode not in DISPATCH_MODES:
         fail(
-            "SCHEDULER_EXECUTOR_METADATA_INVALID",
-            "actual_model_id requires the dispatched native model_id",
+            "SCHEDULER_DISPATCH_MODE_INVALID",
+            "dispatch_mode must be AUTO or MANUAL",
         )
+    if dispatch_mode == "AUTO":
+        if host_adapter_id not in HOST_ADAPTER_AGENTS:
+            fail(
+                "SCHEDULER_HOST_ADAPTER_UNTRUSTED",
+                "Automatic dispatch requires an exact trusted host adapter",
+            )
+        actual_agent_id = HOST_ADAPTER_AGENTS[host_adapter_id]
+        if (
+            supplied_agent_id is not None
+            and supplied_agent_id != actual_agent_id
+        ):
+            fail(
+                "SCHEDULER_HOST_NATIVE_EXECUTOR_MISMATCH",
+                "The current host cannot create the supplied receiver Agent",
+                hostAdapterId=host_adapter_id,
+                suppliedAgentId=supplied_agent_id,
+            )
+        # AUTO model values are never selectors or authorization inputs.  A
+        # model observed by a lifecycle Hook remains display-only telemetry.
+        native_model_id = None
+    else:
+        actual_agent_id = supplied_agent_id
     actual_receiver_context_id = (
         _identity(receiver_context_id, "receiver_context_id")
         if receiver_context_id is not None
@@ -845,6 +874,11 @@ def dispatch_loop(
             "Host-side identity issuance requires attested dispatch",
         )
     if require_receiver_attestation:
+        if dispatch_mode != "AUTO":
+            fail(
+                "SCHEDULER_RECEIVER_ATTESTATION_INVALID",
+                "Only automatic host-native dispatch uses receiver attestation",
+            )
         if (
             actual_receiver_attestation_id is None
             and actual_host_receiver_parent_context_id is None
@@ -861,23 +895,6 @@ def dispatch_loop(
                 "SCHEDULER_RECEIVER_ATTESTATION_INVALID",
                 "Receiver identity may be supplied or host-issued, not both",
             )
-        if host_adapter_id not in HOST_ADAPTER_AGENTS:
-            fail(
-                "SCHEDULER_HOST_ADAPTER_UNTRUSTED",
-                "MCP dispatch requires an exact trusted host adapter",
-            )
-        if actual_agent_id != HOST_ADAPTER_AGENTS[host_adapter_id]:
-            fail(
-                "SCHEDULER_HOST_NATIVE_EXECUTOR_MISMATCH",
-                "The attesting host cannot create the reported Agent",
-                hostAdapterId=host_adapter_id,
-                suppliedAgentId=actual_agent_id,
-            )
-    if dispatch_mode not in DISPATCH_MODES:
-        fail(
-            "SCHEDULER_DISPATCH_MODE_INVALID",
-            "dispatch_mode must be AUTO; manual Graph claims are unsupported",
-        )
     if dispatch_mode == "AUTO" and (
         dispatch_transport != HOST_NATIVE_DISPATCH_TRANSPORT
     ):
@@ -908,17 +925,6 @@ def dispatch_loop(
                 "fingerprint returned by the host dispatch plan"
             ),
         )
-    if dispatch_mode == "AUTO" and (
-        dispatch_reasoning_class not in DISPATCH_REASONING_CLASSES
-    ):
-        fail(
-            "SCHEDULER_DISPATCH_REASONING_REQUIRED",
-            (
-                "Automatic dispatch requires the ROUTINE, STANDARD, HIGH, "
-                "or UNCLASSIFIED reasoning class returned by the host "
-                "dispatch plan"
-            ),
-        )
     if (
         dispatch_decision_fingerprint is not None
         and dispatch_mode != "AUTO"
@@ -929,11 +935,6 @@ def dispatch_loop(
                 "dispatch_decision_fingerprint is only valid for "
                 "automatic dispatch"
             ),
-        )
-    if dispatch_reasoning_class is not None and dispatch_mode != "AUTO":
-        fail(
-            "SCHEDULER_DISPATCH_REASONING_INVALID",
-            "dispatch_reasoning_class is only valid for automatic dispatch",
         )
     if dispatch_mode == "AUTO" and dispatch_reservation_id is None:
         fail(
@@ -959,15 +960,10 @@ def dispatch_loop(
         if dispatch_reservation_id is not None
         else None
     )
-    if dispatch_mode == "AUTO" and actual_agent_id is None:
-        fail(
-            "SCHEDULER_EXECUTOR_METADATA_INVALID",
-            "Automatic dispatch requires native agent and model IDs",
-        )
     if (
         dispatch_mode == "AUTO"
         and host_native_agent_ids is not None
-        and actual_agent_id not in host_native_agent_ids
+        and host_native_agent_ids != (actual_agent_id,)
     ):
         fail(
             "SCHEDULER_HOST_NATIVE_EXECUTOR_MISMATCH",
@@ -975,36 +971,27 @@ def dispatch_loop(
             supportedAgentIds=sorted(host_native_agent_ids),
             suppliedAgentId=actual_agent_id,
         )
+    if dispatch_mode == "MANUAL" and (
+        actual_agent_id is None
+        or receiver_context_id is None
+    ):
+        fail(
+            "SCHEDULER_EXECUTOR_METADATA_INVALID",
+            "Manual TASK dispatch requires explicit Agent and receiving context IDs",
+        )
+    if (
+        dispatch_mode == "MANUAL"
+        and host_adapter_id in HOST_ADAPTER_AGENTS
+        and actual_agent_id != HOST_ADAPTER_AGENTS[host_adapter_id]
+    ):
+        fail(
+            "SCHEDULER_HOST_NATIVE_EXECUTOR_MISMATCH",
+            "The receiving host cannot report another Agent for a manual TASK",
+            hostAdapterId=host_adapter_id,
+            suppliedAgentId=actual_agent_id,
+        )
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
-        if run["execution_mode"] != "active":
-            fail(
-                "SCHEDULER_STATE_INVALID",
-                "Only automatic Graph runs can dispatch Loops",
-                executionMode=run["execution_mode"],
-            )
-        if dispatch_mode == "AUTO":
-            expected_dispatch_decision = (
-                automatic_dispatch_decision_fingerprint(
-                    graph_fingerprint=graph_fingerprint(graph),
-                    node_id=node_id,
-                    agent_id=actual_agent_id,
-                    model_id=native_model_id,
-                    reasoning_class=dispatch_reasoning_class,
-                    dispatch_transport=dispatch_transport,
-                )
-            )
-            if (
-                dispatch_decision_fingerprint
-                != expected_dispatch_decision
-            ):
-                fail(
-                    "SCHEDULER_DISPATCH_DECISION_MISMATCH",
-                    (
-                        "The automatic dispatch decision does not match "
-                        "this Graph, Loop, Agent, and model"
-                    ),
-                )
         at = _locked_timestamp(now, run["updated_at"])
         if actual_agent_id is not None:
             global_breaker = repository.open_host_capacity_breaker(
@@ -1031,6 +1018,37 @@ def dispatch_loop(
             )
         _assert_graph_not_replanning(nodes)
         definition, state = _node(graph, nodes, node_id)
+        if not _dispatch_mode_allowed(
+            run["execution_mode"],
+            definition["kind"],
+            dispatch_mode,
+        ):
+            fail(
+                "SCHEDULER_DISPATCH_MODE_INVALID",
+                "The dispatch mode is not allowed for this Graph mode and Loop kind",
+                executionMode=run["execution_mode"],
+                nodeKind=definition["kind"],
+                dispatchMode=dispatch_mode,
+            )
+        if dispatch_mode == "AUTO":
+            expected_dispatch_decision = (
+                automatic_dispatch_decision_fingerprint(
+                    graph_fingerprint=graph_fingerprint(graph),
+                    node_id=node_id,
+                    attempt=state["attempt"],
+                    host_adapter_id=str(host_adapter_id),
+                    receiver_agent_id=str(actual_agent_id),
+                    dispatch_transport=str(dispatch_transport),
+                )
+            )
+            if dispatch_decision_fingerprint != expected_dispatch_decision:
+                fail(
+                    "SCHEDULER_DISPATCH_DECISION_MISMATCH",
+                    (
+                        "The automatic dispatch decision does not match "
+                        "this Graph attempt and native receiver"
+                    ),
+                )
         receiver_attestation = None
         if require_receiver_attestation:
             if actual_host_receiver_parent_context_id is not None:
@@ -1049,7 +1067,7 @@ def dispatch_loop(
                     "WHERE d.reservation_id = ? AND d.run_id = ? "
                     "AND d.root_id = ? AND d.node_id = ? "
                     "AND d.attempt = ? AND d.agent_id = 'codex' "
-                    "AND d.model_id = ? AND d.status = 'RESERVED' "
+                    "AND d.status = 'RESERVED' "
                     "AND d.expires_at >= ? "
                     "AND h.attestation_digest IS NULL LIMIT 1",
                     (
@@ -1058,7 +1076,6 @@ def dispatch_loop(
                         root_id,
                         node_id,
                         state["attempt"],
-                        native_model_id,
                         at,
                     ),
                 ).fetchone()
@@ -1077,7 +1094,7 @@ def dispatch_loop(
                         reservation_id=actual_reservation_id,
                         host_adapter_id="codex",
                         agent_id="codex",
-                        model_id=str(native_model_id),
+                        model_id=(observed_actual_model_id or "UNREPORTED"),
                         receiver_context_id=actual_receiver_context_id,
                         parent_context_id=(
                             actual_host_receiver_parent_context_id
@@ -1096,7 +1113,7 @@ def dispatch_loop(
                     receiver_context_id=actual_receiver_context_id,
                     host_adapter_id=str(host_adapter_id),
                     agent_id=str(actual_agent_id),
-                    model_id=str(native_model_id),
+                    model_id=(observed_actual_model_id or "UNREPORTED"),
                     reservation_id=actual_reservation_id,
                     operation_id=operation_id,
                     at=at,
@@ -1228,17 +1245,18 @@ def dispatch_loop(
                     f"{active['nodeId']}",
                     conflictingNodeId=active["nodeId"],
                 )
-        repository.consume_dispatch_reservation(
-            connection,
-            reservation_id=actual_reservation_id,
-            run_id=run["run_id"],
-            node_id=node_id,
-            attempt=state["attempt"],
-            graph_fingerprint=graph_fingerprint(graph),
-            decision_fingerprint=dispatch_decision_fingerprint,
-            operation_id=operation_id,
-            at=at,
-        )
+        if dispatch_mode == "AUTO":
+            repository.consume_dispatch_reservation(
+                connection,
+                reservation_id=actual_reservation_id,
+                run_id=run["run_id"],
+                node_id=node_id,
+                attempt=state["attempt"],
+                graph_fingerprint=graph_fingerprint(graph),
+                decision_fingerprint=dispatch_decision_fingerprint,
+                operation_id=operation_id,
+                at=at,
+            )
         lease = graph["runtime"]["claimPolicy"]["leaseSeconds"]
         expires = _after(at, lease)
         connection.execute(
@@ -1282,6 +1300,14 @@ def dispatch_loop(
                     else {}
                 ),
                 **(
+                    {"hostAdapterId": host_adapter_id}
+                    if (
+                        dispatch_mode == "MANUAL"
+                        and host_adapter_id in HOST_ADAPTER_AGENTS
+                    )
+                    else {}
+                ),
+                **(
                     {
                         "agentId": actual_agent_id,
                         "modelId": native_model_id,
@@ -1300,7 +1326,6 @@ def dispatch_loop(
                 "dispatchMode": dispatch_mode,
                 "dispatchTransport": dispatch_transport,
                 "dispatchReservationId": actual_reservation_id,
-                "dispatchReasoningClass": dispatch_reasoning_class,
                 "dispatchDecisionFingerprint": (
                     dispatch_decision_fingerprint
                 ),
@@ -1334,7 +1359,6 @@ def dispatch_loop(
         "dispatchMode": dispatch_mode,
         "dispatchTransport": dispatch_transport,
         "dispatchReservationId": actual_reservation_id,
-        "dispatchReasoningClass": dispatch_reasoning_class,
         "dispatchDecisionFingerprint": (
             dispatch_decision_fingerprint
         ),
@@ -1384,10 +1408,14 @@ def attest_loop_receiver(
                 nodeId=node_id,
                 status=state["status"],
             )
-        if run["execution_mode"] != "active":
+        if not _dispatch_mode_allowed(
+            run["execution_mode"],
+            definition["kind"],
+            "AUTO",
+        ):
             fail(
                 "SCHEDULER_STATE_INVALID",
-                "Receiver attestations require automatic execution",
+                "Receiver attestations require an automatically dispatched Loop",
             )
         reservation = connection.execute(
             "SELECT * FROM dispatch_reservations "
@@ -1460,8 +1488,7 @@ def claim_codex_subagent_receiver(
 
     def committed_assignment(connection: Any) -> dict[str, Any] | None:
         row = connection.execute(
-            "SELECT h.operation_id, d.node_id, d.model_id, "
-            "d.reasoning_class, "
+            "SELECT h.operation_id, d.node_id, "
             "d.decision_fingerprint, n.lease_expires_at "
             "FROM host_receiver_identities h "
             "JOIN dispatch_reservations d "
@@ -1488,7 +1515,7 @@ def claim_codex_subagent_receiver(
             "rootId": root_id,
             "nodeId": row["node_id"],
             "agentId": "codex",
-            "modelId": row["model_id"],
+            "modelId": None,
             "actualModelId": observed_actual_model_id,
             "actualModelSource": "HOST_REPORTED",
             "receiverContextId": receiver_context_id,
@@ -1496,7 +1523,6 @@ def claim_codex_subagent_receiver(
             "dispatchMode": "AUTO",
             "dispatchTransport": HOST_NATIVE_DISPATCH_TRANSPORT,
             "dispatchReservationId": reservation_id,
-            "dispatchReasoningClass": row["reasoning_class"],
             "dispatchDecisionFingerprint": row[
                 "decision_fingerprint"
             ],
@@ -1505,15 +1531,15 @@ def claim_codex_subagent_receiver(
         }
 
     with repository.transaction() as connection:
-        _graph, run, _nodes = _loaded(connection, root_id)
+        graph, run, _nodes = _loaded(connection, root_id)
         recovered = committed_assignment(connection)
         if recovered is not None:
             return recovered
         at = _locked_timestamp(now, run["updated_at"])
-        if run["execution_mode"] != "active":
+        if run["execution_mode"] not in GRAPH_EXECUTION_MODES:
             fail(
                 "SCHEDULER_CODEX_RECEIVER_RESERVATION_MISSING",
-                "Codex SubagentStart claim requires active execution",
+                "Codex SubagentStart claim requires a governed Graph run",
             )
         repository.expire_dispatch_reservations(connection, at=at)
         reservation = connection.execute(
@@ -1548,15 +1574,12 @@ def claim_codex_subagent_receiver(
             owner=receiver_context_id,
             operation_id=operation_id,
             agent_id="codex",
-            model_id=reservation_values["model_id"],
+            model_id=None,
             actual_model_id=observed_actual_model_id,
             receiver_context_id=receiver_context_id,
             dispatch_mode="AUTO",
             dispatch_transport=HOST_NATIVE_DISPATCH_TRANSPORT,
             dispatch_reservation_id=reservation_id,
-            dispatch_reasoning_class=reservation_values[
-                "reasoning_class"
-            ],
             dispatch_decision_fingerprint=reservation_values[
                 "decision_fingerprint"
             ],
@@ -1584,7 +1607,7 @@ def authorize_codex_subagent_operation(
     receiver_context_id: str,
     parent_context_id: str,
     actual_model_id: str,
-    dispatch_reservation_id: str,
+    dispatch_reservation_id: str | None,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
@@ -1599,14 +1622,18 @@ def authorize_codex_subagent_operation(
     )
     parent_context_id = _identity(parent_context_id, "parent_context_id")
     _executor_descriptor(actual_model_id, "actual_model_id")
-    reservation_id = _identity(
-        dispatch_reservation_id,
-        "dispatch_reservation_id",
+    reservation_id = (
+        _identity(
+            dispatch_reservation_id,
+            "dispatch_reservation_id",
+        )
+        if dispatch_reservation_id is not None
+        else None
     )
     with repository.transaction() as connection:
-        _graph, run, nodes = _loaded(connection, root_id)
+        graph, run, nodes = _loaded(connection, root_id)
         at = _locked_timestamp(now, run["updated_at"])
-        _definition, state = _node(_graph, nodes, node_id)
+        definition, state = _node(graph, nodes, node_id)
         if (
             not _active_claim(
                 state,
@@ -1618,6 +1645,52 @@ def authorize_codex_subagent_operation(
             fail(
                 "SCHEDULER_CODEX_RECEIVER_OPERATION_UNAUTHORIZED",
                 "The current Codex context does not own this live Loop",
+            )
+        claimed_event = connection.execute(
+            "SELECT payload_json FROM graph_events "
+            "WHERE run_id = ? AND node_id = ? AND attempt = ? "
+            "AND event_type = 'LOOP_CLAIMED' AND operation_id = ? "
+            "ORDER BY event_id DESC LIMIT 1",
+            (
+                run["run_id"],
+                node_id,
+                state["attempt"],
+                state["operationId"],
+            ),
+        ).fetchone()
+        payload = (
+            json.loads(claimed_event["payload_json"])
+            if claimed_event is not None
+            else None
+        )
+        if (
+            isinstance(payload, dict)
+            and payload.get("dispatchMode") == "MANUAL"
+        ):
+            if (
+                run["execution_mode"] != "manual"
+                or definition["kind"] != "TASK_LOOP"
+                or payload.get("receiverContextId")
+                != receiver_context_id
+                or payload.get("hostAdapterId") != "codex"
+                or payload.get("agentId") != "codex"
+                or payload.get("receiverAttested") is not False
+                or reservation_id is not None
+            ):
+                fail(
+                    "SCHEDULER_CODEX_RECEIVER_OPERATION_UNAUTHORIZED",
+                    "The current Codex context does not own this manual TASK",
+                )
+            return {
+                "rootId": root_id,
+                "nodeId": node_id,
+                "receiverContextId": receiver_context_id,
+                "operationId": state["operationId"],
+            }
+        if reservation_id is None:
+            fail(
+                "SCHEDULER_CODEX_RECEIVER_OPERATION_UNAUTHORIZED",
+                "An automatic Codex Loop requires its consumed reservation",
             )
         identity = connection.execute(
             "SELECT 1 FROM host_receiver_identities "
@@ -1675,7 +1748,7 @@ def authorize_claude_subagent_operation(
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
         at = _locked_timestamp(now, run["updated_at"])
-        _definition, state = _node(graph, nodes, node_id)
+        definition, state = _node(graph, nodes, node_id)
         if not _active_claim(
             state,
             operation_id=state["operationId"],
@@ -1719,6 +1792,29 @@ def authorize_claude_subagent_operation(
             if claimed_event is not None
             else None
         )
+        if (
+            isinstance(payload, dict)
+            and payload.get("dispatchMode") == "MANUAL"
+        ):
+            if (
+                run["execution_mode"] != "manual"
+                or definition["kind"] != "TASK_LOOP"
+                or payload.get("receiverContextId")
+                != receiver_context_id
+                or payload.get("hostAdapterId") != "claude-code"
+                or payload.get("agentId") != "claude-code"
+                or payload.get("receiverAttested") is not False
+            ):
+                fail(
+                    "SCHEDULER_CLAUDE_RECEIVER_OPERATION_UNAUTHORIZED",
+                    "The current Claude context does not own this manual TASK",
+                )
+            return {
+                "rootId": root_id,
+                "nodeId": node_id,
+                "receiverContextId": receiver_context_id,
+                "operationId": state["operationId"],
+            }
         if (
             attestation is None
             or not isinstance(payload, dict)
@@ -3083,10 +3179,10 @@ def _rebuild_graph_run_locked(
     completed_at: str | None = None
     cancelled_at: str | None = None
     execution_mode = current_run["executionMode"]
-    if execution_mode != "active":
+    if execution_mode not in GRAPH_EXECUTION_MODES:
         fail(
             "SCHEDULER_EVENT_REPLAY_INVALID",
-            "Graph replay only supports automatic execution",
+            "Graph replay found an unsupported execution mode",
             executionMode=execution_mode,
         )
     host_capacity: dict[str, str] | None = None
@@ -3099,10 +3195,10 @@ def _rebuild_graph_run_locked(
         payload = event["payload"]
         if event_type == "GRAPH_RUN_STARTED":
             event_execution_mode = payload.get("executionMode")
-            if event_execution_mode != "active":
+            if event_execution_mode != execution_mode:
                 fail(
                     "SCHEDULER_EVENT_REPLAY_INVALID",
-                    "Graph run events must record automatic execution",
+                    "Graph run event execution mode does not match the run",
                     executionMode=event_execution_mode,
                 )
             continue
@@ -3291,6 +3387,19 @@ def _rebuild_graph_run_locked(
             state["status"] = "SUCCEEDED"
             state["finishedAt"] = at
         elif event_type == "LOOP_CLAIMED":
+            definition = next(
+                node for node in graph["nodes"] if node["id"] == node_id
+            )
+            if not _dispatch_mode_allowed(
+                execution_mode,
+                definition["kind"],
+                payload.get("dispatchMode"),
+            ):
+                fail(
+                    "SCHEDULER_EVENT_REPLAY_INVALID",
+                    "Loop claim dispatch mode is inconsistent with the Graph run",
+                    nodeId=node_id,
+                )
             state.update(
                 {
                     "status": "CLAIMED",

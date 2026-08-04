@@ -541,7 +541,20 @@ def discover_available_agents(
     }
 
 
+def available_agents(
+    *,
+    root: str,
+    explicit_dogfood: bool = False,
+    **_: Any,
+) -> dict[str, Any]:
+    """Expose local discovery as a diagnostic controller operation."""
+
+    del root, explicit_dogfood
+    return discover_available_agents()
+
+
 __all__ = (
     "AGENT_PROFILE_ENV",
+    "available_agents",
     "discover_available_agents",
 )

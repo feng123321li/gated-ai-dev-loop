@@ -594,6 +594,133 @@ def freeze_hierarchy(
     }
 
 
+def start_manual_handoff(
+    *,
+    root: str,
+    root_id: str,
+    expected_hierarchy_fingerprint: str,
+    expected_graph_fingerprint: str,
+    started_by: str,
+    workspace_root: str | None = None,
+    explicit_dogfood: bool = False,
+    now: object = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """Bind and start one frozen manual handoff as a governed Graph run."""
+
+    if not isinstance(started_by, str) or not started_by.strip():
+        fail(
+            "SCHEDULER_MANUAL_START_IDENTITY_REQUIRED",
+            "started_by must identify the receiving orchestrator",
+        )
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    stored = repository.hierarchy(root_id)
+    if (
+        stored["hierarchyFingerprint"]
+        != expected_hierarchy_fingerprint
+        or stored["graphFingerprint"] != expected_graph_fingerprint
+    ):
+        fail(
+            "SCHEDULER_MANUAL_HANDOFF_STALE",
+            "The receiving CLI fingerprints do not match the frozen handoff",
+            rootId=root_id,
+            actualHierarchyFingerprint=stored["hierarchyFingerprint"],
+            actualGraphFingerprint=stored["graphFingerprint"],
+        )
+    if stored["status"] == "FROZEN":
+        existing_run = repository.run(root_id)
+        if existing_run["executionMode"] != "manual":
+            fail(
+                "SCHEDULER_MANUAL_HANDOFF_START_CONFLICT",
+                "This Delivery already has a non-manual Graph run",
+                rootId=root_id,
+                executionMode=existing_run["executionMode"],
+            )
+        return {
+            **existing_run,
+            "graphRunCreated": True,
+            "manualStartAlreadyApplied": True,
+            "nextAction": "READ_GRAPH_FRONTIER",
+        }
+    if stored["status"] not in {"HANDOFF_READY", "PREPARED"}:
+        fail(
+            "SCHEDULER_MANUAL_HANDOFF_NOT_READY",
+            "Only a HANDOFF_READY snapshot or its interrupted PREPARED "
+            "adoption can start manual TASK execution",
+            rootId=root_id,
+            status=stored["status"],
+        )
+    history = repository.revision_history(root_id)
+    current = next(
+        (
+            item
+            for item in history["revisions"]
+            if item["revision"] == history["currentRevision"]
+        ),
+        None,
+    )
+    if (
+        current is None
+        or current["status"] not in {"HANDOFF_READY", "PREPARED"}
+        or not isinstance(current["confirmedBy"], str)
+        or not current["confirmedBy"].strip()
+    ):
+        fail(
+            "SCHEDULER_MANUAL_HANDOFF_STATE_INVALID",
+            "The frozen manual revision is missing its confirmation record",
+            rootId=root_id,
+        )
+    if stored["status"] == "HANDOFF_READY":
+        prepared = prepare_hierarchy(
+            root=root,
+            hierarchy=stored["hierarchy"],
+            workspace_root=workspace_root or root,
+            explicit_dogfood=explicit_dogfood,
+            now=now,
+        )
+        if prepared["graphFingerprint"] != expected_graph_fingerprint:
+            fail(
+                "SCHEDULER_MANUAL_HANDOFF_STALE",
+                "The prepared Graph no longer matches the frozen handoff",
+                rootId=root_id,
+            )
+    else:
+        delivery = stored["hierarchy"]["delivery"]
+        verified_projects = verify_delivery_project_scopes(
+            workspace_root or root,
+            delivery,
+            preparing=False,
+        )
+        if delivery.get("projectScopes") is None:
+            verify_delivery_git_binding(
+                workspace_root or root,
+                delivery.get("gitBinding"),
+                preparing=False,
+            )
+        elif not verified_projects:
+            fail(
+                "SCHEDULER_PROJECT_SCOPE_INVALID",
+                "The interrupted manual adoption has no verified project",
+                rootId=root_id,
+            )
+    result = repository.freeze_manual_handoff(
+        root_id,
+        expected_delivery_revision=current["revision"],
+        expected_hierarchy_fingerprint=expected_hierarchy_fingerprint,
+        authorized_project_ids=current["authorizedProjectIds"],
+        confirmed_by=current["confirmedBy"].strip(),
+        started_by=started_by.strip(),
+    )
+    return {
+        **result,
+        "startedBy": started_by.strip(),
+        "graphRunCreated": True,
+        "manualStartAlreadyApplied": False,
+        "nextAction": "READ_GRAPH_FRONTIER",
+    }
+
+
 def select_execution_mode(
     *,
     root: str,
@@ -740,5 +867,6 @@ __all__ = (
     "prepare_hierarchy",
     "preview_hierarchy",
     "select_execution_mode",
+    "start_manual_handoff",
     "workspace_status",
 )

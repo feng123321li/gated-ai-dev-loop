@@ -193,12 +193,25 @@ def build_graph_frontier(
                         definition["loop"]["resourceClaims"],
                     )
                 )
+                manual_task = (
+                    run.get("executionMode") == "manual"
+                    and kind == "TASK_LOOP"
+                )
                 actions.append(
                     {
-                        "action": "DISPATCH_LOOP",
+                        "action": (
+                            "CLAIM_MANUAL_TASK"
+                            if manual_task
+                            else "DISPATCH_LOOP"
+                        ),
                         "nodeId": state["nodeId"],
                         "loopRef": definition["loop"]["ref"],
                         "executionPolicy": execution_policy,
+                        **(
+                            {"dispatchMode": "MANUAL"}
+                            if manual_task
+                            else {}
+                        ),
                     }
                 )
         elif state["status"] == "CLAIMED":

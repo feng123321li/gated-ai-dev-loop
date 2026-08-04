@@ -4,7 +4,6 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
-import re
 import stat
 import sys
 from typing import Any, Mapping
@@ -16,43 +15,26 @@ from .jsonio import strict_json_loads
 
 ORCHESTRATOR_CONFIG_ENV = "LAYERED_DELIVERY_ORCHESTRATOR_CONFIG"
 ORCHESTRATOR_CONFIG_FILE = "orchestrator.json"
-ORCHESTRATOR_CONFIG_SCHEMA_VERSION = 1
+ORCHESTRATOR_CONFIG_SCHEMA_VERSION = 2
 MAX_ORCHESTRATOR_CONFIG_BYTES = 64 * 1024
 
-QUOTA_EXHAUSTION_POLICIES = frozenset(
-    {"PAUSE_AND_RESUME", "SWITCH_ADAPTER", "ASK_USER"}
-)
-SAFE_ADAPTER_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$")
+QUOTA_EXHAUSTION_POLICIES = frozenset({"PAUSE_AND_RESUME"})
 
 
 @dataclass(frozen=True)
 class OrchestratorConfig:
     """Validated user-level policy shared by every local host Adapter."""
 
-    automatic_orchestration: bool = True
-    auto_select_model: bool = True
-    allow_cross_adapter_dispatch: bool = False
-    allowed_adapters: tuple[str, ...] = ("codex", "claude-code")
     max_concurrent_executors: int = 4
     quota_exhaustion_policy: str = "PAUSE_AND_RESUME"
-    prefer_different_adapter_for_review: bool = True
     source: str = "BUILT_IN_DEFAULTS"
     config_path: str | None = None
 
     def policy(self) -> dict[str, Any]:
         return {
             "schemaVersion": ORCHESTRATOR_CONFIG_SCHEMA_VERSION,
-            "automaticOrchestration": self.automatic_orchestration,
-            "autoSelectModel": self.auto_select_model,
-            "allowCrossAdapterDispatch": (
-                self.allow_cross_adapter_dispatch
-            ),
-            "allowedAdapters": list(self.allowed_adapters),
             "maxConcurrentExecutors": self.max_concurrent_executors,
             "quotaExhaustionPolicy": self.quota_exhaustion_policy,
-            "preferDifferentAdapterForReview": (
-                self.prefer_different_adapter_for_review
-            ),
         }
 
     def public_summary(self) -> dict[str, Any]:
@@ -112,13 +94,8 @@ def _validate_config(value: object, *, path: Path) -> OrchestratorConfig:
         )
     expected = {
         "schemaVersion",
-        "automaticOrchestration",
-        "autoSelectModel",
-        "allowCrossAdapterDispatch",
-        "allowedAdapters",
         "maxConcurrentExecutors",
         "quotaExhaustionPolicy",
-        "preferDifferentAdapterForReview",
     }
     if set(value) != expected:
         fail(
@@ -128,43 +105,16 @@ def _validate_config(value: object, *, path: Path) -> OrchestratorConfig:
             expectedFields=sorted(expected),
         )
     schema_version = value["schemaVersion"]
-    booleans = {
-        field: value[field]
-        for field in (
-            "automaticOrchestration",
-            "autoSelectModel",
-            "allowCrossAdapterDispatch",
-            "preferDifferentAdapterForReview",
-        )
-    }
     if (
         isinstance(schema_version, bool)
         or not isinstance(schema_version, int)
         or schema_version != ORCHESTRATOR_CONFIG_SCHEMA_VERSION
-        or any(not isinstance(item, bool) for item in booleans.values())
     ):
         fail(
             "ORCHESTRATOR_CONFIG_INVALID",
-            "Orchestrator schemaVersion or boolean options are invalid",
+            "Orchestrator schemaVersion is invalid",
             configPath=str(path),
             supportedSchemaVersion=ORCHESTRATOR_CONFIG_SCHEMA_VERSION,
-        )
-    raw_adapters = value["allowedAdapters"]
-    if (
-        not isinstance(raw_adapters, list)
-        or not raw_adapters
-        or len(raw_adapters) > 64
-        or any(
-            not isinstance(adapter, str)
-            or SAFE_ADAPTER_ID.fullmatch(adapter) is None
-            for adapter in raw_adapters
-        )
-        or len(set(raw_adapters)) != len(raw_adapters)
-    ):
-        fail(
-            "ORCHESTRATOR_CONFIG_INVALID",
-            "allowedAdapters must contain unique safe Adapter IDs",
-            configPath=str(path),
         )
     maximum = value["maxConcurrentExecutors"]
     if (
@@ -189,17 +139,8 @@ def _validate_config(value: object, *, path: Path) -> OrchestratorConfig:
             allowedValues=sorted(QUOTA_EXHAUSTION_POLICIES),
         )
     return OrchestratorConfig(
-        automatic_orchestration=booleans["automaticOrchestration"],
-        auto_select_model=booleans["autoSelectModel"],
-        allow_cross_adapter_dispatch=booleans[
-            "allowCrossAdapterDispatch"
-        ],
-        allowed_adapters=tuple(raw_adapters),
         max_concurrent_executors=maximum,
         quota_exhaustion_policy=quota_policy,
-        prefer_different_adapter_for_review=booleans[
-            "preferDifferentAdapterForReview"
-        ],
         source="USER_CONFIG",
         config_path=str(path),
     )

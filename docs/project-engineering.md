@@ -4,13 +4,11 @@
 
 ```text
 src/hdg/
-├── agent_discovery.py # 本机终端 Agent、当前模型与用户 Profile 只读发现
-├── agent_recommendation.py
-│                      # TASK/Review 非绑定 Agent + Model 建议
+├── agent_discovery.py # Loop/宿主可用的非权威本机 Worker 只读发现
 ├── dispatch_contracts.py
-│                      # 自动派遣决策指纹与策略版本
+│                      # 外层 receiver 派遣决策指纹与策略版本
 ├── dispatch_planning.py
-│                      # 宿主原生容量、原生模型选择与并发批次规划
+│                      # 可信宿主 receiver 预留与并发批次规划
 ├── loop_contracts.py   # Loop descriptor、outcome、资源锁
 ├── model_core.py       # schema v3 Delivery 与递归 GROUP/TASK 校验
 ├── git_binding.py      # Git worktree/feature/mainline 只读发现与校验
@@ -25,7 +23,7 @@ src/hdg/
 ├── operations.py       # 旧 Python 公共导入面的薄兼容 façade
 ├── host_policy.py      # Codex 项目根与 Claude 审批兼容策略
 ├── orchestrator_config.py
-│                      # 用户级中央编排器配置、原子写入与跨平台路径
+│                      # schema v2 并发/额度配置、原子写入与跨平台路径
 ├── orchestrator_settings.py
 │                      # 面板数据、动态 Adapter 能力状态与设置保存
 ├── mcp_apps.py        # MCP Apps 资源清单、读取与隔离元数据
@@ -119,24 +117,24 @@ hierarchy
     └── acceptance.md
 ```
 
-`scheduler.db` 是需求与调度状态的机器权威；每个需求只使用稳定的 `.layered-delivery/<delivery-id>/`。自动与手动开发都生成根 `overview.md` 以及 Delivery 的 overview、baseline、progress、acceptance、revisions 和同结构 work-items，手动路径另含 `handoff-<fingerprint>.md`。手动包以 `HANDOFF_READY` 登记到 SQLite，但不创建 `runs`、事件链或 workspace 绑定；`requirementSnapshotStatus=FROZEN` 只表示内容由双 fingerprint 锁定，不表示 Graph 已 prepare、freeze 或运行。接收 CLI 可维护 progress/acceptance，控制器刷新冻结输入时保留这些人工记录。稳定 `delivery.id` 下可以有多个不可变 Revision；`revisions.md` 默认展示当前 Revision 并串联旧 run 的 `SUPERSEDED` 审计状态。新用户需求不能因为当前路径恢复了旧 Delivery 就隐式进入其 Revision；`prepare_delivery_revision` 必须提交 `USER_EXPLICIT_SAME_DELIVERY`，或在已有 `REPLAN_REQUIRED` 事件时提交 `ACTIVE_LOOP_REPLAN`。候选只写 `delivery_revisions`，不会移动 `hierarchies` 当前指针，旧 run 直到候选 freeze 时才被原子取代。同一 `workspaceKey` 已有未结束 run 时，第二个 Delivery 在 `prepare` 写入前即被拒绝并返回 `CREATE_INDEPENDENT_WORKTREE_TASK`，避免留下无法冻结或迁移的 PREPARED 状态。`projectScopes` 允许一个需求覆盖多个本地仓库，冻结时要求精确项目 ID 授权；所有可写 Git 项目使用同名 feature 分支，但分别绑定自己的主线与 `baseCommit`。TASK Agent 不创建内部分支；Git stage/commit/push 仍需各自授权。`work-items/<root-id>/children/...` 镜像逻辑父子关系，但不表达文件授权。
+`scheduler.db` 是需求与调度状态的机器权威；每个需求只使用稳定的 `.layered-delivery/<delivery-id>/`。自动与手动开发都生成根 `overview.md` 以及 Delivery 的 overview、baseline、progress、acceptance、revisions 和同结构 work-items，手动路径另含 `handoff-<fingerprint>.md`。手动包先以 `HANDOFF_READY` 登记到 SQLite；交接阶段不创建 `runs`、事件链或 workspace 绑定，`requirementSnapshotStatus=FROZEN` 只表示内容由双 fingerprint 锁定。接收 CLI 在实际工作区调用 `start_manual_handoff` 后，Controller 采用同一 Revision、绑定 workspace 并创建 `execution_mode=manual` 的 run；TASK_LOOP 只能 `dispatch_mode=MANUAL`，所有 TASK/GROUP/Delivery Review 只能 `AUTO`，最终仍需用户确认。此后 progress/acceptance 只由事件投影刷新，不能人工维护。稳定 `delivery.id` 下可以有多个不可变 Revision；`revisions.md` 默认展示当前 Revision 并串联旧 run 的 `SUPERSEDED` 审计状态。新用户需求不能因为当前路径恢复了旧 Delivery 就隐式进入其 Revision；`prepare_delivery_revision` 必须提交 `USER_EXPLICIT_SAME_DELIVERY`，或在已有 `REPLAN_REQUIRED` 事件时提交 `ACTIVE_LOOP_REPLAN`。候选只写 `delivery_revisions`，不会移动 `hierarchies` 当前指针，旧 run 直到候选 freeze 时才被原子取代。同一 `workspaceKey` 已有未结束 run 时，第二个 Delivery 在 `prepare` 写入前即被拒绝并返回 `CREATE_INDEPENDENT_WORKTREE_TASK`，避免留下无法冻结或迁移的 PREPARED 状态。`projectScopes` 允许一个需求覆盖多个本地仓库，冻结时要求精确项目 ID 授权；所有可写 Git 项目使用同名 feature 分支，但分别绑定自己的主线与 `baseCommit`。TASK Agent 不创建内部分支；Git stage/commit/push 仍需各自授权。`work-items/<root-id>/children/...` 镜像逻辑父子关系，但不表达文件授权。
 
-工作区根 `overview.md` 只列 Delivery 标识、标题、状态、更新时间和详情；Delivery `overview.md` 才展示本交付的 TASK 完成度、GROUP 数量与导航。根总览对每个 Delivery 独立校验：无关 Delivery 损坏时只把该行标为“调度状态异常”，健康 Delivery 的 frontier、状态查询和投影刷新继续运行；直接访问损坏 Delivery 仍返回带实际 `rootId` 的完整性错误。其他 Delivery 的投影目录损坏或不可写时，显式当前 `rootId` 的 `workspace_status` 通过 `projectionIssues` 报告并继续。顶层 `baseline.md` 保存基线树和节点链接，`progress.md` 聚合运行进展，`acceptance.md` 只完整展示 Delivery 本层 Review 与用户确认，并以摘要和链接串联根工作项报告。每个 GROUP/TASK 在递归节点目录下拥有自己的 baseline、progress 和 acceptance；GROUP baseline 链接直接子节点，TASK baseline 展示冻结 Loop 输入。TASK 验收只展开本 TASK 与 TASK Review；GROUP 验收只展开本层完成点与 Review，对直接子节点只显示状态、简要结果和验收链接。任何下层输入、证据或 Review findings 都不向上重复复制。progress 状态表显示 claim 事件记录的执行代理、原生模型、宿主观测到的实际模型、认领身份和执行轮次；acceptance 摘要、子节点结果和 Review P0/P1/P2 问题使用表格。只有 TASK payload 显式声明接口时，才在该 TASK 目录生成 `interfaces.md` 索引和 `interfaces/` 下每接口一份详情。完整 before/after 契约会被确定性比较：入参表展示类型、必填和说明，出参表不展示必填；删除值使用 Markdown 删除线，新增或删除字段只显示存在的一侧，真正修改的属性才使用“修改前 → 修改后”。`protocol` 为开放字符串，HTTP、Dubbo、gRPC、GraphQL、消息等只是示例，通用协议可用 `identifier` 定位。无声明时不生成。代码可辅助提取和校验，但不是动态投影源。所有文件绑定双指纹并可随权威状态重建；`workspace_status` 会为早期 schema v3 Delivery 补建当前适用的投影树，异常的其他 Delivery 通过 `projectionIssues` 报告，但不迁移数据库或 Graph。所有固定文案和状态保持中文，标明 UTC+8 的人类时间使用 `YYYY-MM-DD HH:mm:ss`；机器权威仍使用 UTC。
+工作区根 `overview.md` 只列 Delivery 标识、标题、状态、更新时间和详情；Delivery `overview.md` 才展示本交付的 TASK 完成度、GROUP 数量与导航。根总览对每个 Delivery 独立校验：无关 Delivery 损坏时只把该行标为“调度状态异常”，健康 Delivery 的 frontier、状态查询和投影刷新继续运行；直接访问损坏 Delivery 仍返回带实际 `rootId` 的完整性错误。其他 Delivery 的投影目录损坏或不可写时，显式当前 `rootId` 的 `workspace_status` 通过 `projectionIssues` 报告并继续。顶层 `baseline.md` 保存基线树和节点链接，`progress.md` 聚合运行进展，`acceptance.md` 只完整展示 Delivery 本层 Review 与用户确认，并以摘要和链接串联根工作项报告。每个 GROUP/TASK 在递归节点目录下拥有自己的 baseline、progress 和 acceptance；GROUP baseline 链接直接子节点，TASK baseline 展示冻结 Loop 输入。TASK 验收只展开本 TASK 与 TASK Review；GROUP 验收只展开本层完成点与 Review，对直接子节点只显示状态、简要结果和验收链接。任何下层输入、证据或 Review findings 都不向上重复复制。progress 状态表显示 claim 事件记录的外层 receiver、认领身份和执行轮次；内部 Worker 的 agent/model/effort 只从 outcome 的 `workerTelemetry` 非权威展示，未知值保持 `unreported`。acceptance 摘要、子节点结果和 Review P0/P1/P2 问题使用表格。只有 TASK payload 显式声明接口时，才在该 TASK 目录生成 `interfaces.md` 索引和 `interfaces/` 下每接口一份详情。完整 before/after 契约会被确定性比较：入参表展示类型、必填和说明，出参表不展示必填；删除值使用 Markdown 删除线，新增或删除字段只显示存在的一侧，真正修改的属性才使用“修改前 → 修改后”。`protocol` 为开放字符串，HTTP、Dubbo、gRPC、GraphQL、消息等只是示例，通用协议可用 `identifier` 定位。无声明时不生成。代码可辅助提取和校验，但不是动态投影源。所有文件绑定双指纹并可随权威状态重建；`workspace_status` 会为早期 schema v3 Delivery 补建当前适用的投影树，异常的其他 Delivery 通过 `projectionIssues` 报告，但不迁移数据库或 Graph。所有固定文案和状态保持中文，标明 UTC+8 的人类时间使用 `YYYY-MM-DD HH:mm:ss`；机器权威仍使用 UTC。
 
 ## MCP
 
 工具分为六组：
 
-- 发现、自动建议与派遣计划：`available_agents`、`recommend_executors`、`plan_dispatch_batch`。自动模式的正式路由先进入 30 秒 `HOST_NATIVE_ROUTE_REVIEW` 调整窗口，超时后才预留；手动开发不经过推荐器。
-- 规划与交接：`workspace_status`、`hierarchy_contract`、`preview_hierarchy`、`select_execution_mode`、`create_manual_handoff`、`prepare_hierarchy`、`freeze_hierarchy`。preview 先登记 `CHOICE_READY` 并生成数据库、总览、基线和全部关联投影；`select_execution_mode` 原子应用 Controller 返回的自动/手动选项。手动开发在本需求的 `<delivery-id>` 目录生成完整冻结内容包；接收方开始开发时才创建 worktree，并可直接按内容开发而不准备 Graph。
+- 外层 receiver 派遣计划：`plan_dispatch_batch`。它按当前可信宿主 Adapter 直接预留 receiver，固定 `modelPolicy=CURRENT_HOST_INHERIT`，不接收模型 inventory、风险判级或 effort。
+- 规划与交接：`workspace_status`、`hierarchy_contract`、`preview_hierarchy`、`select_execution_mode`、`create_manual_handoff`、`start_manual_handoff`、`prepare_hierarchy`、`freeze_hierarchy`。preview 先登记 `CHOICE_READY` 并生成数据库、总览、基线和全部关联投影；`select_execution_mode` 原子应用 Controller 返回的自动/手动选项。手动开发在本需求的 `<delivery-id>` 目录生成完整冻结内容包；接收方开始开发时才创建 worktree，并必须用 `start_manual_handoff` 把该快照接入完整 Graph。
 - Delivery 修订：`delivery_revision_history`、`prepare_delivery_revision`
 - 需求修订：`unfreeze_task_requirement`、`refreeze_task_requirement`
 - 查询：`graph_frontier`、`graph_status`、`graph_events`、`loop_context`
 - Loop 控制：`dispatch_loop`、`heartbeat_loop`、`report_loop_progress`、`pause_loop`、`resume_loop`、`record_loop_result`
 
-Graph Run 只有自动执行一种模式：MCP 与 Python `freeze_hierarchy` 均不接收 `execution_mode`，Repository 冻结只写入 `active`；`dispatch_loop` 必须显式提交 `dispatch_mode=AUTO` 及对应的宿主原生 reservation/decision，`MANUAL` 会在 schema 和运行时同时被拒绝。手动开发是 `create_manual_handoff` 冻结内容文件的独立流程，不创建 Graph Run，也不存在可供第三方调用的 manual claim 兼容入口。
+公开的 `freeze_hierarchy` 仍不接收 `execution_mode`，自动路径固定创建 `active` run。手动路径也不暴露通用 mode 参数：只有 `start_manual_handoff` 能把精确 `HANDOFF_READY` 双 fingerprint 在接收工作区启动为 `manual` run。`dispatch_loop(MANUAL)` 只允许该 run 的 `TASK_LOOP`，要求显式 receiver context，且不接受自动 reservation/decision/transport/attestation 或模型参数；自动 run 的 TASK 和任何 Review 都拒绝 MANUAL。manual run 的 Review 继续使用可信外层 receiver 的 AUTO claim。
 
-`report_loop_progress` 写入有界的 `LOOP_PROGRESS_REPORTED` 可观测事件，不参与 Graph FSM、不续租。摘要、里程碑和下一步使用用户当前语言，不强制包含中文字符。`graph_status` 与会先推进租约的 `graph_frontier` 返回 `progressMonitor`：结构化行用于宿主监控，`markdownTable` 使用中文固定表头与状态标签汇总 attempt、Agent、原生/实际模型、当前阶段、摘要、里程碑、下一步、测试、心跳/租约和健康预警。主 Agent 默认展示该表格，不把原始事件名、operation、reservation 或终端日志直接暴露给普通用户。
+`report_loop_progress` 写入有界的 `LOOP_PROGRESS_REPORTED` 可观测事件，不参与 Graph FSM、不续租。摘要、里程碑和下一步使用用户当前语言。`graph_status` 与会先推进租约的 `graph_frontier` 返回 `progressMonitor`：结构化行用于宿主监控，`markdownTable` 汇总 attempt、外层 receiver、当前阶段、摘要、里程碑、下一步、测试、心跳/租约和健康预警。内部 Worker 遥测只在最终 outcome 中显示为非权威信息。
 - 恢复：`advance_graph`、`rebuild_graph_run`
 - 终态：`record_user_confirmation`、`cancel_graph_run`
 
@@ -146,15 +144,15 @@ Plugin MCP 工具不接收业务 `root` 参数。Adapter 从宿主配置或请�
 
 `loop_context.completionPolicy` 明确输入和终态边界：payload 是目标、明确约束和已知验收点的输入，Loop 在运行时从真实代码、契约和数据链路推导 scope 内必要条件；冻结 Graph 不冻结内部实现计划，可修复 finding 必须在当前 Loop 内调整方案、修正并复验。STANDARD 执行完整声明验收并保留分层 Review；LIGHT 对已声明改动做定向验证，并在实际内容或影响超出判断依据时以 `REPLAN_REQUIRED` 退出，不能继续借轻量档绕过 Review。初始 freeze 同时为所有 TASK 建立 revision 1 冻结记录；`unfreeze_task_requirement` 只接受未开始 TASK，`refreeze_task_requirement` 只替换标题、摘要和 payload，并原子更新 hierarchy/graph 双指纹、事件链和人类投影。`record_loop_result` 的 `BLOCKED` 要求显式 failure class，只用于当前 scope 和权限内没有继续路径的真实终态；调度器仍不解释不透明 finding，也不为返工创建 Graph 环。
 
-`controller.py` 是唯一共享应用入口；`mcp_tools.py` 把 30 个模型可调用工具映射到 Controller。接收凭证签发和硬额度熔断是模型外宿主回调，不进入 MCP 工具目录。该数量由契约测试与真实工具目录同步校验，避免文档漂移。`mcp_adapter.py` 负责协议、精确启动适配器身份与宿主策略。
+`controller.py` 是唯一共享应用入口；`mcp_tools.py` 把 30 个模型可调用工具映射到 Controller。receiver 凭证签发和硬额度熔断是模型外宿主回调，不进入 MCP 工具目录；工具数量由契约测试与真实目录同步校验。`mcp_adapter.py` 负责协议、精确启动 Adapter 身份与宿主策略。
 
-`agent_discovery.py` 只读取 PATH、终端 `--version`、非敏感模型字段和用户本地 Profile，不启动开发命令或返回绝对路径、凭据与服务地址。`agent_recommendation.py` 只按 `TASK_LOOP`/Review 角色、显式 Profile 优先级、可用性和上游开发 Agent 多样性排序；发现候选固定标记为 `LOCAL_TERMINAL / EXTERNAL_PROCESS / hostDispatchEligible=false`，不读取 Loop payload，不持久化结果，也不调用 `dispatch_loop`。因此手工配置或任意本机修改器的变化无需重建 Frozen Graph，项目也不依赖修改器类型。
+`agent_discovery.py` 只读取 PATH、终端 `--version` 和非敏感本机 Worker 信息，不启动开发命令或返回凭据。其结果只供宿主或 Loop 内部 Worker 选择参考，始终是非权威事实，不能进入外层派遣、claim 或授权。
 
-`orchestrator_config.py` 从 Plugin 外的用户配置目录读取一份同机宿主共享的严格 JSON。缺失时使用安全默认值；存在但字段、类型、版本、大小或文件类型非法时 fail closed。该配置不进入 Delivery schema、SQLite 或事件链，Marketplace 更新也不覆盖。`dispatch_planning.py` 与终端发现分离：它只消费宿主显式提交且标为 `HOST_NATIVE` 的原生 Agent inventory、原生模型 selector、当前 frontier、临时 `node_requirements` 和可选当前执行器事实，并应用自动编排/自动选模开关、Adapter 允许列表、跨 Adapter 权限、全局并发上限、额度策略和 Review Adapter 偏好。可信原生 Agent 集合仍来自 MCP Server 启动配置的精确适配器 ID；协议 `clientInfo` 不参与授权。原生调用后的实际提供方模型只可由宿主观测为 `actualModelId`，不进入 planning。计划预留和已认领 Loop 共同占用跨 Delivery Agent 槽位，直到 Loop 暂停或终态才释放。Claude Code 接收方必须消费 PreToolUse Hook 签发并直接绑定 node/attempt/context/reservation 的一次性 attestation。Codex assignment 返回唯一 `hostTaskName`，`SubagentStart` Hook 通过 Codex transcript 校验 child/parent/task 后，在单一数据库事务内签发并消费内部身份、固定成功编排根、消费 reservation 和写入唯一 claim；child 只收到不含 receiver/operation bearer 的 assignment。后续 heartbeat、pause 和 result 由共享 PreToolUse Hook 注入 operation：Codex 依据当前 child transcript，Claude 依据真实 `agent_id` 与 consumed attestation；宿主观测到的实际模型只影响展示，不参与 owner 授权。普通 root/helper 或缺少宿主身份的工具调用统一拒绝。后续直接、多级子上下文或首次引入另一平台 adapter 都不能另建信任根。跨平台派遣只有两个原生 adapter 能证明同一宿主编排根时才继续，否则 fail closed。Review 再校验该 attested context 不复用上游上下文。
+`orchestrator_config.py` 读取 Plugin 外的严格 schema v2 JSON，只包含 `maxConcurrentExecutors` 与固定 `quotaExhaustionPolicy=PAUSE_AND_RESUME`。`dispatch_planning.py` 只消费当前 frontier、可信 `host_adapter_id` 和宿主可原生创建的 receiver Agent 集合；assignment 固定 `modelPolicy=CURRENT_HOST_INHERIT`，模型与 effort 不进入 planning、reservation、claim 或 decision fingerprint。预留和已认领 receiver 共同占用跨 Delivery 槽位。Claude Code receiver 消费绑定 node/attempt/context/reservation 的一次性 attestation；Codex assignment 返回唯一 `hostTaskName`，`SubagentStart` Hook 校验 child/parent/task 后在单一事务内签发身份、固定编排根、消费 reservation 并 claim。后续 heartbeat、progress、pause 和 result 由 PreToolUse Hook 为同一 receiver 注入 operation；普通 root/helper 与内部 Worker统一拒绝。Codex、Claude、Grok、DeepSeek 等内部 Worker 只把结果返回 receiver，并可在最终 `workerTelemetry` 中按 phase 非权威报告 agent/model/effort。
 
-`open_orchestrator_settings` 是只读 render tool，关联 `ui://layered-delivery/orchestrator-settings.html`；`resources/list` / `resources/read` 返回自包含的 `text/html;profile=mcp-app` 组件。组件只使用 MCP Apps `ui/*` bridge，不访问外部网络，并通过需要宿主确认的 `update_orchestrator_settings` 保存完整策略。Controller 对这两个操作不构造 `SchedulerRepository`，所以查看或修改用户配置不会在任一项目生成 `.layered-delivery`。保存使用同目录临时文件和 `os.replace`，成功后 MCP Adapter 重新加载当前连接。UI catalog 把当前可信 `HDG_HOST_ADAPTER`、仅 PATH 发现的 `EXTERNAL_PROCESS` 与未检测候选分开；任何 UI 都不能把终端发现提升为原生派遣事实。官方宿主未渲染 MCP Apps 时，工具的 `structuredContent` 仍是完整降级界面。
+`open_orchestrator_settings` 是只读 render tool，关联自包含 MCP Apps 组件；`update_orchestrator_settings` 只保存 schema v2 的并发上限与固定额度策略。Controller 对这两个操作不构造 `SchedulerRepository`，因此不会生成 `.layered-delivery`。面板可显示当前可信 Adapter 与仅 PATH 发现的 Worker，但任何 UI 都不能把终端发现提升为外层 receiver 权限。
 
-Codex Plugin 通过约定的 `hooks/hooks.json` 注册 `SubagentStart` 与 Loop mutation `PreToolUse` Hook，并由 manifest 的 MCP 启动环境声明可信 `codex` adapter；同一 Hook bundle 继续承载 Claude Code 的 PreToolUse 与 StopFailure 回调。Hook 不信任调用方环境里的会话目录，只接受操作系统账户默认 `~/.codex/sessions` 中与实际 child、parent 和 assignment `hostTaskName` 相符的 transcript，并要求绑定工作区存在 active Delivery 与精确预留。reservation 中的 `modelId` 是派遣权威原生 selector；Hook 看到的运行模型只记录为展示用 `actualModelId`。校验成功后 claim 的权威状态在一个事务提交；内部一次性身份、operation 均不写入 `SubagentStart.additionalContext`。重复 Hook 可从已提交 identity 幂等恢复 assignment，投影后处理失败不撤销权威 claim。覆盖 `CODEX_HOME`、普通 helper、工作区伪造 transcript、过期预留、手动 claim 和重放均得不到正常工具路径授权。Codex 会按 Hook 内容哈希要求用户审阅和信任，未信任或宿主版本不支持相应事件时不会降级为模型自证，预留保持未认领。该校验遵循 Codex Hook 的 guardrail 信任边界，不等同于恶意编排 Agent 的密码学宿主证明；手工调用 Hook/控制器或改写 transcript/SQLite 需要宿主不可伪造的 caller-context 才能进一步防御。若需支持自定义 Codex home，也必须由宿主提供调用方不可伪造的会话根。
+Codex Plugin 通过 `hooks/hooks.json` 注册 `SubagentStart` 与 Loop mutation `PreToolUse` Hook，并由 manifest 声明可信 `codex` Adapter；同一 bundle 承载 Claude Code 的 PreToolUse 与 StopFailure 回调。Hook 只接受操作系统账户默认 `~/.codex/sessions` 中与实际 child、parent 和 assignment `hostTaskName` 相符的 transcript，并要求 active Delivery 与精确预留。校验成功后 claim 在一个事务提交；内部身份和 operation 不写入 `additionalContext`。普通 helper、内部 Worker、工作区伪造 transcript、过期预留、手动 claim 和重放均得不到控制面权限。新增供应商只有提供等价可信外层生命周期证明时才能注册 Adapter；仅作为 Loop 内 Worker 不需要 Controller 集成。
 
 提供方限额按容量范围分流。软阈值只有宿主提供结构化 utilization/reset 时才提前暂停；标准 Claude CLI Hook 未暴露预警事件时不从模型文本猜测。硬 429 由模型外私有回调处理：Claude `StopFailure` 只解析 `error_details`，校验实际子 Agent 上下文，限制 reset 最远 24 小时并用 report ID 幂等去重。共享 `host_capacity_breakers` 会暂停同容量域的跨 Delivery claimed Loop并禁止新派遣；到点后 `advance_graph` 恢复同一 attempt。重建旧 run 时，恢复操作必须匹配原 `reportId/resetAt`，打开操作只有同一未恢复报告或更晚 `reportedAt` 才能更新共享行，不能覆盖另一 Delivery 的新断路器。该能力不在 MCP 工具目录中，失败模型无需也不能主动触发。
 

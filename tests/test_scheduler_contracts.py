@@ -264,6 +264,14 @@ class HierarchyContractTests(unittest.TestCase):
             interaction["selectionTool"],
             "select_execution_mode",
         )
+        self.assertEqual(
+            interaction["manualStartTool"],
+            "start_manual_handoff",
+        )
+        self.assertEqual(
+            interaction["manualExecutionBoundary"],
+            "MANUAL_TASK_ONLY_REVIEWS_REMAIN_AUTOMATIC",
+        )
         choice = interaction["executionChoice"]
         self.assertEqual(choice["defaultOptionId"], "AUTOMATIC")
         self.assertEqual(
@@ -813,7 +821,7 @@ class McpSurfaceTests(unittest.TestCase):
             update_settings["inputSchema"]["properties"]["config"][
                 "properties"
             ]["quotaExhaustionPolicy"]["enum"],
-            ["PAUSE_AND_RESUME", "SWITCH_ADAPTER", "ASK_USER"],
+            ["PAUSE_AND_RESUME"],
         )
         self.assertEqual(
             set(
@@ -868,6 +876,19 @@ class McpSurfaceTests(unittest.TestCase):
                 "confirmed_by",
             ],
         )
+        self.assertEqual(
+            by_name["start_manual_handoff"]["inputSchema"]["required"],
+            [
+                "root_id",
+                "expected_hierarchy_fingerprint",
+                "expected_graph_fingerprint",
+                "started_by",
+            ],
+        )
+        self.assertIn(
+            "never weakens or skips STANDARD Review nodes",
+            by_name["start_manual_handoff"]["description"],
+        )
         self.assertNotIn(
             "confirmed",
             by_name["create_manual_handoff"]["inputSchema"]["properties"],
@@ -900,31 +921,8 @@ class McpSurfaceTests(unittest.TestCase):
             by_name["create_manual_handoff"]["description"],
         )
         self.assertNotIn("_meta", by_name["create_manual_handoff"])
-        self.assertEqual(
-            by_name["recommend_executors"]["inputSchema"]["required"],
-            ["root_id", "recommendation_mode"],
-        )
-        self.assertEqual(
-            set(
-                by_name["recommend_executors"]["inputSchema"][
-                    "properties"
-                ]
-            ),
-            {
-                "root_id",
-                "recommendation_mode",
-                "executor_inventory",
-                "node_requirements",
-                "current_executor",
-            },
-        )
-        self.assertEqual(
-            by_name["recommend_executors"]["inputSchema"]
-            ["properties"]["recommendation_mode"]["enum"],
-            ["AUTOMATIC"],
-        )
+        self.assertNotIn("recommend_executors", by_name)
         self.assertNotIn("_meta", by_name["available_agents"])
-        self.assertNotIn("_meta", by_name["recommend_executors"])
         dispatch_plan_schema = by_name[
             "plan_dispatch_batch"
         ]["inputSchema"]
@@ -933,8 +931,6 @@ class McpSurfaceTests(unittest.TestCase):
             [
                 "root_id",
                 "expected_graph_fingerprint",
-                "executor_inventory",
-                "node_requirements",
             ],
         )
         self.assertEqual(
@@ -942,44 +938,7 @@ class McpSurfaceTests(unittest.TestCase):
             {
                 "root_id",
                 "expected_graph_fingerprint",
-                "executor_inventory",
-                "node_requirements",
-                "current_executor",
             },
-        )
-        self.assertEqual(
-            dispatch_plan_schema["properties"]["node_requirements"].get(
-                "minItems"
-            ),
-            None,
-        )
-        self.assertEqual(
-            dispatch_plan_schema["properties"]["node_requirements"]
-            ["items"]["properties"]["reasoningClass"]["enum"],
-            ["ROUTINE", "STANDARD", "HIGH"],
-        )
-        self.assertIn(
-            "preferredNativeModelId",
-            dispatch_plan_schema["properties"]["node_requirements"]
-            ["items"]["properties"],
-        )
-        executor_schema = dispatch_plan_schema["properties"][
-            "executor_inventory"
-        ]["items"]
-        self.assertIn("dispatchTransport", executor_schema["required"])
-        self.assertIn(
-            "nativeModelSelectionSupported",
-            executor_schema["required"],
-        )
-        self.assertNotIn(
-            "modelOverrideSupported",
-            executor_schema["properties"],
-        )
-        self.assertIn("adapterId", executor_schema["properties"])
-        self.assertNotIn("adapterId", executor_schema["required"])
-        self.assertEqual(
-            executor_schema["properties"]["dispatchTransport"]["enum"],
-            ["HOST_NATIVE", "EXTERNAL_PROCESS"],
         )
         self.assertNotIn("_meta", by_name["plan_dispatch_batch"])
         dispatch_schema = by_name["dispatch_loop"]["inputSchema"]
@@ -990,7 +949,6 @@ class McpSurfaceTests(unittest.TestCase):
                 "node_id",
                 "owner",
                 "agent_id",
-                "model_id",
                 "dispatch_mode",
                 "operation_id",
             ],
@@ -1029,18 +987,11 @@ class McpSurfaceTests(unittest.TestCase):
                 "dispatch_mode",
                 "dispatch_transport",
                 "dispatch_reservation_id",
-                "dispatch_reasoning_class",
                 "dispatch_decision_fingerprint",
                 "receiver_context_id",
                 "receiver_attestation_id",
                 "operation_id",
             },
-        )
-        self.assertEqual(
-            dispatch_schema["properties"]["dispatch_reasoning_class"][
-                "enum"
-            ],
-            ["ROUTINE", "STANDARD", "HIGH", "UNCLASSIFIED"],
         )
         pause_schema = by_name["pause_loop"]["inputSchema"]
         self.assertNotIn("resume_at", pause_schema["required"])
@@ -1328,7 +1279,7 @@ class McpSurfaceTests(unittest.TestCase):
         }["dispatch_loop"]["inputSchema"]
         self.assertEqual(
             dispatch_schema["properties"]["dispatch_mode"]["enum"],
-            ["AUTO"],
+            ["AUTO", "MANUAL"],
         )
         base = {
             "root_id": "d-service",
@@ -1357,9 +1308,15 @@ class McpSurfaceTests(unittest.TestCase):
             validate_tool_arguments("dispatch_loop", host_injected),
             host_injected,
         )
+        without_model = {
+            key: value for key, value in base.items() if key != "model_id"
+        }
+        self.assertEqual(
+            validate_tool_arguments("dispatch_loop", without_model),
+            without_model,
+        )
         for invalid in (
             {key: value for key, value in base.items() if key != "agent_id"},
-            {key: value for key, value in base.items() if key != "model_id"},
             {**base, "agent_id": "x" * 257},
             {**base, "model_id": "x" * 257},
         ):
@@ -1579,6 +1536,33 @@ class McpSurfaceTests(unittest.TestCase):
             self.assertEqual(
                 status["workspaceIsolation"]["mode"],
                 "UNBOUND_MANUAL_HANDOFF",
+            )
+            started = call_tool(
+                "start_manual_handoff",
+                {
+                    "root_id": handoff["rootId"],
+                    "expected_hierarchy_fingerprint": handoff[
+                        "hierarchyFingerprint"
+                    ],
+                    "expected_graph_fingerprint": handoff[
+                        "graphFingerprint"
+                    ],
+                    "started_by": "manual-orchestrator",
+                },
+                root=root,
+                workspace_root=root,
+            )
+            frontier = call_tool(
+                "graph_frontier",
+                {"root_id": handoff["rootId"]},
+                root=root,
+                workspace_root=root,
+            )
+            self.assertEqual(started["executionMode"], "manual")
+            self.assertTrue(started["graphRunCreated"])
+            self.assertEqual(
+                [action["action"] for action in frontier["actions"]],
+                ["CLAIM_MANUAL_TASK"],
             )
 
         self.assertEqual(handoff["status"], "HANDOFF_READY")
@@ -2110,9 +2094,6 @@ class McpSurfaceTests(unittest.TestCase):
                         "dispatch_reservation_id": reservation[
                             "dispatchReservationId"
                         ],
-                        "dispatch_reasoning_class": reservation[
-                            "dispatchReasoningClass"
-                        ],
                         "dispatch_decision_fingerprint": reservation[
                             "dispatchDecisionFingerprint"
                         ],
@@ -2449,7 +2430,6 @@ class McpSurfaceTests(unittest.TestCase):
                         "dispatch_mode": "AUTO",
                         "dispatch_transport": "HOST_NATIVE",
                         "dispatch_reservation_id": "reservation-integrity",
-                        "dispatch_reasoning_class": "STANDARD",
                         "dispatch_decision_fingerprint": "0" * 64,
                         "receiver_context_id": "context-integrity",
                         "receiver_attestation_id": "attestation-integrity",
@@ -2544,13 +2524,12 @@ class McpSurfaceTests(unittest.TestCase):
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "After automatic execution is chosen, "
-                "recommend_executors uses only the current host Agent",
+                "Layered Delivery never recommends or selects a "
+                "development model",
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "plan_dispatch_batch consumes ephemeral host-native "
-                "capacity",
+                "plan_dispatch_batch atomically reserves each selected Loop",
                 initialized["result"]["instructions"],
             )
             self.assertIn(
@@ -2801,6 +2780,44 @@ class McpSurfaceTests(unittest.TestCase):
                     "ABSENT",
                 )
             self.assertIsNone(connection.project_root.bound_root)
+
+    def test_worker_telemetry_is_display_only_phase_reporting(self) -> None:
+        tools = {tool["name"]: tool for tool in tool_definitions()}
+        telemetry = tools["record_loop_result"]["inputSchema"][
+            "properties"
+        ]["outcome"]["properties"]["result"]["properties"][
+            "workerTelemetry"
+        ]["items"]
+        self.assertEqual(
+            telemetry["required"],
+            ["phase", "agent", "model", "reasoningEffort"],
+        )
+        self.assertEqual(
+            validate_tool_arguments(
+                "record_loop_result",
+                {
+                    "root_id": "d-service",
+                    "node_id": "loop:t-service",
+                    "outcome": {
+                        "status": "SUCCEEDED",
+                        "summary": "Loop completed.",
+                        "result": {
+                            "workerTelemetry": [
+                                {
+                                    "phase": "review",
+                                    "agent": "unreported",
+                                    "model": "unreported",
+                                    "reasoningEffort": "unreported",
+                                    "displayOnly": True,
+                                    "nonAuthoritative": True,
+                                }
+                            ]
+                        },
+                    },
+                },
+            )["outcome"]["result"]["workerTelemetry"][0]["model"],
+            "unreported",
+        )
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
-from .agent_recommendation import available_agents, recommend_executors
+from .agent_discovery import available_agents
 from .dispatch_planning import plan_dispatch_batch
 from .errors import fail
 from .graph_frontier import get_graph_frontier
@@ -42,6 +42,7 @@ from .planning import (
     prepare_hierarchy,
     preview_hierarchy,
     select_execution_mode,
+    start_manual_handoff,
     workspace_status,
 )
 from .repository import SchedulerRepository
@@ -58,10 +59,10 @@ CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "preview_hierarchy": preview_hierarchy,
     "select_execution_mode": select_execution_mode,
     "create_manual_handoff": create_manual_handoff,
+    "start_manual_handoff": start_manual_handoff,
     "prepare_hierarchy": prepare_hierarchy,
     "prepare_delivery_revision": prepare_delivery_revision,
     "delivery_revision_history": delivery_revision_history,
-    "recommend_executors": recommend_executors,
     "plan_dispatch_batch": plan_dispatch_batch,
     "freeze_hierarchy": freeze_hierarchy,
     "graph_frontier": get_graph_frontier,
@@ -128,12 +129,17 @@ class LayeredDeliveryController:
         git_workspace = None
         if isinstance(root_id, str):
             repository = SchedulerRepository(context.project_root)
-            if name == "select_execution_mode":
+            if name in {
+                "select_execution_mode",
+                "start_manual_handoff",
+            }:
                 selected = repository.hierarchy(root_id)
-                if selected["status"] not in {
-                    "CHOICE_READY",
-                    "HANDOFF_READY",
-                }:
+                unbound_statuses = (
+                    {"CHOICE_READY", "HANDOFF_READY"}
+                    if name == "select_execution_mode"
+                    else {"HANDOFF_READY"}
+                )
+                if selected["status"] not in unbound_statuses:
                     repository.assert_delivery_workspace(
                         root_id,
                         workspace_root,
@@ -148,6 +154,7 @@ class LayeredDeliveryController:
                 "workspace_status",
                 "prepare_delivery_revision",
                 "select_execution_mode",
+                "start_manual_handoff",
             }:
                 stored = repository.hierarchy(root_id)
                 git_binding = stored["hierarchy"]["delivery"].get(
@@ -185,23 +192,21 @@ class LayeredDeliveryController:
             "prepare_hierarchy",
             "prepare_delivery_revision",
             "select_execution_mode",
+            "start_manual_handoff",
         }:
             arguments_value["workspace_root"] = workspace_root
         if name in {
-            "recommend_executors",
             "plan_dispatch_batch",
             "dispatch_loop",
         }:
             arguments_value["host_native_agent_ids"] = (
                 context.host_native_agent_ids
             )
-        if name in {"recommend_executors", "plan_dispatch_batch"}:
+        if name == "plan_dispatch_batch":
             arguments_value["host_adapter_id"] = context.host_adapter_id
             arguments_value["orchestrator_config"] = (
                 context.orchestrator_config
             )
-        if name == "plan_dispatch_batch":
-            arguments_value["enforce_route_review_window"] = True
         if name in {
             "open_orchestrator_settings",
             "update_orchestrator_settings",
@@ -213,7 +218,9 @@ class LayeredDeliveryController:
             )
         if name == "dispatch_loop":
             arguments_value["host_adapter_id"] = context.host_adapter_id
-            arguments_value["require_receiver_attestation"] = True
+            arguments_value["require_receiver_attestation"] = (
+                arguments_value.get("dispatch_mode") == "AUTO"
+            )
         result = operation(
             root=context.project_root,
             explicit_dogfood=context.explicit_dogfood,

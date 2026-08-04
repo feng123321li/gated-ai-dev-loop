@@ -537,6 +537,10 @@ def hierarchy_contract(
                 "artifactGate": "CHOICE_READY_ARTIFACTS_READY",
                 "hostMapping": "MECHANICAL_NO_REWRITE",
                 "selectionTool": "select_execution_mode",
+                "manualStartTool": "start_manual_handoff",
+                "manualExecutionBoundary": (
+                    "MANUAL_TASK_ONLY_REVIEWS_REMAIN_AUTOMATIC"
+                ),
                 "directTextAction": "CONTINUE_REQUIREMENT_DISCUSSION",
                 "executionChoice": execution_choice_contract(),
                 "description": (

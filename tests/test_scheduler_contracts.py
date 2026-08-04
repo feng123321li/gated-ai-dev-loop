@@ -835,10 +835,7 @@ class McpSurfaceTests(unittest.TestCase):
             by_name["workspace_status"]["inputSchema"]["required"],
             [],
         )
-        self.assertEqual(
-            by_name["available_agents"]["inputSchema"]["required"],
-            [],
-        )
+        self.assertNotIn("available_agents", by_name)
         self.assertEqual(
             by_name["preview_hierarchy"]["inputSchema"]["required"],
             ["hierarchy"],
@@ -922,7 +919,6 @@ class McpSurfaceTests(unittest.TestCase):
         )
         self.assertNotIn("_meta", by_name["create_manual_handoff"])
         self.assertNotIn("recommend_executors", by_name)
-        self.assertNotIn("_meta", by_name["available_agents"])
         dispatch_plan_schema = by_name[
             "plan_dispatch_batch"
         ]["inputSchema"]
@@ -982,7 +978,6 @@ class McpSurfaceTests(unittest.TestCase):
                 "node_id",
                 "owner",
                 "agent_id",
-                "model_id",
                 "actual_model_id",
                 "dispatch_mode",
                 "dispatch_transport",
@@ -1286,7 +1281,7 @@ class McpSurfaceTests(unittest.TestCase):
             "node_id": "loop:t-service",
             "owner": "agent-1",
             "agent_id": "codex",
-            "model_id": "gpt-5.6-sol",
+            "actual_model_id": "host-observed-model",
             "dispatch_mode": "AUTO",
             "receiver_context_id": "context-1",
             "receiver_attestation_id": "attestation-1",
@@ -1309,7 +1304,9 @@ class McpSurfaceTests(unittest.TestCase):
             host_injected,
         )
         without_model = {
-            key: value for key, value in base.items() if key != "model_id"
+            key: value
+            for key, value in base.items()
+            if key != "actual_model_id"
         }
         self.assertEqual(
             validate_tool_arguments("dispatch_loop", without_model),
@@ -1318,7 +1315,8 @@ class McpSurfaceTests(unittest.TestCase):
         for invalid in (
             {key: value for key, value in base.items() if key != "agent_id"},
             {**base, "agent_id": "x" * 257},
-            {**base, "model_id": "x" * 257},
+            {**base, "actual_model_id": "x" * 257},
+            {**base, "model_id": "gpt-5.6-sol"},
         ):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(GatedLoopError) as caught:
@@ -1524,7 +1522,7 @@ class McpSurfaceTests(unittest.TestCase):
             )
             self.assertEqual(
                 handoff["nextAction"],
-                "OPEN_FROZEN_BUNDLE_IN_ANY_CLI",
+                "OPEN_FROZEN_BUNDLE_AND_START_MANUAL_HANDOFF_IN_RECEIVING_CLI",
             )
             status = call_tool(
                 "workspace_status",
@@ -2086,7 +2084,6 @@ class McpSurfaceTests(unittest.TestCase):
                         "node_id": f"loop:{task_id}",
                         "owner": f"agent-{delivery_id}",
                         "agent_id": reservation["agentId"],
-                        "model_id": reservation["modelId"],
                         "dispatch_mode": reservation["dispatchMode"],
                         "dispatch_transport": reservation[
                             "dispatchTransport"
@@ -2426,7 +2423,6 @@ class McpSurfaceTests(unittest.TestCase):
                         "node_id": "loop:t-service",
                         "owner": "agent-integrity",
                         "agent_id": "codex",
-                        "model_id": "gpt-5.6-sol",
                         "dispatch_mode": "AUTO",
                         "dispatch_transport": "HOST_NATIVE",
                         "dispatch_reservation_id": "reservation-integrity",
@@ -2640,7 +2636,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 30)
+            self.assertEqual(len(listed["result"]["tools"]), 29)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

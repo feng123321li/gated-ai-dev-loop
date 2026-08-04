@@ -60,7 +60,7 @@ Delivery
 | 租约、暂停、恢复和基础设施重试 | 外部系统凭据与不可逆操作授权 |
 | 保障档、分层 Review 和最终确认顺序 | Git commit、merge、push、发布与迁移 |
 
-调度器不解析 `loop.payload` 或 `loop.result` 的业务语义，也不会把 PATH 中发现的 CLI 当成可自动派遣的 Agent。
+调度器不解析 `loop.payload` 或 `loop.result` 的业务语义，不扫描 PATH 或执行本机 CLI 探针，也不会把外部 CLI 当成可自动派遣的 Agent。
 
 ## 使用方式
 

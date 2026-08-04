@@ -211,7 +211,9 @@ def preview_hierarchy(
     artifacts_ready = staged["artifactsReady"]
     choice_ready = artifacts_ready and staged["status"] == "CHOICE_READY"
     next_actions = {
-        "HANDOFF_READY": "OPEN_FROZEN_BUNDLE_IN_ANY_CLI",
+        "HANDOFF_READY": (
+            "OPEN_FROZEN_BUNDLE_AND_START_MANUAL_HANDOFF_IN_RECEIVING_CLI"
+        ),
         "PREPARED": "FREEZE_PREPARED_HIERARCHY",
         "FROZEN": "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH",
     }
@@ -378,7 +380,9 @@ def create_manual_handoff(
         "controlStateCreated": True,
         "graphRunCreated": False,
         "workspaceCreated": False,
-        "nextAction": "OPEN_FROZEN_BUNDLE_IN_ANY_CLI",
+        "nextAction": (
+            "OPEN_FROZEN_BUNDLE_AND_START_MANUAL_HANDOFF_IN_RECEIVING_CLI"
+        ),
     }
 
 

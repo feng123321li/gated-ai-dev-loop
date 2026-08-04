@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
-from .agent_discovery import available_agents
 from .dispatch_planning import plan_dispatch_batch
 from .errors import fail
 from .graph_frontier import get_graph_frontier
@@ -54,7 +53,6 @@ CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "open_orchestrator_settings": open_orchestrator_settings,
     "update_orchestrator_settings": update_orchestrator_settings,
     "workspace_status": workspace_status,
-    "available_agents": available_agents,
     "hierarchy_contract": hierarchy_contract,
     "preview_hierarchy": preview_hierarchy,
     "select_execution_mode": select_execution_mode,

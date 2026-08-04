@@ -783,7 +783,6 @@ def dispatch_loop(
     owner: str,
     operation_id: str,
     agent_id: str | None = None,
-    model_id: str | None = None,
     actual_model_id: str | None = None,
     receiver_context_id: str | None = None,
     receiver_attestation_id: str | None = None,
@@ -805,11 +804,6 @@ def dispatch_loop(
     supplied_agent_id = (
         _executor_descriptor(agent_id, "agent_id")
         if agent_id is not None
-        else None
-    )
-    native_model_id = (
-        _executor_descriptor(model_id, "model_id")
-        if model_id is not None
         else None
     )
     observed_actual_model_id = (
@@ -839,9 +833,6 @@ def dispatch_loop(
                 hostAdapterId=host_adapter_id,
                 suppliedAgentId=supplied_agent_id,
             )
-        # AUTO model values are never selectors or authorization inputs.  A
-        # model observed by a lifecycle Hook remains display-only telemetry.
-        native_model_id = None
     else:
         actual_agent_id = supplied_agent_id
     actual_receiver_context_id = (
@@ -1094,7 +1085,6 @@ def dispatch_loop(
                         reservation_id=actual_reservation_id,
                         host_adapter_id="codex",
                         agent_id="codex",
-                        model_id=(observed_actual_model_id or "UNREPORTED"),
                         receiver_context_id=actual_receiver_context_id,
                         parent_context_id=(
                             actual_host_receiver_parent_context_id
@@ -1113,7 +1103,6 @@ def dispatch_loop(
                     receiver_context_id=actual_receiver_context_id,
                     host_adapter_id=str(host_adapter_id),
                     agent_id=str(actual_agent_id),
-                    model_id=(observed_actual_model_id or "UNREPORTED"),
                     reservation_id=actual_reservation_id,
                     operation_id=operation_id,
                     at=at,
@@ -1310,7 +1299,6 @@ def dispatch_loop(
                 **(
                     {
                         "agentId": actual_agent_id,
-                        "modelId": native_model_id,
                         **(
                             {
                                 "actualModelId": observed_actual_model_id,
@@ -1347,7 +1335,6 @@ def dispatch_loop(
         ),
         "owner": owner,
         "agentId": actual_agent_id,
-        "modelId": native_model_id,
         "actualModelId": observed_actual_model_id,
         "actualModelSource": (
             "HOST_REPORTED"
@@ -1462,7 +1449,7 @@ def claim_codex_subagent_receiver(
     workspace_root: str,
     receiver_context_id: str,
     parent_context_id: str,
-    actual_model_id: str,
+    actual_model_id: str | None,
     dispatch_reservation_id: str,
     explicit_dogfood: bool = False,
     now: object = None,
@@ -1477,9 +1464,10 @@ def claim_codex_subagent_receiver(
         "receiver_context_id",
     )
     parent_context_id = _identity(parent_context_id, "parent_context_id")
-    observed_actual_model_id = _executor_descriptor(
-        actual_model_id,
-        "actual_model_id",
+    observed_actual_model_id = (
+        _executor_descriptor(actual_model_id, "actual_model_id")
+        if actual_model_id is not None
+        else None
     )
     reservation_id = _identity(
         dispatch_reservation_id,
@@ -1515,9 +1503,12 @@ def claim_codex_subagent_receiver(
             "rootId": root_id,
             "nodeId": row["node_id"],
             "agentId": "codex",
-            "modelId": None,
             "actualModelId": observed_actual_model_id,
-            "actualModelSource": "HOST_REPORTED",
+            "actualModelSource": (
+                "HOST_REPORTED"
+                if observed_actual_model_id is not None
+                else None
+            ),
             "receiverContextId": receiver_context_id,
             "receiverAttested": True,
             "dispatchMode": "AUTO",
@@ -1574,7 +1565,6 @@ def claim_codex_subagent_receiver(
             owner=receiver_context_id,
             operation_id=operation_id,
             agent_id="codex",
-            model_id=None,
             actual_model_id=observed_actual_model_id,
             receiver_context_id=receiver_context_id,
             dispatch_mode="AUTO",
@@ -1606,7 +1596,6 @@ def authorize_codex_subagent_operation(
     workspace_root: str,
     receiver_context_id: str,
     parent_context_id: str,
-    actual_model_id: str,
     dispatch_reservation_id: str | None,
     explicit_dogfood: bool = False,
     now: object = None,
@@ -1621,7 +1610,6 @@ def authorize_codex_subagent_operation(
         "receiver_context_id",
     )
     parent_context_id = _identity(parent_context_id, "parent_context_id")
-    _executor_descriptor(actual_model_id, "actual_model_id")
     reservation_id = (
         _identity(
             dispatch_reservation_id,

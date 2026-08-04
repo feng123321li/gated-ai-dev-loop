@@ -462,8 +462,6 @@ class SchedulerRepository:
                 node_id TEXT NOT NULL,
                 attempt INTEGER NOT NULL,
                 agent_id TEXT,
-                model_id TEXT,
-                reasoning_class TEXT,
                 graph_fingerprint TEXT NOT NULL,
                 decision_fingerprint TEXT NOT NULL,
                 status TEXT NOT NULL,
@@ -505,7 +503,6 @@ class SchedulerRepository:
                 reservation_id TEXT NOT NULL UNIQUE,
                 host_adapter_id TEXT NOT NULL,
                 agent_id TEXT NOT NULL,
-                model_id TEXT NOT NULL,
                 receiver_context_id TEXT NOT NULL,
                 parent_context_id TEXT NOT NULL,
                 status TEXT NOT NULL,
@@ -782,15 +779,15 @@ class SchedulerRepository:
                 "PRAGMA table_info(dispatch_reservations)"
             ).fetchall()
         }
-        for column_name in (
-            "agent_id",
-            "model_id",
-            "reasoning_class",
-        ):
-            if column_name not in dispatch_reservation_columns:
+        if "agent_id" not in dispatch_reservation_columns:
+            connection.execute(
+                "ALTER TABLE dispatch_reservations ADD COLUMN agent_id TEXT"
+            )
+        for obsolete_column in ("model_id", "reasoning_class"):
+            if obsolete_column in dispatch_reservation_columns:
                 connection.execute(
                     "ALTER TABLE dispatch_reservations "
-                    f"ADD COLUMN {column_name} TEXT"
+                    f"DROP COLUMN {obsolete_column}"
                 )
         connection.execute(
             "UPDATE delivery_revisions SET execution_mode = "
@@ -830,7 +827,6 @@ class SchedulerRepository:
                 reservation_id TEXT NOT NULL UNIQUE,
                 host_adapter_id TEXT NOT NULL,
                 agent_id TEXT NOT NULL,
-                model_id TEXT NOT NULL,
                 receiver_context_id TEXT NOT NULL,
                 parent_context_id TEXT NOT NULL,
                 status TEXT NOT NULL,
@@ -873,6 +869,16 @@ class SchedulerRepository:
         if "expires_at" not in receiver_attestation_columns:
             connection.execute(
                 "ALTER TABLE receiver_attestations ADD COLUMN expires_at TEXT"
+            )
+        host_receiver_identity_columns = {
+            row["name"]
+            for row in connection.execute(
+                "PRAGMA table_info(host_receiver_identities)"
+            ).fetchall()
+        }
+        if "model_id" in host_receiver_identity_columns:
+            connection.execute(
+                "ALTER TABLE host_receiver_identities DROP COLUMN model_id"
             )
         connection.commit()
 
@@ -2849,7 +2855,6 @@ class SchedulerRepository:
                     "nodeId": row["node_id"],
                     "attempt": row["attempt"],
                     "agentId": row["agent_id"],
-                    "modelId": row["model_id"],
                     "graphFingerprint": row["graph_fingerprint"],
                     "decisionFingerprint": row[
                         "decision_fingerprint"
@@ -3097,7 +3102,6 @@ class SchedulerRepository:
         reservation_id: str,
         host_adapter_id: str,
         agent_id: str,
-        model_id: str,
         receiver_context_id: str,
         parent_context_id: str,
         at: str,
@@ -3122,10 +3126,10 @@ class SchedulerRepository:
         connection.execute(
             "INSERT INTO host_receiver_identities("
             "attestation_digest, run_id, root_id, node_id, attempt, "
-            "reservation_id, host_adapter_id, agent_id, model_id, "
+            "reservation_id, host_adapter_id, agent_id, "
             "receiver_context_id, parent_context_id, status, created_at, "
             "expires_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ISSUED', ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ISSUED', ?, ?)",
             (
                 attestation_digest,
                 run_id,
@@ -3135,7 +3139,6 @@ class SchedulerRepository:
                 reservation_id,
                 host_adapter_id,
                 agent_id,
-                model_id,
                 receiver_context_id,
                 parent_context_id,
                 at,
@@ -3156,7 +3159,6 @@ class SchedulerRepository:
         receiver_context_id: str,
         host_adapter_id: str,
         agent_id: str,
-        model_id: str,
         reservation_id: str | None,
         operation_id: str,
         at: str,
@@ -3393,12 +3395,7 @@ class SchedulerRepository:
             rejected: dict[str, dict[str, Any]] = {}
             for assignment in assignments:
                 node_id = assignment["nodeId"]
-                agent_id = assignment.get("receiverAgentId")
-                if agent_id is None:
-                    agent_id = assignment["agent"]["id"]
-                # V5 reserves only the authoritative receiver identity.
-                # Development model and reasoning stay inside the host Agent.
-                model_id = None
+                agent_id = assignment["receiverAgentId"]
                 state = states.get(node_id)
                 definition = definitions.get(node_id)
                 key = (
@@ -3485,11 +3482,11 @@ class SchedulerRepository:
                     """
                     INSERT INTO dispatch_reservations(
                         reservation_id, run_id, root_id, node_id, attempt,
-                        agent_id, model_id, reasoning_class,
+                        agent_id,
                         graph_fingerprint, decision_fingerprint, status,
                         reserved_at, expires_at
                     ) VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'RESERVED', ?, ?
+                        ?, ?, ?, ?, ?, ?, ?, ?, 'RESERVED', ?, ?
                     )
                     """,
                     (
@@ -3499,8 +3496,6 @@ class SchedulerRepository:
                         node_id,
                         state["attempt"],
                         agent_id,
-                        model_id,
-                        None,
                         graph_fingerprint,
                         assignment["decisionFingerprint"],
                         at,
@@ -3670,7 +3665,6 @@ class SchedulerRepository:
                 "status": row["status"],
                 "owner": row["owner"],
                 "agentId": executor.get("agentId"),
-                "modelId": executor.get("modelId"),
                 "actualModelId": executor.get("actualModelId"),
                 "actualModelSource": executor.get(
                     "actualModelSource"

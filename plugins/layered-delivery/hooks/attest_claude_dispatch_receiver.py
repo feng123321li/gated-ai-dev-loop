@@ -56,6 +56,8 @@ def main() -> int:
     if tool_input.get("dispatch_mode") == "MANUAL":
         updated_input: dict[str, Any] = dict(tool_input)
         updated_input.pop("receiver_attestation_id", None)
+        updated_input.pop("model_id", None)
+        updated_input.pop("actual_model_id", None)
         updated_input["agent_id"] = "claude-code"
         updated_input["receiver_context_id"] = agent_id
         print(

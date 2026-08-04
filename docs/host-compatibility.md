@@ -17,7 +17,7 @@
 
 发布管理员完成真实冒烟后，应在发布记录中填写准确宿主版本和结果；矩阵中的“CI 自动”不等于已经验证模型账户、Keyring、Hook 信任或原生 Agent 容量。
 
-当前矩阵只验证可信外层 receiver：Claude 宿主的 claim 必须来自受认证的 `claude-code` receiver，Codex 宿主的 claim 必须来自受认证的 `codex` receiver。PATH 中发现的 CLI 或 Loop 内 Worker 不能取得 Graph 控制面权限。新增外层供应商 Adapter 后必须作为独立矩阵维度验证，不能复用内部 Worker 成功记录宣称支持。
+当前矩阵只验证可信外层 receiver：Claude 宿主的 claim 必须来自受认证的 `claude-code` receiver，Codex 宿主的 claim 必须来自受认证的 `codex` receiver。PATH 中存在的 CLI 或 Loop 内 Worker 不能取得 Graph 控制面权限。新增外层供应商 Adapter 后必须作为独立矩阵维度验证，不能复用内部 Worker 成功记录宣称支持。
 
 ## 当前候选基线
 
@@ -40,7 +40,7 @@ receiver 可以在 Loop 内使用 Codex、Claude、Grok、DeepSeek 或其他 Wor
 |---|---|
 | 已验证 | 当前版本、当前平台真实完成对应门禁 |
 | 核心契约通过 | Controller 与 MCP 合约通过，但未启动真实模型宿主 |
-| 候选验证中 | 已发现宿主，尚未完成发布候选真实冒烟 |
+| 候选验证中 | 已登记宿主，尚未完成发布候选真实冒烟 |
 | 不支持 | 缺少所需 Plugin、Hook、MCP 或原生 Agent 能力 |
 
-团队对外说明只能使用已经取得的状态；不得把 PATH 中发现某个 CLI 写成“真实宿主已验证”。
+团队对外说明只能使用已经取得的状态；不得把 PATH 中存在某个 CLI 写成“真实宿主已验证”。

@@ -174,11 +174,7 @@ def main() -> int:
     receiver_context_id: str
     parent_context_id: str
     dispatch_reservation_id: str | None
-    model_id: str | None
     if session_meta is not None:
-        model_id = hook_input.get("model")
-        if not isinstance(model_id, str) or not model_id:
-            return _deny("Loop mutation lacks a host receiver context")
         if codex_receiver_context_id is None:
             return _deny("Loop mutation lacks a host receiver context")
         try:
@@ -226,7 +222,6 @@ def main() -> int:
         # returns. The consumed claim-time receiver attestation is the
         # durable authority for subsequent Loop mutations, so do not race
         # the transcript here.
-        model_id = None
 
     root_id = tool_input.get("root_id")
     node_id = tool_input.get("node_id")
@@ -262,7 +257,6 @@ def main() -> int:
                 workspace_root=resolution.workspace_root,
                 receiver_context_id=receiver_context_id,
                 parent_context_id=parent_context_id,
-                actual_model_id=model_id,
                 dispatch_reservation_id=dispatch_reservation_id,
             )
         else:

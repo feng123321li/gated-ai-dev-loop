@@ -222,7 +222,6 @@ def build_graph_frontier(
                 "attempt": state["attempt"],
                 "owner": state["owner"],
                 "agentId": state.get("agentId"),
-                "modelId": state.get("modelId"),
                 "actualModelId": state.get("actualModelId"),
                 "actualModelSource": state.get("actualModelSource"),
                 "operationId": state["operationId"],

@@ -630,7 +630,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertNotIn("executionChoice", repeated_preview)
         self.assertEqual(
             repeated_preview["nextAction"],
-            "OPEN_FROZEN_BUNDLE_IN_ANY_CLI",
+            "OPEN_FROZEN_BUNDLE_AND_START_MANUAL_HANDOFF_IN_RECEIVING_CLI",
         )
 
     def test_manual_handoff_materializes_development_bundle_without_starting(
@@ -686,7 +686,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             handoff["nextAction"],
-            "OPEN_FROZEN_BUNDLE_IN_ANY_CLI",
+            "OPEN_FROZEN_BUNDLE_AND_START_MANUAL_HANDOFF_IN_RECEIVING_CLI",
         )
         self.assertTrue(handoff["controlStateCreated"])
         self.assertFalse(handoff["graphRunCreated"])
@@ -945,7 +945,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
                         node_id=node_id,
                         owner=f"manual-task-{index}",
                         agent_id="claude-code",
-                        model_id="manual-model",
                         receiver_context_id=receiver_context_id,
                         dispatch_mode="MANUAL",
                         operation_id=operation_id,
@@ -1106,7 +1105,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
             node_id=task_node_id,
             owner="manual-task",
             agent_id="claude-code",
-            model_id="manual-model",
             receiver_context_id="context-manual-task",
             dispatch_mode="MANUAL",
             operation_id="op-manual-task",
@@ -1128,7 +1126,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 node_id=task_review_node_id("t-manual-run"),
                 owner="manual-review",
                 agent_id="claude-code",
-                model_id="manual-model",
                 receiver_context_id="context-manual-review",
                 dispatch_mode="MANUAL",
                 operation_id="op-manual-review",
@@ -1195,7 +1192,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
             workspace_root=self.root,
             receiver_context_id="codex-child-manual",
             parent_context_id="codex-parent",
-            actual_model_id="gpt-manual-observed",
             dispatch_reservation_id=None,
             now=at(4),
         )
@@ -3173,7 +3169,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
             node_id=node_id,
             owner="claude-worker",
             agent_id="claude-code",
-            model_id="claude-opus",
             operation_id="op-hard-429",
             now=at(3),
         )
@@ -3278,7 +3273,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
             node_id=node_id,
             owner="claude-worker",
             agent_id="claude-code",
-            model_id="claude-opus",
             receiver_context_id="claude-context",
             operation_id="op-hard-quota-horizon",
             now=at(3),
@@ -3316,7 +3310,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
             node_id=node_id,
             owner="claude-worker",
             agent_id="claude-code",
-            model_id="claude-opus",
             receiver_context_id="claude-worker",
             operation_id="op-stale-open",
             now=at(3),
@@ -3368,7 +3361,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
             node_id=node_id,
             owner="claude-worker",
             agent_id="claude-code",
-            model_id="claude-opus",
             receiver_context_id="claude-worker",
             operation_id="op-stale-restore",
             now=at(3),
@@ -3444,7 +3436,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 node_id=loop_node_id(task_id),
                 owner=f"claude-{task_id}",
                 agent_id="claude-code",
-                model_id="claude-opus",
                 receiver_context_id=f"context-{task_id}",
                 operation_id=f"op-{task_id}",
                 now=at(3),
@@ -3552,7 +3543,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
             node_id=node_id,
             owner="agent-task",
             agent_id="codex",
-            model_id="gpt-5.6-sol",
             operation_id="op-task-projection",
             now=at(2),
         )
@@ -3563,14 +3553,14 @@ class SchedulerRuntimeTests(unittest.TestCase):
             if item["nodeId"] == node_id
         )
         self.assertEqual(claimed_node["agentId"], "codex")
-        self.assertIsNone(claimed_node["modelId"])
+        self.assertNotIn("modelId", claimed_node)
 
         running_progress = (item_root / "progress.md").read_text(
             encoding="utf-8"
         )
         self.assertIn(
             (
-                "| TASK | 执行中 | codex | 无 | "
+                "| TASK | 执行中 | codex | 未报告 | "
                 "agent-task | 1 |"
             ),
             running_progress,
@@ -3596,7 +3586,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             if item["nodeId"] == node_id
         )
         self.assertEqual(rebuilt_node["agentId"], "codex")
-        self.assertIsNone(rebuilt_node["modelId"])
+        self.assertNotIn("modelId", rebuilt_node)
 
         completed_progress = (item_root / "progress.md").read_text(
             encoding="utf-8"
@@ -3606,7 +3596,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertIn(
             (
-                "| 阶段 | 当前进度 | 执行代理 | 执行模型 | "
+                "| 阶段 | 当前进度 | 执行代理 | 宿主观测模型 | "
                 "认领身份 | 执行轮次 | "
                 "最近更新时间（UTC+8） | 结果摘要 |"
             ),
@@ -3614,7 +3604,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertIn(
             (
-                "| TASK | 已成功 | codex | 无 | "
+                "| TASK | 已成功 | codex | 未报告 | "
                 "agent-task | 1 |"
             ),
             completed_progress,
@@ -3997,7 +3987,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "node_id": loop_node_id("t-first"),
                 "owner": "agent-first",
                 "agent_id": first_reservation["agentId"],
-                "model_id": first_reservation["modelId"],
                 "dispatch_mode": first_reservation["dispatchMode"],
                 "dispatch_transport": first_reservation[
                     "dispatchTransport"
@@ -4063,7 +4052,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "node_id": loop_node_id("t-second"),
                     "owner": "agent-second",
                     "agent_id": second_reservation["agentId"],
-                    "model_id": second_reservation["modelId"],
                     "dispatch_mode": second_reservation[
                         "dispatchMode"
                     ],
@@ -4953,7 +4941,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertIn("t-service", progress)
         self.assertIn(
             (
-                "| 层级路径 | 阶段 | 当前进度 | 执行代理 | 执行模型 | "
+                "| 层级路径 | 阶段 | 当前进度 | 执行代理 | 宿主观测模型 | "
                 "认领身份 | 执行轮次 | "
                 "最近更新时间（UTC+8） | 结果摘要 | 节点进展 |"
             ),
@@ -6140,7 +6128,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 self.assertIn(
                     (
                         f"| {path} | {stage} | {status} | "
-                        "无 | 无 | 无 | 1 |"
+                        "无 | 未报告 | 无 | 1 |"
                     ),
                     progress,
                 )
@@ -6214,7 +6202,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertIn(
             (
-                "| t-service | TASK | 执行中 | codex | 无 | "
+                "| t-service | TASK | 执行中 | codex | 未报告 | "
                 "agent-local-time | 1 | "
                 "2026-01-01 08:02:00 |"
             ),
@@ -6240,7 +6228,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
             node_id=node_id,
             owner="claude-reviewer",
             agent_id="claude-code",
-            model_id="sonnet",
             actual_model_id="glm-5.2",
             operation_id="op-progress",
             now=at(2),
@@ -6287,14 +6274,14 @@ class SchedulerRuntimeTests(unittest.TestCase):
             item for item in status["nodes"] if item["nodeId"] == node_id
         )
         self.assertEqual(state["progress"]["progressPercent"], 70)
-        self.assertIsNone(state["modelId"])
+        self.assertNotIn("modelId", state)
         self.assertEqual(state["actualModelId"], "glm-5.2")
         self.assertEqual(state["actualModelSource"], "HOST_REPORTED")
         table = status["progressMonitor"]["markdownTable"]
         self.assertIn("| 节点 | 执行器 | 当前阶段 |", table)
         self.assertIn("t-service · 任务执行", table)
         self.assertIn(
-            "第 1 轮 · claude-code · 原生 未记录模型 → 实际 glm-5.2",
+            "第 1 轮 · claude-code · 宿主观测模型 glm-5.2",
             table,
         )
         self.assertIn("运行测试", table)
@@ -6417,7 +6404,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
             node_id=node_id,
             owner="background-agent",
             agent_id="claude-code",
-            model_id="glm-5.2",
             operation_id=operation_id,
             now=claimed_at,
         )
@@ -6679,6 +6665,83 @@ class SchedulerRuntimeTests(unittest.TestCase):
 
 
 class RemovedCouplingTests(unittest.TestCase):
+    def test_current_schema_omits_removed_model_routing_columns(self) -> None:
+        with TemporaryDirectory() as root:
+            preview_hierarchy(root=root, hierarchy=task_hierarchy())
+            connection = sqlite3.connect(
+                Path(root, ".layered-delivery", "scheduler.db")
+            )
+            try:
+                reservation_columns = {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(dispatch_reservations)"
+                    )
+                }
+                receiver_columns = {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(host_receiver_identities)"
+                    )
+                }
+            finally:
+                connection.close()
+
+        self.assertTrue(
+            {"model_id", "reasoning_class"}.isdisjoint(
+                reservation_columns
+            )
+        )
+        self.assertNotIn("model_id", receiver_columns)
+
+    def test_current_schema_removes_obsolete_model_routing_columns(self) -> None:
+        with TemporaryDirectory() as root:
+            preview_hierarchy(root=root, hierarchy=task_hierarchy())
+            database = Path(root, ".layered-delivery", "scheduler.db")
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    "ALTER TABLE dispatch_reservations "
+                    "ADD COLUMN model_id TEXT"
+                )
+                connection.execute(
+                    "ALTER TABLE dispatch_reservations "
+                    "ADD COLUMN reasoning_class TEXT"
+                )
+                connection.execute(
+                    "ALTER TABLE host_receiver_identities "
+                    "ADD COLUMN model_id TEXT"
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            SchedulerRepository(root).workspace_status()
+
+            connection = sqlite3.connect(database)
+            try:
+                reservation_columns = {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(dispatch_reservations)"
+                    )
+                }
+                receiver_columns = {
+                    row[1]
+                    for row in connection.execute(
+                        "PRAGMA table_info(host_receiver_identities)"
+                    )
+                }
+            finally:
+                connection.close()
+
+        self.assertTrue(
+            {"model_id", "reasoning_class"}.isdisjoint(
+                reservation_columns
+            )
+        )
+        self.assertNotIn("model_id", receiver_columns)
+
     def test_old_scope_gate_skill_and_plan_fields_are_rejected(
         self,
     ) -> None:

@@ -5,9 +5,6 @@ from .jsonio import fingerprint
 
 DISPATCH_POLICY_VERSION = "HOST_NATIVE_RECEIVER_ROUTING_V5"
 HOST_NATIVE_DISPATCH_TRANSPORT = "HOST_NATIVE"
-DISPATCH_TRANSPORTS = frozenset(
-    {HOST_NATIVE_DISPATCH_TRANSPORT, "EXTERNAL_PROCESS"}
-)
 
 # Receiver Agent IDs are host lifecycle identities, not development-model
 # recommendations.  A new Adapter must implement the same native receiver
@@ -44,7 +41,6 @@ def automatic_dispatch_decision_fingerprint(
 
 __all__ = (
     "DISPATCH_POLICY_VERSION",
-    "DISPATCH_TRANSPORTS",
     "HOST_ADAPTER_RECEIVER_AGENTS",
     "HOST_NATIVE_DISPATCH_TRANSPORT",
     "automatic_dispatch_decision_fingerprint",

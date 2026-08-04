@@ -4,7 +4,6 @@
 
 ```text
 src/hdg/
-├── agent_discovery.py # Loop/宿主可用的非权威本机 Worker 只读发现
 ├── dispatch_contracts.py
 │                      # 外层 receiver 派遣决策指纹与策略版本
 ├── dispatch_planning.py
@@ -144,15 +143,13 @@ Plugin MCP 工具不接收业务 `root` 参数。Adapter 从宿主配置或请�
 
 `loop_context.completionPolicy` 明确输入和终态边界：payload 是目标、明确约束和已知验收点的输入，Loop 在运行时从真实代码、契约和数据链路推导 scope 内必要条件；冻结 Graph 不冻结内部实现计划，可修复 finding 必须在当前 Loop 内调整方案、修正并复验。STANDARD 执行完整声明验收并保留分层 Review；LIGHT 对已声明改动做定向验证，并在实际内容或影响超出判断依据时以 `REPLAN_REQUIRED` 退出，不能继续借轻量档绕过 Review。初始 freeze 同时为所有 TASK 建立 revision 1 冻结记录；`unfreeze_task_requirement` 只接受未开始 TASK，`refreeze_task_requirement` 只替换标题、摘要和 payload，并原子更新 hierarchy/graph 双指纹、事件链和人类投影。`record_loop_result` 的 `BLOCKED` 要求显式 failure class，只用于当前 scope 和权限内没有继续路径的真实终态；调度器仍不解释不透明 finding，也不为返工创建 Graph 环。
 
-`controller.py` 是唯一共享应用入口；`mcp_tools.py` 把 30 个模型可调用工具映射到 Controller。receiver 凭证签发和硬额度熔断是模型外宿主回调，不进入 MCP 工具目录；工具数量由契约测试与真实目录同步校验。`mcp_adapter.py` 负责协议、精确启动 Adapter 身份与宿主策略。
-
-`agent_discovery.py` 只读取 PATH、终端 `--version` 和非敏感本机 Worker 信息，不启动开发命令或返回凭据。其结果只供宿主或 Loop 内部 Worker 选择参考，始终是非权威事实，不能进入外层派遣、claim 或授权。
+`controller.py` 是唯一共享应用入口；`mcp_tools.py` 把 29 个模型可调用工具映射到 Controller。receiver 凭证签发和硬额度熔断是模型外宿主回调，不进入 MCP 工具目录；工具数量由契约测试与真实目录同步校验。`mcp_adapter.py` 负责协议、精确启动 Adapter 身份与宿主策略。Controller 不扫描 PATH、不执行本机 CLI 版本探针，也不提供 Agent/模型发现工具。
 
 `orchestrator_config.py` 读取 Plugin 外的严格 schema v2 JSON，只包含 `maxConcurrentExecutors` 与固定 `quotaExhaustionPolicy=PAUSE_AND_RESUME`。`dispatch_planning.py` 只消费当前 frontier、可信 `host_adapter_id` 和宿主可原生创建的 receiver Agent 集合；assignment 固定 `modelPolicy=CURRENT_HOST_INHERIT`，模型与 effort 不进入 planning、reservation、claim 或 decision fingerprint。预留和已认领 receiver 共同占用跨 Delivery 槽位。Claude Code receiver 消费绑定 node/attempt/context/reservation 的一次性 attestation；Codex assignment 返回唯一 `hostTaskName`，`SubagentStart` Hook 校验 child/parent/task 后在单一事务内签发身份、固定编排根、消费 reservation 并 claim。后续 heartbeat、progress、pause 和 result 由 PreToolUse Hook 为同一 receiver 注入 operation；普通 root/helper 与内部 Worker统一拒绝。Codex、Claude、Grok、DeepSeek 等内部 Worker 只把结果返回 receiver，并可在最终 `workerTelemetry` 中按 phase 非权威报告 agent/model/effort。
 
-`open_orchestrator_settings` 是只读 render tool，关联自包含 MCP Apps 组件；`update_orchestrator_settings` 只保存 schema v2 的并发上限与固定额度策略。Controller 对这两个操作不构造 `SchedulerRepository`，因此不会生成 `.layered-delivery`。面板可显示当前可信 Adapter 与仅 PATH 发现的 Worker，但任何 UI 都不能把终端发现提升为外层 receiver 权限。
+`open_orchestrator_settings` 是只读 render tool，关联自包含 MCP Apps 组件；`update_orchestrator_settings` 只保存 schema v2 的并发上限与固定额度策略。Controller 对这两个操作不构造 `SchedulerRepository`，因此不会生成 `.layered-delivery`。面板只显示当前宿主直接提供的可信 Adapter 状态，不扫描或展示 PATH 中的 Worker。
 
-Codex Plugin 通过 `hooks/hooks.json` 注册 `SubagentStart` 与 Loop mutation `PreToolUse` Hook，并由 manifest 声明可信 `codex` Adapter；同一 bundle 承载 Claude Code 的 PreToolUse 与 StopFailure 回调。Hook 只接受操作系统账户默认 `~/.codex/sessions` 中与实际 child、parent 和 assignment `hostTaskName` 相符的 transcript，并要求 active Delivery 与精确预留。校验成功后 claim 在一个事务提交；内部身份和 operation 不写入 `additionalContext`。普通 helper、内部 Worker、工作区伪造 transcript、过期预留、手动 claim 和重放均得不到控制面权限。新增供应商只有提供等价可信外层生命周期证明时才能注册 Adapter；仅作为 Loop 内 Worker 不需要 Controller 集成。
+Codex Plugin 通过 `hooks/hooks.json` 注册 `SubagentStart` 与 Loop mutation `PreToolUse` Hook，并由 manifest 声明可信 `codex` Adapter；同一 bundle 承载 Claude Code 的 PreToolUse 与 StopFailure 回调。Hook 只接受操作系统账户默认 `~/.codex/sessions` 中与实际 child、parent 和 assignment `hostTaskName` 相符的 transcript，并要求受治理的 active/manual Delivery 与精确预留；manual Graph 只有 Review Loop 会取得 AUTO 预留。校验成功后 claim 在一个事务提交；内部身份和 operation 不写入 `additionalContext`。普通 helper、内部 Worker、工作区伪造 transcript、过期预留、手动 claim 和重放均得不到控制面权限。新增供应商只有提供等价可信外层生命周期证明时才能注册 Adapter；仅作为 Loop 内 Worker 不需要 Controller 集成。
 
 提供方限额按容量范围分流。软阈值只有宿主提供结构化 utilization/reset 时才提前暂停；标准 Claude CLI Hook 未暴露预警事件时不从模型文本猜测。硬 429 由模型外私有回调处理：Claude `StopFailure` 只解析 `error_details`，校验实际子 Agent 上下文，限制 reset 最远 24 小时并用 report ID 幂等去重。共享 `host_capacity_breakers` 会暂停同容量域的跨 Delivery claimed Loop并禁止新派遣；到点后 `advance_graph` 恢复同一 attempt。重建旧 run 时，恢复操作必须匹配原 `reportId/resetAt`，打开操作只有同一未恢复报告或更晚 `reportedAt` 才能更新共享行，不能覆盖另一 Delivery 的新断路器。该能力不在 MCP 工具目录中，失败模型无需也不能主动触发。
 

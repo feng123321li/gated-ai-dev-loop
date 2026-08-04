@@ -254,7 +254,12 @@ def main() -> int:
     parent_session_id = hook_input.get("session_id")
     receiver_context_id = hook_input.get("agent_id")
     agent_type = hook_input.get("agent_type")
-    model_id = hook_input.get("model")
+    model_value = hook_input.get("model")
+    model_id = (
+        model_value
+        if isinstance(model_value, str) and model_value
+        else None
+    )
     cwd = hook_input.get("cwd")
     transcript_path = hook_input.get("transcript_path")
     if not all(
@@ -263,7 +268,6 @@ def main() -> int:
             parent_session_id,
             receiver_context_id,
             agent_type,
-            model_id,
             cwd,
             transcript_path,
         )
@@ -308,7 +312,7 @@ def main() -> int:
         root_id = status.get("rootId")
         if (
             not isinstance(root_id, str)
-            or status.get("executionMode") != "active"
+            or status.get("executionMode") not in {"active", "manual"}
         ):
             return 0
         assignment = claim_codex_subagent_receiver(

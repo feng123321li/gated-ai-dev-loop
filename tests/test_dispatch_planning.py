@@ -117,14 +117,13 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 workspace_root=root,
                 receiver_context_id="codex-v5-child",
                 parent_context_id="codex-v5-parent",
-                actual_model_id="host-observed-model-b",
                 dispatch_reservation_id=assignment[
                     "dispatchReservationId"
                 ],
             )
 
         self.assertEqual(claimed["agentId"], "codex")
-        self.assertIsNone(claimed["modelId"])
+        self.assertNotIn("modelId", claimed)
         self.assertEqual(
             claimed["actualModelId"],
             "host-observed-model-a",
@@ -226,8 +225,8 @@ class HostDispatchPlanningTests(unittest.TestCase):
             )
 
         self.assertEqual(claimed["status"], "CLAIMED")
-        self.assertIsNone(claimed["modelId"])
-        self.assertIsNone(state["nodes"][0]["modelId"])
+        self.assertNotIn("modelId", claimed)
+        self.assertNotIn("modelId", state["nodes"][0])
 
     def test_auto_claim_rejects_tampered_decision_fingerprint(self) -> None:
         with TemporaryDirectory() as root:

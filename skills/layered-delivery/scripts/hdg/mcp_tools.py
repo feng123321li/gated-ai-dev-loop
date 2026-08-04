@@ -356,7 +356,7 @@ TOOLS = (
         "open_orchestrator_settings",
         (
             "Read the shared user-level central orchestrator policy and "
-            "live Adapter discovery. Render the settings panel when the "
+            "current trusted Adapter status. Render the settings panel when the "
             "host supports MCP Apps; otherwise return the same structured "
             "configuration for text-based inspection. This user-level tool "
             "does not require a Delivery workspace."
@@ -417,15 +417,6 @@ TOOLS = (
             "returns a suggested immutable Delivery Git binding."
         ),
         _object({"root_id": ROOT_ID}),
-    ),
-    _tool(
-        "available_agents",
-        (
-            "Discover local terminal Agents and their current configured "
-            "models without starting development commands or changing "
-            "execution."
-        ),
-        _object({}),
     ),
     _tool(
         "hierarchy_contract",
@@ -760,16 +751,6 @@ TOOLS = (
                         "Actual receiving Agent ID, such as codex or "
                         "claude-code. This is execution evidence, not an "
                         "executor recommendation."
-                    ),
-                },
-                "model_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 256,
-                    "description": (
-                        "Optional display-only model reported by the outer "
-                        "receiver. It never participates in routing, "
-                        "authorization, fingerprinting, or acceptance."
                     ),
                 },
                 "actual_model_id": {

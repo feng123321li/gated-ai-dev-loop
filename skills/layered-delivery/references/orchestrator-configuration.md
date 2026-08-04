@@ -45,7 +45,7 @@ Plugin 安装目录之外；Marketplace 安装、升级或卸载不修改它。�
 Adapter 状态；`update_orchestrator_settings` 只保存 schema v2 的两个策略字段。
 设置工具不读取或创建 `.layered-delivery` 状态，也不能改变任何 Delivery 控制面。
 
-Adapter 状态仅说明当前连接是否具有可信外层 receiver 通道。PATH 中检测到 CLI、
+Adapter 状态仅说明当前连接是否具有可信外层 receiver 通道。PATH 中存在的 CLI、
 本地 Worker 配置或模型列表只能用于宿主/Loop 内部执行，不能由面板升级为可领取
 Graph 的 Adapter。
 

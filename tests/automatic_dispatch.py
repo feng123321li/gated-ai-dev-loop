@@ -26,7 +26,6 @@ def reserve_loop(
     root_id: str,
     node_id: str,
     agent_id: str = "codex",
-    model_id: str = "gpt-test",
     now: object = None,
 ) -> dict[str, Any]:
     """Create one decision-bound test reservation for a Graph Loop."""
@@ -56,9 +55,9 @@ def reserve_loop(
             connection.execute(
                 "INSERT INTO dispatch_reservations("
                 "reservation_id, run_id, root_id, node_id, attempt, "
-                "agent_id, model_id, reasoning_class, graph_fingerprint, "
+                "agent_id, graph_fingerprint, "
                 "decision_fingerprint, status, reserved_at, expires_at"
-                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'RESERVED', ?, ?)",
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'RESERVED', ?, ?)",
                 (
                     reservation_id,
                     run["runId"],
@@ -66,8 +65,6 @@ def reserve_loop(
                     node_id,
                     state["attempt"],
                     agent_id,
-                    None,
-                    None,
                     stored["graphFingerprint"],
                     decision_fingerprint,
                     timestamp(now),
@@ -81,7 +78,6 @@ def reserve_loop(
             created = False
     return {
         "agentId": agent_id,
-        "modelId": model_id,
         "dispatchMode": "AUTO",
         "dispatchTransport": HOST_NATIVE_DISPATCH_TRANSPORT,
         "dispatchReservationId": reservation_id,
@@ -103,11 +99,8 @@ def dispatch_loop(**arguments: Any) -> dict[str, Any]:
         return runtime_dispatch_loop(**arguments)
 
     agent_id = arguments.get("agent_id")
-    model_id = arguments.get("model_id")
     if agent_id is None:
         agent_id = "codex"
-    if model_id is None:
-        model_id = "gpt-test"
 
     root = arguments["root"]
     root_id = arguments["root_id"]
@@ -118,7 +111,6 @@ def dispatch_loop(**arguments: Any) -> dict[str, Any]:
         root_id=root_id,
         node_id=node_id,
         agent_id=agent_id,
-        model_id=model_id,
         now=now,
     )
 
@@ -126,7 +118,6 @@ def dispatch_loop(**arguments: Any) -> dict[str, Any]:
     claimed_arguments.update(
         {
             "agent_id": agent_id,
-            "model_id": model_id,
             "host_adapter_id": agent_id,
             "host_native_agent_ids": (agent_id,),
             "dispatch_mode": reservation["dispatchMode"],

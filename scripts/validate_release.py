@@ -31,7 +31,7 @@ SKILL_RUNTIME = CANONICAL_SKILL / "scripts" / "hdg"
 PLUGIN = ROOT / "plugins" / "layered-delivery"
 PLUGIN_SKILL = PLUGIN / "skills" / "layered-delivery"
 TEMPLATES = ROOT / "examples" / "team-loops"
-EXPECTED_TOOL_COUNT = 30
+EXPECTED_TOOL_COUNT = 29
 
 
 def _version_from_pyproject() -> str:

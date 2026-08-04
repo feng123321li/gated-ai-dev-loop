@@ -1592,16 +1592,7 @@ def _projection_state_values(
         "nodeId": node_id,
         "status": _status_text(state["status"]),
         "agent": state.get("agentId") or "无",
-        "model": (
-            (
-                "原生 "
-                + (state.get("modelId") or "未记录")
-                + " → 实际 "
-                + state["actualModelId"]
-            )
-            if state.get("actualModelId")
-            else (state.get("modelId") or "无")
-        ),
+        "model": state.get("actualModelId") or "未报告",
         "owner": state["owner"] or "无",
         "attempt": str(state["attempt"]),
         "updatedAt": _utc_plus_8(latest) if latest else "无",
@@ -2260,7 +2251,7 @@ def render_delivery_progress(
             )
         )
     table_header = (
-        "| 层级路径 | 阶段 | 当前进度 | 执行代理 | 执行模型 | "
+        "| 层级路径 | 阶段 | 当前进度 | 执行代理 | 宿主观测模型 | "
         "认领身份 | 执行轮次 | "
         "最近更新时间（UTC+8） | 结果摘要 | 节点进展 |"
     )
@@ -2575,7 +2566,7 @@ def render_work_item_progress(
     definition = node["definition"]
     states = _projection_states(run)
     progress_header = (
-        "| 阶段 | 当前进度 | 执行代理 | 执行模型 | "
+        "| 阶段 | 当前进度 | 执行代理 | 宿主观测模型 | "
         "认领身份 | 执行轮次 | "
         "最近更新时间（UTC+8） | 结果摘要 |"
     )

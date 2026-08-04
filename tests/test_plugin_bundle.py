@@ -19,8 +19,12 @@ from unittest import mock
 import hdg
 from hdg.dispatch_planning import plan_dispatch_batch
 from hdg.errors import GatedLoopError
-from hdg.graph_model import loop_node_id
-from hdg.graph_runtime import graph_status
+from hdg.graph_model import loop_node_id, task_review_node_id
+from hdg.graph_runtime import (
+    dispatch_loop as runtime_dispatch_loop,
+    graph_status,
+    record_loop_result,
+)
 from hdg.mcp_tools import call_tool, tool_definitions
 from hdg.mcp_adapter import (
     CLIENT_CAPABILITIES_META_KEY,
@@ -52,41 +56,11 @@ PLUGIN_SKILL = PLUGIN / "skills" / "layered-delivery"
 
 class PluginBundleTests(unittest.TestCase):
     @staticmethod
-    def codex_executor_inventory() -> list[dict]:
-        return [
-            {
-                "agentId": "codex",
-                "displayName": "Codex",
-                "dispatchTransport": "HOST_NATIVE",
-                "capabilities": ["development", "review"],
-                "availableSlots": 2,
-                "priority": 20,
-                "nativeModelSelectionSupported": True,
-                "models": [
-                    {
-                        "id": "gpt-5.6-sol",
-                        "family": "gpt-5.6",
-                        "tier": "FRONTIER",
-                        "reasoningEffort": "high",
-                        "priority": 10,
-                    },
-                    {
-                        "id": "gpt-5.6-terra",
-                        "family": "gpt-5.6",
-                        "tier": "BALANCED",
-                        "reasoningEffort": "medium",
-                        "priority": 20,
-                    },
-                ],
-            }
-        ]
-
-    @staticmethod
     def codex_subagent_event(
         root: str,
         *,
         agent_id: str,
-        model_id: str,
+        model_id: str | None,
         task_name: str,
         cwd: str,
         parent_session_id: str = "codex-parent-session",
@@ -147,20 +121,19 @@ class PluginBundleTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-        return (
-            {
+        event = {
                 "hook_event_name": "SubagentStart",
                 "session_id": parent_session_id,
                 "turn_id": "codex-turn-1",
                 "agent_id": agent_id,
                 "agent_type": agent_type,
                 "permission_mode": "default",
-                "model": model_id,
                 "cwd": cwd,
                 "transcript_path": str(start_transcript),
-            },
-            codex_home,
-        )
+            }
+        if model_id is not None:
+            event["model"] = model_id
+        return event, codex_home
 
     @staticmethod
     def run_codex_hook(
@@ -659,7 +632,6 @@ class PluginBundleTests(unittest.TestCase):
                 root_id=prepared["rootId"],
                 node_id=loop_node_id("t-service"),
                 agent_id="claude-code",
-                model_id="claude-sonnet",
             )
             tool_input = {
                 "root_id": prepared["rootId"],
@@ -843,7 +815,7 @@ class PluginBundleTests(unittest.TestCase):
             "claude-agent-child-1",
         )
         self.assertTrue(claimed["receiverAttested"])
-        self.assertIsNone(claimed["modelId"])
+        self.assertNotIn("modelId", claimed)
         self.assertEqual(claimed["actualModelId"], "glm-5.2")
         self.assertEqual(mutation_output["permissionDecision"], "allow")
         self.assertEqual(
@@ -1117,7 +1089,6 @@ class PluginBundleTests(unittest.TestCase):
                         "summary": "verified",
                     },
                 },
-                "model": hook_event["model"],
                 "cwd": hook_event["cwd"],
                 "transcript_path": hook_event["transcript_path"],
             }
@@ -1211,7 +1182,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(assignment_context["node_id"], assignment["nodeId"])
         self.assertEqual(claimed["status"], "CLAIMED")
-        self.assertIsNone(claimed["modelId"])
+        self.assertNotIn("modelId", claimed)
         self.assertEqual(
             claimed["actualModelId"],
             "effective-model-from-local-forwarder",
@@ -1273,6 +1244,134 @@ class PluginBundleTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("LAYERED_DELIVERY_ASSIGNMENT=", completed.stdout)
 
+    def test_codex_subagent_start_does_not_require_model_for_identity(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="human",
+            )
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                host_adapter_id="codex",
+                host_native_agent_ids=("codex",),
+            )["assignments"][0]
+            hook_event, hook_codex_home = self.codex_subagent_event(
+                root,
+                agent_id="codex-child-without-model",
+                model_id=None,
+                task_name=assignment["hostTaskName"],
+                cwd=root,
+            )
+
+            completed = self.run_codex_hook(
+                hook_event,
+                hook_codex_home,
+            )
+            state = graph_status(root=root, root_id=prepared["rootId"])
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("LAYERED_DELIVERY_ASSIGNMENT=", completed.stdout)
+        claimed = next(
+            item
+            for item in state["nodes"]
+            if item["nodeId"] == loop_node_id("t-service")
+        )
+        self.assertEqual(claimed["status"], "CLAIMED")
+        self.assertIsNone(claimed["actualModelId"])
+
+    def test_codex_hook_claims_review_for_manual_graph(self) -> None:
+        with TemporaryDirectory() as root:
+            preview = preview_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            handoff = create_manual_handoff(
+                root=root,
+                hierarchy=task_hierarchy(),
+                expected_hierarchy_fingerprint=(
+                    preview["hierarchyFingerprint"]
+                ),
+                expected_graph_fingerprint=preview["graphFingerprint"],
+                authorized_project_ids=[],
+                confirmed=True,
+                confirmed_by="human",
+            )
+            start_manual_handoff(
+                root=root,
+                root_id=handoff["rootId"],
+                expected_hierarchy_fingerprint=(
+                    handoff["hierarchyFingerprint"]
+                ),
+                expected_graph_fingerprint=handoff["graphFingerprint"],
+                started_by="codex-parent",
+                workspace_root=root,
+            )
+            task_node_id = loop_node_id("t-service")
+            runtime_dispatch_loop(
+                root=root,
+                root_id=handoff["rootId"],
+                node_id=task_node_id,
+                owner="manual-codex-task",
+                agent_id="codex",
+                receiver_context_id="manual-codex-task",
+                dispatch_mode="MANUAL",
+                host_adapter_id="codex",
+                operation_id="op-manual-codex-task",
+            )
+            record_loop_result(
+                root=root,
+                root_id=handoff["rootId"],
+                node_id=task_node_id,
+                operation_id="op-manual-codex-task",
+                outcome={
+                    "status": "SUCCEEDED",
+                    "summary": "Manual TASK completed.",
+                    "result": {},
+                },
+            )
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=handoff["rootId"],
+                expected_graph_fingerprint=handoff["graphFingerprint"],
+                host_adapter_id="codex",
+                host_native_agent_ids=("codex",),
+            )["assignments"][0]
+            hook_event, hook_codex_home = self.codex_subagent_event(
+                root,
+                agent_id="codex-manual-review-child",
+                model_id="host-observed-review-model",
+                task_name=assignment["hostTaskName"],
+                cwd=root,
+            )
+
+            completed = self.run_codex_hook(
+                hook_event,
+                hook_codex_home,
+            )
+            state = graph_status(root=root, root_id=handoff["rootId"])
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("LAYERED_DELIVERY_ASSIGNMENT=", completed.stdout)
+        claimed = next(
+            item
+            for item in state["nodes"]
+            if item["nodeId"] == task_review_node_id("t-service")
+        )
+        self.assertEqual(claimed["status"], "CLAIMED")
+
     def test_codex_subagent_hook_treats_observed_model_as_display_only(
         self,
     ) -> None:
@@ -1317,7 +1416,7 @@ class PluginBundleTests(unittest.TestCase):
             for item in state["nodes"]
             if item["nodeId"] == loop_node_id("t-service")
         )
-        self.assertIsNone(claimed["modelId"])
+        self.assertNotIn("modelId", claimed)
         self.assertEqual(claimed["actualModelId"], "deepseek-v4-pro")
         self.assertEqual(
             claimed["actualModelSource"],
@@ -1503,7 +1602,6 @@ class PluginBundleTests(unittest.TestCase):
                 node_id=node_id,
                 owner="claude-worker",
                 agent_id="claude-code",
-                model_id="claude-opus",
                 receiver_context_id="claude-session",
                 operation_id="op-claude-rate-limit-hook",
             )
@@ -1569,7 +1667,6 @@ class PluginBundleTests(unittest.TestCase):
                 node_id=node_id,
                 owner="claude-worker",
                 agent_id="claude-code",
-                model_id="claude-opus",
                 receiver_context_id="claude-session",
                 operation_id="op-ignore-rendered-rate-limit",
             )
@@ -1656,7 +1753,7 @@ class PluginBundleTests(unittest.TestCase):
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
         tool_count = len(tool_definitions())
-        self.assertEqual(tool_count, 30)
+        self.assertEqual(tool_count, 29)
         self.assertIn(
             "start_manual_handoff",
             {tool["name"] for tool in tool_definitions()},
@@ -1713,16 +1810,6 @@ class PluginBundleTests(unittest.TestCase):
                 "id": 3,
                 "method": "tools/call",
                 "params": {
-                    "name": "available_agents",
-                    "arguments": {},
-                    "_meta": request_meta,
-                },
-            },
-            {
-                "jsonrpc": "2.0",
-                "id": 4,
-                "method": "tools/call",
-                "params": {
                     "name": "preview_hierarchy",
                     "arguments": {"hierarchy": hierarchy},
                     "_meta": request_meta,
@@ -1730,7 +1817,7 @@ class PluginBundleTests(unittest.TestCase):
             },
             {
                 "jsonrpc": "2.0",
-                "id": 5,
+                "id": 4,
                 "method": "tools/call",
                 "params": {
                     "name": "create_manual_handoff",
@@ -1783,7 +1870,7 @@ class PluginBundleTests(unittest.TestCase):
             for line in stdout.splitlines()
             if line
         ]
-        self.assertEqual(len(responses), 5)
+        self.assertEqual(len(responses), 4)
         self.assertEqual(
             responses[0]["result"]["supportedVersions"],
             [
@@ -1797,18 +1884,14 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            30,
+            29,
         )
-        discovery = responses[2]["result"]["structuredContent"]["result"]
-        self.assertFalse(
-            discovery["rules"]["developmentCommandsStarted"]
-        )
-        preview_result = responses[3]["result"]["structuredContent"][
+        preview_result = responses[2]["result"]["structuredContent"][
             "result"
         ]
         self.assertEqual(preview_result["status"], "CHOICE_READY")
         self.assertTrue(preview_result["artifactsReady"])
-        handoff = responses[4]["result"]["structuredContent"]["result"]
+        handoff = responses[3]["result"]["structuredContent"]["result"]
         self.assertEqual(handoff["status"], "HANDOFF_READY")
         self.assertEqual(handoff["requirementSnapshotStatus"], "FROZEN")
         self.assertFalse(handoff["graphRunCreated"])
@@ -1884,7 +1967,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            30,
+            29,
         )
 
 

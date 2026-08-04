@@ -1,6 +1,6 @@
 # 团队安装与运维
 
-本文面向团队管理员和普通使用者，覆盖 `layered-delivery` 0.33.4 的安装、升级、恢复、卸载与回滚。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 标准库。
+本文面向团队管理员和普通使用者，覆盖 `layered-delivery` 0.34.0 的安装、升级、恢复、卸载与回滚。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 标准库。
 
 ## 安装前检查
 
@@ -41,7 +41,7 @@ claude plugin list --json
 python scripts/host_smoke.py probe --json
 ```
 
-结果必须报告 Plugin 版本 0.33.4 和 30 个 MCP 工具，并如实标记本机已安装的宿主。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器，普通成员也不需要重复付费冒烟。
+结果必须报告 Plugin 版本 0.34.0 和 30 个 MCP 工具，并如实标记本机已安装的宿主。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器，普通成员也不需要重复付费冒烟。
 
 真实冒烟默认先只展示计划，必须显式增加 `--execute` 才调用模型。两个宿主分别运行，绝不从一个终端跨调另一个 Agent：
 
@@ -53,7 +53,7 @@ python scripts/host_smoke.py run --host codex --scenario light
 python scripts/host_smoke.py run --host codex --scenario light --execute
 ```
 
-Claude 命令从当前源码候选的 `--plugin-dir` 加载包；Codex 命令要求 0.33.4 候选已经从 Marketplace 安装。发布前的最小门禁可用 LIGHT 验证同宿主 claim/heartbeat/progress/result；发布管理员需要覆盖 Review 时再把 `--scenario light` 改成 `--scenario standard`。任何输出中的 `claimedAgents` 都必须只含命令指定的当前宿主。
+Claude 命令从当前源码候选的 `--plugin-dir` 加载包；Codex 命令要求 0.34.0 候选已经从 Marketplace 安装。发布前的最小门禁可用 LIGHT 验证同宿主 claim/heartbeat/progress/result；发布管理员需要覆盖 Review 时再把 `--scenario light` 改成 `--scenario standard`。任何输出中的 `claimedAgents` 都必须只含命令指定的当前宿主。
 
 Codex 冒烟不能使用 `--ephemeral`：`SubagentStart` attestation 必须从宿主持久化 transcript 校验 parent/child/task。冒烟会留下一个可审计的 Codex 会话记录，但业务工作区仍位于自动清理的临时目录；若宿主无法提供该 transcript，claim 必须 fail closed。
 
@@ -62,10 +62,11 @@ Codex 冒烟不能使用 `--ephemeral`：`SubagentStart` attestation 必须从�
 ### 升级前
 
 1. 记录当前 `codex plugin list --json` 或 `claude plugin list --json` 输出中的版本。
-2. 对 0.31 及更早版本的 manual Graph run，先在旧版本完成或取消。0.32 不再提供 manual Graph claim；手动开发只生成冻结内容包。
-3. 自动 schema v3 Graph 可在新会话通过 `workspace_status → graph_frontier` 恢复。升级前仍建议让正在写结果的 Loop 完成，避免恰好跨越 Hook 重载窗口。
-4. 已由早期 0.33.0 生成、但缺少根 `scheduler.db`/`overview.md` 的手动内容包不会从 Markdown 反向迁移。升级后应在仍持有原 hierarchy 与双 fingerprint 的需求会话中重新调用 `create_manual_handoff` 完成 SQLite 登记；不要手工创建数据库或拼接总览。
-5. 不删除项目中的 `.layered-delivery`，也不直接修改 `scheduler.db`。
+2. 若用户级 `orchestrator.json` 仍为 schema v1，升级前将其明确改为 `{"schemaVersion":2,"maxConcurrentExecutors":4,"quotaExhaustionPolicy":"PAUSE_AND_RESUME"}`，其中并发值可保留原配置。v2 不再接受模型选择、Adapter allowlist、跨 Adapter 或 Review 多样性字段；旧文件会 fail closed，不会静默迁移。
+3. 对 0.31 及更早版本的旧式 manual Graph run，先在旧版本完成或取消。当前版本的 manual Graph 只能由 `start_manual_handoff` 从精确 `HANDOFF_READY` 快照创建，且 MANUAL 只允许 TASK；不要把旧 run 当作新协议恢复。
+4. 自动 schema v3 Graph 可在新会话通过 `workspace_status → graph_frontier` 恢复。升级前仍建议让正在写结果的 Loop 完成，避免恰好跨越 Hook 重载窗口。
+5. 已由早期 0.33.0 生成、但缺少根 `scheduler.db`/`overview.md` 的手动内容包不会从 Markdown 反向迁移。升级后应在仍持有原 hierarchy 与双 fingerprint 的需求会话中重新调用 `create_manual_handoff` 完成 SQLite 登记；不要手工创建数据库或拼接总览。
+6. 不删除项目中的 `.layered-delivery`，也不直接修改 `scheduler.db`。
 
 ### Codex 升级
 

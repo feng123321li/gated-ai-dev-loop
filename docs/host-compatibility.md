@@ -5,7 +5,7 @@
 - **核心契约**：Python Controller、schema、SQLite、生成产物、Hook 单元测试和 stdio MCP 握手通过。
 - **真实宿主**：实际 Codex 或 Claude Code 会话加载候选 Plugin，创建原生子 Agent，并完成 claim、progress、heartbeat、result，最后到达待用户确认门禁；冒烟程序不得代替用户确认。
 
-## 0.33.4 发布矩阵
+## 0.34.0 发布矩阵
 
 | 环境 | Python | 核心契约 | 真实宿主 | 发布用途 |
 |---|---:|---|---|---|
@@ -17,22 +17,22 @@
 
 发布管理员完成真实冒烟后，应在发布记录中填写准确宿主版本和结果；矩阵中的“CI 自动”不等于已经验证模型账户、Keyring、Hook 信任或原生 Agent 容量。
 
-当前矩阵只验证同宿主原生派遣：Claude 终端的全部 claim 必须是 `claude-code`，Codex 终端的全部 claim 必须是 `codex`。即使 PATH 发现另一 CLI，也不得加入 `HOST_NATIVE` inventory。可信多 Adapter 桥接尚未实现，因此 0.33.4 不建立跨 Agent 冒烟任务；未来实现后应作为独立矩阵维度增加，不能复用当前结果宣称支持。
+当前矩阵只验证可信外层 receiver：Claude 宿主的 claim 必须来自受认证的 `claude-code` receiver，Codex 宿主的 claim 必须来自受认证的 `codex` receiver。PATH 中发现的 CLI 或 Loop 内 Worker 不能取得 Graph 控制面权限。新增外层供应商 Adapter 后必须作为独立矩阵维度验证，不能复用内部 Worker 成功记录宣称支持。
 
 ## 当前候选基线
 
 | 宿主 | 候选验证版本 | Plugin 加载方式 | 必须验证 |
 |---|---|---|---|
-| Codex | codex-cli 0.146.0 | 从候选 Marketplace 安装 | 30 工具、Controller 交互契约、`SubagentStart`、mutation Hook、原生 modelId、待用户确认状态 |
-| Claude Code | 2.1.220 | `--plugin-dir` 候选包及最终 Marketplace 安装 | 30 工具、Controller 交互契约、dispatch attestation、progress/heartbeat/result、StopFailure 兼容 |
+| Codex | codex-cli 0.146.0 | 从候选 Marketplace 安装 | Controller 交互契约、manual TASK 接入、`SubagentStart`、receiver mutation Hook、当前宿主继承策略、待用户确认状态 |
+| Claude Code | 2.1.220 | `--plugin-dir` 候选包及最终 Marketplace 安装 | Controller 交互契约、manual TASK 接入、receiver attestation、progress/heartbeat/result、StopFailure 兼容 |
 
-上述版本是 0.33.4 候选基线，不是永久兼容承诺。宿主升级后若 Hook 事件字段、Plugin manifest 或 MCP 工具命名发生变化，应先在自托管 Runner 重跑真实宿主冒烟，再更新本矩阵。
+上述版本是 0.34.0 候选基线，不是永久兼容承诺。宿主升级后若 Hook 事件字段、Plugin manifest 或 MCP 工具命名发生变化，应先在自托管 Runner 重跑真实宿主冒烟，再更新本矩阵。
 
-## 模型与转发兼容
+## 模型与内部 Worker 兼容
 
-调度契约只使用宿主原生模型角色和 `modelId`。CC Switch、本地配置文件、企业网关或其他转发器可以在原生调用之后替换实际模型；宿主能够观测时只把它记录为 `actualModelId` 展示。实际代理模型不参与路由、能力推断、reservation、attestation 或 Review 独立性。
+外层调度不选择模型。自动 receiver 继承当前宿主模型与默认 reasoning 设置，模型不进入 reservation、decision fingerprint 或 claim 授权。CC Switch、本地配置、企业网关和其他转发器属于宿主/Loop 内部能力，不改变 Graph 身份。
 
-因此兼容矩阵验证的是 Codex/Claude 的原生 selector 与 Hook 协议，不为 GLM、DeepSeek 或其他转发目标分别建立调度分支。
+receiver 可以在 Loop 内使用 Codex、Claude、Grok、DeepSeek 或其他 Worker，并在最终 `workerTelemetry` 中按 phase 非权威报告 agent/model/effort；无法权威观察时写 `unreported`。这些供应商不需要单独调度分支。只有要让某个供应商直接领取 Graph 时，才必须增加并验证可信外层 Adapter。
 
 ## 支持状态定义
 

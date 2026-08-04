@@ -188,12 +188,29 @@ def main() -> int:
             )
         except (json.JSONDecodeError, KeyError, OSError, ValueError):
             metadata = None
-        if metadata is None:
-            return _deny("Only the assigned Codex child may mutate this Loop")
+        source = session_meta.get("source")
+        subagent = source.get("subagent") if isinstance(source, dict) else None
+        thread_spawn = (
+            subagent.get("thread_spawn")
+            if isinstance(subagent, dict)
+            else None
+        )
+        session_parent = session_meta.get("session_id")
+        if (
+            not isinstance(thread_spawn, dict)
+            or not isinstance(session_parent, str)
+            or not session_parent
+            or thread_spawn.get("parent_thread_id") != session_parent
+        ):
+            return _deny("Only a Codex child may mutate this Loop")
         host_adapter_id = "codex"
         receiver_context_id = codex_receiver_context_id
-        parent_context_id = metadata["parentContextId"]
-        dispatch_reservation_id = metadata["dispatchReservationId"]
+        parent_context_id = session_parent
+        dispatch_reservation_id = (
+            metadata["dispatchReservationId"]
+            if metadata is not None
+            else None
+        )
     else:
         claude_agent_id = hook_input.get("agent_id")
         if (
@@ -246,9 +263,7 @@ def main() -> int:
                 receiver_context_id=receiver_context_id,
                 parent_context_id=parent_context_id,
                 actual_model_id=model_id,
-                dispatch_reservation_id=str(
-                    dispatch_reservation_id
-                ),
+                dispatch_reservation_id=dispatch_reservation_id,
             )
         else:
             authorization = authorize_claude_subagent_operation(

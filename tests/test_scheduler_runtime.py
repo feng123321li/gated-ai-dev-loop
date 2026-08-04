@@ -18,9 +18,11 @@ from hdg.graph_model import (
     group_review_node_id,
     loop_node_id,
     review_node_id,
+    task_review_node_id,
 )
 from hdg.graph_runtime import (
     attest_loop_receiver,
+    authorize_codex_subagent_operation,
     cancel_graph_run,
     graph_events,
     graph_status,
@@ -33,6 +35,7 @@ from hdg.graph_runtime import (
     record_loop_result,
     record_user_confirmation,
     resume_loop,
+    dispatch_loop as runtime_dispatch_loop,
 )
 from hdg.loop_contracts import (
     loop_completion_policy,
@@ -53,6 +56,7 @@ from hdg.planning import (
     prepare_hierarchy,
     preview_hierarchy,
     select_execution_mode,
+    start_manual_handoff,
     workspace_status,
 )
 from hdg.repository import SchedulerRepository
@@ -396,7 +400,11 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             [item["description"] for item in choice["options"]],
-            ["立即开始自动开发。", "生成 handoff，供任意 CLI 开发。"],
+            [
+                "立即开始自动开发。",
+                "生成 handoff；接收 CLI 启动同一 Graph，手动完成 TASK，"
+                "后续审查与自动执行一致。",
+            ],
         )
         self.assertTrue(choice["options"][0]["recommended"])
         self.assertFalse(choice["options"][1]["recommended"])
@@ -404,7 +412,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             [item["nextAction"] for item in choice["options"]],
             [
                 "PREPARE_FREEZE_AND_DISPATCH_AUTOMATICALLY",
-                "CREATE_HANDOFF_AND_PRESENT_RECEIVER_PROMPT",
+                "CREATE_HANDOFF_THEN_START_GOVERNED_MANUAL_GRAPH",
             ],
         )
         self.assertFalse(
@@ -692,7 +700,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
         receiver_prompt = handoff["manualHandoff"]["receiverPrompt"]
         self.assertIn(handoff["manualHandoff"]["path"], receiver_prompt)
         self.assertIn("完整读取", receiver_prompt)
-        self.assertIn("直接开发", receiver_prompt)
+        self.assertIn("start_manual_handoff", receiver_prompt)
+        self.assertIn("TASK/GROUP/Delivery Review", receiver_prompt)
         self.assertIn("不要重新规划", receiver_prompt)
 
         handoff_root = Path(
@@ -775,7 +784,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "开始实际开发时再创建",
             "需求内容快照已冻结",
             "切换到任意 CLI",
-            "直接按冻结内容开发",
+            "start_manual_handoff",
+            "TASK Review、各层 GROUP Review",
             '"id": "d-second"',
         ):
             with self.subTest(expected=expected):
@@ -788,7 +798,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "gpt-5.6",
             "prepare_hierarchy",
             "freeze_hierarchy",
-            "graph_frontier",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, content)
@@ -848,6 +857,353 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertIn(
             "需求已冻结（手动开发，调度未启动）",
             workspace_overview,
+        )
+
+    def test_manual_handoff_runs_the_complete_standard_review_graph(
+        self,
+    ) -> None:
+        hierarchy = group_hierarchy()
+        preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        handoff = create_manual_handoff(
+            root=self.root,
+            hierarchy=hierarchy,
+            expected_hierarchy_fingerprint=(
+                preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=preview["graphFingerprint"],
+            authorized_project_ids=[],
+            confirmed=True,
+            confirmed_by="human",
+            now=at(1),
+        )
+
+        started = start_manual_handoff(
+            root=self.root,
+            root_id=handoff["rootId"],
+            expected_hierarchy_fingerprint=(
+                handoff["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=handoff["graphFingerprint"],
+            started_by="manual-orchestrator",
+            workspace_root=self.root,
+            now=at(2),
+        )
+
+        self.assertEqual(started["status"], "ACTIVE")
+        self.assertEqual(started["executionMode"], "manual")
+        self.assertTrue(started["graphRunCreated"])
+        self.assertEqual(started["nextAction"], "READ_GRAPH_FRONTIER")
+        repeated_start = start_manual_handoff(
+            root=self.root,
+            root_id=handoff["rootId"],
+            expected_hierarchy_fingerprint=(
+                handoff["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=handoff["graphFingerprint"],
+            started_by="manual-orchestrator",
+            workspace_root=self.root,
+            now=at(2),
+        )
+        self.assertTrue(repeated_start["manualStartAlreadyApplied"])
+        self.assertEqual(repeated_start["runId"], started["runId"])
+
+        expected_steps = [
+            ("CLAIM_MANUAL_TASK", loop_node_id("t-api")),
+            ("DISPATCH_LOOP", task_review_node_id("t-api")),
+            ("CLAIM_MANUAL_TASK", loop_node_id("t-core")),
+            ("DISPATCH_LOOP", task_review_node_id("t-core")),
+            ("DISPATCH_LOOP", group_review_node_id("g-service")),
+            ("DISPATCH_LOOP", review_node_id("d-service")),
+        ]
+        for index, (action_name, node_id) in enumerate(
+            expected_steps,
+            start=3,
+        ):
+            with self.subTest(action=action_name, node=node_id):
+                frontier = get_graph_frontier(
+                    root=self.root,
+                    root_id=handoff["rootId"],
+                    now=at(index),
+                )
+                self.assertEqual(
+                    [
+                        (action["action"], action.get("nodeId"))
+                        for action in frontier["actions"]
+                    ],
+                    [(action_name, node_id)],
+                )
+                operation_id = f"op-manual-graph-{index}"
+                receiver_context_id = f"context-manual-graph-{index}"
+                if action_name == "CLAIM_MANUAL_TASK":
+                    runtime_dispatch_loop(
+                        root=self.root,
+                        root_id=handoff["rootId"],
+                        node_id=node_id,
+                        owner=f"manual-task-{index}",
+                        agent_id="claude-code",
+                        model_id="manual-model",
+                        receiver_context_id=receiver_context_id,
+                        dispatch_mode="MANUAL",
+                        operation_id=operation_id,
+                        now=at(index),
+                    )
+                    outcome = success("Manual TASK completed.")
+                else:
+                    dispatch_loop(
+                        root=self.root,
+                        root_id=handoff["rootId"],
+                        node_id=node_id,
+                        owner=f"review-agent-{index}",
+                        receiver_context_id=receiver_context_id,
+                        operation_id=operation_id,
+                        now=at(index),
+                    )
+                    outcome = {
+                        "status": "SUCCEEDED",
+                        "summary": "Independent Review completed.",
+                        "result": {"reviewFindings": []},
+                    }
+                record_loop_result(
+                    root=self.root,
+                    root_id=handoff["rootId"],
+                    node_id=node_id,
+                    operation_id=operation_id,
+                    outcome=outcome,
+                    now=at(index),
+                )
+
+        rebuilt = rebuild_graph_run(
+            root=self.root,
+            root_id=handoff["rootId"],
+        )
+        self.assertEqual(rebuilt["executionMode"], "manual")
+        frontier = get_graph_frontier(
+            root=self.root,
+            root_id=handoff["rootId"],
+            now=at(10),
+        )
+        self.assertEqual(
+            [action["action"] for action in frontier["actions"]],
+            ["RECORD_USER_CONFIRMATION"],
+        )
+        self.assertEqual(
+            SchedulerRepository(self.root).run(handoff["rootId"])[
+                "executionMode"
+            ],
+            "manual",
+        )
+
+    def test_manual_handoff_start_recovers_interrupted_prepared_adoption(
+        self,
+    ) -> None:
+        hierarchy = delivery_task_hierarchy(
+            "d-manual-interrupted",
+            "t-manual-interrupted",
+        )
+        preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        handoff = create_manual_handoff(
+            root=self.root,
+            hierarchy=hierarchy,
+            expected_hierarchy_fingerprint=(
+                preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=preview["graphFingerprint"],
+            authorized_project_ids=[],
+            confirmed=True,
+            confirmed_by="human",
+            now=at(1),
+        )
+        prepared = prepare_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            workspace_root=self.root,
+            now=at(2),
+        )
+        self.assertEqual(prepared["status"], "PREPARED")
+
+        started = start_manual_handoff(
+            root=self.root,
+            root_id=handoff["rootId"],
+            expected_hierarchy_fingerprint=(
+                handoff["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=handoff["graphFingerprint"],
+            started_by="manual-orchestrator",
+            workspace_root=self.root,
+            now=at(3),
+        )
+
+        self.assertEqual(started["executionMode"], "manual")
+        self.assertFalse(started["manualStartAlreadyApplied"])
+        self.assertEqual(
+            get_graph_frontier(
+                root=self.root,
+                root_id=handoff["rootId"],
+                now=at(4),
+            )["actions"][0]["action"],
+            "CLAIM_MANUAL_TASK",
+        )
+
+    def test_manual_graph_rejects_manual_review_and_automatic_task_claims(
+        self,
+    ) -> None:
+        hierarchy = delivery_task_hierarchy("d-manual-run", "t-manual-run")
+        preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        handoff = create_manual_handoff(
+            root=self.root,
+            hierarchy=hierarchy,
+            expected_hierarchy_fingerprint=(
+                preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=preview["graphFingerprint"],
+            authorized_project_ids=[],
+            confirmed=True,
+            confirmed_by="human",
+            now=at(1),
+        )
+        start_manual_handoff(
+            root=self.root,
+            root_id=handoff["rootId"],
+            expected_hierarchy_fingerprint=(
+                handoff["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=handoff["graphFingerprint"],
+            started_by="manual-orchestrator",
+            workspace_root=self.root,
+            now=at(2),
+        )
+        task_node_id = loop_node_id("t-manual-run")
+
+        with self.assertRaises(GatedLoopError) as automatic_error:
+            dispatch_loop(
+                root=self.root,
+                root_id=handoff["rootId"],
+                node_id=task_node_id,
+                owner="automatic-task",
+                operation_id="op-automatic-task",
+                now=at(3),
+            )
+        self.assertEqual(
+            automatic_error.exception.code,
+            "SCHEDULER_DISPATCH_MODE_INVALID",
+        )
+
+        runtime_dispatch_loop(
+            root=self.root,
+            root_id=handoff["rootId"],
+            node_id=task_node_id,
+            owner="manual-task",
+            agent_id="claude-code",
+            model_id="manual-model",
+            receiver_context_id="context-manual-task",
+            dispatch_mode="MANUAL",
+            operation_id="op-manual-task",
+            now=at(3),
+        )
+        record_loop_result(
+            root=self.root,
+            root_id=handoff["rootId"],
+            node_id=task_node_id,
+            operation_id="op-manual-task",
+            outcome=success(),
+            now=at(4),
+        )
+
+        with self.assertRaises(GatedLoopError) as manual_review_error:
+            runtime_dispatch_loop(
+                root=self.root,
+                root_id=handoff["rootId"],
+                node_id=task_review_node_id("t-manual-run"),
+                owner="manual-review",
+                agent_id="claude-code",
+                model_id="manual-model",
+                receiver_context_id="context-manual-review",
+                dispatch_mode="MANUAL",
+                operation_id="op-manual-review",
+                now=at(5),
+            )
+        self.assertEqual(
+            manual_review_error.exception.code,
+            "SCHEDULER_DISPATCH_MODE_INVALID",
+        )
+
+    def test_codex_manual_task_child_can_authorize_followup_operations(
+        self,
+    ) -> None:
+        hierarchy = delivery_task_hierarchy(
+            "d-manual-codex-child",
+            "t-manual-codex-child",
+        )
+        preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        handoff = create_manual_handoff(
+            root=self.root,
+            hierarchy=hierarchy,
+            expected_hierarchy_fingerprint=(
+                preview["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=preview["graphFingerprint"],
+            authorized_project_ids=[],
+            confirmed=True,
+            confirmed_by="human",
+            now=at(1),
+        )
+        start_manual_handoff(
+            root=self.root,
+            root_id=handoff["rootId"],
+            expected_hierarchy_fingerprint=(
+                handoff["hierarchyFingerprint"]
+            ),
+            expected_graph_fingerprint=handoff["graphFingerprint"],
+            started_by="codex-parent",
+            workspace_root=self.root,
+            now=at(2),
+        )
+        node_id = loop_node_id("t-manual-codex-child")
+        claimed = runtime_dispatch_loop(
+            root=self.root,
+            root_id=handoff["rootId"],
+            node_id=node_id,
+            owner="codex-child-manual",
+            agent_id="codex",
+            receiver_context_id="codex-child-manual",
+            dispatch_mode="MANUAL",
+            host_adapter_id="codex",
+            operation_id="op-codex-child-manual",
+            now=at(3),
+        )
+
+        authorization = authorize_codex_subagent_operation(
+            root=self.root,
+            root_id=handoff["rootId"],
+            node_id=node_id,
+            workspace_root=self.root,
+            receiver_context_id="codex-child-manual",
+            parent_context_id="codex-parent",
+            actual_model_id="gpt-manual-observed",
+            dispatch_reservation_id=None,
+            now=at(4),
+        )
+
+        self.assertFalse(claimed["receiverAttested"])
+        self.assertEqual(
+            authorization["operationId"],
+            claimed["operationId"],
         )
 
     def test_preview_rejects_duplicate_external_requirement_under_new_id(
@@ -3207,14 +3563,14 @@ class SchedulerRuntimeTests(unittest.TestCase):
             if item["nodeId"] == node_id
         )
         self.assertEqual(claimed_node["agentId"], "codex")
-        self.assertEqual(claimed_node["modelId"], "gpt-5.6-sol")
+        self.assertIsNone(claimed_node["modelId"])
 
         running_progress = (item_root / "progress.md").read_text(
             encoding="utf-8"
         )
         self.assertIn(
             (
-                "| TASK | 执行中 | codex | gpt-5.6-sol | "
+                "| TASK | 执行中 | codex | 无 | "
                 "agent-task | 1 |"
             ),
             running_progress,
@@ -3240,7 +3596,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             if item["nodeId"] == node_id
         )
         self.assertEqual(rebuilt_node["agentId"], "codex")
-        self.assertEqual(rebuilt_node["modelId"], "gpt-5.6-sol")
+        self.assertIsNone(rebuilt_node["modelId"])
 
         completed_progress = (item_root / "progress.md").read_text(
             encoding="utf-8"
@@ -3258,7 +3614,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertIn(
             (
-                "| TASK | 已成功 | codex | gpt-5.6-sol | "
+                "| TASK | 已成功 | codex | 无 | "
                 "agent-task | 1 |"
             ),
             completed_progress,
@@ -3649,9 +4005,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "dispatch_reservation_id": first_reservation[
                     "dispatchReservationId"
                 ],
-                "dispatch_reasoning_class": first_reservation[
-                    "dispatchReasoningClass"
-                ],
                 "dispatch_decision_fingerprint": first_reservation[
                     "dispatchDecisionFingerprint"
                 ],
@@ -3719,9 +4072,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     ],
                     "dispatch_reservation_id": second_reservation[
                         "dispatchReservationId"
-                    ],
-                    "dispatch_reasoning_class": second_reservation[
-                        "dispatchReasoningClass"
                     ],
                     "dispatch_decision_fingerprint": second_reservation[
                         "dispatchDecisionFingerprint"
@@ -5864,7 +6214,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertIn(
             (
-                "| t-service | TASK | 执行中 | codex | gpt-test | "
+                "| t-service | TASK | 执行中 | codex | 无 | "
                 "agent-local-time | 1 | "
                 "2026-01-01 08:02:00 |"
             ),
@@ -5937,14 +6287,14 @@ class SchedulerRuntimeTests(unittest.TestCase):
             item for item in status["nodes"] if item["nodeId"] == node_id
         )
         self.assertEqual(state["progress"]["progressPercent"], 70)
-        self.assertEqual(state["modelId"], "sonnet")
+        self.assertIsNone(state["modelId"])
         self.assertEqual(state["actualModelId"], "glm-5.2")
         self.assertEqual(state["actualModelSource"], "HOST_REPORTED")
         table = status["progressMonitor"]["markdownTable"]
         self.assertIn("| 节点 | 执行器 | 当前阶段 |", table)
         self.assertIn("t-service · 任务执行", table)
         self.assertIn(
-            "第 1 轮 · claude-code · 原生 sonnet → 实际 glm-5.2",
+            "第 1 轮 · claude-code · 原生 未记录模型 → 实际 glm-5.2",
             table,
         )
         self.assertIn("运行测试", table)

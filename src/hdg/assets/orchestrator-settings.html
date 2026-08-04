@@ -78,30 +78,9 @@
       .row { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
       .label { display: block; font-weight: 640; line-height: 1.35; }
       .hint { display: block; margin-top: 3px; color: var(--muted); font-size: 0.78rem; line-height: 1.45; }
-      .switch { position: relative; display: inline-flex; flex: none; width: 42px; height: 24px; }
-      .switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-      .switch span { width: 100%; border-radius: 999px; background: #98a2b3; transition: 150ms ease; }
-      .switch span::after {
-        content: ""; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px;
-        border-radius: 50%; background: white; box-shadow: 0 1px 3px rgba(0,0,0,.24); transition: 150ms ease;
-      }
-      .switch input:checked + span { background: var(--brand); }
-      .switch input:checked + span::after { transform: translateX(18px); }
-      .switch input:focus-visible + span { outline: 3px solid var(--brand-soft); outline-offset: 2px; }
-      .switch input:disabled + span { cursor: not-allowed; opacity: .45; }
       legend { width: 100%; padding: 0 0 10px; font-weight: 640; }
-      .adapter-list, .radio-list { display: grid; gap: 8px; }
-      .adapter {
-        display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center;
-        padding: 10px 12px; border-radius: 12px; background: var(--surface-muted);
-      }
-      .adapter input, .radio-list input { accent-color: var(--brand); }
-      .adapter-name { font-weight: 600; font-size: 0.9rem; }
-      .adapter-id { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.72rem; }
-      .state { font-size: 0.74rem; font-weight: 650; text-align: right; }
-      .state.native { color: var(--success); }
-      .state.terminal { color: var(--warning); }
-      .state.missing { color: var(--muted); }
+      .radio-list { display: grid; gap: 8px; }
+      .radio-list input { accent-color: var(--brand); }
       .number-input {
         width: 74px; padding: 7px 9px; border: 1px solid var(--border); border-radius: 9px;
         color: var(--text); background: var(--surface); font: inherit; text-align: center;
@@ -128,8 +107,6 @@
         body { padding: 0; }
         main { border-radius: 0; border-left: 0; border-right: 0; }
         header, form { padding-left: 16px; padding-right: 16px; }
-        .adapter { grid-template-columns: auto 1fr; }
-        .state { grid-column: 2; text-align: left; }
         footer { align-items: flex-end; }
       }
     </style>
@@ -139,31 +116,12 @@
       <header>
         <div>
           <h1>中央编排器设置</h1>
-          <p class="subtitle">本机用户级策略，在 Codex、Claude Code 等 Adapter 间共享</p>
+          <p class="subtitle">本机共享的并发与额度策略；宿主身份由 Plugin/Hook 注册</p>
         </div>
         <span id="host-badge" class="host-badge">宿主检测中</span>
       </header>
 
       <form id="settings-form">
-        <div class="row">
-          <div><span class="label">自动编排</span><span class="hint">自动规划并发 Loop 的派遣批次</span></div>
-          <label class="switch"><input id="automatic" type="checkbox" /><span aria-hidden="true"></span></label>
-        </div>
-        <div class="row">
-          <div><span class="label">自动选择模型</span><span class="hint">按 Agent 分析的 ROUTINE / STANDARD / HIGH 分类选择模型</span></div>
-          <label class="switch"><input id="model" type="checkbox" /><span aria-hidden="true"></span></label>
-        </div>
-        <div class="row">
-          <div><span class="label">跨 Adapter 调度</span><span class="hint">当前版本尚未提供可信多 Adapter 宿主桥接</span></div>
-          <label class="switch"><input id="cross" type="checkbox" disabled /><span aria-hidden="true"></span></label>
-        </div>
-        <div id="cross-adapter-notice" class="notice error" role="alert" hidden></div>
-
-        <fieldset>
-          <legend>允许的 Adapter</legend>
-          <div id="adapter-list" class="adapter-list"></div>
-        </fieldset>
-
         <div class="row">
           <div><span class="label">最大并发执行器</span><span class="hint">所有 Delivery 共用的原子并发上限（1–64）</span></div>
           <input id="concurrency" class="number-input" type="number" min="1" max="64" required />
@@ -173,19 +131,12 @@
           <legend>额度耗尽</legend>
           <div class="radio-list">
             <label><input type="radio" name="quota" value="PAUSE_AND_RESUME" /><span class="radio-copy">暂停并在额度恢复后继续<small>保留 Loop，按已知重置时间恢复</small></span></label>
-            <label><input id="quota-switch-adapter" type="radio" name="quota" value="SWITCH_ADAPTER" disabled /><span class="radio-copy">自动切换到其他 Adapter<small>跨 Adapter 宿主桥接可用前不可选择</small></span></label>
-            <label><input type="radio" name="quota" value="ASK_USER" /><span class="radio-copy">询问用户<small>暂停自动派遣并等待选择</small></span></label>
           </div>
         </fieldset>
 
-        <div class="row">
-          <div><span class="label">优先使用不同 Adapter 审查</span><span class="hint">在可用容量允许时提高 Review 的执行器独立性</span></div>
-          <label class="switch"><input id="review" type="checkbox" /><span aria-hidden="true"></span></label>
-        </div>
-
         <div class="notice">
           配置文件：<span id="config-path" class="path">读取中</span><br />
-          “终端已安装”不等于当前宿主可原生派遣；面板会分别显示真实能力。
+          当前宿主由 Plugin/Hook 只读注册，不能通过本面板修改。
         </div>
         <footer>
           <span id="status" role="status" aria-live="polite"></span>
@@ -199,9 +150,6 @@
       const form = byId("settings-form");
       const saveButton = byId("save");
       const status = byId("status");
-      const adaptersElement = byId("adapter-list");
-      const crossAdapterNotice = byId("cross-adapter-notice");
-      let latestSettings = null;
       let rpcId = 0;
       const pending = new Map();
 
@@ -210,66 +158,20 @@
         status.className = kind;
       };
 
-      const stateCopy = {
-        CURRENT_HOST_NATIVE: ["当前宿主原生可派遣", "native"],
-        TERMINAL_ONLY: ["仅检测到本机终端", "terminal"],
-        NOT_DETECTED: ["未检测到", "missing"],
-      };
-
       const render = (payload) => {
         const settings = payload?.result ?? payload;
         if (!settings?.config) return;
-        latestSettings = settings;
         const config = settings.config;
-        const crossCapability = settings.featureAvailability?.crossAdapterDispatch ?? {
-          supported: false,
-          mutable: false,
-          message: "跨 Adapter 自动派遣暂不可用。",
-        };
-        const crossMutable = Boolean(crossCapability.supported && crossCapability.mutable);
-        byId("automatic").checked = Boolean(config.automaticOrchestration);
-        byId("model").checked = Boolean(config.autoSelectModel);
-        byId("cross").disabled = !crossMutable;
-        byId("cross").checked = crossMutable && Boolean(config.allowCrossAdapterDispatch);
-        byId("quota-switch-adapter").disabled = !crossMutable;
         byId("concurrency").value = String(config.maxConcurrentExecutors ?? 4);
-        byId("review").checked = Boolean(config.preferDifferentAdapterForReview);
-        const quotaPolicy = !crossMutable && config.quotaExhaustionPolicy === "SWITCH_ADAPTER"
-          ? "PAUSE_AND_RESUME"
-          : config.quotaExhaustionPolicy;
-        const quota = form.querySelector(`input[name="quota"][value="${quotaPolicy}"]`);
+        const quota = form.querySelector(
+          `input[name="quota"][value="${config.quotaExhaustionPolicy}"]`,
+        );
         if (quota) quota.checked = true;
-        crossAdapterNotice.hidden = crossMutable;
-        crossAdapterNotice.textContent = crossMutable ? "" : crossCapability.message;
         byId("config-path").textContent = config.configPath || "未解析";
         byId("host-badge").textContent = settings.currentHostAdapter
           ? `当前宿主：${settings.currentHostAdapter}`
           : "宿主未声明";
 
-        adaptersElement.replaceChildren();
-        for (const adapter of settings.adapters ?? []) {
-          const row = document.createElement("label");
-          row.className = "adapter";
-          const checkbox = document.createElement("input");
-          checkbox.type = "checkbox";
-          checkbox.name = "adapter";
-          checkbox.value = adapter.id;
-          checkbox.checked = Boolean(adapter.enabled);
-          const copy = document.createElement("span");
-          const name = document.createElement("span");
-          name.className = "adapter-name";
-          name.textContent = adapter.displayName;
-          const id = document.createElement("span");
-          id.className = "adapter-id";
-          id.textContent = adapter.id;
-          copy.append(name, document.createElement("br"), id);
-          const state = document.createElement("span");
-          const [label, className] = stateCopy[adapter.registrationState] ?? [adapter.registrationState, "missing"];
-          state.className = `state ${className}`;
-          state.textContent = label;
-          row.append(checkbox, copy, state);
-          adaptersElement.append(row);
-        }
         if (settings.saved) setStatus("设置已保存并应用到当前连接。", "success");
       };
 
@@ -307,12 +209,6 @@
 
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
-        const allowedAdapters = [...form.querySelectorAll('input[name="adapter"]:checked')]
-          .map((input) => input.value);
-        if (!allowedAdapters.length) {
-          setStatus("至少保留一个允许的 Adapter。", "error");
-          return;
-        }
         const maximum = Number(byId("concurrency").value);
         if (!Number.isInteger(maximum) || maximum < 1 || maximum > 64) {
           setStatus("最大并发执行器必须是 1–64 的整数。", "error");
@@ -320,14 +216,9 @@
         }
         const quota = form.querySelector('input[name="quota"]:checked')?.value;
         const config = {
-          schemaVersion: 1,
-          automaticOrchestration: byId("automatic").checked,
-          autoSelectModel: byId("model").checked,
-          allowCrossAdapterDispatch: byId("cross").checked,
-          allowedAdapters,
+          schemaVersion: 2,
           maxConcurrentExecutors: maximum,
           quotaExhaustionPolicy: quota,
-          preferDifferentAdapterForReview: byId("review").checked,
         };
         saveButton.disabled = true;
         setStatus("正在保存…");

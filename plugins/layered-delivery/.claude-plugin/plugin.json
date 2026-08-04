@@ -1,7 +1,7 @@
 {
   "name": "layered-delivery",
-  "version": "0.33.4",
-  "description": "预览和调度递归 GROUP/TASK、原生模型分档、任意 CLI 可接管的冻结开发包与中文进度",
+  "version": "0.34.0",
+  "description": "预览和调度递归 GROUP/TASK、当前宿主 receiver、完整手动交接审查、冻结开发包与中文进度",
   "author": {
     "name": "layered-delivery contributors",
     "url": "https://github.com/feng123321li/layered-delivery"
@@ -14,7 +14,8 @@
     "graph-scheduling",
     "recursive-graph",
     "agent-discovery",
-    "model-recommendation",
+    "manual-handoff",
+    "review-governance",
     "automatic-agent-dispatch",
     "git-worktree",
     "group-task",

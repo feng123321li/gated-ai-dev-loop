@@ -6,10 +6,14 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 import uuid
 
 
 DISPATCH_TASK_NAME = re.compile(r"^ld_([0-9a-f]{32})$")
+SESSION_IDENTIFIER = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,255}$")
+CHILD_TRANSCRIPT_WAIT_SECONDS = 2.0
+CHILD_TRANSCRIPT_POLL_SECONDS = 0.05
 
 
 def _runtime_path() -> Path:
@@ -144,6 +148,51 @@ def _subagent_claim_metadata(
     }
 
 
+def _child_transcript_from_parent(
+    parent_transcript_path: str,
+    *,
+    parent_session_id: str,
+    receiver_context_id: str,
+) -> Path | None:
+    if SESSION_IDENTIFIER.fullmatch(receiver_context_id) is None:
+        return None
+    parent_meta = _session_meta_from_transcript(
+        parent_transcript_path,
+        session_id=parent_session_id,
+    )
+    if parent_meta is None:
+        return None
+
+    sessions_root = _trusted_codex_sessions_root()
+    parent_transcript = Path(parent_transcript_path).expanduser().resolve(
+        strict=True
+    )
+    deadline = time.monotonic() + CHILD_TRANSCRIPT_WAIT_SECONDS
+    pattern = f"*-{receiver_context_id}.jsonl"
+    while True:
+        sibling_candidates = tuple(parent_transcript.parent.glob(pattern))
+        candidates = sibling_candidates
+        if not candidates:
+            candidates = tuple(sessions_root.rglob(pattern))
+        matched: list[Path] = []
+        for candidate in candidates:
+            try:
+                session_meta = _session_meta_from_transcript(
+                    str(candidate),
+                    session_id=receiver_context_id,
+                )
+            except (json.JSONDecodeError, OSError, ValueError):
+                continue
+            if session_meta is not None:
+                matched.append(candidate.resolve(strict=True))
+        unique_matches = tuple(dict.fromkeys(matched))
+        if len(unique_matches) == 1:
+            return unique_matches[0]
+        if len(unique_matches) > 1 or time.monotonic() >= deadline:
+            return None
+        time.sleep(CHILD_TRANSCRIPT_POLL_SECONDS)
+
+
 def _dispatch_reservation_from_transcript(
     transcript_path: str,
     *,
@@ -162,6 +211,37 @@ def _dispatch_reservation_from_transcript(
     ):
         return None
     return metadata["dispatchReservationId"]
+
+
+def _dispatch_reservation_from_subagent_start(
+    transcript_path: str,
+    *,
+    receiver_context_id: str,
+    parent_session_id: str,
+    agent_type: str,
+) -> str | None:
+    direct_reservation = _dispatch_reservation_from_transcript(
+        transcript_path,
+        receiver_context_id=receiver_context_id,
+        parent_session_id=parent_session_id,
+        agent_type=agent_type,
+    )
+    if direct_reservation is not None:
+        return direct_reservation
+
+    child_transcript = _child_transcript_from_parent(
+        transcript_path,
+        parent_session_id=parent_session_id,
+        receiver_context_id=receiver_context_id,
+    )
+    if child_transcript is None:
+        return None
+    return _dispatch_reservation_from_transcript(
+        str(child_transcript),
+        receiver_context_id=receiver_context_id,
+        parent_session_id=parent_session_id,
+        agent_type=agent_type,
+    )
 
 
 def main() -> int:
@@ -191,7 +271,7 @@ def main() -> int:
         return 0
 
     try:
-        dispatch_reservation_id = _dispatch_reservation_from_transcript(
+        dispatch_reservation_id = _dispatch_reservation_from_subagent_start(
             transcript_path,
             receiver_context_id=receiver_context_id,
             parent_session_id=parent_session_id,
@@ -247,16 +327,12 @@ def main() -> int:
 
     context = {
         "agent_id": assignment["agentId"],
-        "model_id": assignment["modelId"],
         "receiver_context_id": assignment["receiverContextId"],
         "root_id": assignment["rootId"],
         "node_id": assignment["nodeId"],
         "lease_expires_at": assignment["leaseExpiresAt"],
         "dispatch_reservation_id": assignment[
             "dispatchReservationId"
-        ],
-        "dispatch_reasoning_class": assignment[
-            "dispatchReasoningClass"
         ],
         "dispatch_decision_fingerprint": assignment[
             "dispatchDecisionFingerprint"

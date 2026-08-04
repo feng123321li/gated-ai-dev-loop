@@ -2,80 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from .agent_discovery import discover_available_agents
-from .errors import fail
 from .orchestrator_config import (
     OrchestratorConfig,
     built_in_orchestrator_config,
     save_orchestrator_config,
 )
-
-
-KNOWN_ADAPTER_NAMES = {
-    "codex": "Codex Native",
-    "claude-code": "Claude Native",
-    "gemini": "Gemini Adapter",
-}
-
-CROSS_ADAPTER_UNAVAILABLE = {
-    "supported": False,
-    "mutable": False,
-    "code": "ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE",
-    "message": (
-        "跨 Adapter 自动派遣暂不可用；当前宿主只能原生创建和认证"
-        "当前 Adapter 的接收上下文。"
-    ),
-}
-
-
-def _adapter_catalog(
-    *,
-    config: OrchestratorConfig,
-    host_adapter_id: str | None,
-    discovered_agents: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    discovered = {
-        agent["id"]: agent
-        for agent in discovered_agents
-        if isinstance(agent.get("id"), str)
-    }
-    adapter_ids = set(config.allowed_adapters)
-    adapter_ids.update(discovered)
-    adapter_ids.update(KNOWN_ADAPTER_NAMES)
-    if host_adapter_id:
-        adapter_ids.add(host_adapter_id)
-
-    catalog: list[dict[str, Any]] = []
-    for adapter_id in sorted(adapter_ids):
-        agent = discovered.get(adapter_id)
-        current_host_native = adapter_id == host_adapter_id
-        terminal_detected = agent is not None
-        if current_host_native:
-            registration_state = "CURRENT_HOST_NATIVE"
-        elif terminal_detected:
-            registration_state = "TERMINAL_ONLY"
-        else:
-            registration_state = "NOT_DETECTED"
-        catalog.append(
-            {
-                "id": adapter_id,
-                "displayName": (
-                    agent.get("displayName")
-                    if agent is not None
-                    else KNOWN_ADAPTER_NAMES.get(adapter_id, adapter_id)
-                ),
-                "enabled": adapter_id in config.allowed_adapters,
-                "currentHostNative": current_host_native,
-                "localTerminalDetected": terminal_detected,
-                "registrationState": registration_state,
-                "configuredModel": (
-                    agent.get("model")
-                    if agent is not None
-                    else None
-                ),
-            }
-        )
-    return catalog
 
 
 def open_orchestrator_settings(
@@ -90,27 +21,9 @@ def open_orchestrator_settings(
 
     del root, explicit_dogfood
     config = orchestrator_config or built_in_orchestrator_config()
-    discovery = discover_available_agents()
-    agents = discovery.get("agents", [])
-    if not isinstance(agents, list):
-        agents = []
     return {
         "config": config.public_summary(),
         "currentHostAdapter": host_adapter_id,
-        "adapters": _adapter_catalog(
-            config=config,
-            host_adapter_id=host_adapter_id,
-            discovered_agents=agents,
-        ),
-        "discoveryWarnings": discovery.get("warnings", []),
-        "dispatchBoundary": {
-            "crossAdapterSwitchIsAuthorizationOnly": True,
-            "currentHostNativeOnly": True,
-            "terminalDiscoveryDoesNotImplyNativeDispatch": True,
-        },
-        "featureAvailability": {
-            "crossAdapterDispatch": dict(CROSS_ADAPTER_UNAVAILABLE),
-        },
     }
 
 
@@ -125,19 +38,6 @@ def update_orchestrator_settings(
     """Persist one explicitly approved complete user-level policy."""
 
     del root, explicit_dogfood
-    unsupported_fields: list[str] = []
-    if isinstance(config, dict):
-        if config.get("allowCrossAdapterDispatch") is True:
-            unsupported_fields.append("allowCrossAdapterDispatch")
-        if config.get("quotaExhaustionPolicy") == "SWITCH_ADAPTER":
-            unsupported_fields.append("quotaExhaustionPolicy")
-    if unsupported_fields:
-        fail(
-            CROSS_ADAPTER_UNAVAILABLE["code"],
-            CROSS_ADAPTER_UNAVAILABLE["message"],
-            unsupportedFields=unsupported_fields,
-            currentHostNativeOnly=True,
-        )
     saved = save_orchestrator_config(config)
     result = open_orchestrator_settings(
         root=".",
@@ -150,8 +50,6 @@ def update_orchestrator_settings(
 
 
 __all__ = (
-    "CROSS_ADAPTER_UNAVAILABLE",
-    "KNOWN_ADAPTER_NAMES",
     "open_orchestrator_settings",
     "update_orchestrator_settings",
 )

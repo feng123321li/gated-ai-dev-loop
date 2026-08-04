@@ -53,6 +53,30 @@ def main() -> int:
     if reservation_id is not None and not isinstance(reservation_id, str):
         return _block("Layered Delivery dispatch reservation is invalid.")
 
+    if tool_input.get("dispatch_mode") == "MANUAL":
+        updated_input: dict[str, Any] = dict(tool_input)
+        updated_input.pop("receiver_attestation_id", None)
+        updated_input["agent_id"] = "claude-code"
+        updated_input["receiver_context_id"] = agent_id
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "allow",
+                        "permissionDecisionReason": (
+                            "Bound the manual TASK claim to this Claude child."
+                        ),
+                        "updatedInput": updated_input,
+                    }
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+        return 0
+
     sys.path.insert(0, str(_runtime_path()))
     from hdg.errors import GatedLoopError
     from hdg.graph_runtime import attest_loop_receiver
@@ -79,6 +103,7 @@ def main() -> int:
         return _block(f"Layered Delivery receiver attestation failed: {error}")
 
     updated_input: dict[str, Any] = dict(tool_input)
+    updated_input.pop("model_id", None)
     updated_input.pop("actual_model_id", None)
     updated_input["agent_id"] = "claude-code"
     updated_input["receiver_context_id"] = agent_id

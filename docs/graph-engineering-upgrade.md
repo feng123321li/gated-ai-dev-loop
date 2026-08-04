@@ -77,20 +77,30 @@ Delivery: d-commerce
 
 这保持了两个边界：用户偏好不会丢失，Loop 自治也不会被 requirement 阶段的错误猜测锁死。
 
-## Agent 与模型晚绑定
+## Receiver 与 Worker 晚绑定
 
-预览 hierarchy 表达开发内容；Frozen Graph 表达“哪个 TASK/Review 何时可运行”，不表达“某台主机上的哪个 Agent/模型必须运行”。按用户选择提供两条分离路径：
+预览 hierarchy 表达开发内容；Frozen Graph 只表达哪个 TASK/Review 何时可运行。自动
+派遣把 Ready Loop 绑定到当前可信宿主的独立外层 receiver，并固定
+`modelPolicy=CURRENT_HOST_INHERIT`；不表达或推荐具体模型与 reasoning effort。
 
 ```text
-自动执行：当前宿主原生 inventory → 原生模型 tier 预览 → 30 秒路由调整窗口 → 宿主原生派遣
-手动开发：只读 hierarchy 预览 → 同结构冻结内容包 → 切换任意 CLI 选择宿主与工作区并直接开发
+自动执行：当前可信宿主 Adapter → receiver reservation → 独立 receiver claim
+手动开发：冻结内容包 → 接收 CLI 启动同一 Graph → 独立 MANUAL receiver
+Loop 内部：receiver → 按成本/任务自主使用 Codex、Claude、Grok、DeepSeek 等 Worker
 ```
 
-建议不修改 hierarchy、Graph、事件链、claim 或 owner。自动建议只在当前宿主 Agent 内按原生 tier 选择模型，不因为发现另一 CLI 而生成跨 Agent 建议。手动开发不调用 Agent 推荐器、不创建接收任务/worktree、不冻结 Graph；它只用双 fingerprint 冻结内容快照，具体 Agent 与模型只有接收宿主开始实际开发后才知道。推荐器不解析不透明 payload，因此不会把模型路由策略重新塞进外层业务 schema。
+只有外层 receiver 进入 Graph 权威身份链，能够 claim、heartbeat、progress、pause、
+resume 和提交 result。内部 Worker 不获得 operation、attestation 或 reservation，只把
+结果返回 receiver。新增 Worker 供应商不改变外层 Graph；只有要让供应商成为 receiver
+时才新增可信 Adapter，并提供与现有宿主等价的生命周期和身份校验。
 
-手工配置、任意本机修改器、PATH 或用户 Profile 改变后重新发现即可；同一 Frozen Graph 可在不同主机得到不同展示。人工交接发现保持 `ADVISORY / EXTERNAL_PROCESS`。自动模式由 `plan_dispatch_batch` 消费宿主明确提供且 `dispatchTransport=HOST_NATIVE` 的原生 Agent 容量、原生模型 selector 与选择能力；Agent 分析完整时按 tier 选择子 Agent 的原生模型名，缺少节点分析时可沿用宿主明确报告的当前 Agent/原生模型并标记 `UNCLASSIFIED`。正式 Ready 批次的首次稳定路由返回 `HOST_NATIVE_ROUTE_REVIEW`，持久化 30 秒调整窗口但不预留；主 Agent 用中文表格展示路由，用户可直接修改 `preferredNativeModelId`，不再询问确认。到期后宿主自动重调，相同决策才原子签发短租约并返回 `HOST_NATIVE_DISPATCH_PLAN`；变化节点重新计时。本机配置在原生调用后转发到哪个实际模型与编排无关，宿主观测值只作为 `actualModelId` 展示。随后按槽位并发创建接收上下文；第二个调度器只能等待接收方 claim 或预留过期。PATH 中发现的 CLI 不自动取得启动授权，计划工具也不启动 Agent 或 claim。
+内部 Worker 的 agent/model/effort 可以由 receiver 在最终
+`outcome.result.workerTelemetry` 中按 phase 报告。未知值写 `unreported`；该数据只用于
+展示、成本分析和后续 Review，不参与授权、路由、指纹、重试或独立性判断。
 
-运行中的容量故障不写回 Frozen Graph。执行 Agent 限额使用 `EXECUTOR` 暂停并等待原 Agent 的宿主原生一次性恢复提示；调度宿主自身限额使用 `HOST` 暂停。两种限额等待都不调用建议或派遣计划，也不自动换 Agent。Controller 在下一次调用时自动恢复节点，但不承担常驻定时或进程启动。
+运行中的容量故障不写回 Frozen Graph。额度策略固定 `PAUSE_AND_RESUME`：执行侧使用
+`EXECUTOR` 暂停，总调度宿主使用 `HOST` 暂停，均等待带真实 `resetAt` 的一次性恢复
+提示，不静默切换 Adapter、模型或 Worker。
 
 ## 图模型
 
@@ -220,11 +230,11 @@ GROUP/TASK 的递归存在于冻结 hierarchy 和编译 Graph 中，并镜像到
     └── acceptance.md
 ```
 
-`scheduler.db` 是需求与调度状态的机器权威；一个需求的自动与手动开发都进入同一个稳定 Delivery 目录并使用同结构人类投影，不再使用共享 `handoffs` 目录。手动包另含 `handoff-<fingerprint>.md`，并以 `HANDOFF_READY` 登记到 SQLite、刷新根 `overview.md`；它仍不创建 Graph Run、事件链或 workspace 绑定，也不表示 Graph 已 prepare、freeze 或运行。Graph 投影只保留分离的需求基线、执行进展和验收记录，不再生成 hierarchy、编译 Graph 或当前状态 JSON 副本。Delivery baseline 链接全部节点 baseline；每个 GROUP/TASK 在 `work-items/<root-id>/children/...` 的对应节点目录拥有 baseline、progress 和 acceptance。只有 TASK 显式声明接口时才在自己的目录增加接口契约投影；协议字段保持开放，HTTP、Dubbo、gRPC、GraphQL、消息等均可表达。接口投影展开实际 request/response 字段，空字段列表明确标记无入参或无出参；HTTP 位置容器和 Controller 返回元数据只参与规范化，不作为业务字段输出，`wireType`、`frameworkEnvelope`、`wrapping` 与 `Rs` 包装信息一律忽略。目录名使用不可变 ID，不使用可修改标题；物理递归只镜像父子关系，不重新引入文件 scope，兄弟执行顺序仍由 `dependsOn` 控制。
+`scheduler.db` 是需求与调度状态的机器权威；一个需求的自动与手动开发都进入同一个稳定 Delivery 目录并使用同结构人类投影，不再使用共享 `handoffs` 目录。手动包另含 `handoff-<fingerprint>.md`，并以 `HANDOFF_READY` 登记到 SQLite、刷新根 `overview.md`；交接阶段不创建 Graph Run、事件链或 workspace 绑定。接收 CLI 在任何代码工作前调用 `start_manual_handoff` 后，同一快照进入 `execution_mode=manual` 的 run：TASK 实现只允许 MANUAL claim，所有 Review 只允许正常 AUTO claim。Graph 投影只保留分离的需求基线、执行进展和验收记录，不再生成 hierarchy、编译 Graph 或当前状态 JSON 副本。Delivery baseline 链接全部节点 baseline；每个 GROUP/TASK 在 `work-items/<root-id>/children/...` 的对应节点目录拥有 baseline、progress 和 acceptance。只有 TASK 显式声明接口时才在自己的目录增加接口契约投影；协议字段保持开放，HTTP、Dubbo、gRPC、GraphQL、消息等均可表达。接口投影展开实际 request/response 字段，空字段列表明确标记无入参或无出参；HTTP 位置容器和 Controller 返回元数据只参与规范化，不作为业务字段输出，`wireType`、`frameworkEnvelope`、`wrapping` 与 `Rs` 包装信息一律忽略。目录名使用不可变 ID，不使用可修改标题；物理递归只镜像父子关系，不重新引入文件 scope，兄弟执行顺序仍由 `dependsOn` 控制。
 
 外部工单号通过 `delivery.requirementKey` 与一个稳定 `delivery.id` 一对一绑定；未显式声明时，Controller 仍从 Delivery ID/标题识别常见 `PROJECT-123` 引用。不同 ID 命中同一 key 时，preview 与最终事务写入都返回连续性冲突，要求复用已有 ID。`HANDOFF_READY` 内容变化使用 `create_manual_handoff` 的显式当前 Revision、`USER_EXPLICIT_SAME_DELIVERY` 和修订原因，在原目录追加不可变手动 Revision；旧 Revision 标记为 `SUPERSEDED`，不再通过改名生成重复目录。
 
-人类投影集合必须足以完成冻结前评审、运行中跟踪和最终验收：工作区 `overview.md` 只列 Delivery 入口，Delivery `overview.md` 展示本交付状态与内部统计；Delivery 投影负责聚合与串联；节点投影覆盖双指纹、summary、`dependsOn`、Loop 引用、资源锁、不透明 payload、运行状态、Loop 结果和证据。验收内容按层归属：TASK 只完整展开本 TASK 与 TASK Review，GROUP 只完整展开本层完成点与 GROUP Review，Delivery 只完整展开 Delivery Review 和用户确认；向上一层只提供直接下层或根工作项的状态、简要结果和报告链接，不复制下层输入、证据或 findings。进度表使用中文字段展示实际执行代理、执行模型、认领身份和执行轮次；验收摘要、子节点结果和 P0/P1/P2 问题使用表格。P0/P1 只在修复、验证和独立复审后关闭，P2 非阻断但必须列示。新增、调整或删除接口的 TASK 通过 `payload.interfaces` 显式提供 `changeType`、协议、名称、简介以及完整 before/after 快照；控制器生成 `interfaces.md` 索引，并在 `interfaces/` 下为每个接口生成一份详情。HTTP 按 Path、Query、请求头、请求体和响应参数展示，Dubbo 按接口、方法、调用参数和返回结果展示；字段表覆盖类型、必填、最大长度、说明和示例值。冻结 baseline 的 after 是开发接口与后续 Torna 发布的唯一事实来源，方法、路径或签名以及字段层级和属性必须一致。删除值使用 Markdown 删除线，新增或删除字段只显示存在的一侧。代码可辅助准备和验证契约，但不成为动态投影源，接口内容也不参与 Graph 决策。固定展示使用中文，标明 UTC+8 的时间使用 `YYYY-MM-DD HH:mm:ss`；SQLite 继续保持机器 UTC。
+人类投影集合必须足以完成冻结前评审、运行中跟踪和最终验收：工作区 `overview.md` 只列 Delivery 入口，Delivery `overview.md` 展示本交付状态与内部统计；Delivery 投影负责聚合与串联；节点投影覆盖双指纹、summary、`dependsOn`、Loop 引用、资源锁、不透明 payload、运行状态、Loop 结果和证据。验收内容按层归属：TASK 只完整展开本 TASK 与 TASK Review，GROUP 只完整展开本层完成点与 GROUP Review，Delivery 只完整展开 Delivery Review 和用户确认；向上一层只提供直接下层或根工作项的状态、简要结果和报告链接，不复制下层输入、证据或 findings。进度表展示外层 receiver、认领身份和执行轮次；内部 Worker 的 agent/model/effort 仅从最终 `workerTelemetry` 非权威展示，未知值为 `unreported`。验收摘要、子节点结果和 P0/P1/P2 问题使用表格。P0/P1 只在修复、验证和独立复审后关闭，P2 非阻断但必须列示。新增、调整或删除接口的 TASK 通过 `payload.interfaces` 显式提供 `changeType`、协议、名称、简介以及完整 before/after 快照；控制器生成 `interfaces.md` 索引，并在 `interfaces/` 下为每个接口生成一份详情。HTTP 按 Path、Query、请求头、请求体和响应参数展示，Dubbo 按接口、方法、调用参数和返回结果展示；字段表覆盖类型、必填、最大长度、说明和示例值。冻结 baseline 的 after 是开发接口与后续 Torna 发布的唯一事实来源，方法、路径或签名以及字段层级和属性必须一致。删除值使用 Markdown 删除线，新增或删除字段只显示存在的一侧。代码可辅助准备和验证契约，但不成为动态投影源，接口内容也不参与 Graph 决策。固定展示使用中文，标明 UTC+8 的时间使用 `YYYY-MM-DD HH:mm:ss`；SQLite 继续保持机器 UTC。
 
 ## 可恢复性
 

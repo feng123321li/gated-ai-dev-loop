@@ -1,9 +1,9 @@
 """Test-only helper for claiming Loops through the automatic contract.
 
 Runtime tests exercise Graph state transitions rather than route planning.
-They still need a real, decision-bound reservation now that manual Graph runs
-no longer exist. This helper creates that prerequisite in the test database
-and then calls the production ``dispatch_loop`` unchanged.
+They still need a real, decision-bound reservation for every AUTO claim. This
+helper creates that prerequisite in the test database and then calls the
+production ``dispatch_loop`` unchanged; manual Graph TASK claims bypass it.
 """
 
 from __future__ import annotations
@@ -35,13 +35,12 @@ def reserve_loop(
     stored = repository.hierarchy(root_id)
     run = repository.run(root_id)
     state = next(node for node in run["nodes"] if node["nodeId"] == node_id)
-    reasoning_class = "STANDARD"
     decision_fingerprint = automatic_dispatch_decision_fingerprint(
         graph_fingerprint=stored["graphFingerprint"],
         node_id=node_id,
-        agent_id=agent_id,
-        model_id=model_id,
-        reasoning_class=reasoning_class,
+        attempt=state["attempt"],
+        host_adapter_id=agent_id,
+        receiver_agent_id=agent_id,
         dispatch_transport=HOST_NATIVE_DISPATCH_TRANSPORT,
     )
     with repository.transaction() as connection:
@@ -67,8 +66,8 @@ def reserve_loop(
                     node_id,
                     state["attempt"],
                     agent_id,
-                    model_id,
-                    reasoning_class,
+                    None,
+                    None,
                     stored["graphFingerprint"],
                     decision_fingerprint,
                     timestamp(now),
@@ -86,7 +85,6 @@ def reserve_loop(
         "dispatchMode": "AUTO",
         "dispatchTransport": HOST_NATIVE_DISPATCH_TRANSPORT,
         "dispatchReservationId": reservation_id,
-        "dispatchReasoningClass": reasoning_class,
         "dispatchDecisionFingerprint": decision_fingerprint,
         "created": created,
     }
@@ -99,7 +97,6 @@ def dispatch_loop(**arguments: Any) -> dict[str, Any]:
         "dispatch_mode",
         "dispatch_transport",
         "dispatch_reservation_id",
-        "dispatch_reasoning_class",
         "dispatch_decision_fingerprint",
     }
     if provenance_fields.intersection(arguments):
@@ -107,13 +104,10 @@ def dispatch_loop(**arguments: Any) -> dict[str, Any]:
 
     agent_id = arguments.get("agent_id")
     model_id = arguments.get("model_id")
-    if (agent_id is None) != (model_id is None):
-        return runtime_dispatch_loop(**arguments)
     if agent_id is None:
         agent_id = "codex"
+    if model_id is None:
         model_id = "gpt-test"
-    if arguments.get("actual_model_id") is not None and model_id is None:
-        return runtime_dispatch_loop(**arguments)
 
     root = arguments["root"]
     root_id = arguments["root_id"]
@@ -133,13 +127,12 @@ def dispatch_loop(**arguments: Any) -> dict[str, Any]:
         {
             "agent_id": agent_id,
             "model_id": model_id,
+            "host_adapter_id": agent_id,
+            "host_native_agent_ids": (agent_id,),
             "dispatch_mode": reservation["dispatchMode"],
             "dispatch_transport": reservation["dispatchTransport"],
             "dispatch_reservation_id": reservation[
                 "dispatchReservationId"
-            ],
-            "dispatch_reasoning_class": reservation[
-                "dispatchReasoningClass"
             ],
             "dispatch_decision_fingerprint": reservation[
                 "dispatchDecisionFingerprint"

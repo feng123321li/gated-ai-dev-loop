@@ -145,9 +145,9 @@ def _prompt(scenario: str) -> str:
         A Claude child omits receiver_context_id and receiver_attestation_id so
         the PreToolUse hook can inject them; it must never invent placeholders.
 
-        Prepare and freeze the hierarchy, honor the 30-second native routing
-        adjustment window without asking another question, dispatch through a
-        real host-native child Agent, and have every child send at least one
+        Prepare and freeze the hierarchy, reserve the current frontier through
+        the trusted current host without asking another question, dispatch
+        through a real host-native child Agent, and have every child send at least one
         heartbeat immediately after claim before reporting structured progress
         and recording a truthful Loop result. Continue until the frontier reaches
         RECORD_USER_CONFIRMATION. Stop there: final acceptance must remain a

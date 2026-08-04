@@ -31,9 +31,11 @@ from hdg.mcp_adapter import (
 )
 from hdg.model_core import validate_hierarchy_definition
 from hdg.planning import (
+    create_manual_handoff,
     freeze_hierarchy,
     prepare_hierarchy,
     preview_hierarchy,
+    start_manual_handoff,
 )
 
 from .test_loop_architecture import group_hierarchy, task_hierarchy
@@ -89,6 +91,7 @@ class PluginBundleTests(unittest.TestCase):
         cwd: str,
         parent_session_id: str = "codex-parent-session",
         agent_type: str = "default",
+        start_transcript_is_parent: bool = False,
     ) -> tuple[dict, Path]:
         codex_home = Path(root, "codex-home")
         transcript = (
@@ -126,6 +129,24 @@ class PluginBundleTests(unittest.TestCase):
             + "\n",
             encoding="utf-8",
         )
+        start_transcript = transcript
+        if start_transcript_is_parent:
+            start_transcript = transcript.with_name(
+                f"rollout-{parent_session_id}.jsonl"
+            )
+            start_transcript.write_text(
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {
+                            "id": parent_session_id,
+                            "source": "cli",
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
         return (
             {
                 "hook_event_name": "SubagentStart",
@@ -136,7 +157,7 @@ class PluginBundleTests(unittest.TestCase):
                 "permission_mode": "default",
                 "model": model_id,
                 "cwd": cwd,
-                "transcript_path": str(transcript),
+                "transcript_path": str(start_transcript),
             },
             codex_home,
         )
@@ -314,7 +335,7 @@ class PluginBundleTests(unittest.TestCase):
             transport,
         )
 
-    def test_skill_keeps_agent_recommendations_advisory(self) -> None:
+    def test_skill_keeps_receiver_and_worker_boundaries_explicit(self) -> None:
         main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         planning = (
             SKILL / "references" / "planning-quickstart.md"
@@ -323,15 +344,11 @@ class PluginBundleTests(unittest.TestCase):
             SKILL / "references" / "execution-quickstart.md"
         ).read_text(encoding="utf-8")
         recommendations = (
-            SKILL / "references" / "agent-recommendations.md"
+            SKILL / "references" / "agent-execution-boundary.md"
         ).read_text(encoding="utf-8")
-        for tool_name in ("available_agents", "recommend_executors"):
-            with self.subTest(tool_name=tool_name):
-                self.assertIn(f"`{tool_name}`", main)
-                self.assertIn(f"`{tool_name}`", recommendations)
-        self.assertIn("不再询问", planning)
-        self.assertIn("30 秒调整窗口", planning)
-        self.assertIn("到期自动重调", planning)
+        self.assertNotIn("`recommend_executors`", main + recommendations)
+        self.assertIn("不推荐派遣模型", planning)
+        self.assertIn("不提供路由调整窗口", recommendations)
         self.assertIn("手动开发生成完整冻结内容包", planning)
         self.assertIn(
             ".layered-delivery/<delivery-id>/handoff-<fingerprint>.md",
@@ -341,29 +358,25 @@ class PluginBundleTests(unittest.TestCase):
             "不得创建跨需求共享的 `.layered-delivery/handoffs/`",
             planning,
         )
-        self.assertIn("冻结内容时不指定 Agent", planning)
-        self.assertIn("开始实际开发时才创建", planning)
+        self.assertIn("不指定 Agent、模型或接收任务", planning)
+        self.assertIn("start_manual_handoff", planning)
         self.assertNotIn("创建新 Codex 任务", planning)
         self.assertNotIn("创建新 Claude 会话", planning)
-        self.assertIn("推荐工具不得启动外部 CLI", execution)
-        self.assertIn("dispatchAllowed=false", recommendations)
-        self.assertIn("不解析 `loop.payload`", recommendations)
-        self.assertIn(
-            "LAYERED_DELIVERY_AGENT_PROFILES",
-            recommendations,
-        )
+        self.assertIn("内部 Worker 不是 Graph receiver", recommendations)
+        self.assertIn("不得调用 `dispatch_loop`", recommendations)
+        self.assertIn("MANUAL claim", recommendations)
         metadata = (
             SKILL / "agents" / "openai.yaml"
         ).read_text(encoding="utf-8")
         self.assertIn("冻结", metadata)
 
-    def test_skill_auto_dispatches_planned_models_in_parallel(self) -> None:
+    def test_skill_auto_dispatches_current_host_receivers_in_parallel(self) -> None:
         main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         execution = (
             SKILL / "references" / "execution-quickstart.md"
         ).read_text(encoding="utf-8")
         recommendations = (
-            SKILL / "references" / "agent-recommendations.md"
+            SKILL / "references" / "agent-execution-boundary.md"
         ).read_text(encoding="utf-8")
         orchestrator = (
             SKILL
@@ -373,7 +386,7 @@ class PluginBundleTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("`plan_dispatch_batch`", main)
-        self.assertIn("显式模型 assignment 必须覆盖", execution)
+        self.assertIn("modelPolicy=CURRENT_HOST_INHERIT", main)
         self.assertIn("并发创建", main)
         self.assertIn(
             "Codex 由 `SubagentStart` Hook 在 child 上下文可见前完成 host-side claim",
@@ -382,33 +395,17 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("WAIT_FOR_DISPATCH_RECEIVER", main + execution)
         self.assertIn("dispatchReservationId", main + execution)
         self.assertIn("decisionFingerprint", execution)
-        self.assertIn("不能继承总调度 Agent 的模型", execution)
-        self.assertIn("派遣前自动判级", execution)
-        self.assertIn("`ROUTINE`/`STANDARD`/`HIGH`", execution)
-        self.assertIn("`ROUTINE` 目标为 `EFFICIENT`", recommendations)
-        self.assertIn("luna 标为 `EFFICIENT`", recommendations)
-        self.assertIn("不确定时使用 `HIGH`", execution)
-        self.assertIn("只用于路由判级", execution)
-        self.assertIn("HOST_NATIVE_DISPATCH_PLAN", recommendations)
-        self.assertIn("HOST_NATIVE_ROUTE_REVIEW", recommendations)
-        self.assertIn("30 秒", main + execution + recommendations)
-        self.assertIn("dispatchTransport=HOST_NATIVE", main + execution)
-        self.assertIn("EXTERNAL_PROCESS", main + execution + recommendations)
-        self.assertIn("codex-companion", recommendations)
-        self.assertIn("UNSAFE_EXECUTOR_TRANSPORT", recommendations)
-        self.assertIn("`diversityLevel`", main + recommendations)
-        self.assertIn('"autoSelectModel": true', orchestrator)
-        self.assertIn('"allowCrossAdapterDispatch": false', orchestrator)
+        self.assertIn("始终继承当前宿主模型", execution)
+        self.assertIn("不提供路由调整窗口", recommendations)
+        self.assertIn("不接收", recommendations)
+        self.assertIn("model inventory", recommendations)
+        self.assertIn("schema v2", orchestrator)
         self.assertIn('"maxConcurrentExecutors": 4', orchestrator)
         self.assertIn("%APPDATA%", orchestrator)
         self.assertIn("XDG_CONFIG_HOME", orchestrator)
-        self.assertIn(
-            "ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE",
-            orchestrator,
-        )
-        self.assertIn("设置工具不依赖 Delivery 工作区", orchestrator)
+        self.assertIn('"quotaExhaustionPolicy": "PAUSE_AND_RESUME"', orchestrator)
         self.assertIn("打开中央编排器设置", readme)
-        self.assertIn("当前跨 Adapter 限制", readme)
+        self.assertIn("设置工具不依赖 Delivery 工作区", readme)
         self.assertIn("RECEIVER_ROOT_ROTATED", execution)
         self.assertIn("无需重冻", readme)
 
@@ -419,11 +416,9 @@ class PluginBundleTests(unittest.TestCase):
             SKILL / "references" / "execution-quickstart.md"
         ).read_text(encoding="utf-8")
         self.assertIn("剩余额度不高于 5%", execution)
-        self.assertIn("Claude Code", execution)
-        self.assertIn("一次性 Cron", execution)
-        self.assertIn("Codex Desktop", execution)
-        self.assertIn("当前任务计划", execution)
-        self.assertIn("直接收到 429", execution)
+        self.assertIn("Claude `StopFailure`", execution)
+        self.assertIn("一次性恢复提示", execution)
+        self.assertIn("宿主直接观察到硬 429", execution)
         self.assertIn("模型外宿主适配器私有回调", execution)
         self.assertIn("cancelRecurringMonitors=true", execution)
         self.assertIn("HOST_NATIVE_ONE_SHOT", execution)
@@ -495,7 +490,7 @@ class PluginBundleTests(unittest.TestCase):
         for reference in (
             "planning-quickstart.md",
             "execution-quickstart.md",
-            "agent-recommendations.md",
+            "agent-execution-boundary.md",
             "acceptance.md",
             "mcp-transport.md",
             "orchestrator-configuration.md",
@@ -679,9 +674,6 @@ class PluginBundleTests(unittest.TestCase):
                 "dispatch_reservation_id": reservation[
                     "dispatchReservationId"
                 ],
-                "dispatch_reasoning_class": reservation[
-                    "dispatchReasoningClass"
-                ],
                 "dispatch_decision_fingerprint": reservation[
                     "dispatchDecisionFingerprint"
                 ],
@@ -851,7 +843,7 @@ class PluginBundleTests(unittest.TestCase):
             "claude-agent-child-1",
         )
         self.assertTrue(claimed["receiverAttested"])
-        self.assertEqual(claimed["modelId"], "claude-sonnet")
+        self.assertIsNone(claimed["modelId"])
         self.assertEqual(claimed["actualModelId"], "glm-5.2")
         self.assertEqual(mutation_output["permissionDecision"], "allow")
         self.assertEqual(
@@ -893,6 +885,118 @@ class PluginBundleTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(completed.returncode, 2)
+
+    def test_claude_hooks_bind_and_authorize_manual_task_child(self) -> None:
+        with TemporaryDirectory() as root:
+            hierarchy = task_hierarchy()
+            preview = preview_hierarchy(root=root, hierarchy=hierarchy)
+            handoff = create_manual_handoff(
+                root=root,
+                hierarchy=hierarchy,
+                expected_hierarchy_fingerprint=(
+                    preview["hierarchyFingerprint"]
+                ),
+                expected_graph_fingerprint=preview["graphFingerprint"],
+                authorized_project_ids=[],
+                confirmed=True,
+                confirmed_by="human",
+            )
+            start_manual_handoff(
+                root=root,
+                root_id=handoff["rootId"],
+                expected_hierarchy_fingerprint=(
+                    handoff["hierarchyFingerprint"]
+                ),
+                expected_graph_fingerprint=handoff["graphFingerprint"],
+                started_by="claude-parent-session",
+                workspace_root=root,
+            )
+            dispatch_tool = (
+                "mcp__plugin_layered-delivery_layered-delivery"
+                "__dispatch_loop"
+            )
+            tool_input = {
+                "root_id": handoff["rootId"],
+                "node_id": loop_node_id("t-service"),
+                "owner": "claude-agent-child-manual",
+                "agent_id": "untrusted-model-claim",
+                "receiver_context_id": "untrusted-context",
+                "receiver_attestation_id": "untrusted-attestation",
+                "dispatch_mode": "MANUAL",
+                "operation_id": "op-claude-manual-task",
+            }
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-X",
+                    "utf8",
+                    str(
+                        PLUGIN
+                        / "hooks"
+                        / "attest_claude_dispatch_receiver.py"
+                    ),
+                ],
+                input=json.dumps(
+                    {
+                        "hook_event_name": "PreToolUse",
+                        "tool_name": dispatch_tool,
+                        "tool_use_id": "claude-manual-dispatch-tool",
+                        "tool_input": tool_input,
+                        "agent_id": "claude-agent-child-manual",
+                        "session_id": "claude-parent-session",
+                        "cwd": root,
+                    }
+                ),
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            updated = json.loads(completed.stdout)[
+                "hookSpecificOutput"
+            ]["updatedInput"]
+            claimed = call_tool(
+                "dispatch_loop",
+                updated,
+                root=root,
+                trusted_host_adapter="claude-code",
+            )
+            mutation = self.run_loop_operation_hook(
+                {
+                    "hook_event_name": "PreToolUse",
+                    "session_id": "claude-parent-session",
+                    "agent_id": "claude-agent-child-manual",
+                    "tool_name": (
+                        "mcp__plugin_layered-delivery_layered-delivery"
+                        "__heartbeat_loop"
+                    ),
+                    "tool_input": {
+                        "root_id": handoff["rootId"],
+                        "node_id": loop_node_id("t-service"),
+                    },
+                    "tool_use_id": "claude-manual-heartbeat-tool",
+                    "cwd": root,
+                },
+                Path(root, "codex-home"),
+            )
+            mutation_output = json.loads(mutation.stdout)[
+                "hookSpecificOutput"
+            ]
+
+        self.assertEqual(updated["agent_id"], "claude-code")
+        self.assertEqual(
+            updated["receiver_context_id"],
+            "claude-agent-child-manual",
+        )
+        self.assertNotIn("receiver_attestation_id", updated)
+        self.assertFalse(claimed["receiverAttested"])
+        self.assertEqual(claimed["dispatchMode"], "MANUAL")
+        self.assertEqual(mutation_output["permissionDecision"], "allow")
+        self.assertEqual(
+            mutation_output["updatedInput"]["operation_id"],
+            claimed["operationId"],
+        )
 
     def test_codex_plugin_registers_native_subagent_attestation(self) -> None:
         manifest = json.loads(
@@ -964,15 +1068,8 @@ class PluginBundleTests(unittest.TestCase):
                 root=root,
                 root_id=prepared["rootId"],
                 expected_graph_fingerprint=prepared["graphFingerprint"],
-                executor_inventory=self.codex_executor_inventory(),
-                node_requirements=[
-                    {
-                        "nodeId": loop_node_id("t-service"),
-                        "reasoningClass": "STANDARD",
-                        "source": "PLANNING",
-                        "reason": "The host analyzed this development Loop.",
-                    }
-                ],
+                host_adapter_id="codex",
+                host_native_agent_ids=("codex",),
             )["assignments"][0]
             nested_cwd = Path(root, "modules", "service")
             nested_cwd.mkdir(parents=True)
@@ -1065,7 +1162,7 @@ class PluginBundleTests(unittest.TestCase):
             helper_event, helper_codex_home = self.codex_subagent_event(
                 root,
                 agent_id="codex-unassigned-helper",
-                model_id=assignment["model"]["id"],
+                model_id="helper-observed-model",
                 task_name="unrelated_helper",
                 cwd=str(nested_cwd),
             )
@@ -1114,7 +1211,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(assignment_context["node_id"], assignment["nodeId"])
         self.assertEqual(claimed["status"], "CLAIMED")
-        self.assertEqual(claimed["modelId"], assignment["model"]["id"])
+        self.assertIsNone(claimed["modelId"])
         self.assertEqual(
             claimed["actualModelId"],
             "effective-model-from-local-forwarder",
@@ -1134,6 +1231,47 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("operation_id", replayed_assignment)
         self.assertEqual(denied_output["permissionDecision"], "deny")
         self.assertEqual(missing_output["permissionDecision"], "deny")
+
+    def test_codex_subagent_start_resolves_child_from_parent_transcript(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="human",
+            )
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                host_adapter_id="codex",
+                host_native_agent_ids=("codex",),
+            )["assignments"][0]
+            hook_event, hook_codex_home = self.codex_subagent_event(
+                root,
+                agent_id="codex-child-parent-transcript",
+                model_id="host-observed-model",
+                task_name=assignment["hostTaskName"],
+                cwd=root,
+                start_transcript_is_parent=True,
+            )
+
+            completed = self.run_codex_hook(
+                hook_event,
+                hook_codex_home,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("LAYERED_DELIVERY_ASSIGNMENT=", completed.stdout)
 
     def test_codex_subagent_hook_treats_observed_model_as_display_only(
         self,
@@ -1156,15 +1294,8 @@ class PluginBundleTests(unittest.TestCase):
                 root=root,
                 root_id=prepared["rootId"],
                 expected_graph_fingerprint=prepared["graphFingerprint"],
-                executor_inventory=self.codex_executor_inventory(),
-                node_requirements=[
-                    {
-                        "nodeId": loop_node_id("t-service"),
-                        "reasoningClass": "STANDARD",
-                        "source": "PLANNING",
-                        "reason": "The host analyzed this development Loop.",
-                    }
-                ],
+                host_adapter_id="codex",
+                host_native_agent_ids=("codex",),
             )
             hook_event, hook_codex_home = self.codex_subagent_event(
                 root,
@@ -1186,7 +1317,7 @@ class PluginBundleTests(unittest.TestCase):
             for item in state["nodes"]
             if item["nodeId"] == loop_node_id("t-service")
         )
-        self.assertEqual(claimed["modelId"], "gpt-5.6-terra")
+        self.assertIsNone(claimed["modelId"])
         self.assertEqual(claimed["actualModelId"], "deepseek-v4-pro")
         self.assertEqual(
             claimed["actualModelSource"],
@@ -1214,20 +1345,13 @@ class PluginBundleTests(unittest.TestCase):
                 expected_graph_fingerprint=prepared[
                     "graphFingerprint"
                 ],
-                executor_inventory=self.codex_executor_inventory(),
-                node_requirements=[
-                    {
-                        "nodeId": loop_node_id("t-service"),
-                        "reasoningClass": "STANDARD",
-                        "source": "PLANNING",
-                        "reason": "The host analyzed this development Loop.",
-                    }
-                ],
+                host_adapter_id="codex",
+                host_native_agent_ids=("codex",),
             )["assignments"][0]
             helper_event, helper_codex_home = self.codex_subagent_event(
                 root,
                 agent_id="codex-explorer-child",
-                model_id=assignment["model"]["id"],
+                model_id="helper-observed-model",
                 task_name="unrelated_explorer",
                 cwd=root,
             )
@@ -1239,7 +1363,7 @@ class PluginBundleTests(unittest.TestCase):
                 self.codex_subagent_event(
                     root,
                     agent_id="codex-intended-child",
-                    model_id=assignment["model"]["id"],
+                    model_id="receiver-observed-model",
                     task_name=assignment["hostTaskName"],
                     cwd=root,
                 )
@@ -1276,20 +1400,13 @@ class PluginBundleTests(unittest.TestCase):
                 expected_graph_fingerprint=prepared[
                     "graphFingerprint"
                 ],
-                executor_inventory=self.codex_executor_inventory(),
-                node_requirements=[
-                    {
-                        "nodeId": loop_node_id("t-service"),
-                        "reasoningClass": "STANDARD",
-                        "source": "PLANNING",
-                        "reason": "The host analyzed this development Loop.",
-                    }
-                ],
+                host_adapter_id="codex",
+                host_native_agent_ids=("codex",),
             )["assignments"][0]
             event, fake_codex_home = self.codex_subagent_event(
                 root,
                 agent_id="codex-forged-child",
-                model_id=assignment["model"]["id"],
+                model_id="host-observed-model",
                 task_name=assignment["hostTaskName"],
                 cwd=root,
             )
@@ -1541,6 +1658,10 @@ class PluginBundleTests(unittest.TestCase):
         tool_count = len(tool_definitions())
         self.assertEqual(tool_count, 30)
         self.assertIn(
+            "start_manual_handoff",
+            {tool["name"] for tool in tool_definitions()},
+        )
+        self.assertIn(
             "report_loop_progress",
             {tool["name"] for tool in tool_definitions()},
         )
@@ -1632,6 +1753,10 @@ class PluginBundleTests(unittest.TestCase):
                 json.dumps(message, separators=(",", ":")) + "\n"
                 for message in messages
             )
+            environment = dict(os.environ)
+            environment["LAYERED_DELIVERY_ORCHESTRATOR_CONFIG"] = str(
+                Path(project_root, "user-config", "orchestrator.json")
+            )
             process = subprocess.Popen(
                 [
                     sys.executable,
@@ -1646,6 +1771,7 @@ class PluginBundleTests(unittest.TestCase):
                 stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
+                env=environment,
             )
             stdout, stderr = process.communicate(
                 request,
@@ -1720,6 +1846,10 @@ class PluginBundleTests(unittest.TestCase):
             for message in messages
         )
         with TemporaryDirectory() as project_root:
+            environment = dict(os.environ)
+            environment["LAYERED_DELIVERY_ORCHESTRATOR_CONFIG"] = str(
+                Path(project_root, "user-config", "orchestrator.json")
+            )
             process = subprocess.Popen(
                 [
                     sys.executable,
@@ -1734,6 +1864,7 @@ class PluginBundleTests(unittest.TestCase):
                 stderr=subprocess.PIPE,
                 text=True,
                 encoding="utf-8",
+                env=environment,
             )
             stdout, stderr = process.communicate(
                 request,

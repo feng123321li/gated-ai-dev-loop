@@ -8,6 +8,7 @@ import unittest
 from hdg.errors import GatedLoopError
 from hdg.orchestrator_config import (
     ORCHESTRATOR_CONFIG_ENV,
+    ORCHESTRATOR_CONFIG_SCHEMA_VERSION,
     load_orchestrator_config,
     orchestrator_config_path,
     save_orchestrator_config,
@@ -16,14 +17,9 @@ from hdg.orchestrator_config import (
 
 def configured_policy(**overrides: object) -> dict[str, object]:
     value: dict[str, object] = {
-        "schemaVersion": 1,
-        "automaticOrchestration": True,
-        "autoSelectModel": True,
-        "allowCrossAdapterDispatch": False,
-        "allowedAdapters": ["codex", "claude-code"],
+        "schemaVersion": 2,
         "maxConcurrentExecutors": 4,
         "quotaExhaustionPolicy": "PAUSE_AND_RESUME",
-        "preferDifferentAdapterForReview": True,
     }
     value.update(overrides)
     return value
@@ -38,25 +34,28 @@ class OrchestratorConfigTests(unittest.TestCase):
                 environ={ORCHESTRATOR_CONFIG_ENV: str(path)},
             )
 
-        self.assertTrue(config.automatic_orchestration)
-        self.assertTrue(config.auto_select_model)
-        self.assertFalse(config.allow_cross_adapter_dispatch)
-        self.assertEqual(config.allowed_adapters, ("codex", "claude-code"))
+        self.assertEqual(ORCHESTRATOR_CONFIG_SCHEMA_VERSION, 2)
         self.assertEqual(config.max_concurrent_executors, 4)
         self.assertEqual(config.quota_exhaustion_policy, "PAUSE_AND_RESUME")
-        self.assertTrue(config.prefer_different_adapter_for_review)
+        self.assertEqual(config.policy(), configured_policy())
+        for legacy_attribute in (
+            "automatic_orchestration",
+            "allowed_adapters",
+            "auto_select_model",
+            "allow_cross_adapter_dispatch",
+            "prefer_different_adapter_for_review",
+        ):
+            self.assertFalse(hasattr(config, legacy_attribute))
         self.assertEqual(config.source, "BUILT_IN_DEFAULTS")
         self.assertEqual(config.config_path, str(path))
 
-    def test_user_file_can_enable_cross_adapter_dispatch(self) -> None:
+    def test_user_file_loads_complete_sop_policy(self) -> None:
         with TemporaryDirectory() as root:
             path = Path(root, "orchestrator.json")
             path.write_text(
                 json.dumps(
                     configured_policy(
-                        allowCrossAdapterDispatch=True,
                         maxConcurrentExecutors=7,
-                        quotaExhaustionPolicy="SWITCH_ADAPTER",
                     )
                 ),
                 encoding="utf-8",
@@ -65,17 +64,17 @@ class OrchestratorConfigTests(unittest.TestCase):
                 environ={ORCHESTRATOR_CONFIG_ENV: str(path)},
             )
 
-        self.assertTrue(config.allow_cross_adapter_dispatch)
         self.assertEqual(config.max_concurrent_executors, 7)
-        self.assertEqual(config.quota_exhaustion_policy, "SWITCH_ADAPTER")
+        self.assertEqual(
+            config.quota_exhaustion_policy,
+            "PAUSE_AND_RESUME",
+        )
         self.assertEqual(config.source, "USER_CONFIG")
 
     def test_save_atomically_creates_and_reloads_complete_policy(self) -> None:
         with TemporaryDirectory() as root:
             path = Path(root, "nested", "orchestrator.json")
             policy = configured_policy(
-                allowCrossAdapterDispatch=True,
-                allowedAdapters=["codex", "claude-code", "custom"],
                 maxConcurrentExecutors=6,
             )
             saved = save_orchestrator_config(
@@ -105,7 +104,7 @@ class OrchestratorConfigTests(unittest.TestCase):
             path.write_text(json.dumps(original), encoding="utf-8")
             with self.assertRaises(GatedLoopError) as caught:
                 save_orchestrator_config(
-                    configured_policy(allowedAdapters=[]),
+                    configured_policy(maxConcurrentExecutors=0),
                     environ={ORCHESTRATOR_CONFIG_ENV: str(path)},
                 )
 
@@ -165,7 +164,7 @@ class OrchestratorConfigTests(unittest.TestCase):
         with TemporaryDirectory() as root:
             path = Path(root, "orchestrator.json")
             value = configured_policy()
-            del value["allowCrossAdapterDispatch"]
+            del value["maxConcurrentExecutors"]
             value["unexpected"] = True
             path.write_text(json.dumps(value), encoding="utf-8")
 
@@ -179,13 +178,39 @@ class OrchestratorConfigTests(unittest.TestCase):
             "ORCHESTRATOR_CONFIG_INVALID",
         )
 
+    def test_legacy_orchestration_fields_fail_closed(self) -> None:
+        legacy_fields = {
+            "automaticOrchestration": True,
+            "allowedAdapters": ["codex", "claude-code"],
+            "autoSelectModel": True,
+            "allowCrossAdapterDispatch": False,
+            "preferDifferentAdapterForReview": True,
+        }
+        for field, value in legacy_fields.items():
+            with self.subTest(field=field), TemporaryDirectory() as root:
+                path = Path(root, "orchestrator.json")
+                path.write_text(
+                    json.dumps(configured_policy(**{field: value})),
+                    encoding="utf-8",
+                )
+
+                with self.assertRaises(GatedLoopError) as caught:
+                    load_orchestrator_config(
+                        environ={ORCHESTRATOR_CONFIG_ENV: str(path)}
+                    )
+
+                self.assertEqual(
+                    caught.exception.code,
+                    "ORCHESTRATOR_CONFIG_INVALID",
+                )
+
     def test_invalid_option_types_and_values_fail_closed(self) -> None:
         invalid_values = (
-            {"schemaVersion": 1.0},
-            {"autoSelectModel": "true"},
-            {"allowedAdapters": ["codex", "codex"]},
+            {"schemaVersion": 2.0},
             {"maxConcurrentExecutors": 0},
             {"quotaExhaustionPolicy": "GUESS_RESET"},
+            {"quotaExhaustionPolicy": "ASK_USER"},
+            {"quotaExhaustionPolicy": "SWITCH_ADAPTER"},
             {"quotaExhaustionPolicy": []},
         )
         for overrides in invalid_values:

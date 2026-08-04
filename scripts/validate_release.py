@@ -166,9 +166,10 @@ def validate_release() -> list[str]:
         .get("dispatch_mode", {})
         .get("enum")
     )
-    if dispatch_enum != ["AUTO"]:
+    if dispatch_enum != ["AUTO", "MANUAL"]:
         problems.append(
-            f"dispatch_loop dispatch_mode enum is {dispatch_enum!r}, expected ['AUTO']"
+            "dispatch_loop dispatch_mode enum is "
+            f"{dispatch_enum!r}, expected ['AUTO', 'MANUAL']"
         )
 
     expected_profiles = {

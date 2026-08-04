@@ -4,6 +4,17 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.34.0 — 2026-08-04
+
+发布提交：`6bba7a3`
+
+- 修复手动交接在 TASK 实现后脱离治理 Graph 的流程缺口：新增 `start_manual_handoff`，接收 CLI 必须在代码工作前用双 fingerprint 启动同一 Revision；只有 TASK 实现使用 `MANUAL` claim，TASK/GROUP/Delivery Review、findings 闭环和最终用户确认均与自动执行保持一致。
+- manual Graph 支持启动响应未知后的幂等恢复、HANDOFF → PREPARED 中断恢复和事件重放；Claude/Codex 独立 TASK receiver 的 Hook 可继续授权 heartbeat、进度与结果操作，但不能把任何 Review 降级为 MANUAL。
+- 中央派遣升级为 `HOST_NATIVE_RECEIVER_ROUTING_V5`：Controller 只为当前可信宿主预留独立 receiver，receiver 继承当前宿主模型；移除 `recommend_executors`、模型推荐、reasoning class 和 30 秒路由调整窗口，Loop 内 Worker 的模型与 effort 只作为非权威遥测。
+- 中央编排器配置升级为 schema v2，只保留全局 receiver 并发上限和固定的 `PAUSE_AND_RESUME` 额度策略。已有 schema v1 文件必须按运维文档显式改写；旧字段 fail closed，不做静默兼容或迁移。
+- MCP 工具总数保持 30：删除模型推荐工具并新增手动 Graph 启动工具；同步更新双宿主 Hook、Plugin 元数据、Skill、参考文档、设置面板与 host smoke 契约。
+- Python 全量 226 项测试、编译检查、0.34.0 发布候选校验、Skill/Plugin 校验、双宿主无模型本地探测和 `git diff --check` 通过。
+
 ## 0.33.4 — 2026-08-04
 
 发布提交：`3b94213`

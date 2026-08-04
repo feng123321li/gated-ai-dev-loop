@@ -2,7 +2,7 @@
 
 `layered-delivery` 把已经确认的需求冻结为递归 Delivery Graph，再协调多个独立 Agent/WorkLoop 完成实现、逐层审查和最终验收。
 
-当前版本：**0.33.4**
+当前版本：**0.34.0**
 
 ## 核心流程
 
@@ -12,7 +12,7 @@
   → 生成 Delivery Graph 基线与全部关联文档
   → Controller 提供“自动执行（默认）/ 手动开发”统一交互
   → 自动执行：立即准备并冻结 Graph，进入 TASK WorkLoop 自动派遣
-  → 手动开发：生成含接收提示词的 handoff，供任意 CLI 直接开发
+  → 手动开发：生成 handoff；接收 CLI 启动同一 Graph，手动完成 TASK
   → LIGHT：单一 TASK 定向验证
   → STANDARD：TASK Review → 逐层 GROUP Review → Delivery Review
   → 用户最终验收
@@ -43,12 +43,12 @@ Delivery
 - 把跨项目、跨模块需求拆成可恢复的递归 `GROUP` / `TASK` Graph。
 - 为 STANDARD 交付的 TASK、GROUP 和 Delivery 提供强制分层 Review；LIGHT 保留定向验证与最终人工验收。
 - 在同一批 frontier 中并发派遣互不冲突的宿主原生 Agent。
-- 根据 Agent 对任务风险的分析动态选择高效、平衡或前沿的宿主原生模型名。
+- 自动派遣始终继承当前宿主模型；Loop 可在内部按成本和任务需要使用其他模型、effort 与 Worker。
 - 用 claim、heartbeat、lease、重试和容量断路器处理长时间运行与失联。
 - 支持一个 Delivery 覆盖多个本地 Git 项目，并冻结各项目的基线与权限上限。
 - 用不可变 Delivery Revision 管理验收前的需求调整和安全结果携带。
 - 以 SQLite 保存需求与调度状态，Graph 运行后再用哈希事件链记录历史，同时生成可读的中文进度与验收投影。
-- 后台 Loop 在代码检查、测试、问题修复和复审等阶段使用用户当前语言上报结构化进度；主 Agent 以表格持续展示 Agent、原生模型与宿主观测到的实际模型、测试、心跳、剩余租约及失联预警，原始事件仅用于诊断。
+- 后台 Loop 在代码检查、测试、问题修复和复审等阶段上报结构化进度；主 Agent 持续展示外层 receiver、测试、心跳、剩余租约及失联预警。内部 Worker 的 agent/model/effort 只从最终 `workerTelemetry` 非权威展示，未知值为 `unreported`。
 
 ## 能力边界
 
@@ -56,7 +56,7 @@ Delivery
 |---|---|
 | 何时运行哪个 TASK/Review | 如何分析、编码、设计、测试或讨论 |
 | Graph 依赖、资源锁和并发批次 | Loop 内部计划、Gate 与修正循环 |
-| Agent/模型建议与宿主原生派遣计划 | 真正创建 Agent、执行模型与沙箱权限 |
+| 可信外层 receiver 的预留、派遣与身份边界 | Loop 内 Worker、模型、effort、成本与沙箱权限 |
 | 租约、暂停、恢复和基础设施重试 | 外部系统凭据与不可逆操作授权 |
 | 保障档、分层 Review 和最终确认顺序 | Git commit、merge、push、发布与迁移 |
 
@@ -70,41 +70,28 @@ Plugin 激活后，在 Codex 或 Claude Code 的新会话中提出需求，并�
 2. 与用户沟通需求，检查真实代码、预计或已有 diff 和影响范围；无法可靠判断时使用 STANDARD。调用 `preview_hierarchy` 登记 `CHOICE_READY`，先生成共享数据库、根总览、baseline 及全部关联文档。
 3. 只有 `artifactsReady=true` 后，宿主才原样或机械映射 Controller 返回的 `executionChoice`。交互只有“自动执行（默认）/ 手动开发”两个按钮；直接输入文字继续需求沟通，不创建“其他”按钮。
 4. 用户选择自动执行后调用一次 `select_execution_mode(AUTOMATIC)`；Controller 立即完成 prepare、freeze 并要求宿主进入 frontier 自动派遣，不增加第二次确认。
-5. 用户选择手动开发后调用一次 `select_execution_mode(MANUAL)`；Controller 把需求转为 `HANDOFF_READY`，生成自包含 handoff，并返回已嵌入文件的 `manualHandoff.receiverPrompt`。不创建 Graph Run、workspace 绑定、任务或 worktree。
-6. 自动模式对正式 Ready 批次展示中文模型表和默认 30 秒路由调整窗口；用户可直接改为其他可用原生模型，不再回答确认问题，超时后自动预留并派遣。
-7. 自动模式持续消费 frontier，并发调度当前可运行的独立 WorkLoop。
-8. STANDARD 在所有 Review 完成后展示验收报告；LIGHT 在唯一 TASK 定向验证完成后展示改动与影响依据。两者都等待用户最终确认。
+5. 用户选择手动开发后调用一次 `select_execution_mode(MANUAL)`；Controller 把需求转为 `HANDOFF_READY`，生成自包含 handoff，并返回已嵌入文件的 `manualHandoff.receiverPrompt`。交接阶段不创建 Graph Run、workspace 绑定、任务或 worktree。
+6. 接收 CLI 在任何代码工作前调用 `start_manual_handoff`，用双 fingerprint 在实际工作区启动同一 Graph。只有 TASK 实现走 `MANUAL` claim；TASK/GROUP/Delivery Review 全部沿用自动派遣、独立审查与 findings 闭环。
+7. 自动模式及 manual Graph 的 Review 批次由当前可信宿主直接预留独立 receiver；receiver 继承当前宿主模型，不进行调度前模型推荐或调整。
+8. 两种模式都持续消费 frontier，调度当前可运行的独立 WorkLoop。
+9. STANDARD 在所有 Review 完成后展示验收报告；LIGHT 在唯一 TASK 定向验证完成后展示改动与影响依据。两者都等待用户最终确认。
 
 执行方式的区别：
 
 | 模式 | 选择后的行为 |
 |---|---|
 | 自动执行 | 开始实际开发：按需创建 worktree，准备并冻结 Graph，再由当前宿主派遣可证明为 `HOST_NATIVE` 的 Agent |
-| 手动开发 | 在 SQLite 登记 `HANDOFF_READY`、刷新根总览并生成同结构内容包；不创建 Graph Run、workspace 绑定、任务或 worktree，可切换任意 CLI 直接开发并记录 progress/acceptance |
+| 手动开发 | 先登记 `HANDOFF_READY` 并生成同结构内容包；接收 CLI 选定工作区后调用 `start_manual_handoff`，手动完成 TASK，随后执行与自动模式完全相同的 Review Graph 和最终确认 |
 
 新业务目标默认创建新 Delivery。自动与手动开发使用同一个稳定的 `.layered-delivery/<delivery-id>/` 和同结构投影，不再创建共享 `handoffs` 目录。选择前的 `CHOICE_READY` 已创建 SQLite、根总览与全部基线文档，但未绑定 workspace、创建 Run 或 worktree；手动响应的 `requirementSnapshotStatus=FROZEN` 表示需求内容已冻结，仍不代表 Graph 已 prepare、freeze 或创建 Run。一个工作区最多绑定一个未结束 Delivery；并行需求真正开始开发时使用独立对话工作区，Git 项目优先使用 linked worktree。只有用户明确要求继续同一需求，或当前 Loop 返回 `REPLAN_REQUIRED`，才在原 `delivery.id` 上创建下一 Revision。
 
-## Agent、模型与并发
+## Receiver、Worker 与并发
 
-Agent 发现、自动路由建议和手动内容交接是不同的事：
-
-- `available_agents` 只提供通用本机终端与非敏感模型发现，不参与手动开发选择。
-- `recommend_executors(AUTOMATIC)` 只在当前宿主 Agent 内按原生 tier 生成全 Graph 只读预览，并与正式派遣复用路由决策。
-- `create_manual_handoff` 在本需求的 `.layered-delivery/<delivery-id>/` 中生成冻结内容包，不调用推荐器、不绑定接收 Agent/模型；切换到任意 CLI 并开始实际开发时，宿主才确定执行者和本机模型映射。
-- `plan_dispatch_batch` 只接受宿主正式 Agent API 证明为 `HOST_NATIVE` 的容量；先返回无预留的 `HOST_NATIVE_ROUTE_REVIEW` 和 30 秒调整窗口，到期重调后才返回可并发 assignment。
-- assignment 只使用 Claude/Codex 原生 `modelId` 派遣；本机配置在原生调用后如何转发与本项目无关。宿主可把观测到的结果记录为展示用 `actualModelId`，但它不参与选模、指纹、预留、授权或 Review 多样性。
-
-自动选模由调度 Agent 分析当前 Loop：
-
-| 推理分类 | 模型层级 | 典型任务 |
-|---|---|---|
-| `ROUTINE` | `EFFICIENT` | 明确、低歧义、可重复且验证路径确定 |
-| `STANDARD` | `BALANCED` | 常规实现、设计或分析 |
-| `HIGH` | `FRONTIER` | 高风险、跨边界、复杂审查或不确定任务 |
-
-Controller 不用 Python 做本地语义判断。某个节点缺少 Agent 分析时，只能回退到宿主明确报告的当前 Agent/模型；两者都缺失时，该节点暂不自动派遣。
-
-用户不认可默认模型时，可在 30 秒窗口内为尚未 claim 的节点指定当前宿主 inventory 中的精确 `preferredNativeModelId`；建议预览和派遣计划共同遵守该原生 selector，不重新冻结，也不新增确认，变化节点重新获得 30 秒调整时间。GLM、DeepSeek 等转发后模型不能作为 override。
+- `plan_dispatch_batch` 只为当前可信宿主 Adapter 预留外层 receiver。assignment 使用 `hostAdapterId`、`receiverAgentId` 与 `modelPolicy=CURRENT_HOST_INHERIT`，不包含模型推荐、reasoning class 或 effort。
+- 只有外层 receiver 能 claim、heartbeat、progress、pause、resume 和提交 result。普通 helper 与 Loop 内 Worker 不能获得 reservation、attestation 或 operation。
+- receiver 完成首次独立 heartbeat 后，可按成本和任务需要自行使用 Codex、Claude、Grok、DeepSeek 或其他 Worker，并自主选择模型、effort、并发与升级路径。
+- 新增 Worker 供应商无需修改 Layered Delivery；只有要让供应商直接领取 Graph 时，才需要实现一个能证明宿主生命周期和 receiver 身份的可信外层 Adapter。
+- 最终 `outcome.result.workerTelemetry` 可按 phase 报告内部 Worker 的 `agent`、`model` 和 `reasoningEffort`。未知写 `unreported`；这些值只用于展示、成本分析和 Review，不参与路由、授权、指纹或重试。
 
 ## 中央编排器设置
 
@@ -112,7 +99,7 @@ Controller 不用 Python 做本地语义判断。某个节点缺少 Agent 分析
 
 设置工具不依赖 Delivery 工作区，不创建 `.layered-delivery` 运行状态，也不要求 Codex MCP Apps 的保存请求携带项目 sandbox metadata。其他 Graph 工具仍严格要求当前工作区身份，不能借设置入口绕过项目隔离。
 
-默认配置开启自动编排和自动选模、关闭跨 Adapter、允许 `codex` 与 `claude-code`、最大并发为 4，并在额度耗尽时暂停等待恢复。配置文件位于 Plugin 安装目录之外，Marketplace 升级不会覆盖：
+配置 schema v2 只管理外层 receiver 最大并发与额度恢复。默认最大并发为 4，额度策略固定 `PAUSE_AND_RESUME`。配置文件位于 Plugin 安装目录之外，Marketplace 升级不会覆盖：
 
 | 平台 | 默认路径 |
 |---|---|
@@ -120,13 +107,7 @@ Controller 不用 Python 做本地语义判断。某个节点缺少 Agent 分析
 | macOS | `~/Library/Application Support/layered-delivery/orchestrator.json` |
 | Linux | `${XDG_CONFIG_HOME:-~/.config}/layered-delivery/orchestrator.json` |
 
-通过面板保存后当前 MCP 连接立即刷新；手动编辑文件后需要新建 Codex 或 Claude Code 会话。已经签发的 reservation 和已经认领的 Loop 不会被追溯改写。
-
-### 当前跨 Adapter 限制
-
-当前 Plugin 只接受本次会话宿主能够原生创建和认证的 Adapter。面板会把跨 Adapter 开关和 `SWITCH_ADAPTER` 额度策略锁定，并返回 `ORCHESTRATOR_CROSS_ADAPTER_UNAVAILABLE`；保存工具同样拒绝启用它们。PATH 中检测到 Claude Code 或 Codex CLI 只会显示“仅检测到本机终端”，不会升级成可信执行器。
-
-未来必须由中央宿主提供原生多 Adapter API、容量事实和同一编排根下的 receiver attestation 后，这些选项才会开放。完整字段、默认 JSON、环境变量覆盖和故障处理见[中央编排器配置](skills/layered-delivery/references/orchestrator-configuration.md)。
+等价配置为 `{"schemaVersion":2,"maxConcurrentExecutors":4,"quotaExhaustionPolicy":"PAUSE_AND_RESUME"}`。通过面板保存后当前 MCP 连接立即刷新；手动编辑文件后需要新建宿主会话。已经签发的 reservation 和已经认领的 Loop 不会被追溯改写。模型、Worker、Adapter allowlist 与 Review 多样性都不是编排器设置。完整契约见[中央编排器配置](skills/layered-delivery/references/orchestrator-configuration.md)。
 
 ## 状态、隔离与恢复
 
@@ -147,7 +128,7 @@ Controller 不用 Python 做本地语义判断。某个节点缺少 Agent 分析
 - Codex：MCP Server、`SubagentStart` 与 Loop mutation Hook。
 - Claude Code：MCP Server、PreToolUse 与结构化限额失败 Hook。
 
-宿主原生能力决定当前会话实际能派遣哪些 Agent。当前版本尚未开放跨 Adapter 保存和自动派遣；外部 CLI 不会被升级为可信执行器。安装或升级 Plugin 后应新建会话，使 Skill、MCP 和 Hook 重新加载。
+宿主原生能力决定当前会话是否能创建并认证外层 receiver。外部 CLI 和内部 Worker 不会被升级为可信执行器；安装或升级 Plugin 后应新建会话，使 Skill、MCP 和 Hook 重新加载。
 
 ## 项目结构
 
@@ -180,7 +161,7 @@ git diff --check
 ## 文档导航
 
 - [规划、Schema v3 与冻结](skills/layered-delivery/references/planning-quickstart.md)
-- [Agent 发现、模型建议与自动路由](skills/layered-delivery/references/agent-recommendations.md)
+- [外层 receiver、Loop 内 Worker、权限与遥测](skills/layered-delivery/references/agent-execution-boundary.md)
 - [Frontier、并发、租约与恢复](skills/layered-delivery/references/execution-quickstart.md)
 - [分层 Review 与最终验收](skills/layered-delivery/references/acceptance.md)
 - [MCP、状态权威与人类投影](skills/layered-delivery/references/mcp-transport.md)

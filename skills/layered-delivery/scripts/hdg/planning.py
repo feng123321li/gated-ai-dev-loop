@@ -308,7 +308,7 @@ def _automatic_workspace_setup(
     setup = discovery.get("worktreeSetup")
     if not isinstance(setup, dict):
         return None
-    return {
+    result = {
         **setup,
         "strategy": "HOST_NATIVE_LINKED_WORKTREE",
         "resumeAction": (
@@ -318,6 +318,60 @@ def _automatic_workspace_setup(
         "controllerCreatesWorktree": False,
         "selectionPreserved": True,
     }
+    if setup.get("state") != "DEDICATED_WORKTREE_REQUIRED":
+        return result
+
+    delivery_id = hierarchy["delivery"]["id"]
+    hierarchy_value = hierarchy_fingerprint(hierarchy)
+    graph = compile_delivery_graph(
+        hierarchy,
+        hierarchy_fingerprint=hierarchy_value,
+    )
+    graph_value = graph_fingerprint(graph)
+    host_operations = {
+        "claude-code": "CREATE_CLAUDE_WORKTREE_SESSION",
+        "codex": "CREATE_CODEX_PROJECT_TASK",
+    }
+    host_operation = host_operations.get(
+        host_adapter_id or "",
+        "CREATE_HOST_NATIVE_WORKTREE_TASK",
+    )
+    result["hostDispatch"] = {
+        "action": "CREATE_HOST_NATIVE_WORKTREE_TASK",
+        "hostAdapterId": host_adapter_id,
+        "hostOperation": host_operation,
+        "launchPolicy": "IMMEDIATE",
+        "environment": "worktree",
+        "deliveryId": delivery_id,
+        "title": f"Delivery {delivery_id}",
+        "idempotencyKey": (
+            f"delivery-worktree:{delivery_id}:{hierarchy_value}"
+        ),
+        "prompt": (
+            f"Resume automatic Delivery {delivery_id} in this "
+            "host-created worktree. Call workspace_status"
+            f"(root_id={delivery_id}), then call "
+            f"resume_execution_mode(root_id={delivery_id}, "
+            f"expected_hierarchy_fingerprint={hierarchy_value}, "
+            f"expected_graph_fingerprint={graph_value}). Do not ask for "
+            "execution mode again and do not change the coordinator "
+            "checkout."
+        ),
+        "baseRef": setup["baseRef"],
+        "baseCommit": setup["baseCommit"],
+        "integrationTarget": setup["integrationTarget"],
+        "manualDirectoryChangeRequired": False,
+        "coordinatorCheckoutPolicy": "PRESERVE_CURRENT_CHECKOUT",
+        "continuation": {
+            "firstTool": "workspace_status",
+            "thenTool": "resume_execution_mode",
+            "rootId": delivery_id,
+            "expectedHierarchyFingerprint": hierarchy_value,
+            "expectedGraphFingerprint": graph_value,
+            "confirmationRequired": False,
+        },
+    }
+    return result
 
 
 def preview_hierarchy(

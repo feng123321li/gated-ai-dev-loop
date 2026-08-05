@@ -319,6 +319,9 @@ class PluginBundleTests(unittest.TestCase):
 
     def test_skill_keeps_receiver_and_worker_boundaries_explicit(self) -> None:
         main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        plugin_main = (PLUGIN_SKILL / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
         planning = (
             SKILL / "references" / "planning-quickstart.md"
         ).read_text(encoding="utf-8")
@@ -328,6 +331,12 @@ class PluginBundleTests(unittest.TestCase):
         recommendations = (
             SKILL / "references" / "agent-execution-boundary.md"
         ).read_text(encoding="utf-8")
+        allowed_tools = (
+            "allowed-tools:\n"
+            "  - mcp__plugin_layered-delivery_layered-delivery__*"
+        )
+        self.assertIn(allowed_tools, main)
+        self.assertIn(allowed_tools, plugin_main)
         self.assertNotIn("`recommend_executors`", main + recommendations)
         self.assertIn("不推荐派遣模型", planning)
         self.assertIn("不提供路由调整窗口", recommendations)
@@ -346,6 +355,17 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("`claude --worktree <delivery-id>`", planning)
         self.assertIn("`${CLAUDE_PROJECT_DIR}`", planning)
         self.assertIn("不得只在旧会话内调用 `EnterWorktree`", planning)
+        self.assertIn("`hostDispatch`", main + planning)
+        self.assertIn(
+            "`manualDirectoryChangeRequired=false`",
+            main + planning,
+        )
+        self.assertIn(
+            "`coordinatorCheckoutPolicy=PRESERVE_CURRENT_CHECKOUT`",
+            main + planning,
+        )
+        self.assertIn("不要求用户手动 `cd`", main + planning)
+        self.assertIn("主 checkout 保持 `main` 或 `master`", planning)
         self.assertIn("`CREATE_DELIVERY_FEATURE_BRANCH`", planning)
         self.assertIn("重新调用 `workspace_status`", planning)
         self.assertIn("`HOST_NATIVE_LINKED_WORKTREE`", planning)

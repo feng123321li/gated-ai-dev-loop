@@ -15,7 +15,7 @@ Plugin 优先使用 MCP `2026-07-28`。现代客户端可先调用 `server/disco
 
 `preview_hierarchy.executionChoice` 使用独立 schema v2 交互契约。`activeHostMapping` 指向当前可信 Adapter 的原生问题工具；该工具在当前上下文可调用时必须直接消费 `options`，不得先输出文本问题。只有工具未暴露或当前模式不可调用时，才按 `presentationPolicy.fallback` 逐字显示 `markdown`，不得追加“回复自动”等 Agent 文案。
 
-Claude Plugin 通过启动环境 `${CLAUDE_PROJECT_DIR}` 固定项目协调根；切换到独立 worktree 时必须启动新的 worktree session，不能只在旧会话调用 `EnterWorktree` 后沿用旧 MCP。Codex 的现代请求从每次请求 `_meta` 解析项目根；旧版 Codex 会话则在首次合法元数据后绑定不可漂移的根。两者只是 `HOST_NATIVE_LINKED_WORKTREE` 的不同宿主 Adapter；无论从哪种宿主取得，Controller 的单次 operation 都只接收一个已解析、已校验的项目根。它是存放 `.layered-delivery/` 控制面的工作区位置，不等于 hierarchy 的 `delivery.id` 或递归 `root` 节点。
+Claude Plugin 通过启动环境 `${CLAUDE_PROJECT_DIR}` 固定项目协调根；切换到独立 worktree 时必须启动新的 worktree session，不能只在旧会话调用 `EnterWorktree` 后沿用旧 MCP。AUTOMATIC 在 primary checkout 返回 `worktreeSetup.hostDispatch` 后，Claude Desktop/agent view 或 CLI 宿主编排器自动创建该会话并发送 continuation prompt，不把 `cd` 或启动命令交给用户执行；宿主缺少相应 API 时报告 `HOST_NATIVE_WORKTREE_LAUNCH_UNAVAILABLE`。Codex 的现代请求从每次请求 `_meta` 解析项目根；旧版 Codex 会话则在首次合法元数据后绑定不可漂移的根。两者只是 `HOST_NATIVE_LINKED_WORKTREE` 的不同宿主 Adapter；无论从哪种宿主取得，Controller 的单次 operation 都只接收一个已解析、已校验的项目根。它是存放 `.layered-delivery/` 控制面的工作区位置，不等于 hierarchy 的 `delivery.id` 或递归 `root` 节点。
 
 控制面根使用共享 `.layered-delivery/scheduler.db`。每个 `delivery.id` 是稳定的需求目录 namespace，其可读投影固定为：
 

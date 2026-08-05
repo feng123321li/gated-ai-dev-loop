@@ -2026,6 +2026,53 @@ class McpSurfaceTests(unittest.TestCase):
                 selected["worktreeSetup"]["resumeAction"],
                 "CALL_WORKSPACE_STATUS_THEN_RESUME_EXECUTION_MODE",
             )
+            self.assertEqual(
+                selected["worktreeSetup"]["hostDispatch"],
+                {
+                    "action": "CREATE_HOST_NATIVE_WORKTREE_TASK",
+                    "hostAdapterId": "claude-code",
+                    "hostOperation": "CREATE_CLAUDE_WORKTREE_SESSION",
+                    "launchPolicy": "IMMEDIATE",
+                    "environment": "worktree",
+                    "deliveryId": "d-auto-transition",
+                    "title": "Delivery d-auto-transition",
+                    "idempotencyKey": (
+                        "delivery-worktree:d-auto-transition:"
+                        + preview["hierarchyFingerprint"]
+                    ),
+                    "prompt": (
+                        "Resume automatic Delivery d-auto-transition in "
+                        "this host-created worktree. Call workspace_status"
+                        "(root_id=d-auto-transition), then call resume_"
+                        "execution_mode(root_id=d-auto-transition, "
+                        "expected_hierarchy_fingerprint="
+                        + preview["hierarchyFingerprint"]
+                        + ", expected_graph_fingerprint="
+                        + preview["graphFingerprint"]
+                        + "). Do not ask for execution mode again and do "
+                        "not change the coordinator checkout."
+                    ),
+                    "baseRef": "main",
+                    "baseCommit": base_commit,
+                    "integrationTarget": "main",
+                    "manualDirectoryChangeRequired": False,
+                    "coordinatorCheckoutPolicy": (
+                        "PRESERVE_CURRENT_CHECKOUT"
+                    ),
+                    "continuation": {
+                        "firstTool": "workspace_status",
+                        "thenTool": "resume_execution_mode",
+                        "rootId": "d-auto-transition",
+                        "expectedHierarchyFingerprint": preview[
+                            "hierarchyFingerprint"
+                        ],
+                        "expectedGraphFingerprint": preview[
+                            "graphFingerprint"
+                        ],
+                        "confirmationRequired": False,
+                    },
+                },
+            )
 
             status = call_tool(
                 "workspace_status",
@@ -2132,6 +2179,67 @@ class McpSurfaceTests(unittest.TestCase):
                     "erp-protein": str(repository.resolve()),
                     "erp-pm": str(secondary_repository.resolve()),
                 },
+            )
+
+    def test_codex_host_dispatch_preserves_master_checkout(self) -> None:
+        with TemporaryDirectory() as root:
+            repository, _worktree, base_commit, branch_ref = (
+                git_delivery_checkout(
+                    root,
+                    delivery_id="d-codex-master",
+                    mainline="master",
+                )
+            )
+            hierarchy = bind_delivery_to_git(
+                task_hierarchy(),
+                branch_ref=branch_ref,
+                base_commit=base_commit,
+                base_ref="master",
+            )
+            hierarchy["delivery"]["id"] = "d-codex-master"
+            preview = call_tool(
+                "preview_hierarchy",
+                {"hierarchy": hierarchy},
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="codex",
+            )
+
+            selected = call_tool(
+                "select_execution_mode",
+                {
+                    "root_id": "d-codex-master",
+                    "selection": "AUTOMATIC",
+                    "expected_hierarchy_fingerprint": preview[
+                        "hierarchyFingerprint"
+                    ],
+                    "expected_graph_fingerprint": preview[
+                        "graphFingerprint"
+                    ],
+                    "authorized_project_ids": [],
+                    "confirmed_by": "human",
+                },
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="codex",
+            )
+
+            dispatch = selected["worktreeSetup"]["hostDispatch"]
+            self.assertEqual(
+                dispatch["hostOperation"],
+                "CREATE_CODEX_PROJECT_TASK",
+            )
+            self.assertEqual(dispatch["environment"], "worktree")
+            self.assertEqual(dispatch["baseRef"], "master")
+            self.assertEqual(dispatch["integrationTarget"], "master")
+            self.assertFalse(dispatch["manualDirectoryChangeRequired"])
+            self.assertEqual(
+                dispatch["coordinatorCheckoutPolicy"],
+                "PRESERVE_CURRENT_CHECKOUT",
+            )
+            self.assertEqual(
+                git_command(repository, "branch", "--show-current"),
+                "master",
             )
 
     def test_loop_context_keeps_parallel_deliveries_in_their_own_worktrees(
@@ -3538,6 +3646,18 @@ class McpSurfaceTests(unittest.TestCase):
             )
             self.assertIn(
                 "Claude must start a new worktree session",
+                initialized["result"]["instructions"],
+            )
+            self.assertIn(
+                "hostDispatch",
+                initialized["result"]["instructions"],
+            )
+            self.assertIn(
+                "without asking the user to change directories",
+                initialized["result"]["instructions"],
+            )
+            self.assertIn(
+                "preserves the coordinator main or master checkout",
                 initialized["result"]["instructions"],
             )
             self.assertIn(

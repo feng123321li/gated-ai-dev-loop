@@ -22,7 +22,7 @@
 
 不要自行增加 TASK/Gate 节点，也不要根据 payload 内容改变 frontier 顺序。
 
-用户选择自动执行时，`select_execution_mode(AUTOMATIC)` 已记录一次业务确认。若响应 `automaticDispatchRequested=true`，实际开发工作区已完成 prepare/freeze，宿主立即进入本执行循环；若响应包含 `worktreeSetup`，宿主迁移到要求的 linked worktree，新会话调用 `workspace_status(root_id)` 后以原双 fingerprint 调用 `resume_execution_mode`，不得再次展示选择器、询问或重放 prepare/freeze。Ready 批次按当前可信 `host_adapter_id` 调用一次 `plan_dispatch_batch`，直接取得 reservation 和并发组。计划不展示模型表、不等待调整窗口，也不接收 inventory、node requirements、current executor、模型或 effort 参数。用户选择手动开发时，`select_execution_mode(MANUAL)` 只生成冻结内容包与嵌入的接收提示词；接收 CLI 选定实际工作区后，在任何代码工作前调用 `start_manual_handoff`，随后立即消费 frontier。
+用户选择自动执行时，`select_execution_mode(AUTOMATIC)` 已记录一次业务确认。若响应 `automaticDispatchRequested=true`，实际开发工作区已完成 prepare/freeze，宿主立即进入本执行循环；若 primary checkout 响应包含 `worktreeSetup.hostDispatch`，宿主按 `launchPolicy=IMMEDIATE` 自动创建 worktree 任务并发送内置 prompt，不切换协调 checkout，也不要求用户手动 `cd`。linked worktree 只缺 feature 分支时执行 `worktreeSetup.nextAction`。新会话调用 `workspace_status(root_id)` 后以原双 fingerprint 调用 `resume_execution_mode`，不得再次展示选择器、询问或重放 prepare/freeze。Ready 批次按当前可信 `host_adapter_id` 调用一次 `plan_dispatch_batch`，直接取得 reservation 和并发组。计划不展示模型表、不等待调整窗口，也不接收 inventory、node requirements、current executor、模型或 effort 参数。用户选择手动开发时，`select_execution_mode(MANUAL)` 只生成冻结内容包与嵌入的接收提示词；接收 CLI 选定实际工作区后，在任何代码工作前调用 `start_manual_handoff`，随后立即消费 frontier。
 
 ### 宿主继承与内部 Worker
 

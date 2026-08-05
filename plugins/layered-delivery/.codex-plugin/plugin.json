@@ -1,6 +1,6 @@
 {
   "name": "layered-delivery",
-  "version": "0.34.5",
+  "version": "0.34.6",
   "description": "预览和调度递归 GROUP/TASK、当前宿主 receiver、完整手动交接审查、冻结开发包与中文进度",
   "author": {
     "name": "layered-delivery contributors",

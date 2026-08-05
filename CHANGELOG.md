@@ -4,9 +4,12 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
-## Unreleased
+## 0.34.6 — 2026-08-05
+
+发布提交：`30a64fa`
 
 - `loop_context` 把冻结的仓库锚点与运行时有效 worktree 分离：receiver 只在本 Delivery 已验证的 `projectScopes` 路径工作，并明确禁止自行创建或切换分支，避免同仓库并行 Delivery 互相抢占主检出。
+- 重新构建规范 Skill runtime 和 Plugin 内嵌 Skill，Python 全量 234 项测试、编译检查、0.34.6 发布候选校验、Skill/Plugin 校验、双宿主本地探测和 `git diff --check` 通过。
 
 ## 0.34.5 — 2026-08-05
 

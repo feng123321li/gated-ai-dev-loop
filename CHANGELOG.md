@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.34.4 — 2026-08-05
+
+发布提交：`047c124`
+
+- 新 Delivery 采用宿主原生 linked worktree 契约：宿主可显式选择基线；否则优先使用有效的 `origin/HEAD`，再回退本地 `main`、`master`，不硬编码 `develop`。
+- `workspace_status` 新增可冻结的 worktree provenance，校验独立分支、其他 worktree/Delivery 占用、主 worktree 误绑定和已有 diff 精确指纹确认，确保并行会话不会互相污染。
+- 执行方式交互升级为 schema v2：Codex 与 Claude Code 在原生选择器可调用时必须直接映射 Controller 的固定选项；只有能力不可用时才允许原样显示 Controller Markdown，不再改写成“回复自动/手动”的文本交互。
+- 重新构建规范 Skill runtime 和 Plugin 内嵌 Skill，Python 全量 228 项测试、编译检查、0.34.4 发布候选校验、Skill/Plugin 校验、双宿主本地探测和 `git diff --check` 通过。
+
 ## 0.34.3 — 2026-08-05
 
 发布提交：`dd226ff`

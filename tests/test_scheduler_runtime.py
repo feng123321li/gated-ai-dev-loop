@@ -6447,7 +6447,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             root_id=root_id,
             now=claimed_at + timedelta(minutes=33),
         )
-        self.assertEqual(frontier["progressMonitor"]["recommendedPollSeconds"], 30)
+        self.assertEqual(frontier["progressMonitor"]["recommendedPollSeconds"], 10)
         events = graph_events(root=self.root, root_id=root_id)["events"]
         expired = next(
             event

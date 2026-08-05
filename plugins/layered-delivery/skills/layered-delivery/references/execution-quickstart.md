@@ -6,7 +6,7 @@
 
 调用 `graph_frontier` 并执行全部 action：
 
-- 每次响应同时读取 `progressMonitor`。后台 Agent 运行期间按 `recommendedPollSeconds` 继续刷新；仅在进度表或预警变化时，把 `markdownTable` 原样作为中文表格展示到主 Agent 窗口。`graph_events` 是诊断接口，不把原始事件、operation 或 reservation 日志直接展示给普通用户。
+- 每次响应同时读取 `progressMonitor`。后台 Agent 运行期间严格按 `recommendedPollSeconds`（当前为 10 秒）继续刷新，不得把 90 秒首次心跳告警阈值当作 sleep 或轮询间隔；宿主收到原生 child 完成通知时立即中断等待并刷新 frontier。仅在进度表或预警变化时，把 `markdownTable` 原样作为中文表格展示到主 Agent 窗口。`graph_events` 是诊断接口，不把原始事件、operation 或 reservation 日志直接展示给普通用户。
 
 - `CLAIM_MANUAL_TASK`：只出现在 `start_manual_handoff` 已启动的 manual Graph，且只对应 `TASK_LOOP`。总协调上下文不得实现；由独立 receiver 读取 `loop_context`，显式提交真实 receiving context、唯一 operation 与 `dispatch_mode=MANUAL`，claim 后立即独立 heartbeat，再进入完整 TASK Loop。
 - `DISPATCH_LOOP`：自动 Graph 的全部 Loop，以及 manual Graph 中 TASK 完成后的全部 Review 都按当前可信宿主 Adapter 调用一次 `plan_dispatch_batch`。计划直接预留外层 receiver，固定 `modelPolicy=CURRENT_HOST_INHERIT`，不接收或返回模型建议。receiver 读取 `loop_context` 后凭预留 AUTO claim。
@@ -61,7 +61,7 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。`STANDARD` 不得
 7. 内部 Loop 先识别当前任务与宿主可用 Skill，再优先原生触发适用的 Skill Hint；不要因为 hierarchy 提供了提示，就假定每条提示都适用于当前 Loop。
 8. 让内部 Loop 自己选择其他必要 Skill。payload 是目标、明确约束和已知验收点的输入，不是完整实现规约；Loop 要结合真实代码、契约和数据链路推导当前 scope 的必要条件。冻结 Graph 不冻结内部实现计划。TASK Loop 自主管理实现、文件、测试、Gate 和修正；Review Loop 自主管理独立发现、修正协调、Gate 和复审。
 9. 当前目标内可修复的实现缺陷、测试失败、数据完整性或边界问题都留在当前 Loop：receiver 调整内部计划，按需创建成本合适的 Codex、Claude、Grok、DeepSeek 等 Worker，完成修正后重新验证。内部 Worker 只能向 receiver 返回结果；只有 receiver 能上报进度或终态。Review 必须保留独立复核，不要把“Review 未通过”提交成 `BLOCKED`。
-10. `STANDARD` Loop 在领取、代码检查完成、运行测试、发现问题、修复、复审和最终验证等有意义的阶段调用 `report_loop_progress`。`LIGHT` 只在发现问题和最终验证时上报，执行时间很短且没有问题时可只报最终验证。`summary_zh`、`completed_zh` 与 `next_step_zh` 使用用户当前语言，测试结果使用结构化计数；字段名为现有 schema v3 契约，不代表内容必须包含中文字符。禁止提交原始终端日志或内部推理。进度事件是可观测事实，不是 Graph 状态迁移，也不续租。
+10. `STANDARD` Loop 在领取、代码检查完成、确认根因、完成修改、测试开始与结束、发现问题、修复、复审和最终验证等有意义的阶段立即调用 `report_loop_progress`；长时间测试或构建在开始前和结束后各上报一次。`LIGHT` 只在发现问题和最终验证时上报，执行时间很短且没有问题时可只报最终验证。`summary_zh`、`completed_zh` 与 `next_step_zh` 使用用户当前语言，测试结果使用结构化计数；字段名为现有 schema v3 契约，不代表内容必须包含中文字符。禁止提交原始终端日志或内部推理。进度事件是可观测事实，不是 Graph 状态迁移，也不续租。
 11. 首次独立 heartbeat 之后，长任务继续按租约调用 `heartbeat_loop`。Codex 与 Claude 原生 child 对 heartbeat、progress、pause、result 均省略 `operation_id`，由共享 PreToolUse 校验各自宿主身份后注入；其他适配器在获得等价宿主授权通道前不能自动变更 Loop。检测到上下文容量压力或高轮次 Hook 摩擦且工作仍可继续时，不提交失败结果；在租约有效期内调用普通 `pause_loop`。
 12. 宿主明确报告剩余额度不高于 5% 且提供真实未来 `resetAt` 时，停止启动新 Loop，并在额度耗尽前保存当前工作。已 claim 的执行 Agent 在租约有效期内调用 `pause_loop(resume_at=resetAt, capacity_scope=EXECUTOR)`；总调度宿主受限时使用 `capacity_scope=HOST` 暂停其正在承载的 claimed Loop。两者都释放租约和资源占用、保留同一 attempt；不得估算剩余额度或猜测 `resetAt`。
 13. 软阈值 pause 成功后，使用当前宿主的原生计划能力创建一次性恢复提示。为避免恢复窗口边界抖动，计划时间应晚于 `resetAt` 一小段安全余量。提示只要求原宿主调用 `workspace_status → graph_frontier → loop_context` 并重新 dispatch；额度策略固定 `PAUSE_AND_RESUME`，不自动换 Adapter、模型或 Worker。

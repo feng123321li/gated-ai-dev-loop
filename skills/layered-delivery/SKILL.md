@@ -77,12 +77,12 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 5. 只消费派遣计划的 `concurrentDispatchGroups`，并按 assignment 的 `hostAdapterId`、`receiverAgentId`、工作区、预留 ID、决策指纹和宿主任务名创建 receiver。不得在预留后继续做额外分析，也不得跨 Delivery 复用 receiver、上下文或工作区。
 6. AUTO claim 严格遵循宿主接收协议：Claude 由真实 child 消费一次性 attestation 后 claim；Codex 由 `SubagentStart` Hook 校验真实 child/parent/task 并在 child 可见前 claim。claim 成功后，receiver 读取一次 `loop_context`，随即在任何代码检查、分析、读写或测试前提交首次独立 `heartbeat_loop`；不得把 claim 自带租约当成首次 heartbeat。Hook、预留或宿主身份无法证明时 fail closed。
 7. 只有外层 receiver 可以 claim、heartbeat、progress、pause、resume 或提交 result。receiver 可在 Loop 内按成本和任务需要创建 Codex、Claude、Grok、DeepSeek 等内部 Worker，自主选择模型、effort、并发和升级策略；内部 Worker 不得持有 operation、attestation 或 reservation，也不得直接调用控制面工具。
-8. receiver 从 `loop_context` 获取冻结输入，自主管理分析、实现、测试、Gate 与修正。`STANDARD` 在领取、代码检查完成、测试、修复、复审和最终验证等阶段上报进度；`LIGHT` 只在发现问题和最终验证时上报。进度不续租，长运行仍须在租约到期前 heartbeat。
+8. receiver 从 `loop_context` 获取冻结输入，自主管理分析、实现、测试、Gate 与修正。`STANDARD` 在领取、代码检查完成、确认根因、完成修改、测试开始与结束、修复、复审和最终验证等阶段立即上报进度；长时间测试或构建在开始前和结束后各上报一次。`LIGHT` 只在发现问题和最终验证时上报。进度不续租，长运行仍须在租约到期前 heartbeat。
 9. `STANDARD` 的 TASK Review、GROUP Review 和 Delivery Review 在各自独立 receiver 内完成发现、修正、验证和复审。`LIGHT` 不创建这些 Review 节点；若实际 diff 或影响扩大，必须提交 `REPLAN_REQUIRED` 并升级同一 Delivery 的下一 Revision 为 `STANDARD`。详见[验收说明](references/acceptance.md)。
 10. 只向 `record_loop_result` 提交真实业务终态。可在 `outcome.result.workerTelemetry` 中按 phase 报告内部 Worker 的 `agent`、`model`、`reasoningEffort`；未知字段写 `unreported`。该遥测只用于展示和后续 Review，不参与授权、路由、重试或独立性判断。
 11. frontier 返回 `RECORD_USER_CONFIRMATION` 时，展示分层验收结果并等待真实用户确认。
 
-后台 Loop 运行期间，总调度 Agent 按 `progressMonitor.recommendedPollSeconds` 持续读取 `graph_frontier`，仅在表格内容或预警变化时把 `progressMonitor.markdownTable` 展示到主 Agent 窗口。普通用户界面不展开 `graph_events`、operation、reservation 或原始英文状态；这些信息只保留给诊断。领取后 90 秒无首次独立心跳显示“疑似未启动”，心跳正常但超过 5 分钟无进度显示“存活但无可见进展”，心跳和进度均超过预期窗口显示“疑似失联”；租约到期由下一次 `graph_frontier` 自动按 `WORKER_LOST` 回收。
+后台 Loop 运行期间，总调度 Agent 严格按 `progressMonitor.recommendedPollSeconds`（当前为 10 秒）持续读取 `graph_frontier`；不得把 90 秒首次心跳告警阈值用作 sleep 或轮询间隔。宿主收到原生 child 完成通知时立即中断等待并刷新 frontier。仅在表格内容或预警变化时把 `progressMonitor.markdownTable` 展示到主 Agent 窗口。普通用户界面不展开 `graph_events`、operation、reservation 或原始英文状态；这些信息只保留给诊断。领取后 90 秒无首次独立心跳显示“疑似未启动”，心跳正常但超过 5 分钟无进度显示“存活但无可见进展”，心跳和进度均超过预期窗口显示“疑似失联”；租约到期由下一次 `graph_frontier` 自动按 `WORKER_LOST` 回收。
 
 ## Receiver、Worker 与容量
 

@@ -2526,6 +2526,26 @@ class McpSurfaceTests(unittest.TestCase):
                 "Delivery branch",
                 initialized["result"]["instructions"],
             )
+            self.assertIn(
+                "must never use the 90-second first-heartbeat warning as a "
+                "sleep or polling interval",
+                initialized["result"]["instructions"],
+            )
+            self.assertIn(
+                "A native child completion notification interrupts any wait "
+                "and triggers graph_frontier immediately",
+                initialized["result"]["instructions"],
+            )
+            self.assertIn(
+                "code inspection, root-cause confirmation, edit completion, "
+                "test start and completion, rework, Review, and final "
+                "verification",
+                initialized["result"]["instructions"],
+            )
+            self.assertIn(
+                "LIGHT Loops report findings and final verification",
+                initialized["result"]["instructions"],
+            )
             handle_message(
                 {
                     "jsonrpc": "2.0",

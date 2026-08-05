@@ -5,7 +5,7 @@
 ## 连接失败
 
 - Plugin 未安装、工具未注册或 MCP 未连接：报告 `PLUGIN_MCP_UNAVAILABLE` 并停止治理写入。
-- 运行中断连：报告 `PLUGIN_MCP_DISCONNECTED`，保留最后已知 root、node 与 operation。
+- 运行中断连：报告 `PLUGIN_MCP_DISCONNECTED`，保留最后已知 root、node 与 operation。AUTOMATIC 已选择但尚待 worktree 时同时保留双 fingerprint；新会话从 `workspace_status(root_id)` 的 `executionSelection` 恢复并调用 `resume_execution_mode`，不得再次展示选择器。
 - 响应未返回的写操作状态视为未知；重连后先调用 `workspace_status`。调用发生在当前对话工作区，已知 Delivery 时显式传 `root_id`。linked Git worktree 会映射到主 checkout 的共享控制根，但通过 `workspaceKey` 只访问本对话绑定的 Delivery。仅当返回 `ACTIVE`、`BLOCKED`、`PAUSED`、`COMPLETED` 或 `CANCELLED` 且存在 `rootId` 时，再调用 `graph_status` 和 `graph_frontier`；`ABSENT` 或 `PREPARED` 按规划说明恢复，不调用尚不存在 run 的工具，也不盲目重放写操作。
 - Git Delivery 重连时同时核对 `gitBinding` 与 `gitWorkspace`。如果只是临时切到其他分支，切回绑定的 feature 分支后重新调用 `workspace_status`；不要让控制器自动 `git switch`。HEAD 可以随本 Delivery commit 前进，但必须继续继承冻结的 `baseCommit`，且本地或 `origin` 的同名 `baseRef` / `integrationTarget` 必须仍包含该基线。未冻结的新工作区按宿主显式 `base_ref`、有效 `origin/HEAD`、本地 `main`、本地 `master` 的顺序发现基线，并从 `worktreeProvenance` 读取实际的 `selectionSource`、`baseRef`、`baseCommit`、`baseHeadCommit` 与 `integrationTarget`；不要从分支名前缀推断来源。脏 linked worktree 必须由用户确认当前全部 diff，并以原响应的精确 `workingTree.stateFingerprint` 作为 `confirmed_dirty_state_fingerprint` 重查；指纹变化或分支已被其他 worktree/Delivery 使用时不得复用。
 

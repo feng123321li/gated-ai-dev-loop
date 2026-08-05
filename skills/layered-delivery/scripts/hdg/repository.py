@@ -1016,6 +1016,7 @@ class SchedulerRepository:
         workspace_root: str | os.PathLike[str],
         *,
         allow_unbound_manual: bool = False,
+        allow_unbound_choice: bool = False,
     ) -> None:
         if not self.database_path.is_file():
             fail(
@@ -1023,7 +1024,7 @@ class SchedulerRepository:
                 "No layered-delivery scheduler state exists",
             )
         expected = self.workspace_key(workspace_root)
-        if allow_unbound_manual:
+        if allow_unbound_manual or allow_unbound_choice:
             with self.read() as connection:
                 manual = connection.execute(
                     "SELECT h.status, w.workspace_key "
@@ -1035,7 +1036,12 @@ class SchedulerRepository:
                 ).fetchone()
             if (
                 manual is not None
-                and manual["status"] == "HANDOFF_READY"
+                and manual["status"]
+                in (
+                    {"HANDOFF_READY"}
+                    if not allow_unbound_choice
+                    else {"CHOICE_READY", "HANDOFF_READY"}
+                )
                 and manual["workspace_key"] is None
             ):
                 return
@@ -1353,14 +1359,26 @@ class SchedulerRepository:
                         "UPDATE delivery_revisions SET "
                         "hierarchy_fingerprint = ?, graph_fingerprint = ?, "
                         "hierarchy_json = ?, graph_json = ?, status = "
-                        "'CHOICE_READY', reason = ?, updated_at = ? "
+                        "'CHOICE_READY', reason = ?, "
+                        "confirmed_by = CASE WHEN ? THEN confirmed_by "
+                        "ELSE NULL END, authorized_project_ids_json = "
+                        "CASE WHEN ? THEN authorized_project_ids_json "
+                        "ELSE NULL END, execution_mode = CASE WHEN ? "
+                        "THEN execution_mode ELSE NULL END, updated_at = ? "
                         "WHERE root_id = ? AND revision = ?",
                         (
                             hierarchy_fingerprint,
                             graph_fingerprint,
                             hierarchy_json,
                             graph_json,
-                            "需求沟通后已重新生成基线，待选择开发方式",
+                            (
+                                "自动执行已确认，等待实际开发 worktree"
+                                if content_matches
+                                else "需求沟通后已重新生成基线，待选择开发方式"
+                            ),
+                            content_matches,
+                            content_matches,
+                            content_matches,
                             at,
                             root_id,
                             existing["revision"],
@@ -1383,6 +1401,131 @@ class SchedulerRepository:
             "artifactsReady": staged,
             "controlStateCreated": existing is not None or staged,
             "recordedAt": at,
+        }
+
+    def record_automatic_selection(
+        self,
+        root_id: str,
+        *,
+        expected_hierarchy_fingerprint: str,
+        expected_graph_fingerprint: str,
+        authorized_project_ids: list[str],
+        confirmed_by: str,
+    ) -> dict[str, Any]:
+        """Persist one human AUTOMATIC choice before host worktree setup."""
+
+        with self.transaction() as connection:
+            hierarchy = connection.execute(
+                "SELECT * FROM hierarchies WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if hierarchy is None:
+                fail(
+                    "SCHEDULER_HIERARCHY_MISSING",
+                    f"Unknown hierarchy: {root_id}",
+                )
+            if (
+                hierarchy["hierarchy_fingerprint"]
+                != expected_hierarchy_fingerprint
+                or hierarchy["graph_fingerprint"]
+                != expected_graph_fingerprint
+            ):
+                fail(
+                    "SCHEDULER_EXECUTION_CHOICE_STALE",
+                    "The selected execution choice does not match the "
+                    "generated baseline",
+                    rootId=root_id,
+                )
+            if hierarchy["status"] not in {"CHOICE_READY", "PREPARED"}:
+                fail(
+                    "SCHEDULER_EXECUTION_CHOICE_CONFLICT",
+                    "The Delivery is not waiting for automatic execution",
+                    rootId=root_id,
+                    status=hierarchy["status"],
+                )
+            revision = connection.execute(
+                "SELECT * FROM delivery_revisions WHERE root_id = ? "
+                "AND revision = ?",
+                (root_id, hierarchy["revision"]),
+            ).fetchone()
+            if revision is None:
+                fail(
+                    "SCHEDULER_STATE_INVALID",
+                    "The current Delivery revision is missing",
+                    rootId=root_id,
+                )
+            encoded_projects = canonical_json(authorized_project_ids)
+            if revision["execution_mode"] == "automatic_pending" and (
+                revision["confirmed_by"] != confirmed_by
+                or revision["authorized_project_ids_json"]
+                != encoded_projects
+            ):
+                fail(
+                    "SCHEDULER_EXECUTION_CHOICE_CONFLICT",
+                    "The recorded automatic choice has different human "
+                    "authorization",
+                    rootId=root_id,
+                )
+            if revision["execution_mode"] not in {
+                None,
+                "automatic_pending",
+            }:
+                fail(
+                    "SCHEDULER_EXECUTION_CHOICE_CONFLICT",
+                    "Another execution mode has already been selected",
+                    rootId=root_id,
+                    executionMode=revision["execution_mode"],
+                )
+            at = _commit_timestamp(self.now, hierarchy["updated_at"])
+            connection.execute(
+                "UPDATE delivery_revisions SET confirmed_by = ?, "
+                "authorized_project_ids_json = ?, execution_mode = "
+                "'automatic_pending', reason = ?, updated_at = ? "
+                "WHERE root_id = ? AND revision = ?",
+                (
+                    confirmed_by,
+                    encoded_projects,
+                    "用户已选择自动执行，等待宿主完成实际开发 worktree",
+                    at,
+                    root_id,
+                    hierarchy["revision"],
+                ),
+            )
+            connection.execute(
+                "UPDATE hierarchies SET updated_at = ? WHERE root_id = ?",
+                (at, root_id),
+            )
+        self.write_projections(root_id)
+        return {
+            "selection": "AUTOMATIC",
+            "state": "RECORDED_PENDING_WORKTREE",
+            "confirmationRequired": False,
+            "confirmedBy": confirmed_by,
+            "authorizedProjectIds": list(authorized_project_ids),
+        }
+
+    def execution_selection(
+        self,
+        root_id: str,
+    ) -> dict[str, Any] | None:
+        """Return a recorded execution selection for the current revision."""
+
+        with self.read() as connection:
+            row = connection.execute(
+                "SELECT d.* FROM delivery_revisions d "
+                "JOIN hierarchies h ON h.root_id = d.root_id "
+                "AND h.revision = d.revision WHERE d.root_id = ?",
+                (root_id,),
+            ).fetchone()
+        if row is None or row["execution_mode"] != "automatic_pending":
+            return None
+        authorized = json.loads(row["authorized_project_ids_json"] or "[]")
+        return {
+            "selection": "AUTOMATIC",
+            "state": "RECORDED_PENDING_WORKTREE",
+            "confirmationRequired": False,
+            "confirmedBy": row["confirmed_by"],
+            "authorizedProjectIds": authorized,
         }
 
     def record_manual_handoff(
@@ -1847,9 +1990,21 @@ class SchedulerRepository:
                         reason = NULL,
                         continuity_basis = NULL,
                         requested_by = NULL,
-                        confirmed_by = NULL,
-                        authorized_project_ids_json = NULL,
-                        execution_mode = NULL,
+                        confirmed_by = CASE WHEN
+                            delivery_revisions.execution_mode =
+                                'automatic_pending'
+                            THEN delivery_revisions.confirmed_by
+                            ELSE NULL END,
+                        authorized_project_ids_json = CASE WHEN
+                            delivery_revisions.execution_mode =
+                                'automatic_pending'
+                            THEN delivery_revisions.authorized_project_ids_json
+                            ELSE NULL END,
+                        execution_mode = CASE WHEN
+                            delivery_revisions.execution_mode =
+                                'automatic_pending'
+                            THEN delivery_revisions.execution_mode
+                            ELSE NULL END,
                         updated_at = excluded.updated_at,
                         frozen_at = NULL,
                         superseded_at = NULL
@@ -3017,17 +3172,27 @@ class SchedulerRepository:
         )
         if same_adapter and same_parent:
             return
-        if (
-            not same_adapter
-            or not self._worker_lost_retry_allows_receiver_root_rotation(
+        rotation_reason: str | None = None
+        if same_adapter:
+            if self._worker_lost_retry_allows_receiver_root_rotation(
                 connection,
                 run_id=run_id,
                 node_id=node_id,
                 attempt=attempt,
                 parent_context_id=parent_context_id,
                 at=at,
-            )
-        ):
+            ):
+                rotation_reason = "WORKER_LOST_RETRY"
+            elif self._idle_frontier_allows_receiver_root_rotation(
+                connection,
+                run_id=run_id,
+                node_id=node_id,
+                attempt=attempt,
+                parent_context_id=parent_context_id,
+                at=at,
+            ):
+                rotation_reason = "IDLE_FRONTIER_HANDOFF"
+        if rotation_reason is None:
             fail(
                 "SCHEDULER_RECEIVER_PARENT_UNTRUSTED",
                 "Receiver attestations must originate from the run's "
@@ -3069,7 +3234,7 @@ class SchedulerRepository:
             actor=host_adapter_id,
             operation_id=None,
             payload={
-                "reason": "WORKER_LOST_RETRY",
+                "reason": rotation_reason,
                 "previousOrchestratorContextDigest": hashlib.sha256(
                     previous_context_id.encode("utf-8")
                 ).hexdigest(),
@@ -3078,6 +3243,54 @@ class SchedulerRepository:
                 ).hexdigest(),
             },
             at=at,
+        )
+
+    @staticmethod
+    def _idle_frontier_allows_receiver_root_rotation(
+        connection: sqlite3.Connection,
+        *,
+        run_id: str,
+        node_id: str,
+        attempt: int,
+        parent_context_id: str,
+        at: str,
+    ) -> bool:
+        current = connection.execute(
+            "SELECT status FROM node_runs WHERE run_id = ? "
+            "AND node_id = ? AND attempt = ?",
+            (run_id, node_id, attempt),
+        ).fetchone()
+        if current is None or current["status"] != "READY":
+            return False
+        completed_loop = connection.execute(
+            "SELECT 1 FROM graph_events WHERE run_id = ? "
+            "AND event_type = 'LOOP_SUCCEEDED' LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if completed_loop is None:
+            return False
+        active_claim = connection.execute(
+            "SELECT 1 FROM node_runs WHERE run_id = ? "
+            "AND status = 'CLAIMED' LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if active_claim is not None:
+            return False
+        active_claude_attestation = connection.execute(
+            "SELECT 1 FROM receiver_attestations WHERE run_id = ? "
+            "AND status = 'ISSUED' AND expires_at >= ? "
+            "AND parent_context_id != ? LIMIT 1",
+            (run_id, at, parent_context_id),
+        ).fetchone()
+        active_codex_identity = connection.execute(
+            "SELECT 1 FROM host_receiver_identities WHERE run_id = ? "
+            "AND status = 'ISSUED' AND expires_at >= ? "
+            "AND parent_context_id != ? LIMIT 1",
+            (run_id, at, parent_context_id),
+        ).fetchone()
+        return (
+            active_claude_attestation is None
+            and active_codex_identity is None
         )
 
     @staticmethod

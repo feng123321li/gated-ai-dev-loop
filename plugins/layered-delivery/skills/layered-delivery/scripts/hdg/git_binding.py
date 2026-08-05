@@ -687,6 +687,40 @@ def verify_delivery_git_binding(
     }
 
 
+def _git_common_directory(workspace: Path) -> Path | None:
+    if not (workspace / ".git").exists():
+        return None
+    common = Path(_git_output(workspace, "rev-parse", "--git-common-dir"))
+    if not common.is_absolute():
+        common = workspace / common
+    return common.resolve(strict=True)
+
+
+def _branch_worktrees(
+    repository_workspace: Path,
+    branch_ref: str,
+) -> list[Path]:
+    output = _git_output(
+        repository_workspace,
+        "worktree",
+        "list",
+        "--porcelain",
+    )
+    expected_ref = f"refs/heads/{branch_ref}"
+    worktrees: list[Path] = []
+    current: Path | None = None
+    for line in [*output.splitlines(), ""]:
+        if line.startswith("worktree "):
+            current = Path(line.removeprefix("worktree ")).resolve(
+                strict=True
+            )
+        elif line == f"branch {expected_ref}" and current is not None:
+            worktrees.append(current)
+        elif not line:
+            current = None
+    return worktrees
+
+
 def verify_delivery_project_scopes(
     workspace_root: str,
     delivery: dict[str, Any],
@@ -699,8 +733,7 @@ def verify_delivery_project_scopes(
     if scopes is None:
         return []
     primary_root = Path(workspace_root).absolute().resolve(strict=True)
-    verified: list[dict[str, Any]] = []
-    includes_primary = False
+    resolved_scopes: list[tuple[dict[str, Any], Path]] = []
     for scope in scopes:
         try:
             project_root = Path(scope["workspaceRoot"]).resolve(
@@ -720,9 +753,59 @@ def verify_delivery_project_scopes(
                 projectId=scope["id"],
                 workspaceRoot=str(project_root),
             )
-        if project_root == primary_root:
-            includes_primary = True
+        resolved_scopes.append((scope, project_root))
+
+    direct_primary = [
+        index
+        for index, (_scope, project_root) in enumerate(resolved_scopes)
+        if project_root == primary_root
+    ]
+    repository_primary: list[int] = []
+    if not direct_primary:
+        primary_common = _git_common_directory(primary_root)
+        if primary_common is not None:
+            repository_primary = [
+                index
+                for index, (_scope, project_root) in enumerate(
+                    resolved_scopes
+                )
+                if _git_common_directory(project_root) == primary_common
+            ]
+    primary_matches = direct_primary or repository_primary
+    if len(primary_matches) != 1:
+        fail(
+            "SCHEDULER_PROJECT_SCOPE_INVALID",
+            "projectScopes must identify exactly one current Delivery "
+            "repository workspace",
+            workspaceRoot=str(primary_root),
+            matchingProjectIds=[
+                resolved_scopes[index][0]["id"]
+                for index in primary_matches
+            ],
+        )
+    primary_index = primary_matches[0]
+
+    verified: list[dict[str, Any]] = []
+    for index, (scope, declared_root) in enumerate(resolved_scopes):
+        project_root = declared_root
         scope_binding = scope.get("gitBinding")
+        if index == primary_index:
+            project_root = primary_root
+        elif scope_binding is not None:
+            branch_roots = _branch_worktrees(
+                declared_root,
+                scope_binding["branchRef"],
+            )
+            if len(branch_roots) == 1:
+                project_root = branch_roots[0]
+            elif len(branch_roots) > 1:
+                fail(
+                    "SCHEDULER_PROJECT_SCOPE_INVALID",
+                    "A project feature branch resolves to multiple worktrees",
+                    projectId=scope["id"],
+                    branchRef=scope_binding["branchRef"],
+                    workspaceRoots=[str(item) for item in branch_roots],
+                )
         if project_root == primary_root:
             delivery_binding = delivery.get("gitBinding")
             if (
@@ -748,17 +831,16 @@ def verify_delivery_project_scopes(
             "workspaceRoot": str(project_root),
             "access": scope["access"],
         }
+        if project_root != declared_root:
+            item["declaredWorkspaceRoot"] = str(declared_root)
+            item["workspaceBindingSource"] = (
+                "SAME_REPOSITORY_LINKED_WORKTREE"
+            )
         if scope_binding is not None:
             item["gitBinding"] = scope_binding
         if git_workspace is not None:
             item["gitWorkspace"] = git_workspace
         verified.append(item)
-    if not includes_primary:
-        fail(
-            "SCHEDULER_PROJECT_SCOPE_INVALID",
-            "projectScopes must include the current Delivery workspace",
-            workspaceRoot=str(primary_root),
-        )
     return sorted(verified, key=lambda item: item["id"])
 
 

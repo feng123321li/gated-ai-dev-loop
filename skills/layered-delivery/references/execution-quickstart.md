@@ -22,7 +22,7 @@
 
 不要自行增加 TASK/Gate 节点，也不要根据 payload 内容改变 frontier 顺序。
 
-用户选择自动执行时，`select_execution_mode(AUTOMATIC)` 已在实际开发工作区完成 prepare 和 freeze，并要求宿主立即进入本执行循环；不得再次询问或重放 prepare/freeze。Ready 批次按当前可信 `host_adapter_id` 调用一次 `plan_dispatch_batch`，直接取得 reservation 和并发组。计划不展示模型表、不等待调整窗口，也不接收 inventory、node requirements、current executor、模型或 effort 参数。用户选择手动开发时，`select_execution_mode(MANUAL)` 只生成冻结内容包与嵌入的接收提示词；接收 CLI 选定实际工作区后，在任何代码工作前调用 `start_manual_handoff`，随后立即消费 frontier。
+用户选择自动执行时，`select_execution_mode(AUTOMATIC)` 已记录一次业务确认。若响应 `automaticDispatchRequested=true`，实际开发工作区已完成 prepare/freeze，宿主立即进入本执行循环；若响应包含 `worktreeSetup`，宿主迁移到要求的 linked worktree，新会话调用 `workspace_status(root_id)` 后以原双 fingerprint 调用 `resume_execution_mode`，不得再次展示选择器、询问或重放 prepare/freeze。Ready 批次按当前可信 `host_adapter_id` 调用一次 `plan_dispatch_batch`，直接取得 reservation 和并发组。计划不展示模型表、不等待调整窗口，也不接收 inventory、node requirements、current executor、模型或 effort 参数。用户选择手动开发时，`select_execution_mode(MANUAL)` 只生成冻结内容包与嵌入的接收提示词；接收 CLI 选定实际工作区后，在任何代码工作前调用 `start_manual_handoff`，随后立即消费 frontier。
 
 ### 宿主继承与内部 Worker
 
@@ -61,8 +61,8 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。`STANDARD` 不得
 7. 内部 Loop 先识别当前任务与宿主可用 Skill，再优先原生触发适用的 Skill Hint；不要因为 hierarchy 提供了提示，就假定每条提示都适用于当前 Loop。
 8. 让内部 Loop 自己选择其他必要 Skill。payload 是目标、明确约束和已知验收点的输入，不是完整实现规约；Loop 要结合真实代码、契约和数据链路推导当前 scope 的必要条件。冻结 Graph 不冻结内部实现计划。TASK Loop 自主管理实现、文件、测试、Gate 和修正；Review Loop 自主管理独立发现、修正协调、Gate 和复审。
 9. 当前目标内可修复的实现缺陷、测试失败、数据完整性或边界问题都留在当前 Loop：receiver 调整内部计划，按需创建成本合适的 Codex、Claude、Grok、DeepSeek 等 Worker，完成修正后重新验证。内部 Worker 只能向 receiver 返回结果；只有 receiver 能上报进度或终态。Review 必须保留独立复核，不要把“Review 未通过”提交成 `BLOCKED`。
-10. `STANDARD` Loop 在领取、代码检查完成、确认根因、完成修改、测试开始与结束、发现问题、修复、复审和最终验证等有意义的阶段立即调用 `report_loop_progress`；长时间测试或构建在开始前和结束后各上报一次。`LIGHT` 只在发现问题和最终验证时上报，执行时间很短且没有问题时可只报最终验证。`summary_zh`、`completed_zh` 与 `next_step_zh` 使用用户当前语言，测试结果使用结构化计数；字段名为现有 schema v3 契约，不代表内容必须包含中文字符。禁止提交原始终端日志或内部推理。进度事件是可观测事实，不是 Graph 状态迁移，也不续租。
-11. 首次独立 heartbeat 之后，长任务继续按租约调用 `heartbeat_loop`。Codex 与 Claude 原生 child 对 heartbeat、progress、pause、result 均省略 `operation_id`，由共享 PreToolUse 校验各自宿主身份后注入；其他适配器在获得等价宿主授权通道前不能自动变更 Loop。检测到上下文容量压力或高轮次 Hook 摩擦且工作仍可继续时，不提交失败结果；在租约有效期内调用普通 `pause_loop`。
+10. `STANDARD` Loop 在领取、代码检查完成、确认根因、完成修改、测试开始与结束、发现问题、修复、复审和最终验证等有意义的阶段立即调用 `report_loop_progress`。长时间测试或构建必须由 receiver 以非阻塞进程/宿主异步命令启动，或交给独立监控 Worker，使外层 receiver 不被单次 shell/tool call 占满；开始前 progress + heartbeat，运行期间至少每 `heartbeatSeconds` heartbeat，结束后立即 heartbeat + progress。`LIGHT` 只在发现问题和最终验证时上报，执行时间很短且没有问题时可只报最终验证。`summary_zh`、`completed_zh` 与 `next_step_zh` 使用用户当前语言，测试结果使用结构化计数；字段名为现有 schema v3 契约，不代表内容必须包含中文字符。禁止提交原始终端日志或内部推理。进度事件是可观测事实，不是 Graph 状态迁移，也不续租。
+11. 首次独立 heartbeat 之后，长任务继续按租约调用 `heartbeat_loop`。宿主未发出 child 完成通知只表示没有终态通知，既不是 heartbeat，也不能证明 receiver 仍存活；`SUSPECT_LOST` 也只证明控制面心跳和进度都静默，不能自行归因为 Maven 阻塞、会话错配或进程退出。Codex 与 Claude 原生 child 对 heartbeat、progress、pause、result 均省略 `operation_id`，由共享 PreToolUse 校验各自宿主身份后注入；其他适配器在获得等价宿主授权通道前不能自动变更 Loop。检测到上下文容量压力或高轮次 Hook 摩擦且工作仍可继续时，不提交失败结果；在租约有效期内调用普通 `pause_loop`。
 12. 宿主明确报告剩余额度不高于 5% 且提供真实未来 `resetAt` 时，停止启动新 Loop，并在额度耗尽前保存当前工作。已 claim 的执行 Agent 在租约有效期内调用 `pause_loop(resume_at=resetAt, capacity_scope=EXECUTOR)`；总调度宿主受限时使用 `capacity_scope=HOST` 暂停其正在承载的 claimed Loop。两者都释放租约和资源占用、保留同一 attempt；不得估算剩余额度或猜测 `resetAt`。
 13. 软阈值 pause 成功后，使用当前宿主的原生计划能力创建一次性恢复提示。为避免恢复窗口边界抖动，计划时间应晚于 `resetAt` 一小段安全余量。提示只要求原宿主调用 `workspace_status → graph_frontier → loop_context` 并重新 dispatch；额度策略固定 `PAUSE_AND_RESUME`，不自动换 Adapter、模型或 Worker。
 14. 宿主直接观察到硬 429 且结构化响应提供真实未来 `resetAt` 时，由模型外宿主适配器私有回调处理，不等待失败 Loop。Claude `StopFailure` 只读取 `error_details`，不读取渲染消息或模型输出；回调精确匹配 claimed receiver、限制 reset 最远 24 小时、用 report ID 幂等防重放，并暂停共享容量域内跨 Delivery 的同 Agent Loop。该回调不是 MCP 工具。宿主消费 `cancelRecurringMonitors=true`，按 `wakeMode=HOST_NATIVE_ONE_SHOT` 只建立 reset 后一次唤醒。
@@ -77,7 +77,15 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。`STANDARD` 不得
 - 已有 progress 但 90 秒仍无首次独立 heartbeat：`HEARTBEAT_MISSING / 已开始但无独立心跳`。
 - heartbeat 仍在预期窗口内，但超过 5 分钟没有 progress：`ALIVE_WITHOUT_PROGRESS / 存活但无可见进展`。
 - heartbeat 与 progress 均超过 `heartbeatSeconds + graceSeconds`：`SUSPECT_LOST / 疑似失联`。
+- `SUSPECT_LOST.diagnosis.claimMatched=true` 表示该 attempt 最初已经合法 claim；`cause=UNDETERMINED_CONTROL_PLANE_SILENCE` 明确禁止仅凭告警猜测长命令阻塞、会话身份不匹配或宿主进程仍存活。租约有效时继续监控；只有显式 mutation 错误可证明 operation/receiver 匹配失败。
 - lease 到期后，下一次 `graph_frontier` 先调用 `advance_graph`，记录 `CLAIM_LEASE_EXPIRED / WORKER_LOST` 并在重试预算内生成新 attempt。
+
+## 多会话 Review 接力
+
+- 同一 run 的 receiver 根默认固定为首次成功派遣的可信 `hostAdapterId + orchestrator_context_id`。
+- 前一 Loop 已 `SUCCEEDED`、下一层 frontier Ready、当前没有任何 `CLAIMED` Loop，且不存在其他主会话的有效 receiver attestation/identity 时，同一可信 Adapter 的新主会话可以派遣下一层 TASK/GROUP/Delivery Review。Controller 在新 claim 中记录 `RECEIVER_ROOT_ROTATED(reason=IDLE_FRONTIER_HANDOFF)`。
+- 仍有任一活跃 claim 时，新主会话必须得到 `SCHEDULER_RECEIVER_PARENT_UNTRUSTED`；不得把“多会话接力”解释成接管正在执行的 receiver。跨 Adapter 接力同样拒绝。
+- 当前 attempt 已合法 claim 后出现 `SUSPECT_LOST`，说明最初匹配成功；这与“下一层 Review 由新主会话接力”是两类问题。等待租约到期后的 `WORKER_LOST` retry 仍使用既有恢复规则。
 - mutation Hook 拒绝 heartbeat、progress、pause 或 result 时，主 Agent 不得代交结果或手填 operation。等待 lease 回收，修复宿主 Hook/child/model 身份后再派遣新 attempt；新接收方复用工作区成果并重新验证。
 
 不要合并以下恢复分支：

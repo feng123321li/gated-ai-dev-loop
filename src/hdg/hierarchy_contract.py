@@ -537,6 +537,7 @@ def hierarchy_contract(
                 "artifactGate": "CHOICE_READY_ARTIFACTS_READY",
                 "hostMapping": "MECHANICAL_NO_REWRITE",
                 "selectionTool": "select_execution_mode",
+                "automaticResumeTool": "resume_execution_mode",
                 "manualStartTool": "start_manual_handoff",
                 "manualExecutionBoundary": (
                     "MANUAL_TASK_ONLY_REVIEWS_REMAIN_AUTOMATIC"
@@ -551,8 +552,11 @@ def hierarchy_contract(
                     "native selector whenever callable and may show exact "
                     "Markdown only when it is unavailable; skills do not "
                     "reconstruct, rewrite, or add options. Selecting "
-                    "AUTOMATIC immediately "
-                    "prepares, freezes, and enters automatic dispatch."
+                    "AUTOMATIC is recorded once. A ready worktree "
+                    "immediately prepares, freezes, and dispatches; a "
+                    "primary checkout returns host worktree setup and the "
+                    "new session calls resume_execution_mode without "
+                    "another user confirmation."
                 ),
             },
             "deliveryContinuity": {

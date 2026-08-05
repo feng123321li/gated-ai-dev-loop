@@ -6,7 +6,7 @@
 
 - 每次收到新的用户需求，先判断它是否明确要求继续、修改或恢复当前 `delivery.id`。**新用户需求默认属于新 Delivery**；不同工单、不同业务目标、用户明确称为“新需求/独立需求”，或没有明确引用当前 Delivery，均不得修改当前 Delivery。
 - 不得仅因 `workspace_status` 返回旧 Delivery 就进入 Revision。只有用户明确要求修改或继续该 Delivery 时，才允许调用 `unfreeze_task_requirement` 或 `prepare_delivery_revision`；Agent 的语义判断不能替代这项用户连续性授权。
-- 当前上下文仍保留最近一次 `preview_hierarchy` 响应和原始 hierarchy 时，复用其中的双 fingerprint、完整清单和 `executionChoice`；需求未变时不要重复 preview，回答用户问题后重新展示 Controller 返回的同一交互。
+- 当前上下文仍保留最近一次 `preview_hierarchy` 响应和原始 hierarchy 时，复用其中的双 fingerprint、完整清单和 `executionChoice`；需求未变且尚无 `executionSelection` 时不要重复 preview，回答用户问题后重新展示 Controller 返回的同一交互。若已记录 `AUTOMATIC`，只续接 worktree 迁移与 `resume_execution_mode`，不得重新展示选择器。
 - 初次开发前用户修改需求时，更新 hierarchy 并重新调用 `preview_hierarchy`；Controller 在同一 `CHOICE_READY` Delivery 中重新生成基线与关联文档，只使用新响应的 fingerprint，不复用旧值。初始自动选择统一调用 `select_execution_mode`，不得由 Skill 拆成或猜测 `prepare_hierarchy` / `freeze_hierarchy` 步骤。
 - 初次冻结后、最终用户验收前用户修改依赖、项目范围、资源或拓扑时，保持相同 `delivery.id` 调用 `prepare_delivery_revision`，不得重新调用初始 prepare，也不得创建另一个 Delivery ID。用户明确要求继续同一 Delivery 时提交 `continuity_basis=USER_EXPLICIT_SAME_DELIVERY`；只有当前 Graph 已记录 `REPLAN_REQUIRED` 时提交 `ACTIVE_LOOP_REPLAN`。路径、分支和旧 Delivery 状态都不是连续性依据。
 - 用户给出工单号、需求号等稳定外部标识时，将其规范化写入 `delivery.requirementKey`。同一 key 只能映射一个稳定 `delivery.id`；Controller 还会从 Delivery ID/标题识别常见 `PROJECT-123` 工单号，在 preview 与最终写入两处拒绝换 ID 后重复冻结。
@@ -345,7 +345,7 @@ Torna 必须保持相同的方法、路径或签名、字段层级、类型、�
 
 ## 准备与冻结
 
-`preview_hierarchy` 与手动选择都不绑定 Delivery 工作区。preview 先把需求登记为 `CHOICE_READY`，生成共享 SQLite、根总览和完整投影；自动选择通过 `select_execution_mode(AUTOMATIC)` 在实际开发工作区完成 prepare/freeze 并建立绑定。手动选择把快照转为 `HANDOFF_READY`，交接阶段不创建 Graph Run 或 workspace 绑定；接收 CLI 调用 `start_manual_handoff` 绑定并启动同一 Graph，成功后才允许编码。多个窗口同时开发多个 Delivery 时必须使用不同工作区；Git 场景使用“一 Delivery、一 linked worktree、一最终 feature 分支”。linked worktree 共享主 checkout 的调度数据库，但 `workspaceKey` 不同。新业务目标进入已绑定其他未结束 Delivery 的工作区时，不在旧会话中 preview；宿主先创建新的 worktree 会话，再从新工作区开始规划。Controller 自身始终不创建 worktree；若仍在占用工作区 prepare，则以 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED` 拒绝并返回 `CREATE_INDEPENDENT_WORKTREE_TASK` 及 `worktreeSetup`。
+`preview_hierarchy` 与手动选择都不绑定 Delivery 工作区。preview 先把需求登记为 `CHOICE_READY`，生成共享 SQLite、根总览和完整投影；自动按钮由 `select_execution_mode(AUTOMATIC)` 先持久记录选择和项目授权。实际开发 worktree 已就绪时同一次调用完成 prepare/freeze；当前是 primary checkout、detached worktree 或主线 worktree时返回宿主 `worktreeSetup`，保持 `CHOICE_READY` 和 `executionSelection.state=RECORDED_PENDING_WORKTREE`。新 worktree 会话只调用 `workspace_status(root_id)` 与 `resume_execution_mode` 续接，不再次确认。手动选择把快照转为 `HANDOFF_READY`，交接阶段不创建 Graph Run 或 workspace 绑定；接收 CLI 调用 `start_manual_handoff` 绑定并启动同一 Graph，成功后才允许编码。多个窗口同时开发多个 Delivery 时必须使用不同工作区；Git 场景使用“一 Delivery、一 linked worktree、一最终 feature 分支”。linked worktree 共享主 checkout 的调度数据库，但 `workspaceKey` 不同。新业务目标进入已绑定其他未结束 Delivery 的工作区时，不在旧会话中 preview；宿主先创建新的 worktree 会话，再从新工作区开始规划。Controller 自身始终不创建 worktree；若仍在占用工作区 prepare，则以 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED` 拒绝并返回 `CREATE_INDEPENDENT_WORKTREE_TASK` 及 `worktreeSetup`。
 
 Git 场景先检查首次 `workspace_status`：
 
@@ -359,6 +359,7 @@ Git 场景先检查首次 `workspace_status`：
 - Codex 承接新 Delivery 时创建新的项目任务并设置 `environment=worktree`。Codex 管理的 worktree 可能先处于 detached HEAD；此时 `workspace_status` 返回的 `worktreeSetup.nextAction` 为 `CREATE_DELIVERY_FEATURE_BRANCH`。取得 Git 分支写授权并创建本 Delivery 的本地 feature 分支后，重新调用 `workspace_status`，直到获得 `suggestedGitBinding` 才继续。
 - Claude Code Desktop 必须创建新的 worktree session；CLI 使用 `claude --worktree <delivery-id>` 启动新进程/会话。Plugin 的 MCP 根由启动时 `${CLAUDE_PROJECT_DIR}` 固定，因此不得只在旧会话内调用 `EnterWorktree` 后继续；新会话加载 MCP 后重新调用 `workspace_status`。
 - feature 分支名称由宿主或用户已有分支策略决定；Layered Delivery 不生成 `feature/m_lf_` 等固定前缀，只冻结实际 checkout 的本地分支名。
+- `projectScopes.workspaceRoot` 在 CHOICE_READY 快照中保存 preview 时的仓库锚点，不要求宿主 worktree 与该绝对路径相同。prepare/runtime 会以 Git common directory、精确 `branchRef` 和冻结基线只读解析每个 scope 的唯一实际 worktree，并在 `verifiedProjectScopes` 中同时返回 `declaredWorkspaceRoot` 与实际 `workspaceRoot`。同仓库唯一匹配时不重新 preview；没有匹配、存在歧义或分支/基线不符时按 Controller 错误补齐 worktree，不能自行改写 frozen hierarchy。
 - `gitBinding` 只属于 Delivery。同一 Delivery 的全部 TASK 共享该 feature worktree 和分支；不要为 TASK 创建、声明或切换内部 Git 分支。获得相应 Git 写入授权后，各 TASK 可以只 `git add` 并 `git commit` 自身 scope 的变更，在同一 Delivery 分支上形成独立 commit；Git index/commit 写入必须串行。
 - 当前工作区是 primary checkout 时，无论当前分支名是什么都返回 `DEDICATED_WORKTREE_REQUIRED / CREATE_INDEPENDENT_WORKTREE_TASK`；先创建独立 worktree 会话，不直接绑定新 Delivery。linked worktree 仍位于所选主线或 detached HEAD 时返回 `FEATURE_BRANCH_REQUIRED / CREATE_DELIVERY_FEATURE_BRANCH`。
 - 在某个 Active Delivery 的 feature worktree 中收到另一个独立 Delivery 时，立即从宿主选择的基线或上述默认发现结果创建另一 worktree 会话；不得从当前 feature HEAD 分叉。只有用户明确要求 stacked delivery 时才允许建立真实的 Delivery 间 Git 依赖。
@@ -369,6 +370,8 @@ Git 场景先检查首次 `workspace_status`：
 ### 跨本地仓库的同一 Delivery
 
 主需求位于 `project-api`，但需要同时修改 `project-provider`、`project-consumer` 等本地仓库时，不拆成多个 Delivery。使用 `delivery.projectScopes` 声明精确范围：
+
+MCP 根固定只限制当前会话的主工作区锚点，不把同一 Delivery 限制为单仓库。只要这些仓库属于同一业务目标，就在初始 hierarchy 中一次声明完整 `projectScopes`，再让不同 TASK 通过 payload/resource claim 指向各自项目；不得为第二仓库另起 Delivery，也不得把“无法在当前会话切换 MCP 根”误报成跨仓库交付失败。只有第二仓库属于独立业务目标，或用户明确要求拆分交付时，才创建另一个 Delivery。
 
 ```json
 {
@@ -425,7 +428,7 @@ Git 场景先检查首次 `workspace_status`：
 5. Controller 是交互文案的唯一所有者。宿主必须优先调用原生选择器：把 `executionChoice.options` 机械映射到 `AskUserQuestion`（Claude Code）、机械映射到 `request_user_input`（Codex），并保留顺序、ID、默认项、推荐项、标签和说明。只有映射工具在当前上下文不可调用时，才允许逐字显示 `executionChoice.markdown`；不得由 Skill 或 Agent 改写降级文案、交换顺序、增加第三个按钮，也不得要求用户回复选项文字。`AUTOMATIC` 是默认和推荐项，`MANUAL` 是第二项。
 6. 原生对话框仍允许直接输入文字，但不为它创建“其他”选项。自由输入按 `freeformInput.nextAction` = `CONTINUE_REQUIREMENT_DISCUSSION` 继续需求沟通；需求发生变化后重新调用 preview，让 Controller 重新生成基线、关联文档和交互。用户只是提问且需求未变时，回答后保留当前 fingerprint，并再次按 `presentationPolicy` 展示同一 `executionChoice`，不得主动退回文本交互。
 7. 用户点选按钮后，把选项 ID、双 fingerprint、`requiredProjectAuthorizations` 的精确项目 ID 和真实确认人一次性传给 `select_execution_mode`：
-   - `AUTOMATIC`：立即进入 prepare、freeze 和自动派遣，不追加第二次确认。响应返回 `automaticDispatchRequested=true` 后立刻读取 `graph_frontier`，按当前可信宿主 Adapter 预留并创建 Ready 批次的独立 receiver；不插入模型推荐或调整窗口。
+   - `AUTOMATIC`：先记录业务确认。响应返回 `automaticDispatchRequested=true` 时已完成 prepare/freeze，立刻读取 `graph_frontier`；返回 `selectionRecorded=true`、`automaticDispatchRequested=false` 和 `worktreeSetup` 时，宿主创建要求的独立 worktree/feature 分支，新会话用原双 fingerprint 调用 `resume_execution_mode`。续接工具不接受 `confirmed_by` 或项目授权，不追加第二次确认；成功后立刻读取 frontier。两条路径都不插入模型推荐或调整窗口。
    - `MANUAL`：生成同结构开发包和自包含 handoff，登记 `HANDOFF_READY`；交接阶段不创建 Graph Run、workspace 绑定、任务或 worktree。宿主展示 `manualHandoff.receiverPrompt`，不得改写；同一提示词已经嵌入 `manualHandoff.path` 指向的文件。接收 CLI 必须先调用 `start_manual_handoff`，再按 frontier 在独立上下文 MANUAL claim TASK；Review 不允许 MANUAL，必须正常自动派遣。
-8. 自动或手动按钮选择本身就是该初始 Revision 的一次业务授权。`select_execution_mode` 不接受第二个确认步骤；宿主不得再调用初始 `prepare_hierarchy`、`freeze_hierarchy` 或 `create_manual_handoff` 重放选择。后续显式 Revision 继续使用各自的 Revision 工具和既有确认规则。
+8. 自动或手动按钮选择本身就是该初始 Revision 的一次业务授权。`select_execution_mode` 不接受第二个确认步骤；自动 worktree 迁移只调用 `resume_execution_mode`，宿主不得再次调用选择器，也不得调用初始 `prepare_hierarchy`、`freeze_hierarchy` 或 `create_manual_handoff` 重放选择。需求内容改变会清除未执行的 AUTOMATIC 选择并重新生成交互。后续显式 Revision 继续使用各自的 Revision 工具和既有确认规则。
 9. 自动初次冻结后当前 Delivery Revision 的 Git/project binding、依赖、资源和拓扑固定，所有 TASK requirement revision 1 均为 `FROZEN`。手动开发把相同需求内容冻结为 SQLite 已登记的 `HANDOFF_READY` 可移植快照，返回 `requirementSnapshotStatus=FROZEN`；这不等于 Graph `FROZEN`，交接阶段不创建 Graph Run 或 workspace 绑定。接收方启动 `start_manual_handoff` 后，同一 Revision 进入 `executionMode=manual` 的 Graph Run，所有 TASK requirement 同样冻结并接受完整调度、Review 与最终验收。

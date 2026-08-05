@@ -5,7 +5,7 @@ from typing import Any
 
 EXECUTION_CHOICE_MARKDOWN = """请选择开发方式（默认：自动执行）：
 
-1. 自动执行（默认）：立即开始自动开发。
+1. 自动执行（默认）：记录一次选择；工作区就绪时立即开始，否则迁移到独立 worktree 后自动继续，不再确认。
 2. 手动开发：生成 handoff；接收 CLI 启动同一 Graph，手动完成 TASK，后续审查与自动执行一致。
 
 也可直接输入修改意见，继续需求沟通。
@@ -72,11 +72,17 @@ def execution_choice_contract(
             {
                 "id": "AUTOMATIC",
                 "label": "自动执行",
-                "description": "立即开始自动开发。",
+                "description": (
+                    "记录一次选择；工作区就绪时立即开始，否则迁移到独立 "
+                    "worktree 后自动继续，不再确认。"
+                ),
                 "recommended": True,
                 "requiresAdditionalConfirmation": False,
                 "nextAction": (
-                    "PREPARE_FREEZE_AND_DISPATCH_AUTOMATICALLY"
+                    "RECORD_SELECTION_THEN_PREPARE_OR_REQUEST_WORKTREE"
+                ),
+                "worktreeContinuation": (
+                    "RESUME_EXECUTION_MODE_WITHOUT_CONFIRMATION"
                 ),
             },
             {

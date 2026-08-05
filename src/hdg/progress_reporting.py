@@ -383,7 +383,7 @@ def build_progress_monitor(
         claim_policy["graceSeconds"]
     )
     rows: list[dict[str, Any]] = []
-    alerts: list[dict[str, str]] = []
+    alerts: list[dict[str, Any]] = []
     for state in run["nodes"]:
         definition = definitions[state["nodeId"]]
         kind_text = LOOP_KIND_TEXT.get(definition["kind"])
@@ -418,13 +418,19 @@ def build_progress_monitor(
             )
             heartbeat_zh += f"；租约剩余 {_duration_zh(lease_seconds)}"
             if alert_message is not None:
-                alerts.append(
-                    {
-                        "nodeId": state["nodeId"],
-                        "code": health,
-                        "messageZh": alert_message,
+                alert: dict[str, Any] = {
+                    "nodeId": state["nodeId"],
+                    "code": health,
+                    "messageZh": alert_message,
+                }
+                if health == "SUSPECT_LOST":
+                    alert["diagnosis"] = {
+                        "claimMatched": True,
+                        "cause": "UNDETERMINED_CONTROL_PLANE_SILENCE",
+                        "hostProcessAlive": None,
+                        "safeRecovery": "WAIT_FOR_LEASE_EXPIRY",
                     }
-                )
+                alerts.append(alert)
         else:
             health = state["status"]
             health_zh = STATE_HEALTH_TEXT.get(state["status"], "状态未知")

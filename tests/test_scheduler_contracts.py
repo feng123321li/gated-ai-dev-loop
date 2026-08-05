@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import inspect
 import json
 from pathlib import Path
@@ -263,6 +264,10 @@ class HierarchyContractTests(unittest.TestCase):
         self.assertEqual(
             interaction["selectionTool"],
             "select_execution_mode",
+        )
+        self.assertEqual(
+            interaction["automaticResumeTool"],
+            "resume_execution_mode",
         )
         self.assertEqual(
             interaction["manualStartTool"],
@@ -881,6 +886,18 @@ class McpSurfaceTests(unittest.TestCase):
         self.assertIn(
             "without another confirmation",
             by_name["select_execution_mode"]["description"],
+        )
+        self.assertEqual(
+            by_name["resume_execution_mode"]["inputSchema"]["required"],
+            [
+                "root_id",
+                "expected_hierarchy_fingerprint",
+                "expected_graph_fingerprint",
+            ],
+        )
+        self.assertNotIn(
+            "confirmed_by",
+            by_name["resume_execution_mode"]["inputSchema"]["properties"],
         )
         self.assertEqual(
             by_name["create_manual_handoff"]["inputSchema"]["required"],
@@ -1908,6 +1925,182 @@ class McpSurfaceTests(unittest.TestCase):
                 "PRIMARY_WORKTREE",
             )
             self.assertNotIn("suggestedGitBinding", discovered)
+
+    def test_automatic_choice_moves_to_linked_worktree_without_reconfirm(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            repository, worktree, base_commit, branch_ref = (
+                git_delivery_checkout(
+                    root,
+                    delivery_id="d-auto-transition",
+                )
+            )
+            secondary_container = Path(root, "secondary")
+            secondary_container.mkdir()
+            (
+                secondary_repository,
+                secondary_worktree,
+                secondary_base_commit,
+                secondary_branch_ref,
+            ) = git_delivery_checkout(
+                str(secondary_container),
+                delivery_id="d-auto-transition",
+            )
+            self.assertEqual(secondary_branch_ref, branch_ref)
+            hierarchy = bind_delivery_to_git(
+                task_hierarchy(),
+                branch_ref=branch_ref,
+                base_commit=base_commit,
+            )
+            hierarchy["delivery"]["id"] = "d-auto-transition"
+            hierarchy["delivery"]["projectScopes"] = [
+                {
+                    "id": "erp-protein",
+                    "workspaceRoot": str(repository.resolve()),
+                    "access": "READ_WRITE",
+                    "gitBinding": deepcopy(
+                        hierarchy["delivery"]["gitBinding"]
+                    ),
+                },
+                {
+                    "id": "erp-pm",
+                    "workspaceRoot": str(secondary_repository.resolve()),
+                    "access": "READ_WRITE",
+                    "gitBinding": {
+                        "branchRef": secondary_branch_ref,
+                        "baseRef": "main",
+                        "baseCommit": secondary_base_commit,
+                        "integrationTarget": "main",
+                    },
+                },
+            ]
+            preview = call_tool(
+                "preview_hierarchy",
+                {"hierarchy": hierarchy},
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="claude-code",
+            )
+
+            selected = call_tool(
+                "select_execution_mode",
+                {
+                    "root_id": "d-auto-transition",
+                    "selection": "AUTOMATIC",
+                    "expected_hierarchy_fingerprint": preview[
+                        "hierarchyFingerprint"
+                    ],
+                    "expected_graph_fingerprint": preview[
+                        "graphFingerprint"
+                    ],
+                    "authorized_project_ids": ["erp-pm", "erp-protein"],
+                    "confirmed_by": "human",
+                },
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="claude-code",
+            )
+
+            self.assertEqual(selected["status"], "CHOICE_READY")
+            self.assertEqual(selected["selection"], "AUTOMATIC")
+            self.assertTrue(selected["selectionRecorded"])
+            self.assertFalse(selected["automaticDispatchRequested"])
+            self.assertEqual(
+                selected["nextAction"],
+                "CREATE_INDEPENDENT_WORKTREE_TASK",
+            )
+            self.assertEqual(
+                selected["selectionContinuation"],
+                {
+                    "tool": "resume_execution_mode",
+                    "confirmationRequired": False,
+                    "selectionPreserved": True,
+                },
+            )
+            self.assertEqual(
+                selected["worktreeSetup"]["state"],
+                "DEDICATED_WORKTREE_REQUIRED",
+            )
+            self.assertEqual(
+                selected["worktreeSetup"]["resumeAction"],
+                "CALL_WORKSPACE_STATUS_THEN_RESUME_EXECUTION_MODE",
+            )
+
+            status = call_tool(
+                "workspace_status",
+                {"root_id": "d-auto-transition"},
+                root=str(repository),
+                workspace_root=str(worktree),
+                trusted_host_adapter="claude-code",
+            )
+            self.assertEqual(
+                status["executionSelection"],
+                {
+                    "selection": "AUTOMATIC",
+                    "state": "RECORDED_PENDING_WORKTREE",
+                    "confirmationRequired": False,
+                    "confirmedBy": "human",
+                    "authorizedProjectIds": ["erp-pm", "erp-protein"],
+                },
+            )
+            verified_status = {
+                item["id"]: item
+                for item in status["verifiedProjectScopes"]
+            }
+            self.assertEqual(
+                verified_status["erp-protein"]["workspaceRoot"],
+                str(worktree.resolve()),
+            )
+            self.assertEqual(
+                verified_status["erp-protein"]["declaredWorkspaceRoot"],
+                str(repository.resolve()),
+            )
+            self.assertEqual(
+                verified_status["erp-pm"]["workspaceRoot"],
+                str(secondary_worktree.resolve()),
+            )
+            self.assertEqual(
+                verified_status["erp-pm"]["declaredWorkspaceRoot"],
+                str(secondary_repository.resolve()),
+            )
+
+            resumed = call_tool(
+                "resume_execution_mode",
+                {
+                    "root_id": "d-auto-transition",
+                    "expected_hierarchy_fingerprint": preview[
+                        "hierarchyFingerprint"
+                    ],
+                    "expected_graph_fingerprint": preview[
+                        "graphFingerprint"
+                    ],
+                },
+                root=str(repository),
+                workspace_root=str(worktree),
+                trusted_host_adapter="claude-code",
+            )
+
+            self.assertEqual(resumed["status"], "ACTIVE")
+            self.assertEqual(resumed["selection"], "AUTOMATIC")
+            self.assertTrue(resumed["automaticDispatchRequested"])
+            self.assertFalse(resumed["confirmationRequired"])
+            self.assertEqual(
+                resumed["nextAction"],
+                "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH",
+            )
+            resumed_projects = {
+                item["id"]: item
+                for item in resumed["verifiedProjectScopes"]
+            }
+            self.assertEqual(
+                resumed_projects["erp-protein"]["workspaceRoot"],
+                str(worktree.resolve()),
+            )
+            self.assertEqual(
+                resumed_projects["erp-pm"]["workspaceRoot"],
+                str(secondary_worktree.resolve()),
+            )
 
     def test_clean_host_native_worktree_is_ready_for_branch_adoption(
         self,
@@ -3364,7 +3557,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 27)
+            self.assertEqual(len(listed["result"]["tools"]), 28)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

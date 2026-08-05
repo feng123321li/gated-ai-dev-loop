@@ -59,6 +59,40 @@ def workspace_status(
         delivery = stored["hierarchy"]["delivery"]
         git_binding = delivery.get("gitBinding")
         project_scopes = delivery.get("projectScopes")
+        selection = repository.execution_selection(selected_root_id)
+        if selection is not None:
+            result["executionSelection"] = selection
+        discovery = (
+            inspect_delivery_git_workspace(
+                workspace_root or root,
+                base_ref=(
+                    git_binding.get("baseRef")
+                    if isinstance(git_binding, dict)
+                    else None
+                ),
+                host_adapter_id=host_adapter_id,
+            )
+            if stored["status"] == "CHOICE_READY"
+            else None
+        )
+        if (
+            isinstance(discovery, dict)
+            and discovery.get("worktreeSetup") is not None
+        ):
+            result.update(discovery)
+            if git_binding is not None:
+                result["gitBinding"] = git_binding
+            result["projectScopes"] = project_scopes or []
+            if selection is not None:
+                recorded_setup = _automatic_workspace_setup(
+                    workspace_root=workspace_root or root,
+                    hierarchy=stored["hierarchy"],
+                    host_adapter_id=host_adapter_id,
+                )
+                if recorded_setup is not None:
+                    result["worktreeSetup"] = recorded_setup
+                    result["nextAction"] = recorded_setup["nextAction"]
+            return result
         verified_projects = verify_delivery_project_scopes(
             workspace_root or root,
             delivery,
@@ -113,6 +147,9 @@ def workspace_status(
             )
         if project_scopes is not None:
             result["projectScopes"] = project_scopes
+            result["verifiedProjectScopes"] = verified_projects
+        if selection is not None:
+            result["nextAction"] = "RESUME_RECORDED_AUTOMATIC_SELECTION"
     else:
         discovery = inspect_delivery_git_workspace(
             workspace_root or root,
@@ -250,6 +287,39 @@ def _preview_values(hierarchy: object) -> tuple[
     )
 
 
+def _automatic_workspace_setup(
+    *,
+    workspace_root: str,
+    hierarchy: dict[str, Any],
+    host_adapter_id: str | None,
+) -> dict[str, Any] | None:
+    git_binding = hierarchy["delivery"].get("gitBinding")
+    discovery = inspect_delivery_git_workspace(
+        workspace_root,
+        base_ref=(
+            git_binding.get("baseRef")
+            if isinstance(git_binding, dict)
+            else None
+        ),
+        host_adapter_id=host_adapter_id,
+    )
+    if not isinstance(discovery, dict):
+        return None
+    setup = discovery.get("worktreeSetup")
+    if not isinstance(setup, dict):
+        return None
+    return {
+        **setup,
+        "strategy": "HOST_NATIVE_LINKED_WORKTREE",
+        "resumeAction": (
+            "CALL_WORKSPACE_STATUS_THEN_RESUME_EXECUTION_MODE"
+        ),
+        "resumeTool": "resume_execution_mode",
+        "controllerCreatesWorktree": False,
+        "selectionPreserved": True,
+    }
+
+
 def preview_hierarchy(
     *,
     root: str,
@@ -273,7 +343,14 @@ def preview_hierarchy(
         graph_fingerprint=graph_value,
     )
     artifacts_ready = staged["artifactsReady"]
-    choice_ready = artifacts_ready and staged["status"] == "CHOICE_READY"
+    recorded_selection = repository.execution_selection(
+        normalized["delivery"]["id"]
+    )
+    choice_ready = (
+        artifacts_ready
+        and staged["status"] == "CHOICE_READY"
+        and recorded_selection is None
+    )
     next_actions = {
         "HANDOFF_READY": (
             "OPEN_FROZEN_BUNDLE_AND_START_MANUAL_HANDOFF_IN_RECEIVING_CLI"
@@ -296,6 +373,8 @@ def preview_hierarchy(
         "nextAction": (
             "PRESENT_HOST_NATIVE_EXECUTION_CHOICE"
             if choice_ready
+            else "RESUME_RECORDED_AUTOMATIC_SELECTION_IN_READY_WORKTREE"
+            if recorded_selection is not None
             else next_actions.get(
                 staged["status"],
                 "REGENERATE_ARTIFACTS_BEFORE_EXECUTION_CHOICE",
@@ -308,6 +387,8 @@ def preview_hierarchy(
         result["executionChoice"] = execution_choice_contract(
             host_adapter_id
         )
+    if recorded_selection is not None:
+        result["executionSelection"] = recorded_selection
     return result
 
 
@@ -522,6 +603,8 @@ def prepare_hierarchy(
         result["gitBinding"] = git_binding
     if git_workspace is not None:
         result["gitWorkspace"] = git_workspace
+    if project_scopes is not None:
+        result["verifiedProjectScopes"] = verified_projects
     return result
 
 
@@ -791,6 +874,133 @@ def start_manual_handoff(
     }
 
 
+def resume_execution_mode(
+    *,
+    root: str,
+    root_id: str,
+    expected_hierarchy_fingerprint: str,
+    expected_graph_fingerprint: str,
+    workspace_root: str | None = None,
+    explicit_dogfood: bool = False,
+    host_adapter_id: str | None = None,
+    now: object = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """Continue one recorded AUTOMATIC choice in the ready worktree."""
+
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    stored = repository.hierarchy(root_id)
+    if (
+        stored["hierarchyFingerprint"]
+        != expected_hierarchy_fingerprint
+        or stored["graphFingerprint"] != expected_graph_fingerprint
+    ):
+        fail(
+            "SCHEDULER_EXECUTION_CHOICE_STALE",
+            "The recorded execution choice does not match the generated "
+            "baseline",
+            rootId=root_id,
+            actualHierarchyFingerprint=stored["hierarchyFingerprint"],
+            actualGraphFingerprint=stored["graphFingerprint"],
+        )
+    if stored["status"] == "FROZEN":
+        run = repository.run(root_id)
+        return {
+            **run,
+            "selection": "AUTOMATIC",
+            "selectionAlreadyApplied": True,
+            "confirmationRequired": False,
+            "automaticDispatchRequested": True,
+            "nextAction": "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH",
+        }
+    selection = repository.execution_selection(root_id)
+    if selection is None:
+        fail(
+            "SCHEDULER_EXECUTION_SELECTION_MISSING",
+            "Automatic execution cannot resume without the recorded human "
+            "selection",
+            rootId=root_id,
+        )
+    actual_workspace = workspace_root or root
+    setup = _automatic_workspace_setup(
+        workspace_root=actual_workspace,
+        hierarchy=stored["hierarchy"],
+        host_adapter_id=host_adapter_id,
+    )
+    if setup is not None:
+        return {
+            "rootId": root_id,
+            "status": stored["status"],
+            "hierarchyFingerprint": stored["hierarchyFingerprint"],
+            "graphFingerprint": stored["graphFingerprint"],
+            "selection": "AUTOMATIC",
+            "selectionRecorded": True,
+            "confirmationRequired": False,
+            "automaticDispatchRequested": False,
+            "worktreeSetup": setup,
+            "selectionContinuation": {
+                "tool": "resume_execution_mode",
+                "confirmationRequired": False,
+                "selectionPreserved": True,
+            },
+            "nextAction": setup["nextAction"],
+        }
+    if stored["status"] == "CHOICE_READY":
+        prepared = prepare_hierarchy(
+            root=root,
+            hierarchy=stored["hierarchy"],
+            workspace_root=actual_workspace,
+            explicit_dogfood=explicit_dogfood,
+            now=now,
+        )
+    elif stored["status"] == "PREPARED":
+        repository.assert_delivery_workspace(root_id, actual_workspace)
+        prepared = {
+            "rootId": root_id,
+            "deliveryRevision": stored["deliveryRevision"],
+            "hierarchyFingerprint": stored["hierarchyFingerprint"],
+        }
+        verified_projects = verify_delivery_project_scopes(
+            actual_workspace,
+            stored["hierarchy"]["delivery"],
+            preparing=False,
+        )
+        if stored["hierarchy"]["delivery"].get("projectScopes") is not None:
+            prepared["verifiedProjectScopes"] = verified_projects
+    else:
+        fail(
+            "SCHEDULER_EXECUTION_CHOICE_CONFLICT",
+            "The Delivery cannot resume the recorded automatic choice",
+            rootId=root_id,
+            status=stored["status"],
+        )
+    frozen = freeze_hierarchy(
+        root=root,
+        root_id=root_id,
+        expected_delivery_revision=prepared["deliveryRevision"],
+        expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
+        authorized_project_ids=selection["authorizedProjectIds"],
+        confirmed=True,
+        confirmed_by=selection["confirmedBy"],
+        explicit_dogfood=explicit_dogfood,
+        now=now,
+    )
+    return {
+        **frozen,
+        "selection": "AUTOMATIC",
+        "selectionAlreadyApplied": False,
+        "confirmationRequired": False,
+        "automaticDispatchRequested": True,
+        **(
+            {"verifiedProjectScopes": prepared["verifiedProjectScopes"]}
+            if "verifiedProjectScopes" in prepared
+            else {}
+        ),
+        "nextAction": "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH",
+    }
+
+
 def select_execution_mode(
     *,
     root: str,
@@ -802,6 +1012,7 @@ def select_execution_mode(
     confirmed_by: str,
     workspace_root: str | None = None,
     explicit_dogfood: bool = False,
+    host_adapter_id: str | None = None,
     now: object = None,
     **_: Any,
 ) -> dict[str, Any]:
@@ -836,6 +1047,14 @@ def select_execution_mode(
         )
     hierarchy = stored["hierarchy"]
     if selection == "MANUAL":
+        if repository.execution_selection(root_id) is not None:
+            fail(
+                "SCHEDULER_EXECUTION_CHOICE_CONFLICT",
+                "Automatic execution has already been selected; continue "
+                "it without another mode confirmation",
+                rootId=root_id,
+                selected=selection,
+            )
         if stored["status"] not in {
             "CHOICE_READY",
             "HANDOFF_READY",
@@ -885,21 +1104,7 @@ def select_execution_mode(
             status=stored["status"],
             selected=selection,
         )
-    if stored["status"] == "CHOICE_READY":
-        prepared = prepare_hierarchy(
-            root=root,
-            hierarchy=hierarchy,
-            workspace_root=workspace_root or root,
-            explicit_dogfood=explicit_dogfood,
-            now=now,
-        )
-    elif stored["status"] == "PREPARED":
-        prepared = {
-            "rootId": root_id,
-            "deliveryRevision": stored["deliveryRevision"],
-            "hierarchyFingerprint": stored["hierarchyFingerprint"],
-        }
-    else:
+    if stored["status"] not in {"CHOICE_READY", "PREPARED"}:
         fail(
             "SCHEDULER_EXECUTION_CHOICE_CONFLICT",
             "The Delivery is not waiting for an execution choice",
@@ -907,25 +1112,30 @@ def select_execution_mode(
             status=stored["status"],
             selected=selection,
         )
-    frozen = freeze_hierarchy(
+    _assert_exact_project_authorization(
+        hierarchy,
+        authorized_project_ids,
+    )
+    repository.record_automatic_selection(
+        root_id,
+        expected_hierarchy_fingerprint=expected_hierarchy_fingerprint,
+        expected_graph_fingerprint=expected_graph_fingerprint,
+        authorized_project_ids=authorized_project_ids or [],
+        confirmed_by=confirmed_by.strip(),
+    )
+    resumed = resume_execution_mode(
         root=root,
         root_id=root_id,
-        expected_delivery_revision=prepared["deliveryRevision"],
-        expected_hierarchy_fingerprint=(
-            prepared["hierarchyFingerprint"]
-        ),
-        authorized_project_ids=authorized_project_ids,
-        confirmed=True,
-        confirmed_by=confirmed_by,
+        expected_hierarchy_fingerprint=expected_hierarchy_fingerprint,
+        expected_graph_fingerprint=expected_graph_fingerprint,
+        workspace_root=workspace_root or root,
         explicit_dogfood=explicit_dogfood,
+        host_adapter_id=host_adapter_id,
         now=now,
     )
     return {
-        **frozen,
-        "selection": "AUTOMATIC",
-        "selectionAlreadyApplied": False,
-        "automaticDispatchRequested": True,
-        "nextAction": "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH",
+        **resumed,
+        "selectionRecorded": True,
     }
 
 
@@ -936,6 +1146,7 @@ __all__ = (
     "prepare_delivery_revision",
     "prepare_hierarchy",
     "preview_hierarchy",
+    "resume_execution_mode",
     "select_execution_mode",
     "start_manual_handoff",
     "workspace_status",

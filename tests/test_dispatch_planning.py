@@ -10,7 +10,9 @@ from hdg.graph_runtime import (
     authorize_codex_subagent_operation,
     claim_codex_subagent_receiver,
     dispatch_loop,
+    graph_events,
     graph_status,
+    record_loop_result,
 )
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
 
@@ -129,6 +131,101 @@ class HostDispatchPlanningTests(unittest.TestCase):
         )
         self.assertNotIn("dispatchReasoningClass", claimed)
         self.assertEqual(authorized["operationId"], claimed["operationId"])
+
+    def test_new_orchestrator_session_can_dispatch_next_review_at_idle_frontier(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            implementation = self.plan(root, prepared)["assignments"][0]
+            claimed = claim_codex_subagent_receiver(
+                root=root,
+                root_id=prepared["rootId"],
+                workspace_root=root,
+                receiver_context_id="implementation-child",
+                parent_context_id="orchestrator-session-one",
+                actual_model_id="host-model",
+                dispatch_reservation_id=implementation[
+                    "dispatchReservationId"
+                ],
+            )
+            record_loop_result(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=implementation["nodeId"],
+                operation_id=claimed["operationId"],
+                outcome={
+                    "status": "SUCCEEDED",
+                    "summary": "Implementation completed.",
+                    "result": {},
+                },
+            )
+
+            review = self.plan(root, prepared)["assignments"][0]
+            review_claim = claim_codex_subagent_receiver(
+                root=root,
+                root_id=prepared["rootId"],
+                workspace_root=root,
+                receiver_context_id="review-child",
+                parent_context_id="orchestrator-session-two",
+                actual_model_id="host-model",
+                dispatch_reservation_id=review[
+                    "dispatchReservationId"
+                ],
+            )
+
+            self.assertEqual(review_claim["nodeId"], review["nodeId"])
+            rotation = next(
+                event
+                for event in graph_events(
+                    root=root,
+                    root_id=prepared["rootId"],
+                )["events"]
+                if event["eventType"] == "RECEIVER_ROOT_ROTATED"
+            )
+            self.assertEqual(
+                rotation["payload"]["reason"],
+                "IDLE_FRONTIER_HANDOFF",
+            )
+
+    def test_new_orchestrator_session_cannot_take_over_active_claims(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(
+                root,
+                parallel_group_hierarchy(),
+            )
+            assignments = self.plan(root, prepared)["assignments"]
+            claim_codex_subagent_receiver(
+                root=root,
+                root_id=prepared["rootId"],
+                workspace_root=root,
+                receiver_context_id="first-child",
+                parent_context_id="orchestrator-session-one",
+                actual_model_id="host-model",
+                dispatch_reservation_id=assignments[0][
+                    "dispatchReservationId"
+                ],
+            )
+
+            with self.assertRaises(GatedLoopError) as caught:
+                claim_codex_subagent_receiver(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    workspace_root=root,
+                    receiver_context_id="second-child",
+                    parent_context_id="orchestrator-session-two",
+                    actual_model_id="host-model",
+                    dispatch_reservation_id=assignments[1][
+                        "dispatchReservationId"
+                    ],
+                )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_RECEIVER_PARENT_UNTRUSTED",
+        )
 
     def test_registered_adapter_is_the_only_extension_boundary(self) -> None:
         with TemporaryDirectory() as root:

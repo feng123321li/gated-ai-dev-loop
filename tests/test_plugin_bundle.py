@@ -235,8 +235,11 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("`AUTOMATIC`", text)
         self.assertIn("`MANUAL`", text)
         self.assertIn("`freeformInput.nextAction`", text)
-        self.assertIn("立即进入 prepare、freeze 和自动派遣", text)
+        self.assertIn("先记录业务确认", text)
+        self.assertIn("新会话用原双 fingerprint 调用 `resume_execution_mode`", text)
         self.assertIn("展示 `manualHandoff.receiverPrompt`", text)
+        self.assertIn("不把同一 Delivery 限制为单仓库", text)
+        self.assertIn("不得为第二仓库另起 Delivery", text)
 
     def test_skill_routes_prepared_and_replan_safely(self) -> None:
         main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
@@ -254,7 +257,10 @@ class PluginBundleTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn("`PREPARED`", main)
-        self.assertIn("需求未变时不要重复 preview", main + planning)
+        self.assertIn(
+            "需求未变且尚无 `executionSelection` 时不要重复 preview",
+            main + planning,
+        )
         self.assertIn("初次开发前用户修改需求时", planning)
         self.assertIn(
             "回答后保留当前 fingerprint",
@@ -1761,7 +1767,7 @@ class PluginBundleTests(unittest.TestCase):
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
         tool_count = len(tool_definitions())
-        self.assertEqual(tool_count, 27)
+        self.assertEqual(tool_count, 28)
         self.assertIn(
             "start_manual_handoff",
             {tool["name"] for tool in tool_definitions()},
@@ -1889,7 +1895,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            27,
+            28,
         )
         preview_result = responses[2]["result"]["structuredContent"][
             "result"
@@ -1975,7 +1981,7 @@ class PluginBundleTests(unittest.TestCase):
         ]
         self.assertEqual(len(responses), 2)
         tools = responses[1]["result"]["tools"]
-        self.assertEqual(len(tools), 27)
+        self.assertEqual(len(tools), 28)
         self.assertNotIn(
             "open_orchestrator_settings",
             {tool["name"] for tool in tools},
@@ -2053,7 +2059,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            27,
+            28,
         )
 
 

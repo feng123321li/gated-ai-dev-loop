@@ -286,6 +286,21 @@ def _execution_choice_tool_schema() -> dict[str, Any]:
     )
 
 
+def _execution_resume_tool_schema() -> dict[str, Any]:
+    return _object(
+        {
+            "root_id": ROOT_ID,
+            "expected_hierarchy_fingerprint": FINGERPRINT,
+            "expected_graph_fingerprint": FINGERPRINT,
+        },
+        required=[
+            "root_id",
+            "expected_hierarchy_fingerprint",
+            "expected_graph_fingerprint",
+        ],
+    )
+
+
 def _manual_start_tool_schema() -> dict[str, Any]:
     return _object(
         {
@@ -394,13 +409,26 @@ TOOLS = (
         "select_execution_mode",
         (
             "Apply one exact option returned by executionChoice. AUTOMATIC "
-            "immediately prepares and freezes the staged snapshot, then "
-            "returns the automatic dispatch next action without another "
-            "confirmation. MANUAL creates the handoff and returns the exact "
+            "records the human choice before checking host worktree setup; "
+            "a primary checkout returns a host-owned transition whose "
+            "continuation completes without another confirmation. A ready "
+            "worktree immediately prepares and freezes the staged snapshot. "
+            "MANUAL creates the handoff and returns the exact "
             "receiver prompt embedded in that file. Direct dialog text is "
             "not a tool option and continues requirement discussion."
         ),
         _execution_choice_tool_schema(),
+    ),
+    _tool(
+        "resume_execution_mode",
+        (
+            "Continue a previously recorded AUTOMATIC selection after the "
+            "trusted host enters the required linked worktree. Revalidate "
+            "the exact fingerprints and Git/project bindings, then prepare, "
+            "freeze, and dispatch without asking the user to select or "
+            "confirm again. This tool never changes MANUAL into AUTOMATIC."
+        ),
+        _execution_resume_tool_schema(),
     ),
     _tool(
         "create_manual_handoff",

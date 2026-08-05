@@ -69,7 +69,7 @@ Plugin 激活后，在 Codex 或 Claude Code 的新会话中提出需求，并�
 1. 读取工作区状态和当前 schema v3 契约。新业务目标若落在已绑定其他未结束 Delivery 的工作区，宿主先按 `HOST_NATIVE_LINKED_WORKTREE` 创建独立任务/会话与 linked worktree：Codex 使用 worktree 项目任务，Claude 使用新的 worktree session。
 2. 与用户沟通需求，检查真实代码、预计或已有 diff 和影响范围；无法可靠判断时使用 STANDARD。调用 `preview_hierarchy` 登记 `CHOICE_READY`，先生成共享数据库、根总览、baseline 及全部关联文档。
 3. 只有 `artifactsReady=true` 后，宿主才展示 Controller 返回的 `executionChoice`。Codex/Claude 必须优先把 `options` 映射为当前上下文可调用的原生选择器；只有映射工具不可用时才逐字显示 Controller Markdown，不得改写成“回复自动”等文字提示。交互只有“自动执行（默认）/ 手动开发”两个选项；直接输入文字继续需求沟通，不创建第三个业务选项。
-4. 用户选择自动执行后调用一次 `select_execution_mode(AUTOMATIC)`；Controller 立即完成 prepare、freeze 并要求宿主进入 frontier 自动派遣，不增加第二次确认。
+4. 用户选择自动执行后调用一次 `select_execution_mode(AUTOMATIC)`；Controller 先持久记录选择。linked worktree 已就绪时立即 prepare/freeze；仍在 primary checkout 时返回宿主 worktree 迁移动作，新会话只调用 `workspace_status → resume_execution_mode`，不再展示选择器或要求第二次确认。
 5. 用户选择手动开发后调用一次 `select_execution_mode(MANUAL)`；Controller 把需求转为 `HANDOFF_READY`，生成自包含 handoff，并返回已嵌入文件的 `manualHandoff.receiverPrompt`。交接阶段不创建 Graph Run、workspace 绑定、任务或 worktree。
 6. 接收 CLI 在任何代码工作前调用 `start_manual_handoff`，用双 fingerprint 在实际工作区启动同一 Graph。只有 TASK 实现走 `MANUAL` claim；TASK/GROUP/Delivery Review 全部沿用自动派遣、独立审查与 findings 闭环。
 7. 自动模式及 manual Graph 的 Review 批次由当前可信宿主直接预留独立 receiver；receiver 继承当前宿主模型，不进行调度前模型推荐或调整。
@@ -83,13 +83,15 @@ Plugin 激活后，在 Codex 或 Claude Code 的新会话中提出需求，并�
 | 自动执行 | 在本 Delivery 的独立 worktree 中准备并冻结 Graph，再由当前宿主派遣可证明为 `HOST_NATIVE` 的 Agent |
 | 手动开发 | 先登记 `HANDOFF_READY` 并生成同结构内容包；接收 CLI 选定工作区后调用 `start_manual_handoff`，手动完成 TASK，随后执行与自动模式完全相同的 Review Graph 和最终确认 |
 
-新业务目标默认创建新 Delivery。自动与手动开发使用同一个稳定的 `.layered-delivery/<delivery-id>/` 和同结构投影，不再创建共享 `handoffs` 目录。选择前的 `CHOICE_READY` 已创建 SQLite、根总览与全部基线文档，但未绑定 workspace 或创建 Run；worktree 是宿主在独立任务/会话边界预先建立的开发工作区，不是 Controller 副作用。`workspace_status` 用 `worktreeProvenance` 记录实际 worktree 拓扑、宿主、基线选择来源与提交；只有 linked worktree 中未被其他 worktree/Delivery 使用且基线有效的分支才可绑定，已有 diff 还必须由用户按精确状态指纹确认。手动响应的 `requirementSnapshotStatus=FROZEN` 表示需求内容已冻结，仍不代表 Graph 已 prepare、freeze 或创建 Run。一个工作区最多绑定一个未结束 Delivery；linked worktree 让并行 Delivery 共享控制数据库而使用不同 `workspaceKey`。只有用户明确要求继续同一需求，或当前 Loop 返回 `REPLAN_REQUIRED`，才在原 `delivery.id` 上创建下一 Revision。
+新业务目标默认创建新 Delivery。自动与手动开发使用同一个稳定的 `.layered-delivery/<delivery-id>/` 和同结构投影，不再创建共享 `handoffs` 目录。选择前的 `CHOICE_READY` 已创建 SQLite、根总览与全部基线文档，但未绑定 workspace 或创建 Run；记录了 AUTOMATIC 但尚待 worktree 时继续保持 CHOICE_READY，并通过 `executionSelection` 暴露无需二次确认的续接状态。worktree 是宿主在独立任务/会话边界建立的开发工作区，不是 Controller 副作用。`workspace_status` 用 `worktreeProvenance` 记录实际 worktree 拓扑、宿主、基线选择来源与提交；`projectScopes.workspaceRoot` 作为仓库锚点，Controller 可在同一 Git common directory 中把它只读解析到唯一同分支 linked worktree，并通过 `verifiedProjectScopes` 展示实际路径，无需仅因物理路径变化重新 preview。只有 linked worktree 中未被其他 worktree/Delivery 使用且基线有效的分支才可绑定，已有 diff 还必须由用户按精确状态指纹确认。手动响应的 `requirementSnapshotStatus=FROZEN` 表示需求内容已冻结，仍不代表 Graph 已 prepare、freeze 或创建 Run。一个工作区最多绑定一个未结束 Delivery；linked worktree 让并行 Delivery 共享控制数据库而使用不同 `workspaceKey`。只有用户明确要求继续同一需求，或当前 Loop 返回 `REPLAN_REQUIRED`，才在原 `delivery.id` 上创建下一 Revision。
 
 ## Receiver、Worker 与并发
 
 - `plan_dispatch_batch` 只为当前可信宿主 Adapter 预留外层 receiver。assignment 使用 `hostAdapterId`、`receiverAgentId` 与 `modelPolicy=CURRENT_HOST_INHERIT`，不包含模型推荐、reasoning class 或 effort。
 - 只有外层 receiver 能 claim、heartbeat、progress、pause、resume 和提交 result。普通 helper 与 Loop 内 Worker 不能获得 reservation、attestation 或 operation。
 - receiver 完成首次独立 heartbeat 后，可按成本和任务需要自行使用 Codex、Claude、Grok、DeepSeek 或其他 Worker，并自主选择模型、effort、并发与升级路径。
+- 长时间测试/构建必须以非阻塞进程或独立监控运行，使 receiver 能继续 heartbeat；宿主 completion notification 不算 heartbeat。`SUSPECT_LOST` 只说明控制面静默，不证明 receiver 仍活着，也不证明会话身份错配。
+- 前一 Loop 成功且 frontier 无活跃 claim 时，同一可信 Adapter 的新主会话可通过 `IDLE_FRONTIER_HANDOFF` 接力下一层 Review；活跃 claim 和跨 Adapter 接管仍被拒绝。
 - 新增 Worker 供应商无需修改 Layered Delivery；只有要让供应商直接领取 Graph 时，才需要实现一个能证明宿主生命周期和 receiver 身份的可信外层 Adapter。
 - 最终 `outcome.result.workerTelemetry` 可按 phase 报告内部 Worker 的 `agent`、`model` 和 `reasoningEffort`。未知写 `unreported`；这些值只用于展示、成本分析和 Review，不参与路由、授权、指纹或重试。
 
@@ -108,7 +110,7 @@ Plugin 激活后，在 Codex 或 Claude Code 的新会话中提出需求，并�
 - 多项目 Delivery 的可写仓库使用同名 feature 分支，并分别冻结自己的基线提交。
 - 软额度阈值可提前暂停；结构化硬 429 由宿主容量回调暂停同一容量域，并在真实恢复时间后一次性唤醒。
 - 租约过期、执行器失联和物化状态损坏分别由 frontier、`advance_graph` 和事件重建处理。
-- `WORKER_LOST` 自动重试可由同一 Adapter 的新编排会话安全接管接收方信任根，并记录 `RECEIVER_ROOT_ROTATED` 审计事件；恢复无需重冻，也无需直接修改 `scheduler.db`。不同 Adapter、仍有已认领 Loop 或旧接收凭据仍有效时继续 fail closed。
+- 同一 Adapter 的新编排会话可在 `WORKER_LOST` 自动重试或“前一 Loop 已成功、frontier 无活跃 claim”的安全边界接力接收方信任根，并分别记录 `WORKER_LOST_RETRY` / `IDLE_FRONTIER_HANDOFF` 的 `RECEIVER_ROOT_ROTATED` 审计事件；恢复无需重冻，也无需直接修改 `scheduler.db`。不同 Adapter、仍有已认领 Loop 或旧接收凭据仍有效时继续 fail closed。
 
 完整执行和恢复规则见[执行快速说明](skills/layered-delivery/references/execution-quickstart.md)与[MCP、状态和投影](skills/layered-delivery/references/mcp-transport.md)。
 

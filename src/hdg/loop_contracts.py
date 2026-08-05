@@ -49,6 +49,14 @@ _LOOP_EXECUTION_POLICY = {
         "rawLogsAllowed": False,
         "hiddenReasoningAllowed": False,
     },
+    "longRunningCommands": {
+        "execution": "NON_BLOCKING_OR_SEPARATE_MONITOR",
+        "heartbeatWhileRunning": True,
+        "heartbeatIntervalSeconds": 300,
+        "beforeStart": "REPORT_PROGRESS_AND_HEARTBEAT",
+        "afterFinish": "HEARTBEAT_AND_REPORT_PROGRESS",
+        "hostCompletionNotificationIsNotHeartbeat": True,
+    },
     "providerRateLimit": {
         "softStopTrigger": (
             "KNOWN_REMAINING_CAPACITY_AT_OR_BELOW_5_PERCENT"

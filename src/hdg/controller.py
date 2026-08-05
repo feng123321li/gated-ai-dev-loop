@@ -35,6 +35,7 @@ from .planning import (
     prepare_delivery_revision,
     prepare_hierarchy,
     preview_hierarchy,
+    resume_execution_mode,
     select_execution_mode,
     start_manual_handoff,
     workspace_status,
@@ -49,6 +50,7 @@ CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "hierarchy_contract": hierarchy_contract,
     "preview_hierarchy": preview_hierarchy,
     "select_execution_mode": select_execution_mode,
+    "resume_execution_mode": resume_execution_mode,
     "create_manual_handoff": create_manual_handoff,
     "start_manual_handoff": start_manual_handoff,
     "prepare_hierarchy": prepare_hierarchy,
@@ -121,12 +123,16 @@ class LayeredDeliveryController:
             repository = SchedulerRepository(context.project_root)
             if name in {
                 "select_execution_mode",
+                "resume_execution_mode",
                 "start_manual_handoff",
             }:
                 selected = repository.hierarchy(root_id)
                 unbound_statuses = (
-                    {"CHOICE_READY", "HANDOFF_READY"}
-                    if name == "select_execution_mode"
+                    {"CHOICE_READY", "PREPARED", "HANDOFF_READY"}
+                    if name in {
+                        "select_execution_mode",
+                        "resume_execution_mode",
+                    }
                     else {"HANDOFF_READY"}
                 )
                 if selected["status"] not in unbound_statuses:
@@ -139,11 +145,13 @@ class LayeredDeliveryController:
                     root_id,
                     workspace_root,
                     allow_unbound_manual=(name == "workspace_status"),
+                    allow_unbound_choice=(name == "workspace_status"),
                 )
             if name not in {
                 "workspace_status",
                 "prepare_delivery_revision",
                 "select_execution_mode",
+                "resume_execution_mode",
                 "start_manual_handoff",
             }:
                 stored = repository.hierarchy(root_id)
@@ -182,6 +190,7 @@ class LayeredDeliveryController:
             "prepare_hierarchy",
             "prepare_delivery_revision",
             "select_execution_mode",
+            "resume_execution_mode",
             "start_manual_handoff",
         }:
             arguments_value["workspace_root"] = workspace_root
@@ -192,7 +201,12 @@ class LayeredDeliveryController:
             arguments_value["host_native_agent_ids"] = (
                 context.host_native_agent_ids
             )
-        if name in {"workspace_status", "preview_hierarchy"}:
+        if name in {
+            "workspace_status",
+            "preview_hierarchy",
+            "select_execution_mode",
+            "resume_execution_mode",
+        }:
             arguments_value["host_adapter_id"] = context.host_adapter_id
         if name == "plan_dispatch_batch":
             arguments_value["host_adapter_id"] = context.host_adapter_id

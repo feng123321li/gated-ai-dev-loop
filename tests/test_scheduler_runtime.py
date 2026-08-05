@@ -428,7 +428,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(
             [item["description"] for item in choice["options"]],
             [
-                "立即开始自动开发。",
+                "记录一次选择；工作区就绪时立即开始，否则迁移到独立 "
+                "worktree 后自动继续，不再确认。",
                 "生成 handoff；接收 CLI 启动同一 Graph，手动完成 TASK，"
                 "后续审查与自动执行一致。",
             ],
@@ -438,12 +439,16 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(
             [item["nextAction"] for item in choice["options"]],
             [
-                "PREPARE_FREEZE_AND_DISPATCH_AUTOMATICALLY",
+                "RECORD_SELECTION_THEN_PREPARE_OR_REQUEST_WORKTREE",
                 "CREATE_HANDOFF_THEN_START_GOVERNED_MANUAL_GRAPH",
             ],
         )
         self.assertFalse(
             choice["options"][0]["requiresAdditionalConfirmation"]
+        )
+        self.assertEqual(
+            choice["options"][0]["worktreeContinuation"],
+            "RESUME_EXECUTION_MODE_WITHOUT_CONFIRMATION",
         )
         self.assertFalse(
             choice["options"][1]["requiresAdditionalConfirmation"]
@@ -556,6 +561,49 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(
             second["executionChoice"],
             first["executionChoice"],
+        )
+
+    def test_changed_requirement_clears_recorded_automatic_selection(
+        self,
+    ) -> None:
+        hierarchy = delivery_task_hierarchy(
+            "d-selection-invalidated",
+            "t-selection-invalidated",
+        )
+        first = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        SchedulerRepository(self.root, now=at(1)).record_automatic_selection(
+            "d-selection-invalidated",
+            expected_hierarchy_fingerprint=first[
+                "hierarchyFingerprint"
+            ],
+            expected_graph_fingerprint=first["graphFingerprint"],
+            authorized_project_ids=[],
+            confirmed_by="human",
+        )
+        same = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(2),
+        )
+        self.assertIn("executionSelection", same)
+        self.assertNotIn("executionChoice", same)
+
+        hierarchy["delivery"]["summary"] = "Changed delivery scope."
+        changed = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(3),
+        )
+
+        self.assertNotIn("executionSelection", changed)
+        self.assertIn("executionChoice", changed)
+        self.assertEqual(
+            changed["nextAction"],
+            "PRESENT_HOST_NATIVE_EXECUTION_CHOICE",
         )
 
     def test_controller_selection_starts_automatic_graph_without_reconfirm(
@@ -2546,6 +2594,14 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     ],
                     "rawLogsAllowed": False,
                     "hiddenReasoningAllowed": False,
+                },
+                "longRunningCommands": {
+                    "execution": "NON_BLOCKING_OR_SEPARATE_MONITOR",
+                    "heartbeatWhileRunning": True,
+                    "heartbeatIntervalSeconds": 300,
+                    "beforeStart": "REPORT_PROGRESS_AND_HEARTBEAT",
+                    "afterFinish": "HEARTBEAT_AND_REPORT_PROGRESS",
+                    "hostCompletionNotificationIsNotHeartbeat": True,
                 },
                 "providerRateLimit": {
                     "softStopTrigger": (
@@ -6467,6 +6523,15 @@ class SchedulerRuntimeTests(unittest.TestCase):
             now=claimed_at + timedelta(minutes=10),
         )["progressMonitor"]
         self.assertEqual(suspect_lost["alerts"][0]["code"], "SUSPECT_LOST")
+        self.assertEqual(
+            suspect_lost["alerts"][0]["diagnosis"],
+            {
+                "claimMatched": True,
+                "cause": "UNDETERMINED_CONTROL_PLANE_SILENCE",
+                "hostProcessAlive": None,
+                "safeRecovery": "WAIT_FOR_LEASE_EXPIRY",
+            },
+        )
         self.assertIn("疑似失联", suspect_lost["markdownTable"])
 
         frontier = get_graph_frontier(
@@ -6482,6 +6547,23 @@ class SchedulerRuntimeTests(unittest.TestCase):
             if event["eventType"] == "CLAIM_LEASE_EXPIRED"
         )
         self.assertEqual(expired["payload"]["failureClass"], "WORKER_LOST")
+
+    def test_long_running_commands_keep_heartbeat_outside_blocking_call(
+        self,
+    ) -> None:
+        policy = loop_execution_policy()
+
+        self.assertEqual(
+            policy["longRunningCommands"],
+            {
+                "execution": "NON_BLOCKING_OR_SEPARATE_MONITOR",
+                "heartbeatWhileRunning": True,
+                "heartbeatIntervalSeconds": 300,
+                "beforeStart": "REPORT_PROGRESS_AND_HEARTBEAT",
+                "afterFinish": "HEARTBEAT_AND_REPORT_PROGRESS",
+                "hostCompletionNotificationIsNotHeartbeat": True,
+            },
+        )
 
     def test_materialized_state_can_be_rebuilt_from_events(self) -> None:
         prepared = self.prepare_and_freeze(task_hierarchy())

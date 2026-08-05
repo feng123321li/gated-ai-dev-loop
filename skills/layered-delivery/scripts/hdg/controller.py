@@ -119,6 +119,7 @@ class LayeredDeliveryController:
         root_id = arguments_value.get("root_id")
         git_binding = None
         git_workspace = None
+        verified_projects = None
         if isinstance(root_id, str):
             repository = SchedulerRepository(context.project_root)
             if name in {
@@ -194,6 +195,11 @@ class LayeredDeliveryController:
             "start_manual_handoff",
         }:
             arguments_value["workspace_root"] = workspace_root
+        if name == "loop_context":
+            arguments_value["workspace_root"] = workspace_root
+            arguments_value["verified_project_scopes"] = (
+                verified_projects
+            )
         if name in {
             "plan_dispatch_batch",
             "dispatch_loop",

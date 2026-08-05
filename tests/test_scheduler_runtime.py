@@ -2728,6 +2728,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "returnOnlyStandardLoopOutcome": True,
                 "coordinatorMustNotExecuteLoopInline": True,
                 "accessOnlyAuthorizedProjectScopes": True,
+                "projectScopeWorkspaceRootsAreRuntimeVerified": False,
+                "loopsMustNotCreateSwitchOrCheckoutGitBranches": True,
             },
         )
 

@@ -5,6 +5,7 @@ import re
 import secrets
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from .dispatch_contracts import (
@@ -613,6 +614,8 @@ def loop_context(
     root: str,
     root_id: str,
     node_id: str,
+    workspace_root: str | None = None,
+    verified_project_scopes: list[dict[str, Any]] | None = None,
     explicit_dogfood: bool = False,
 ) -> dict[str, Any]:
     repository = SchedulerRepository(root)
@@ -709,6 +712,20 @@ def loop_context(
                 )
             )
     assurance_profile = graph_assurance_profile(stored["graph"])
+    project_scope_anchors = stored["hierarchy"]["delivery"].get(
+        "projectScopes",
+        [],
+    )
+    project_scopes = (
+        project_scope_anchors
+        if verified_project_scopes is None
+        else deepcopy(verified_project_scopes)
+    )
+    workspace_isolation = deepcopy(run["workspaceIsolation"])
+    if workspace_root is not None:
+        workspace_isolation["workspaceRoot"] = str(
+            Path(workspace_root).absolute().resolve(strict=True)
+        )
     context = {
         "rootId": root_id,
         "deliveryRevision": run["deliveryRevision"],
@@ -734,11 +751,9 @@ def loop_context(
             node_id,
         ),
         "humanArtifacts": human_artifacts,
-        "workspaceIsolation": run["workspaceIsolation"],
-        "projectScopes": stored["hierarchy"]["delivery"].get(
-            "projectScopes",
-            [],
-        ),
+        "workspaceIsolation": workspace_isolation,
+        "projectScopes": project_scopes,
+        "projectScopeAnchors": project_scope_anchors,
         "executionPolicy": loop_execution_policy(assurance_profile),
         "completionPolicy": loop_completion_policy(assurance_profile),
         "rules": {
@@ -752,6 +767,10 @@ def loop_context(
             "returnOnlyStandardLoopOutcome": True,
             "coordinatorMustNotExecuteLoopInline": True,
             "accessOnlyAuthorizedProjectScopes": True,
+            "projectScopeWorkspaceRootsAreRuntimeVerified": (
+                verified_project_scopes is not None
+            ),
+            "loopsMustNotCreateSwitchOrCheckoutGitBranches": True,
         },
     }
     git_binding = stored["hierarchy"]["delivery"].get("gitBinding")

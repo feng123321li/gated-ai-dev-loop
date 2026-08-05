@@ -695,9 +695,12 @@ TOOLS = (
         (
             "Read one opaque Loop descriptor, shared late-bound Skill hints, "
             "direct predecessors, transitive upstream results, TASK baseline "
-            "path, completion policy for internal adaptation and rework, and "
-            "the execution policy separating pre-claim capacity, live-lease "
-            "handoff, and expired-lease recovery."
+            "path, runtime-verified project worktree roots, frozen project "
+            "scope anchors, completion policy for internal adaptation and "
+            "rework, and the execution policy separating pre-claim capacity, "
+            "live-lease handoff, and expired-lease recovery. Loops use the "
+            "verified roots as-is and never create, switch, or check out Git "
+            "branches."
         ),
         _object(
             {"root_id": ROOT_ID, "node_id": NODE_ID},

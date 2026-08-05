@@ -152,8 +152,9 @@ def _project_scope_schema() -> dict[str, Any]:
                 "type": "string",
                 "minLength": 1,
                 "description": (
-                    "Absolute local workspace root authorized for this "
-                    "Delivery revision."
+                    "Absolute local repository anchor authorized for this "
+                    "Delivery revision. Runtime loop_context resolves it "
+                    "to this Delivery's verified worktree root."
                 ),
             },
             "access": {

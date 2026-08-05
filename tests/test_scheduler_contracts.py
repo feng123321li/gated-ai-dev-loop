@@ -2101,6 +2101,147 @@ class McpSurfaceTests(unittest.TestCase):
                 resumed_projects["erp-pm"]["workspaceRoot"],
                 str(secondary_worktree.resolve()),
             )
+            context = call_tool(
+                "loop_context",
+                {
+                    "root_id": "d-auto-transition",
+                    "node_id": "loop:t-service",
+                },
+                root=str(repository),
+                workspace_root=str(worktree),
+                trusted_host_adapter="claude-code",
+            )
+            context_projects = {
+                item["id"]: item
+                for item in context["projectScopes"]
+            }
+            self.assertEqual(
+                context_projects["erp-protein"]["workspaceRoot"],
+                str(worktree.resolve()),
+            )
+            self.assertEqual(
+                context_projects["erp-pm"]["workspaceRoot"],
+                str(secondary_worktree.resolve()),
+            )
+            self.assertEqual(
+                {
+                    item["id"]: item["workspaceRoot"]
+                    for item in context["projectScopeAnchors"]
+                },
+                {
+                    "erp-protein": str(repository.resolve()),
+                    "erp-pm": str(secondary_repository.resolve()),
+                },
+            )
+
+    def test_loop_context_keeps_parallel_deliveries_in_their_own_worktrees(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            repository, first, base_commit, first_branch = (
+                git_delivery_checkout(
+                    root,
+                    delivery_id="d-first",
+                )
+            )
+            second = Path(root, "worktrees", "d-second")
+            second_branch = "feature/d-second"
+            git_command(
+                repository,
+                "worktree",
+                "add",
+                "-b",
+                second_branch,
+                str(second),
+                "main",
+            )
+
+            deliveries = (
+                ("d-first", "t-first", first_branch, first),
+                ("d-second", "t-second", second_branch, second),
+            )
+            for delivery_id, task_id, branch_ref, worktree in deliveries:
+                hierarchy = bind_delivery_to_git(
+                    isolated_task_hierarchy(delivery_id, task_id),
+                    branch_ref=branch_ref,
+                    base_commit=base_commit,
+                )
+                hierarchy["delivery"]["projectScopes"] = [
+                    {
+                        "id": "erp-protein",
+                        "workspaceRoot": str(repository.resolve()),
+                        "access": "READ_WRITE",
+                        "gitBinding": deepcopy(
+                            hierarchy["delivery"]["gitBinding"]
+                        ),
+                    }
+                ]
+                prepared = call_tool(
+                    "prepare_hierarchy",
+                    {"hierarchy": hierarchy},
+                    root=str(repository),
+                    workspace_root=str(worktree),
+                )
+                call_tool(
+                    "freeze_hierarchy",
+                    {
+                        "root_id": delivery_id,
+                        "expected_delivery_revision": 1,
+                        "expected_hierarchy_fingerprint": prepared[
+                            "hierarchyFingerprint"
+                        ],
+                        "authorized_project_ids": ["erp-protein"],
+                        "confirmed_by": "human",
+                    },
+                    root=str(repository),
+                    workspace_root=str(worktree),
+                )
+
+            context = call_tool(
+                "loop_context",
+                {
+                    "root_id": "d-second",
+                    "node_id": "loop:t-second",
+                },
+                root=str(repository),
+                workspace_root=str(second),
+                trusted_host_adapter="claude-code",
+            )
+
+            self.assertEqual(
+                context["workspaceIsolation"]["workspaceRoot"],
+                str(second.resolve()),
+            )
+            self.assertEqual(
+                context["projectScopes"][0]["workspaceRoot"],
+                str(second.resolve()),
+            )
+            self.assertEqual(
+                context["projectScopes"][0]["declaredWorkspaceRoot"],
+                str(repository.resolve()),
+            )
+            self.assertEqual(
+                context["projectScopeAnchors"][0]["workspaceRoot"],
+                str(repository.resolve()),
+            )
+            self.assertTrue(
+                context["rules"][
+                    "projectScopeWorkspaceRootsAreRuntimeVerified"
+                ]
+            )
+            self.assertTrue(
+                context["rules"][
+                    "loopsMustNotCreateSwitchOrCheckoutGitBranches"
+                ]
+            )
+            self.assertEqual(
+                git_command(first, "branch", "--show-current"),
+                first_branch,
+            )
+            self.assertEqual(
+                git_command(second, "branch", "--show-current"),
+                second_branch,
+            )
 
     def test_clean_host_native_worktree_is_ready_for_branch_adoption(
         self,

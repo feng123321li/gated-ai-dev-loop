@@ -228,6 +228,9 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("`executionChoice.markdown`", text)
         self.assertIn("机械映射到 `AskUserQuestion`", text)
         self.assertIn("机械映射到 `request_user_input`", text)
+        self.assertIn("必须优先调用原生选择器", text)
+        self.assertIn("只有映射工具在当前上下文不可调用", text)
+        self.assertIn("不得要求用户回复选项文字", text)
         self.assertIn("Controller 是交互文案的唯一所有者", text)
         self.assertIn("`AUTOMATIC`", text)
         self.assertIn("`MANUAL`", text)
@@ -333,8 +336,26 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertIn("不指定 Agent、模型或接收任务", planning)
         self.assertIn("start_manual_handoff", planning)
-        self.assertNotIn("创建新 Codex 任务", planning)
-        self.assertNotIn("创建新 Claude 会话", planning)
+        self.assertIn("`environment=worktree`", planning)
+        self.assertIn("`claude --worktree <delivery-id>`", planning)
+        self.assertIn("`${CLAUDE_PROJECT_DIR}`", planning)
+        self.assertIn("不得只在旧会话内调用 `EnterWorktree`", planning)
+        self.assertIn("`CREATE_DELIVERY_FEATURE_BRANCH`", planning)
+        self.assertIn("重新调用 `workspace_status`", planning)
+        self.assertIn("`HOST_NATIVE_LINKED_WORKTREE`", planning)
+        self.assertIn("`worktreeProvenance`", planning)
+        self.assertIn("`baseHeadCommit`", planning)
+        self.assertIn("`selectionSource`", planning)
+        self.assertIn("`DIRTY_CONFIRMATION_REQUIRED`", planning)
+        self.assertIn(
+            "`confirmed_dirty_state_fingerprint`",
+            planning,
+        )
+        self.assertIn(
+            "`BRANCH_BOUND_TO_OTHER_DELIVERY`",
+            planning,
+        )
+        self.assertIn("不能仅凭 feature 分支名", planning)
         self.assertIn("内部 Worker 不是 Graph receiver", recommendations)
         self.assertIn("不得调用 `dispatch_loop`", recommendations)
         self.assertIn("MANUAL claim", recommendations)
@@ -412,8 +433,9 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("REFREEZE_TASK_REQUIREMENT", execution)
         self.assertIn("requirement revision 1", planning)
         self.assertIn("不得修改依赖", execution)
-        self.assertIn("优先选择本地 `main`", planning)
-        self.assertIn("回退 `master`", planning)
+        self.assertIn("宿主显式选择", planning)
+        self.assertIn("`origin/HEAD`", planning)
+        self.assertIn("本地 `main`、本地 `master`", planning)
         self.assertIn(
             "不得从当前 feature HEAD 分叉",
             planning,

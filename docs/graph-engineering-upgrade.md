@@ -189,7 +189,7 @@ Review 沿层级逐层向上收敛，但不会把同一个 Review 节点重复�
 
 冻结 Revision 只固定当前外层目标、依赖、资源声明、项目范围和拓扑，不固定 Loop 内部实现计划；显式 payload 也不是工程正确性的穷举清单。Gate 失败、普通实现缺陷或 Review finding 只要能在当前 scope 和权限内修正，就由当前 Loop 调整方案、修正并重新验证。`BLOCKED` 仅用于当前 Loop 已无可行的 scope 内路径，并要求显式 failure class；只有冻结的依赖、资源、项目范围或拓扑必须改变时才返回 `REPLAN_REQUIRED`。最终用户验收前的 replan 保持同一 `delivery.id` 并生成下一不可变 Revision，不再用取消旧 run 加新 Delivery ID 表达同一需求。
 
-Revision 连续性必须来自用户明确说明，而不是来自工作区恰好恢复了哪个 Active Delivery。不同工单或独立业务目标默认建立新 Delivery。`preview_hierarchy` 先登记不绑定工作区的 `CHOICE_READY`，并在显示选项前生成数据库、总览、基线与关联投影；手动选择同样不绑定工作区。同一物理工作区已有未结束 Delivery 时，只有 `select_execution_mode(AUTOMATIC)` 内真正开始开发的 prepare 才返回 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED / CREATE_INDEPENDENT_WORKTREE_TASK`。宿主此时才从主线创建 worktree；若只返回排队标识，则保持 `WORKTREE_SETUP_QUEUED`，不重复创建，也不宣称 Graph 已冻结。初始自动或手动按钮选择由 Controller 一次应用，不触发第二次通用确认。
+Revision 连续性必须来自用户明确说明，而不是来自工作区恰好恢复了哪个 Active Delivery。不同工单或独立业务目标默认建立新 Delivery。新目标进入已绑定其他未结束 Delivery 的工作区时，宿主在 preview 前按 `HOST_NATIVE_LINKED_WORKTREE` 创建新的任务/会话与 linked worktree；Codex 使用 worktree 项目任务，Claude 必须启动新 worktree session，其他宿主提供等价适配。Controller 不执行 Git 写入，而以 `worktreeProvenance` 明示实际宿主、拓扑、基线选择来源和提交；分支只有未被其他 worktree/Delivery 使用、基线有效，且现存 diff 经用户按精确状态指纹确认后才可 adoption。`preview_hierarchy` 仍只登记不绑定工作区的 `CHOICE_READY`，并在显示选项前生成数据库、总览、基线与关联投影；返回的 schema v2 `executionChoice` 要求 Codex/Claude 在映射工具可调用时使用原生选择器，仅在不可调用时逐字显示 Markdown，禁止 Agent 自行改写为回复提示。手动选择同样不绑定工作区。遗漏入口路由而在占用工作区 prepare 时，返回 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED / CREATE_INDEPENDENT_WORKTREE_TASK` 与 `worktreeSetup`。异步宿主若只返回排队标识，则保持 `WORKTREE_SETUP_QUEUED`，不重复创建，也不宣称 Graph 已冻结。初始自动或手动按钮选择由 Controller 一次应用，不触发第二次通用确认。
 
 ## 逻辑递归与物理布局
 

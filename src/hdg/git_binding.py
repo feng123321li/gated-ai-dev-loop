@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 from typing import Any
 
 from .errors import fail
+from .jsonio import fingerprint
 from .model_core import validate_git_binding
 
 
 GIT_TIMEOUT_SECONDS = 10
+
+
+@dataclass(frozen=True)
+class MainlineSelection:
+    branch_ref: str
+    head_commit: str
+    source: str
 
 
 def _git(
@@ -82,10 +91,220 @@ def _optional_commit(workspace: Path, revision: str) -> str | None:
     )
 
 
+def _origin_default_branch(
+    workspace: Path,
+) -> tuple[str, str] | None:
+    symbolic = _git(
+        workspace,
+        "symbolic-ref",
+        "--quiet",
+        "refs/remotes/origin/HEAD",
+        accepted=(0, 1, 128),
+    )
+    if symbolic.returncode != 0:
+        return None
+    full_ref = symbolic.stdout.strip()
+    prefix = "refs/remotes/origin/"
+    if not full_ref.startswith(prefix):
+        return None
+    branch_ref = full_ref.removeprefix(prefix)
+    commit = _optional_commit(workspace, full_ref)
+    if commit is None:
+        return None
+    return branch_ref, commit
+
+
+def _select_mainline(
+    workspace: Path,
+    base_ref: str | None,
+) -> MainlineSelection:
+    remote_default = _origin_default_branch(workspace)
+    if base_ref is None and remote_default is not None:
+        return MainlineSelection(
+            branch_ref=remote_default[0],
+            head_commit=remote_default[1],
+            source="ORIGIN_HEAD",
+        )
+    if base_ref is not None:
+        remote_commit = _optional_commit(
+            workspace,
+            f"refs/remotes/origin/{base_ref}",
+        )
+        if remote_commit is not None:
+            return MainlineSelection(
+                branch_ref=base_ref,
+                head_commit=remote_commit,
+                source="HOST_SELECTED",
+            )
+        local_commit = _optional_commit(
+            workspace,
+            f"refs/heads/{base_ref}",
+        )
+        if local_commit is not None:
+            return MainlineSelection(
+                branch_ref=base_ref,
+                head_commit=local_commit,
+                source="HOST_SELECTED",
+            )
+        fail(
+            "SCHEDULER_GIT_BASE_INVALID",
+            "Selected mainline branch does not exist locally or as an "
+            "origin tracking ref",
+            baseRef=base_ref,
+        )
+    for candidate in ("main", "master"):
+        candidate_commit = _optional_commit(
+            workspace,
+            f"refs/heads/{candidate}",
+        )
+        if candidate_commit is not None:
+            return MainlineSelection(
+                branch_ref=candidate,
+                head_commit=candidate_commit,
+                source=f"LOCAL_{candidate.upper()}_FALLBACK",
+            )
+    fail(
+        "SCHEDULER_GIT_BASE_INVALID",
+        "No valid origin default branch, local main, or local master exists",
+    )
+
+
+def _merge_base(
+    workspace: Path,
+    head_commit: str,
+    base_commit: str,
+    *,
+    branch_ref: str | None,
+    base_ref: str,
+) -> str:
+    merge_base = _git(
+        workspace,
+        "merge-base",
+        head_commit,
+        base_commit,
+        accepted=(0, 1),
+    )
+    if merge_base.returncode != 0 or not merge_base.stdout.strip():
+        fail(
+            "SCHEDULER_GIT_BASE_INVALID",
+            "Delivery workspace does not share a base with the mainline "
+            "branch",
+            branchRef=branch_ref,
+            baseRef=base_ref,
+        )
+    return merge_base.stdout.strip()
+
+
+def _mainline_commits(
+    workspace: Path,
+    base_ref: str,
+) -> tuple[str, ...]:
+    revisions = (
+        f"refs/heads/{base_ref}",
+        f"refs/remotes/origin/{base_ref}",
+    )
+    commits = tuple(
+        dict.fromkeys(
+            commit
+            for revision in revisions
+            if (commit := _optional_commit(workspace, revision)) is not None
+        )
+    )
+    if not commits:
+        fail(
+            "SCHEDULER_GIT_BASE_INVALID",
+            "Delivery baseRef does not resolve to a local branch or origin "
+            "tracking branch",
+            baseRef=base_ref,
+        )
+    return commits
+
+
+def _absolute_git_path(workspace: Path, *arguments: str) -> Path:
+    value = Path(_git_output(workspace, *arguments))
+    if not value.is_absolute():
+        value = workspace / value
+    return value.resolve(strict=True)
+
+
+def _worktree_topology(workspace: Path) -> str:
+    git_dir = _absolute_git_path(
+        workspace,
+        "rev-parse",
+        "--absolute-git-dir",
+    )
+    common_dir = _absolute_git_path(
+        workspace,
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+    )
+    return (
+        "LINKED_WORKTREE"
+        if git_dir != common_dir
+        else "PRIMARY_WORKTREE"
+    )
+
+
+def _working_tree_state(workspace: Path) -> dict[str, Any]:
+    porcelain = _git_output(
+        workspace,
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+    )
+    changes = porcelain.splitlines() if porcelain else []
+    return {
+        "clean": not changes,
+        "changeCount": len(changes),
+        "stateFingerprint": fingerprint({"porcelain": porcelain}),
+    }
+
+
+def _branch_worktree_count(workspace: Path, branch_ref: str) -> int:
+    expected = f"branch refs/heads/{branch_ref}"
+    return sum(
+        line == expected
+        for line in _git_output(
+            workspace,
+            "worktree",
+            "list",
+            "--porcelain",
+        ).splitlines()
+    )
+
+
+def _worktree_provenance(
+    workspace: Path,
+    *,
+    topology: str,
+    selection: MainlineSelection,
+    base_commit: str,
+    host_adapter_id: str | None,
+) -> dict[str, Any]:
+    return {
+        "strategy": (
+            "HOST_NATIVE_LINKED_WORKTREE"
+            if topology == "LINKED_WORKTREE"
+            else "PRIMARY_CHECKOUT"
+        ),
+        "hostAdapterId": host_adapter_id,
+        "workspaceRoot": str(workspace),
+        "topology": topology,
+        "selectionSource": selection.source,
+        "baseRef": selection.branch_ref,
+        "baseCommit": base_commit,
+        "baseHeadCommit": selection.head_commit,
+        "integrationTarget": selection.branch_ref,
+    }
+
+
 def inspect_delivery_git_workspace(
     workspace_root: str,
     *,
     base_ref: str | None = None,
+    confirmed_dirty_state_fingerprint: str | None = None,
+    host_adapter_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Discover the current feature branch and suggest a frozen binding."""
 
@@ -107,11 +326,91 @@ def inspect_delivery_git_workspace(
         "HEAD",
         accepted=(0, 1),
     )
+    head_commit = _commit(
+        workspace,
+        "HEAD",
+        code="SCHEDULER_GIT_HEAD_INVALID",
+        message="Delivery worktree HEAD is not a commit",
+    )
+    selection = _select_mainline(
+        workspace,
+        base_ref,
+    )
+    topology = _worktree_topology(workspace)
+    working_tree = _working_tree_state(workspace)
+    if topology == "PRIMARY_WORKTREE":
+        if symbolic.returncode == 0:
+            full_ref = symbolic.stdout.strip()
+            if not full_ref.startswith("refs/heads/"):
+                fail(
+                    "SCHEDULER_GIT_BRANCH_MISMATCH",
+                    "Delivery worktree must use a local branch",
+                )
+            branch_ref = full_ref.removeprefix("refs/heads/")
+            git_workspace = {
+                "branchRef": branch_ref,
+                "headCommit": head_commit,
+                "role": (
+                    "MAINLINE"
+                    if branch_ref == selection.branch_ref
+                    or branch_ref in {"main", "master"}
+                    else "UNBOUND_BRANCH"
+                ),
+            }
+        else:
+            git_workspace = {
+                "role": "DETACHED_PRIMARY",
+                "headCommit": head_commit,
+            }
+        return {
+            "gitWorkspace": git_workspace,
+            "worktreeSetup": {
+                "state": "DEDICATED_WORKTREE_REQUIRED",
+                "owner": "HOST",
+                "nextAction": "CREATE_INDEPENDENT_WORKTREE_TASK",
+                "baseRef": selection.branch_ref,
+                "baseCommit": selection.head_commit,
+                "integrationTarget": selection.branch_ref,
+            },
+            "worktreeProvenance": _worktree_provenance(
+                workspace,
+                topology=topology,
+                selection=selection,
+                base_commit=selection.head_commit,
+                host_adapter_id=host_adapter_id,
+            ),
+            "workingTree": working_tree,
+        }
     if symbolic.returncode != 0:
-        fail(
-            "SCHEDULER_GIT_DETACHED_HEAD",
-            "A Git Delivery must be prepared on a feature branch",
+        base_commit = _merge_base(
+            workspace,
+            head_commit,
+            selection.head_commit,
+            branch_ref=None,
+            base_ref=selection.branch_ref,
         )
+        return {
+            "gitWorkspace": {
+                "role": "DETACHED_WORKTREE",
+                "headCommit": head_commit,
+            },
+            "worktreeSetup": {
+                "state": "FEATURE_BRANCH_REQUIRED",
+                "owner": "HOST",
+                "nextAction": "CREATE_DELIVERY_FEATURE_BRANCH",
+                "baseRef": selection.branch_ref,
+                "baseCommit": base_commit,
+                "integrationTarget": selection.branch_ref,
+            },
+            "worktreeProvenance": _worktree_provenance(
+                workspace,
+                topology=topology,
+                selection=selection,
+                base_commit=base_commit,
+                host_adapter_id=host_adapter_id,
+            ),
+            "workingTree": working_tree,
+        }
     full_ref = symbolic.stdout.strip()
     if not full_ref.startswith("refs/heads/"):
         fail(
@@ -119,71 +418,131 @@ def inspect_delivery_git_workspace(
             "Delivery worktree must use a local feature branch",
         )
     branch_ref = full_ref.removeprefix("refs/heads/")
-    head_commit = _commit(
-        workspace,
-        "HEAD",
-        code="SCHEDULER_GIT_HEAD_INVALID",
-        message="Delivery worktree HEAD is not a commit",
-    )
     result: dict[str, Any] = {
         "gitWorkspace": {
             "branchRef": branch_ref,
             "headCommit": head_commit,
-        }
+        },
+        "workingTree": working_tree,
     }
-    selected_base_ref = base_ref
-    base_ref_commit = None
-    if selected_base_ref is None:
-        if branch_ref in {"main", "master"}:
-            selected_base_ref = branch_ref
-            base_ref_commit = head_commit
-        else:
-            for candidate in ("main", "master"):
-                candidate_commit = _optional_commit(
-                    workspace,
-                    f"refs/heads/{candidate}",
-                )
-                if candidate_commit is not None:
-                    selected_base_ref = candidate
-                    base_ref_commit = candidate_commit
-                    break
-    if selected_base_ref is None:
-        fail(
-            "SCHEDULER_GIT_BASE_INVALID",
-            "Neither main nor master exists as a local mainline branch",
-        )
-    if branch_ref == selected_base_ref:
+    if branch_ref == selection.branch_ref or branch_ref in {"main", "master"}:
         result["gitWorkspace"]["role"] = "MAINLINE"
-        return result
-    if base_ref_commit is None:
-        base_ref_commit = _commit(
+        result["worktreeSetup"] = {
+            "state": "FEATURE_BRANCH_REQUIRED",
+            "owner": "HOST",
+            "nextAction": "CREATE_DELIVERY_FEATURE_BRANCH",
+            "baseRef": selection.branch_ref,
+            "baseCommit": selection.head_commit,
+            "integrationTarget": selection.branch_ref,
+        }
+        result["worktreeProvenance"] = _worktree_provenance(
             workspace,
-            f"refs/heads/{selected_base_ref}",
-            code="SCHEDULER_GIT_BASE_INVALID",
-            message="Selected mainline branch does not exist",
+            topology=topology,
+            selection=selection,
+            base_commit=selection.head_commit,
+            host_adapter_id=host_adapter_id,
         )
-    merge_base = _git(
+        return result
+    base_commit = _merge_base(
         workspace,
-        "merge-base",
         head_commit,
-        base_ref_commit,
-        accepted=(0, 1),
+        selection.head_commit,
+        branch_ref=branch_ref,
+        base_ref=selection.branch_ref,
     )
-    if merge_base.returncode != 0 or not merge_base.stdout.strip():
-        fail(
-            "SCHEDULER_GIT_BASE_INVALID",
-            "Feature branch does not share a base with the mainline branch",
-            branchRef=branch_ref,
-            baseRef=selected_base_ref,
-        )
     result["gitWorkspace"]["role"] = "DELIVERY_FEATURE"
-    result["suggestedGitBinding"] = {
+    binding = {
         "branchRef": branch_ref,
-        "baseRef": selected_base_ref,
-        "baseCommit": merge_base.stdout.strip(),
-        "integrationTarget": selected_base_ref,
+        "baseRef": selection.branch_ref,
+        "baseCommit": base_commit,
+        "integrationTarget": selection.branch_ref,
     }
+    result["worktreeProvenance"] = _worktree_provenance(
+        workspace,
+        topology=topology,
+        selection=selection,
+        base_commit=base_commit,
+        host_adapter_id=host_adapter_id,
+    )
+    branch_worktree_count = _branch_worktree_count(workspace, branch_ref)
+    if branch_worktree_count > 1:
+        result["branchAdoption"] = {
+            "state": "BRANCH_IN_USE_BY_OTHER_WORKTREE",
+            "nextAction": "CREATE_DELIVERY_FEATURE_BRANCH",
+            "workingTreeClean": working_tree["clean"],
+            "conflictingWorktreeCount": branch_worktree_count,
+        }
+        return result
+    if working_tree["clean"]:
+        if confirmed_dirty_state_fingerprint is not None:
+            fail(
+                "SCHEDULER_GIT_DIRTY_CONFIRMATION_INVALID",
+                "The worktree is clean and has no dirty state to confirm",
+            )
+        result["branchAdoption"] = {
+            "state": "READY",
+            "nextAction": "USE_SUGGESTED_GIT_BINDING",
+            "workingTreeClean": True,
+        }
+        result["suggestedGitBinding"] = binding
+        return result
+    dirty_fingerprint = working_tree["stateFingerprint"]
+    if confirmed_dirty_state_fingerprint is None:
+        result["branchAdoption"] = {
+            "state": "DIRTY_CONFIRMATION_REQUIRED",
+            "nextAction": "CONFIRM_CURRENT_DIFF_BELONGS_TO_DELIVERY",
+            "workingTreeClean": False,
+            "dirtyStateFingerprint": dirty_fingerprint,
+        }
+        result["candidateGitBinding"] = binding
+        return result
+    if confirmed_dirty_state_fingerprint != dirty_fingerprint:
+        fail(
+            "SCHEDULER_GIT_DIRTY_STATE_CHANGED",
+            "The worktree changed after its dirty state was presented",
+            expectedDirtyStateFingerprint=(
+                confirmed_dirty_state_fingerprint
+            ),
+            actualDirtyStateFingerprint=dirty_fingerprint,
+        )
+    result["branchAdoption"] = {
+        "state": "READY_WITH_CONFIRMED_CHANGES",
+        "nextAction": "USE_SUGGESTED_GIT_BINDING",
+        "workingTreeClean": False,
+        "dirtyStateFingerprint": dirty_fingerprint,
+    }
+    result["suggestedGitBinding"] = binding
     return result
+
+
+def inspect_frozen_git_workspace_provenance(
+    workspace_root: str,
+    binding: object,
+    *,
+    host_adapter_id: str | None = None,
+) -> dict[str, Any]:
+    """Report current worktree provenance for a frozen Git binding."""
+
+    workspace = Path(workspace_root).absolute().resolve(strict=True)
+    normalized = validate_git_binding(binding)
+    selected = _select_mainline(workspace, normalized["baseRef"])
+    selection = MainlineSelection(
+        branch_ref=selected.branch_ref,
+        head_commit=selected.head_commit,
+        source="FROZEN_GIT_BINDING",
+    )
+    provenance = _worktree_provenance(
+        workspace,
+        topology=_worktree_topology(workspace),
+        selection=selection,
+        base_commit=normalized["baseCommit"],
+        host_adapter_id=host_adapter_id,
+    )
+    provenance["integrationTarget"] = normalized["integrationTarget"]
+    return {
+        "worktreeProvenance": provenance,
+        "workingTree": _working_tree_state(workspace),
+    }
 
 
 def verify_delivery_git_binding(
@@ -260,12 +619,6 @@ def verify_delivery_git_binding(
             baseCommit=normalized["baseCommit"],
             resolvedCommit=base_commit,
         )
-    base_ref_commit = _commit(
-        workspace,
-        f"refs/heads/{normalized['baseRef']}",
-        code="SCHEDULER_GIT_BASE_INVALID",
-        message="Delivery baseRef does not resolve to a local branch",
-    )
     ancestor = _git(
         workspace,
         "merge-base",
@@ -281,34 +634,47 @@ def verify_delivery_git_binding(
             baseCommit=base_commit,
             headCommit=head_commit,
         )
-    mainline_ancestor = _git(
+    mainline_commits = _mainline_commits(
         workspace,
-        "merge-base",
-        "--is-ancestor",
-        base_commit,
-        base_ref_commit,
-        accepted=(0, 1),
+        normalized["baseRef"],
     )
-    if mainline_ancestor.returncode != 0:
+    mainline_contains_base = any(
+        _git(
+            workspace,
+            "merge-base",
+            "--is-ancestor",
+            base_commit,
+            mainline_commit,
+            accepted=(0, 1),
+        ).returncode
+        == 0
+        for mainline_commit in mainline_commits
+    )
+    if not mainline_contains_base:
         fail(
             "SCHEDULER_GIT_BASE_INVALID",
-            "Delivery mainline no longer contains baseCommit",
+            "No local or origin mainline ref contains baseCommit",
             baseCommit=base_commit,
             baseRef=normalized["baseRef"],
         )
     if preparing:
-        merge_base = _git_output(
-            workspace,
-            "merge-base",
-            head_commit,
-            base_ref_commit,
+        merge_bases = tuple(
+            dict.fromkeys(
+                _git_output(
+                    workspace,
+                    "merge-base",
+                    head_commit,
+                    mainline_commit,
+                )
+                for mainline_commit in mainline_commits
+            )
         )
-        if merge_base != base_commit:
+        if base_commit not in merge_bases:
             fail(
                 "SCHEDULER_GIT_BASE_INVALID",
                 "baseCommit must be the feature branch fork point from "
                 "baseRef when the Delivery is prepared",
-                expectedBaseCommit=merge_base,
+                expectedBaseCommits=list(merge_bases),
                 actualBaseCommit=base_commit,
             )
     return {
@@ -398,6 +764,7 @@ def verify_delivery_project_scopes(
 
 __all__ = (
     "inspect_delivery_git_workspace",
+    "inspect_frozen_git_workspace_provenance",
     "verify_delivery_git_binding",
     "verify_delivery_project_scopes",
 )

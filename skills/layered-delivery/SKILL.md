@@ -25,14 +25,14 @@ description: "规划、冻结、调度或恢复多项目、多模块交付 Graph
 - SQLite 是需求与调度状态的机器权威；Graph 启动后由事件链记录运行历史。Markdown 投影只用于沟通、进度和验收。
 - 一个对话工作区最多绑定一个未结束 Delivery。新业务目标默认创建新 Delivery；不得因为工作区已有旧 Delivery 就把新需求写成旧 Delivery 的 Revision。
 - 一个需求只使用一个稳定的 `.layered-delivery/<delivery-id>/` 目录。用户提供工单号等外部需求标识时写入 `delivery.requirementKey`；同一 key 不得换 `delivery.id`，Controller 也会从 ID/标题识别常见工单号并阻断重复目录。自动与手动开发均生成 overview、baseline、progress、acceptance、revisions 和同结构 work-items；手动开发额外包含自包含 handoff 文件。不得创建共享 `.layered-delivery/handoffs/`。手动包的需求内容已由双指纹冻结，但它不是 Graph `FROZEN`：未 prepare、未创建 Graph Run。
-- 并行 Delivery 真正开始开发时使用独立宿主工作区；Git 场景优先使用独立 linked worktree。`preview_hierarchy` 会先创建共享 `scheduler.db`、根总览和 Delivery 基线/关联文档并登记 `CHOICE_READY`，但不绑定 workspace、不创建 Graph Run 或 worktree。手动内容冻结阶段同样不创建 worktree。不要复制调度数据库或启动第二套控制面。
+- 新 Delivery 不复用已绑定其他未结束 Delivery 的会话工作区。Git 项目统一遵循 `HOST_NATIVE_LINKED_WORKTREE`：Codex 创建 `environment=worktree` 的项目任务，Claude 创建新的 worktree session，其他可信宿主提供等价任务/会话与 linked worktree。Controller 不执行 Git 写操作；它通过 `worktreeProvenance` 显示实际宿主、拓扑、基线选择来源、`baseRef/baseCommit/baseHeadCommit/integrationTarget`，并只在 linked worktree 的分支未被其他 worktree/Delivery 使用时允许 adoption。不能仅凭 feature 分支名复用；已有 diff 必须让用户确认全部属于本 Delivery，再以原响应的精确 `workingTree.stateFingerprint` 作为 `confirmed_dirty_state_fingerprint` 重查。`preview_hierarchy` 仍只创建共享 `scheduler.db`、根总览和 Delivery 基线/关联文档，不绑定 workspace 或创建 Graph Run。linked worktree 复用共享控制面，但获得独立 `workspaceKey`；不要复制调度数据库或启动第二套控制面。
 - 总调度上下文只规划和路由，不在自身上下文内实现 TASK 或 Review。自动 TASK、手动 TASK 与每个 Review Loop 都使用独立接收上下文；手动接收主上下文也只负责启动 Graph 和消费 frontier。
 - Git 创建/切换分支、commit、merge、push、发布、迁移和新增外部权限始终需要各自授权；Graph 的项目范围不替代这些授权。
 - 最终完成必须取得真实用户确认。
 
 ## 入口路由
 
-先调用 `workspace_status`；已知 Delivery 时显式传 `rootId`。
+先调用 `workspace_status`；已知 Delivery 时显式传 `rootId`。如果用户提出新业务目标而当前状态属于另一个未结束 Delivery，先按规划说明创建宿主原生 worktree 会话，再在新工作区重新调用 `workspace_status`；不得按旧 Delivery 的状态行续接。
 
 | 状态 | 下一步 |
 |---|---|
@@ -56,7 +56,7 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 4. 把实现目标和明确约束放入不透明 `loop.payload`。调度器不解释实现计划、测试、Gate 或内部 Skill 流程。
 5. 用精确 `resourceClaims` 表达跨 Delivery 排他资源；worktree 不能替代数据库、端口或环境锁。
 6. 用户提供的 Skill 只登记为共享 `root.skillHints`，由各 Loop 根据真实上下文决定是否触发。
-7. 调用 `preview_hierarchy`。只有响应为 `CHOICE_READY` 且 `artifactsReady=true`，确认共享数据库、根总览、baseline、progress、acceptance、revisions 与 work-items 已生成后，才展示执行方式。Controller 是交互文案的唯一所有者；宿主必须原样或机械映射 `executionChoice` 的顺序、默认项、标签、说明和自由输入行为，Skill 不得重写、猜测或增加第三个选项。
+7. 调用 `preview_hierarchy`。只有响应为 `CHOICE_READY` 且 `artifactsReady=true`，确认共享数据库、根总览、baseline、progress、acceptance、revisions 与 work-items 已生成后，才展示执行方式。Controller 是交互文案的唯一所有者；宿主必须按 `executionChoice.presentationPolicy` 优先使用当前 Adapter 的原生选择器，从 `options` 机械映射顺序、ID、默认项、推荐项、标签、说明和自由输入行为。只有映射工具在当前上下文不可调用时才原样显示 `markdown`；不得改写降级文案、要求用户回复选项文字或增加第三个选项。
 8. 用户点选按钮后只调用一次 `select_execution_mode`。选择默认的 `AUTOMATIC` 时，Controller 立即 prepare、freeze 并返回自动派遣动作；不再询问通用 Yes/No，宿主立刻进入 frontier 自动派遣循环。选择 `MANUAL` 时，Controller 生成 handoff、登记 `HANDOFF_READY`，宿主原样展示 `manualHandoff.receiverPrompt`；该提示词也已嵌入 handoff。接收 CLI 在实际工作区显式调用 `start_manual_handoff`，然后用 `CLAIM_MANUAL_TASK` 完成 TASK 实现，并让后续 Review 回到与自动执行相同的 `DISPATCH_LOOP`。用户直接输入修改意见时不调用选择工具，继续需求沟通；需求变化后用同一 Delivery 重新生成基线与关联文档。
 
 需求连续性规则：

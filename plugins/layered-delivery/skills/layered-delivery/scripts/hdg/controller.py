@@ -192,6 +192,8 @@ class LayeredDeliveryController:
             arguments_value["host_native_agent_ids"] = (
                 context.host_native_agent_ids
             )
+        if name in {"workspace_status", "preview_hierarchy"}:
+            arguments_value["host_adapter_id"] = context.host_adapter_id
         if name == "plan_dispatch_batch":
             arguments_value["host_adapter_id"] = context.host_adapter_id
         if name == "dispatch_loop":

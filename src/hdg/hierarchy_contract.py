@@ -547,8 +547,11 @@ def hierarchy_contract(
                     "Generate baseline and associated projections before "
                     "showing this controller-owned choice. Hosts preserve "
                     "the option order, default, labels, descriptions, and "
-                    "freeform behavior exactly; skills do not reconstruct "
-                    "or add options. Selecting AUTOMATIC immediately "
+                    "freeform behavior exactly. They must use the mapped "
+                    "native selector whenever callable and may show exact "
+                    "Markdown only when it is unavailable; skills do not "
+                    "reconstruct, rewrite, or add options. Selecting "
+                    "AUTOMATIC immediately "
                     "prepares, freezes, and enters automatic dispatch."
                 ),
             },

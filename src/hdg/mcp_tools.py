@@ -37,6 +37,26 @@ def _string(description: str) -> dict[str, Any]:
 
 
 ROOT_ID = _string("Frozen Delivery and Graph run ID.")
+BASE_REF = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 240,
+    "description": (
+        "Optional host-selected mainline branch name. It takes priority "
+        "over origin/HEAD during unbound Git workspace discovery."
+    ),
+}
+DIRTY_STATE_FINGERPRINT = {
+    "type": "string",
+    "minLength": 64,
+    "maxLength": 64,
+    "pattern": "^[0-9a-f]{64}$",
+    "description": (
+        "Exact workingTree.stateFingerprint returned immediately before "
+        "the user confirmed that all current changes belong to the new "
+        "Delivery."
+    ),
+}
 NODE_ID = _string("Exact graph node ID from graph_frontier.")
 OPERATION_ID = _string(
     "Globally unique Loop operation ID. Codex-native children omit it for "
@@ -329,9 +349,18 @@ TOOLS = (
         (
             "Inspect the Delivery bound to this conversation workspace, or "
             "select it by root ID. An unbound Git feature worktree also "
-            "returns a suggested immutable Delivery Git binding."
+            "returns a suggested immutable Delivery Git binding; a "
+            "mainline or detached worktree returns host-owned setup steps."
         ),
-        _object({"root_id": ROOT_ID}),
+        _object(
+            {
+                "root_id": ROOT_ID,
+                "base_ref": BASE_REF,
+                "confirmed_dirty_state_fingerprint": (
+                    DIRTY_STATE_FINGERPRINT
+                ),
+            }
+        ),
     ),
     _tool(
         "hierarchy_contract",
@@ -353,7 +382,10 @@ TOOLS = (
             "CHOICE_READY snapshot, and generate scheduler.db, root overview, "
             "baseline, progress, acceptance, revisions, and work-item "
             "artifacts before returning the controller-owned execution "
-            "choice. It does not bind a workspace, freeze a Graph, create a "
+            "choice with a host-native-selector-first presentation policy. "
+            "The mapped native question tool is mandatory whenever callable; "
+            "exact Markdown is only a capability fallback. It does not bind "
+            "a workspace, freeze a Graph, create a "
             "run, or create a worktree."
         ),
         _prepare_hierarchy_tool_schema(),

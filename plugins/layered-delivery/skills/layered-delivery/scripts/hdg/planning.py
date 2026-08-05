@@ -7,6 +7,7 @@ from .errors import fail
 from .fs_safe import atomic_write, safe_path
 from .git_binding import (
     inspect_delivery_git_workspace,
+    inspect_frozen_git_workspace_provenance,
     verify_delivery_git_binding,
     verify_delivery_project_scopes,
 )
@@ -40,8 +41,11 @@ def workspace_status(
     *,
     root: str,
     root_id: str | None = None,
+    base_ref: str | None = None,
+    confirmed_dirty_state_fingerprint: str | None = None,
     workspace_root: str | None = None,
     explicit_dogfood: bool = False,
+    host_adapter_id: str | None = None,
 ) -> dict[str, Any]:
     repository = SchedulerRepository(root)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
@@ -60,16 +64,12 @@ def workspace_status(
             delivery,
             preparing=False,
         )
-        git_workspace = (
-            verify_delivery_git_binding(
-                workspace_root or root,
-                git_binding,
-                preparing=False,
-            )
+        current_project = (
+            None
             if project_scopes is None
             else next(
                 (
-                    item.get("gitWorkspace")
+                    item
                     for item in verified_projects
                     if SchedulerRepository.workspace_key(
                         item["workspaceRoot"]
@@ -81,17 +81,80 @@ def workspace_status(
                 None,
             )
         )
+        current_binding = (
+            git_binding
+            if current_project is None
+            else current_project.get("gitBinding")
+        )
+        git_workspace = (
+            verify_delivery_git_binding(
+                workspace_root or root,
+                current_binding,
+                preparing=False,
+            )
+            if project_scopes is None
+            else (
+                current_project.get("gitWorkspace")
+                if current_project is not None
+                else None
+            )
+        )
         if git_binding is not None:
             result["gitBinding"] = git_binding
         if git_workspace is not None:
             result["gitWorkspace"] = git_workspace
+        if current_binding is not None:
+            result.update(
+                inspect_frozen_git_workspace_provenance(
+                    workspace_root or root,
+                    current_binding,
+                    host_adapter_id=host_adapter_id,
+                )
+            )
         if project_scopes is not None:
             result["projectScopes"] = project_scopes
     else:
         discovery = inspect_delivery_git_workspace(
             workspace_root or root,
+            base_ref=base_ref,
+            confirmed_dirty_state_fingerprint=(
+                confirmed_dirty_state_fingerprint
+            ),
+            host_adapter_id=host_adapter_id,
         )
         if discovery is not None:
+            candidate_binding = discovery.get(
+                "suggestedGitBinding",
+                discovery.get("candidateGitBinding"),
+            )
+            if isinstance(candidate_binding, dict):
+                branch_usage = repository.git_branch_usage(
+                    candidate_binding["branchRef"]
+                )
+                if branch_usage:
+                    discovery.pop("suggestedGitBinding", None)
+                    discovery.pop("candidateGitBinding", None)
+                    terminal_statuses = {
+                        "COMPLETED",
+                        "CANCELLED",
+                        "SUPERSEDED",
+                    }
+                    active_usage = any(
+                        item["status"] not in terminal_statuses
+                        for item in branch_usage
+                    )
+                    discovery["branchAdoption"] = {
+                        "state": (
+                            "BRANCH_BOUND_TO_OTHER_DELIVERY"
+                            if active_usage
+                            else "BRANCH_USED_BY_HISTORICAL_DELIVERY"
+                        ),
+                        "nextAction": "CREATE_DELIVERY_FEATURE_BRANCH",
+                        "workingTreeClean": discovery["workingTree"][
+                            "clean"
+                        ],
+                        "conflictingDeliveries": branch_usage,
+                    }
             result.update(discovery)
     return result
 
@@ -192,6 +255,7 @@ def preview_hierarchy(
     root: str,
     hierarchy: object,
     explicit_dogfood: bool = False,
+    host_adapter_id: str | None = None,
     now: object = None,
     **_: Any,
 ) -> dict[str, Any]:
@@ -230,7 +294,7 @@ def preview_hierarchy(
         "controlStateCreated": staged["controlStateCreated"],
         "artifactsReady": artifacts_ready,
         "nextAction": (
-            "PRESENT_CONTROLLER_EXECUTION_CHOICE"
+            "PRESENT_HOST_NATIVE_EXECUTION_CHOICE"
             if choice_ready
             else next_actions.get(
                 staged["status"],
@@ -241,7 +305,9 @@ def preview_hierarchy(
     if artifacts_ready:
         result["humanArtifacts"] = _human_artifacts(normalized)
     if choice_ready:
-        result["executionChoice"] = execution_choice_contract()
+        result["executionChoice"] = execution_choice_contract(
+            host_adapter_id
+        )
     return result
 
 

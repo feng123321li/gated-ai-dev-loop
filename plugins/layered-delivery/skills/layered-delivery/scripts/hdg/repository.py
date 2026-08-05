@@ -1214,6 +1214,49 @@ class SchedulerRepository:
         )
         return result
 
+    def git_branch_usage(self, branch_ref: str) -> list[dict[str, str]]:
+        """Return current Delivery identities that froze one branch name."""
+
+        self._assert_no_legacy_state()
+        if not self.database_path.is_file():
+            return []
+        usage: list[dict[str, str]] = []
+        with self.read() as connection:
+            rows = connection.execute(
+                "SELECT * FROM hierarchies ORDER BY created_at, root_id"
+            ).fetchall()
+            for row in rows:
+                hierarchy, _ = _validated_stored_definition(row)
+                delivery = hierarchy["delivery"]
+                bindings = []
+                binding = delivery.get("gitBinding")
+                if binding is not None:
+                    bindings.append(binding)
+                bindings.extend(
+                    scope["gitBinding"]
+                    for scope in delivery.get("projectScopes", [])
+                    if scope.get("gitBinding") is not None
+                )
+                if not any(
+                    item["branchRef"] == branch_ref
+                    for item in bindings
+                ):
+                    continue
+                run = connection.execute(
+                    "SELECT status FROM runs WHERE root_id = ? "
+                    "AND revision = ?",
+                    (row["root_id"], row["revision"]),
+                ).fetchone()
+                status = (
+                    run["status"]
+                    if run is not None
+                    else row["status"]
+                )
+                usage.append(
+                    {"rootId": row["root_id"], "status": status}
+                )
+        return usage
+
     def record_choice_ready(
         self,
         hierarchy: dict[str, Any],
@@ -1681,6 +1724,14 @@ class SchedulerRepository:
                     occupiedRootId=occupied["root_id"],
                     occupiedStatus=occupied["status"],
                     nextAction="CREATE_INDEPENDENT_WORKTREE_TASK",
+                    worktreeSetup={
+                        "owner": "HOST",
+                        "strategy": "HOST_NATIVE_LINKED_WORKTREE",
+                        "resumeAction": (
+                            "CALL_WORKSPACE_STATUS_IN_NEW_WORKTREE"
+                        ),
+                        "controllerCreatesWorktree": False,
+                    },
                 )
             frozen = connection.execute(
                 "SELECT status, revision, hierarchy_fingerprint, "
@@ -2235,6 +2286,15 @@ class SchedulerRepository:
                     "A second active Delivery requires another conversation "
                     "worktree",
                     rootId=occupied["root_id"],
+                    nextAction="CREATE_INDEPENDENT_WORKTREE_TASK",
+                    worktreeSetup={
+                        "owner": "HOST",
+                        "strategy": "HOST_NATIVE_LINKED_WORKTREE",
+                        "resumeAction": (
+                            "CALL_WORKSPACE_STATUS_IN_NEW_WORKTREE"
+                        ),
+                        "controllerCreatesWorktree": False,
+                    },
                 )
             if (
                 revision_row["hierarchy_fingerprint"]

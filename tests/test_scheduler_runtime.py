@@ -373,16 +373,43 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertTrue(preview["artifactsReady"])
         self.assertEqual(
             preview["nextAction"],
-            "PRESENT_CONTROLLER_EXECUTION_CHOICE",
+            "PRESENT_HOST_NATIVE_EXECUTION_CHOICE",
         )
         choice = preview["executionChoice"]
-        self.assertEqual(choice["schemaVersion"], 1)
+        self.assertEqual(choice["schemaVersion"], 2)
         self.assertEqual(choice["owner"], "CONTROLLER")
         self.assertEqual(choice["kind"], "EXECUTION_MODE")
         self.assertTrue(choice["selectionRequired"])
         self.assertEqual(choice["defaultOptionId"], "AUTOMATIC")
         self.assertEqual(choice["recommendedOptionId"], "AUTOMATIC")
-        self.assertTrue(choice["hostQuestionToolAllowed"])
+        self.assertEqual(
+            choice["presentationPolicy"],
+            {
+                "preferredMode": "HOST_NATIVE_SELECTOR",
+                "nativeSelectorRequiredWhenAvailable": True,
+                "availabilityRule": (
+                    "MAPPED_TOOL_CALLABLE_IN_CURRENT_CONTEXT"
+                ),
+                "optionSourceField": "options",
+                "selectionValueField": "id",
+                "preserveOptionOrder": True,
+                "preserveOptionCopy": True,
+                "hostMappings": {
+                    "codex": {"tool": "request_user_input"},
+                    "claude-code": {"tool": "AskUserQuestion"},
+                },
+                "fallback": {
+                    "allowedOnlyWhen": (
+                        "MAPPED_NATIVE_SELECTOR_UNAVAILABLE"
+                    ),
+                    "mode": "EXACT_CONTROLLER_MARKDOWN",
+                    "contentField": "markdown",
+                    "agentRewriteAllowed": False,
+                    "typedOptionPromptAllowed": False,
+                },
+            },
+        )
+        self.assertIsNone(choice["activeHostMapping"])
         self.assertEqual(
             choice["freeformInput"],
             {
@@ -677,7 +704,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(preview["status"], "CHOICE_READY")
         self.assertEqual(
             preview["nextAction"],
-            "PRESENT_CONTROLLER_EXECUTION_CHOICE",
+            "PRESENT_HOST_NATIVE_EXECUTION_CHOICE",
         )
         self.assertEqual(handoff["status"], "HANDOFF_READY")
         self.assertEqual(

@@ -12,17 +12,58 @@ EXECUTION_CHOICE_MARKDOWN = """请选择开发方式（默认：自动执行）�
 """
 
 
-def execution_choice_contract() -> dict[str, Any]:
+HOST_NATIVE_QUESTION_TOOLS = {
+    "codex": "request_user_input",
+    "claude-code": "AskUserQuestion",
+}
+
+
+def execution_choice_contract(
+    host_adapter_id: str | None = None,
+) -> dict[str, Any]:
     """Return the controller-owned execution-mode interaction contract."""
 
+    active_tool = HOST_NATIVE_QUESTION_TOOLS.get(host_adapter_id or "")
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "owner": "CONTROLLER",
         "kind": "EXECUTION_MODE",
         "selectionRequired": True,
         "defaultOptionId": "AUTOMATIC",
         "recommendedOptionId": "AUTOMATIC",
-        "hostQuestionToolAllowed": True,
+        "presentationPolicy": {
+            "preferredMode": "HOST_NATIVE_SELECTOR",
+            "nativeSelectorRequiredWhenAvailable": True,
+            "availabilityRule": (
+                "MAPPED_TOOL_CALLABLE_IN_CURRENT_CONTEXT"
+            ),
+            "optionSourceField": "options",
+            "selectionValueField": "id",
+            "preserveOptionOrder": True,
+            "preserveOptionCopy": True,
+            "hostMappings": {
+                host_id: {"tool": tool}
+                for host_id, tool in HOST_NATIVE_QUESTION_TOOLS.items()
+            },
+            "fallback": {
+                "allowedOnlyWhen": (
+                    "MAPPED_NATIVE_SELECTOR_UNAVAILABLE"
+                ),
+                "mode": "EXACT_CONTROLLER_MARKDOWN",
+                "contentField": "markdown",
+                "agentRewriteAllowed": False,
+                "typedOptionPromptAllowed": False,
+            },
+        },
+        "activeHostMapping": (
+            {
+                "hostAdapterId": host_adapter_id,
+                "tool": active_tool,
+                "requiredWhenCallable": True,
+            }
+            if active_tool is not None
+            else None
+        ),
         "freeformInput": {
             "allowed": True,
             "nextAction": "CONTINUE_REQUIREMENT_DISCUSSION",
@@ -75,6 +116,7 @@ def manual_receiver_prompt(relative_handoff_path: str) -> str:
 
 __all__ = (
     "EXECUTION_CHOICE_MARKDOWN",
+    "HOST_NATIVE_QUESTION_TOOLS",
     "execution_choice_contract",
     "manual_receiver_prompt",
 )

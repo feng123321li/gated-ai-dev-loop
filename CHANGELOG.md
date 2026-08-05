@@ -4,6 +4,14 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.34.7 — 2026-08-05
+
+发布提交：`179f30e`
+
+- AUTOMATIC 在 primary checkout 返回机器可消费的 `hostDispatch`，Codex/Claude 宿主立即创建独立 worktree 任务并携带续接参数；协调 checkout 保持 `main`/`master`，不再要求用户手动 `cd`。
+- 恢复 Claude Skill 的 MCP wildcard `allowed-tools`：普通 Layered Delivery 工具自动放行，重建、取消和需求解冻/再冻结等敏感操作继续由 PreToolUse Hook 强制询问或拒绝。
+- 重新构建规范 Skill runtime 和 Plugin 内嵌 Skill，Python 全量 235 项测试、编译检查、0.34.7 发布候选校验、Skill/Plugin 校验、双宿主本地探测和 `git diff --check` 通过。
+
 ## 0.34.6 — 2026-08-05
 
 发布提交：`30a64fa`

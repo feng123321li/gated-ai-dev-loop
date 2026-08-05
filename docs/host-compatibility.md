@@ -5,7 +5,7 @@
 - **核心契约**：Python Controller、schema、SQLite、生成产物、Hook 单元测试和 stdio MCP 握手通过。
 - **真实宿主**：实际 Codex 或 Claude Code 会话加载候选 Plugin，创建原生子 Agent，并完成 claim、progress、heartbeat、result，最后到达待用户确认门禁；冒烟程序不得代替用户确认。
 
-## 0.34.2 发布矩阵
+## 0.34.3 发布矩阵
 
 | 环境 | Python | 核心契约 | 真实宿主 | 发布用途 |
 |---|---:|---|---|---|
@@ -26,7 +26,7 @@
 | Codex | codex-cli 0.146.0 | 从候选 Marketplace 安装 | Controller 交互契约、manual TASK 接入、`SubagentStart`、receiver mutation Hook、当前宿主继承策略、待用户确认状态 |
 | Claude Code | 2.1.220 | `--plugin-dir` 候选包及最终 Marketplace 安装 | Controller 交互契约、manual TASK 接入、receiver attestation、progress/heartbeat/result、StopFailure 兼容 |
 
-上述版本是 0.34.2 候选基线，不是永久兼容承诺。宿主升级后若 Hook 事件字段、Plugin manifest 或 MCP 工具命名发生变化，应先在自托管 Runner 重跑真实宿主冒烟，再更新本矩阵。
+上述版本是 0.34.3 候选基线，不是永久兼容承诺。宿主升级后若 Hook 事件字段、Plugin manifest 或 MCP 工具命名发生变化，应先在自托管 Runner 重跑真实宿主冒烟，再更新本矩阵。
 
 ## 模型与内部 Worker 兼容
 

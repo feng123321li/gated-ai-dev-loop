@@ -2,7 +2,7 @@
 
 `layered-delivery` 把已经确认的需求冻结为递归 Delivery Graph，再协调多个独立 Agent/WorkLoop 完成实现、逐层审查和最终验收。
 
-当前版本：**0.34.2**
+当前版本：**0.34.3**
 
 ## 核心流程
 

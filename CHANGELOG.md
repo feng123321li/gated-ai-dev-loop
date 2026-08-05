@@ -4,6 +4,14 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.34.5 — 2026-08-05
+
+发布提交：`60d2da9`
+
+- AUTOMATIC 选择改为先持久记录再校验 worktree：primary checkout 返回宿主迁移动作，新会话通过 `resume_execution_mode` 延续同一次确认；`projectScopes` 可按 Git common directory 与冻结分支解析实际 linked worktree，同一业务目标覆盖多个本地仓库时不再误拆 Delivery。
+- 多会话 Review 支持在无活跃 claim 的安全 frontier 边界轮换同一可信 Adapter 的编排根；长时间命令契约要求心跳与阻塞进程解耦，`SUSPECT_LOST` 增加不猜测宿主存活或具体根因的诊断字段。
+- 重新构建规范 Skill runtime 和 Plugin 内嵌 Skill，Python 全量 233 项测试、编译检查、0.34.5 发布候选校验、Skill/Plugin 校验、双宿主本地探测和 `git diff --check` 通过。
+
 ## 0.34.4 — 2026-08-05
 
 发布提交：`047c124`

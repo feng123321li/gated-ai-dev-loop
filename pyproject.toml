@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "layered-delivery"
-version = "0.34.7"
+version = "0.34.8"
 description = "Recursive GROUP/TASK delivery Graph scheduling for pluggable Loops"
 requires-python = ">=3.10"
 dependencies = []

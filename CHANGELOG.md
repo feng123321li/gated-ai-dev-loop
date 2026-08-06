@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.34.8 — 2026-08-06
+
+发布提交：`f23ed5e`
+
+- Claude 与 Codex 自动 Git Delivery 统一改走 `HOST_NATIVE_LINKED_WORKTREE`：宿主创建或复用一个稳定 Delivery worktree 并启动后台 coordinator，主会话只监控并从共享控制根消费进度；移除独占 primary checkout 路径，不再要求用户新开顶层会话或手动 `cd`。
+- 新增 Claude `PreToolUse` Hook `attest_claude_workspace.py`：为每次 MCP 调用注入一次性、与工具绑定的 workspace attestation，使固定插件根解析到宿主实际观测的 cwd；模型与普通 MCP 客户端必须忽略该内部字段。新增 `delivery-coordinator` 后台 Agent 与 `host_workspace_attestations` SQLite 表（60 秒有效期、一次性消费）。
+- 控制器允许 `graph_frontier`/`graph_status`/`graph_events` 等监控工具从共享控制根安全读取，主会话无需进入执行 worktree 即可观察后台 Delivery。
+- 重新构建规范 Skill runtime 和 Plugin 内嵌 Skill，Python 全量 242 项测试、编译检查、0.34.8 发布候选校验、Skill/Plugin 校验、双宿主本地探测和 `git diff --check` 通过。
+
 ## 0.34.7 — 2026-08-05
 
 发布提交：`d84896a`

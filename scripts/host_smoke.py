@@ -75,7 +75,7 @@ def _run_checked(command: list[str], *, cwd: Path) -> None:
         raise RuntimeError(f"command failed ({' '.join(command)}): {detail}")
 
 
-def _prepare_workspace(path: Path) -> None:
+def _prepare_workspace(path: Path, host: str) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     if any(path.iterdir()):
         raise RuntimeError(f"smoke workspace must be empty: {path}")
@@ -92,12 +92,29 @@ def _prepare_workspace(path: Path) -> None:
     )
     _run_checked(["git", "add", "README.md"], cwd=path)
     _run_checked(["git", "commit", "-m", "Initialize smoke workspace"], cwd=path)
-    _run_checked(
-        ["git", "switch", "-c", "feature/m_lf_host_smoke"], cwd=path
-    )
+    branch_ref = "feature/m_lf_host_smoke"
+    if host == "claude-code":
+        _run_checked(["git", "switch", "-c", branch_ref], cwd=path)
+        return path
+    if host == "codex":
+        worktree = path.with_name(f"{path.name}-worktree")
+        _run_checked(
+            [
+                "git",
+                "worktree",
+                "add",
+                "-b",
+                branch_ref,
+                str(worktree),
+                "main",
+            ],
+            cwd=path,
+        )
+        return worktree
+    raise RuntimeError(f"unsupported host: {host}")
 
 
-def _prompt(scenario: str) -> str:
+def _prompt(scenario: str, host: str) -> str:
     profile = "LIGHT" if scenario == "light" else "STANDARD"
     review_requirement = (
         "Do not create review loops because this is a LIGHT single-TASK graph."
@@ -107,12 +124,29 @@ def _prompt(scenario: str) -> str:
             "each in an independent host-native child context."
         )
     )
+    workspace_requirement = (
+        "The current Claude Code session is running directly in an exclusive "
+        "primary checkout on the Delivery feature branch. Continue in this "
+        "same session and checkout; do not request or create another "
+        "worktree session."
+        if host == "claude-code"
+        else (
+            "The current Codex session is already running in a host-created "
+            "linked worktree on the Delivery feature branch. Use it as-is; "
+            "do not create or switch another branch or worktree."
+        )
+    )
     return textwrap.dedent(
         f"""
         Run the official layered-delivery {profile} real-host smoke test in this
         disposable Git repository. The user has explicitly selected automatic
         execution. Use only the installed layered-delivery Skill and MCP tools;
         do not use a direct Python API or edit SQLite.
+
+        Hard harness boundary: NEVER call record_user_confirmation. Automatic
+        execution authorization is not final acceptance. When the frontier
+        returns RECORD_USER_CONFIRMATION, stop immediately and leave the run
+        ACTIVE at that gate. A COMPLETED run fails this smoke test.
 
         This release tests current-host dispatch only. The executor inventory and
         every assignment must contain only the host that started this session;
@@ -122,15 +156,18 @@ def _prompt(scenario: str) -> str:
         sessions, history, caches, user configuration, or earlier smoke output;
         they are not evidence for this run. Use only this prompt, the installed
         Skill/MCP contract, and files inside the disposable workspace.
+        Do not call TaskCreate, TaskUpdate, TaskList, or TaskGet; the MCP Graph
+        is the only progress tracker for this disposable run.
 
         The harness has already initialized the disposable development workspace
         on `feature/m_lf_host_smoke` from `main`. Use that current feature branch
-        and its discovered gitBinding; do not create another branch or worktree.
+        and its discovered gitBinding. {workspace_requirement}
 
-        Create one root TASK whose implementation writes one small text artifact
-        containing both `layered-delivery` (or `Layered Delivery`) and `smoke`,
-        then verifies the artifact content with Python. Classify from the actual
-        change content and impact scope.
+        Create one root TASK with stable ID `t-smoke-artifact`. Its entire
+        implementation is to create `smoke.txt` with exactly
+        `layered-delivery smoke\\n`, then use one Python command to assert that
+        exact content. Do not create any other business file, test scaffold, or
+        additional verification command. Classify from this exact local change.
         {review_requirement}
 
         The frozen TASK payload and every child assignment must explicitly make
@@ -140,8 +177,9 @@ def _prompt(scenario: str) -> str:
 
         When HOST_NATIVE_DISPATCH_PLAN is returned, start the current-host child
         immediately; do not read more documentation or inspect Plugin source.
-        The child must call loop_context once and then dispatch_loop before any
-        Bash, Read, Write, Edit, analysis of implementation, or extra discovery.
+        The child must call dispatch_loop first, then loop_context once, then
+        heartbeat_loop immediately before any Bash, Read, Write, Edit, analysis
+        of implementation, or extra discovery.
         A Claude child omits receiver_context_id and receiver_attestation_id so
         the PreToolUse hook can inject them; it must never invent placeholders.
 
@@ -214,7 +252,7 @@ def _host_command(
     scenario: str,
     model: str | None,
 ) -> list[str]:
-    prompt = _prompt(scenario)
+    prompt = _prompt(scenario, host)
     if host == "claude-code":
         executable = shutil.which("claude")
         if executable is None:
@@ -230,8 +268,13 @@ def _host_command(
                 "mcp__plugin_layered-delivery_layered-delivery__"
                 f"{tool['name']}"
                 for tool in tool_definitions()
+                if tool["name"] != "record_user_confirmation"
             ],
         ]
+        final_confirmation_tool = (
+            "mcp__plugin_layered-delivery_layered-delivery__"
+            "record_user_confirmation"
+        )
         command = [
             executable,
             "--print",
@@ -244,6 +287,8 @@ def _host_command(
             "acceptEdits",
             "--allowedTools",
             ",".join(allowed_tools),
+            "--disallowedTools",
+            final_confirmation_tool,
             "--no-session-persistence",
             "--plugin-dir",
             str(ROOT / "plugins" / "layered-delivery"),
@@ -322,11 +367,15 @@ def _validate_smoke(
     workspace: Path,
     scenario: str,
     host: str,
+    *,
+    control_root: Path | None = None,
 ) -> dict[str, object]:
     artifact = _find_smoke_artifact(workspace)
     if artifact is None:
         raise RuntimeError("host did not create a verifiable smoke artifact")
-    database = workspace / ".layered-delivery" / "scheduler.db"
+    database = (
+        control_root or workspace
+    ) / ".layered-delivery" / "scheduler.db"
     if not database.is_file():
         raise RuntimeError("host did not create scheduler.db through the Plugin")
     with sqlite3.connect(database) as connection:
@@ -400,7 +449,7 @@ def run_smoke(args: argparse.Namespace) -> int:
             "real-host smoke is opt-in; inspect the plan, then repeat with --execute",
             file=sys.stderr,
         )
-        print(_prompt(args.scenario))
+        print(_prompt(args.scenario, args.host))
         return 2
     result: dict[str, object]
     temporary_path: Path
@@ -410,8 +459,8 @@ def run_smoke(args: argparse.Namespace) -> int:
     ) as temporary:
         temporary_root = Path(temporary)
         temporary_path = temporary_root
-        workspace = temporary_root / "workspace"
-        _prepare_workspace(workspace)
+        control_root = temporary_root / "workspace"
+        workspace = _prepare_workspace(control_root, args.host)
         command = _host_command(
             args.host,
             workspace=workspace,
@@ -437,7 +486,12 @@ def run_smoke(args: argparse.Namespace) -> int:
                 f"{args.host} exited with {completed.returncode}; output tail:\n{tail}"
             )
         try:
-            result = _validate_smoke(workspace, args.scenario, args.host)
+            result = _validate_smoke(
+                workspace,
+                args.scenario,
+                args.host,
+                control_root=control_root,
+            )
         except RuntimeError as error:
             tail = log_path.read_text(
                 encoding="utf-8", errors="replace"

@@ -310,7 +310,10 @@ def _automatic_workspace_setup(
         return None
     result = {
         **setup,
-        "strategy": "HOST_NATIVE_LINKED_WORKTREE",
+        "strategy": discovery.get("worktreeProvenance", {}).get(
+            "strategy",
+            "HOST_NATIVE_LINKED_WORKTREE",
+        ),
         "resumeAction": (
             "CALL_WORKSPACE_STATUS_THEN_RESUME_EXECUTION_MODE"
         ),

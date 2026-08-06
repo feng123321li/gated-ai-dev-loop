@@ -11,6 +11,7 @@ from .model_core import validate_git_binding
 
 
 GIT_TIMEOUT_SECONDS = 10
+EXCLUSIVE_PRIMARY_HOST_ADAPTERS = frozenset({"claude-code"})
 
 
 @dataclass(frozen=True)
@@ -252,6 +253,10 @@ def _working_tree_state(workspace: Path) -> dict[str, Any]:
         "status",
         "--porcelain=v1",
         "--untracked-files=all",
+        "--",
+        ".",
+        ":(exclude).layered-delivery",
+        ":(exclude).layered-delivery/**",
     )
     changes = porcelain.splitlines() if porcelain else []
     return {
@@ -282,12 +287,14 @@ def _worktree_provenance(
     base_commit: str,
     host_adapter_id: str | None,
 ) -> dict[str, Any]:
+    if topology == "LINKED_WORKTREE":
+        strategy = "HOST_NATIVE_LINKED_WORKTREE"
+    elif host_adapter_id in EXCLUSIVE_PRIMARY_HOST_ADAPTERS:
+        strategy = "EXCLUSIVE_PRIMARY_CHECKOUT"
+    else:
+        strategy = "PRIMARY_CHECKOUT"
     return {
-        "strategy": (
-            "HOST_NATIVE_LINKED_WORKTREE"
-            if topology == "LINKED_WORKTREE"
-            else "PRIMARY_CHECKOUT"
-        ),
+        "strategy": strategy,
         "hostAdapterId": host_adapter_id,
         "workspaceRoot": str(workspace),
         "topology": topology,
@@ -338,7 +345,11 @@ def inspect_delivery_git_workspace(
     )
     topology = _worktree_topology(workspace)
     working_tree = _working_tree_state(workspace)
-    if topology == "PRIMARY_WORKTREE":
+    exclusive_primary = (
+        topology == "PRIMARY_WORKTREE"
+        and host_adapter_id in EXCLUSIVE_PRIMARY_HOST_ADAPTERS
+    )
+    if topology == "PRIMARY_WORKTREE" and not exclusive_primary:
         if symbolic.returncode == 0:
             full_ref = symbolic.stdout.strip()
             if not full_ref.startswith("refs/heads/"):
@@ -391,7 +402,11 @@ def inspect_delivery_git_workspace(
         )
         return {
             "gitWorkspace": {
-                "role": "DETACHED_WORKTREE",
+                "role": (
+                    "DETACHED_PRIMARY"
+                    if exclusive_primary
+                    else "DETACHED_WORKTREE"
+                ),
                 "headCommit": head_commit,
             },
             "worktreeSetup": {

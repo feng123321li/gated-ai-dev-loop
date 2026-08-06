@@ -553,10 +553,12 @@ def hierarchy_contract(
                     "native selector whenever callable and may show exact "
                     "Markdown only when it is unavailable; skills do not "
                     "reconstruct, rewrite, or add options. Selecting "
-                    "AUTOMATIC is recorded once. A ready worktree "
-                    "immediately prepares, freezes, and dispatches; a "
-                    "primary checkout returns host worktree setup and the "
-                    "new session calls resume_execution_mode without "
+                    "AUTOMATIC is recorded once. A ready exclusive Claude "
+                    "primary checkout or linked worktree immediately "
+                    "prepares, freezes, and dispatches. A Claude primary "
+                    "mainline returns feature-branch setup in the same "
+                    "session; a Codex primary returns host worktree setup. "
+                    "The continuation calls resume_execution_mode without "
                     "another user confirmation."
                 ),
             },

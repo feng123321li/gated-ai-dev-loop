@@ -8,9 +8,11 @@
 
 发布提交：`179f30e`
 
-- AUTOMATIC 在 primary checkout 返回机器可消费的 `hostDispatch`，Codex/Claude 宿主立即创建独立 worktree 任务并携带续接参数；协调 checkout 保持 `main`/`master`，不再要求用户手动 `cd`。
+- Claude Code 裸 CLI 支持从 `cd project; claude` 启动的独占 primary checkout：有效 feature 分支可直接执行，主线或 detached 状态只需在当前 checkout 建立 Delivery feature 分支后无二次确认续接；同一 primary checkout 仍只绑定一个未结束 Delivery。
+- Codex primary checkout 继续返回机器可消费的 `hostDispatch` 并创建独立 worktree 项目任务；并行或已占用的 Claude Delivery 也继续使用 linked worktree，不降低隔离边界。
+- 工作区 dirty 指纹排除 `.layered-delivery/**` 控制面产物，业务改动仍要求用户按精确状态指纹确认。
 - 恢复 Claude Skill 的 MCP wildcard `allowed-tools`：普通 Layered Delivery 工具自动放行，重建、取消和需求解冻/再冻结等敏感操作继续由 PreToolUse Hook 强制询问或拒绝。
-- 重新构建规范 Skill runtime 和 Plugin 内嵌 Skill，Python 全量 235 项测试、编译检查、0.34.7 发布候选校验、Skill/Plugin 校验、双宿主本地探测和 `git diff --check` 通过。
+- 重新构建规范 Skill runtime 和 Plugin 内嵌 Skill，Python 全量 239 项测试、编译检查、0.34.7 发布候选校验、Skill/Plugin 校验、双宿主本地探测和 `git diff --check` 通过。
 
 ## 0.34.6 — 2026-08-05
 

@@ -53,7 +53,7 @@ python scripts/host_smoke.py run --host codex --scenario light
 python scripts/host_smoke.py run --host codex --scenario light --execute
 ```
 
-Claude 命令从当前源码候选的 `--plugin-dir` 加载包；Codex 命令要求 0.34.7 候选已经从 Marketplace 安装。发布前的最小门禁可用 LIGHT 验证同宿主 claim/heartbeat/progress/result；发布管理员需要覆盖 Review 时再把 `--scenario light` 改成 `--scenario standard`。任何输出中的 `claimedAgents` 都必须只含命令指定的当前宿主。
+Claude 命令从当前源码候选的 `--plugin-dir` 加载包，并在临时仓库的 primary feature 分支验证裸 CLI 独占执行，不预建 linked worktree；Codex 命令要求 0.34.7 候选已经从 Marketplace 安装，并在临时 linked worktree 中验证项目任务路径。发布前的最小门禁可用 LIGHT 验证同宿主 claim/heartbeat/progress/result；发布管理员需要覆盖 Review 时再把 `--scenario light` 改成 `--scenario standard`。任何输出中的 `claimedAgents` 都必须只含命令指定的当前宿主。
 
 Codex 冒烟不能使用 `--ephemeral`：`SubagentStart` attestation 必须从宿主持久化 transcript 校验 parent/child/task。冒烟会留下一个可审计的 Codex 会话记录，但业务工作区仍位于自动清理的临时目录；若宿主无法提供该 transcript，claim 必须 fail closed。
 

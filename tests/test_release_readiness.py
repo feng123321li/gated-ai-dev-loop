@@ -174,25 +174,104 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         )
         self.assertNotIn("--ephemeral", command)
 
-    def test_host_smoke_workspace_starts_on_an_isolated_feature_branch(
+    def test_claude_smoke_hard_denies_final_user_confirmation(self) -> None:
+        with TemporaryDirectory() as temporary:
+            with patch(
+                "scripts.host_smoke.shutil.which",
+                return_value="claude",
+            ):
+                command = _host_command(
+                    "claude-code",
+                    workspace=Path(temporary),
+                    scenario="light",
+                    model=None,
+                )
+        disallowed_index = command.index("--disallowedTools")
+        self.assertEqual(
+            command[disallowed_index + 1],
+            "mcp__plugin_layered-delivery_layered-delivery__"
+            "record_user_confirmation",
+        )
+        self.assertIn("NEVER call record_user_confirmation", command[-1])
+
+    def test_claude_smoke_starts_on_exclusive_primary_feature_branch(
         self,
     ) -> None:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary)
-            _prepare_workspace(workspace)
+            development = _prepare_workspace(workspace, "claude-code")
             completed = subprocess.run(
                 ["git", "branch", "--show-current"],
-                cwd=workspace,
+                cwd=development,
                 text=True,
                 encoding="utf-8",
                 capture_output=True,
                 check=False,
             )
+            git_dir = subprocess.run(
+                ["git", "rev-parse", "--absolute-git-dir"],
+                cwd=development,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
+            common_dir = subprocess.run(
+                ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                cwd=development,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
         self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(development, workspace)
         self.assertEqual(
             completed.stdout.strip(),
             "feature/m_lf_host_smoke",
         )
+        self.assertEqual(git_dir, common_dir)
+
+    def test_codex_smoke_starts_in_a_linked_feature_worktree(self) -> None:
+        with TemporaryDirectory() as temporary:
+            repository = Path(temporary, "repository")
+            development = _prepare_workspace(repository, "codex")
+            primary_branch = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=repository,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
+            feature_branch = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=development,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
+            git_dir = subprocess.run(
+                ["git", "rev-parse", "--absolute-git-dir"],
+                cwd=development,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
+            common_dir = subprocess.run(
+                ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                cwd=development,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
+        self.assertNotEqual(development, repository)
+        self.assertEqual(primary_branch, "main")
+        self.assertEqual(feature_branch, "feature/m_lf_host_smoke")
+        self.assertNotEqual(git_dir, common_dir)
 
     def test_host_smoke_accepts_content_evidence_not_a_fixed_filename(
         self,
@@ -212,7 +291,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
     ) -> None:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary)
-            _prepare_workspace(workspace)
+            _prepare_workspace(workspace, "claude-code")
             self.assertIsNone(_find_smoke_artifact(workspace))
             readme = workspace / "README.md"
             readme.write_text(
@@ -223,10 +302,14 @@ class TeamReleaseReadinessTests(unittest.TestCase):
             self.assertEqual(_find_smoke_artifact(workspace), readme)
 
     def test_host_smoke_prompt_forbids_cross_agent_dispatch(self) -> None:
-        prompt = _prompt("light")
+        prompt = _prompt("light", "claude-code")
         self.assertIn("current-host dispatch only", prompt)
         self.assertIn("never dispatch to another Agent", prompt)
         self.assertIn("Do not read prior Codex/Claude", prompt)
+        self.assertIn("exclusive primary checkout", prompt)
+        self.assertIn("Do not call TaskCreate", prompt)
+        self.assertIn("dispatch_loop first, then loop_context", prompt)
+        self.assertIn("`layered-delivery smoke\\n`", prompt)
 
     def test_release_surfaces_and_public_automatic_contract_match(self) -> None:
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")

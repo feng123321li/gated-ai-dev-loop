@@ -428,8 +428,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(
             [item["description"] for item in choice["options"]],
             [
-                "记录一次选择；工作区就绪时立即开始，否则迁移到独立 "
-                "worktree 后自动继续，不再确认。",
+                "记录一次选择；工作区就绪时立即开始，否则按宿主要求"
+                "准备分支或独立 worktree 后继续，不再确认。",
                 "生成 handoff；接收 CLI 启动同一 Graph，手动完成 TASK，"
                 "后续审查与自动执行一致。",
             ],
@@ -439,7 +439,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(
             [item["nextAction"] for item in choice["options"]],
             [
-                "RECORD_SELECTION_THEN_PREPARE_OR_REQUEST_WORKTREE",
+                "RECORD_SELECTION_THEN_PREPARE_OR_REQUEST_WORKSPACE",
                 "CREATE_HANDOFF_THEN_START_GOVERNED_MANUAL_GRAPH",
             ],
         )

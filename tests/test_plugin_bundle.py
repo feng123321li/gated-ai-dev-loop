@@ -236,7 +236,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("`MANUAL`", text)
         self.assertIn("`freeformInput.nextAction`", text)
         self.assertIn("先记录业务确认", text)
-        self.assertIn("新会话用原双 fingerprint 调用 `resume_execution_mode`", text)
+        self.assertIn("同一会话用原双 fingerprint 调用 `resume_execution_mode`", text)
         self.assertIn("展示 `manualHandoff.receiverPrompt`", text)
         self.assertIn("不把同一 Delivery 限制为单仓库", text)
         self.assertIn("不得为第二仓库另起 Delivery", text)
@@ -352,10 +352,11 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("不指定 Agent、模型或接收任务", planning)
         self.assertIn("start_manual_handoff", planning)
         self.assertIn("`environment=worktree`", planning)
-        self.assertIn("`claude --worktree <delivery-id>`", planning)
         self.assertIn("`${CLAUDE_PROJECT_DIR}`", planning)
-        self.assertIn("不得只在旧会话内调用 `EnterWorktree`", planning)
         self.assertIn("`hostDispatch`", main + planning)
+        self.assertIn("`EXCLUSIVE_PRIMARY_CHECKOUT`", main + planning)
+        self.assertIn("Claude Code 裸 CLI", main + planning)
+        self.assertIn("同一 primary checkout 只绑定一个未结束 Delivery", planning)
         self.assertIn(
             "`manualDirectoryChangeRequired=false`",
             main + planning,

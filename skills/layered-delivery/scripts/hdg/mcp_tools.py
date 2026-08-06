@@ -409,10 +409,12 @@ TOOLS = (
         "select_execution_mode",
         (
             "Apply one exact option returned by executionChoice. AUTOMATIC "
-            "records the human choice before checking host worktree setup; "
-            "a primary checkout returns a host-owned transition whose "
+            "records the human choice before checking host workspace setup. "
+            "A Claude primary mainline returns in-place feature-branch setup; "
+            "a Codex primary checkout returns host-owned worktree setup. The "
             "continuation completes without another confirmation. A ready "
-            "worktree immediately prepares and freezes the staged snapshot. "
+            "exclusive primary checkout or linked worktree immediately "
+            "prepares and freezes the staged snapshot. "
             "MANUAL creates the handoff and returns the exact "
             "receiver prompt embedded in that file. Direct dialog text is "
             "not a tool option and continues requirement discussion."
@@ -423,8 +425,9 @@ TOOLS = (
         "resume_execution_mode",
         (
             "Continue a previously recorded AUTOMATIC selection after the "
-            "trusted host enters the required linked worktree. Revalidate "
-            "the exact fingerprints and Git/project bindings, then prepare, "
+            "trusted host prepares the required feature branch or linked "
+            "worktree. Revalidate the exact fingerprints and Git/project "
+            "bindings, then prepare, "
             "freeze, and dispatch without asking the user to select or "
             "confirm again. This tool never changes MANUAL into AUTOMATIC."
         ),

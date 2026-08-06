@@ -1926,7 +1926,203 @@ class McpSurfaceTests(unittest.TestCase):
             )
             self.assertNotIn("suggestedGitBinding", discovered)
 
-    def test_automatic_choice_moves_to_linked_worktree_without_reconfirm(
+    def test_claude_cli_primary_checkout_runs_one_exclusive_delivery(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            repository, worktree, base_commit, branch_ref = (
+                git_delivery_checkout(
+                    root,
+                    delivery_id="d-claude-cli",
+                )
+            )
+            git_command(repository, "worktree", "remove", str(worktree))
+
+            mainline = call_tool(
+                "workspace_status",
+                {},
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="claude-code",
+            )
+
+            self.assertEqual(mainline["status"], "ABSENT")
+            self.assertEqual(
+                mainline["worktreeSetup"],
+                {
+                    "state": "FEATURE_BRANCH_REQUIRED",
+                    "owner": "HOST",
+                    "nextAction": "CREATE_DELIVERY_FEATURE_BRANCH",
+                    "baseRef": "main",
+                    "baseCommit": base_commit,
+                    "integrationTarget": "main",
+                },
+            )
+            self.assertEqual(
+                mainline["worktreeProvenance"]["strategy"],
+                "EXCLUSIVE_PRIMARY_CHECKOUT",
+            )
+            self.assertNotIn(
+                "hostDispatch",
+                mainline["worktreeSetup"],
+            )
+
+            hierarchy = bind_delivery_to_git(
+                task_hierarchy(),
+                branch_ref=branch_ref,
+                base_commit=base_commit,
+            )
+            hierarchy["delivery"]["id"] = "d-claude-cli"
+            preview = call_tool(
+                "preview_hierarchy",
+                {"hierarchy": hierarchy},
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="claude-code",
+            )
+            selected = call_tool(
+                "select_execution_mode",
+                {
+                    "root_id": "d-claude-cli",
+                    "selection": "AUTOMATIC",
+                    "expected_hierarchy_fingerprint": preview[
+                        "hierarchyFingerprint"
+                    ],
+                    "expected_graph_fingerprint": preview[
+                        "graphFingerprint"
+                    ],
+                    "authorized_project_ids": [],
+                    "confirmed_by": "human",
+                },
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="claude-code",
+            )
+
+            self.assertEqual(selected["status"], "CHOICE_READY")
+            self.assertTrue(selected["selectionRecorded"])
+            self.assertFalse(selected["automaticDispatchRequested"])
+            self.assertEqual(
+                selected["nextAction"],
+                "CREATE_DELIVERY_FEATURE_BRANCH",
+            )
+            self.assertEqual(
+                selected["worktreeSetup"]["strategy"],
+                "EXCLUSIVE_PRIMARY_CHECKOUT",
+            )
+            self.assertNotIn("hostDispatch", selected["worktreeSetup"])
+
+            git_command(repository, "switch", branch_ref)
+            ready = call_tool(
+                "workspace_status",
+                {"root_id": "d-claude-cli"},
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="claude-code",
+            )
+
+            self.assertEqual(
+                ready["gitBinding"],
+                {
+                    "branchRef": branch_ref,
+                    "baseRef": "main",
+                    "baseCommit": base_commit,
+                    "integrationTarget": "main",
+                },
+            )
+            self.assertEqual(
+                ready["worktreeProvenance"]["strategy"],
+                "EXCLUSIVE_PRIMARY_CHECKOUT",
+            )
+            self.assertEqual(
+                ready["worktreeProvenance"]["topology"],
+                "PRIMARY_WORKTREE",
+            )
+            self.assertTrue(ready["workingTree"]["clean"])
+            self.assertEqual(
+                ready["executionSelection"]["state"],
+                "RECORDED_PENDING_WORKTREE",
+            )
+
+            resumed = call_tool(
+                "resume_execution_mode",
+                {
+                    "root_id": "d-claude-cli",
+                    "expected_hierarchy_fingerprint": preview[
+                        "hierarchyFingerprint"
+                    ],
+                    "expected_graph_fingerprint": preview[
+                        "graphFingerprint"
+                    ],
+                },
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="claude-code",
+            )
+
+            self.assertEqual(resumed["status"], "ACTIVE")
+            self.assertTrue(resumed["automaticDispatchRequested"])
+            self.assertEqual(
+                resumed["nextAction"],
+                "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH",
+            )
+            self.assertNotIn("worktreeSetup", resumed)
+
+    def test_claude_cli_primary_checkout_requires_exact_dirty_confirmation(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            repository, worktree, _base_commit, branch_ref = (
+                git_delivery_checkout(
+                    root,
+                    delivery_id="d-claude-dirty",
+                )
+            )
+            git_command(repository, "worktree", "remove", str(worktree))
+            git_command(repository, "switch", branch_ref)
+            Path(repository, "change.txt").write_text(
+                "belongs to this Delivery\n",
+                encoding="utf-8",
+            )
+
+            discovered = call_tool(
+                "workspace_status",
+                {},
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="claude-code",
+            )
+            dirty_fingerprint = discovered["branchAdoption"][
+                "dirtyStateFingerprint"
+            ]
+
+            self.assertEqual(
+                discovered["branchAdoption"]["state"],
+                "DIRTY_CONFIRMATION_REQUIRED",
+            )
+            self.assertEqual(discovered["workingTree"]["changeCount"], 1)
+            self.assertNotIn("suggestedGitBinding", discovered)
+
+            confirmed = call_tool(
+                "workspace_status",
+                {
+                    "confirmed_dirty_state_fingerprint": dirty_fingerprint,
+                },
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="claude-code",
+            )
+
+            self.assertEqual(
+                confirmed["branchAdoption"]["state"],
+                "READY_WITH_CONFIRMED_CHANGES",
+            )
+            self.assertEqual(
+                confirmed["suggestedGitBinding"]["branchRef"],
+                branch_ref,
+            )
+
+    def test_codex_automatic_choice_moves_to_worktree_without_reconfirm(
         self,
     ) -> None:
         with TemporaryDirectory() as root:
@@ -1980,7 +2176,7 @@ class McpSurfaceTests(unittest.TestCase):
                 {"hierarchy": hierarchy},
                 root=str(repository),
                 workspace_root=str(repository),
-                trusted_host_adapter="claude-code",
+                trusted_host_adapter="codex",
             )
 
             selected = call_tool(
@@ -1999,7 +2195,7 @@ class McpSurfaceTests(unittest.TestCase):
                 },
                 root=str(repository),
                 workspace_root=str(repository),
-                trusted_host_adapter="claude-code",
+                trusted_host_adapter="codex",
             )
 
             self.assertEqual(selected["status"], "CHOICE_READY")
@@ -2030,8 +2226,8 @@ class McpSurfaceTests(unittest.TestCase):
                 selected["worktreeSetup"]["hostDispatch"],
                 {
                     "action": "CREATE_HOST_NATIVE_WORKTREE_TASK",
-                    "hostAdapterId": "claude-code",
-                    "hostOperation": "CREATE_CLAUDE_WORKTREE_SESSION",
+                    "hostAdapterId": "codex",
+                    "hostOperation": "CREATE_CODEX_PROJECT_TASK",
                     "launchPolicy": "IMMEDIATE",
                     "environment": "worktree",
                     "deliveryId": "d-auto-transition",
@@ -2079,7 +2275,7 @@ class McpSurfaceTests(unittest.TestCase):
                 {"root_id": "d-auto-transition"},
                 root=str(repository),
                 workspace_root=str(worktree),
-                trusted_host_adapter="claude-code",
+                trusted_host_adapter="codex",
             )
             self.assertEqual(
                 status["executionSelection"],
@@ -2125,7 +2321,7 @@ class McpSurfaceTests(unittest.TestCase):
                 },
                 root=str(repository),
                 workspace_root=str(worktree),
-                trusted_host_adapter="claude-code",
+                trusted_host_adapter="codex",
             )
 
             self.assertEqual(resumed["status"], "ACTIVE")
@@ -2156,7 +2352,7 @@ class McpSurfaceTests(unittest.TestCase):
                 },
                 root=str(repository),
                 workspace_root=str(worktree),
-                trusted_host_adapter="claude-code",
+                trusted_host_adapter="codex",
             )
             context_projects = {
                 item["id"]: item
@@ -3645,7 +3841,7 @@ class McpSurfaceTests(unittest.TestCase):
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "Claude must start a new worktree session",
+                "Claude Code may bind one exclusive primary checkout",
                 initialized["result"]["instructions"],
             )
             self.assertIn(
@@ -3658,10 +3854,6 @@ class McpSurfaceTests(unittest.TestCase):
             )
             self.assertIn(
                 "preserves the coordinator main or master checkout",
-                initialized["result"]["instructions"],
-            )
-            self.assertIn(
-                "must not merely EnterWorktree in the old Claude session",
                 initialized["result"]["instructions"],
             )
             self.assertIn(
@@ -3680,6 +3872,10 @@ class McpSurfaceTests(unittest.TestCase):
             )
             self.assertIn(
                 "HOST_NATIVE_LINKED_WORKTREE",
+                initialized["result"]["instructions"],
+            )
+            self.assertIn(
+                "EXCLUSIVE_PRIMARY_CHECKOUT",
                 initialized["result"]["instructions"],
             )
             self.assertIn(

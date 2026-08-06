@@ -66,10 +66,10 @@ Delivery
 
 Plugin 激活后，在 Codex 或 Claude Code 的新会话中提出需求，并要求使用 `layered-delivery`。Agent 会按当前工作区状态选择创建、继续或恢复：
 
-1. 读取工作区状态和当前 schema v3 契约。新业务目标若落在已绑定其他未结束 Delivery 的工作区，宿主先按 `HOST_NATIVE_LINKED_WORKTREE` 创建独立任务/会话与 linked worktree：Codex 使用 worktree 项目任务，Claude 使用新的 worktree session。主 checkout 保持 `main`/`master`，无需用户手动 `cd`。
+1. 读取工作区状态和当前 schema v3 契约。Claude Code 裸 CLI 从项目目录直接启动时可独占当前 primary checkout 执行一个 Delivery；Codex 或并行/占用的 Claude Delivery 使用 `HOST_NATIVE_LINKED_WORKTREE` 创建独立任务/会话。
 2. 与用户沟通需求，检查真实代码、预计或已有 diff 和影响范围；无法可靠判断时使用 STANDARD。调用 `preview_hierarchy` 登记 `CHOICE_READY`，先生成共享数据库、根总览、baseline 及全部关联文档。
 3. 只有 `artifactsReady=true` 后，宿主才展示 Controller 返回的 `executionChoice`。Codex/Claude 必须优先把 `options` 映射为当前上下文可调用的原生选择器；只有映射工具不可用时才逐字显示 Controller Markdown，不得改写成“回复自动”等文字提示。交互只有“自动执行（默认）/ 手动开发”两个选项；直接输入文字继续需求沟通，不创建第三个业务选项。
-4. 用户选择自动执行后调用一次 `select_execution_mode(AUTOMATIC)`；Controller 先持久记录选择。linked worktree 已就绪时立即 prepare/freeze；仍在 primary checkout 时返回机器可消费的 `worktreeSetup.hostDispatch`。宿主立即创建 `environment=worktree` 的任务/会话并发送内置 continuation prompt，不输出手动 `cd` 指引；新会话只调用 `workspace_status → resume_execution_mode`，不再展示选择器或要求第二次确认。
+4. 用户选择自动执行后调用一次 `select_execution_mode(AUTOMATIC)`；Controller 先持久记录选择。Claude primary 已在有效 feature 分支时立即 prepare/freeze；仍在主线或 detached 状态时返回 `CREATE_DELIVERY_FEATURE_BRANCH`，取得 Git 授权并切换后由同一会话调用 `workspace_status → resume_execution_mode`。Codex primary 返回机器可消费的 `worktreeSetup.hostDispatch`，宿主创建 `environment=worktree` 的任务并按同样流程续接。两条路径都不再展示选择器或要求第二次确认。
 5. 用户选择手动开发后调用一次 `select_execution_mode(MANUAL)`；Controller 把需求转为 `HANDOFF_READY`，生成自包含 handoff，并返回已嵌入文件的 `manualHandoff.receiverPrompt`。交接阶段不创建 Graph Run、workspace 绑定、任务或 worktree。
 6. 接收 CLI 在任何代码工作前调用 `start_manual_handoff`，用双 fingerprint 在实际工作区启动同一 Graph。只有 TASK 实现走 `MANUAL` claim；TASK/GROUP/Delivery Review 全部沿用自动派遣、独立审查与 findings 闭环。
 7. 自动模式及 manual Graph 的 Review 批次由当前可信宿主直接预留独立 receiver；receiver 继承当前宿主模型，不进行调度前模型推荐或调整。
@@ -80,10 +80,10 @@ Plugin 激活后，在 Codex 或 Claude Code 的新会话中提出需求，并�
 
 | 模式 | 选择后的行为 |
 |---|---|
-| 自动执行 | 在本 Delivery 的独立 worktree 中准备并冻结 Graph，再由当前宿主派遣可证明为 `HOST_NATIVE` 的 Agent |
+| 自动执行 | 在 Claude 裸 CLI 独占 primary checkout 或本 Delivery 的独立 worktree 中准备并冻结 Graph，再由当前宿主派遣可证明为 `HOST_NATIVE` 的 Agent |
 | 手动开发 | 先登记 `HANDOFF_READY` 并生成同结构内容包；接收 CLI 选定工作区后调用 `start_manual_handoff`，手动完成 TASK，随后执行与自动模式完全相同的 Review Graph 和最终确认 |
 
-新业务目标默认创建新 Delivery。自动与手动开发使用同一个稳定的 `.layered-delivery/<delivery-id>/` 和同结构投影，不再创建共享 `handoffs` 目录。选择前的 `CHOICE_READY` 已创建 SQLite、根总览与全部基线文档，但未绑定 workspace 或创建 Run；记录了 AUTOMATIC 但尚待 worktree 时继续保持 CHOICE_READY，并通过 `executionSelection` 暴露无需二次确认的续接状态。`hostDispatch` 使用确定性 idempotency key 避免异步创建重放，并以 `manualDirectoryChangeRequired=false`、`coordinatorCheckoutPolicy=PRESERVE_CURRENT_CHECKOUT` 明确主调度 checkout 不迁移。worktree 是宿主在独立任务/会话边界建立的开发工作区，不是 Controller 副作用。`workspace_status` 用 `worktreeProvenance` 记录实际 worktree 拓扑、宿主、基线选择来源与提交；`projectScopes.workspaceRoot` 作为仓库锚点，Controller 可在同一 Git common directory 中把它只读解析到唯一同分支 linked worktree，并通过 `verifiedProjectScopes` 展示实际路径，无需仅因物理路径变化重新 preview。Loop 的 `loop_context.projectScopes` 继续使用运行时已验证的实际 worktree，冻结锚点单独保存在 `projectScopeAnchors`；receiver 不得自行创建或切换分支。只有 linked worktree 中未被其他 worktree/Delivery 使用且基线有效的分支才可绑定，已有 diff 还必须由用户按精确状态指纹确认。手动响应的 `requirementSnapshotStatus=FROZEN` 表示需求内容已冻结，仍不代表 Graph 已 prepare、freeze 或创建 Run。一个工作区最多绑定一个未结束 Delivery；linked worktree 让并行 Delivery 共享控制数据库而使用不同 `workspaceKey`。只有用户明确要求继续同一需求，或当前 Loop 返回 `REPLAN_REQUIRED`，才在原 `delivery.id` 上创建下一 Revision。
+新业务目标默认创建新 Delivery。自动与手动开发使用同一个稳定的 `.layered-delivery/<delivery-id>/` 和同结构投影，不再创建共享 `handoffs` 目录。选择前的 `CHOICE_READY` 已创建 SQLite、根总览与全部基线文档，但未绑定 workspace 或创建 Run；记录了 AUTOMATIC 但尚待 feature 分支或 worktree 时继续保持 CHOICE_READY，并通过 `executionSelection` 暴露无需二次确认的续接状态。Claude 裸 CLI 的 `EXCLUSIVE_PRIMARY_CHECKOUT` 允许同一 primary checkout 绑定一个未结束 Delivery；主线或 detached 状态只要求在当前 checkout 创建 Delivery feature 分支。Codex 的 `hostDispatch` 使用确定性 idempotency key 避免异步创建重放，并以 `manualDirectoryChangeRequired=false`、`coordinatorCheckoutPolicy=PRESERVE_CURRENT_CHECKOUT` 明确主调度 checkout 不迁移。worktree 是宿主在独立任务/会话边界建立的开发工作区，不是 Controller 副作用。`workspace_status` 用 `worktreeProvenance` 记录实际拓扑、宿主、策略、基线选择来源与提交；`projectScopes.workspaceRoot` 作为仓库锚点，Controller 可在当前独占 primary 或同一 Git common directory 的唯一同分支 linked worktree 中只读解析实际路径。Loop 的 `loop_context.projectScopes` 继续使用运行时已验证的路径，冻结锚点单独保存在 `projectScopeAnchors`；receiver 不得自行创建或切换分支。只有未被其他 worktree/Delivery 使用且基线有效的分支才可绑定，已有业务 diff 还必须由用户按精确状态指纹确认；`.layered-delivery/**` 控制面文件不计入业务 dirty 状态。手动响应的 `requirementSnapshotStatus=FROZEN` 表示需求内容已冻结，仍不代表 Graph 已 prepare、freeze 或创建 Run。一个工作区最多绑定一个未结束 Delivery；linked worktree 让并行 Delivery 共享控制数据库而使用不同 `workspaceKey`。只有用户明确要求继续同一需求，或当前 Loop 返回 `REPLAN_REQUIRED`，才在原 `delivery.id` 上创建下一 Revision。
 
 ## Receiver、Worker 与并发
 

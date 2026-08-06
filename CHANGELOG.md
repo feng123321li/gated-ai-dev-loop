@@ -6,7 +6,7 @@
 
 ## 0.34.7 — 2026-08-05
 
-发布提交：`179f30e`
+发布提交：`d84896a`
 
 - Claude Code 裸 CLI 支持从 `cd project; claude` 启动的独占 primary checkout：有效 feature 分支可直接执行，主线或 detached 状态只需在当前 checkout 建立 Delivery feature 分支后无二次确认续接；同一 primary checkout 仍只绑定一个未结束 Delivery。
 - Codex primary checkout 继续返回机器可消费的 `hostDispatch` 并创建独立 worktree 项目任务；并行或已占用的 Claude Delivery 也继续使用 linked worktree，不降低隔离边界。

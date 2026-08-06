@@ -174,10 +174,22 @@ def _tool(
     annotations: dict[str, Any] | None = None,
     meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    schema_value = deepcopy(schema)
+    properties = schema_value.get("properties")
+    if isinstance(properties, dict):
+        properties["_host_workspace_attestation"] = {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 256,
+            "description": (
+                "Host-injected one-time workspace evidence. Models and "
+                "ordinary MCP clients must omit this internal field."
+            ),
+        }
     result: dict[str, Any] = {
         "name": name,
         "description": description,
-        "inputSchema": schema,
+        "inputSchema": schema_value,
     }
     if title is not None:
         result["title"] = title
@@ -410,10 +422,10 @@ TOOLS = (
         (
             "Apply one exact option returned by executionChoice. AUTOMATIC "
             "records the human choice before checking host workspace setup. "
-            "A Claude primary mainline returns in-place feature-branch setup; "
-            "a Codex primary checkout returns host-owned worktree setup. The "
-            "continuation completes without another confirmation. A ready "
-            "exclusive primary checkout or linked worktree immediately "
+            "Claude and Codex Git primary checkouts return host-owned stable "
+            "linked-worktree background dispatch. The continuation completes "
+            "without another confirmation; the main conversation remains a "
+            "monitor-only coordinator while the background Delivery Agent "
             "prepares and freezes the staged snapshot. "
             "MANUAL creates the handoff and returns the exact "
             "receiver prompt embedded in that file. Direct dialog text is "

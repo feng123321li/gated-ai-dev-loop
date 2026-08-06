@@ -6,6 +6,7 @@ from typing import Any
 from .errors import fail
 from .fs_safe import atomic_write, safe_path
 from .git_binding import (
+    find_delivery_linked_worktree,
     inspect_delivery_git_workspace,
     inspect_frozen_git_workspace_provenance,
     verify_delivery_git_binding,
@@ -332,12 +333,41 @@ def _automatic_workspace_setup(
     )
     graph_value = graph_fingerprint(graph)
     host_operations = {
-        "claude-code": "CREATE_CLAUDE_WORKTREE_SESSION",
+        "claude-code": "CREATE_CLAUDE_BACKGROUND_DELIVERY_AGENT",
         "codex": "CREATE_CODEX_PROJECT_TASK",
     }
     host_operation = host_operations.get(
         host_adapter_id or "",
         "CREATE_HOST_NATIVE_WORKTREE_TASK",
+    )
+    expected_binding = hierarchy["delivery"].get("gitBinding")
+    existing_worktree = find_delivery_linked_worktree(
+        workspace_root,
+        expected_binding,
+    )
+    worktree_name = (
+        "ld-"
+        + "".join(
+            character if character.isalnum() else "-"
+            for character in delivery_id.casefold()
+        ).strip("-")[:48]
+        + "-"
+        + hierarchy_value[:10]
+    )
+    prompt = (
+        f"Coordinate automatic Delivery {delivery_id} in the stable "
+        "Delivery worktree supplied by the host. Call workspace_status"
+        f"(root_id={delivery_id}), complete only the returned host-owned "
+        "feature-branch action when one is still required, then call "
+        f"resume_execution_mode(root_id={delivery_id}, "
+        f"expected_hierarchy_fingerprint={hierarchy_value}, "
+        f"expected_graph_fingerprint={graph_value}). Do not ask for "
+        "execution mode again. Remain the background Delivery coordinator: "
+        "consume graph_frontier, create independent native receiver Agents "
+        "for each reservation, and keep this same worktree for TASK and "
+        "Review Loops. Never start another top-level CLI session and never "
+        "use EnterWorktree inside a receiver. The main conversation only "
+        "monitors progress from the preserved coordinator checkout."
     )
     result["hostDispatch"] = {
         "action": "CREATE_HOST_NATIVE_WORKTREE_TASK",
@@ -350,21 +380,41 @@ def _automatic_workspace_setup(
         "idempotencyKey": (
             f"delivery-worktree:{delivery_id}:{hierarchy_value}"
         ),
-        "prompt": (
-            f"Resume automatic Delivery {delivery_id} in this "
-            "host-created worktree. Call workspace_status"
-            f"(root_id={delivery_id}), then call "
-            f"resume_execution_mode(root_id={delivery_id}, "
-            f"expected_hierarchy_fingerprint={hierarchy_value}, "
-            f"expected_graph_fingerprint={graph_value}). Do not ask for "
-            "execution mode again and do not change the coordinator "
-            "checkout."
-        ),
+        "prompt": prompt,
         "baseRef": setup["baseRef"],
         "baseCommit": setup["baseCommit"],
         "integrationTarget": setup["integrationTarget"],
         "manualDirectoryChangeRequired": False,
         "coordinatorCheckoutPolicy": "PRESERVE_CURRENT_CHECKOUT",
+        "stableDeliveryWorkspace": True,
+        "requiresNewTopLevelSession": False,
+        "manualSessionLaunchAllowed": False,
+        "sameSessionEnterWorktreeSupported": True,
+        "mainConversationRole": "MONITOR_ONLY",
+        "worktreeName": worktree_name,
+        "existingWorktreeRoot": existing_worktree,
+        "agentDispatch": (
+            {
+                "agentType": (
+                    "layered-delivery:delivery-coordinator"
+                ),
+                "name": worktree_name,
+                "runInBackground": True,
+                "reusePolicy": "RESUME_BY_NAME",
+                "workspaceEntry": (
+                    "ENTER_EXISTING_WORKTREE"
+                    if existing_worktree is not None
+                    else "CREATE_LINKED_WORKTREE_THEN_ENTER"
+                ),
+                "returnMainConversationToCoordinatorCheckout": True,
+            }
+            if host_adapter_id == "claude-code"
+            else {
+                "taskEnvironment": "worktree",
+                "runInBackground": True,
+                "reusePolicy": "RESUME_PROJECT_TASK",
+            }
+        ),
         "continuation": {
             "firstTool": "workspace_status",
             "thenTool": "resume_execution_mode",

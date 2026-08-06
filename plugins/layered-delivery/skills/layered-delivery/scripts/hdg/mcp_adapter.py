@@ -13,6 +13,7 @@ from .host_policy import (
     ProjectRootBinding,
 )
 from .jsonio import redact
+from .repository import SchedulerRepository
 from .mcp_tools import (
     call_tool,
     tool_definitions,
@@ -54,25 +55,21 @@ SERVER_INSTRUCTIONS = (
     "delivery.id; common ticket references in the ID or title are also "
     "detected, and a different ID is rejected at preview and final write. "
     "An occupied workspace rejects another initial prepare before writing "
-    "and returns host-owned worktreeSetup. When a new user requirement "
-    "arrives in a workspace bound to another unfinished Delivery, route it "
-    "to a new host-native worktree session before preview. Codex project "
-    "task with environment=worktree carries worktreeSetup.hostDispatch "
-    "with the continuation prompt and fingerprints without asking the "
-    "user to change directories, and preserves the coordinator main or "
-    "master checkout. Claude Code may bind one exclusive primary checkout "
-    "to one unfinished Delivery under EXCLUSIVE_PRIMARY_CHECKOUT. A Claude "
-    "primary mainline or detached checkout returns "
-    "CREATE_DELIVERY_FEATURE_BRANCH; after the host performs that separately "
-    "authorized Git action, the same session calls workspace_status and "
-    "resume_execution_mode. Parallel or occupied Claude Deliveries still use "
-    "HOST_NATIVE_LINKED_WORKTREE and a separate worktree session. "
+    "and returns host-owned worktreeSetup. Claude Code and Codex automatic "
+    "Git Deliveries always use HOST_NATIVE_LINKED_WORKTREE. hostDispatch "
+    "creates or reuses one stable Delivery worktree and starts a background "
+    "Delivery coordinator while preserving the primary checkout. Claude "
+    "does this inside the existing top-level session: it may briefly enter "
+    "the host worktree to start the background coordinator, then returns to "
+    "primary. It never asks the user to start another Claude session. Codex "
+    "uses an environment=worktree project task. The main conversation is "
+    "monitor-only and consumes progress from the shared control root. "
     "workspace_status reports "
     "worktreeProvenance with the actual host, topology, selectionSource, "
     "baseRef, baseCommit, baseHeadCommit, and integrationTarget regardless "
     "of which branch originally seeded the worktree. A feature branch name "
     "alone is not proof that the branch belongs to this Delivery. It is "
-    "adoptable in an exclusive Claude primary checkout or linked worktree "
+    "adoptable in a linked worktree "
     "only when no other worktree or Delivery uses it and its base "
     "relationship remains valid. A dirty candidate "
     "requires explicit user attribution of all current changes followed by "
@@ -102,7 +99,10 @@ SERVER_INSTRUCTIONS = (
     "projectScopeAnchors. Receivers must use the verified paths as-is and "
     "must never create, switch, or check out Git branches. This prevents "
     "parallel Deliveries in one repository from moving each other's "
-    "worktrees. "
+    "worktrees. Claude's fixed plugin project root is only the shared "
+    "control root: a PreToolUse Hook injects one-time, tool-bound evidence "
+    "for the actual host-observed cwd. Models must never supply or replay "
+    "that internal evidence. "
     "Its decomposition is a recursive GROUP/TASK hierarchy: TASK is "
     "the execution leaf, while every GROUP joins and reviews its child "
     "subtree before succeeding. Start with workspace_status, compose the "
@@ -120,13 +120,12 @@ SERVER_INSTRUCTIONS = (
     "and must not add another choice. Direct text "
     "continues requirement discussion and a changed requirement must be "
     "previewed again. For a selected button call select_execution_mode once. "
-    "AUTOMATIC records that human choice before workspace validation. A ready "
-    "exclusive Claude primary checkout or linked worktree immediately "
-    "prepares, freezes, and enters dispatch. A Claude primary mainline first "
-    "returns in-place feature-branch setup; a Codex primary checkout returns "
-    "host-owned worktree setup. The continuing session calls workspace_status "
-    "and resume_execution_mode without presenting the mode selector or asking "
-    "for confirmation again. "
+    "AUTOMATIC records that human choice before workspace validation. Claude "
+    "and Codex primary checkouts return host-owned stable linked-worktree "
+    "background dispatch. The background Delivery coordinator calls "
+    "workspace_status and resume_execution_mode without presenting the mode "
+    "selector or asking for confirmation again; the main conversation only "
+    "monitors and handles final user interaction. "
     "MANUAL creates the portable handoff and returns the exact receiverPrompt "
     "also embedded in that file. It registers HANDOFF_READY without binding "
     "a workspace or starting a Graph run. The receiving CLI must call "
@@ -609,11 +608,33 @@ def _call_scheduler_tool(
             stateless=modern,
             require_sandbox_metadata=True,
         )
+        tool_arguments = dict(arguments)
+        workspace_attestation = tool_arguments.pop(
+            "_host_workspace_attestation",
+            None,
+        )
+        workspace_root = root_resolution.workspace_root
+        if workspace_attestation is not None:
+            if (
+                connection.trusted_host_adapter != "claude-code"
+                or not isinstance(workspace_attestation, str)
+            ):
+                raise GatedLoopError(
+                    "SCHEDULER_HOST_WORKSPACE_ATTESTATION_UNTRUSTED",
+                    "Only the Claude Code host Hook may attest a workspace",
+                )
+            workspace_root = SchedulerRepository(
+                root_resolution.project_root
+            ).consume_host_workspace_attestation(
+                workspace_attestation,
+                host_adapter_id="claude-code",
+                tool_name=name,
+            )
         business_result = call_tool(
             name,
-            arguments,
+            tool_arguments,
             root=root_resolution.project_root,
-            workspace_root=root_resolution.workspace_root,
+            workspace_root=workspace_root,
             explicit_dogfood=explicit_dogfood,
             client_info=(dict(client_info) if client_info else None),
             trusted_host_adapter=connection.trusted_host_adapter,

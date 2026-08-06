@@ -5,7 +5,7 @@
 ## 连接失败
 
 - Plugin 未安装、工具未注册或 MCP 未连接：报告 `PLUGIN_MCP_UNAVAILABLE` 并停止治理写入。
-- 运行中断连：报告 `PLUGIN_MCP_DISCONNECTED`，保留最后已知 root、node 与 operation。AUTOMATIC 已选择但尚待 worktree 时同时保留双 fingerprint；新会话从 `workspace_status(root_id)` 的 `executionSelection` 恢复并调用 `resume_execution_mode`，不得再次展示选择器。
+- 运行中断连：报告 `PLUGIN_MCP_DISCONNECTED`，保留最后已知 root、node 与 operation。AUTOMATIC 已选择但尚待 worktree 时同时保留双 fingerprint；恢复同一个宿主后台 Delivery Agent/项目任务，由其从 `workspace_status(root_id)` 的 `executionSelection` 调用 `resume_execution_mode`，不得创建新顶层会话或再次展示选择器。
 - 响应未返回的写操作状态视为未知；重连后先调用 `workspace_status`。调用发生在当前对话工作区，已知 Delivery 时显式传 `root_id`。linked Git worktree 会映射到主 checkout 的共享控制根，但通过 `workspaceKey` 只访问本对话绑定的 Delivery。仅当返回 `ACTIVE`、`BLOCKED`、`PAUSED`、`COMPLETED` 或 `CANCELLED` 且存在 `rootId` 时，再调用 `graph_status` 和 `graph_frontier`；`ABSENT` 或 `PREPARED` 按规划说明恢复，不调用尚不存在 run 的工具，也不盲目重放写操作。
 - Git Delivery 重连时同时核对 `gitBinding` 与 `gitWorkspace`。如果只是临时切到其他分支，切回绑定的 feature 分支后重新调用 `workspace_status`；不要让控制器自动 `git switch`。HEAD 可以随本 Delivery commit 前进，但必须继续继承冻结的 `baseCommit`，且本地或 `origin` 的同名 `baseRef` / `integrationTarget` 必须仍包含该基线。未冻结的新工作区按宿主显式 `base_ref`、有效 `origin/HEAD`、本地 `main`、本地 `master` 的顺序发现基线，并从 `worktreeProvenance` 读取实际的 `selectionSource`、`baseRef`、`baseCommit`、`baseHeadCommit` 与 `integrationTarget`；不要从分支名前缀推断来源。脏 linked worktree 必须由用户确认当前全部 diff，并以原响应的精确 `workingTree.stateFingerprint` 作为 `confirmed_dirty_state_fingerprint` 重查；指纹变化或分支已被其他 worktree/Delivery 使用时不得复用。
 
@@ -15,7 +15,7 @@ Plugin 优先使用 MCP `2026-07-28`。现代客户端可先调用 `server/disco
 
 `preview_hierarchy.executionChoice` 使用独立 schema v2 交互契约。`activeHostMapping` 指向当前可信 Adapter 的原生问题工具；该工具在当前上下文可调用时必须直接消费 `options`，不得先输出文本问题。只有工具未暴露或当前模式不可调用时，才按 `presentationPolicy.fallback` 逐字显示 `markdown`，不得追加“回复自动”等 Agent 文案。
 
-Claude Plugin 通过启动环境 `${CLAUDE_PROJECT_DIR}` 固定项目协调根。裸 CLI 从 primary checkout 启动时使用 `EXCLUSIVE_PRIMARY_CHECKOUT`：有效 feature 分支可直接绑定一个未结束 Delivery；主线或 detached 状态在取得 Git 授权后于当前 checkout 建立 Delivery feature 分支，同一会话即可用 `workspace_status → resume_execution_mode` 续接，`${CLAUDE_PROJECT_DIR}` 无需漂移。只有并行/占用场景才需要新的 linked worktree 会话；此时必须从目标 worktree 启动新会话，不能只在旧会话调用 `EnterWorktree` 后沿用旧 MCP。Codex 的现代请求从每次请求 `_meta` 解析项目根；旧版 Codex 会话则在首次合法元数据后绑定不可漂移的根。Codex primary 使用 `HOST_NATIVE_LINKED_WORKTREE` 和 `hostDispatch`，宿主缺少创建项目任务的 API 时报告 `HOST_NATIVE_WORKTREE_LAUNCH_UNAVAILABLE`。无论从哪种宿主取得，Controller 的单次 operation 都只接收一个已解析、已校验的项目根；该根是 `.layered-delivery/` 控制面位置，不等于 hierarchy 的 `delivery.id` 或递归 `root` 节点。
+Claude Plugin 通过启动环境 `${CLAUDE_PROJECT_DIR}` 固定共享控制根，但执行工作区不再等同于该固定根。Claude 的 PreToolUse Hook 为每次 MCP 调用签发并消费一次性、工具绑定的真实 cwd 证明；因此主会话可以短暂 `EnterWorktree(path=...)` 完成后台 Delivery coordinator 启动后返回 primary，而后台 coordinator 与其 receiver 始终解析到稳定 linked worktree。模型输入的路径不能替代该证明。禁止启动新顶层 Claude 会话，也禁止在 receiver 内调用 `EnterWorktree`。Codex 的现代请求继续从每次请求 `_meta` 解析项目根；旧版 Codex 会话在首次合法元数据后绑定不可漂移的根。两种宿主的 primary 都使用 `HOST_NATIVE_LINKED_WORKTREE` 和 `hostDispatch`；主会话从共享控制根调用 `graph_frontier`、`graph_status` 或 `graph_events` 时只获得 `MONITOR_ONLY` 权限，不能借此变更执行工作区。宿主缺少后台 Agent/项目任务能力时报告 `HOST_NATIVE_WORKTREE_LAUNCH_UNAVAILABLE`。Controller 的单次 operation 同时区分共享 `.layered-delivery/` 控制根与经宿主证明的执行 workspace；二者都不等于 hierarchy 的 `delivery.id` 或递归 `root` 节点。
 
 控制面根使用共享 `.layered-delivery/scheduler.db`。每个 `delivery.id` 是稳定的需求目录 namespace，其可读投影固定为：
 

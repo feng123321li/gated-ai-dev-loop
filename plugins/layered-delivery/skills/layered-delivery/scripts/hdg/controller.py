@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from .dispatch_planning import plan_dispatch_batch
-from .errors import fail
+from .errors import GatedLoopError, fail
 from .graph_frontier import get_graph_frontier
 from .git_binding import (
     verify_delivery_git_binding,
@@ -44,6 +45,10 @@ from .repository import SchedulerRepository
 
 
 ControllerOperation = Callable[..., dict[str, Any]]
+
+CONTROL_ROOT_MONITOR_TOOLS = frozenset(
+    {"graph_frontier", "graph_status", "graph_events"}
+)
 
 CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "workspace_status": workspace_status,
@@ -120,6 +125,7 @@ class LayeredDeliveryController:
         git_binding = None
         git_workspace = None
         verified_projects = None
+        monitoring_from_control_root = False
         if isinstance(root_id, str):
             repository = SchedulerRepository(context.project_root)
             if name in {
@@ -142,19 +148,34 @@ class LayeredDeliveryController:
                         workspace_root,
                     )
             else:
-                repository.assert_delivery_workspace(
-                    root_id,
-                    workspace_root,
-                    allow_unbound_manual=(name == "workspace_status"),
-                    allow_unbound_choice=(name == "workspace_status"),
-                )
+                try:
+                    repository.assert_delivery_workspace(
+                        root_id,
+                        workspace_root,
+                        allow_unbound_manual=(name == "workspace_status"),
+                        allow_unbound_choice=(name == "workspace_status"),
+                    )
+                except GatedLoopError as error:
+                    same_control_root = (
+                        context.host_adapter_id in {"claude-code", "codex"}
+                        and name in CONTROL_ROOT_MONITOR_TOOLS
+                        and os.path.normcase(workspace_root)
+                        == os.path.normcase(context.project_root)
+                    )
+                    if (
+                        error.code
+                        != "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH"
+                        or not same_control_root
+                    ):
+                        raise
+                    monitoring_from_control_root = True
             if name not in {
                 "workspace_status",
                 "prepare_delivery_revision",
                 "select_execution_mode",
                 "resume_execution_mode",
                 "start_manual_handoff",
-            }:
+            } and not monitoring_from_control_root:
                 stored = repository.hierarchy(root_id)
                 git_binding = stored["hierarchy"]["delivery"].get(
                     "gitBinding"
@@ -230,6 +251,9 @@ class LayeredDeliveryController:
             result["gitBinding"] = git_binding
         if git_workspace is not None:
             result["gitWorkspace"] = git_workspace
+        if monitoring_from_control_root:
+            result["coordinationRole"] = "MONITOR_ONLY"
+            result["executionWorkspaceMutationAllowed"] = False
         return result
 
 

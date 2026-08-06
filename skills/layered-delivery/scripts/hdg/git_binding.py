@@ -11,7 +11,10 @@ from .model_core import validate_git_binding
 
 
 GIT_TIMEOUT_SECONDS = 10
-EXCLUSIVE_PRIMARY_HOST_ADAPTERS = frozenset({"claude-code"})
+EXCLUSIVE_PRIMARY_HOST_ADAPTERS = frozenset()
+HOST_NATIVE_LINKED_WORKTREE_ADAPTERS = frozenset(
+    {"claude-code", "codex"}
+)
 
 
 @dataclass(frozen=True)
@@ -289,8 +292,8 @@ def _worktree_provenance(
 ) -> dict[str, Any]:
     if topology == "LINKED_WORKTREE":
         strategy = "HOST_NATIVE_LINKED_WORKTREE"
-    elif host_adapter_id in EXCLUSIVE_PRIMARY_HOST_ADAPTERS:
-        strategy = "EXCLUSIVE_PRIMARY_CHECKOUT"
+    elif host_adapter_id in HOST_NATIVE_LINKED_WORKTREE_ADAPTERS:
+        strategy = "HOST_NATIVE_LINKED_WORKTREE"
     else:
         strategy = "PRIMARY_CHECKOUT"
     return {
@@ -736,6 +739,34 @@ def _branch_worktrees(
     return worktrees
 
 
+def find_delivery_linked_worktree(
+    workspace_root: str,
+    binding: object,
+) -> str | None:
+    """Find the unique existing linked worktree for a Delivery branch."""
+
+    if binding is None:
+        return None
+    normalized = validate_git_binding(binding)
+    workspace = Path(workspace_root).absolute().resolve(strict=True)
+    matches = [
+        candidate
+        for candidate in _branch_worktrees(
+            workspace,
+            normalized["branchRef"],
+        )
+        if candidate != workspace
+    ]
+    if len(matches) != 1:
+        return None
+    verify_delivery_git_binding(
+        str(matches[0]),
+        normalized,
+        preparing=True,
+    )
+    return str(matches[0])
+
+
 def verify_delivery_project_scopes(
     workspace_root: str,
     delivery: dict[str, Any],
@@ -860,6 +891,7 @@ def verify_delivery_project_scopes(
 
 
 __all__ = (
+    "find_delivery_linked_worktree",
     "inspect_delivery_git_workspace",
     "inspect_frozen_git_workspace_provenance",
     "verify_delivery_git_binding",

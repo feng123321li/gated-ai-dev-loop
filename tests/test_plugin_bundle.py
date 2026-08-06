@@ -41,6 +41,7 @@ from hdg.planning import (
     preview_hierarchy,
     start_manual_handoff,
 )
+from hdg.repository import SchedulerRepository
 
 from .test_loop_architecture import group_hierarchy, task_hierarchy
 from .automatic_dispatch import dispatch_loop, reserve_loop
@@ -55,6 +56,113 @@ PLUGIN_SKILL = PLUGIN / "skills" / "layered-delivery"
 
 
 class PluginBundleTests(unittest.TestCase):
+    def test_claude_plugin_registers_background_delivery_coordinator(
+        self,
+    ) -> None:
+        agent = (
+            PLUGIN / "agents" / "delivery-coordinator.md"
+        ).read_text(encoding="utf-8")
+        hooks = json.loads(
+            (PLUGIN / "hooks" / "hooks.json").read_text(encoding="utf-8")
+        )
+        self.assertIn("name: delivery-coordinator", agent)
+        self.assertIn("background: true", agent)
+        self.assertIn("tools: Agent", agent)
+        self.assertNotIn("isolation: worktree", agent)
+        commands = [
+            hook["command"]
+            for group in hooks["hooks"]["PreToolUse"]
+            for hook in group["hooks"]
+        ]
+        self.assertTrue(
+            any("attest_claude_workspace.py" in item for item in commands)
+        )
+
+    def test_claude_workspace_hook_attests_linked_worktree_cwd(self) -> None:
+        with TemporaryDirectory() as root:
+            repository = Path(root, "repository")
+            worktree = Path(root, "delivery-worktree")
+            repository.mkdir()
+
+            def git(*arguments: str, cwd: Path = repository) -> None:
+                completed = subprocess.run(
+                    ["git", "-C", str(cwd), *arguments],
+                    text=True,
+                    encoding="utf-8",
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(
+                    completed.returncode,
+                    0,
+                    completed.stderr,
+                )
+
+            git("init", "--initial-branch=main")
+            git("config", "user.name", "Plugin Tests")
+            git("config", "user.email", "plugin-tests@example.invalid")
+            Path(repository, "tracked.txt").write_text(
+                "baseline\n",
+                encoding="utf-8",
+            )
+            git("add", "tracked.txt")
+            git("commit", "-m", "baseline")
+            git(
+                "worktree",
+                "add",
+                "-b",
+                "feature/delivery-hook",
+                str(worktree),
+                "main",
+            )
+            scheduler = SchedulerRepository(str(repository))
+            with scheduler.transaction():
+                pass
+            transcript = Path(root, "claude-transcript.jsonl")
+            transcript.write_text("{}\n", encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-X",
+                    "utf8",
+                    str(
+                        PLUGIN
+                        / "hooks"
+                        / "attest_claude_workspace.py"
+                    ),
+                ],
+                input=json.dumps(
+                    {
+                        "hook_event_name": "PreToolUse",
+                        "tool_name": (
+                            "mcp__plugin_layered-delivery_"
+                            "layered-delivery__workspace_status"
+                        ),
+                        "tool_input": {"root_id": "d-service"},
+                        "tool_use_id": "claude-tool-use",
+                        "session_id": "claude-session",
+                        "transcript_path": str(transcript),
+                        "cwd": str(worktree),
+                    }
+                ),
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            updated = json.loads(completed.stdout)["hookSpecificOutput"][
+                "updatedInput"
+            ]
+            self.assertEqual(updated["root_id"], "d-service")
+            attestation = updated["_host_workspace_attestation"]
+            resolved = scheduler.consume_host_workspace_attestation(
+                attestation,
+                host_adapter_id="claude-code",
+                tool_name="workspace_status",
+            )
+            self.assertEqual(resolved, str(worktree.resolve()))
+
     @staticmethod
     def codex_subagent_event(
         root: str,
@@ -236,7 +344,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("`MANUAL`", text)
         self.assertIn("`freeformInput.nextAction`", text)
         self.assertIn("先记录业务确认", text)
-        self.assertIn("同一会话用原双 fingerprint 调用 `resume_execution_mode`", text)
+        self.assertIn("后台方用原双 fingerprint 调用 `resume_execution_mode`", text)
         self.assertIn("展示 `manualHandoff.receiverPrompt`", text)
         self.assertIn("不把同一 Delivery 限制为单仓库", text)
         self.assertIn("不得为第二仓库另起 Delivery", text)
@@ -354,9 +462,10 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("`environment=worktree`", planning)
         self.assertIn("`${CLAUDE_PROJECT_DIR}`", planning)
         self.assertIn("`hostDispatch`", main + planning)
-        self.assertIn("`EXCLUSIVE_PRIMARY_CHECKOUT`", main + planning)
-        self.assertIn("Claude Code 裸 CLI", main + planning)
-        self.assertIn("同一 primary checkout 只绑定一个未结束 Delivery", planning)
+        self.assertNotIn("`EXCLUSIVE_PRIMARY_CHECKOUT`", main + planning)
+        self.assertIn("`HOST_NATIVE_LINKED_WORKTREE`", main + planning)
+        self.assertIn("后台 `delivery-coordinator`", main + planning)
+        self.assertIn("禁止要求用户启动第二个顶层 Claude 会话", planning)
         self.assertIn(
             "`manualDirectoryChangeRequired=false`",
             main + planning,

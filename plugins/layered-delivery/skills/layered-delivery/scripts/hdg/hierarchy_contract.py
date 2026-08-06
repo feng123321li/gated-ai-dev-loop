@@ -553,13 +553,12 @@ def hierarchy_contract(
                     "native selector whenever callable and may show exact "
                     "Markdown only when it is unavailable; skills do not "
                     "reconstruct, rewrite, or add options. Selecting "
-                    "AUTOMATIC is recorded once. A ready exclusive Claude "
-                    "primary checkout or linked worktree immediately "
-                    "prepares, freezes, and dispatches. A Claude primary "
-                    "mainline returns feature-branch setup in the same "
-                    "session; a Codex primary returns host worktree setup. "
-                    "The continuation calls resume_execution_mode without "
-                    "another user confirmation."
+                    "AUTOMATIC is recorded once. Claude and Codex Git "
+                    "Deliveries use a host-native stable linked worktree and "
+                    "background Delivery coordinator while the main "
+                    "conversation remains monitor-only. The continuation "
+                    "calls resume_execution_mode without another user "
+                    "confirmation or a new top-level session."
                 ),
             },
             "deliveryContinuity": {

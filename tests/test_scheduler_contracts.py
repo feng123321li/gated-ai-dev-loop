@@ -853,7 +853,14 @@ class McpSurfaceTests(unittest.TestCase):
                 "root_id",
                 "base_ref",
                 "confirmed_dirty_state_fingerprint",
+                "_host_workspace_attestation",
             },
+        )
+        self.assertIn(
+            "Host-injected",
+            by_name["workspace_status"]["inputSchema"]["properties"][
+                "_host_workspace_attestation"
+            ]["description"],
         )
         self.assertEqual(
             by_name["workspace_status"]["inputSchema"]["required"],
@@ -970,6 +977,7 @@ class McpSurfaceTests(unittest.TestCase):
             {
                 "root_id",
                 "expected_graph_fingerprint",
+                "_host_workspace_attestation",
             },
         )
         self.assertNotIn("_meta", by_name["plan_dispatch_batch"])
@@ -1022,6 +1030,7 @@ class McpSurfaceTests(unittest.TestCase):
                 "receiver_context_id",
                 "receiver_attestation_id",
                 "operation_id",
+                "_host_workspace_attestation",
             },
         )
         pause_schema = by_name["pause_loop"]["inputSchema"]
@@ -1926,7 +1935,7 @@ class McpSurfaceTests(unittest.TestCase):
             )
             self.assertNotIn("suggestedGitBinding", discovered)
 
-    def test_claude_cli_primary_checkout_runs_one_exclusive_delivery(
+    def test_claude_cli_primary_dispatches_background_delivery_agent(
         self,
     ) -> None:
         with TemporaryDirectory() as root:
@@ -1936,8 +1945,6 @@ class McpSurfaceTests(unittest.TestCase):
                     delivery_id="d-claude-cli",
                 )
             )
-            git_command(repository, "worktree", "remove", str(worktree))
-
             mainline = call_tool(
                 "workspace_status",
                 {},
@@ -1950,9 +1957,9 @@ class McpSurfaceTests(unittest.TestCase):
             self.assertEqual(
                 mainline["worktreeSetup"],
                 {
-                    "state": "FEATURE_BRANCH_REQUIRED",
+                    "state": "DEDICATED_WORKTREE_REQUIRED",
                     "owner": "HOST",
-                    "nextAction": "CREATE_DELIVERY_FEATURE_BRANCH",
+                    "nextAction": "CREATE_INDEPENDENT_WORKTREE_TASK",
                     "baseRef": "main",
                     "baseCommit": base_commit,
                     "integrationTarget": "main",
@@ -1960,11 +1967,7 @@ class McpSurfaceTests(unittest.TestCase):
             )
             self.assertEqual(
                 mainline["worktreeProvenance"]["strategy"],
-                "EXCLUSIVE_PRIMARY_CHECKOUT",
-            )
-            self.assertNotIn(
-                "hostDispatch",
-                mainline["worktreeSetup"],
+                "HOST_NATIVE_LINKED_WORKTREE",
             )
 
             hierarchy = bind_delivery_to_git(
@@ -2004,22 +2007,87 @@ class McpSurfaceTests(unittest.TestCase):
             self.assertFalse(selected["automaticDispatchRequested"])
             self.assertEqual(
                 selected["nextAction"],
-                "CREATE_DELIVERY_FEATURE_BRANCH",
+                "CREATE_INDEPENDENT_WORKTREE_TASK",
             )
             self.assertEqual(
                 selected["worktreeSetup"]["strategy"],
-                "EXCLUSIVE_PRIMARY_CHECKOUT",
+                "HOST_NATIVE_LINKED_WORKTREE",
             )
-            self.assertNotIn("hostDispatch", selected["worktreeSetup"])
+            dispatch = selected["worktreeSetup"]["hostDispatch"]
+            self.assertEqual(
+                dispatch["hostOperation"],
+                "CREATE_CLAUDE_BACKGROUND_DELIVERY_AGENT",
+            )
+            self.assertEqual(
+                dispatch["existingWorktreeRoot"],
+                str(worktree.resolve()),
+            )
+            self.assertFalse(dispatch["requiresNewTopLevelSession"])
+            self.assertEqual(dispatch["mainConversationRole"], "MONITOR_ONLY")
+            self.assertEqual(
+                dispatch["agentDispatch"]["agentType"],
+                "layered-delivery:delivery-coordinator",
+            )
+            self.assertTrue(dispatch["agentDispatch"]["runInBackground"])
 
-            git_command(repository, "switch", branch_ref)
-            ready = call_tool(
-                "workspace_status",
-                {"root_id": "d-claude-cli"},
-                root=str(repository),
-                workspace_root=str(repository),
+            attestation = SchedulerRepository(
+                str(repository)
+            ).issue_host_workspace_attestation(
+                host_adapter_id="claude-code",
+                context_id="background-coordinator",
+                tool_name="workspace_status",
+                tool_use_id="tool-use-workspace-status",
+                workspace_root=str(worktree),
+            )
+            connection = McpConnection(
+                project_root=ProjectRootBinding.from_startup(repository),
                 trusted_host_adapter="claude-code",
             )
+            handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "initialize",
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": LEGACY_PREFERRED_PROTOCOL_VERSION,
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "claude-code",
+                            "version": "test",
+                        },
+                    },
+                },
+                connection=connection,
+            )
+            handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/initialized",
+                    "params": {},
+                },
+                connection=connection,
+            )
+            attested_response = handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "workspace-status",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "workspace_status",
+                        "arguments": {
+                            "root_id": "d-claude-cli",
+                            "_host_workspace_attestation": attestation,
+                        },
+                    },
+                },
+                connection=connection,
+            )
+            self.assertTrue(
+                attested_response["result"]["structuredContent"]["ok"]
+            )
+            ready = attested_response["result"]["structuredContent"][
+                "result"
+            ]
 
             self.assertEqual(
                 ready["gitBinding"],
@@ -2032,11 +2100,11 @@ class McpSurfaceTests(unittest.TestCase):
             )
             self.assertEqual(
                 ready["worktreeProvenance"]["strategy"],
-                "EXCLUSIVE_PRIMARY_CHECKOUT",
+                "HOST_NATIVE_LINKED_WORKTREE",
             )
             self.assertEqual(
                 ready["worktreeProvenance"]["topology"],
-                "PRIMARY_WORKTREE",
+                "LINKED_WORKTREE",
             )
             self.assertTrue(ready["workingTree"]["clean"])
             self.assertEqual(
@@ -2056,7 +2124,7 @@ class McpSurfaceTests(unittest.TestCase):
                     ],
                 },
                 root=str(repository),
-                workspace_root=str(repository),
+                workspace_root=str(worktree),
                 trusted_host_adapter="claude-code",
             )
 
@@ -2068,7 +2136,52 @@ class McpSurfaceTests(unittest.TestCase):
             )
             self.assertNotIn("worktreeSetup", resumed)
 
-    def test_claude_cli_primary_checkout_requires_exact_dirty_confirmation(
+            monitored = call_tool(
+                "graph_frontier",
+                {"root_id": "d-claude-cli"},
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="claude-code",
+            )
+            self.assertEqual(monitored["coordinationRole"], "MONITOR_ONLY")
+            self.assertFalse(
+                monitored["executionWorkspaceMutationAllowed"]
+            )
+
+    def test_host_workspace_attestation_is_tool_bound_and_one_time(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            repository, worktree, _base_commit, _branch_ref = (
+                git_delivery_checkout(root)
+            )
+            scheduler = SchedulerRepository(str(repository))
+            attestation = scheduler.issue_host_workspace_attestation(
+                host_adapter_id="claude-code",
+                context_id="agent-1",
+                tool_name="workspace_status",
+                tool_use_id="tool-use-1",
+                workspace_root=str(worktree),
+            )
+
+            resolved = scheduler.consume_host_workspace_attestation(
+                attestation,
+                host_adapter_id="claude-code",
+                tool_name="workspace_status",
+            )
+            self.assertEqual(resolved, str(worktree.resolve()))
+            with self.assertRaises(GatedLoopError) as replayed:
+                scheduler.consume_host_workspace_attestation(
+                    attestation,
+                    host_adapter_id="claude-code",
+                    tool_name="workspace_status",
+                )
+            self.assertEqual(
+                replayed.exception.code,
+                "SCHEDULER_HOST_WORKSPACE_ATTESTATION_CONSUMED",
+            )
+
+    def test_claude_cli_linked_worktree_requires_exact_dirty_confirmation(
         self,
     ) -> None:
         with TemporaryDirectory() as root:
@@ -2078,9 +2191,7 @@ class McpSurfaceTests(unittest.TestCase):
                     delivery_id="d-claude-dirty",
                 )
             )
-            git_command(repository, "worktree", "remove", str(worktree))
-            git_command(repository, "switch", branch_ref)
-            Path(repository, "change.txt").write_text(
+            Path(worktree, "change.txt").write_text(
                 "belongs to this Delivery\n",
                 encoding="utf-8",
             )
@@ -2089,7 +2200,7 @@ class McpSurfaceTests(unittest.TestCase):
                 "workspace_status",
                 {},
                 root=str(repository),
-                workspace_root=str(repository),
+                workspace_root=str(worktree),
                 trusted_host_adapter="claude-code",
             )
             dirty_fingerprint = discovered["branchAdoption"][
@@ -2109,7 +2220,7 @@ class McpSurfaceTests(unittest.TestCase):
                     "confirmed_dirty_state_fingerprint": dirty_fingerprint,
                 },
                 root=str(repository),
-                workspace_root=str(repository),
+                workspace_root=str(worktree),
                 trusted_host_adapter="claude-code",
             )
 
@@ -2222,53 +2333,30 @@ class McpSurfaceTests(unittest.TestCase):
                 selected["worktreeSetup"]["resumeAction"],
                 "CALL_WORKSPACE_STATUS_THEN_RESUME_EXECUTION_MODE",
             )
+            dispatch = selected["worktreeSetup"]["hostDispatch"]
+            self.assertEqual(dispatch["hostAdapterId"], "codex")
             self.assertEqual(
-                selected["worktreeSetup"]["hostDispatch"],
+                dispatch["hostOperation"],
+                "CREATE_CODEX_PROJECT_TASK",
+            )
+            self.assertEqual(dispatch["environment"], "worktree")
+            self.assertTrue(dispatch["stableDeliveryWorkspace"])
+            self.assertFalse(dispatch["requiresNewTopLevelSession"])
+            self.assertEqual(dispatch["mainConversationRole"], "MONITOR_ONLY")
+            self.assertEqual(
+                dispatch["agentDispatch"],
                 {
-                    "action": "CREATE_HOST_NATIVE_WORKTREE_TASK",
-                    "hostAdapterId": "codex",
-                    "hostOperation": "CREATE_CODEX_PROJECT_TASK",
-                    "launchPolicy": "IMMEDIATE",
-                    "environment": "worktree",
-                    "deliveryId": "d-auto-transition",
-                    "title": "Delivery d-auto-transition",
-                    "idempotencyKey": (
-                        "delivery-worktree:d-auto-transition:"
-                        + preview["hierarchyFingerprint"]
-                    ),
-                    "prompt": (
-                        "Resume automatic Delivery d-auto-transition in "
-                        "this host-created worktree. Call workspace_status"
-                        "(root_id=d-auto-transition), then call resume_"
-                        "execution_mode(root_id=d-auto-transition, "
-                        "expected_hierarchy_fingerprint="
-                        + preview["hierarchyFingerprint"]
-                        + ", expected_graph_fingerprint="
-                        + preview["graphFingerprint"]
-                        + "). Do not ask for execution mode again and do "
-                        "not change the coordinator checkout."
-                    ),
-                    "baseRef": "main",
-                    "baseCommit": base_commit,
-                    "integrationTarget": "main",
-                    "manualDirectoryChangeRequired": False,
-                    "coordinatorCheckoutPolicy": (
-                        "PRESERVE_CURRENT_CHECKOUT"
-                    ),
-                    "continuation": {
-                        "firstTool": "workspace_status",
-                        "thenTool": "resume_execution_mode",
-                        "rootId": "d-auto-transition",
-                        "expectedHierarchyFingerprint": preview[
-                            "hierarchyFingerprint"
-                        ],
-                        "expectedGraphFingerprint": preview[
-                            "graphFingerprint"
-                        ],
-                        "confirmationRequired": False,
-                    },
+                    "taskEnvironment": "worktree",
+                    "runInBackground": True,
+                    "reusePolicy": "RESUME_PROJECT_TASK",
                 },
             )
+            self.assertEqual(dispatch["baseCommit"], base_commit)
+            self.assertEqual(
+                dispatch["continuation"]["expectedHierarchyFingerprint"],
+                preview["hierarchyFingerprint"],
+            )
+            self.assertIn("Never start another top-level CLI session", dispatch["prompt"])
 
             status = call_tool(
                 "workspace_status",
@@ -3837,11 +3925,12 @@ class McpSurfaceTests(unittest.TestCase):
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "Codex project task with environment=worktree",
+                "Codex uses an environment=worktree project task",
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "Claude Code may bind one exclusive primary checkout",
+                "Claude Code and Codex automatic Git Deliveries always use "
+                "HOST_NATIVE_LINKED_WORKTREE",
                 initialized["result"]["instructions"],
             )
             self.assertIn(
@@ -3849,11 +3938,11 @@ class McpSurfaceTests(unittest.TestCase):
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "without asking the user to change directories",
+                "It never asks the user to start another Claude session",
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "preserves the coordinator main or master checkout",
+                "preserving the primary checkout",
                 initialized["result"]["instructions"],
             )
             self.assertIn(
@@ -3874,7 +3963,7 @@ class McpSurfaceTests(unittest.TestCase):
                 "HOST_NATIVE_LINKED_WORKTREE",
                 initialized["result"]["instructions"],
             )
-            self.assertIn(
+            self.assertNotIn(
                 "EXCLUSIVE_PRIMARY_CHECKOUT",
                 initialized["result"]["instructions"],
             )

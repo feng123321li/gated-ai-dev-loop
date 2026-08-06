@@ -48,6 +48,7 @@ GOVERNANCE_DIRECTORY = ".layered-delivery"
 DATABASE_FILE = "scheduler.db"
 SCHEDULER_STATE_CONTRACT = "schema-v3-graph-compiler-v1"
 RECEIVER_ATTESTATION_SECONDS = 300
+HOST_WORKSPACE_ATTESTATION_SECONDS = 60
 MANUAL_WRITABLE_PROJECTIONS = frozenset(
     {"progress.md", "acceptance.md"}
 )
@@ -534,10 +535,149 @@ class SchedulerRepository:
                 restored_at TEXT,
                 reason TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS host_workspace_attestations (
+                attestation_digest TEXT PRIMARY KEY,
+                host_adapter_id TEXT NOT NULL,
+                context_digest TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                tool_use_digest TEXT NOT NULL,
+                workspace_root TEXT NOT NULL,
+                workspace_key TEXT NOT NULL,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS host_workspace_attestations_active
+            ON host_workspace_attestations(
+                host_adapter_id, context_digest, status, expires_at
+            );
             """
         )
         SchedulerRepository._verify_state_contract(connection)
         SchedulerRepository._upgrade_revision_storage(connection)
+
+    def issue_host_workspace_attestation(
+        self,
+        *,
+        host_adapter_id: str,
+        context_id: str,
+        tool_name: str,
+        tool_use_id: str,
+        workspace_root: str | os.PathLike[str],
+    ) -> str:
+        """Bind one imminent MCP call to a host-observed workspace."""
+
+        workspace = str(
+            Path(workspace_root).absolute().resolve(strict=True)
+        )
+        attestation = secrets.token_hex(32)
+        attestation_digest = hashlib.sha256(
+            attestation.encode("utf-8")
+        ).hexdigest()
+        context_digest = hashlib.sha256(
+            context_id.encode("utf-8")
+        ).hexdigest()
+        tool_use_digest = hashlib.sha256(
+            tool_use_id.encode("utf-8")
+        ).hexdigest()
+        at = timestamp(self.now)
+        expires_at = (
+            datetime.fromisoformat(at.replace("Z", "+00:00"))
+            + timedelta(seconds=HOST_WORKSPACE_ATTESTATION_SECONDS)
+        ).isoformat().replace("+00:00", "Z")
+        with self.transaction() as connection:
+            connection.execute(
+                "UPDATE host_workspace_attestations "
+                "SET status = 'SUPERSEDED' "
+                "WHERE host_adapter_id = ? AND context_digest = ? "
+                "AND tool_use_digest = ? AND status = 'ISSUED'",
+                (
+                    host_adapter_id,
+                    context_digest,
+                    tool_use_digest,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO host_workspace_attestations("
+                "attestation_digest, host_adapter_id, context_digest, "
+                "tool_name, tool_use_digest, workspace_root, "
+                "workspace_key, status, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'ISSUED', ?, ?)",
+                (
+                    attestation_digest,
+                    host_adapter_id,
+                    context_digest,
+                    tool_name,
+                    tool_use_digest,
+                    workspace,
+                    self.workspace_key(workspace),
+                    at,
+                    expires_at,
+                ),
+            )
+        return attestation
+
+    def consume_host_workspace_attestation(
+        self,
+        attestation: str,
+        *,
+        host_adapter_id: str,
+        tool_name: str,
+    ) -> str:
+        """Consume host workspace evidence and return its verified path."""
+
+        digest = hashlib.sha256(attestation.encode("utf-8")).hexdigest()
+        at = timestamp(self.now)
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM host_workspace_attestations "
+                "WHERE attestation_digest = ?",
+                (digest,),
+            ).fetchone()
+            if row is None:
+                fail(
+                    "SCHEDULER_HOST_WORKSPACE_ATTESTATION_MISSING",
+                    "Host workspace evidence does not exist",
+                )
+            if row["status"] != "ISSUED":
+                fail(
+                    "SCHEDULER_HOST_WORKSPACE_ATTESTATION_CONSUMED",
+                    "Host workspace evidence is no longer active",
+                )
+            if row["expires_at"] < at:
+                fail(
+                    "SCHEDULER_HOST_WORKSPACE_ATTESTATION_EXPIRED",
+                    "Host workspace evidence expired",
+                )
+            if (
+                row["host_adapter_id"] != host_adapter_id
+                or row["tool_name"] != tool_name
+            ):
+                fail(
+                    "SCHEDULER_HOST_WORKSPACE_ATTESTATION_MISMATCH",
+                    "Host workspace evidence targets another call",
+                )
+            workspace = str(
+                Path(row["workspace_root"]).absolute().resolve(strict=True)
+            )
+            if self.workspace_key(workspace) != row["workspace_key"]:
+                fail(
+                    "SCHEDULER_HOST_WORKSPACE_ATTESTATION_MISMATCH",
+                    "Host workspace evidence no longer matches its path",
+                )
+            updated = connection.execute(
+                "UPDATE host_workspace_attestations "
+                "SET status = 'CONSUMED', consumed_at = ? "
+                "WHERE attestation_digest = ? AND status = 'ISSUED'",
+                (at, digest),
+            )
+            if updated.rowcount != 1:
+                fail(
+                    "SCHEDULER_HOST_WORKSPACE_ATTESTATION_CONSUMED",
+                    "Host workspace evidence was consumed concurrently",
+                )
+        return workspace
 
     @staticmethod
     def _verify_state_contract(connection: sqlite3.Connection) -> None:

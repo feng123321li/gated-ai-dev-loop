@@ -867,10 +867,10 @@ class McpSurfaceTests(unittest.TestCase):
             [],
         )
         self.assertNotIn("available_agents", by_name)
-        self.assertEqual(
-            by_name["preview_hierarchy"]["inputSchema"]["required"],
-            ["hierarchy"],
-        )
+        preview_schema = by_name["preview_hierarchy"]["inputSchema"]
+        self.assertEqual(preview_schema["required"], [])
+        self.assertIn("hierarchy", preview_schema["properties"])
+        self.assertIn("hierarchy_file", preview_schema["properties"])
         self.assertEqual(
             by_name["select_execution_mode"]["inputSchema"]["required"],
             [
@@ -906,15 +906,21 @@ class McpSurfaceTests(unittest.TestCase):
             "confirmed_by",
             by_name["resume_execution_mode"]["inputSchema"]["properties"],
         )
+        manual_handoff_schema = by_name["create_manual_handoff"][
+            "inputSchema"
+        ]
         self.assertEqual(
-            by_name["create_manual_handoff"]["inputSchema"]["required"],
+            manual_handoff_schema["required"],
             [
-                "hierarchy",
                 "expected_hierarchy_fingerprint",
                 "expected_graph_fingerprint",
                 "authorized_project_ids",
                 "confirmed_by",
             ],
+        )
+        self.assertIn("hierarchy", manual_handoff_schema["properties"])
+        self.assertIn(
+            "hierarchy_file", manual_handoff_schema["properties"]
         )
         self.assertEqual(
             by_name["start_manual_handoff"]["inputSchema"]["required"],
@@ -1090,9 +1096,13 @@ class McpSurfaceTests(unittest.TestCase):
         )
         revision_prepare = by_name["prepare_delivery_revision"]
         self.assertNotIn("_meta", revision_prepare)
-        self.assertIn(
+        self.assertNotIn(
             "hierarchy",
             revision_prepare["inputSchema"]["required"],
+        )
+        self.assertIn(
+            "hierarchy_file",
+            revision_prepare["inputSchema"]["properties"],
         )
         self.assertEqual(
             by_name["delivery_revision_history"]["inputSchema"][
@@ -4281,6 +4291,122 @@ class McpSurfaceTests(unittest.TestCase):
             )["outcome"]["result"]["workerTelemetry"][0]["model"],
             "unreported",
         )
+
+
+class HierarchyFileTests(unittest.TestCase):
+    """hierarchy_file loads a large hierarchy from a workspace file."""
+
+    def _repo_root(self) -> Path:
+        return Path(__file__).resolve().parents[1]
+
+    def _valid_hierarchy(self) -> dict:
+        with (self._repo_root() / "examples" / "team-loops" / "light-change.json").open(
+            encoding="utf-8"
+        ) as handle:
+            return json.load(handle)
+
+    @staticmethod
+    def _write(workspace: Path, name: str, payload: object) -> None:
+        text = payload if isinstance(payload, str) else json.dumps(payload)
+        (workspace / name).write_text(text, encoding="utf-8")
+
+    def test_preview_loads_hierarchy_from_file(self) -> None:
+        hierarchy = self._valid_hierarchy()
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            self._write(workspace, "h.json", hierarchy)
+            call_tool(
+                "preview_hierarchy",
+                {"hierarchy_file": "h.json"},
+                root=str(workspace),
+                workspace_root=str(workspace),
+            )
+            # hierarchy_file was consumed and substituted; artifacts written
+            self.assertTrue(
+                (workspace / ".layered-delivery" / "scheduler.db").is_file()
+            )
+            repository = SchedulerRepository(str(workspace))
+            stored = repository.hierarchy(hierarchy["delivery"]["id"])
+            self.assertEqual(
+                stored["hierarchy"]["delivery"]["id"],
+                hierarchy["delivery"]["id"],
+            )
+
+    def test_inline_hierarchy_still_works(self) -> None:
+        hierarchy = self._valid_hierarchy()
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            call_tool(
+                "preview_hierarchy",
+                {"hierarchy": hierarchy},
+                root=str(workspace),
+                workspace_root=str(workspace),
+            )
+            self.assertTrue(
+                (workspace / ".layered-delivery" / "scheduler.db").is_file()
+            )
+
+    def test_inline_and_file_are_mutually_exclusive(self) -> None:
+        hierarchy = self._valid_hierarchy()
+        with TemporaryDirectory() as temporary:
+            self._write(Path(temporary), "h.json", hierarchy)
+            with self.assertRaises(GatedLoopError) as caught:
+                validate_tool_arguments(
+                    "preview_hierarchy",
+                    {"hierarchy": hierarchy, "hierarchy_file": "h.json"},
+                )
+            self.assertEqual(
+                caught.exception.code, "SCHEDULER_HIERARCHY_INPUT_CONFLICT"
+            )
+
+    def test_neither_inline_nor_file_is_rejected(self) -> None:
+        with self.assertRaises(GatedLoopError) as caught:
+            validate_tool_arguments("preview_hierarchy", {})
+        self.assertEqual(
+            caught.exception.code, "SCHEDULER_HIERARCHY_INPUT_REQUIRED"
+        )
+
+    def test_file_outside_workspace_is_rejected(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            with self.assertRaises(GatedLoopError) as caught:
+                call_tool(
+                    "preview_hierarchy",
+                    {"hierarchy_file": "../outside.json"},
+                    root=str(workspace),
+                    workspace_root=str(workspace),
+                )
+            self.assertEqual(caught.exception.code, "PATH_OUTSIDE_ROOT")
+
+    def test_invalid_json_file_is_rejected(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            self._write(workspace, "bad.json", "{not json")
+            with self.assertRaises(GatedLoopError) as caught:
+                call_tool(
+                    "preview_hierarchy",
+                    {"hierarchy_file": "bad.json"},
+                    root=str(workspace),
+                    workspace_root=str(workspace),
+                )
+            self.assertEqual(
+                caught.exception.code, "SCHEDULER_HIERARCHY_FILE_INVALID"
+            )
+
+    def test_non_object_json_is_rejected(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            self._write(workspace, "arr.json", "[1, 2, 3]")
+            with self.assertRaises(GatedLoopError) as caught:
+                call_tool(
+                    "preview_hierarchy",
+                    {"hierarchy_file": "arr.json"},
+                    root=str(workspace),
+                    workspace_root=str(workspace),
+                )
+            self.assertEqual(
+                caught.exception.code, "SCHEDULER_HIERARCHY_FILE_INVALID"
+            )
 
 
 if __name__ == "__main__":

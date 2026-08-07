@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from typing import Any
 
@@ -10,6 +11,7 @@ from .controller import (
     LayeredDeliveryController,
 )
 from .errors import GatedLoopError, fail
+from .fs_safe import read_regular_file
 from .hierarchy_contract import hierarchy_input_schema
 from .jsonio import canonical_json
 from .model_core import validate_hierarchy_definition
@@ -207,8 +209,16 @@ def _prepare_hierarchy_tool_schema() -> dict[str, Any]:
     hierarchy_schema = hierarchy_input_schema()
     definitions = hierarchy_schema.pop("$defs")
     tool_schema = _object(
-        {"hierarchy": hierarchy_schema},
-        required=["hierarchy"],
+        {
+            "hierarchy": hierarchy_schema,
+            "hierarchy_file": _string(
+                "Path (workspace-relative preferred) to a UTF-8 JSON file "
+                "containing the hierarchy object. Mutually exclusive with "
+                "hierarchy; the controller reads and validates it. Use when "
+                "the hierarchy is too large to emit inline."
+            ),
+        },
+        required=[],
     )
     tool_schema["$defs"] = definitions
     return tool_schema
@@ -220,6 +230,12 @@ def _manual_handoff_tool_schema() -> dict[str, Any]:
     tool_schema = _object(
         {
             "hierarchy": hierarchy_schema,
+            "hierarchy_file": _string(
+                "Path (workspace-relative preferred) to a UTF-8 JSON file "
+                "containing the hierarchy object. Mutually exclusive with "
+                "hierarchy; the controller reads and validates it. Use when "
+                "the hierarchy is too large to emit inline."
+            ),
             "expected_hierarchy_fingerprint": FINGERPRINT,
             "expected_graph_fingerprint": FINGERPRINT,
             "authorized_project_ids": {
@@ -253,7 +269,6 @@ def _manual_handoff_tool_schema() -> dict[str, Any]:
             "confirmed_by": _string("Human confirmer identity."),
         },
         required=[
-            "hierarchy",
             "expected_hierarchy_fingerprint",
             "expected_graph_fingerprint",
             "authorized_project_ids",
@@ -341,6 +356,12 @@ def _prepare_revision_tool_schema() -> dict[str, Any]:
                 "minimum": 1,
             },
             "hierarchy": hierarchy_schema,
+            "hierarchy_file": _string(
+                "Path (workspace-relative preferred) to a UTF-8 JSON file "
+                "containing the hierarchy object. Mutually exclusive with "
+                "hierarchy; the controller reads and validates it. Use when "
+                "the hierarchy is too large to emit inline."
+            ),
             "reason": _string(
                 "Why the active, not-yet-accepted Delivery scope changed."
             ),
@@ -360,7 +381,6 @@ def _prepare_revision_tool_schema() -> dict[str, Any]:
         required=[
             "root_id",
             "expected_current_revision",
-            "hierarchy",
             "reason",
             "continuity_basis",
             "requested_by",
@@ -1158,6 +1178,16 @@ def _validate_schema(
             )
 
 
+_HIERARCHY_FILE_TOOLS = frozenset(
+    {
+        "preview_hierarchy",
+        "prepare_hierarchy",
+        "create_manual_handoff",
+        "prepare_delivery_revision",
+    }
+)
+
+
 def validate_tool_arguments(
     name: str,
     arguments: object,
@@ -1170,25 +1200,57 @@ def validate_tool_arguments(
         fail("MCP_TOOL_UNKNOWN", f"Unknown scheduler tool: {name}")
     _validate_schema(arguments, tool["inputSchema"], "arguments")
     validated = dict(arguments)
-    if name in {
-        "preview_hierarchy",
-        "create_manual_handoff",
-        "prepare_hierarchy",
-        "prepare_delivery_revision",
-    }:
-        try:
-            validate_hierarchy_definition(validated["hierarchy"])
-        except GatedLoopError as error:
+    if name in _HIERARCHY_FILE_TOOLS:
+        has_inline = "hierarchy" in validated
+        has_file = "hierarchy_file" in validated
+        if has_inline and has_file:
             fail(
-                "MCP_TOOL_ARGUMENT_INVALID",
-                "arguments.hierarchy does not match schema v3",
-                schemaError={
-                    "code": error.code,
-                    "message": error.message,
-                    "details": error.details,
-                },
+                "SCHEDULER_HIERARCHY_INPUT_CONFLICT",
+                "Provide exactly one of hierarchy or hierarchy_file, not both",
             )
+        if not has_inline and not has_file:
+            fail(
+                "SCHEDULER_HIERARCHY_INPUT_REQUIRED",
+                "Provide the hierarchy object or a hierarchy_file path",
+            )
+        if has_inline:
+            try:
+                validate_hierarchy_definition(validated["hierarchy"])
+            except GatedLoopError as error:
+                fail(
+                    "MCP_TOOL_ARGUMENT_INVALID",
+                    "arguments.hierarchy does not match schema v3",
+                    schemaError={
+                        "code": error.code,
+                        "message": error.message,
+                        "details": error.details,
+                    },
+                )
     return validated
+
+
+def _apply_hierarchy_file(
+    arguments: dict[str, Any],
+    workspace_root: str,
+) -> None:
+    """Load the hierarchy from a workspace file when hierarchy_file is set."""
+    if "hierarchy_file" not in arguments:
+        return
+    raw = read_regular_file(workspace_root, arguments["hierarchy_file"])
+    try:
+        loaded = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as error:
+        fail(
+            "SCHEDULER_HIERARCHY_FILE_INVALID",
+            f"hierarchy_file is not valid JSON: {error}",
+        )
+    if not isinstance(loaded, dict):
+        fail(
+            "SCHEDULER_HIERARCHY_FILE_INVALID",
+            "hierarchy_file must contain a JSON object",
+        )
+    arguments["hierarchy"] = loaded
+    del arguments["hierarchy_file"]
 
 
 def call_tool(
@@ -1204,6 +1266,7 @@ def call_tool(
     **_: Any,
 ) -> dict[str, Any]:
     internal_arguments = validate_tool_arguments(name, arguments)
+    _apply_hierarchy_file(internal_arguments, workspace_root or root)
     if name in {"create_manual_handoff", "freeze_hierarchy"}:
         internal_arguments["confirmed"] = True
     result = controller.execute(

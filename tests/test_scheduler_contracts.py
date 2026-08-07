@@ -39,7 +39,11 @@ from hdg.mcp_tools import (
 from hdg.graph_runtime import attest_loop_receiver
 from hdg.model_core import validate_hierarchy_definition
 from hdg.planning import workspace_status
-from hdg.planning import freeze_hierarchy, prepare_hierarchy
+from hdg.planning import (
+    _assert_automatic_git_branch_available,
+    freeze_hierarchy,
+    prepare_hierarchy,
+)
 from hdg.repository import SchedulerRepository
 
 from .test_loop_architecture import (
@@ -4407,6 +4411,82 @@ class HierarchyFileTests(unittest.TestCase):
             self.assertEqual(
                 caught.exception.code, "SCHEDULER_HIERARCHY_FILE_INVALID"
             )
+
+
+class AutomaticBranchOccupancyTests(unittest.TestCase):
+    """AUTOMATIC refuses a frozen branchRef already held by another worktree."""
+
+    @staticmethod
+    def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
+        result = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        assert result.returncode == 0, (args, result.stderr)
+        return result
+
+    def _primary_repo(self) -> tuple[Path, str]:
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        repo = Path(temporary.name)
+        self._git(repo, "-c", "init.defaultBranch=main", "init")
+        self._git(repo, "config", "user.email", "t@t")
+        self._git(repo, "config", "user.name", "t")
+        (repo / "f.txt").write_text("x", encoding="utf-8")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-m", "m")
+        main_sha = self._git(repo, "rev-parse", "main").stdout.strip()
+        self._git(repo, "switch", "-c", "feature/m_lf_protein")
+        (repo / "g.txt").write_text("y", encoding="utf-8")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-m", "p")
+        return repo, main_sha
+
+    @staticmethod
+    def _binding(branch: str, main_sha: str) -> dict:
+        return {
+            "branchRef": branch,
+            "baseRef": "main",
+            "baseCommit": main_sha,
+            "integrationTarget": "main",
+        }
+
+    def test_rejects_branchref_held_by_primary(self) -> None:
+        repo, main_sha = self._primary_repo()
+        with self.assertRaises(GatedLoopError) as caught:
+            _assert_automatic_git_branch_available(
+                {
+                    "delivery": {
+                        "gitBinding": self._binding(
+                            "feature/m_lf_protein", main_sha
+                        )
+                    }
+                },
+                str(repo),
+            )
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_GIT_BRANCH_IN_USE_BY_OTHER_WORKTREE",
+        )
+
+    def test_allows_free_branch(self) -> None:
+        repo, main_sha = self._primary_repo()
+        _assert_automatic_git_branch_available(
+            {
+                "delivery": {
+                    "gitBinding": self._binding(
+                        "feature/free-branch", main_sha
+                    )
+                }
+            },
+            str(repo),
+        )
+
+    def test_allows_missing_gitbinding(self) -> None:
+        repo, _ = self._primary_repo()
+        _assert_automatic_git_branch_available({"delivery": {}}, str(repo))
 
 
 if __name__ == "__main__":

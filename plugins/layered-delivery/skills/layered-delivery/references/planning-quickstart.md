@@ -349,6 +349,8 @@ Torna 必须保持相同的方法、路径或签名、字段层级、类型、�
 
 `preview_hierarchy`、`prepare_delivery_revision` 与 `create_manual_handoff` 的 `hierarchy` 也可改用 `hierarchy_file` 传入：当层级结构较大或 payload 详细、难以一次性内联写出正确 JSON 时，先用 Write 把 JSON 写到工作区文件（如 `.layered-delivery/staging/hierarchy.json`），用 `python -m json.tool` 校验，再调用时只传 `hierarchy_file`（工作区相对路径）。控制器在工作区沙箱内读取并解析该文件，等价于内联 `hierarchy`；两者二选一，同时给或都不给都会被拒绝，路径穿越/符号链接/跨盘也会被拒绝。
 
+新 AUTOMATIC Delivery 的 `gitBinding.branchRef` 必须是一个**未被其他 worktree/Delivery 占用的新分支名**，或干脆省略 `gitBinding` 让 Controller 在 worktree setup 用 `suggestedGitBinding` 建议——**不要从已完成旧 Delivery 拷绑定**：若该分支正被 primary 占用，git 不允许两个 worktree 共用同一分支，Controller 会在 AUTOMATIC 派发前以 `SCHEDULER_GIT_BRANCH_IN_USE_BY_OTHER_WORKTREE` 拒绝。另外，单文件/小修直接在 primary 改即可，**不必套 AUTOMATIC**（它适合多 TASK/跨模块/可恢复的较大交付；小修套 AUTOMATIC 的 worktree + 协调器开销不划算）。
+
 ### Git 工作区设置
 
 先检查首次 `workspace_status`：

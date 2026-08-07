@@ -6,6 +6,7 @@ from typing import Any
 from .errors import fail
 from .fs_safe import atomic_write, safe_path
 from .git_binding import (
+    _branch_worktree_count,
     find_delivery_linked_worktree,
     inspect_delivery_git_workspace,
     inspect_frozen_git_workspace_provenance,
@@ -1108,6 +1109,38 @@ def resume_execution_mode(
     }
 
 
+def _assert_automatic_git_branch_available(
+    hierarchy: dict[str, Any],
+    workspace_root: str,
+) -> None:
+    """Refuse AUTOMATIC dispatch when a frozen branchRef is already checked
+    out by a worktree this Delivery cannot adopt (e.g. the primary checkout).
+
+    git forbids two worktrees on the same branch, so a Delivery that freezes
+    a branchRef already held by the primary can never create its dedicated
+    worktree and would stall the coordinator. Catch it before dispatch.
+    """
+    binding = hierarchy.get("delivery", {}).get("gitBinding")
+    if not isinstance(binding, dict):
+        return
+    branch_ref = binding.get("branchRef")
+    if not isinstance(branch_ref, str) or not branch_ref.strip():
+        return
+    workspace = Path(workspace_root).absolute().resolve(strict=True)
+    if _branch_worktree_count(workspace, branch_ref) < 1:
+        return
+    if find_delivery_linked_worktree(workspace_root, binding) is not None:
+        return  # an adoptable worktree on this branch already exists
+    fail(
+        "SCHEDULER_GIT_BRANCH_IN_USE_BY_OTHER_WORKTREE",
+        "The frozen branchRef is already checked out by another worktree "
+        "(commonly the primary checkout), so the AUTOMATIC dedicated "
+        "worktree cannot be created on it. Use a new branch for this "
+        "Delivery, or omit gitBinding so the Controller can suggest one.",
+        branchRef=branch_ref,
+    )
+
+
 def select_execution_mode(
     *,
     root: str,
@@ -1223,6 +1256,7 @@ def select_execution_mode(
         hierarchy,
         authorized_project_ids,
     )
+    _assert_automatic_git_branch_available(hierarchy, workspace_root or root)
     repository.record_automatic_selection(
         root_id,
         expected_hierarchy_fingerprint=expected_hierarchy_fingerprint,

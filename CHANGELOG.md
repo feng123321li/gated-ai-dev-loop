@@ -4,6 +4,14 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.34.13 — 2026-08-07
+
+发布提交：`53a4702`
+
+- `cancel_graph_run` 可终态化 pre-run 草稿（CHOICE_READY/automatic_pending/PREPARED/HANDOFF_READY、无 FROZEN run、无 workspace 绑定）：标记 `ABANDONED` 并释放 `requirementKey`，而非返回 `SCHEDULER_DELIVERY_WORKSPACE_MISSING`。卡住的 AUTOMATIC 草稿（coordinator 从未绑定工作区）现可干净退役、需求键可被新 Delivery 复用；FROZEN run 仍走原取消路径。
+- 控制器允许 `cancel_graph_run` 对未绑定 CHOICE_READY 草稿放行；requirementKey 冲突扫描跳过 ABANDONED；abandoned 草稿上报终态 nextAction。
+- 重新构建规范 Skill runtime 和 Plugin 内嵌 Skill，Python 全量 253 项测试、编译检查、0.34.13 发布候选校验、Skill/Plugin 校验、双宿主本地探测和 `git diff --check` 通过。
+
 ## 0.34.12 — 2026-08-07
 
 发布提交：`6f1c9d5`

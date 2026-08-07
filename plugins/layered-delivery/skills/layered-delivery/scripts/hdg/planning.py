@@ -493,7 +493,8 @@ def preview_hierarchy(
         result["humanArtifacts"] = _human_artifacts(normalized)
     if choice_ready:
         result["executionChoice"] = execution_choice_contract(
-            host_adapter_id
+            host_adapter_id,
+            git_binding=normalized["delivery"].get("gitBinding"),
         )
     if recorded_selection is not None:
         result["executionSelection"] = recorded_selection

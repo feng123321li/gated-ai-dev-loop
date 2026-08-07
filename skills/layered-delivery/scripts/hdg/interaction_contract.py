@@ -20,14 +20,23 @@ HOST_NATIVE_QUESTION_TOOLS = {
 
 def execution_choice_contract(
     host_adapter_id: str | None = None,
+    *,
+    git_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return the controller-owned execution-mode interaction contract."""
 
     active_tool = HOST_NATIVE_QUESTION_TOOLS.get(host_adapter_id or "")
+    base_ref = None
+    integration_target = None
+    if isinstance(git_binding, dict):
+        base_ref = git_binding.get("baseRef")
+        integration_target = git_binding.get("integrationTarget")
     return {
         "schemaVersion": 2,
         "owner": "CONTROLLER",
         "kind": "EXECUTION_MODE",
+        "baseRef": base_ref,
+        "integrationTarget": integration_target,
         "selectionRequired": True,
         "defaultOptionId": "AUTOMATIC",
         "recommendedOptionId": "AUTOMATIC",

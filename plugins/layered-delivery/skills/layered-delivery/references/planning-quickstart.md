@@ -351,6 +351,8 @@ Torna 必须保持相同的方法、路径或签名、字段层级、类型、�
 
 新 AUTOMATIC Delivery 的 `gitBinding.branchRef` 必须是一个**未被其他 worktree/Delivery 占用的新分支名**，或干脆省略 `gitBinding` 让 Controller 在 worktree setup 用 `suggestedGitBinding` 建议——**不要从已完成旧 Delivery 拷绑定**：若该分支正被 primary 占用，git 不允许两个 worktree 共用同一分支，Controller 会在 AUTOMATIC 派发前以 `SCHEDULER_GIT_BRANCH_IN_USE_BY_OTHER_WORKTREE` 拒绝。另外，单文件/小修直接在 primary 改即可，**不必套 AUTOMATIC**（它适合多 TASK/跨模块/可恢复的较大交付；小修套 AUTOMATIC 的 worktree + 协调器开销不划算）。
 
+preview 的 `executionChoice` 会带出 `baseRef`/`integrationTarget`：若基于进行中分支（如 `feature/m_lf_protein`）修 bug，在 `workspace_status(base_ref=...)` 或 hierarchy 的 `gitBinding` 里明确指定该分支，并在选择执行方式时**与用户确认基线分支**（基于 master 还是某个进行中分支）。
+
 ### Git 工作区设置
 
 先检查首次 `workspace_status`：

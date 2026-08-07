@@ -4,6 +4,14 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.34.12 — 2026-08-07
+
+发布提交：`6f1c9d5`
+
+- `preview_hierarchy` 的 `executionChoice` 新增 `baseRef`/`integrationTarget`：宿主在“自动/手动”选择时即可看到并确认基线分支（基于 master 还是某个进行中分支），在 AUTOMATIC 派发前明确基线；hierarchy 无 gitBinding 时为 null（基线在 worktree setup 时发现）。
+- 文档：planning-quickstart 指出基于进行中分支修 bug 时应显式指定 `base_ref`/`gitBinding` 并与用户确认基线分支。
+- 重新构建规范 Skill runtime 和 Plugin 内嵌 Skill，Python 全量 252 项测试、编译检查、0.34.12 发布候选校验、Skill/Plugin 校验、双宿主本地探测和 `git diff --check` 通过。
+
 ## 0.34.11 — 2026-08-07
 
 发布提交：`66f0516`

@@ -122,12 +122,14 @@ def main() -> int:
                 _claude_model_from_transcript,
             )
 
+            comparison_input = dict(tool_input)
+            comparison_input.pop("_host_workspace_attestation", None)
             observed_model_id = _claude_model_from_transcript(
                 transcript_path,
                 receiver_context_id=agent_id,
                 parent_context_id=parent_session_id,
                 tool_name=tool_name,
-                tool_input=tool_input,
+                tool_input=comparison_input,
                 tool_use_id=tool_use_id,
             )
         except (json.JSONDecodeError, OSError, ValueError):

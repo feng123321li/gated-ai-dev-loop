@@ -44,6 +44,20 @@ def main() -> int:
     ):
         return 0
 
+    # Sensitive administrative tools are approval-gated by a later hook. Skip
+    # workspace attestation for them so the 60s attestation cannot expire
+    # while the user is still approving; they resolve via the control root.
+    if (
+        tool_name.rsplit("__", 1)[-1]
+        in {
+            "rebuild_graph_run",
+            "cancel_graph_run",
+            "unfreeze_task_requirement",
+            "refreeze_task_requirement",
+        }
+    ):
+        return 0
+
     hook_directory = Path(__file__).resolve().parent
     sys.path.insert(0, str(hook_directory))
     from attest_codex_subagent_receiver import (

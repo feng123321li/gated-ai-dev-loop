@@ -132,7 +132,7 @@ claim 超过 `leaseExpiresAt` 后，旧 operation 不能 heartbeat、pause 或�
 
 - `BLOCKED + RETRYABLE_INFRA` 与租约丢失 `WORKER_LOST`：调度器在预算内创建新 attempt。
 - `WORKER_LOST` 新 attempt 处于 Ready、前一 attempt 与 `LOOP_RETRY_SCHEDULED` 审计均精确指向失联、当前 run 没有其他已认领 Loop 且没有冲突的有效接收凭据时，同一 Adapter 的新编排会话可在 claim 事务中轮换接收方信任根。控制器只记录旧/新会话摘要和 `RECEIVER_ROOT_ROTATED`，不暴露原始会话标识；恢复无需重新 prepare/freeze 或直接修改 `scheduler.db`。不同 Adapter 一律不能借此切换信任根。
-- 普通 `BLOCKED`：必须显式提供 failure class，且只表示当前 scope 和权限内没有继续路径；不自动重跑。可修复 finding 或内部 Gate 失败不是 `BLOCKED`，必须在提交终态前由当前 Loop 继续修正和复验。
+- 普通 `BLOCKED`：必须显式提供 failure class（取值：`RETRYABLE_INFRA`、`WORKER_LOST`、`LOOP_BLOCKED`、`REPLAN_REQUIRED`、`EXTERNAL_AUTHORITY`、`NON_RETRYABLE`），且只表示当前 scope 和权限内没有继续路径；不自动重跑。当前 Loop 内可修复的 finding 或内部 Gate 失败不是 `BLOCKED`，必须在提交终态前继续修正和复验；依赖外部人工或权限的用 `EXTERNAL_AUTHORITY`，契约不再适用的用 `REPLAN_REQUIRED`。
 - `REPLAN_REQUIRED`：当前冻结 Revision 的调度契约已不适用。记录结果后等待 `REPLAN_HIERARCHY`；不要直接修改原图，也不要创建新的 Delivery ID。用户明确要求调整后，用同一 `delivery.id` 准备并冻结下一 Revision；新 Revision 冻结时旧 run 自动成为 `SUPERSEDED`。
 - `CANCELLED`：结束当前 Loop，不自动重试。
 - 未 claim 且宿主 Agent 暂时不可用：人工交接，不提前 claim。
@@ -164,7 +164,7 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 2. 将完整新范围传给 `prepare_delivery_revision`，同时提交当前 revision、变更原因、真实请求人和连续性依据。用户明确要求继续同一 Delivery 时传 `continuity_basis=USER_EXPLICIT_SAME_DELIVERY`；只有当前 Graph 已记录 `REPLAN_REQUIRED` 才传 `ACTIVE_LOOP_REPLAN`。工作区、路径、分支或旧 Delivery 仍处于 Active 都不能充当连续性。该调用只写候选 Revision，不替换当前 hierarchy/run，也不应触发宿主通用确认弹窗；可重复 prepare 尚未冻结的同一新 Revision，但不能修改旧 Revision。
 3. 检查响应中的 `carryForwardTaskIds`。只有 TASK definition、依赖、Loop、资源声明与 TASK Review 完全未变，而且旧 Revision 的实现及 Review 都成功，才会成为携带候选；GROUP 与 Delivery Review 不携带。
 4. 展示完整新范围、Revision 编号、携带候选和 `requiredProjectAuthorizations`。跨项目 scope 必须包含当前工作区，所有可写 Git 项目使用同名 feature 分支。
-5. 用户选择自动执行或手动开发是本 Revision 唯一一次业务确认。自动执行调用 `freeze_hierarchy`，同时提交精确 `expected_delivery_revision`、新 fingerprint 和与准备结果完全一致的 `authorized_project_ids`。手动开发调用 `create_manual_handoff` 输出修订后的完整冻结内容包，但不替换当前 run；接收方真正开始开发前需再次确认如何承接该活动 Delivery。
+5. 后续 Revision 没有 Controller `executionChoice`：宿主用自己的原生对话询问自动或手动（这是本 Revision 唯一一次业务确认），随后直接调用对应工具，不要再调用 `select_execution_mode`。自动执行调用 `freeze_hierarchy`，同时提交精确 `expected_delivery_revision`、新 fingerprint、与准备结果完全一致的 `authorized_project_ids` 和真实 `confirmed_by`。手动开发调用 `create_manual_handoff` 输出修订后的完整冻结内容包，但不替换当前 run；接收方真正开始开发前需再次确认如何承接该活动 Delivery。
 6. 只有自动冻结成功后，旧 run 才标记为 `SUPERSEDED`，新 run 继续同一 Delivery 的验收；`revisions.md` 与 `delivery_revision_history` 保留审计链。
 
 ## 恢复

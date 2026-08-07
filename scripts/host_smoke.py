@@ -94,7 +94,6 @@ def _prepare_workspace(path: Path, host: str) -> Path:
     _run_checked(["git", "commit", "-m", "Initialize smoke workspace"], cwd=path)
     branch_ref = "feature/m_lf_host_smoke"
     if host == "claude-code":
-        _run_checked(["git", "switch", "-c", branch_ref], cwd=path)
         return path
     if host == "codex":
         worktree = path.with_name(f"{path.name}-worktree")
@@ -125,15 +124,36 @@ def _prompt(scenario: str, host: str) -> str:
         )
     )
     workspace_requirement = (
-        "The current Claude Code session is running directly in an exclusive "
-        "primary checkout on the Delivery feature branch. Continue in this "
-        "same session and checkout; do not request or create another "
-        "worktree session."
+        "This Claude Code session runs in the primary checkout on `main` as "
+        "the monitor-only control root. After select_execution_mode(AUTOMATIC) "
+        "returns hostDispatch, spawn the delivery-coordinator background "
+        "agent exactly as its agentDispatch describes; the coordinator "
+        "creates and enters the stable Delivery linked worktree and drives "
+        "the Graph while this main session only monitors until "
+        "RECORD_USER_CONFIRMATION. Do not pre-create the worktree or feature "
+        "branch yourself, and do not refuse the worktree the coordinator "
+        "opens."
         if host == "claude-code"
         else (
             "The current Codex session is already running in a host-created "
             "linked worktree on the Delivery feature branch. Use it as-is; "
             "do not create or switch another branch or worktree."
+        )
+    )
+    execution_requirement = (
+        "Preview the hierarchy with the TASK and acceptance conditions above, "
+        "then call select_execution_mode(AUTOMATIC). When hostDispatch "
+        "returns, spawn the delivery-coordinator background agent exactly "
+        "as its agentDispatch describes; the coordinator resumes, freezes "
+        "and dispatches receivers in the stable linked worktree while this "
+        "main session only monitors the frontier. Do not call "
+        "resume_execution_mode, prepare or freeze the Graph, or dispatch "
+        "receivers from this main session."
+        if host == "claude-code"
+        else (
+            "Prepare and freeze the hierarchy, reserve the current frontier "
+            "through the trusted current host without asking another "
+            "question, and dispatch through a real host-native child Agent."
         )
     )
     return textwrap.dedent(
@@ -159,9 +179,8 @@ def _prompt(scenario: str, host: str) -> str:
         Do not call TaskCreate, TaskUpdate, TaskList, or TaskGet; the MCP Graph
         is the only progress tracker for this disposable run.
 
-        The harness has already initialized the disposable development workspace
-        on `feature/m_lf_host_smoke` from `main`. Use that current feature branch
-        and its discovered gitBinding. {workspace_requirement}
+        The harness has initialized a disposable Git repository on `main` as
+        the primary checkout (the shared control root). {workspace_requirement}
 
         Create one root TASK with stable ID `t-smoke-artifact`. Its entire
         implementation is to create `smoke.txt` with exactly
@@ -183,14 +202,13 @@ def _prompt(scenario: str, host: str) -> str:
         A Claude child omits receiver_context_id and receiver_attestation_id so
         the PreToolUse hook can inject them; it must never invent placeholders.
 
-        Prepare and freeze the hierarchy, reserve the current frontier through
-        the trusted current host without asking another question, dispatch
-        through a real host-native child Agent, and have every child send at least one
-        heartbeat immediately after claim before reporting structured progress
-        and recording a truthful Loop result. Continue until the frontier reaches
+        {execution_requirement} Every child must send at least one heartbeat
+        immediately after claim before reporting structured progress and
+        recording a truthful Loop result. Continue until the frontier reaches
         RECORD_USER_CONFIRMATION. Stop there: final acceptance must remain a
-        real user action and must not be fabricated. Do not commit, push, access
-        the network, or modify anything outside this disposable repository.
+        real user action and must not be fabricated. Do not commit, push,
+        access the network, or modify anything outside this disposable
+        repository.
 
         For Claude dispatch_loop, use `owner=claude-code` unless the host supplies
         another portable owner label; do not derive owner from a node ID.
@@ -333,33 +351,61 @@ def _host_command(
     raise RuntimeError(f"unsupported host: {host}")
 
 
-def _find_smoke_artifact(workspace: Path) -> Path | None:
+def _git_worktree_roots(repo_root: Path) -> list[Path]:
+    completed = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_root),
+            "worktree",
+            "list",
+            "--porcelain",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if completed.returncode != 0:
+        return [repo_root]
+    roots: list[Path] = []
+    for line in completed.stdout.splitlines():
+        if line.startswith("worktree "):
+            candidate = Path(line[len("worktree ") :].strip())
+            if candidate.is_dir():
+                roots.append(candidate)
+    return roots or [repo_root]
+
+
+def _find_smoke_artifact(repo_root: Path) -> Path | None:
     ignored_roots = {".git", ".layered-delivery"}
-    for path in sorted(workspace.rglob("*")):
-        if not path.is_file():
-            continue
-        relative = path.relative_to(workspace)
-        if relative.parts and relative.parts[0] in ignored_roots:
-            continue
-        if path.name == "README.md":
-            changed = subprocess.run(
-                ["git", "diff", "--quiet", "--", relative.as_posix()],
-                cwd=workspace,
-                capture_output=True,
-                check=False,
-            )
-            if changed.returncode != 1:
+    for workspace in _git_worktree_roots(repo_root):
+        for path in sorted(workspace.rglob("*")):
+            if not path.is_file():
                 continue
-        try:
-            if path.stat().st_size > 64 * 1024:
+            relative = path.relative_to(workspace)
+            if relative.parts and relative.parts[0] in ignored_roots:
                 continue
-            content = path.read_text(encoding="utf-8").lower()
-        except (OSError, UnicodeError):
-            continue
-        if "smoke" in content and (
-            "layered-delivery" in content or "layered delivery" in content
-        ):
-            return path
+            if path.name == "README.md":
+                changed = subprocess.run(
+                    ["git", "diff", "--quiet", "--", relative.as_posix()],
+                    cwd=workspace,
+                    capture_output=True,
+                    check=False,
+                )
+                if changed.returncode != 1:
+                    continue
+            try:
+                if path.stat().st_size > 64 * 1024:
+                    continue
+                content = path.read_text(encoding="utf-8").lower()
+            except (OSError, UnicodeError):
+                continue
+            if "smoke" in content and (
+                "layered-delivery" in content or "layered delivery" in content
+            ):
+                return path
     return None
 
 
@@ -370,7 +416,7 @@ def _validate_smoke(
     *,
     control_root: Path | None = None,
 ) -> dict[str, object]:
-    artifact = _find_smoke_artifact(workspace)
+    artifact = _find_smoke_artifact(control_root or workspace)
     if artifact is None:
         raise RuntimeError("host did not create a verifiable smoke artifact")
     database = (
@@ -435,7 +481,7 @@ def _validate_smoke(
         "rootId": run["root_id"],
         "runId": run["run_id"],
         "runStatus": run["status"],
-        "artifact": artifact.relative_to(workspace).as_posix(),
+        "artifact": str(artifact),
         "claimedAgents": sorted(claimed_agents),
         "events": events,
         "nodes": [dict(node) for node in nodes],

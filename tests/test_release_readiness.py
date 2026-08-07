@@ -194,7 +194,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         )
         self.assertIn("NEVER call record_user_confirmation", command[-1])
 
-    def test_claude_smoke_starts_on_exclusive_primary_feature_branch(
+    def test_claude_smoke_starts_on_main_primary_checkout(
         self,
     ) -> None:
         with TemporaryDirectory() as temporary:
@@ -228,7 +228,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         self.assertEqual(development, workspace)
         self.assertEqual(
             completed.stdout.strip(),
-            "feature/m_lf_host_smoke",
+            "main",
         )
         self.assertEqual(git_dir, common_dir)
 
@@ -306,7 +306,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         self.assertIn("current-host dispatch only", prompt)
         self.assertIn("never dispatch to another Agent", prompt)
         self.assertIn("Do not read prior Codex/Claude", prompt)
-        self.assertIn("exclusive primary checkout", prompt)
+        self.assertIn("delivery-coordinator background agent", prompt)
         self.assertIn("Do not call TaskCreate", prompt)
         self.assertIn("dispatch_loop first, then loop_context", prompt)
         self.assertIn("`layered-delivery smoke\\n`", prompt)

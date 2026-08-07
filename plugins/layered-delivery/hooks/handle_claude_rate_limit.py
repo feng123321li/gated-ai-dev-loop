@@ -102,69 +102,76 @@ def main() -> int:
         return 0
 
     sys.path.insert(0, str(_runtime_path()))
+    from hdg.errors import GatedLoopError
     from hdg.graph_runtime import pause_loop, report_host_capacity_exhausted
     from hdg.host_policy import ProjectRootBinding
     from hdg.repository import SchedulerRepository
 
-    binding = ProjectRootBinding.from_startup(cwd)
-    resolution = binding.resolve_request(None, stateless=False)
-    repository = SchedulerRepository(resolution.project_root)
-    status = repository.workspace_status(
-        workspace_root=resolution.workspace_root,
-    )
-    root_id = status.get("rootId")
-    if not isinstance(root_id, str):
-        return 0
-    run = repository.run(root_id)
-    claimed = [
-        node
-        for node in run["nodes"]
-        if node["status"] == "CLAIMED"
-    ]
-    matching = [
-        node
-        for node in claimed
-        if node.get("receiverContextId") == receiver_context_id
-        and node.get("agentId") == "claude-code"
-    ]
-    if len(matching) != 1:
-        return 0
-    if reset_at is None:
-        operation_id = matching[0].get("operationId")
-        if isinstance(operation_id, str):
-            pause_loop(
-                root=resolution.project_root,
-                root_id=root_id,
-                node_id=matching[0]["nodeId"],
-                operation_id=operation_id,
+    try:
+        binding = ProjectRootBinding.from_startup(cwd)
+        resolution = binding.resolve_request(None, stateless=False)
+        repository = SchedulerRepository(resolution.project_root)
+        status = repository.workspace_status(
+            workspace_root=resolution.workspace_root,
+        )
+        root_id = status.get("rootId")
+        if not isinstance(root_id, str):
+            return 0
+        run = repository.run(root_id)
+        claimed = [
+            node
+            for node in run["nodes"]
+            if node["status"] == "CLAIMED"
+        ]
+        matching = [
+            node
+            for node in claimed
+            if node.get("receiverContextId") == receiver_context_id
+            and node.get("agentId") == "claude-code"
+        ]
+        if len(matching) != 1:
+            return 0
+        if reset_at is None:
+            operation_id = matching[0].get("operationId")
+            if isinstance(operation_id, str):
+                pause_loop(
+                    root=resolution.project_root,
+                    root_id=root_id,
+                    node_id=matching[0]["nodeId"],
+                    operation_id=operation_id,
+                )
+            print(
+                "Layered Delivery paused the failed receiver without guessing "
+                "a reset time; manual host recovery is required.",
+                file=sys.stderr,
             )
+            return 0
+        report_material = json.dumps(
+            {
+                "receiverContextId": receiver_context_id,
+                "resetAt": reset_at,
+                "errorDetails": hook_input.get("error_details"),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        report_id = hashlib.sha256(report_material).hexdigest()
+        report_host_capacity_exhausted(
+            root=resolution.project_root,
+            root_id=root_id,
+            node_id=matching[0]["nodeId"],
+            reset_at=reset_at,
+            host_adapter_id="claude-code",
+            receiver_context_id=receiver_context_id,
+            report_id=report_id,
+            reason="Claude Code StopFailure reported rate_limit",
+        )
+    except (GatedLoopError, OSError, ValueError, KeyError, TypeError) as error:
         print(
-            "Layered Delivery paused the failed receiver without guessing "
-            "a reset time; manual host recovery is required.",
+            f"Layered Delivery rate-limit hook failed safely: {error}",
             file=sys.stderr,
         )
-        return 0
-    report_material = json.dumps(
-        {
-            "receiverContextId": receiver_context_id,
-            "resetAt": reset_at,
-            "errorDetails": hook_input.get("error_details"),
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    report_id = hashlib.sha256(report_material).hexdigest()
-    report_host_capacity_exhausted(
-        root=resolution.project_root,
-        root_id=root_id,
-        node_id=matching[0]["nodeId"],
-        reset_at=reset_at,
-        host_adapter_id="claude-code",
-        receiver_context_id=receiver_context_id,
-        report_id=report_id,
-        reason="Claude Code StopFailure reported rate_limit",
-    )
     return 0
 
 

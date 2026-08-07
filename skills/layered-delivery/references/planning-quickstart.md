@@ -347,23 +347,48 @@ Torna 必须保持相同的方法、路径或签名、字段层级、类型、�
 
 `preview_hierarchy` 与手动选择都不绑定 Delivery 工作区。preview 先把需求登记为 `CHOICE_READY`，生成共享 SQLite、根总览和完整投影；自动按钮由 `select_execution_mode(AUTOMATIC)` 先持久记录选择和项目授权。Claude Code 与 Codex 的自动 Git Delivery 都返回机器可消费的 `worktreeSetup.hostDispatch`，保持 `CHOICE_READY` 和 `executionSelection.state=RECORDED_PENDING_WORKTREE`，直到后台 Delivery coordinator/项目任务在稳定 linked worktree 中完成 `workspace_status → resume_execution_mode`。Claude 主会话只短暂进入宿主 worktree 以启动后台 coordinator，随后返回 primary；固定 MCP 控制根由 Hook 的真实 cwd 证明解耦，不创建新顶层会话。手动选择把快照转为 `HANDOFF_READY`，交接阶段不创建 Graph Run 或 workspace 绑定；接收 CLI 调用 `start_manual_handoff` 绑定并启动同一 Graph，成功后才允许编码。多个 Delivery 使用不同稳定 worktree；linked worktree 共享 primary checkout 的调度数据库，但 `workspaceKey` 不同。Controller 自身始终不创建或切换分支/worktree；错误地在占用工作区 prepare 时仍以 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED` 拒绝并返回宿主后台 worktree handoff。
 
-Git 场景先检查首次 `workspace_status`：
+### Git 工作区设置
+
+先检查首次 `workspace_status`：
+
+#### 自动策略与 `hostDispatch`
 
 - 自动 Git 工作区策略统一为 `HOST_NATIVE_LINKED_WORKTREE`。`worktreeSetup.hostDispatch` 固定包含宿主操作、`environment=worktree`、确定性标题/idempotency key、基线、续接 prompt、双 fingerprint、稳定工作区、后台执行、`requiresNewTopLevelSession=false`、`manualDirectoryChangeRequired=false` 与 `coordinatorCheckoutPolicy=PRESERVE_CURRENT_CHECKOUT`。Claude 机械消费 `agentDispatch`，优先进入唯一现有 Delivery worktree，否则创建后进入，启动后台 coordinator 并返回 primary；Codex 创建后台 worktree 项目任务。Controller 不负责选择宿主 UI，也不直接调用 `git worktree add`、`switch` 或生成分支名。
+
+#### `worktreeProvenance` 与基线发现
+
 - 每次返回的 `worktreeProvenance` 都必须体现实际来源：`hostAdapterId`、`workspaceRoot`、`topology`、`selectionSource`、`baseRef`、`baseCommit`、`baseHeadCommit` 与 `integrationTarget`。`baseCommit` 是当前 HEAD 与所选主线的 merge-base；`baseHeadCommit` 是检查时所选本地或 remote-tracking 主线的 HEAD。无论 worktree 最初基于哪个分支创建，都不得省略或猜测这些字段。
 - Delivery 冻结后，`gitBinding` 中的 `baseRef/baseCommit/integrationTarget` 是权威基线；后续 `workspace_status` 仍返回 `worktreeProvenance`，并以 `selectionSource=FROZEN_GIT_BINDING` 区分冻结事实与当次主线发现，`baseHeadCommit` 继续表示当次可见的主线 HEAD。
 - 基线发现顺序固定为：调用方通过 `workspace_status(base_ref=...)` 提交的宿主显式选择（`HOST_SELECTED`）、有效的远端默认引用 `origin/HEAD`（`ORIGIN_HEAD`），再依次降级到本地 `main`、本地 `master`（对应 `LOCAL_MAIN_FALLBACK`、`LOCAL_MASTER_FALLBACK`）；全部无效时停止并要求明确选择。这里的远端引用是当前仓库已经持有的 remote-tracking ref，Controller 不执行 `fetch`。不会额外枚举或硬编码 `develop`、`origin/develop` 或其他分支名。显式 `base_ref` 必须能解析为本地分支或 `origin` tracking ref，并同时成为建议的 `baseRef` 与 `integrationTarget`。
+
+#### 分支 adoption 与 dirty 确认
+
 - 不能仅凭 feature 分支名判断“当前分支已是本 Delivery 的独立分支”。只有策略为 `HOST_NATIVE_LINKED_WORKTREE`、该分支未被其他 worktree checkout、未绑定其他 Delivery，且基线关系有效时，才进入 adoption 判断。`BRANCH_IN_USE_BY_OTHER_WORKTREE`、`BRANCH_BOUND_TO_OTHER_DELIVERY` 或 `BRANCH_USED_BY_HISTORICAL_DELIVERY` 均必须创建新的 Delivery feature 分支后重查，不能接管已有分支。
 - Delivery linked worktree 干净且唯一时，`branchAdoption.state=READY` 并返回 `suggestedGitBinding`。把建议中的 `branchRef`、`baseRef`、`baseCommit`、`integrationTarget` 原样写入 `delivery.gitBinding`。
 - Delivery linked worktree 已有业务 diff 时，只返回 `candidateGitBinding` 和 `DIRTY_CONFIRMATION_REQUIRED`。`.layered-delivery/**` 是 Controller 控制面，不计入业务 dirty 状态。宿主必须向用户展示其余变更并确认全部属于本 Delivery；确认后立即把原响应的精确 `workingTree.stateFingerprint` 作为 `confirmed_dirty_state_fingerprint` 再次调用 `workspace_status`。只有 diff 未变化时才返回 `READY_WITH_CONFIRMED_CHANGES` 与 `suggestedGitBinding`；指纹变化以 `SCHEDULER_GIT_DIRTY_STATE_CHANGED` 停止并重新确认。不得把“有 diff”本身当作可复用证明。
+
+#### 宿主承接与分支命名
+
 - Codex 承接新 Delivery 时把 `hostOperation=CREATE_CODEX_PROJECT_TASK` 映射为新的项目任务并设置 `environment=worktree`，将 `hostDispatch.prompt` 原样作为首条任务指令；主任务不切换目录或分支。Codex 管理的 worktree 可能先处于 detached HEAD；此时 `workspace_status` 返回的 `worktreeSetup.nextAction` 为 `CREATE_DELIVERY_FEATURE_BRANCH`。取得 Git 分支写授权并创建本 Delivery 的本地 feature 分支后，重新调用 `workspace_status`，直到获得 `suggestedGitBinding` 才继续。
 - Claude Code 从项目目录启动时保持 primary checkout 作为控制/监控根，主 checkout 保持 `main` 或 `master`。宿主创建或复用 Delivery linked worktree，并在同一顶层会话内启动后台 coordinator；`${CLAUDE_PROJECT_DIR}` 不漂移，执行 cwd 由 Hook 一次性证明。禁止要求用户启动第二个顶层 Claude 会话。
 - feature 分支名称由宿主或用户已有分支策略决定；Layered Delivery 不生成 `feature/m_lf_` 等固定前缀，只冻结实际 checkout 的本地分支名。
+
+#### `projectScopes` 与 `gitBinding` 归属
+
 - `projectScopes.workspaceRoot` 在 CHOICE_READY 快照中保存 preview 时的仓库锚点。prepare/runtime 会以 Git common directory、精确 `branchRef` 和冻结基线只读解析每个 scope 的唯一实际 linked worktree，并在 `verifiedProjectScopes` 中返回实际 `workspaceRoot`，路径变化时另带 `declaredWorkspaceRoot`。Loop 启动时 `loop_context.projectScopes` 使用同一批运行时验证路径，冻结锚点另以 `projectScopeAnchors` 返回；receiver 不得对非当前有效锚点目录执行开发，也不得自行创建或切换分支。没有匹配、存在歧义或分支/基线不符时按 Controller 错误补齐工作区，不能自行改写 frozen hierarchy。
 - `gitBinding` 只属于 Delivery。同一 Delivery 的全部 TASK 共享该 feature checkout/worktree 和分支；不要为 TASK 创建、声明或切换内部 Git 分支。获得相应 Git 写入授权后，各 TASK 可以只 `git add` 并 `git commit` 自身 scope 的变更，在同一 Delivery 分支上形成独立 commit；Git index/commit 写入必须串行。
+
+#### primary checkout 与并行 Delivery
+
 - Claude 与 Codex primary checkout 都返回 `DEDICATED_WORKTREE_REQUIRED / CREATE_INDEPENDENT_WORKTREE_TASK` 和 `hostDispatch`。linked worktree 位于主线或 detached HEAD 时返回 feature 分支动作；该动作由后台 Delivery 工作区完成，不移动 primary。
 - 在某个 Active Delivery 的 feature worktree 或主监控会话中收到另一个独立 Delivery 时，立即从宿主选择的基线或上述默认发现结果创建另一稳定 Delivery worktree；不得从当前 feature HEAD 分叉。只有用户明确要求 stacked delivery 时才允许建立真实的 Delivery 间 Git 依赖。
+
+#### 手动开发内容包
+
 - 手动开发生成完整冻结内容包：固定写入本需求的 `.layered-delivery/<delivery-id>/`，包含与自动开发相同的 overview、baseline、progress、acceptance、revisions、work-items，以及自包含 `handoff-<fingerprint>.md`；同时必须生成共享 `.layered-delivery/scheduler.db` 与根 `overview.md`，把需求登记为 `HANDOFF_READY`。不创建共享 `handoffs` 目录；交接阶段不创建 Graph Run 或 workspace 绑定，不指定 Agent、模型或接收任务，也不创建 worktree。用户切换任意 CLI 后，在实际开发工作区调用 `start_manual_handoff`：控制器绑定 workspace、启动同一冻结 Graph，并只让 TASK 实现走 MANUAL claim；完整 Review 和最终确认继续沿用自动执行协议。
+
+#### 异步排队与停止条件
+
 - 宿主创建独立 worktree 任务是异步操作时，只返回 `clientThreadId`/排队标识代表 `WORKTREE_SETUP_QUEUED`，不代表已有可跟踪 `threadId`，更不代表 Delivery 已 prepare、freeze 或运行。按 `hostDispatch.idempotencyKey` 对同一 Delivery 和 fingerprint 只发起一次；排队期间不重试创建。宿主返回真实 `threadId` 后才可跟踪任务并继续 prepare/freeze。
 - Git worktree 缺少 `gitBinding`、当前分支不匹配、HEAD 不继承 `baseCommit`，或本地/`origin` 同名主线均不再包含该基线时，`prepare_hierarchy` / 运行工具必须停止。控制器不代替宿主运行 `git worktree add`、`switch`、`commit`、`merge` 或 `push`。
 

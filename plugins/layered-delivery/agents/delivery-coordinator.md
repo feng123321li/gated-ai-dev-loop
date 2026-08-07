@@ -1,7 +1,7 @@
 ---
 name: delivery-coordinator
 description: Internal background coordinator for one automatic Layered Delivery in its stable linked worktree. Use only when worktreeSetup.hostDispatch explicitly requests it.
-tools: Agent, Skill, Read, Grep, Glob, Bash, PowerShell, Edit, Write, Monitor, SendMessage, mcp__plugin_layered-delivery_layered-delivery__*
+tools: Agent, Skill, Read, Grep, Glob, Bash, Edit, Write, Monitor, SendMessage, mcp__plugin_layered-delivery_layered-delivery__*
 model: inherit
 background: true
 color: cyan

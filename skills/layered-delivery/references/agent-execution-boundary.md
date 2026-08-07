@@ -79,6 +79,9 @@ receiver 负责验证、整合并以自己的受信身份更新控制面。
   Controller 不据此授权、路由、重试、判断独立性或重写历史。
 - 未使用内部 Worker 时可以省略 `workerTelemetry`；不得把外层 receiver 本身伪装
   成一个内部 Worker 记录来满足展示要求。
+- 可选字段 `provenance`（`HOST_EVENT` / `HOST_TOOL_RESULT` / `WORKER_SELF_REPORT` / `LOCAL_CONFIG`）、`role`、`status`、`summary` 也可报告；宿主能权威观察时优先用 `HOST_EVENT` / `HOST_TOOL_RESULT`，而非 `WORKER_SELF_REPORT`。
+
+宿主在 `dispatch_loop` 派遣后若权威观察到实际模型，可传入可选的 `actual_model_id` 作为只读展示证据；Controller 从不据此路由、授权、指纹或评估能力，与 `workerTelemetry` 同属非权威展示信息。
 
 ## 手动 Graph
 

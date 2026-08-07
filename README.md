@@ -34,7 +34,7 @@ Delivery
 - `TASK` 是唯一执行叶子。STANDARD 中每个 TASK 都有独立 Review；LIGHT 仅允许一个根 TASK 并直接进入用户确认。
 - `GROUP` 只用于真实的依赖、并行汇合或分层审查，不强制存在。
 - 兄弟节点之间可以声明 DAG 依赖；无依赖且资源不冲突的节点可以并发。
-- `resourceClaims` 是跨 Delivery 生效的精确排他资源键，不是文件路径授权。
+- `resourceClaims` 是跨 Delivery 生效的精确排他资源键，不是文件路径授权。并行 Delivery 改同一文件/区域时，在相关 TASK 声明同一个 claim 即自动串行（见 planning-quickstart「并行 Delivery 与同资源串行化」）。
 - Frozen Graph 保存目标、依赖、资源、项目范围和 Loop 边界，不冻结 Loop 内部实现计划。
 - `LIGHT` 由规划 Agent 根据真实代码/diff 和影响范围判断，只适用于无接口、数据、权限、安全、生产部署等关键边界的局部修改；影响扩大时必须升级同一 Delivery 的 STANDARD Revision。
 

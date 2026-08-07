@@ -463,3 +463,23 @@ MCP 根固定只限制当前会话的主工作区锚点，不把同一 Delivery 
    - `MANUAL`：生成同结构开发包和自包含 handoff，登记 `HANDOFF_READY`；交接阶段不创建 Graph Run、workspace 绑定、任务或 worktree。宿主展示 `manualHandoff.receiverPrompt`，不得改写；同一提示词已经嵌入 `manualHandoff.path` 指向的文件。接收 CLI 必须先调用 `start_manual_handoff`，再按 frontier 在独立上下文 MANUAL claim TASK；Review 不允许 MANUAL，必须正常自动派遣。
 8. 自动或手动按钮选择本身就是该初始 Revision 的一次业务授权。`select_execution_mode` 不接受第二个确认步骤；自动 feature 分支/worktree 准备后只调用 `resume_execution_mode`，宿主不得再次调用选择器，也不得调用初始 `prepare_hierarchy`、`freeze_hierarchy` 或 `create_manual_handoff` 重放选择。需求内容改变会清除未执行的 AUTOMATIC 选择并重新生成交互。后续显式 Revision 继续使用各自的 Revision 工具和既有确认规则。
 9. 自动初次冻结后当前 Delivery Revision 的 Git/project binding、依赖、资源和拓扑固定，所有 TASK requirement revision 1 均为 `FROZEN`。手动开发把相同需求内容冻结为 SQLite 已登记的 `HANDOFF_READY` 可移植快照，返回 `requirementSnapshotStatus=FROZEN`；这不等于 Graph `FROZEN`，交接阶段不创建 Graph Run 或 workspace 绑定。接收方启动 `start_manual_handoff` 后，同一 Revision 进入 `executionMode=manual` 的 Graph Run，所有 TASK requirement 同样冻结并接受完整调度、Review 与最终验收。
+
+## 并行 Delivery 与同资源串行化
+
+多个 Delivery 可在同一仓库并行：每个 Delivery 有独立 linked worktree 和分支，共享同一个 `.layered-delivery/scheduler.db` 控制面，但用不同 `workspaceKey` 隔离。隔离是结构性的——**Controller 从不跨 Delivery 比较文件路径**，两个 Delivery 改同一文件在各自 worktree 里执行期并不冲突（看不到对方未提交改动），冲突只在各自合回 `integrationTarget` 时才可能出现。
+
+### 同文件/同区域：声明式串行化（`resourceClaims`）
+
+要让"改同一文件或同一逻辑区域"的 TASK 跨 Delivery **串行**（后一个等前一个完成），在相关 TASK 的 `execution.loop.resourceClaims` 里声明**同一个锁键**。`resourceClaims` 是**精确匹配的排他锁键，跨所有 Delivery 全局生效**，三层强制：frontier 对有重叠 claim 的 Ready Loop 不发 `DISPATCH_LOOP`（其 `resourceConflicts` 列出持有方 `<rootId>/<nodeId>`）；`plan_dispatch_batch` 预留返回 `DISPATCH_RESERVATION_CONFLICT`；`dispatch_loop` claim 返回 `SCHEDULER_RESOURCE_CONFLICT`。**声明即串行，无需额外开发。**
+
+**锁键命名约定**：稳定的小写 token，**不要用原始路径**（Controller 不做前缀/路径推导）。例如同改订单服务用 `orders-service`；同改某文件用 `file-src-orders-service-py`；同改库表结构用 `db-schema-orders`。键是精确相等匹配。
+
+**没有运行时同文件检测**：隔离 worktree 决定了冲突靠**声明预防**，不是在 Loop 执行中被发现。若两个 TASK 可能改同一处，就在两者都声明同一个 claim。
+
+示例：Delivery A 和 Delivery B 各有一个 TASK 改订单服务，两者都在 `execution.loop.resourceClaims` 写 `"orders-service"` → A 的 TASK 先 claim，B 的 TASK 在 frontier 显示 `resourceConflicts: ["<A-rootId>/<A-nodeId>"]` 并等待，A 完成释放后 B 才派发。被串行的 TASK 不是失败，是排队；持续读 frontier 即可看到它的 `resourceConflicts` 清空后变为可派发。
+
+### 计划中（future 0.35.0）：基线陈旧 rebase 恢复（仅设计，未实现）
+
+另一类问题是**基线陈旧**：某 Delivery 冻结的 `baseCommit` 落后于其 `integrationTarget`（例如别人已把 main 合并前进）。当前 `workspace_status` 会以 `baseHeadCommit`（当次主线 HEAD）对 `baseCommit`（冻结基线）反映这种偏离，但**不会主动处理**；`baseCommit` 冻结后严格不可变；Controller 不执行任何 git 写操作；唯一重锚途径是 `prepare_delivery_revision`，且要求**先在 worktree 内由宿主 rebase 好**再传新 `gitBinding` 重冻。
+
+计划中的恢复设计（本轮不实现，留待 0.35.0）：(1) 检测陈旧基线（主线 HEAD 已越过冻结 `baseCommit`、Delivery 未终态）；(2) 发出**可恢复**信号（新增，区别于当前 fail-closed 的 `SCHEDULER_GIT_BASE_INVALID`）；(3) **宿主**把该 Delivery worktree rebase 到当前 `integrationTarget` HEAD（Controller 仍不做 git）；(4) `prepare_delivery_revision` 用新 `gitBinding` 重锚 `baseCommit`（既有治理路径，`preparing=True` 重验），旧 run 被 supersede。约束：Controller 永不做 git 写；rebase 由宿主执行；重锚走 Revision；绑定 workspace 不可变；rebase 期间在途 claimed Loop 须 pause/释放。开放问题：新 frontier 信号 vs 复用 `REPLAN_REQUIRED`；宿主如何得知需要 rebase；如何保留未提交的 TASK 改动。

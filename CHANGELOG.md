@@ -4,6 +4,14 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.34.14 — 2026-08-07
+
+发布提交：`9fd0ac4`
+
+- 文档：planning-quickstart 新增「并行 Delivery 与同资源串行化」——并行 Delivery 各自独立 worktree 共享调度库；同文件/同区域用 `resourceClaims` 声明同一锁键即三层全局串行（声明式预防，非运行时检测）；含锁键命名约定与示例。SKILL/README 增加指引。
+- 设计（未实现）：同节记录 future 0.35.0 的「基线陈旧 rebase 恢复」设计——陈旧基线检测 → 宿主 rebase → `prepare_delivery_revision` 重锚，及 Controller 不做 git、重锚走 Revision 等约束。
+- 重新构建规范 Skill runtime 和 Plugin 内嵌 Skill，Python 全量 253 项测试、编译检查、0.34.14 发布候选校验、Skill/Plugin 校验、双宿主本地探测和 `git diff --check` 通过。
+
 ## 0.34.13 — 2026-08-07
 
 发布提交：`53a4702`

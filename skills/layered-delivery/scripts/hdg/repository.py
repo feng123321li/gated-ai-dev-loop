@@ -1090,6 +1090,7 @@ class SchedulerRepository:
             return
         rows = connection.execute(
             "SELECT * FROM hierarchies WHERE root_id != ? "
+            "AND status != 'ABANDONED' "
             "ORDER BY created_at, root_id",
             (requested_root_id,),
         ).fetchall()

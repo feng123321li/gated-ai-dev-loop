@@ -3054,52 +3054,85 @@ def cancel_graph_run(
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     with repository.transaction() as connection:
-        graph, run, nodes = _loaded(connection, root_id)
-        at = _locked_timestamp(now, run["updated_at"])
-        if run["status"] in {
-            "COMPLETED",
-            "CANCELLED",
-            "SUPERSEDED",
-        }:
+        hierarchy_row = connection.execute(
+            "SELECT status, updated_at FROM hierarchies WHERE root_id = ?",
+            (root_id,),
+        ).fetchone()
+        if hierarchy_row is None:
             fail(
-                "SCHEDULER_RUN_TERMINAL",
-                "A terminal scheduler run cannot be cancelled",
+                "SCHEDULER_RUN_MISSING",
+                f"No Delivery to cancel: {root_id}",
             )
-        for node in nodes:
-            if node["status"] in {
-                "SUCCEEDED",
+        if hierarchy_row["status"] != "FROZEN":
+            at = _locked_timestamp(now, hierarchy_row["updated_at"])
+            connection.execute(
+                "UPDATE hierarchies SET status = 'ABANDONED', "
+                "updated_at = ? WHERE root_id = ?",
+                (at, root_id),
+            )
+            connection.execute(
+                "UPDATE delivery_revisions SET status = 'ABANDONED', "
+                "updated_at = ? WHERE root_id = ?",
+                (at, root_id),
+            )
+            abandoned = True
+        else:
+            graph, run, nodes = _loaded(connection, root_id)
+            at = _locked_timestamp(now, run["updated_at"])
+            if run["status"] in {
                 "COMPLETED",
                 "CANCELLED",
+                "SUPERSEDED",
             }:
-                continue
-            connection.execute(
-                "UPDATE node_runs SET status = 'CANCELLED', "
-                "finished_at = ? WHERE run_id = ? AND node_id = ? "
-                "AND attempt = ?",
-                (
-                    at,
-                    run["run_id"],
-                    node["nodeId"],
-                    node["attempt"],
-                ),
+                fail(
+                    "SCHEDULER_RUN_TERMINAL",
+                    "A terminal scheduler run cannot be cancelled",
+                )
+            for node in nodes:
+                if node["status"] in {
+                    "SUCCEEDED",
+                    "COMPLETED",
+                    "CANCELLED",
+                }:
+                    continue
+                connection.execute(
+                    "UPDATE node_runs SET status = 'CANCELLED', "
+                    "finished_at = ? WHERE run_id = ? AND node_id = ? "
+                    "AND attempt = ?",
+                    (
+                        at,
+                        run["run_id"],
+                        node["nodeId"],
+                        node["attempt"],
+                    ),
+                )
+            repository.append_event(
+                connection,
+                run_id=run["run_id"],
+                node_id=None,
+                attempt=None,
+                event_type="GRAPH_RUN_CANCELLED",
+                actor=cancelled_by,
+                operation_id=None,
+                payload={"reason": reason.strip()},
+                at=at,
             )
-        repository.append_event(
-            connection,
-            run_id=run["run_id"],
-            node_id=None,
-            attempt=None,
-            event_type="GRAPH_RUN_CANCELLED",
-            actor=cancelled_by,
-            operation_id=None,
-            payload={"reason": reason.strip()},
-            at=at,
-        )
-        connection.execute(
-            "UPDATE runs SET status = 'CANCELLED', updated_at = ?, "
-            "cancelled_at = ? WHERE run_id = ?",
-            (at, at, run["run_id"]),
-        )
+            connection.execute(
+                "UPDATE runs SET status = 'CANCELLED', updated_at = ?, "
+                "cancelled_at = ? WHERE run_id = ?",
+                (at, at, run["run_id"]),
+            )
+            abandoned = False
     repository.write_projections(root_id)
+    if abandoned:
+        return {
+            "rootId": root_id,
+            "runId": None,
+            "runStatus": "ABSENT",
+            "deliveryStatus": "ABANDONED",
+            "cancelledBy": cancelled_by,
+            "reason": reason.strip(),
+        }
     return repository.run(root_id)
 
 

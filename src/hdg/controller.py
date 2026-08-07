@@ -153,7 +153,9 @@ class LayeredDeliveryController:
                         root_id,
                         workspace_root,
                         allow_unbound_manual=(name == "workspace_status"),
-                        allow_unbound_choice=(name == "workspace_status"),
+                        allow_unbound_choice=(
+                            name in {"workspace_status", "cancel_graph_run"}
+                        ),
                     )
                 except GatedLoopError as error:
                     same_control_root = (

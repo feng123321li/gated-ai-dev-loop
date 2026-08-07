@@ -465,6 +465,7 @@ def preview_hierarchy(
         ),
         "PREPARED": "FREEZE_PREPARED_HIERARCHY",
         "FROZEN": "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH",
+        "ABANDONED": "DELIVERY_ABANDONED_NO_FURTHER_ACTION",
     }
     result = {
         "rootId": normalized["delivery"]["id"],

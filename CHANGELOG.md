@@ -4,6 +4,14 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.35.0 — 2026-08-07
+
+发布提交：`df7314b`
+
+- 新增**基线陈旧 rebase 恢复 advisory**：当某 Delivery 冻结的 `baseCommit` 落后于其 `integrationTarget`（主线已前进）时，`workspace_status` 在 `gitWorkspace.worktreeRebase` 带出可恢复 advisory（`required`、`frozenBaseCommit`、`currentBaseCommit`、`integrationTarget`、`nextAction=REBASE_DELIVERY_WORKTREE_ONTO_CURRENT_BASE_THEN_PREPARE_DELIVERY_REVISION`）。Controller 只检测并发出信号，不做 git；宿主 rebase worktree 后用 `prepare_delivery_revision` 重锚 `baseCommit`（既有治理路径，`preparing=True` 重验），旧 run 被 supersede。
+- 文档：planning-quickstart 把 rebase 恢复从“计划中”改为已实现，写明宿主恢复流程（暂停在途 Loop → rebase → `prepare_delivery_revision` → 恢复执行）与约束。
+- 重新构建规范 Skill runtime 和 Plugin 内嵌 Skill，Python 全量 255 项测试、编译检查、0.35.0 发布候选校验、Skill/Plugin 校验、双宿主本地探测和 `git diff --check` 通过。
+
 ## 0.34.14 — 2026-08-07
 
 发布提交：`9fd0ac4`

@@ -1,6 +1,6 @@
 # 团队安装与运维
 
-本文面向团队管理员和普通使用者，覆盖 `layered-delivery` 0.34.14 的安装、升级、恢复、卸载与回滚。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 和标准库。
+本文面向团队管理员和普通使用者，覆盖 `layered-delivery` 0.35.0 的安装、升级、恢复、卸载与回滚。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 和标准库。
 
 ## 安装前检查
 
@@ -41,7 +41,7 @@ claude plugin list --json
 python scripts/host_smoke.py probe --json
 ```
 
-结果必须报告 Plugin 版本 0.34.14 和 28 个 MCP 工具，并如实标记本机已安装的宿主。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器，普通成员也不需要重复付费冒烟。
+结果必须报告 Plugin 版本 0.35.0 和 28 个 MCP 工具，并如实标记本机已安装的宿主。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器，普通成员也不需要重复付费冒烟。
 
 真实冒烟默认先只展示计划，必须显式增加 `--execute` 才调用模型。两个宿主分别运行，绝不从一个终端跨调另一个 Agent：
 
@@ -53,7 +53,7 @@ python scripts/host_smoke.py run --host codex --scenario light
 python scripts/host_smoke.py run --host codex --scenario light --execute
 ```
 
-Claude 命令从当前源码候选的 `--plugin-dir` 加载包，验证自动 Delivery 在稳定 linked worktree 启动后台 coordinator、主会话保持监控并由 PreToolUse Hook 注入工作区 attestation；Codex 命令要求 0.34.14 候选已经从 Marketplace 安装，并在临时 linked worktree 中验证项目任务路径。发布前的最小门禁可用 LIGHT 验证同宿主 claim/heartbeat/progress/result；发布管理员需要覆盖 Review 时再把 `--scenario light` 改成 `--scenario standard`。任何输出中的 `claimedAgents` 都必须只含命令指定的当前宿主。
+Claude 命令从当前源码候选的 `--plugin-dir` 加载包，验证自动 Delivery 在稳定 linked worktree 启动后台 coordinator、主会话保持监控并由 PreToolUse Hook 注入工作区 attestation；Codex 命令要求 0.35.0 候选已经从 Marketplace 安装，并在临时 linked worktree 中验证项目任务路径。发布前的最小门禁可用 LIGHT 验证同宿主 claim/heartbeat/progress/result；发布管理员需要覆盖 Review 时再把 `--scenario light` 改成 `--scenario standard`。任何输出中的 `claimedAgents` 都必须只含命令指定的当前宿主。
 
 Codex 冒烟不能使用 `--ephemeral`：`SubagentStart` attestation 必须从宿主持久化 transcript 校验 parent/child/task。冒烟会留下一个可审计的 Codex 会话记录，但业务工作区仍位于自动清理的临时目录；若宿主无法提供该 transcript，claim 必须 fail closed。
 

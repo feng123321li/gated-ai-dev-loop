@@ -4,6 +4,14 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.34.10 — 2026-08-07
+
+发布提交：`bb93e34`
+
+- `preview_hierarchy`、`prepare_hierarchy`、`create_manual_handoff`、`prepare_delivery_revision` 新增可选 `hierarchy_file`：层级较大或 payload 详细时，模型可先把 JSON 写到工作区文件并校验，再传文件路径代替内联 `hierarchy`，控制器在工作区沙箱内读取解析，避免内联大 JSON 括号错配被吞。`hierarchy` 改为可选，校验改为二选一；拒绝路径穿越/符号链接/跨盘和非对象 JSON。
+- SKILL/planning-quickstart 增加 Write → 校验 → `hierarchy_file` 的标准流程说明。
+- 重新构建规范 Skill runtime 和 Plugin 内嵌 Skill，Python 全量 249 项测试、编译检查、0.34.10 发布候选校验、Skill/Plugin 校验、双宿主本地探测和 `git diff --check` 通过。
+
 ## 0.34.9 — 2026-08-07
 
 发布提交：`d6e090d`

@@ -478,8 +478,19 @@ MCP 根固定只限制当前会话的主工作区锚点，不把同一 Delivery 
 
 示例：Delivery A 和 Delivery B 各有一个 TASK 改订单服务，两者都在 `execution.loop.resourceClaims` 写 `"orders-service"` → A 的 TASK 先 claim，B 的 TASK 在 frontier 显示 `resourceConflicts: ["<A-rootId>/<A-nodeId>"]` 并等待，A 完成释放后 B 才派发。被串行的 TASK 不是失败，是排队；持续读 frontier 即可看到它的 `resourceConflicts` 清空后变为可派发。
 
-### 计划中（future 0.35.0）：基线陈旧 rebase 恢复（仅设计，未实现）
+### 基线陈旧 rebase 恢复（0.35.0 起）
 
-另一类问题是**基线陈旧**：某 Delivery 冻结的 `baseCommit` 落后于其 `integrationTarget`（例如别人已把 main 合并前进）。当前 `workspace_status` 会以 `baseHeadCommit`（当次主线 HEAD）对 `baseCommit`（冻结基线）反映这种偏离，但**不会主动处理**；`baseCommit` 冻结后严格不可变；Controller 不执行任何 git 写操作；唯一重锚途径是 `prepare_delivery_revision`，且要求**先在 worktree 内由宿主 rebase 好**再传新 `gitBinding` 重冻。
+某 Delivery 冻结的 `baseCommit` 落后于其 `integrationTarget`（例如别人已把 main 合并前进）时，`workspace_status` 会在 `gitWorkspace.worktreeRebase` 带出**可恢复 advisory**：
 
-计划中的恢复设计（本轮不实现，留待 0.35.0）：(1) 检测陈旧基线（主线 HEAD 已越过冻结 `baseCommit`、Delivery 未终态）；(2) 发出**可恢复**信号（新增，区别于当前 fail-closed 的 `SCHEDULER_GIT_BASE_INVALID`）；(3) **宿主**把该 Delivery worktree rebase 到当前 `integrationTarget` HEAD（Controller 仍不做 git）；(4) `prepare_delivery_revision` 用新 `gitBinding` 重锚 `baseCommit`（既有治理路径，`preparing=True` 重验），旧 run 被 supersede。约束：Controller 永不做 git 写；rebase 由宿主执行；重锚走 Revision；绑定 workspace 不可变；rebase 期间在途 claimed Loop 须 pause/释放。开放问题：新 frontier 信号 vs 复用 `REPLAN_REQUIRED`；宿主如何得知需要 rebase；如何保留未提交的 TASK 改动。
+```json
+{"worktreeRebase": {"required": true, "frozenBaseCommit": "<冻结基线>", "currentBaseCommit": "<当前 integrationTarget HEAD>", "integrationTarget": "main", "nextAction": "REBASE_DELIVERY_WORKTREE_ONTO_CURRENT_BASE_THEN_PREPARE_DELIVERY_REVISION"}}
+```
+
+宿主/协调器看到它后的恢复流程（Controller 不执行 git）：
+
+1. 先暂停该 Delivery 在该 worktree 里在途的 claimed Loop（`pause_loop`），避免 rebase 干扰运行中的工作；
+2. 在该 Delivery worktree 内把 `branchRef` rebase 到 `currentBaseCommit`（如 `git rebase --onto <integrationTarget HEAD> <frozenBaseCommit> <branchRef>`，或 merge）；冲突由宿主解决，无法解决则相关 Loop 按 `BLOCKED`(`LOOP_BLOCKED`/`EXTERNAL_AUTHORITY`) 上报，不要静默换分支；
+3. 用新的 `gitBinding`（`baseCommit` = rebase 后 HEAD 与主线的 merge-base）调用 `prepare_delivery_revision`（连续性 `ACTIVE_LOOP_REPLAN` 或 `USER_EXPLICIT_SAME_DELIVERY`）重锚基线；`preparing=True` 重验 fork-point，旧 run 被 supersede；
+4. 在新 Revision 上恢复执行（`resume_execution_mode` / 继续 frontier）。
+
+约束：Controller 永不做 git 写；rebase 由宿主执行；重锚走 Revision；绑定 workspace 不可变；rebase 期间在途 Loop 须 pause/释放。`workspace_status` 只检测并**发出 advisory**，不自动 rebase。

@@ -557,10 +557,39 @@ def inspect_frozen_git_workspace_provenance(
         host_adapter_id=host_adapter_id,
     )
     provenance["integrationTarget"] = normalized["integrationTarget"]
-    return {
+    result: dict[str, Any] = {
         "worktreeProvenance": provenance,
         "workingTree": _working_tree_state(workspace),
     }
+    frozen_base = normalized["baseCommit"]
+    current_head = selected.head_commit
+    if (
+        current_head != frozen_base
+        and _git(
+            workspace,
+            "merge-base",
+            "--is-ancestor",
+            frozen_base,
+            current_head,
+            accepted=(0, 1),
+        ).returncode
+        == 0
+    ):
+        # The frozen base has fallen behind the integration target (another
+        # Delivery merged past it). Surface a recoverable advisory; the host
+        # rebases the worktree onto the current base, then prepares a
+        # Delivery revision to re-pin baseCommit. The controller does no git.
+        result["worktreeRebase"] = {
+            "required": True,
+            "frozenBaseCommit": frozen_base,
+            "currentBaseCommit": current_head,
+            "integrationTarget": normalized["integrationTarget"],
+            "nextAction": (
+                "REBASE_DELIVERY_WORKTREE_ONTO_CURRENT_BASE_THEN_"
+                "PREPARE_DELIVERY_REVISION"
+            ),
+        }
+    return result
 
 
 def verify_delivery_git_binding(

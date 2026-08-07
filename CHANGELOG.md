@@ -4,6 +4,14 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.34.11 — 2026-08-07
+
+发布提交：`66f0516`
+
+- `select_execution_mode(AUTOMATIC)` 派发前硬校验 `gitBinding.branchRef` 是否已被其他 worktree 占用：若被 primary 等占用（git 不允许两个 worktree 共用同一分支），立即以 `SCHEDULER_GIT_BRANCH_IN_USE_BY_OTHER_WORKTREE` 拒绝；此前会让 coordinator 在 resume 撞 `SCHEDULER_GIT_BRANCH_MISMATCH` 卡死，并留下无法清理的 pre-run 草稿。
+- 文档：planning-quickstart 增加“别从旧 Delivery 拷 gitBinding”“单文件小修不必套 AUTOMATIC”的指引。
+- 重新构建规范 Skill runtime 和 Plugin 内嵌 Skill，Python 全量 252 项测试、编译检查、0.34.11 发布候选校验、Skill/Plugin 校验、双宿主本地探测和 `git diff --check` 通过。
+
 ## 0.34.10 — 2026-08-07
 
 发布提交：`bb93e34`

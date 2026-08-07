@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.34.9 — 2026-08-07
+
+发布提交：`d6e090d`
+
+- `host_smoke` 的 Claude 路径改为监控主会话 + 后台 `delivery-coordinator`（稳定 linked worktree），替代已移除的独占 primary checkout；并改为跨 `git worktree list` 发现 smoke 产物。同步更新对应发布就绪测试。
+- Hook 修复：`attest_claude_dispatch_receiver` 比对前剥离宿主注入的 `_host_workspace_attestation`，恢复 `actual_model_id` 检测；`attest_claude_workspace` 对审批门禁的敏感工具跳过工作区 attestation，避免 60 秒 TTL 在用户审批期间过期；`handle_claude_rate_limit` 增加异常保护，确保限流暂停始终生效。
+- 文档：README 使用方式改写为 linked worktree + 后台 coordinator 模型，补齐 `delivery-coordinator` 与 `attest_claude_workspace` 说明和结构表；references 补全 `failure_class` 枚举、`record_user_confirmation.summary`、Revision `confirmed_by`、`workerTelemetry.provenance`、`actual_model_id`，并对 planning 的 Git 工作区段做分组重构。
+- `delivery-coordinator` Agent 移除不存在的 `PowerShell` 工具。
+- 重新构建规范 Skill runtime 和 Plugin 内嵌 Skill，Python 全量 242 项测试、编译检查、0.34.9 发布候选校验、Skill/Plugin 校验、双宿主本地探测和 `git diff --check` 通过。
+
 ## 0.34.8 — 2026-08-06
 
 发布提交：`f23ed5e`

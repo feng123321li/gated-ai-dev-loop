@@ -37,6 +37,7 @@ from .planning import (
     prepare_delivery_revision,
     prepare_hierarchy,
     preview_hierarchy,
+    report_worktree_setup,
     resume_execution_mode,
     select_execution_mode,
     start_manual_handoff,
@@ -57,6 +58,7 @@ CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "preview_hierarchy": preview_hierarchy,
     "confirm_development_baseline": confirm_development_baseline,
     "select_execution_mode": select_execution_mode,
+    "report_worktree_setup": report_worktree_setup,
     "resume_execution_mode": resume_execution_mode,
     "create_manual_handoff": create_manual_handoff,
     "start_manual_handoff": start_manual_handoff,
@@ -132,6 +134,7 @@ class LayeredDeliveryController:
             repository = SchedulerRepository(context.project_root)
             if name in {
                 "select_execution_mode",
+                "report_worktree_setup",
                 "resume_execution_mode",
                 "start_manual_handoff",
                 "confirm_development_baseline",
@@ -141,6 +144,7 @@ class LayeredDeliveryController:
                     {"CHOICE_READY", "PREPARED", "HANDOFF_READY"}
                     if name in {
                         "select_execution_mode",
+                        "report_worktree_setup",
                         "resume_execution_mode",
                         "confirm_development_baseline",
                     }
@@ -180,6 +184,7 @@ class LayeredDeliveryController:
                 "confirm_development_baseline",
                 "prepare_delivery_revision",
                 "select_execution_mode",
+                "report_worktree_setup",
                 "resume_execution_mode",
                 "start_manual_handoff",
             } and not monitoring_from_control_root:
@@ -220,6 +225,7 @@ class LayeredDeliveryController:
             "prepare_delivery_revision",
             "confirm_development_baseline",
             "select_execution_mode",
+            "report_worktree_setup",
             "resume_execution_mode",
             "start_manual_handoff",
         }:
@@ -241,6 +247,7 @@ class LayeredDeliveryController:
             "preview_hierarchy",
             "confirm_development_baseline",
             "select_execution_mode",
+            "report_worktree_setup",
             "resume_execution_mode",
             "start_manual_handoff",
         }:

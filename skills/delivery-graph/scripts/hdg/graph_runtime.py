@@ -3075,6 +3075,12 @@ def cancel_graph_run(
                 "updated_at = ? WHERE root_id = ?",
                 (at, root_id),
             )
+            connection.execute(
+                "UPDATE worktree_setup_reservations SET status = "
+                "'RELEASED' WHERE root_id = ? AND status IN "
+                "('PENDING', 'IN_PROGRESS', 'FAILED', 'EXPIRED')",
+                (root_id,),
+            )
             abandoned = True
         else:
             graph, run, nodes = _loaded(connection, root_id)

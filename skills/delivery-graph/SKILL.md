@@ -72,7 +72,10 @@ allowed-tools:
 ### `EXECUTION_MODE`
 
 - 用户选择后只调用一次 `select_execution_mode`。用户输入需求修改意见时不要调用选择工具；继续规划并使旧选择失效。
-- 选择 `AUTOMATIC` 时，消费 `worktreeSetup.hostDispatch`：让宿主创建或复用 Delivery linked worktree 并启动后台协调 receiver；后台用原双 fingerprint 调用 `workspace_status → resume_execution_mode → graph_frontier`。主会话留在 primary checkout，仅监控和处理用户交互。
+- 选择 `AUTOMATIC` 时，消费 `worktreeSetup.hostDispatch`；多项目同时完整消费 `projectWorktreeSetups`，为每个 `READ_WRITE` Git scope 准备精确 binding 的 linked worktree，但只启动一个后台 Delivery coordinator。创建开始后立即按 `hostDispatch.progressReporting` 调用 `report_worktree_setup`，之后按 30 秒心跳间隔上报阶段、摘要与百分比。后台用原双 fingerprint 调用 `workspace_status → resume_execution_mode → graph_frontier`，所有项目进度仍写入同一控制面。主会话留在 primary checkout，仅监控和处理用户交互。
+- 严格遵循 `hostDispatch.launchPolicy`：`IMMEDIATE` 才创建；`DO_NOT_REISSUE` 等待既有 setup；secondary scope 的 `CONTINUE_EXISTING_WORKTREE_TASK` 由当前 coordinator 完成，不另起 coordinator。`branchRef/gitBinding` 是宿主 Git 写入的精确目标，不得自行生成替代分支。
+- `WORKTREE_SETUP_LEASE_EXPIRED` 或 `WORKTREE_SETUP_FAILED` 时停止重发。只有确认旧进程已停止且半成品目录/worktree 已安全核对后，才用唯一 `retry_request_id` 调用 `report_worktree_setup(RETRY_CONFIRMED)`；只消费 Controller 原子授予的新 attempt，未知响应仅用同一 ID 恢复。
+- `FROZEN_DELIVERY_BRANCH_REQUIRED` 只允许在干净 worktree 恢复冻结分支；`FROZEN_DELIVERY_BRANCH_DIRTY` 必须先审查并处理现有改动，不能直接切换。所有 project worktree 为 `READY` 后才调用 `resume_execution_mode`。
 - 选择 `MANUAL` 时，原样展示 `manualHandoff.receiverPrompt`。让接收 CLI 在实际工作区调用 `start_manual_handoff` 后再消费 frontier。
 
 ## 手动启动的 Git 漂移

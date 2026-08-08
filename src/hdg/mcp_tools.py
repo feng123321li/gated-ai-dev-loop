@@ -421,6 +421,102 @@ def _execution_resume_tool_schema() -> dict[str, Any]:
     )
 
 
+def _worktree_setup_report_tool_schema() -> dict[str, Any]:
+    return _object(
+        {
+            "root_id": ROOT_ID,
+            "project_id": ROOT_ID,
+            "reservation_id": FINGERPRINT,
+            "expected_attempt": {
+                "type": "integer",
+                "minimum": 1,
+                "description": (
+                    "Exact setupAttempt from the current hostDispatch."
+                ),
+            },
+            "event": {
+                "type": "string",
+                "enum": [
+                    "STARTED",
+                    "PROGRESS",
+                    "FAILED",
+                    "RETRY_CONFIRMED",
+                ],
+                "description": (
+                    "STARTED/PROGRESS renew the setup lease; FAILED blocks "
+                    "automatic reissue; RETRY_CONFIRMED atomically grants "
+                    "one new attempt after reconciliation."
+                ),
+            },
+            "phase": {
+                "type": "string",
+                "enum": [
+                    "STARTING",
+                    "CREATING_DIRECTORY",
+                    "CREATING_BRANCH",
+                    "CREATING_WORKTREE",
+                    "CHECKING_OUT",
+                    "VERIFYING",
+                    "RECONCILING",
+                    "FAILED",
+                ],
+            },
+            "summary_zh": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500,
+                "description": (
+                    "Bounded user-visible setup progress without raw logs."
+                ),
+            },
+            "progress_percent": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100,
+            },
+            "failure_code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 96,
+                "description": "Required when event=FAILED.",
+            },
+            "retry_request_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "description": (
+                    "Required for RETRY_CONFIRMED. Reuse the same value only "
+                    "when recovering an unknown response so the granted "
+                    "attempt and dispatch can be returned idempotently."
+                ),
+            },
+            "confirmed_previous_attempt_stopped": {
+                "type": "boolean",
+                "description": (
+                    "Required true for RETRY_CONFIRMED after verifying the "
+                    "old host process cannot continue."
+                ),
+            },
+            "confirmed_partial_state_reconciled": {
+                "type": "boolean",
+                "description": (
+                    "Required true for RETRY_CONFIRMED after inspecting and "
+                    "safely reconciling partial paths/worktrees."
+                ),
+            },
+        },
+        required=[
+            "root_id",
+            "project_id",
+            "reservation_id",
+            "expected_attempt",
+            "event",
+            "phase",
+            "summary_zh",
+        ],
+    )
+
+
 def _manual_start_tool_schema() -> dict[str, Any]:
     return _object(
         {
@@ -491,6 +587,11 @@ TOOLS = (
             "select it by root ID. An unbound Git feature worktree also "
             "returns a suggested immutable Delivery Git binding; a "
             "mainline or detached worktree returns host-owned setup steps. "
+            "A recorded automatic choice restores repository-scoped "
+            "projectWorktreeSetups, exact frozen-branch recovery, or a "
+            "DO_NOT_REISSUE wait state without duplicating host creation. "
+            "Its setup progressMonitor exposes per-project attempt, phase, "
+            "percent, lease health, and failure/expiry alerts. "
             "While CHOICE_READY, it restores the single pendingInteraction "
             "before attempting frozen-binding runtime verification."
         ),
@@ -562,7 +663,12 @@ TOOLS = (
             "pendingInteraction. AUTOMATIC "
             "records the human choice before checking host workspace setup. "
             "Claude and Codex Git primary checkouts return host-owned stable "
-            "linked-worktree background dispatch. The continuation completes "
+            "linked-worktree background dispatch with exact branchRef and "
+            "gitBinding. Repository-scoped reservations reject another "
+            "Delivery on the same branch and make repeated selection "
+            "non-reissuing. Multi-project choices return every writable "
+            "projectWorktreeSetup while launching one coordinator. The "
+            "continuation completes "
             "without another confirmation; the main conversation remains a "
             "monitor-only coordinator while the background Delivery Agent "
             "prepares and freezes the staged snapshot. "
@@ -573,11 +679,26 @@ TOOLS = (
         _execution_choice_tool_schema(),
     ),
     _tool(
+        "report_worktree_setup",
+        (
+            "Report bounded host progress while creating one reserved "
+            "Delivery project worktree. STARTED and PROGRESS renew a "
+            "120-second setup lease and update the shared workspace monitor; "
+            "FAILED or lease expiry blocks reissue. RETRY_CONFIRMED requires "
+            "proof that the old attempt stopped and partial paths/worktrees "
+            "were reconciled, then atomically grants exactly one new attempt. "
+            "This tool never performs Git or filesystem writes."
+        ),
+        _worktree_setup_report_tool_schema(),
+        annotations={"idempotentHint": False},
+    ),
+    _tool(
         "resume_execution_mode",
         (
             "Continue a previously recorded AUTOMATIC selection after the "
             "trusted host prepares the required feature branch or linked "
-            "worktree. Revalidate the exact fingerprints and Git/project "
+            "worktree for every writable project scope. Revalidate the exact "
+            "fingerprints and Git/project "
             "bindings, then prepare, "
             "freeze, and dispatch without asking the user to select or "
             "confirm again. This tool never changes MANUAL into AUTOMATIC."

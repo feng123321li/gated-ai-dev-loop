@@ -7,6 +7,28 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.37.2 发布候选矩阵
+
+0.37.2 提供 30 个 MCP 工具，新增 `report_worktree_setup` 和 worktree setup 进度监控。除 0.37.1 的 reservation、精确分支和多项目场景外，真实宿主必须验证：创建阶段与百分比能在主仓 `progressMonitor` 刷新；30 秒 heartbeat 可续 120 秒租约；超时/失败不会自动重发；核对旧进程与半成品后，并发 retry 只有一个获得新 attempt 与 `IMMEDIATE`。
+
+| 环境 | Python | 核心契约 | 真实宿主 | 发布用途 |
+|---|---:|---|---|---|
+| Linux Runner | 3.10 / 3.12 / 3.14 | CI 自动 | 不适用 | setup 状态机、SQLite 并发与协议契约 |
+| Windows 自托管 Runner | 3.10+ | 发布任务 | 候选验证中：Codex/Claude 结果待回填 | 原生 worktree 心跳、失败核对与安全 retry |
+
+候选宿主版本继续使用 Codex CLI 0.147.0 和 Claude Code 2.1.226；这是本轮验证目标，不是永久最低版本。Controller 仍不执行 Git 或目录写操作。
+
+## 0.37.1 发布候选矩阵
+
+0.37.1 保持 29 个 MCP 工具，在 0.37.0 双宿主协议上新增 worktree setup reservation、精确分支 dispatch 和多项目 worktree 编排。核心门禁除全量测试、`compileall`、镜像一致性和发布校验外，必须真实验证：同一选择并发调用只有一个 `IMMEDIATE`；宿主错分支 clean/dirty 两条路径；两个 Delivery 同仓同分支 fail closed；两个不同仓库可用同名分支；多项目全部 `READ_WRITE` worktree 就绪前不创建 Graph Run，且只有一个 coordinator 向共享控制根报告。
+
+| 环境 | Python | 核心契约 | 真实宿主 | 发布用途 |
+|---|---:|---|---|---|
+| Linux Runner | 3.10 / 3.12 / 3.14 | CI 自动 | 不适用 | Python 与 SQLite 并发契约 |
+| Windows 自托管 Runner | 3.10+ | 发布任务 | 候选验证中：Codex/Claude 结果待回填 | 原生 worktree、分支恢复与后台 coordinator |
+
+0.37.1 的候选宿主版本继续使用 Codex CLI 0.147.0 和 Claude Code 2.1.226；这是本轮验证目标，不是永久最低版本。两个宿主都必须确认 Controller 不执行 Git 写操作，且 secondary project setup 不会启动第二 coordinator。
+
 ## 0.37.0 发布候选矩阵
 
 0.37.0 保持 29 个 MCP 工具。Python 全量测试、`compileall`、Skill/Plugin 镜像一致性、协议元数据、发布校验和 diff 检查是核心候选门禁；实际结果以对应候选提交和 CI 为准，不可替代真实宿主验证。

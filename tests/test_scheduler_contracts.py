@@ -2462,7 +2462,7 @@ class McpSurfaceTests(unittest.TestCase):
             self.assertFalse(selected["automaticDispatchRequested"])
             self.assertEqual(
                 selected["nextAction"],
-                "CREATE_INDEPENDENT_WORKTREE_TASK",
+                "CREATE_REQUIRED_PROJECT_WORKTREES",
             )
             self.assertEqual(
                 selected["selectionContinuation"],
@@ -2474,7 +2474,15 @@ class McpSurfaceTests(unittest.TestCase):
             )
             self.assertEqual(
                 selected["worktreeSetup"]["state"],
-                "DEDICATED_WORKTREE_REQUIRED",
+                "PROJECT_WORKTREES_REQUIRED",
+            )
+            self.assertEqual(
+                selected["worktreeSetup"]["pendingProjectIds"],
+                ["erp-protein"],
+            )
+            self.assertEqual(
+                selected["worktreeSetup"]["readyProjectIds"],
+                ["erp-pm"],
             )
             self.assertEqual(
                 selected["worktreeSetup"]["resumeAction"],
@@ -4250,7 +4258,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 29)
+            self.assertEqual(len(listed["result"]["tools"]), 30)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

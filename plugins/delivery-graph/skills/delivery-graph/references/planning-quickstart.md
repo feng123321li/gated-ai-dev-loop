@@ -345,7 +345,7 @@ Torna 必须保持相同的方法、路径或签名、字段层级、类型、�
 
 ## 准备与冻结
 
-`preview_hierarchy` 与手动选择都不绑定 Delivery 工作区。preview 先把需求登记为 `CHOICE_READY`，生成共享 SQLite、根总览和完整投影；自动按钮由 `select_execution_mode(AUTOMATIC)` 先持久记录选择和项目授权。Claude Code 与 Codex 的自动 Git Delivery 都返回机器可消费的 `worktreeSetup.hostDispatch`，保持 `CHOICE_READY` 和 `executionSelection.state=RECORDED_PENDING_WORKTREE`，直到后台 Delivery coordinator/项目任务在稳定 linked worktree 中完成 `workspace_status → resume_execution_mode`。Claude 主会话只短暂进入宿主 worktree 以启动后台 coordinator，随后返回 primary；固定 MCP 控制根由 Hook 的真实 cwd 证明解耦，不创建新顶层会话。手动选择把快照转为 `HANDOFF_READY`，交接阶段不创建 Graph Run 或 workspace 绑定；接收 CLI 调用 `start_manual_handoff` 绑定并启动同一 Graph，成功后才允许编码。多个 Delivery 使用不同稳定 worktree；linked worktree 共享 primary checkout 的调度数据库，但 `workspaceKey` 不同。Controller 自身始终不创建或切换分支/worktree；错误地在占用工作区 prepare 时仍以 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED` 拒绝并返回宿主后台 worktree handoff。
+`preview_hierarchy` 与手动选择都不绑定 Delivery 工作区。preview 先把需求登记为 `CHOICE_READY`，生成共享 SQLite、根总览和完整投影；自动按钮由 `select_execution_mode(AUTOMATIC)` 先持久记录选择和项目授权，并按 Git repository identity + `branchRef` 原子预留 worktree setup。Claude Code 与 Codex 的自动 Git Delivery 都返回机器可消费的 `worktreeSetup.hostDispatch`；多项目另返回全部 `projectWorktreeSetups`。状态保持 `CHOICE_READY` 和 `executionSelection.state=RECORDED_PENDING_WORKTREE`，直到唯一后台 Delivery coordinator 在全部可写项目的稳定 linked worktree 就绪后完成 `workspace_status → resume_execution_mode`。Claude 主会话只短暂进入宿主 worktree 以启动后台 coordinator，随后返回 primary；固定 MCP 控制根由 Hook 的真实 cwd 证明解耦，不创建新顶层会话。手动选择把快照转为 `HANDOFF_READY`，交接阶段不创建 Graph Run 或 workspace 绑定；接收 CLI 调用 `start_manual_handoff` 绑定并启动同一 Graph，成功后才允许编码。多个 Delivery 使用不同稳定 worktree；linked worktree 共享 primary checkout 的调度数据库，但 `workspaceKey` 不同。Controller 自身始终不创建或切换分支/worktree；错误地在占用工作区 prepare 时仍以 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED` 拒绝并返回宿主后台 worktree handoff。
 
 `preview_hierarchy`、`prepare_delivery_revision` 与 `create_manual_handoff` 的 `hierarchy` 也可改用 `hierarchy_file` 传入：当层级结构较大或 payload 详细、难以一次性内联写出正确 JSON 时，先用 Write 把 JSON 写到工作区文件（如 `.layered-delivery/staging/hierarchy.json`），用 `python -m json.tool` 校验，再调用时只传 `hierarchy_file`（工作区相对路径）。控制器在工作区沙箱内读取并解析该文件，等价于内联 `hierarchy`；两者二选一，同时给或都不给都会被拒绝，路径穿越/符号链接/跨盘也会被拒绝。
 
@@ -359,7 +359,8 @@ preview 会先通过 `pendingInteraction.kind=DEVELOPMENT_BASELINE` 确认基线
 
 #### 自动策略与 `hostDispatch`
 
-- 自动 Git 工作区策略统一为 `HOST_NATIVE_LINKED_WORKTREE`。`worktreeSetup.hostDispatch` 固定包含宿主操作、`environment=worktree`、确定性标题/idempotency key、基线、续接 prompt、双 fingerprint、稳定工作区、后台执行、`requiresNewTopLevelSession=false`、`manualDirectoryChangeRequired=false` 与 `coordinatorCheckoutPolicy=PRESERVE_CURRENT_CHECKOUT`。Claude 机械消费 `agentDispatch`，优先进入唯一现有 Delivery worktree，否则创建后进入，启动后台 coordinator 并返回 primary；Codex 创建后台 worktree 项目任务。Controller 不负责选择宿主 UI，也不直接调用 `git worktree add`、`switch` 或生成分支名。
+- 自动 Git 工作区策略统一为 `HOST_NATIVE_LINKED_WORKTREE`。`worktreeSetup.hostDispatch` 固定包含精确 `branchRef/gitBinding`、reservation/attempt、宿主操作、`environment=worktree`、确定性标题/idempotency key、基线、进度协议、续接 prompt、双 fingerprint、稳定工作区、后台执行、`requiresNewTopLevelSession=false`、`manualDirectoryChangeRequired=false` 与 `coordinatorCheckoutPolicy=PRESERVE_CURRENT_CHECKOUT`。`IMMEDIATE` 才允许创建；重复调用返回 `DO_NOT_REISSUE / WAIT_FOR_EXISTING_WORKTREE_SETUP`。开始后立即调用 `report_worktree_setup`，以后每 30 秒内上报阶段、摘要和百分比以续 120 秒 setup 租约；主仓按 `progressMonitor.recommendedPollSeconds=10` 查看全部项目。Claude 机械消费 `agentDispatch`，优先进入唯一现有 Delivery worktree，否则创建后进入，启动后台 coordinator 并返回 primary；Codex 创建后台 worktree 项目任务。Controller 不负责选择宿主 UI，也不直接调用 `git worktree add`、`switch` 或生成分支名。
+- 多项目 setup 为每个 `READ_WRITE` Git scope 返回一项 `projectWorktreeSetups`。各仓可以使用同名 feature 分支，因为 reservation 以 Git common directory 区分；同仓同分支只能由一个活动 Delivery 占用。coordinator scope 启动唯一后台 coordinator，secondary scope 的 `CONTINUE_EXISTING_WORKTREE_TASK` 只准备项目 worktree，不创建第二 coordinator。全部 scope 为 `READY` 前 `resume_execution_mode` 继续返回 setup，不创建 Graph Run。
 
 #### `worktreeProvenance` 与基线发现
 
@@ -375,7 +376,7 @@ preview 会先通过 `pendingInteraction.kind=DEVELOPMENT_BASELINE` 确认基线
 
 #### 宿主承接与分支命名
 
-- Codex 承接新 Delivery 时把 `hostOperation=CREATE_CODEX_PROJECT_TASK` 映射为新的项目任务并设置 `environment=worktree`，将 `hostDispatch.prompt` 原样作为首条任务指令；主任务不切换目录或分支。Codex 管理的 worktree 可能先处于 detached HEAD；此时 `workspace_status` 返回的 `worktreeSetup.nextAction` 为 `CREATE_DELIVERY_FEATURE_BRANCH`。取得 Git 分支写授权并创建本 Delivery 的本地 feature 分支后，重新调用 `workspace_status`，直到获得 `suggestedGitBinding` 才继续。
+- Codex 承接新 Delivery 时把 `hostOperation=CREATE_CODEX_PROJECT_TASK` 映射为新的项目任务并设置 `environment=worktree`，将 `hostDispatch.prompt` 原样作为首条任务指令；主任务不切换目录或分支。宿主必须使用 dispatch 的精确 `branchRef/gitBinding`。Codex 管理的 worktree 若先处于 detached HEAD，则按 `CREATE_DELIVERY_FEATURE_BRANCH` 创建冻结分支；若宿主已生成另一 feature 分支，干净时按 `FROZEN_DELIVERY_BRANCH_REQUIRED` 恢复冻结分支，存在改动时以 `FROZEN_DELIVERY_BRANCH_DIRTY` 停止并审查，不能直接切换。完成创建或恢复后，重新调用 `workspace_status` 让 Controller 验证精确分支与基线。
 - Claude Code 从项目目录启动时保持 primary checkout 作为控制/监控根，主 checkout 保持 `main` 或 `master`。宿主创建或复用 Delivery linked worktree，并在同一顶层会话内启动后台 coordinator；`${CLAUDE_PROJECT_DIR}` 不漂移，执行 cwd 由 Hook 一次性证明。禁止要求用户启动第二个顶层 Claude 会话。
 - feature 分支名称由宿主或用户已有分支策略决定；Delivery Graph 不生成 `feature/m_lf_` 等固定前缀，只冻结实际 checkout 的本地分支名。
 
@@ -395,7 +396,7 @@ preview 会先通过 `pendingInteraction.kind=DEVELOPMENT_BASELINE` 确认基线
 
 #### 异步排队与停止条件
 
-- 宿主创建独立 worktree 任务是异步操作时，只返回 `clientThreadId`/排队标识代表 `WORKTREE_SETUP_QUEUED`，不代表已有可跟踪 `threadId`，更不代表 Delivery 已 prepare、freeze 或运行。按 `hostDispatch.idempotencyKey` 对同一 Delivery 和 fingerprint 只发起一次；排队期间不重试创建。宿主返回真实 `threadId` 后才可跟踪任务并继续 prepare/freeze。
+- 宿主创建独立 worktree 任务是异步操作时，只返回 `clientThreadId`/排队标识代表 `WORKTREE_SETUP_QUEUED`，不代表已有可跟踪 `threadId`，更不代表 Delivery 已 prepare、freeze 或运行。Controller 已持久化 setup reservation；按 `hostDispatch.idempotencyKey` 对同一项目和 fingerprint 只发起一次。排队接受后也立即报告 `STARTED`，随后持续 heartbeat；排队期间不重试创建，`DO_NOT_REISSUE` 和有效租约期间也不重试。`WORKTREE_SETUP_LEASE_EXPIRED` / `WORKTREE_SETUP_FAILED` 都必须先确认旧创建者已停止并安全核对残留路径，再用唯一 `retry_request_id` 的 `RETRY_CONFIRMED` 申请唯一新 attempt；响应未知时只用同一 ID 恢复，不得直接重放原 dispatch。宿主返回真实 `threadId` 后才可跟踪任务并继续 prepare/freeze。
 - Git worktree 缺少 `gitBinding`、当前分支不匹配、HEAD 不继承 `baseCommit`，或本地/`origin` 同名主线均不再包含该基线时，`prepare_hierarchy` / 运行工具必须停止。控制器不代替宿主运行 `git worktree add`、`switch`、`commit`、`merge` 或 `push`。
 
 ### 跨本地仓库的同一 Delivery

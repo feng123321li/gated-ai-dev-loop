@@ -887,6 +887,18 @@ def _git_common_directory(workspace: Path) -> Path | None:
     return common.resolve(strict=True)
 
 
+def git_repository_identity(workspace_root: str) -> str | None:
+    """Return a stable local identity shared by all worktrees of one repo."""
+
+    workspace = Path(workspace_root).absolute().resolve(strict=True)
+    common = _git_common_directory(workspace)
+    if common is None:
+        return None
+    return fingerprint(
+        {"gitCommonDirectory": os.path.normcase(str(common))}
+    )
+
+
 def _branch_worktrees(
     repository_workspace: Path,
     branch_ref: str,
@@ -1066,6 +1078,7 @@ def verify_delivery_project_scopes(
 __all__ = (
     "enumerate_local_feature_branches",
     "find_delivery_linked_worktree",
+    "git_repository_identity",
     "inspect_delivery_git_workspace",
     "inspect_frozen_git_workspace_provenance",
     "resolve_branch_binding",

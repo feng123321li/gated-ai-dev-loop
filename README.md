@@ -4,7 +4,7 @@
 
 `delivery-graph` 把已经确认的软件需求冻结为可执行、可审查、可恢复的 Delivery Graph，再协调宿主原生 Agent 完成实现、分层 Review 和最终验收。
 
-当前版本：**0.37.0** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
+当前版本：**0.37.2** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
 
 ## 它做什么
 
@@ -65,6 +65,8 @@ Delivery
 
 自动模式不会让 Controller 创建分支或切换 worktree；这些动作由 Codex 或 Claude Code 的宿主能力完成。手动模式不会绕过 Review，也不会把 Review 降级为手动 claim。
 
+自动选择会按 Git repository identity 和 `branchRef` 原子预留 worktree setup。同一 Delivery 的重复请求只恢复既有 setup，不会再次派发同一路径创建；不同 Delivery 不能预留同仓同分支。宿主通过 `report_worktree_setup` 上报创建阶段、百分比和心跳；超时或失败后先核对旧进程与半成品，再由 Controller 原子授予唯一重试。`hostDispatch` 始终携带精确 `gitBinding`，宿主生成了其他分支时先恢复冻结分支，错误分支已有改动则停止并审查。多项目 Delivery 会为全部 `READ_WRITE` Git scope 返回 `projectWorktreeSetups`；所有项目仍由一个后台 coordinator 管理并向同一控制面报告进度。
+
 ## 交互与 Git 基线
 
 准备完成后，Controller 通过一个 `pendingInteraction` 依次解决两件事：
@@ -79,13 +81,14 @@ Delivery
 - 工作树已有业务改动时，用户必须确认这些改动属于本 Delivery，并回传精确状态指纹。
 - 手动 handoff 启动前若 Git 基线漂移，启动会先被阻断；重新确认后恢复原 Revision，或在 binding 变化时生成下一不可变 Revision。
 - 一个 Delivery 可以覆盖多个本地 Git 项目，但每个 Git project scope 都必须提供完整 binding；缺失时提前 fail closed，不从顶层偏好猜测其他仓库。
+- 分支占用按 Git common directory 区分；不同仓库可以使用同名 feature 分支，同一仓库不能被两个活动 Delivery 预留同一分支。
 - 多仓手动启动出现 Git 漂移时 fail closed；必须恢复冻结基线，或用完整多仓 bindings 显式创建下一 Revision。
 
 ## 状态与恢复
 
 `.layered-delivery/scheduler.db` 是需求和调度状态的机器权威，Markdown 文件只是人类可读投影。不要直接编辑数据库或控制面生成物。
 
-新会话从 `workspace_status` 恢复当前 Delivery，再读取 Graph frontier。活动 receiver 通过 heartbeat 和 lease 维持所有权；失联、租约过期或可重试失败由控制面在安全边界回收。需求发生变化时创建同一 Delivery 的下一 Revision，不覆写已经冻结的版本。
+新会话从 `workspace_status` 恢复当前 Delivery，再读取 Graph frontier。worktree setup 与活动 receiver 都有独立 heartbeat 和 lease；前者通过 `worktreeSetup.progressMonitor` 在主仓显示全部项目，后者通过 Graph `progressMonitor` 显示 TASK 与 Review。失联、租约过期或可重试失败只在各自安全边界恢复。需求发生变化时创建同一 Delivery 的下一 Revision，不覆写已经冻结的版本。
 
 ## 安装
 

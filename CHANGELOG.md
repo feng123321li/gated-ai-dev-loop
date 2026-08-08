@@ -4,6 +4,25 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.37.2 — 2026-08-08
+
+发布提交：以 tag `v0.37.2` 指向的提交为准
+
+- **worktree setup 实时监控**：新增 `report_worktree_setup` MCP 工具。宿主在创建目录、分支、linked worktree、checkout 和验证阶段上报有界摘要、百分比与心跳；`workspace_status.worktreeSetup.progressMonitor` 在单仓和多仓中统一返回项目行、健康状态和告警，主仓建议每 10 秒刷新。
+- **setup 租约与失败关闭**：每个 reservation/attempt 拥有 120 秒租约，按 30 秒间隔上报即可续租。超时进入 `WORKTREE_SETUP_LEASE_EXPIRED`，显式失败进入 `WORKTREE_SETUP_FAILED`；两种状态都阻止自动重发，避免旧宿主仍在运行时产生第二个创建者。
+- **安全重试闭环**：`RETRY_CONFIRMED` 必须同时确认旧创建进程已经停止、半成品目录/worktree 已安全核对；Controller 随后在 SQLite 事务中只授予一个新 attempt。并发重试只有一个获得 `IMMEDIATE`，其余以 `SCHEDULER_WORKTREE_SETUP_ATTEMPT_STALE` 拒绝。
+- **协议与验证**：MCP 工具数增至 30；新增 setup progress、心跳续租、过期阻断、失败阻断与并发 retry 回归覆盖。最终全量数量以候选提交的发布校验结果为准。
+
+## 0.37.1 — 2026-08-08（未单独发布）
+
+发布提交：未单独打 tag；本节能力合并随 `v0.37.2` 发布
+
+- **worktree 创建去重**：AUTOMATIC 选择在同一 SQLite 事务中为每个项目记录 worktree setup reservation。同一 Delivery/Revision 的并发或重复选择只有一个 `IMMEDIATE` 派发，其余返回 `DO_NOT_REISSUE / WAIT_FOR_EXISTING_WORKTREE_SETUP`，避免同一路径并发创建和半成品目录。
+- **仓库感知的分支排他**：reservation 以 Git common directory identity + `branchRef` 为键；同仓同分支跨 Delivery 原子拒绝为 `SCHEDULER_WORKTREE_BRANCH_RESERVED`，不同仓库仍可安全使用同名 feature 分支。显式 hierarchy binding 不再绕过排他检查。
+- **精确宿主分支恢复**：`hostDispatch` 新增 `branchRef`、完整 `gitBinding`、repository/project identity 和派发状态。宿主生成其他 feature 分支时，干净 worktree 返回 `FROZEN_DELIVERY_BRANCH_REQUIRED`；已有改动返回 `FROZEN_DELIVERY_BRANCH_DIRTY` 并 fail closed。
+- **多项目自动工作区**：每个 `READ_WRITE` Git scope 都进入 `projectWorktreeSetups`；全部项目 worktree 验证为 `READY` 后才允许 `resume_execution_mode` 创建 Graph Run。secondary scope 只准备 worktree，不启动第二 coordinator；所有项目继续向同一控制根报告进度。
+- **验证**：新增 7 项 worktree setup 回归测试，覆盖真实并发重复选择、显式同分支冲突、不同仓同名分支、宿主错分支 clean/dirty 双分支，以及多项目完整恢复。最终全量数量以候选提交的发布校验结果为准。
+
 ## 0.37.0 — 2026-08-08
 
 发布提交：以 tag `v0.37.0` 指向的提交为准

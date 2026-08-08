@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.36.0 — 2026-08-08
+
+发布提交：待定（特性分支 `feature/m_lf_release_0_36_0_development_baseline`，尚未合并发布）
+
+- feat（调度前置基线确认）：在确认开发方式（EXECUTION_MODE）之前新增控制器拥有的「开发基线」交互（`DEVELOPMENT_BASELINE`）。当工作树干净、且无已记忆基线、层级未带 `gitBinding` 时，`preview_hierarchy` 返回 `developmentBaseline`（仅枚举本地分支 + 「从主线创建新分支」）并暂不发 `executionChoice`；宿主经 `confirm_development_baseline` 记录该选择、只读计算 `gitBinding` 并将其冻结回层级，再返回 `executionChoice`。同一 Delivery 的后续 Revision 自动复用已记忆基线，不再重复询问；`prepare_delivery_revision`/`prepare_hierarchy` 在缺省 `gitBinding` 时自动注入。
+- fix（AUTOMATIC 基线默认 main）：修复 AUTOMATIC 默认从 mainline（origin/HEAD→main→master）建 worktree、导致 feature 分支上的目标代码缺失、Loop 无法执行的问题。
+- 工具与存储：新增 `confirm_development_baseline` MCP 工具（MCP 工具数 28→29）与 `delivery_preferences` 表（`root_id`、`branch_ref`、`base_ref`、`base_commit`、`integration_target`、`source`、`chosen_by`、`chosen_at`）。Controller 不执行任何 Git 写操作，分支/worktree 仍由宿主创建。
+- 边界：手动交接（`start_manual_handoff`）在 git 漂移时阻断并要求重新确认基线的能力留待后续版本（Phase 2）。
+- 验证：Python 标准库全量测试、`compileall`、Skill/Plugin 镜像重建与 `git diff --exit-code`、`validate_release`（工具数 29、版本 0.36.0）。
+
 ## 0.35.0 — 2026-08-07
 
 发布提交：`df7314b`

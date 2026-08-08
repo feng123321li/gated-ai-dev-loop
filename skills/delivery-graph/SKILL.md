@@ -1,6 +1,6 @@
 ---
 name: delivery-graph
-description: "把已确认的软件需求建模为分层 Delivery Graph，并驱动 Git 基线确认、冻结、自动 Agent 派遣或手动 CLI 交接、TASK/GROUP/Delivery Review、最终验收与恢复。用于规划或修订多项目、多模块交付，选择自动/手动执行，接续既有 Delivery，或处理暂停、失联、容量等待、Git 漂移和 REPLAN_REQUIRED。"
+description: "把已确认的软件需求建模为分层 Delivery Graph，并驱动 Git 基线确认、冻结、自动 Agent 派遣或手动 CLI 交接、TASK/GROUP/Delivery Review、最终验收、归档与恢复。用于规划或修订多项目、多模块交付，选择自动/手动执行，接续既有 Delivery，或处理暂停、失联、容量等待、Git 漂移和 REPLAN_REQUIRED。"
 allowed-tools:
   - mcp__plugin_delivery-graph_delivery-graph__*
 ---
@@ -38,7 +38,8 @@ allowed-tools:
 | `HANDOFF_READY` | 在实际工作区调用 `start_manual_handoff`；Graph 启动前不得开发 |
 | `PREPARED` | 续接当前方案；需求未变时不要重复 prepare |
 | `ACTIVE` / `BLOCKED` / `PAUSED` | 读取[执行说明](references/execution-quickstart.md)，从 `graph_frontier` 恢复 |
-| `COMPLETED` | 报告终态；新目标创建新 Delivery |
+| `COMPLETED` | 报告终态；仅在用户明确要求后调用 `archive_delivery`，新目标创建新 Delivery |
+| `ARCHIVED` | 已从默认工作区发现中隐藏；历史和详情投影仍按 `rootId` 可查 |
 | `CANCELLED` | 报告终态；仅在用户明确续接同一未验收需求时创建 Revision |
 
 遇到未知写响应、MCP 重连、Git binding 异常或投影问题时，先读取[MCP 与状态说明](references/mcp-transport.md)，不要盲目重放写操作。

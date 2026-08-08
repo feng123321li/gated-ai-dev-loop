@@ -6,6 +6,17 @@ from pathlib import Path
 import sys
 
 
+SENSITIVE_ADMINISTRATIVE_TOOLS = frozenset(
+    {
+        "archive_delivery",
+        "cancel_graph_run",
+        "rebuild_graph_run",
+        "refreeze_task_requirement",
+        "unfreeze_task_requirement",
+    }
+)
+
+
 def _runtime_path() -> Path:
     return (
         Path(__file__).resolve().parents[1]
@@ -49,12 +60,7 @@ def main() -> int:
     # while the user is still approving; they resolve via the control root.
     if (
         tool_name.rsplit("__", 1)[-1]
-        in {
-            "rebuild_graph_run",
-            "cancel_graph_run",
-            "unfreeze_task_requirement",
-            "refreeze_task_requirement",
-        }
+        in SENSITIVE_ADMINISTRATIVE_TOOLS
     ):
         return 0
 

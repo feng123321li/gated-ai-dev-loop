@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr
 from copy import deepcopy
+import io
 import inspect
 import json
 from pathlib import Path
@@ -8,9 +10,11 @@ import re
 import sqlite3
 import subprocess
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+from hdg import mcp_server
 from hdg.controller import (
     ControllerContext,
     LayeredDeliveryController,
@@ -45,7 +49,10 @@ from hdg.planning import (
     freeze_hierarchy,
     prepare_hierarchy,
 )
-from hdg.repository import SchedulerRepository
+from hdg.repository import (
+    SCHEDULER_STATE_CONTRACT,
+    SchedulerRepository,
+)
 
 from .test_loop_architecture import (
     group_hierarchy,
@@ -947,12 +954,20 @@ class McpSurfaceTests(unittest.TestCase):
         self.assertEqual(
             human,
             {
+                "archive_delivery",
                 "cancel_graph_run",
                 "refreeze_task_requirement",
                 "unfreeze_task_requirement",
             },
         )
         by_name = {tool["name"]: tool for tool in tools}
+        archive_tool = by_name["archive_delivery"]
+        self.assertEqual(
+            archive_tool["inputSchema"]["required"],
+            ["root_id"],
+        )
+        self.assertTrue(archive_tool["annotations"]["destructiveHint"])
+        self.assertTrue(archive_tool["annotations"]["idempotentHint"])
         progress_tool = by_name["report_loop_progress"]
         self.assertFalse(progress_tool["annotations"]["readOnlyHint"])
         self.assertEqual(
@@ -3887,17 +3902,18 @@ class McpSurfaceTests(unittest.TestCase):
         self,
     ) -> None:
         with TemporaryDirectory() as root:
-            prepared = prepare_hierarchy(
-                root=root,
-                hierarchy=task_hierarchy(),
-                now=at(0),
-            )
-            database = Path(root, ".layered-delivery", "scheduler.db")
+            control = Path(root, ".layered-delivery")
+            control.mkdir()
+            database = control / "scheduler.db"
             connection = sqlite3.connect(database)
             try:
                 connection.execute(
-                    "UPDATE scheduler_metadata SET value = ? "
-                    "WHERE key = 'state_contract'",
+                    "CREATE TABLE scheduler_metadata ("
+                    "key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO scheduler_metadata(key, value) "
+                    "VALUES ('state_contract', ?)",
                     ("schema-v3-incompatible-generator",),
                 )
                 connection.commit()
@@ -3905,7 +3921,21 @@ class McpSurfaceTests(unittest.TestCase):
                 connection.close()
 
             with self.assertRaises(GatedLoopError) as caught:
-                SchedulerRepository(root).hierarchy(prepared["rootId"])
+                SchedulerRepository(root).hierarchy("d-incompatible")
+
+            inspection = sqlite3.connect(database)
+            try:
+                tables = {
+                    row[0]
+                    for row in inspection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }
+                journal_mode = inspection.execute(
+                    "PRAGMA journal_mode"
+                ).fetchone()[0]
+            finally:
+                inspection.close()
 
         self.assertEqual(
             caught.exception.code,
@@ -3914,6 +3944,54 @@ class McpSurfaceTests(unittest.TestCase):
         self.assertEqual(
             caught.exception.details["actualStateContract"],
             "schema-v3-incompatible-generator",
+        )
+        self.assertEqual(tables, {"scheduler_metadata"})
+        self.assertEqual(journal_mode, "delete")
+
+    def test_new_scheduler_records_the_current_state_contract(self) -> None:
+        with TemporaryDirectory() as root:
+            prepare_hierarchy(root=root, hierarchy=task_hierarchy())
+            database = Path(root, ".layered-delivery", "scheduler.db")
+            connection = sqlite3.connect(database)
+            try:
+                row = connection.execute(
+                    "SELECT value FROM scheduler_metadata "
+                    "WHERE key = 'state_contract'"
+                ).fetchone()
+            finally:
+                connection.close()
+
+        self.assertEqual(row[0], SCHEDULER_STATE_CONTRACT)
+
+    def test_non_text_state_contract_is_rejected_as_unknown(self) -> None:
+        with TemporaryDirectory() as root:
+            control = Path(root, ".layered-delivery")
+            control.mkdir()
+            database = control / "scheduler.db"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    "CREATE TABLE scheduler_metadata ("
+                    "key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "INSERT INTO scheduler_metadata(key, value) "
+                    "VALUES ('state_contract', ?)",
+                    (sqlite3.Binary(b"untrusted-contract"),),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            with self.assertRaises(GatedLoopError) as caught:
+                SchedulerRepository(root).workspace_status()
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_STATE_CONTRACT_MISMATCH",
+        )
+        self.assertIsNone(
+            caught.exception.details["actualStateContract"],
         )
 
     def test_schema_valid_graph_tamper_is_rejected_before_mutation(
@@ -4197,6 +4275,154 @@ class McpSurfaceTests(unittest.TestCase):
             self.assertEqual(json.loads(rendered), structured)
             self.assertNotIn("resultType", response["result"])
 
+    def test_mcp_internal_error_is_correlated_without_leaking_details(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            connection = McpConnection(
+                project_root=ProjectRootBinding.from_startup(root)
+            )
+            stderr = io.StringIO()
+            failure = RuntimeError(
+                "token=raw-secret-value; 路径=G:\\Private Folder\\state.json"
+            )
+            leaky_frame = SimpleNamespace(
+                filename=r"G:\Private Folder\state.py",
+                name="raise_private_error",
+                lineno=42,
+            )
+            with (
+                patch(
+                    "hdg.mcp_adapter.call_tool",
+                    side_effect=failure,
+                ),
+                patch(
+                    "hdg.mcp_adapter.traceback.extract_tb",
+                    return_value=[leaky_frame],
+                ),
+                redirect_stderr(stderr),
+            ):
+                response = handle_message(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "private-request-id",
+                        "method": "tools/call",
+                        "params": {
+                            "name": "workspace_status",
+                            "arguments": {},
+                            "_meta": modern_meta(),
+                        },
+                    },
+                    connection=connection,
+                )
+
+        structured = response["result"]["structuredContent"]
+        error = structured["error"]
+        self.assertEqual(error["code"], "INTERNAL_ERROR")
+        self.assertEqual(error["message"], "Unexpected error")
+        self.assertEqual(set(error["details"]), {"diagnosticId"})
+        diagnostic_id = error["details"]["diagnosticId"]
+        self.assertRegex(diagnostic_id, r"^[0-9a-f]{32}$")
+
+        log_text = stderr.getvalue()
+        log_text.encode("ascii")
+        log_lines = log_text.splitlines()
+        self.assertEqual(len(log_lines), 1)
+        diagnostic = json.loads(log_lines[0])
+        self.assertEqual(
+            diagnostic,
+            {
+                "diagnosticId": diagnostic_id,
+                "event": "delivery_graph_internal_error",
+                "exceptionType": "RuntimeError",
+                "operation": "tool:workspace_status",
+                "stack": diagnostic["stack"],
+            },
+        )
+        self.assertEqual(
+            diagnostic["stack"],
+            [
+                {
+                    "file": "state.py",
+                    "function": "raise_private_error",
+                    "line": 42,
+                }
+            ],
+        )
+        for frame in diagnostic["stack"]:
+            self.assertEqual(set(frame), {"file", "function", "line"})
+            self.assertNotIn("/", frame["file"])
+            self.assertNotIn("\\", frame["file"])
+        for secret in (
+            "raw-secret-value",
+            "Private Folder",
+            "private-request-id",
+            str(Path(root).resolve()),
+        ):
+            self.assertNotIn(secret, log_text)
+
+    def test_mcp_internal_error_response_survives_diagnostic_log_failure(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            connection = McpConnection(
+                project_root=ProjectRootBinding.from_startup(root)
+            )
+            failing_stderr = Mock()
+            failing_stderr.write.side_effect = OSError("stderr unavailable")
+            with (
+                patch(
+                    "hdg.mcp_adapter.call_tool",
+                    side_effect=RuntimeError("private failure"),
+                ),
+                patch("hdg.mcp_adapter.sys.stderr", failing_stderr),
+            ):
+                response = handle_message(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "call",
+                        "method": "tools/call",
+                        "params": {
+                            "name": "workspace_status",
+                            "arguments": {},
+                            "_meta": modern_meta(),
+                        },
+                    },
+                    connection=connection,
+                )
+
+        error = response["result"]["structuredContent"]["error"]
+        self.assertEqual(error["code"], "INTERNAL_ERROR")
+        self.assertRegex(
+            error["details"]["diagnosticId"],
+            r"^[0-9a-f]{32}$",
+        )
+
+    def test_mcp_server_top_level_error_emits_correlated_diagnostic(
+        self,
+    ) -> None:
+        stderr = io.StringIO()
+        with (
+            patch("hdg.mcp_server._configure_utf8_stdio"),
+            patch(
+                "hdg.mcp_server.serve",
+                side_effect=RuntimeError("token=top-level-secret"),
+            ),
+            redirect_stderr(stderr),
+        ):
+            returncode = mcp_server.main([])
+
+        self.assertEqual(returncode, 1)
+        lines = stderr.getvalue().splitlines()
+        self.assertEqual(len(lines), 1)
+        diagnostic = json.loads(lines[0])
+        self.assertRegex(diagnostic["diagnosticId"], r"^[0-9a-f]{32}$")
+        self.assertEqual(
+            diagnostic["operation"],
+            "mcp_server",
+        )
+        self.assertNotIn("top-level-secret", stderr.getvalue())
+
     def test_mcp_supports_exactly_modern_and_claude_legacy_versions(
         self,
     ) -> None:
@@ -4258,7 +4484,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 30)
+            self.assertEqual(len(listed["result"]["tools"]), 31)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

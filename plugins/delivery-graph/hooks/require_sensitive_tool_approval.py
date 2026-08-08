@@ -14,6 +14,9 @@ SENSITIVE_TOOL_REASONS = {
     f"{MCP_PERMISSION_PREFIX}cancel_graph_run": (
         "取消当前 Graph 运行前需要用户明确确认。"
     ),
+    f"{MCP_PERMISSION_PREFIX}archive_delivery": (
+        "归档已完成的 Delivery 前需要用户明确确认。"
+    ),
     f"{MCP_PERMISSION_PREFIX}unfreeze_task_requirement": (
         "解冻尚未开始的 TASK 需求前需要用户明确确认。"
     ),

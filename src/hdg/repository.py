@@ -43,11 +43,15 @@ from .model_rendering import (
     render_workspace_overview,
 )
 from .progress_reporting import attach_progress_monitor
+from .storage_schema import (
+    SCHEDULER_STATE_CONTRACT,
+    initialize_scheduler_storage,
+    verify_scheduler_state_contract,
+)
 
 
 GOVERNANCE_DIRECTORY = ".layered-delivery"
 DATABASE_FILE = "scheduler.db"
-SCHEDULER_STATE_CONTRACT = "schema-v3-graph-compiler-v1"
 RECEIVER_ATTESTATION_SECONDS = 300
 HOST_WORKSPACE_ATTESTATION_SECONDS = 60
 WORKTREE_SETUP_HEARTBEAT_SECONDS = 30
@@ -223,6 +227,21 @@ def _validated_stored_definition(
     return normalized, graph
 
 
+def _event_material(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "eventUuid": row["event_uuid"],
+        "runId": row["run_id"],
+        "nodeId": row["node_id"],
+        "attempt": row["attempt"],
+        "eventType": row["event_type"],
+        "actor": row["actor"],
+        "operationId": row["operation_id"],
+        "payload": json.loads(row["payload_json"]),
+        "recordedAt": row["recorded_at"],
+        "previousHash": row["previous_hash"],
+    }
+
+
 def timestamp(now: object = None) -> str:
     value = now() if callable(now) else now
     if value is None:
@@ -355,11 +374,16 @@ class SchedulerRepository:
                 "Scheduler control root must not be a symbolic link",
             )
         self.control_root.mkdir(parents=True, exist_ok=True)
-        if self.database_path.exists():
+        database_exists = self.database_path.exists()
+        if self.database_path.is_symlink():
+            fail(
+                "SCHEDULER_PATH_INVALID",
+                "Scheduler database must not be a symbolic link",
+            )
+        if database_exists:
             database_stat = self.database_path.lstat()
             if (
-                self.database_path.is_symlink()
-                or not self.database_path.is_file()
+                not self.database_path.is_file()
                 or database_stat.st_nlink != 1
             ):
                 fail(
@@ -378,267 +402,15 @@ class SchedulerRepository:
         try:
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA foreign_keys = ON")
+            if database_exists:
+                verify_scheduler_state_contract(connection)
             connection.execute("PRAGMA journal_mode = WAL")
-            self._initialize(connection)
+            if not database_exists:
+                initialize_scheduler_storage(connection)
         except Exception:
             connection.close()
             raise
         return connection
-
-    @staticmethod
-    def _initialize(connection: sqlite3.Connection) -> None:
-        connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS hierarchies (
-                root_id TEXT PRIMARY KEY,
-                revision INTEGER NOT NULL DEFAULT 1,
-                hierarchy_fingerprint TEXT NOT NULL,
-                graph_fingerprint TEXT NOT NULL,
-                hierarchy_json TEXT NOT NULL,
-                graph_json TEXT NOT NULL,
-                status TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS scheduler_metadata (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS runs (
-                run_id TEXT PRIMARY KEY,
-                root_id TEXT NOT NULL,
-                revision INTEGER NOT NULL DEFAULT 1,
-                execution_mode TEXT NOT NULL DEFAULT 'active',
-                status TEXT NOT NULL,
-                started_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                completed_at TEXT,
-                cancelled_at TEXT,
-                superseded_at TEXT,
-                superseded_by_revision INTEGER,
-                host_capacity_key TEXT,
-                host_capacity_reset_at TEXT,
-                host_capacity_reported_at TEXT,
-                host_capacity_reason TEXT,
-                UNIQUE(root_id, revision),
-                FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
-            );
-            CREATE TABLE IF NOT EXISTS node_runs (
-                run_id TEXT NOT NULL,
-                node_id TEXT NOT NULL,
-                attempt INTEGER NOT NULL,
-                status TEXT NOT NULL,
-                owner TEXT,
-                operation_id TEXT,
-                claimed_at TEXT,
-                last_heartbeat_at TEXT,
-                lease_expires_at TEXT,
-                finished_at TEXT,
-                outcome_json TEXT,
-                failure_class TEXT,
-                PRIMARY KEY(run_id, node_id, attempt),
-                FOREIGN KEY(run_id) REFERENCES runs(run_id)
-            );
-            CREATE UNIQUE INDEX IF NOT EXISTS operation_ids_unique
-            ON node_runs(operation_id)
-            WHERE operation_id IS NOT NULL;
-            CREATE TABLE IF NOT EXISTS graph_events (
-                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                event_uuid TEXT NOT NULL UNIQUE,
-                run_id TEXT NOT NULL,
-                node_id TEXT,
-                attempt INTEGER,
-                event_type TEXT NOT NULL,
-                actor TEXT NOT NULL,
-                operation_id TEXT,
-                payload_json TEXT NOT NULL,
-                recorded_at TEXT NOT NULL,
-                previous_hash TEXT,
-                event_hash TEXT NOT NULL UNIQUE,
-                FOREIGN KEY(run_id) REFERENCES runs(run_id)
-            );
-            CREATE TABLE IF NOT EXISTS delivery_workspaces (
-                root_id TEXT PRIMARY KEY,
-                workspace_key TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
-            );
-            CREATE INDEX IF NOT EXISTS delivery_workspaces_by_key
-            ON delivery_workspaces(workspace_key);
-            CREATE TABLE IF NOT EXISTS task_requirement_states (
-                run_id TEXT NOT NULL,
-                task_id TEXT NOT NULL,
-                revision INTEGER NOT NULL,
-                status TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY(run_id, task_id),
-                FOREIGN KEY(run_id) REFERENCES runs(run_id)
-            );
-            CREATE TABLE IF NOT EXISTS delivery_revisions (
-                root_id TEXT NOT NULL,
-                revision INTEGER NOT NULL,
-                hierarchy_fingerprint TEXT NOT NULL,
-                graph_fingerprint TEXT NOT NULL,
-                hierarchy_json TEXT NOT NULL,
-                graph_json TEXT NOT NULL,
-                status TEXT NOT NULL,
-                reason TEXT,
-                continuity_basis TEXT,
-                requested_by TEXT,
-                confirmed_by TEXT,
-                authorized_project_ids_json TEXT,
-                execution_mode TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                frozen_at TEXT,
-                superseded_at TEXT,
-                PRIMARY KEY(root_id, revision),
-                FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
-            );
-            CREATE TABLE IF NOT EXISTS delivery_preferences (
-                root_id TEXT PRIMARY KEY,
-                branch_ref TEXT NOT NULL,
-                base_ref TEXT NOT NULL,
-                base_commit TEXT NOT NULL,
-                integration_target TEXT NOT NULL,
-                source TEXT NOT NULL,
-                chosen_by TEXT NOT NULL,
-                chosen_at TEXT NOT NULL,
-                FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
-            );
-            CREATE TABLE IF NOT EXISTS worktree_setup_reservations (
-                reservation_id TEXT PRIMARY KEY,
-                root_id TEXT NOT NULL,
-                revision INTEGER NOT NULL,
-                project_id TEXT NOT NULL,
-                repository_key TEXT NOT NULL,
-                repository_root TEXT NOT NULL,
-                branch_ref TEXT NOT NULL,
-                hierarchy_fingerprint TEXT NOT NULL,
-                idempotency_key TEXT NOT NULL UNIQUE,
-                status TEXT NOT NULL,
-                attempt INTEGER NOT NULL DEFAULT 1,
-                phase TEXT,
-                summary_zh TEXT,
-                progress_percent INTEGER,
-                issued_at TEXT NOT NULL,
-                last_reported_at TEXT,
-                lease_expires_at TEXT,
-                ready_at TEXT,
-                failure_code TEXT,
-                failure_message_zh TEXT,
-                reconciled_at TEXT,
-                last_retry_request_id TEXT,
-                UNIQUE(root_id, revision, project_id),
-                FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
-            );
-            CREATE UNIQUE INDEX IF NOT EXISTS
-            active_worktree_setup_by_repository_branch
-            ON worktree_setup_reservations(repository_key, branch_ref)
-            WHERE status IN (
-                'PENDING', 'IN_PROGRESS', 'READY', 'FAILED', 'EXPIRED'
-            );
-            CREATE TABLE IF NOT EXISTS dispatch_reservations (
-                reservation_id TEXT PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                root_id TEXT NOT NULL,
-                node_id TEXT NOT NULL,
-                attempt INTEGER NOT NULL,
-                agent_id TEXT,
-                graph_fingerprint TEXT NOT NULL,
-                decision_fingerprint TEXT NOT NULL,
-                status TEXT NOT NULL,
-                reserved_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                claimed_at TEXT,
-                operation_id TEXT,
-                FOREIGN KEY(run_id) REFERENCES runs(run_id)
-            );
-            CREATE UNIQUE INDEX IF NOT EXISTS
-            active_dispatch_reservation_by_node
-            ON dispatch_reservations(run_id, node_id, attempt)
-            WHERE status = 'RESERVED';
-            CREATE TABLE IF NOT EXISTS receiver_attestations (
-                attestation_id TEXT PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                root_id TEXT NOT NULL,
-                node_id TEXT NOT NULL,
-                attempt INTEGER NOT NULL,
-                receiver_context_id TEXT NOT NULL,
-                parent_context_id TEXT NOT NULL,
-                host_adapter_id TEXT NOT NULL,
-                reservation_id TEXT,
-                status TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                consumed_at TEXT,
-                operation_id TEXT,
-                FOREIGN KEY(run_id) REFERENCES runs(run_id)
-            );
-            CREATE INDEX IF NOT EXISTS receiver_attestations_by_node
-            ON receiver_attestations(run_id, node_id, attempt, status);
-            CREATE TABLE IF NOT EXISTS host_receiver_identities (
-                attestation_digest TEXT PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                root_id TEXT NOT NULL,
-                node_id TEXT NOT NULL,
-                attempt INTEGER NOT NULL,
-                reservation_id TEXT NOT NULL UNIQUE,
-                host_adapter_id TEXT NOT NULL,
-                agent_id TEXT NOT NULL,
-                receiver_context_id TEXT NOT NULL,
-                parent_context_id TEXT NOT NULL,
-                status TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                consumed_at TEXT,
-                operation_id TEXT,
-                FOREIGN KEY(run_id) REFERENCES runs(run_id)
-            );
-            CREATE INDEX IF NOT EXISTS host_receiver_identities_by_context
-            ON host_receiver_identities(
-                run_id, host_adapter_id, receiver_context_id, status
-            );
-            CREATE TABLE IF NOT EXISTS run_receiver_roots (
-                run_id TEXT PRIMARY KEY,
-                host_adapter_id TEXT NOT NULL,
-                orchestrator_context_id TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY(run_id) REFERENCES runs(run_id)
-            );
-            CREATE TABLE IF NOT EXISTS host_capacity_breakers (
-                capacity_key TEXT PRIMARY KEY,
-                host_adapter_id TEXT NOT NULL,
-                agent_id TEXT NOT NULL,
-                reset_at TEXT NOT NULL,
-                report_id TEXT NOT NULL UNIQUE,
-                status TEXT NOT NULL,
-                reported_at TEXT NOT NULL,
-                restored_at TEXT,
-                reason TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS host_workspace_attestations (
-                attestation_digest TEXT PRIMARY KEY,
-                host_adapter_id TEXT NOT NULL,
-                context_digest TEXT NOT NULL,
-                tool_name TEXT NOT NULL,
-                tool_use_digest TEXT NOT NULL,
-                workspace_root TEXT NOT NULL,
-                workspace_key TEXT NOT NULL,
-                status TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                consumed_at TEXT
-            );
-            CREATE INDEX IF NOT EXISTS host_workspace_attestations_active
-            ON host_workspace_attestations(
-                host_adapter_id, context_digest, status, expires_at
-            );
-            """
-        )
-        SchedulerRepository._verify_state_contract(connection)
-        SchedulerRepository._upgrade_revision_storage(connection)
 
     def issue_host_workspace_attestation(
         self,
@@ -762,404 +534,6 @@ class SchedulerRepository:
                 )
         return workspace
 
-    @staticmethod
-    def _verify_state_contract(connection: sqlite3.Connection) -> None:
-        """Reject writers using an incompatible scheduler state contract."""
-
-        row = connection.execute(
-            "SELECT value FROM scheduler_metadata WHERE key = ?",
-            ("state_contract",),
-        ).fetchone()
-        if row is None:
-            connection.execute(
-                "INSERT INTO scheduler_metadata(key, value) VALUES (?, ?)",
-                ("state_contract", SCHEDULER_STATE_CONTRACT),
-            )
-            return
-        if row["value"] != SCHEDULER_STATE_CONTRACT:
-            fail(
-                "SCHEDULER_STATE_CONTRACT_MISMATCH",
-                "Scheduler state was created by an incompatible graph "
-                "generator contract",
-                expectedStateContract=SCHEDULER_STATE_CONTRACT,
-                actualStateContract=row["value"],
-            )
-
-    @staticmethod
-    def _upgrade_revision_storage(
-        connection: sqlite3.Connection,
-    ) -> None:
-        """Upgrade internal SQLite storage without accepting old contracts."""
-
-        hierarchy_columns = {
-            row["name"]
-            for row in connection.execute(
-                "PRAGMA table_info(hierarchies)"
-            ).fetchall()
-        }
-        if "revision" not in hierarchy_columns:
-            connection.execute(
-                "ALTER TABLE hierarchies "
-                "ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"
-            )
-
-        run_columns = {
-            row["name"]
-            for row in connection.execute(
-                "PRAGMA table_info(runs)"
-            ).fetchall()
-        }
-        needs_run_rebuild = (
-            "revision" not in run_columns
-            or "superseded_at" not in run_columns
-            or "superseded_by_revision" not in run_columns
-        )
-        if needs_run_rebuild:
-            connection.execute("PRAGMA foreign_keys = OFF")
-            connection.executescript(
-                """
-                DROP INDEX IF EXISTS operation_ids_unique;
-                CREATE TABLE runs_revision_upgrade (
-                    run_id TEXT PRIMARY KEY,
-                    root_id TEXT NOT NULL,
-                    revision INTEGER NOT NULL DEFAULT 1,
-                    execution_mode TEXT NOT NULL DEFAULT 'active',
-                    status TEXT NOT NULL,
-                    started_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    completed_at TEXT,
-                    cancelled_at TEXT,
-                    superseded_at TEXT,
-                    superseded_by_revision INTEGER,
-                    host_capacity_key TEXT,
-                    host_capacity_reset_at TEXT,
-                    host_capacity_reported_at TEXT,
-                    host_capacity_reason TEXT,
-                    UNIQUE(root_id, revision),
-                    FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
-                );
-                INSERT INTO runs_revision_upgrade(
-                    run_id, root_id, revision, execution_mode, status,
-                    started_at,
-                    updated_at, completed_at, cancelled_at
-                )
-                SELECT run_id, root_id, 1, 'active', status, started_at,
-                       updated_at, completed_at, cancelled_at
-                FROM runs;
-
-                CREATE TABLE node_runs_revision_upgrade (
-                    run_id TEXT NOT NULL,
-                    node_id TEXT NOT NULL,
-                    attempt INTEGER NOT NULL,
-                    status TEXT NOT NULL,
-                    owner TEXT,
-                    operation_id TEXT,
-                    claimed_at TEXT,
-                    last_heartbeat_at TEXT,
-                    lease_expires_at TEXT,
-                    finished_at TEXT,
-                    outcome_json TEXT,
-                    failure_class TEXT,
-                    PRIMARY KEY(run_id, node_id, attempt),
-                    FOREIGN KEY(run_id)
-                        REFERENCES runs_revision_upgrade(run_id)
-                );
-                INSERT INTO node_runs_revision_upgrade
-                SELECT * FROM node_runs;
-
-                CREATE TABLE graph_events_revision_upgrade (
-                    event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    event_uuid TEXT NOT NULL UNIQUE,
-                    run_id TEXT NOT NULL,
-                    node_id TEXT,
-                    attempt INTEGER,
-                    event_type TEXT NOT NULL,
-                    actor TEXT NOT NULL,
-                    operation_id TEXT,
-                    payload_json TEXT NOT NULL,
-                    recorded_at TEXT NOT NULL,
-                    previous_hash TEXT,
-                    event_hash TEXT NOT NULL UNIQUE,
-                    FOREIGN KEY(run_id)
-                        REFERENCES runs_revision_upgrade(run_id)
-                );
-                INSERT INTO graph_events_revision_upgrade
-                SELECT * FROM graph_events;
-
-                CREATE TABLE task_requirement_states_revision_upgrade (
-                    run_id TEXT NOT NULL,
-                    task_id TEXT NOT NULL,
-                    revision INTEGER NOT NULL,
-                    status TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY(run_id, task_id),
-                    FOREIGN KEY(run_id)
-                        REFERENCES runs_revision_upgrade(run_id)
-                );
-                INSERT INTO task_requirement_states_revision_upgrade
-                SELECT * FROM task_requirement_states;
-
-                DROP TABLE graph_events;
-                DROP TABLE node_runs;
-                DROP TABLE task_requirement_states;
-                DROP TABLE runs;
-                ALTER TABLE runs_revision_upgrade RENAME TO runs;
-                ALTER TABLE node_runs_revision_upgrade
-                    RENAME TO node_runs;
-                ALTER TABLE graph_events_revision_upgrade
-                    RENAME TO graph_events;
-                ALTER TABLE task_requirement_states_revision_upgrade
-                    RENAME TO task_requirement_states;
-                CREATE UNIQUE INDEX operation_ids_unique
-                ON node_runs(operation_id)
-                WHERE operation_id IS NOT NULL;
-                """
-            )
-            connection.execute("PRAGMA foreign_keys = ON")
-
-        run_columns = {
-            row["name"]
-            for row in connection.execute(
-                "PRAGMA table_info(runs)"
-            ).fetchall()
-        }
-        if "execution_mode" not in run_columns:
-            connection.execute(
-                "ALTER TABLE runs ADD COLUMN execution_mode TEXT "
-                "NOT NULL DEFAULT 'active'"
-            )
-        run_columns = {
-            row["name"]
-            for row in connection.execute(
-                "PRAGMA table_info(runs)"
-            ).fetchall()
-        }
-        for column_name in (
-            "host_capacity_key",
-            "host_capacity_reset_at",
-            "host_capacity_reported_at",
-            "host_capacity_reason",
-        ):
-            if column_name not in run_columns:
-                connection.execute(
-                    f"ALTER TABLE runs ADD COLUMN {column_name} TEXT"
-                )
-
-        connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS delivery_revisions (
-                root_id TEXT NOT NULL,
-                revision INTEGER NOT NULL,
-                hierarchy_fingerprint TEXT NOT NULL,
-                graph_fingerprint TEXT NOT NULL,
-                hierarchy_json TEXT NOT NULL,
-                graph_json TEXT NOT NULL,
-                status TEXT NOT NULL,
-                reason TEXT,
-                continuity_basis TEXT,
-                requested_by TEXT,
-                confirmed_by TEXT,
-                authorized_project_ids_json TEXT,
-                execution_mode TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                frozen_at TEXT,
-                superseded_at TEXT,
-                PRIMARY KEY(root_id, revision),
-                FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
-            );
-            INSERT OR IGNORE INTO delivery_revisions(
-                root_id, revision, hierarchy_fingerprint,
-                graph_fingerprint, hierarchy_json, graph_json, status,
-                created_at, updated_at, frozen_at
-            )
-            SELECT root_id, revision, hierarchy_fingerprint,
-                   graph_fingerprint, hierarchy_json, graph_json, status,
-                   created_at, updated_at,
-                   CASE WHEN status = 'FROZEN' THEN updated_at ELSE NULL END
-            FROM hierarchies;
-            CREATE TABLE IF NOT EXISTS delivery_preferences (
-                root_id TEXT PRIMARY KEY,
-                branch_ref TEXT NOT NULL,
-                base_ref TEXT NOT NULL,
-                base_commit TEXT NOT NULL,
-                integration_target TEXT NOT NULL,
-                source TEXT NOT NULL,
-                chosen_by TEXT NOT NULL,
-                chosen_at TEXT NOT NULL,
-                FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
-            );
-            """
-        )
-        delivery_revision_columns = {
-            row["name"]
-            for row in connection.execute(
-                "PRAGMA table_info(delivery_revisions)"
-            ).fetchall()
-        }
-        if "execution_mode" not in delivery_revision_columns:
-            connection.execute(
-                "ALTER TABLE delivery_revisions "
-                "ADD COLUMN execution_mode TEXT"
-            )
-        if "continuity_basis" not in delivery_revision_columns:
-            connection.execute(
-                "ALTER TABLE delivery_revisions "
-                "ADD COLUMN continuity_basis TEXT"
-            )
-        dispatch_reservation_columns = {
-            row["name"]
-            for row in connection.execute(
-                "PRAGMA table_info(dispatch_reservations)"
-            ).fetchall()
-        }
-        if "agent_id" not in dispatch_reservation_columns:
-            connection.execute(
-                "ALTER TABLE dispatch_reservations ADD COLUMN agent_id TEXT"
-            )
-        for obsolete_column in ("model_id", "reasoning_class"):
-            if obsolete_column in dispatch_reservation_columns:
-                connection.execute(
-                    "ALTER TABLE dispatch_reservations "
-                    f"DROP COLUMN {obsolete_column}"
-                )
-        connection.execute(
-            "UPDATE delivery_revisions SET execution_mode = "
-            "COALESCE(execution_mode, ("
-            "SELECT r.execution_mode FROM runs r "
-            "WHERE r.root_id = delivery_revisions.root_id "
-            "AND r.revision = delivery_revisions.revision"
-            ")) WHERE status != 'PREPARED'"
-        )
-        connection.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS receiver_attestations (
-                attestation_id TEXT PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                root_id TEXT NOT NULL,
-                node_id TEXT NOT NULL,
-                attempt INTEGER NOT NULL,
-                receiver_context_id TEXT NOT NULL,
-                parent_context_id TEXT NOT NULL,
-                host_adapter_id TEXT NOT NULL,
-                reservation_id TEXT,
-                status TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT,
-                consumed_at TEXT,
-                operation_id TEXT,
-                FOREIGN KEY(run_id) REFERENCES runs(run_id)
-            );
-            CREATE INDEX IF NOT EXISTS receiver_attestations_by_node
-            ON receiver_attestations(run_id, node_id, attempt, status);
-            CREATE TABLE IF NOT EXISTS host_receiver_identities (
-                attestation_digest TEXT PRIMARY KEY,
-                run_id TEXT NOT NULL,
-                root_id TEXT NOT NULL,
-                node_id TEXT NOT NULL,
-                attempt INTEGER NOT NULL,
-                reservation_id TEXT NOT NULL UNIQUE,
-                host_adapter_id TEXT NOT NULL,
-                agent_id TEXT NOT NULL,
-                receiver_context_id TEXT NOT NULL,
-                parent_context_id TEXT NOT NULL,
-                status TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                consumed_at TEXT,
-                operation_id TEXT,
-                FOREIGN KEY(run_id) REFERENCES runs(run_id)
-            );
-            CREATE INDEX IF NOT EXISTS host_receiver_identities_by_context
-            ON host_receiver_identities(
-                run_id, host_adapter_id, receiver_context_id, status
-            );
-            CREATE TABLE IF NOT EXISTS run_receiver_roots (
-                run_id TEXT PRIMARY KEY,
-                host_adapter_id TEXT NOT NULL,
-                orchestrator_context_id TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY(run_id) REFERENCES runs(run_id)
-            );
-            CREATE TABLE IF NOT EXISTS host_capacity_breakers (
-                capacity_key TEXT PRIMARY KEY,
-                host_adapter_id TEXT NOT NULL,
-                agent_id TEXT NOT NULL,
-                reset_at TEXT NOT NULL,
-                report_id TEXT NOT NULL UNIQUE,
-                status TEXT NOT NULL,
-                reported_at TEXT NOT NULL,
-                restored_at TEXT,
-                reason TEXT NOT NULL
-            );
-            """
-        )
-        receiver_attestation_columns = {
-            row["name"]
-            for row in connection.execute(
-                "PRAGMA table_info(receiver_attestations)"
-            ).fetchall()
-        }
-        if "expires_at" not in receiver_attestation_columns:
-            connection.execute(
-                "ALTER TABLE receiver_attestations ADD COLUMN expires_at TEXT"
-            )
-        host_receiver_identity_columns = {
-            row["name"]
-            for row in connection.execute(
-                "PRAGMA table_info(host_receiver_identities)"
-            ).fetchall()
-        }
-        if "model_id" in host_receiver_identity_columns:
-            connection.execute(
-                "ALTER TABLE host_receiver_identities DROP COLUMN model_id"
-            )
-        worktree_setup_columns = {
-            row["name"]
-            for row in connection.execute(
-                "PRAGMA table_info(worktree_setup_reservations)"
-            ).fetchall()
-        }
-        worktree_setup_additions = {
-            "attempt": "INTEGER NOT NULL DEFAULT 1",
-            "phase": "TEXT",
-            "summary_zh": "TEXT",
-            "progress_percent": "INTEGER",
-            "last_reported_at": "TEXT",
-            "lease_expires_at": "TEXT",
-            "failure_code": "TEXT",
-            "failure_message_zh": "TEXT",
-            "reconciled_at": "TEXT",
-            "last_retry_request_id": "TEXT",
-        }
-        for column_name, declaration in worktree_setup_additions.items():
-            if column_name not in worktree_setup_columns:
-                connection.execute(
-                    "ALTER TABLE worktree_setup_reservations ADD COLUMN "
-                    f"{column_name} {declaration}"
-                )
-        connection.execute(
-            "DROP INDEX IF EXISTS "
-            "active_worktree_setup_by_repository_branch"
-        )
-        connection.execute(
-            "CREATE UNIQUE INDEX "
-            "active_worktree_setup_by_repository_branch ON "
-            "worktree_setup_reservations(repository_key, branch_ref) "
-            "WHERE status IN ('PENDING', 'IN_PROGRESS', 'READY', "
-            "'FAILED', 'EXPIRED')"
-        )
-        connection.execute(
-            "UPDATE worktree_setup_reservations SET status = 'EXPIRED', "
-            "phase = COALESCE(phase, 'LEASE_EXPIRED'), "
-            "summary_zh = COALESCE(summary_zh, "
-            "'升级后需要核对既有 worktree 创建尝试'), "
-            "last_reported_at = COALESCE(last_reported_at, issued_at) "
-            "WHERE status IN ('PENDING', 'IN_PROGRESS') "
-            "AND lease_expires_at IS NULL"
-        )
-        connection.commit()
-
     @contextmanager
     def scheduler_lock(self) -> Iterator[None]:
         """Hold the controller lock across a multi-read/write operation."""
@@ -1239,6 +613,17 @@ class SchedulerRepository:
                 != requirement_key
             ):
                 continue
+            if row["status"] == "ARCHIVED":
+                fail(
+                    "SCHEDULER_DELIVERY_REQUIREMENT_CONFLICT",
+                    "The external requirement belongs to a completed, "
+                    "archived Delivery; a new Delivery requires a new "
+                    "external requirement identity",
+                    requirementKey=requirement_key,
+                    existingRootId=row["root_id"],
+                    requestedRootId=requested_root_id,
+                    nextAction="CREATE_NEW_REQUIREMENT_AND_DELIVERY",
+                )
             fail(
                 "SCHEDULER_DELIVERY_REQUIREMENT_CONFLICT",
                 "The external requirement already belongs to another "
@@ -1360,7 +745,11 @@ class SchedulerRepository:
                 if workspace_root is not None
                 else None
             )
-            candidates = rows
+            candidates = (
+                [row for row in rows if row["status"] != "ARCHIVED"]
+                if root_id is None
+                else rows
+            )
             if root_id is not None:
                 candidates = [
                     row for row in candidates if row["root_id"] == root_id
@@ -1417,9 +806,26 @@ class SchedulerRepository:
                 "WHERE root_id = ? AND revision = ?",
                 (latest["root_id"], latest["revision"]),
             ).fetchone()
+            if latest["status"] == "ARCHIVED":
+                revision = connection.execute(
+                    "SELECT status FROM delivery_revisions "
+                    "WHERE root_id = ? AND revision = ?",
+                    (latest["root_id"], latest["revision"]),
+                ).fetchone()
+                if (
+                    run is None
+                    or run["status"] != "COMPLETED"
+                    or revision is None
+                    or revision["status"] != "ARCHIVED"
+                ):
+                    fail(
+                        "SCHEDULER_STATE_INVALID",
+                        "Archived Delivery state is inconsistent",
+                        rootId=latest["root_id"],
+                    )
         state = (
             latest["status"]
-            if latest["status"] == "PREPARED"
+            if latest["status"] in {"ARCHIVED", "PREPARED"}
             else (
                 run["status"]
                 if run is not None
@@ -1473,6 +879,10 @@ class SchedulerRepository:
         }
         if run is not None:
             result["executionMode"] = run["execution_mode"]
+        if state == "ARCHIVED":
+            result["archivedAt"] = latest["updated_at"]
+            result["runStatus"] = run["status"]
+            result["nextAction"] = "START_NEW_DELIVERY"
         if workspace_root is not None:
             if state == "CHOICE_READY":
                 result["workspaceIsolation"] = {
@@ -1558,9 +968,13 @@ class SchedulerRepository:
                     (row["root_id"], row["revision"]),
                 ).fetchone()
                 status = (
-                    run["status"]
-                    if run is not None
-                    else row["status"]
+                    "ARCHIVED"
+                    if row["status"] == "ARCHIVED"
+                    else (
+                        run["status"]
+                        if run is not None
+                        else row["status"]
+                    )
                 )
                 usage.append(
                     {"rootId": row["root_id"], "status": status}
@@ -1710,6 +1124,12 @@ class SchedulerRepository:
                 status = "CHOICE_READY"
             else:
                 _validated_stored_definition(existing)
+                if existing["status"] == "ARCHIVED":
+                    fail(
+                        "SCHEDULER_DELIVERY_ARCHIVED",
+                        "An archived Delivery cannot be previewed again",
+                        rootId=root_id,
+                    )
                 content_matches = (
                     existing["hierarchy_fingerprint"]
                     == hierarchy_fingerprint
@@ -2354,6 +1774,12 @@ class SchedulerRepository:
             ).fetchone()
             if existing is not None:
                 _validated_stored_definition(existing)
+                if existing["status"] == "ARCHIVED":
+                    fail(
+                        "SCHEDULER_DELIVERY_ARCHIVED",
+                        "An archived Delivery cannot become a manual handoff",
+                        rootId=root_id,
+                    )
                 content_changed = (
                     existing["hierarchy_fingerprint"]
                     != hierarchy_fingerprint
@@ -2940,6 +2366,12 @@ class SchedulerRepository:
                     "SCHEDULER_HIERARCHY_MISSING",
                     f"Scheduler hierarchy is missing: {root_id}",
                 )
+            if row["status"] == "ARCHIVED":
+                fail(
+                    "SCHEDULER_DELIVERY_ARCHIVED",
+                    "An archived Delivery cannot be revised",
+                    rootId=root_id,
+                )
             binding = connection.execute(
                 "SELECT workspace_key FROM delivery_workspaces "
                 "WHERE root_id = ?",
@@ -3172,6 +2604,12 @@ class SchedulerRepository:
                     "SCHEDULER_HIERARCHY_MISSING",
                     f"Scheduler hierarchy is missing: {root_id}",
                 )
+            if row["status"] == "ARCHIVED":
+                fail(
+                    "SCHEDULER_DELIVERY_ARCHIVED",
+                    "An archived Delivery cannot be frozen again",
+                    rootId=root_id,
+                )
             if (
                 not isinstance(expected_delivery_revision, int)
                 or isinstance(expected_delivery_revision, bool)
@@ -3296,7 +2734,7 @@ class SchedulerRepository:
                 row["status"] == "FROZEN"
                 and row["revision"] == expected_delivery_revision
             ):
-                return self.run(root_id)
+                return self._run_from_connection(connection, root_id)
             at = _commit_timestamp(
                 self.now,
                 max(row["updated_at"], revision_row["updated_at"]),
@@ -3568,45 +3006,45 @@ class SchedulerRepository:
         result["carriedForwardTaskIds"] = carried_forward
         return result
 
-    def run(
+    def _run_from_connection(
         self,
+        connection: sqlite3.Connection,
         root_id: str,
     ) -> dict[str, Any]:
-        with self.read() as connection:
-            hierarchy_row = connection.execute(
-                "SELECT * FROM hierarchies WHERE root_id = ?",
-                (root_id,),
-            ).fetchone()
-            if hierarchy_row is None:
-                fail(
-                    "SCHEDULER_HIERARCHY_MISSING",
-                    f"Scheduler hierarchy is missing: {root_id}",
-                )
-            row = connection.execute(
-                "SELECT * FROM runs WHERE root_id = ? AND revision = ?",
-                (root_id, hierarchy_row["revision"]),
-            ).fetchone()
-            if row is None:
-                fail(
-                    "SCHEDULER_RUN_MISSING",
-                    f"Scheduler run is missing: {root_id}",
-                )
-            nodes = self.latest_nodes(connection, row["run_id"])
-            task_requirements = self.task_requirement_states(
-                connection,
-                row["run_id"],
+        hierarchy_row = connection.execute(
+            "SELECT * FROM hierarchies WHERE root_id = ?",
+            (root_id,),
+        ).fetchone()
+        if hierarchy_row is None:
+            fail(
+                "SCHEDULER_HIERARCHY_MISSING",
+                f"Scheduler hierarchy is missing: {root_id}",
             )
-            workspace = connection.execute(
-                "SELECT workspace_key FROM delivery_workspaces "
-                "WHERE root_id = ?",
-                (root_id,),
-            ).fetchone()
-            if workspace is None:
-                fail(
-                    "SCHEDULER_DELIVERY_WORKSPACE_MISSING",
-                    f"Delivery workspace binding is missing: {root_id}",
-                )
-            hierarchy, _ = _validated_stored_definition(hierarchy_row)
+        row = connection.execute(
+            "SELECT * FROM runs WHERE root_id = ? AND revision = ?",
+            (root_id, hierarchy_row["revision"]),
+        ).fetchone()
+        if row is None:
+            fail(
+                "SCHEDULER_RUN_MISSING",
+                f"Scheduler run is missing: {root_id}",
+            )
+        nodes = self.latest_nodes(connection, row["run_id"])
+        task_requirements = self.task_requirement_states(
+            connection,
+            row["run_id"],
+        )
+        workspace = connection.execute(
+            "SELECT workspace_key FROM delivery_workspaces "
+            "WHERE root_id = ?",
+            (root_id,),
+        ).fetchone()
+        if workspace is None:
+            fail(
+                "SCHEDULER_DELIVERY_WORKSPACE_MISSING",
+                f"Delivery workspace binding is missing: {root_id}",
+            )
+        hierarchy, _ = _validated_stored_definition(hierarchy_row)
         result = {
             "runId": row["run_id"],
             "rootId": row["root_id"],
@@ -3644,6 +3082,13 @@ class SchedulerRepository:
             [],
         )
         return result
+
+    def run(
+        self,
+        root_id: str,
+    ) -> dict[str, Any]:
+        with self.read() as connection:
+            return self._run_from_connection(connection, root_id)
 
     def revision_history(self, root_id: str) -> dict[str, Any]:
         with self.read() as connection:
@@ -4883,27 +4328,30 @@ class SchedulerRepository:
                     "SCHEDULER_RUN_MISSING",
                     f"Scheduler run is missing: {root_id}",
                 )
-            all_rows = connection.execute(
+            anchor = None
+            if after_event_id > 0:
+                anchor = connection.execute(
+                    "SELECT * FROM graph_events WHERE run_id = ? "
+                    "AND event_id <= ? ORDER BY event_id DESC LIMIT 1",
+                    (run["run_id"], after_event_id),
+                ).fetchone()
+            rows = connection.execute(
                 "SELECT * FROM graph_events WHERE run_id = ? "
-                "ORDER BY event_id",
-                (run["run_id"],),
+                "AND event_id > ? ORDER BY event_id LIMIT ?",
+                (run["run_id"], after_event_id, limit),
             ).fetchall()
         previous_hash: str | None = None
+        if anchor is not None:
+            anchor_material = _event_material(anchor)
+            if fingerprint(anchor_material) != anchor["event_hash"]:
+                fail(
+                    "SCHEDULER_EVENT_CHAIN_INVALID",
+                    "Stored scheduler event chain changed",
+                )
+            previous_hash = anchor["event_hash"]
         result: list[dict[str, Any]] = []
-        for row in all_rows:
-            payload = json.loads(row["payload_json"])
-            material = {
-                "eventUuid": row["event_uuid"],
-                "runId": row["run_id"],
-                "nodeId": row["node_id"],
-                "attempt": row["attempt"],
-                "eventType": row["event_type"],
-                "actor": row["actor"],
-                "operationId": row["operation_id"],
-                "payload": payload,
-                "recordedAt": row["recorded_at"],
-                "previousHash": row["previous_hash"],
-            }
+        for row in rows:
+            material = _event_material(row)
             if (
                 row["previous_hash"] != previous_hash
                 or fingerprint(material) != row["event_hash"]
@@ -4913,8 +4361,6 @@ class SchedulerRepository:
                     "Stored scheduler event chain changed",
                 )
             previous_hash = row["event_hash"]
-            if row["event_id"] <= after_event_id:
-                continue
             result.append(
                 {
                     "eventId": row["event_id"],
@@ -4922,8 +4368,6 @@ class SchedulerRepository:
                     "eventHash": row["event_hash"],
                 }
             )
-            if len(result) == limit:
-                break
         return result
 
     def refresh_ready(
@@ -5184,11 +4628,12 @@ class SchedulerRepository:
             self._write_workspace_overview()
 
     def _workspace_projection_sources(self) -> list[dict[str, Any]]:
-        """Load every Delivery summary from SQLite for the root overview."""
+        """Load unarchived Delivery summaries for the root overview."""
 
         with self.read() as connection:
             rows = connection.execute(
-                "SELECT * FROM hierarchies ORDER BY updated_at DESC, root_id"
+                "SELECT * FROM hierarchies WHERE status != 'ARCHIVED' "
+                "ORDER BY updated_at DESC, root_id"
             ).fetchall()
             sources: list[dict[str, Any]] = []
             for row in rows:

@@ -82,6 +82,8 @@ def workspace_status(
     )
     selected_root_id = result.get("rootId")
     if isinstance(selected_root_id, str):
+        if result["status"] == "ARCHIVED":
+            return result
         stored = repository.hierarchy(selected_root_id)
         delivery = stored["hierarchy"]["delivery"]
         git_binding = delivery.get("gitBinding")
@@ -226,6 +228,7 @@ def workspace_status(
                     discovery.pop("suggestedGitBinding", None)
                     discovery.pop("candidateGitBinding", None)
                     terminal_statuses = {
+                        "ARCHIVED",
                         "COMPLETED",
                         "CANCELLED",
                         "SUPERSEDED",
@@ -1411,7 +1414,12 @@ def confirm_development_baseline(
             )
         source = "LOCAL_BRANCH"
     binding = resolve_branch_binding(workspace, branch_ref=chosen_branch)
-    terminal_statuses = {"COMPLETED", "CANCELLED", "SUPERSEDED"}
+    terminal_statuses = {
+        "ARCHIVED",
+        "COMPLETED",
+        "CANCELLED",
+        "SUPERSEDED",
+    }
     conflicting = [
         item
         for item in repository.git_branch_usage(

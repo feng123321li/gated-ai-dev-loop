@@ -466,7 +466,7 @@ class DeliveryRevisionTests(unittest.TestCase):
             "DELIVERY_PROJECT_BRANCH_MISMATCH",
         )
 
-    def test_existing_scheduler_storage_is_upgraded_for_revisions(
+    def test_existing_scheduler_storage_without_contract_is_not_upgraded(
         self,
     ) -> None:
         control = Path(self.root) / ".layered-delivery"
@@ -547,28 +547,47 @@ class DeliveryRevisionTests(unittest.TestCase):
         connection.close()
 
         repository = SchedulerRepository(self.root)
-        with repository.transaction() as upgraded:
+        with self.assertRaises(GatedLoopError) as caught:
+            with repository.transaction():
+                self.fail("Legacy scheduler storage must not be opened")
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_STATE_CONTRACT_MISMATCH",
+        )
+        self.assertIsNone(
+            caught.exception.details["actualStateContract"],
+        )
+        inspection = sqlite3.connect(database)
+        try:
             hierarchy_columns = {
-                row["name"]
-                for row in upgraded.execute(
+                row[1]
+                for row in inspection.execute(
                     "PRAGMA table_info(hierarchies)"
                 )
             }
             run_columns = {
-                row["name"]
-                for row in upgraded.execute(
+                row[1]
+                for row in inspection.execute(
                     "PRAGMA table_info(runs)"
                 )
             }
-            revisions_table = upgraded.execute(
+            revisions_table = inspection.execute(
                 "SELECT name FROM sqlite_master "
                 "WHERE type = 'table' AND name = 'delivery_revisions'"
             ).fetchone()
+            metadata_table = inspection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'scheduler_metadata'"
+            ).fetchone()
+        finally:
+            inspection.close()
 
-        self.assertIn("revision", hierarchy_columns)
-        self.assertIn("revision", run_columns)
-        self.assertIn("superseded_at", run_columns)
-        self.assertIsNotNone(revisions_table)
+        self.assertNotIn("revision", hierarchy_columns)
+        self.assertNotIn("revision", run_columns)
+        self.assertNotIn("superseded_at", run_columns)
+        self.assertIsNone(revisions_table)
+        self.assertIsNone(metadata_table)
 
 
 if __name__ == "__main__":

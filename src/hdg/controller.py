@@ -13,6 +13,7 @@ from .git_binding import (
 )
 from .graph_runtime import (
     advance_graph,
+    archive_delivery,
     cancel_graph_run,
     dispatch_loop,
     graph_events,
@@ -83,6 +84,7 @@ CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "rebuild_graph_run": rebuild_graph_run,
     "record_user_confirmation": record_user_confirmation,
     "cancel_graph_run": cancel_graph_run,
+    "archive_delivery": archive_delivery,
 }
 
 
@@ -180,6 +182,7 @@ class LayeredDeliveryController:
                         raise
                     monitoring_from_control_root = True
             if name not in {
+                "archive_delivery",
                 "workspace_status",
                 "confirm_development_baseline",
                 "prepare_delivery_revision",

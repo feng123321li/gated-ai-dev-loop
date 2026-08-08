@@ -7,7 +7,18 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
-## 0.37.2 发布候选矩阵
+## 0.37.3 发布候选矩阵
+
+0.37.3 提供 31 个 MCP 工具，在 0.37.2 的 worktree setup 监控基础上新增显式的完成后 `archive_delivery`。真实宿主必须验证：归档只接受 `COMPLETED`，归档操作经过敏感工具审批，默认状态发现与根总览隐藏归档项，而显式 `root_id` 仍保留完成 run、Revision 历史、事件链和详情投影。
+
+| 环境 | Python | 核心契约 | 真实宿主 | 发布用途 |
+|---|---:|---|---|---|
+| Linux Runner | 3.10 / 3.12 / 3.14 | CI 自动 | 不适用 | 归档状态机、SQLite 契约与协议回归 |
+| Windows 自托管 Runner | 3.10+ | 发布任务 | 候选验证中：Codex/Claude 结果待回填 | 双宿主敏感审批与显式历史查询 |
+
+候选宿主版本继续使用 Codex CLI 0.147.0 和 Claude Code 2.1.226；这是本轮验证目标，不是永久最低版本。Controller 仍不执行 Git 或目录写操作。
+
+## 0.37.2 发布矩阵
 
 0.37.2 提供 30 个 MCP 工具，新增 `report_worktree_setup` 和 worktree setup 进度监控。除 0.37.1 的 reservation、精确分支和多项目场景外，真实宿主必须验证：创建阶段与百分比能在主仓 `progressMonitor` 刷新；30 秒 heartbeat 可续 120 秒租约；超时/失败不会自动重发；核对旧进程与半成品后，并发 retry 只有一个获得新 attempt 与 `IMMEDIATE`。
 
@@ -16,7 +27,7 @@
 | Linux Runner | 3.10 / 3.12 / 3.14 | CI 自动 | 不适用 | setup 状态机、SQLite 并发与协议契约 |
 | Windows 自托管 Runner | 3.10+ | 发布任务 | 候选验证中：Codex/Claude 结果待回填 | 原生 worktree 心跳、失败核对与安全 retry |
 
-候选宿主版本继续使用 Codex CLI 0.147.0 和 Claude Code 2.1.226；这是本轮验证目标，不是永久最低版本。Controller 仍不执行 Git 或目录写操作。
+该版本的候选宿主基线为 Codex CLI 0.147.0 和 Claude Code 2.1.226。Controller 不执行 Git 或目录写操作。
 
 ## 0.37.1 发布候选矩阵
 

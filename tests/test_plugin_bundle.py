@@ -714,6 +714,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertEqual(
             matchers,
             {
+                "archive_delivery",
                 "rebuild_graph_run",
                 "cancel_graph_run",
                 "unfreeze_task_requirement",
@@ -721,6 +722,25 @@ class PluginBundleTests(unittest.TestCase):
             },
         )
         self.assertLessEqual(matchers, names)
+
+    def test_sensitive_claude_tools_skip_expiring_workspace_evidence(
+        self,
+    ) -> None:
+        namespace = runpy.run_path(
+            str(PLUGIN / "hooks" / "attest_claude_workspace.py")
+        )
+        self.assertEqual(
+            namespace["SENSITIVE_ADMINISTRATIVE_TOOLS"],
+            frozenset(
+                {
+                    "archive_delivery",
+                    "cancel_graph_run",
+                    "rebuild_graph_run",
+                    "refreeze_task_requirement",
+                    "unfreeze_task_requirement",
+                }
+            ),
+        )
 
     def test_every_sensitive_claude_hook_returns_an_approval_prompt(
         self,
@@ -1898,6 +1918,10 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("freeze_hierarchy", approvals)
         self.assertNotIn("record_user_confirmation", approvals)
         self.assertEqual(
+            approvals["archive_delivery"]["approval_mode"],
+            "prompt",
+        )
+        self.assertEqual(
             approvals["unfreeze_task_requirement"]["approval_mode"],
             "prompt",
         )
@@ -1909,7 +1933,7 @@ class PluginBundleTests(unittest.TestCase):
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
         tool_count = len(tool_definitions())
-        self.assertEqual(tool_count, 30)
+        self.assertEqual(tool_count, 31)
         self.assertIn(
             "start_manual_handoff",
             {tool["name"] for tool in tool_definitions()},
@@ -2037,7 +2061,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-                30,
+                31,
         )
         preview_result = responses[2]["result"]["structuredContent"][
             "result"
@@ -2123,7 +2147,7 @@ class PluginBundleTests(unittest.TestCase):
         ]
         self.assertEqual(len(responses), 2)
         tools = responses[1]["result"]["tools"]
-        self.assertEqual(len(tools), 30)
+        self.assertEqual(len(tools), 31)
         self.assertNotIn(
             "open_orchestrator_settings",
             {tool["name"] for tool in tools},
@@ -2201,7 +2225,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-                30,
+                31,
         )
 
 

@@ -21,6 +21,7 @@ from hdg.graph_model import (
     task_review_node_id,
 )
 from hdg.graph_runtime import (
+    archive_delivery,
     attest_loop_receiver,
     authorize_codex_subagent_operation,
     cancel_graph_run,
@@ -37,6 +38,7 @@ from hdg.graph_runtime import (
     resume_loop,
     dispatch_loop as runtime_dispatch_loop,
 )
+from hdg.jsonio import fingerprint
 from hdg.loop_contracts import (
     loop_completion_policy,
     loop_execution_policy,
@@ -357,6 +359,54 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         return prepared
 
+    def complete_task_delivery(
+        self,
+        delivery_id: str = "d-archive",
+        *,
+        requirement_key: str | None = None,
+    ) -> dict:
+        task_id = "t-archive"
+        hierarchy = delivery_task_hierarchy(delivery_id, task_id)
+        if requirement_key is not None:
+            hierarchy["delivery"]["requirementKey"] = requirement_key
+        prepared = self.prepare_and_freeze(
+            hierarchy
+        )
+        root_id = prepared["rootId"]
+        for index, node_id in enumerate(
+            (
+                loop_node_id(task_id),
+                task_review_node_id(task_id),
+                review_node_id(root_id),
+            ),
+            start=1,
+        ):
+            operation_id = f"op-archive-{index}"
+            dispatch_loop(
+                root=self.root,
+                root_id=root_id,
+                node_id=node_id,
+                owner=f"archive-agent-{index}",
+                operation_id=operation_id,
+                now=at(index * 2),
+            )
+            record_loop_result(
+                root=self.root,
+                root_id=root_id,
+                node_id=node_id,
+                operation_id=operation_id,
+                outcome=success(f"{node_id} completed."),
+                now=at(index * 2 + 1),
+            )
+        return record_user_confirmation(
+            root=self.root,
+            root_id=root_id,
+            confirmed=True,
+            confirmed_by="archive-user",
+            summary="Accepted before archival.",
+            now=at(8),
+        )
+
     def test_preview_materializes_artifacts_before_controller_owned_choice(
         self,
     ) -> None:
@@ -526,6 +576,52 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(prepared["status"], "PREPARED")
         self.assertEqual(frozen["status"], "ACTIVE")
         self.assertEqual(frozen["deliveryRevision"], 1)
+
+    def test_repeated_freeze_returns_the_existing_run_without_self_locking(
+        self,
+    ) -> None:
+        hierarchy = delivery_task_hierarchy("d-freeze-replay", "t-freeze")
+        prepared = prepare_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        first = freeze_hierarchy(
+            root=self.root,
+            root_id=prepared["rootId"],
+            expected_hierarchy_fingerprint=(
+                prepared["hierarchyFingerprint"]
+            ),
+            confirmed=True,
+            confirmed_by="human",
+            now=at(1),
+        )
+        sqlite_connect = sqlite3.connect
+
+        def connect_without_lock_wait(
+            *args: object,
+            **kwargs: object,
+        ) -> sqlite3.Connection:
+            kwargs["timeout"] = 0.01
+            return sqlite_connect(*args, **kwargs)
+
+        with patch(
+            "hdg.repository.sqlite3.connect",
+            side_effect=connect_without_lock_wait,
+        ):
+            repeated = freeze_hierarchy(
+                root=self.root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="human",
+                now=at(2),
+            )
+
+        self.assertEqual(repeated["status"], "ACTIVE")
+        self.assertEqual(repeated["runId"], first["runId"])
 
     def test_changed_freeform_requirement_regenerates_choice_ready_artifacts(
         self,
@@ -926,7 +1022,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             ".layered-delivery",
             "overview.md",
         ).read_text(encoding="utf-8")
-        self.assertIn("交付数量：2", workspace_overview)
+        self.assertIn("未归档交付数量：2", workspace_overview)
         self.assertIn("d-first", workspace_overview)
         self.assertIn("d-second", workspace_overview)
         self.assertIn(
@@ -1865,7 +1961,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             control_root,
             "overview.md",
         ).read_text(encoding="utf-8")
-        self.assertIn("交付数量：4", workspace_overview)
+        self.assertIn("未归档交付数量：4", workspace_overview)
         for index in range(4):
             root_id = f"d-manual-{index}"
             with self.subTest(root_id=root_id):
@@ -2185,6 +2281,323 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertIn("USER_CONFIRMED", event_types)
         self.assertNotIn("TASK_IMPLEMENTED", event_types)
         self.assertNotIn("GATE_FAILED", event_types)
+
+    def test_completed_delivery_can_be_archived_idempotently(self) -> None:
+        completed = self.complete_task_delivery()
+        root_id = completed["rootId"]
+        events_before = graph_events(
+            root=self.root,
+            root_id=root_id,
+        )["events"]
+
+        with patch(
+            "hdg.controller.verify_delivery_project_scopes",
+            side_effect=AssertionError(
+                "Archival must not revalidate a completed Git workspace"
+            ),
+        ):
+            archived = call_tool(
+                "archive_delivery",
+                {"root_id": root_id},
+                root=self.root,
+                workspace_root=self.root,
+            )
+
+        self.assertEqual(
+            archived,
+            {
+                "rootId": root_id,
+                "status": "ARCHIVED",
+                "runStatus": "COMPLETED",
+                "archivedAt": archived["archivedAt"],
+                "alreadyArchived": False,
+            },
+        )
+        self.assertEqual(
+            workspace_status(root=self.root)["status"],
+            "ABSENT",
+        )
+        explicit = workspace_status(
+            root=self.root,
+            root_id=root_id,
+        )
+        self.assertEqual(explicit["status"], "ARCHIVED")
+        self.assertEqual(explicit["runStatus"], "COMPLETED")
+        self.assertEqual(explicit["archivedAt"], archived["archivedAt"])
+
+        history = SchedulerRepository(self.root).revision_history(root_id)
+        self.assertEqual(history["revisions"][-1]["status"], "ARCHIVED")
+        self.assertEqual(
+            history["revisions"][-1]["runStatus"],
+            "COMPLETED",
+        )
+        detail_overview = Path(
+            self.root,
+            ".layered-delivery",
+            root_id,
+            "overview.md",
+        )
+        self.assertTrue(detail_overview.is_file())
+        workspace_overview = Path(
+            self.root,
+            ".layered-delivery",
+            "overview.md",
+        ).read_text(encoding="utf-8")
+        self.assertNotIn(root_id, workspace_overview)
+        self.assertEqual(
+            graph_events(root=self.root, root_id=root_id)["events"],
+            events_before,
+        )
+
+        detail_overview.write_text("stale projection", encoding="utf-8")
+        repeated = archive_delivery(
+            root=self.root,
+            root_id=root_id,
+            now=at(20),
+        )
+        self.assertTrue(repeated["alreadyArchived"])
+        self.assertEqual(repeated["archivedAt"], archived["archivedAt"])
+        repaired_overview = detail_overview.read_text(encoding="utf-8")
+        self.assertIn("已归档", repaired_overview)
+        archived_display = datetime.fromisoformat(
+            archived["archivedAt"].replace("Z", "+00:00")
+        ).astimezone(timezone(timedelta(hours=8))).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+        self.assertIn(archived_display, repaired_overview)
+
+    def test_unfinished_delivery_cannot_be_archived(self) -> None:
+        prepared = self.prepare_and_freeze(
+            delivery_task_hierarchy("d-not-archive", "t-not-archive")
+        )
+
+        with self.assertRaises(GatedLoopError) as caught:
+            archive_delivery(
+                root=self.root,
+                root_id=prepared["rootId"],
+                now=at(2),
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_DELIVERY_NOT_COMPLETED",
+        )
+        repository = SchedulerRepository(self.root)
+        self.assertEqual(
+            repository.hierarchy(prepared["rootId"])["status"],
+            "FROZEN",
+        )
+        self.assertEqual(repository.run(prepared["rootId"])["status"], "ACTIVE")
+
+    def test_cancelled_delivery_cannot_be_archived(self) -> None:
+        prepared = self.prepare_and_freeze(
+            delivery_task_hierarchy("d-cancelled-archive", "t-cancelled")
+        )
+        cancel_graph_run(
+            root=self.root,
+            root_id=prepared["rootId"],
+            cancelled_by="archive-user",
+            reason="Cancelled before completion.",
+            now=at(2),
+        )
+
+        with self.assertRaises(GatedLoopError) as caught:
+            archive_delivery(
+                root=self.root,
+                root_id=prepared["rootId"],
+                now=at(3),
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_DELIVERY_NOT_COMPLETED",
+        )
+        self.assertEqual(
+            SchedulerRepository(self.root).run(prepared["rootId"])["status"],
+            "CANCELLED",
+        )
+
+    def test_pre_run_delivery_cannot_be_archived(self) -> None:
+        preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=delivery_task_hierarchy(
+                "d-prerun-archive",
+                "t-prerun",
+            ),
+            now=at(0),
+        )
+
+        with self.assertRaises(GatedLoopError) as caught:
+            archive_delivery(
+                root=self.root,
+                root_id=preview["rootId"],
+                now=at(1),
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_DELIVERY_NOT_COMPLETED",
+        )
+        self.assertEqual(
+            SchedulerRepository(self.root).hierarchy(preview["rootId"])[
+                "status"
+            ],
+            "CHOICE_READY",
+        )
+
+    def test_archived_delivery_cannot_be_refrozen(self) -> None:
+        completed = self.complete_task_delivery("d-archived-freeze")
+        root_id = completed["rootId"]
+        archive_delivery(root=self.root, root_id=root_id, now=at(9))
+        stored = SchedulerRepository(self.root).hierarchy(root_id)
+
+        with self.assertRaises(GatedLoopError) as caught:
+            freeze_hierarchy(
+                root=self.root,
+                root_id=root_id,
+                expected_hierarchy_fingerprint=stored[
+                    "hierarchyFingerprint"
+                ],
+                confirmed=True,
+                confirmed_by="archive-user",
+                now=at(10),
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_DELIVERY_ARCHIVED",
+        )
+        self.assertEqual(
+            SchedulerRepository(self.root).hierarchy(root_id)["status"],
+            "ARCHIVED",
+        )
+
+    def test_archived_delivery_cannot_become_a_manual_handoff(self) -> None:
+        completed = self.complete_task_delivery("d-archived-manual")
+        root_id = completed["rootId"]
+        archive_delivery(root=self.root, root_id=root_id, now=at(9))
+        stored = SchedulerRepository(self.root).hierarchy(root_id)
+
+        with self.assertRaises(GatedLoopError) as caught:
+            create_manual_handoff(
+                root=self.root,
+                hierarchy=stored["hierarchy"],
+                expected_hierarchy_fingerprint=stored[
+                    "hierarchyFingerprint"
+                ],
+                expected_graph_fingerprint=stored["graphFingerprint"],
+                authorized_project_ids=[],
+                confirmed=True,
+                confirmed_by="archive-user",
+                now=at(10),
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_DELIVERY_ARCHIVED",
+        )
+        self.assertEqual(
+            SchedulerRepository(self.root).hierarchy(root_id)["status"],
+            "ARCHIVED",
+        )
+
+    def test_archived_delivery_cannot_be_cancelled(self) -> None:
+        completed = self.complete_task_delivery("d-archived-cancel")
+        root_id = completed["rootId"]
+        archive_delivery(root=self.root, root_id=root_id, now=at(9))
+
+        with self.assertRaises(GatedLoopError) as caught:
+            cancel_graph_run(
+                root=self.root,
+                root_id=root_id,
+                cancelled_by="archive-user",
+                reason="Must remain archived.",
+                now=at(10),
+            )
+
+        self.assertEqual(caught.exception.code, "SCHEDULER_RUN_TERMINAL")
+        self.assertEqual(
+            SchedulerRepository(self.root).hierarchy(root_id)["status"],
+            "ARCHIVED",
+        )
+
+    def test_archived_delivery_cannot_be_previewed_again(self) -> None:
+        completed = self.complete_task_delivery("d-archived-preview")
+        root_id = completed["rootId"]
+        archive_delivery(root=self.root, root_id=root_id, now=at(9))
+        stored = SchedulerRepository(self.root).hierarchy(root_id)
+
+        with self.assertRaises(GatedLoopError) as caught:
+            preview_hierarchy(
+                root=self.root,
+                hierarchy=stored["hierarchy"],
+                now=at(10),
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_DELIVERY_ARCHIVED",
+        )
+        self.assertEqual(
+            SchedulerRepository(self.root).hierarchy(root_id)["status"],
+            "ARCHIVED",
+        )
+
+    def test_archived_delivery_retains_external_requirement_identity(
+        self,
+    ) -> None:
+        completed = self.complete_task_delivery(
+            "d-archived-requirement",
+            requirement_key="ORDER-443",
+        )
+        archive_delivery(
+            root=self.root,
+            root_id=completed["rootId"],
+            now=at(9),
+        )
+        replacement = delivery_task_hierarchy(
+            "d-replacement-requirement",
+            "t-replacement-requirement",
+        )
+        replacement["delivery"]["requirementKey"] = "order-443"
+
+        with self.assertRaises(GatedLoopError) as caught:
+            preview_hierarchy(
+                root=self.root,
+                hierarchy=replacement,
+                now=at(10),
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_DELIVERY_REQUIREMENT_CONFLICT",
+        )
+        self.assertEqual(
+            caught.exception.details["existingRootId"],
+            completed["rootId"],
+        )
+        self.assertEqual(
+            caught.exception.details["nextAction"],
+            "CREATE_NEW_REQUIREMENT_AND_DELIVERY",
+        )
+
+    def test_archived_delivery_state_is_checked_fail_closed(self) -> None:
+        completed = self.complete_task_delivery("d-archived-corrupt")
+        root_id = completed["rootId"]
+        archive_delivery(root=self.root, root_id=root_id, now=at(9))
+        repository = SchedulerRepository(self.root)
+        with repository.transaction() as connection:
+            connection.execute(
+                "UPDATE delivery_revisions SET status = 'FROZEN' "
+                "WHERE root_id = ? AND revision = 1",
+                (root_id,),
+            )
+
+        with self.assertRaises(GatedLoopError) as caught:
+            workspace_status(root=self.root, root_id=root_id)
+
+        self.assertEqual(caught.exception.code, "SCHEDULER_STATE_INVALID")
+        self.assertEqual(caught.exception.details["rootId"], root_id)
 
     def test_root_task_review_runs_before_delivery_review(self) -> None:
         hierarchy = task_hierarchy()
@@ -4711,8 +5124,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
         workspace_overview = (control / "overview.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("# 全部交付调度与进度总览", workspace_overview)
-        self.assertIn("交付数量：1", workspace_overview)
+        self.assertIn("# 未归档交付调度与进度总览", workspace_overview)
+        self.assertIn("未归档交付数量：1", workspace_overview)
         self.assertIn(
             (
                 "| 交付标识 | 需求标题 | 当前状态 | "
@@ -6120,7 +6533,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         workspace_overview = (
             control / "overview.md"
         ).read_text(encoding="utf-8")
-        self.assertIn("交付数量：2", workspace_overview)
+        self.assertIn("未归档交付数量：2", workspace_overview)
         self.assertIn(first_prepared["rootId"], workspace_overview)
         self.assertIn(second_prepared["rootId"], workspace_overview)
         self.assertIn(
@@ -6601,6 +7014,60 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(state["status"], "CLAIMED")
         self.assertGreater(rebuilt["rebuiltFromEvents"], 0)
 
+    def test_event_pagination_hashes_each_event_only_once_per_full_scan(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        repository = SchedulerRepository(self.root)
+        run_id = repository.run(root_id)["runId"]
+        with repository.transaction() as connection:
+            for index in range(405):
+                repository.append_event(
+                    connection,
+                    run_id=run_id,
+                    node_id=None,
+                    attempt=None,
+                    event_type="PAGINATION_TEST_EVENT",
+                    actor="TEST",
+                    operation_id=None,
+                    payload={"index": index},
+                    at="2026-07-29T08:03:00Z",
+                )
+            expected_ids = [
+                row["event_id"]
+                for row in connection.execute(
+                    "SELECT event_id FROM graph_events "
+                    "WHERE run_id = ? ORDER BY event_id",
+                    (run_id,),
+                ).fetchall()
+            ]
+
+        collected_ids: list[int] = []
+        cursor = 0
+        page_count = 0
+        with patch(
+            "hdg.repository.fingerprint",
+            wraps=fingerprint,
+        ) as hashed:
+            while True:
+                page = repository.events(
+                    root_id,
+                    after_event_id=cursor,
+                    limit=50,
+                )
+                page_count += 1
+                collected_ids.extend(item["eventId"] for item in page)
+                if len(page) < 50:
+                    break
+                cursor = page[-1]["eventId"]
+
+        self.assertEqual(collected_ids, expected_ids)
+        self.assertLessEqual(
+            hashed.call_count,
+            len(expected_ids) + page_count,
+        )
+
     def test_rebuild_does_not_overwrite_a_concurrent_claim(self) -> None:
         prepared = self.prepare_and_freeze(
             disjoint_parallel_hierarchy()
@@ -6776,60 +7243,32 @@ class SchedulerRuntimeTests(unittest.TestCase):
 
 
 class RemovedCouplingTests(unittest.TestCase):
-    def test_current_schema_omits_removed_model_routing_columns(self) -> None:
+    def test_current_schema_indexes_event_pages_by_run_and_event_id(
+        self,
+    ) -> None:
         with TemporaryDirectory() as root:
             preview_hierarchy(root=root, hierarchy=task_hierarchy())
             connection = sqlite3.connect(
                 Path(root, ".layered-delivery", "scheduler.db")
             )
             try:
-                reservation_columns = {
-                    row[1]
+                index_columns = [
+                    row[2]
                     for row in connection.execute(
-                        "PRAGMA table_info(dispatch_reservations)"
+                        "PRAGMA index_info(graph_events_by_run_event_id)"
                     )
-                }
-                receiver_columns = {
-                    row[1]
-                    for row in connection.execute(
-                        "PRAGMA table_info(host_receiver_identities)"
-                    )
-                }
+                ]
             finally:
                 connection.close()
 
-        self.assertTrue(
-            {"model_id", "reasoning_class"}.isdisjoint(
-                reservation_columns
-            )
-        )
-        self.assertNotIn("model_id", receiver_columns)
+        self.assertEqual(index_columns, ["run_id", "event_id"])
 
-    def test_current_schema_removes_obsolete_model_routing_columns(self) -> None:
+    def test_current_schema_omits_removed_model_routing_columns(self) -> None:
         with TemporaryDirectory() as root:
             preview_hierarchy(root=root, hierarchy=task_hierarchy())
-            database = Path(root, ".layered-delivery", "scheduler.db")
-            connection = sqlite3.connect(database)
-            try:
-                connection.execute(
-                    "ALTER TABLE dispatch_reservations "
-                    "ADD COLUMN model_id TEXT"
-                )
-                connection.execute(
-                    "ALTER TABLE dispatch_reservations "
-                    "ADD COLUMN reasoning_class TEXT"
-                )
-                connection.execute(
-                    "ALTER TABLE host_receiver_identities "
-                    "ADD COLUMN model_id TEXT"
-                )
-                connection.commit()
-            finally:
-                connection.close()
-
-            SchedulerRepository(root).workspace_status()
-
-            connection = sqlite3.connect(database)
+            connection = sqlite3.connect(
+                Path(root, ".layered-delivery", "scheduler.db")
+            )
             try:
                 reservation_columns = {
                     row[1]

@@ -38,6 +38,7 @@ STATUS_TEXT = {
     "CANCELLED": "已取消",
     "SUPERSEDED": "已被新修订取代",
     "COMPLETED": "已完成",
+    "ARCHIVED": "已归档",
     "NOT_STARTED": "未启动",
     "UNKNOWN": "未知",
     "UNAVAILABLE": "不可用",
@@ -166,19 +167,19 @@ PAYLOAD_FIELD_ORDER = MappingProxyType(
     }
 )
 UTC_PLUS_8 = timezone(timedelta(hours=8))
-PROJECTION_TEMPLATE_VERSION = 14
+PROJECTION_TEMPLATE_VERSION = 15
 WORK_ITEM_DIRECTORY = "work-items"
 WORKSPACE_OVERVIEW_PROJECTION_TEMPLATE = Template(
-    """# 全部交付调度与进度总览
+    """# 未归档交付调度与进度总览
 
 ## 工作区状态
 
-- 交付数量：${delivery_count}
+- 未归档交付数量：${delivery_count}
 - 更新时间（UTC+8）：${updated_at}
 
-本文件由控制器从 SQLite 权威状态统一生成，用于查看工作区内全部交付需求。
+本文件由控制器从 SQLite 权威状态统一生成，用于查看工作区内未归档交付需求。
 
-## Delivery 清单
+## 未归档 Delivery 清单
 
 | 交付标识 | 需求标题 | 当前状态 | 最近更新（UTC+8） | 交付详情 |
 |---|---|---|---|---|
@@ -1489,15 +1490,20 @@ def render_scheduling_plan(
         for node in hierarchy_nodes
         if node["definition"]["kind"] == "TASK"
     )
+    archived = hierarchy_status == "ARCHIVED"
     status = (
-        run["status"]
-        if run is not None
-        else hierarchy_status or "UNKNOWN"
+        "ARCHIVED"
+        if archived
+        else (
+            run["status"]
+            if run is not None
+            else hierarchy_status or "UNKNOWN"
+        )
     )
     latest_update = (
-        run["updatedAt"]
-        if run is not None
-        else updated_at
+        updated_at
+        if archived or run is None
+        else run["updatedAt"]
     )
     delivery = hierarchy["delivery"]
     status_row = "| " + " | ".join(
@@ -3214,9 +3220,9 @@ def render_projection_documents(
 
     hierarchy = stored_definition["hierarchy"]
     updated_at = (
-        run["updatedAt"]
-        if run is not None
-        else stored_definition["updatedAt"]
+        stored_definition["updatedAt"]
+        if stored_definition["status"] == "ARCHIVED" or run is None
+        else run["updatedAt"]
     )
     human_projection_arguments = {
         "hierarchy_fingerprint": stored_definition[
@@ -3330,9 +3336,9 @@ def render_work_item_projection_documents(
         "graph_fingerprint": stored_definition["graphFingerprint"],
         "hierarchy_status": stored_definition["status"],
         "updated_at": (
-            run["updatedAt"]
-            if run is not None
-            else stored_definition["updatedAt"]
+            stored_definition["updatedAt"]
+            if stored_definition["status"] == "ARCHIVED" or run is None
+            else run["updatedAt"]
         ),
         "run": run,
     }

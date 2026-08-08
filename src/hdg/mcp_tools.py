@@ -202,6 +202,7 @@ READ_ONLY_TOOLS = frozenset(
 
 DESTRUCTIVE_TOOLS = frozenset(
     {
+        "archive_delivery",
         "cancel_graph_run",
         "rebuild_graph_run",
         "unfreeze_task_requirement",
@@ -1307,6 +1308,19 @@ TOOLS = (
             required=["root_id", "cancelled_by", "reason"],
         ),
         human=True,
+    ),
+    _tool(
+        "archive_delivery",
+        (
+            "Archive a completed Delivery from default workspace discovery "
+            "while retaining its SQLite history and detail projections."
+        ),
+        _object(
+            {"root_id": ROOT_ID},
+            required=["root_id"],
+        ),
+        human=True,
+        annotations={"idempotentHint": True},
     ),
 )
 

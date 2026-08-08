@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+import sys
+import traceback
 from typing import Any, Mapping
+import uuid
 
 from . import __version__
 from .errors import GatedLoopError
@@ -252,7 +255,10 @@ SERVER_INSTRUCTIONS = (
     "TASK may be unfrozen and refrozen with a revised title, summary, and "
     "opaque payload; topology, dependencies, and resource claims remain "
     "Delivery-frozen. Final completion still "
-    "requires explicit user confirmation. External Git and publication "
+    "requires explicit user confirmation. A completed Delivery is archived "
+    "only after another explicit user action; archive_delivery hides it from "
+    "default workspace discovery while retaining its history and detail "
+    "projections. External Git and publication "
     "actions remain outside this server."
 )
 
@@ -261,6 +267,55 @@ _USER_INTERACTION_TOOLS = frozenset(
     for tool in tool_definitions()
     if tool.get("_meta", {}).get("anthropic/requiresUserInteraction") is True
 )
+_TOOL_NAMES = frozenset(tool["name"] for tool in tool_definitions())
+
+
+def report_internal_error(
+    error: BaseException,
+    *,
+    operation: str,
+) -> str:
+    """Write one data-minimized diagnostic and return its correlation ID."""
+
+    diagnostic_id = uuid.uuid4().hex
+    try:
+        summaries = traceback.extract_tb(error.__traceback__, limit=-8)
+        stack = [
+            {
+                "file": (
+                    frame.filename.replace("\\", "/").rsplit("/", 1)[-1]
+                )[:128]
+                or "<unknown>",
+                "function": frame.name[:128],
+                "line": frame.lineno,
+            }
+            for frame in summaries
+        ]
+    except Exception:
+        stack = []
+    diagnostic = {
+        "diagnosticId": diagnostic_id,
+        "event": "delivery_graph_internal_error",
+        "exceptionType": type(error).__name__[:128],
+        "operation": operation[:128],
+        "stack": stack,
+    }
+    try:
+        sys.stderr.write(
+            json.dumps(
+                diagnostic,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            + "\n"
+        )
+        sys.stderr.flush()
+    except Exception:
+        pass
+    return diagnostic_id
+
 
 @dataclass
 class McpConnection:
@@ -684,7 +739,12 @@ def _call_scheduler_tool(
             _gated_error_tool_result(error, modern=modern),
             modern=False,
         )
-    except Exception:
+    except Exception as error:
+        tool_name = name if name in _TOOL_NAMES else "unknown"
+        diagnostic_id = report_internal_error(
+            error,
+            operation=f"tool:{tool_name}",
+        )
         return _rpc_result(
             request_id,
             _tool_result(
@@ -693,7 +753,7 @@ def _call_scheduler_tool(
                     "error": {
                         "code": "INTERNAL_ERROR",
                         "message": "Unexpected error",
-                        "details": {},
+                        "details": {"diagnosticId": diagnostic_id},
                     },
                 },
                 is_error=True,

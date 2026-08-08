@@ -3063,6 +3063,11 @@ def cancel_graph_run(
                 "SCHEDULER_RUN_MISSING",
                 f"No Delivery to cancel: {root_id}",
             )
+        if hierarchy_row["status"] == "ARCHIVED":
+            fail(
+                "SCHEDULER_RUN_TERMINAL",
+                "An archived Delivery cannot be cancelled",
+            )
         if hierarchy_row["status"] != "FROZEN":
             at = _locked_timestamp(now, hierarchy_row["updated_at"])
             connection.execute(
@@ -3140,6 +3145,105 @@ def cancel_graph_run(
             "reason": reason.strip(),
         }
     return repository.run(root_id)
+
+
+def archive_delivery(
+    *,
+    root: str,
+    root_id: str,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    """Hide one completed Delivery while retaining its audit history."""
+
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    with repository.transaction() as connection:
+        hierarchy = connection.execute(
+            "SELECT status, revision, updated_at FROM hierarchies "
+            "WHERE root_id = ?",
+            (root_id,),
+        ).fetchone()
+        if hierarchy is None:
+            fail(
+                "SCHEDULER_DELIVERY_MISSING",
+                f"No Delivery to archive: {root_id}",
+            )
+        run = connection.execute(
+            "SELECT status, updated_at FROM runs "
+            "WHERE root_id = ? AND revision = ?",
+            (root_id, hierarchy["revision"]),
+        ).fetchone()
+        revision = connection.execute(
+            "SELECT status FROM delivery_revisions "
+            "WHERE root_id = ? AND revision = ?",
+            (root_id, hierarchy["revision"]),
+        ).fetchone()
+        if hierarchy["status"] == "ARCHIVED":
+            if (
+                run is None
+                or run["status"] != "COMPLETED"
+                or revision is None
+                or revision["status"] != "ARCHIVED"
+            ):
+                fail(
+                    "SCHEDULER_STATE_INVALID",
+                    "An archived Delivery must retain its completed run "
+                    "and revision",
+                    rootId=root_id,
+                )
+            archived_at = hierarchy["updated_at"]
+            already_archived = True
+        else:
+            if run is None or run["status"] != "COMPLETED":
+                fail(
+                    "SCHEDULER_DELIVERY_NOT_COMPLETED",
+                    "Only a completed Delivery can be archived",
+                    rootId=root_id,
+                    runStatus=(run["status"] if run is not None else None),
+                )
+            if hierarchy["status"] != "FROZEN":
+                fail(
+                    "SCHEDULER_STATE_INVALID",
+                    "A completed Delivery has an invalid hierarchy status",
+                    rootId=root_id,
+                    hierarchyStatus=hierarchy["status"],
+                )
+            if revision is None or revision["status"] != "FROZEN":
+                fail(
+                    "SCHEDULER_STATE_INVALID",
+                    "The completed Delivery revision is not frozen",
+                    rootId=root_id,
+                )
+            archived_at = _locked_timestamp(
+                now,
+                max(hierarchy["updated_at"], run["updated_at"]),
+            )
+            connection.execute(
+                "UPDATE hierarchies SET status = 'ARCHIVED', updated_at = ? "
+                "WHERE root_id = ?",
+                (archived_at, root_id),
+            )
+            updated_revision = connection.execute(
+                "UPDATE delivery_revisions SET status = 'ARCHIVED', "
+                "updated_at = ? WHERE root_id = ? AND revision = ?",
+                (archived_at, root_id, hierarchy["revision"]),
+            )
+            if updated_revision.rowcount != 1:
+                fail(
+                    "SCHEDULER_STATE_INVALID",
+                    "The completed Delivery revision is missing",
+                    rootId=root_id,
+                )
+            already_archived = False
+    repository.write_projections(root_id)
+    return {
+        "rootId": root_id,
+        "status": "ARCHIVED",
+        "runStatus": "COMPLETED",
+        "archivedAt": archived_at,
+        "alreadyArchived": already_archived,
+    }
 
 
 def graph_events(
@@ -3731,6 +3835,7 @@ def rebuild_graph_run(
 
 __all__ = (
     "advance_graph",
+    "archive_delivery",
     "attest_loop_receiver",
     "cancel_graph_run",
     "claim_codex_subagent_receiver",

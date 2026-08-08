@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.37.3 — 2026-08-08
+
+发布提交：以 tag `v0.37.3` 指向的提交为准
+
+- **完成 Delivery 显式归档**：新增 `archive_delivery`。只有当前 run 为 `COMPLETED` 时才能归档；hierarchy 与当前 Revision 标为 `ARCHIVED`，run、事件链、历史、详情投影、workspace binding 和 `requirementKey` 均保留。默认 `workspace_status` 与工作区根总览隐藏归档项，显式 `root_id` 继续提供审计查询。
+- **生命周期失败关闭**：归档可安全幂等重放并修复投影；归档后的 cancel、freeze、manual handoff、preview 与 Revision 入口均明确拒绝。Codex manifest 与 Claude Hook 把归档纳入敏感操作审批。
+- **存储契约收束**：既有 SQLite 库在 WAL 或 DDL 前只读校验 state contract；删除旧 schema 自动升级与兼容迁移入口。schema bootstrap/contract 校验提取到独立的 `storage_schema.py`，不引入迁移框架。
+- **正确性与性能修复**：重复 freeze 复用同一连接，避免自锁；Graph event 分页改为索引范围查询并保持从零连续分页的完整链审计；意外内部错误输出脱敏、可关联的单行诊断日志，客户端只接收通用错误与 opaque diagnostic ID。
+- **协议与验证**：MCP 工具数增至 31，投影模板版本增至 15。Python 全量 307 项测试、`compileall`、canonical Skill/Plugin 镜像一致性、发布校验与 `git diff --check` 通过。
+
 ## 0.37.2 — 2026-08-08
 
 发布提交：以 tag `v0.37.2` 指向的提交为准

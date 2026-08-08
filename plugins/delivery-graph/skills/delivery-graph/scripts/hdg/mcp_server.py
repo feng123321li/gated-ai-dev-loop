@@ -13,7 +13,11 @@ from .jsonio import (
     redact,
     strict_json_loads,
 )
-from .mcp_adapter import McpConnection, handle_message
+from .mcp_adapter import (
+    McpConnection,
+    handle_message,
+    report_internal_error,
+)
 
 
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
@@ -233,8 +237,11 @@ def main(argv: list[str] | None = None) -> int:
     except GatedLoopError as error:
         sys.stderr.write(f"ERROR {error.code}: {error.message}\n")
         return error.exit_code
-    except Exception:
-        sys.stderr.write("ERROR INTERNAL_ERROR: Unexpected error\n")
+    except Exception as error:
+        report_internal_error(
+            error,
+            operation="mcp_server",
+        )
         return 1
 
 

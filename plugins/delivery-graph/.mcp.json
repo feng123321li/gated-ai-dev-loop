@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "delivery-graph": {
+      "command": "python",
+      "args": [
+        "-X",
+        "utf8",
+        "${CLAUDE_PLUGIN_ROOT}/skills/delivery-graph/scripts/hdg_mcp.py"
+      ],
+      "env": {
+        "HDG_PROJECT_ROOT": "${CLAUDE_PROJECT_DIR}",
+        "HDG_HOST_ADAPTER": "claude-code"
+      }
+    }
+  }
+}

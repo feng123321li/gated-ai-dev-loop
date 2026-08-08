@@ -292,7 +292,7 @@ class DevelopmentBaselineTests(unittest.TestCase):
             self.assertIn("executionChoice", remembered)
             self.assertNotIn("developmentBaseline", remembered)
 
-    def test_dirty_worktree_does_not_prompt_for_baseline(self) -> None:
+    def test_dirty_worktree_requires_attributed_baseline(self) -> None:
         with TemporaryDirectory() as root:
             _repository, worktree, _base_commit, _branch_ref = (
                 git_delivery_checkout(root, delivery_id="d-dirty")
@@ -307,11 +307,16 @@ class DevelopmentBaselineTests(unittest.TestCase):
                 workspace_root=str(worktree),
                 trusted_host_adapter="claude-code",
             )
-            self.assertNotIn("developmentBaseline", preview)
             self.assertEqual(
-                preview["nextAction"],
-                "PRESENT_HOST_NATIVE_EXECUTION_CHOICE",
+                preview["pendingInteraction"]["kind"],
+                "DEVELOPMENT_BASELINE",
             )
+            self.assertTrue(
+                preview["developmentBaseline"][
+                    "dirtyStateConfirmationRequired"
+                ]
+            )
+            self.assertNotIn("executionChoice", preview)
 
     def test_new_from_mainline_pins_mainline_head(self) -> None:
         with TemporaryDirectory() as root:
@@ -2168,7 +2173,7 @@ class McpSurfaceTests(unittest.TestCase):
             self.assertEqual(dispatch["mainConversationRole"], "MONITOR_ONLY")
             self.assertEqual(
                 dispatch["agentDispatch"]["agentType"],
-                "layered-delivery:delivery-coordinator",
+                "delivery-graph:delivery-coordinator",
             )
             self.assertTrue(dispatch["agentDispatch"]["runInBackground"])
 
@@ -3742,7 +3747,7 @@ class McpSurfaceTests(unittest.TestCase):
     def test_self_hosting_requires_explicit_dogfood(self) -> None:
         with TemporaryDirectory() as root:
             Path(root, "pyproject.toml").write_text(
-                '[project]\nname = "layered-delivery"\n',
+                '[project]\nname = "delivery-graph"\n',
                 encoding="utf-8",
             )
             with self.assertRaises(GatedLoopError) as caught:
@@ -4054,7 +4059,7 @@ class McpSurfaceTests(unittest.TestCase):
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "Layered Delivery never recommends or selects a "
+                "Delivery Graph never recommends or selects a "
                 "development model",
                 initialized["result"]["instructions"],
             )
@@ -4228,7 +4233,7 @@ class McpSurfaceTests(unittest.TestCase):
                 discovered["_meta"][
                     "io.modelcontextprotocol/serverInfo"
                 ]["name"],
-                "layered-delivery",
+                "delivery-graph",
             )
             self.assertFalse(connection.legacy_initialize_requested)
 

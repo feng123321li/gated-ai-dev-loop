@@ -130,8 +130,8 @@ class TeamReleaseReadinessTests(unittest.TestCase):
     ) -> None:
         installed = {
             "installed": [
-                {"name": "layered-delivery", "version": "0.31.0"},
-                {"name": "layered-delivery", "version": __version__},
+                {"name": "delivery-graph", "version": "0.31.0"},
+                {"name": "delivery-graph", "version": __version__},
             ]
         }
         completed = subprocess.CompletedProcess(
@@ -155,7 +155,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
                 "scripts.host_smoke._codex_plugin_state",
                 return_value=(
                     True,
-                    ["layered-delivery@majorbio-skills"],
+                    ["delivery-graph@majorbio-skills"],
                 ),
             ):
                 with patch(
@@ -169,7 +169,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
                         model=None,
                     )
         self.assertIn(
-            'plugins."layered-delivery@majorbio-skills".enabled=false',
+            'plugins."delivery-graph@majorbio-skills".enabled=false',
             command,
         )
         self.assertNotIn("--ephemeral", command)
@@ -189,7 +189,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         disallowed_index = command.index("--disallowedTools")
         self.assertEqual(
             command[disallowed_index + 1],
-            "mcp__plugin_layered-delivery_layered-delivery__"
+            "mcp__plugin_delivery-graph_delivery-graph__"
             "record_user_confirmation",
         )
         self.assertIn("NEVER call record_user_confirmation", command[-1])
@@ -281,7 +281,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
             artifact = workspace / "evidence" / "result.md"
             artifact.parent.mkdir(parents=True)
             artifact.write_text(
-                "Layered Delivery real-host smoke passed.\n",
+                "Delivery Graph real-host smoke passed.\n",
                 encoding="utf-8",
             )
             self.assertEqual(_find_smoke_artifact(workspace), artifact)
@@ -295,7 +295,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
             self.assertIsNone(_find_smoke_artifact(workspace))
             readme = workspace / "README.md"
             readme.write_text(
-                "# Layered Delivery host smoke\n"
+                "# Delivery Graph host smoke\n"
                 "- LIGHT real-host smoke: PASS\n",
                 encoding="utf-8",
             )
@@ -309,7 +309,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         self.assertIn("delivery-coordinator background agent", prompt)
         self.assertIn("Do not call TaskCreate", prompt)
         self.assertIn("dispatch_loop first, then loop_context", prompt)
-        self.assertIn("`layered-delivery smoke\\n`", prompt)
+        self.assertIn("`delivery-graph smoke\\n`", prompt)
 
     def test_release_surfaces_and_public_automatic_contract_match(self) -> None:
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -321,12 +321,12 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         for manifest in (
             ROOT
             / "plugins"
-            / "layered-delivery"
+            / "delivery-graph"
             / ".codex-plugin"
             / "plugin.json",
             ROOT
             / "plugins"
-            / "layered-delivery"
+            / "delivery-graph"
             / ".claude-plugin"
             / "plugin.json",
         ):

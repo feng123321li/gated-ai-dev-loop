@@ -49,10 +49,12 @@ from .automatic_dispatch import dispatch_loop, reserve_loop
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src" / "hdg"
-SKILL = ROOT / "skills" / "layered-delivery"
+SKILL = ROOT / "skills" / "delivery-graph"
 SKILL_RUNTIME = SKILL / "scripts" / "hdg"
-PLUGIN = ROOT / "plugins" / "layered-delivery"
-PLUGIN_SKILL = PLUGIN / "skills" / "layered-delivery"
+PLUGIN = ROOT / "plugins" / "delivery-graph"
+PLUGIN_SKILL = PLUGIN / "skills" / "delivery-graph"
+CODEX_HOOKS = PLUGIN / "hooks" / "hooks.json"
+CLAUDE_HOOKS = PLUGIN / "hooks" / "claude-hooks.json"
 
 
 class PluginBundleTests(unittest.TestCase):
@@ -63,7 +65,7 @@ class PluginBundleTests(unittest.TestCase):
             PLUGIN / "agents" / "delivery-coordinator.md"
         ).read_text(encoding="utf-8")
         hooks = json.loads(
-            (PLUGIN / "hooks" / "hooks.json").read_text(encoding="utf-8")
+            CLAUDE_HOOKS.read_text(encoding="utf-8")
         )
         self.assertIn("name: delivery-coordinator", agent)
         self.assertIn("background: true", agent)
@@ -135,8 +137,8 @@ class PluginBundleTests(unittest.TestCase):
                     {
                         "hook_event_name": "PreToolUse",
                         "tool_name": (
-                            "mcp__plugin_layered-delivery_"
-                            "layered-delivery__workspace_status"
+                            "mcp__plugin_delivery-graph_"
+                            "delivery-graph__workspace_status"
                         ),
                         "tool_input": {"root_id": "d-service"},
                         "tool_use_id": "claude-tool-use",
@@ -333,16 +335,20 @@ class PluginBundleTests(unittest.TestCase):
         text = (
             SKILL / "references" / "planning-quickstart.md"
         ).read_text(encoding="utf-8")
-        self.assertIn("`executionChoice.markdown`", text)
+        self.assertIn("`pendingInteraction`", text)
+        self.assertIn("该对象的 `markdown`", text)
         self.assertIn("机械映射到 `AskUserQuestion`", text)
-        self.assertIn("机械映射到 `request_user_input`", text)
-        self.assertIn("必须优先调用原生选择器", text)
+        self.assertIn("`request_user_input`（Codex）", text)
+        self.assertIn("优先把其 `options` 机械映射", text)
         self.assertIn("只有映射工具在当前上下文不可调用", text)
-        self.assertIn("不得要求用户回复选项文字", text)
+        self.assertIn("不为它创建“其他”选项", text)
         self.assertIn("Controller 是交互文案的唯一所有者", text)
         self.assertIn("`AUTOMATIC`", text)
         self.assertIn("`MANUAL`", text)
-        self.assertIn("`freeformInput.nextAction`", text)
+        self.assertIn(
+            "`freeformInput.nextAction=CONTINUE_REQUIREMENT_DISCUSSION`",
+            text,
+        )
         self.assertIn("先记录业务确认", text)
         self.assertIn("后台方用原双 fingerprint 调用 `resume_execution_mode`", text)
         self.assertIn("展示 `manualHandoff.receiverPrompt`", text)
@@ -374,7 +380,7 @@ class PluginBundleTests(unittest.TestCase):
             "回答后保留当前 fingerprint",
             planning,
         )
-        self.assertIn("`prepare_delivery_revision`", main)
+        self.assertIn("`prepare_delivery_revision`", main + planning)
         self.assertIn("保持相同 `delivery.id`", planning + execution)
         self.assertIn("不要创建新的 Delivery ID", execution)
         self.assertIn("旧 run 自动成为 `SUPERSEDED`", execution)
@@ -441,7 +447,7 @@ class PluginBundleTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         allowed_tools = (
             "allowed-tools:\n"
-            "  - mcp__plugin_layered-delivery_layered-delivery__*"
+            "  - mcp__plugin_delivery-graph_delivery-graph__*"
         )
         self.assertIn(allowed_tools, main)
         self.assertIn(allowed_tools, plugin_main)
@@ -464,7 +470,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("`hostDispatch`", main + planning)
         self.assertNotIn("`EXCLUSIVE_PRIMARY_CHECKOUT`", main + planning)
         self.assertIn("`HOST_NATIVE_LINKED_WORKTREE`", main + planning)
-        self.assertIn("后台 `delivery-coordinator`", main + planning)
+        self.assertIn("启动后台 coordinator", main + planning)
         self.assertIn("禁止要求用户启动第二个顶层 Claude 会话", planning)
         self.assertIn(
             "`manualDirectoryChangeRequired=false`",
@@ -474,7 +480,10 @@ class PluginBundleTests(unittest.TestCase):
             "`coordinatorCheckoutPolicy=PRESERVE_CURRENT_CHECKOUT`",
             main + planning,
         )
-        self.assertIn("不要求用户手动 `cd`", main + planning)
+        self.assertIn(
+            "`requiresNewTopLevelSession=false`",
+            main + planning,
+        )
         self.assertIn("主 checkout 保持 `main` 或 `master`", planning)
         self.assertIn("`CREATE_DELIVERY_FEATURE_BRANCH`", planning)
         self.assertIn("重新调用 `workspace_status`", planning)
@@ -511,8 +520,11 @@ class PluginBundleTests(unittest.TestCase):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
         self.assertIn("`plan_dispatch_batch`", main)
-        self.assertIn("modelPolicy=CURRENT_HOST_INHERIT", main)
-        self.assertIn("并发创建", main)
+        self.assertIn(
+            "modelPolicy=CURRENT_HOST_INHERIT",
+            main + execution + recommendations,
+        )
+        self.assertIn("并发创建", main + execution)
         self.assertIn(
             "Codex 由 `SubagentStart` Hook 在 child 上下文可见前完成 host-side claim",
             execution,
@@ -528,7 +540,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("不读取用户级编排配置", execution)
         self.assertNotIn("打开中央编排器设置", readme)
         self.assertIn("RECEIVER_ROOT_ROTATED", execution)
-        self.assertIn("无需重冻", readme)
+        self.assertIn("恢复无需重新 prepare/freeze", execution)
 
     def test_skill_uses_native_soft_stop_and_hard_429_breaker(
         self,
@@ -686,7 +698,7 @@ class PluginBundleTests(unittest.TestCase):
 
     def test_sensitive_hook_references_only_existing_tools(self) -> None:
         hooks = json.loads(
-            (PLUGIN / "hooks" / "hooks.json").read_text(
+            CLAUDE_HOOKS.read_text(
                 encoding="utf-8"
             )
         )
@@ -714,7 +726,7 @@ class PluginBundleTests(unittest.TestCase):
         self,
     ) -> None:
         hooks = json.loads(
-            (PLUGIN / "hooks" / "hooks.json").read_text(
+            CLAUDE_HOOKS.read_text(
                 encoding="utf-8"
             )
         )
@@ -746,7 +758,7 @@ class PluginBundleTests(unittest.TestCase):
 
     def test_claude_rate_limit_hook_uses_stop_failure(self) -> None:
         hooks = json.loads(
-            (PLUGIN / "hooks" / "hooks.json").read_text(
+            CLAUDE_HOOKS.read_text(
                 encoding="utf-8"
             )
         )
@@ -812,7 +824,7 @@ class PluginBundleTests(unittest.TestCase):
             )
             claude_sidechain.parent.mkdir(parents=True)
             dispatch_tool = (
-                "mcp__plugin_layered-delivery_layered-delivery"
+                "mcp__plugin_delivery-graph_delivery-graph"
                 "__dispatch_loop"
             )
             claude_sidechain.write_text(
@@ -876,7 +888,7 @@ class PluginBundleTests(unittest.TestCase):
                 trusted_host_adapter="claude-code",
             )
             heartbeat_tool = (
-                "mcp__plugin_layered-delivery_layered-delivery"
+                "mcp__plugin_delivery-graph_delivery-graph"
                 "__heartbeat_loop"
             )
             heartbeat_input = {
@@ -1031,7 +1043,7 @@ class PluginBundleTests(unittest.TestCase):
                 workspace_root=root,
             )
             dispatch_tool = (
-                "mcp__plugin_layered-delivery_layered-delivery"
+                "mcp__plugin_delivery-graph_delivery-graph"
                 "__dispatch_loop"
             )
             tool_input = {
@@ -1087,7 +1099,7 @@ class PluginBundleTests(unittest.TestCase):
                     "session_id": "claude-parent-session",
                     "agent_id": "claude-agent-child-manual",
                     "tool_name": (
-                        "mcp__plugin_layered-delivery_layered-delivery"
+                        "mcp__plugin_delivery-graph_delivery-graph"
                         "__heartbeat_loop"
                     ),
                     "tool_input": {
@@ -1125,13 +1137,13 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertNotIn("hooks", manifest)
         self.assertEqual(
-            manifest["mcpServers"]["layered-delivery"]["env"][
+            manifest["mcpServers"]["delivery-graph"]["env"][
                 "HDG_HOST_ADAPTER"
             ],
             "codex",
         )
         hooks = json.loads(
-            (PLUGIN / "hooks" / "hooks.json").read_text(
+            CODEX_HOOKS.read_text(
                 encoding="utf-8"
             )
         )
@@ -1140,7 +1152,7 @@ class PluginBundleTests(unittest.TestCase):
         command = subagent_start[0]["hooks"][0]
         self.assertIn("attest_codex_subagent_receiver.py", command["command"])
         self.assertEqual(command["timeout"], 30)
-        self.assertNotIn("commandWindows", command)
+        self.assertIn("commandWindows", command)
         operation_hooks = [
             entry
             for entry in hooks["hooks"]["PreToolUse"]
@@ -1155,9 +1167,9 @@ class PluginBundleTests(unittest.TestCase):
             "^mcp__.*__(heartbeat_loop|report_loop_progress|pause_loop|record_loop_result)$",
         )
         environment = dict(os.environ)
-        environment["CLAUDE_PLUGIN_ROOT"] = str(PLUGIN)
+        environment["PLUGIN_ROOT"] = str(PLUGIN)
         launched = subprocess.run(
-            command["command"],
+            command["commandWindows"],
             input=json.dumps({"hook_event_name": "unmatched"}),
             text=True,
             encoding="utf-8",
@@ -1211,12 +1223,12 @@ class PluginBundleTests(unittest.TestCase):
                 "immediately call heartbeat_loop once before any other tool",
                 additional_context,
             )
-            marker = "LAYERED_DELIVERY_ASSIGNMENT="
+            marker = "DELIVERY_GRAPH_ASSIGNMENT="
             assignment_context = json.loads(
                 additional_context.split(marker, maxsplit=1)[1].splitlines()[0]
             )
             self.assertNotIn("receiver_attestation_id", completed.stdout)
-            self.assertNotIn("LAYERED_DELIVERY_RECEIVER=", completed.stdout)
+            self.assertNotIn("DELIVERY_GRAPH_RECEIVER=", completed.stdout)
             self.assertNotIn("operation_id", assignment_context)
             operation_event = {
                 "hook_event_name": "PreToolUse",
@@ -1225,7 +1237,7 @@ class PluginBundleTests(unittest.TestCase):
                 "turn_id": "codex-child-turn",
                 "tool_use_id": "codex-child-tool",
                 "tool_name": (
-                    "mcp__plugin_layered-delivery_layered-delivery"
+                    "mcp__plugin_delivery-graph_delivery-graph"
                     "__record_loop_result"
                 ),
                 "tool_input": {
@@ -1338,7 +1350,7 @@ class PluginBundleTests(unittest.TestCase):
             claimed["operationId"],
             injected_operation,
         )
-        self.assertIn("LAYERED_DELIVERY_ASSIGNMENT=", replayed.stdout)
+        self.assertIn("DELIVERY_GRAPH_ASSIGNMENT=", replayed.stdout)
         self.assertNotIn("receiver_attestation_id", replayed.stdout)
         replayed_context = json.loads(replayed.stdout)[
             "hookSpecificOutput"
@@ -1389,7 +1401,7 @@ class PluginBundleTests(unittest.TestCase):
             )
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("LAYERED_DELIVERY_ASSIGNMENT=", completed.stdout)
+        self.assertIn("DELIVERY_GRAPH_ASSIGNMENT=", completed.stdout)
 
     def test_codex_subagent_start_does_not_require_model_for_identity(
         self,
@@ -1430,7 +1442,7 @@ class PluginBundleTests(unittest.TestCase):
             state = graph_status(root=root, root_id=prepared["rootId"])
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("LAYERED_DELIVERY_ASSIGNMENT=", completed.stdout)
+        self.assertIn("DELIVERY_GRAPH_ASSIGNMENT=", completed.stdout)
         claimed = next(
             item
             for item in state["nodes"]
@@ -1511,7 +1523,7 @@ class PluginBundleTests(unittest.TestCase):
             state = graph_status(root=root, root_id=handoff["rootId"])
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("LAYERED_DELIVERY_ASSIGNMENT=", completed.stdout)
+        self.assertIn("DELIVERY_GRAPH_ASSIGNMENT=", completed.stdout)
         claimed = next(
             item
             for item in state["nodes"]
@@ -1557,7 +1569,7 @@ class PluginBundleTests(unittest.TestCase):
             state = graph_status(root=root, root_id=prepared["rootId"])
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("LAYERED_DELIVERY_ASSIGNMENT=", completed.stdout)
+        self.assertIn("DELIVERY_GRAPH_ASSIGNMENT=", completed.stdout)
         claimed = next(
             item
             for item in state["nodes"]
@@ -1622,7 +1634,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertEqual(helper.returncode, 0, helper.stderr)
         self.assertEqual(helper.stdout, "")
         self.assertEqual(intended.returncode, 0, intended.stderr)
-        self.assertIn("LAYERED_DELIVERY_ASSIGNMENT=", intended.stdout)
+        self.assertIn("DELIVERY_GRAPH_ASSIGNMENT=", intended.stdout)
         self.assertNotIn("receiver_attestation_id", intended.stdout)
 
     def test_codex_subagent_hook_rejects_overridden_codex_home(self) -> None:
@@ -1869,11 +1881,11 @@ class PluginBundleTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        server = manifest["mcpServers"]["layered-delivery"]
+        server = manifest["mcpServers"]["delivery-graph"]
         self.assertEqual(server["env"]["HDG_HOST_ADAPTER"], "codex")
         claude_server = json.loads(
             (PLUGIN / ".mcp.json").read_text(encoding="utf-8")
-        )["mcpServers"]["layered-delivery"]
+        )["mcpServers"]["delivery-graph"]
         self.assertEqual(
             claude_server["env"]["HDG_HOST_ADAPTER"],
             "claude-code",
@@ -2084,7 +2096,7 @@ class PluginBundleTests(unittest.TestCase):
                 encoding="utf-8",
             )
             environment = dict(os.environ)
-            environment["LAYERED_DELIVERY_ORCHESTRATOR_CONFIG"] = str(config)
+            environment["DELIVERY_GRAPH_ORCHESTRATOR_CONFIG"] = str(config)
             process = subprocess.Popen(
                 [
                     sys.executable,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate a layered-delivery release candidate without network access."""
+"""Validate a delivery-graph release candidate without network access."""
 
 from __future__ import annotations
 
@@ -26,10 +26,15 @@ from hdg.model_core import validate_hierarchy_definition  # noqa: E402
 from hdg.planning import freeze_hierarchy  # noqa: E402
 
 
-CANONICAL_SKILL = ROOT / "skills" / "layered-delivery"
+CANONICAL_SKILL = ROOT / "skills" / "delivery-graph"
 SKILL_RUNTIME = CANONICAL_SKILL / "scripts" / "hdg"
-PLUGIN = ROOT / "plugins" / "layered-delivery"
-PLUGIN_SKILL = PLUGIN / "skills" / "layered-delivery"
+PLUGIN = ROOT / "plugins" / "delivery-graph"
+PLUGIN_SKILL = PLUGIN / "skills" / "delivery-graph"
+CODEX_MANIFEST = PLUGIN / ".codex-plugin" / "plugin.json"
+CLAUDE_MANIFEST = PLUGIN / ".claude-plugin" / "plugin.json"
+CODEX_HOOKS = PLUGIN / "hooks" / "hooks.json"
+CLAUDE_HOOKS = PLUGIN / "hooks" / "claude-hooks.json"
+REPO_MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 TEMPLATES = ROOT / "examples" / "team-loops"
 EXPECTED_TOOL_COUNT = 29
 
@@ -53,6 +58,49 @@ def _files(root: Path) -> dict[str, bytes]:
             continue
         result[path.relative_to(root).as_posix()] = path.read_bytes()
     return result
+
+
+def _json_object(path: Path) -> dict[str, object]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("root value must be an object")
+    return value
+
+
+def _plugin_path(value: object, *, field: str) -> Path:
+    if not isinstance(value, str) or not value.startswith("./"):
+        raise ValueError(f"{field} must be a ./-relative path")
+    if "\\" in value:
+        raise ValueError(f"{field} must use forward slashes")
+    candidate = (PLUGIN / value).resolve()
+    try:
+        candidate.relative_to(PLUGIN.resolve())
+    except ValueError as error:
+        raise ValueError(f"{field} escapes the Plugin root") from error
+    if not candidate.exists():
+        raise ValueError(f"{field} does not exist: {candidate}")
+    return candidate
+
+
+def _hook_commands(hooks: object) -> list[dict[str, object]]:
+    if not isinstance(hooks, dict):
+        raise ValueError("hooks must be an object")
+    commands: list[dict[str, object]] = []
+    for groups in hooks.values():
+        if not isinstance(groups, list):
+            raise ValueError("hook event entries must be arrays")
+        for group in groups:
+            if not isinstance(group, dict):
+                raise ValueError("hook groups must be objects")
+            handlers = group.get("hooks")
+            if not isinstance(handlers, list):
+                raise ValueError("hook group handlers must be arrays")
+            for handler in handlers:
+                if not isinstance(handler, dict):
+                    raise ValueError("hook handlers must be objects")
+                if handler.get("type") == "command":
+                    commands.append(handler)
+    return commands
 
 
 def _compare_trees(
@@ -98,10 +146,7 @@ def validate_release() -> list[str]:
             f"src/hdg version {__version__!r} does not match {version!r}"
         )
 
-    manifests = (
-        PLUGIN / ".codex-plugin" / "plugin.json",
-        PLUGIN / ".claude-plugin" / "plugin.json",
-    )
+    manifests = (CODEX_MANIFEST, CLAUDE_MANIFEST)
     for manifest in manifests:
         try:
             manifest_version = json.loads(
@@ -151,6 +196,41 @@ def validate_release() -> list[str]:
             f"MCP tool count is {len(tools)}, expected {EXPECTED_TOOL_COUNT}"
         )
     by_name = {tool["name"]: tool for tool in tools}
+    for tool in tools:
+        name = tool.get("name", "<unnamed>")
+        title = tool.get("title")
+        if not isinstance(title, str) or not title.strip():
+            problems.append(f"MCP tool {name}: missing human-readable title")
+        input_schema = tool.get("inputSchema")
+        if (
+            not isinstance(input_schema, dict)
+            or input_schema.get("type") != "object"
+        ):
+            problems.append(
+                f"MCP tool {name}: inputSchema must be a root object"
+            )
+        output_schema = tool.get("outputSchema")
+        if (
+            not isinstance(output_schema, dict)
+            or output_schema.get("type") != "object"
+        ):
+            problems.append(
+                f"MCP tool {name}: outputSchema must be a root object"
+            )
+        annotations = tool.get("annotations")
+        for hint in (
+            "readOnlyHint",
+            "destructiveHint",
+            "idempotentHint",
+            "openWorldHint",
+        ):
+            if (
+                not isinstance(annotations, dict)
+                or not isinstance(annotations.get(hint), bool)
+            ):
+                problems.append(
+                    f"MCP tool {name}: annotations.{hint} must be boolean"
+                )
     if "execution_mode" in inspect.signature(freeze_hierarchy).parameters:
         problems.append("freeze_hierarchy still exposes execution_mode")
     freeze_schema = by_name.get("freeze_hierarchy", {}).get(
@@ -170,6 +250,112 @@ def validate_release() -> list[str]:
         problems.append(
             "dispatch_loop dispatch_mode enum is "
             f"{dispatch_enum!r}, expected ['AUTO', 'MANUAL']"
+        )
+
+    try:
+        codex_manifest = _json_object(CODEX_MANIFEST)
+        _plugin_path(codex_manifest.get("skills"), field="skills")
+        mcp_servers = codex_manifest.get("mcpServers")
+        if not isinstance(mcp_servers, dict) or not mcp_servers:
+            raise ValueError("mcpServers must be a non-empty inline object")
+        declared_hooks = codex_manifest.get("hooks")
+        if declared_hooks is not None:
+            if _plugin_path(declared_hooks, field="hooks") != CODEX_HOOKS.resolve():
+                raise ValueError("Codex hooks override must resolve to hooks.json")
+        interface = codex_manifest.get("interface")
+        if not isinstance(interface, dict):
+            raise ValueError("interface must be an object")
+        for field in (
+            "displayName",
+            "shortDescription",
+            "longDescription",
+            "developerName",
+            "category",
+        ):
+            value = interface.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"interface.{field} must be non-empty")
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        problems.append(f"invalid Agent Plugin manifest {CODEX_MANIFEST}: {error}")
+
+    try:
+        codex_hook_document = _json_object(CODEX_HOOKS)
+        codex_events = codex_hook_document.get("hooks")
+        if not isinstance(codex_events, dict):
+            raise ValueError("hooks must be an object")
+        if "StopFailure" in codex_events:
+            raise ValueError("Codex hooks must not register Claude StopFailure")
+        codex_commands = _hook_commands(codex_events)
+        if not codex_commands:
+            raise ValueError("at least one Codex command hook is required")
+        for handler in codex_commands:
+            command = handler.get("command")
+            if not isinstance(command, str) or "${PLUGIN_ROOT}" not in command:
+                raise ValueError(
+                    "Codex command hooks must resolve through ${PLUGIN_ROOT}"
+                )
+            command_windows = handler.get("commandWindows")
+            if (
+                not isinstance(command_windows, str)
+                or "%PLUGIN_ROOT%" not in command_windows
+            ):
+                raise ValueError(
+                    "Codex command hooks must provide a PLUGIN_ROOT Windows command"
+                )
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        problems.append(f"invalid Codex hooks {CODEX_HOOKS}: {error}")
+
+    try:
+        claude_manifest = _json_object(CLAUDE_MANIFEST)
+        declared_hooks = _plugin_path(
+            claude_manifest.get("hooks"),
+            field="Claude hooks",
+        )
+        if declared_hooks != CLAUDE_HOOKS.resolve():
+            raise ValueError("Claude manifest must point to claude-hooks.json")
+        claude_events = _json_object(CLAUDE_HOOKS).get("hooks")
+        if not isinstance(claude_events, dict) or "StopFailure" not in claude_events:
+            raise ValueError("Claude hooks must retain StopFailure")
+        _hook_commands(claude_events)
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        problems.append(f"invalid Claude hooks {CLAUDE_HOOKS}: {error}")
+
+    try:
+        marketplace = _json_object(REPO_MARKETPLACE)
+        entries = marketplace.get("plugins")
+        if not isinstance(entries, list):
+            raise ValueError("plugins must be an array")
+        matches = [
+            entry
+            for entry in entries
+            if isinstance(entry, dict)
+            and entry.get("name") == "delivery-graph"
+        ]
+        if len(matches) != 1:
+            raise ValueError("exactly one delivery-graph entry is required")
+        entry = matches[0]
+        source = entry.get("source")
+        if not isinstance(source, dict) or source.get("source") != "local":
+            raise ValueError("Plugin source must be local")
+        source_path = source.get("path")
+        if not isinstance(source_path, str) or not source_path.startswith("./"):
+            raise ValueError("local Plugin source path must start with ./")
+        resolved_source = (ROOT / source_path).resolve()
+        if resolved_source != PLUGIN.resolve():
+            raise ValueError("local Plugin source must resolve to the bundle")
+        policy = entry.get("policy")
+        if not isinstance(policy, dict):
+            raise ValueError("policy must be an object")
+        if policy.get("installation") != "AVAILABLE":
+            raise ValueError("policy.installation must be AVAILABLE")
+        if policy.get("authentication") != "ON_INSTALL":
+            raise ValueError("policy.authentication must be ON_INSTALL")
+        category = entry.get("category")
+        if not isinstance(category, str) or not category.strip():
+            raise ValueError("category must be non-empty")
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        problems.append(
+            f"invalid repository Agent Plugin marketplace {REPO_MARKETPLACE}: {error}"
         )
 
     expected_profiles = {

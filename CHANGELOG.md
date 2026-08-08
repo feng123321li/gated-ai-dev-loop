@@ -1,18 +1,30 @@
 # 版本更新记录
 
-本文档汇总 `layered-delivery` 各正式版本的主要变化。版本边界以项目清单中的版本号和对应 Git 提交为准；同一版本发布前的连续改动合并记录在该版本下。
+本文档汇总 `delivery-graph` 各正式版本的主要变化；0.10.0–0.36.0 的 canonical 名为 `layered-delivery`。版本边界以项目清单中的版本号和对应 Git 提交为准；同一版本发布前的连续改动合并记录在该版本下。
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.37.0 — 2026-08-08
+
+发布提交：以 tag `v0.37.0` 指向的提交为准
+
+- **身份收束**：项目、Plugin 与 Skill 的 canonical 机器名从 `layered-delivery` 更新为 `delivery-graph`，展示名统一为“分层交付 Graph 控制面”；Claude coordinator namespace 同步为 `delivery-graph:delivery-coordinator`。安装或升级时需要按新 Plugin 名重新加载会话。项目运行数据目录继续使用 `.layered-delivery/`，已有 schema v3 Delivery 无需迁移或改名。
+- **单一待办交互**：规划、恢复和手动接管统一以 `pendingInteraction` 暴露当前唯一等待用户处理的交互；先完成 `DEVELOPMENT_BASELINE`，再进入 `EXECUTION_MODE`。`developmentBaseline` 与 `executionChoice` 仅作为同一对象的兼容别名，宿主可调用原生选择器时不得改写为自由文本确认。
+- **精确 dirty 确认**：缺少 Git binding 的脏工作树同样进入开发基线确认。`workingTree.stateFingerprint` 同时覆盖 porcelain 状态、变化路径的 worktree blob 与 index state；内容或暂存状态变化都会使旧确认失效，`.layered-delivery/**` 仍不计入业务 dirty 状态。
+- **手动交接 Git 漂移闭环**：`start_manual_handoff` 在任何 workspace、binding 或 Run 写入前检测漂移。单仓返回 `DEVELOPMENT_BASELINE` 重确认：若选择恢复为原 binding，则保留当前 Revision 并要求恢复分支后重试；若确认新的 binding，则生成下一不可变手动 Revision 和新双 fingerprint。多仓漂移因单工作区选择器无法完整改写全部仓库而 fail closed，要求带完整 project bindings 创建手动 Revision。
+- **Agent Plugins 协议**：29 个 MCP 工具补齐标题、根对象输入/输出 schema 与 annotations；Codex 使用 `hooks/hooks.json` 注册 `SubagentStart`/`PreToolUse`，Claude manifest 单独使用 `hooks/claude-hooks.json` 注册 `PreToolUse`/`StopFailure`，避免把宿主不支持的事件混入同一 Hook 清单。
+- **文档收束**：README、Skill 与当前工程文档围绕“规划 → 冻结 → 调度 → 分层 Review → 用户验收”主链重写；`graph-engineering-upgrade.md` 明确为历史 ADR，现行实现以 Skill、MCP schema 与 `project-engineering.md` 为准。
+- **验证**：本地 Python 全量 277 项测试、`compileall`、canonical Skill/Plugin 镜像一致性、Skill/Plugin 校验、`validate_release` 与 `git diff --check` 均通过；真实 Codex/Claude Code 状态以宿主兼容矩阵的候选实测记录为准。
+
 ## 0.36.0 — 2026-08-08
 
-发布提交：待定（特性分支 `feature/m_lf_release_0_36_0_development_baseline`，尚未合并发布）
+发布提交：`ad19c33`（`main`，tag `v0.36.0`）
 
 - feat（调度前置基线确认）：在确认开发方式（EXECUTION_MODE）之前新增控制器拥有的「开发基线」交互（`DEVELOPMENT_BASELINE`）。当工作树干净、且无已记忆基线、层级未带 `gitBinding` 时，`preview_hierarchy` 返回 `developmentBaseline`（仅枚举本地分支 + 「从主线创建新分支」）并暂不发 `executionChoice`；宿主经 `confirm_development_baseline` 记录该选择、只读计算 `gitBinding` 并将其冻结回层级，再返回 `executionChoice`。同一 Delivery 的后续 Revision 自动复用已记忆基线，不再重复询问；`prepare_delivery_revision`/`prepare_hierarchy` 在缺省 `gitBinding` 时自动注入。
 - fix（AUTOMATIC 基线默认 main）：修复 AUTOMATIC 默认从 mainline（origin/HEAD→main→master）建 worktree、导致 feature 分支上的目标代码缺失、Loop 无法执行的问题。
 - 工具与存储：新增 `confirm_development_baseline` MCP 工具（MCP 工具数 28→29）与 `delivery_preferences` 表（`root_id`、`branch_ref`、`base_ref`、`base_commit`、`integration_target`、`source`、`chosen_by`、`chosen_at`）。Controller 不执行任何 Git 写操作，分支/worktree 仍由宿主创建。
 - 边界：手动交接（`start_manual_handoff`）在 git 漂移时阻断并要求重新确认基线的能力留待后续版本（Phase 2）。
-- 验证：Python 标准库全量测试、`compileall`、Skill/Plugin 镜像重建与 `git diff --exit-code`、`validate_release`（工具数 29、版本 0.36.0）。
+- 验证：本地 Python 标准库全量 258 项测试、`compileall`、Skill/Plugin 镜像重建与 `git diff --exit-code`、`validate_release` 通过（工具数 29、版本 0.36.0）。这些结果属于核心契约与发布产物校验，不代表 Codex、Claude Code 的 0.36.0 真实宿主冒烟已经完成；真实宿主状态以兼容矩阵的实测记录为准。
 
 ## 0.35.0 — 2026-08-07
 

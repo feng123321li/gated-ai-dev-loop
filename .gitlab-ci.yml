@@ -15,11 +15,12 @@ contract:
     - python -m unittest discover -s tests -t .
     - python -m compileall -q src tests scripts
     - python scripts/build_skill.py
-    - git diff --exit-code -- skills/layered-delivery/scripts/hdg skills/layered-delivery/scripts/hdg_mcp.py plugins/layered-delivery/skills/layered-delivery
+    - git diff --exit-code -- skills/delivery-graph/scripts/hdg skills/delivery-graph/scripts/hdg_mcp.py plugins/delivery-graph/skills/delivery-graph
     - python scripts/validate_release.py
 
 .host-smoke:
   stage: host-smoke
+  # External Runner label; keep until the Runner configuration is renamed.
   tags:
     - windows
     - layered-delivery-host-smoke

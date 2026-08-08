@@ -81,14 +81,14 @@ def _prepare_workspace(path: Path, host: str) -> Path:
         raise RuntimeError(f"smoke workspace must be empty: {path}")
     _run_checked(["git", "init", "-b", "main"], cwd=path)
     _run_checked(
-        ["git", "config", "user.email", "layered-delivery-smoke@example.invalid"],
+        ["git", "config", "user.email", "delivery-graph-smoke@example.invalid"],
         cwd=path,
     )
     _run_checked(
-        ["git", "config", "user.name", "Layered Delivery Smoke"], cwd=path
+        ["git", "config", "user.name", "Delivery Graph Smoke"], cwd=path
     )
     (path / "README.md").write_text(
-        "# Layered Delivery host smoke\n", encoding="utf-8", newline="\n"
+        "# Delivery Graph host smoke\n", encoding="utf-8", newline="\n"
     )
     _run_checked(["git", "add", "README.md"], cwd=path)
     _run_checked(["git", "commit", "-m", "Initialize smoke workspace"], cwd=path)
@@ -158,9 +158,9 @@ def _prompt(scenario: str, host: str) -> str:
     )
     return textwrap.dedent(
         f"""
-        Run the official layered-delivery {profile} real-host smoke test in this
+        Run the official delivery-graph {profile} real-host smoke test in this
         disposable Git repository. The user has explicitly selected automatic
-        execution. Use only the installed layered-delivery Skill and MCP tools;
+        execution. Use only the installed delivery-graph Skill and MCP tools;
         do not use a direct Python API or edit SQLite.
 
         Hard harness boundary: NEVER call record_user_confirmation. Automatic
@@ -184,7 +184,7 @@ def _prompt(scenario: str, host: str) -> str:
 
         Create one root TASK with stable ID `t-smoke-artifact`. Its entire
         implementation is to create `smoke.txt` with exactly
-        `layered-delivery smoke\\n`, then use one Python command to assert that
+        `delivery-graph smoke\\n`, then use one Python command to assert that
         exact content. Do not create any other business file, test scaffold, or
         additional verification command. Classify from this exact local change.
         {review_requirement}
@@ -238,12 +238,12 @@ def _codex_plugin_state() -> tuple[bool, list[str]]:
     candidate_available = False
     competing_plugin_ids: list[str] = []
     for plugin in payload.get("installed", []):
-        if isinstance(plugin, str) and plugin == "layered-delivery":
+        if isinstance(plugin, str) and plugin == "delivery-graph":
             candidate_available = True
             continue
         if not isinstance(plugin, dict):
             continue
-        if plugin.get("name") != "layered-delivery":
+        if plugin.get("name") != "delivery-graph":
             continue
         if plugin.get("enabled") is False:
             continue
@@ -283,14 +283,14 @@ def _host_command(
             "Bash(python *)",
             "Bash(py *)",
             *[
-                "mcp__plugin_layered-delivery_layered-delivery__"
+                "mcp__plugin_delivery-graph_delivery-graph__"
                 f"{tool['name']}"
                 for tool in tool_definitions()
                 if tool["name"] != "record_user_confirmation"
             ],
         ]
         final_confirmation_tool = (
-            "mcp__plugin_layered-delivery_layered-delivery__"
+            "mcp__plugin_delivery-graph_delivery-graph__"
             "record_user_confirmation"
         )
         command = [
@@ -309,7 +309,7 @@ def _host_command(
             final_confirmation_tool,
             "--no-session-persistence",
             "--plugin-dir",
-            str(ROOT / "plugins" / "layered-delivery"),
+            str(ROOT / "plugins" / "delivery-graph"),
         ]
         if model:
             command.extend(["--model", model])
@@ -322,7 +322,7 @@ def _host_command(
         candidate_available, competing_plugin_ids = _codex_plugin_state()
         if not candidate_available:
             raise RuntimeError(
-                f"layered-delivery {__version__} must be installed in "
+                f"delivery-graph {__version__} must be installed in "
                 "Codex before running the real-host smoke test"
             )
         command = [executable]
@@ -403,7 +403,7 @@ def _find_smoke_artifact(repo_root: Path) -> Path | None:
             except (OSError, UnicodeError):
                 continue
             if "smoke" in content and (
-                "layered-delivery" in content or "layered delivery" in content
+                "delivery-graph" in content or "delivery graph" in content
             ):
                 return path
     return None
@@ -500,7 +500,7 @@ def run_smoke(args: argparse.Namespace) -> int:
     result: dict[str, object]
     temporary_path: Path
     with TemporaryDirectory(
-        prefix="layered-delivery-host-smoke-",
+        prefix="delivery-graph-host-smoke-",
         ignore_cleanup_errors=True,
     ) as temporary:
         temporary_root = Path(temporary)
@@ -598,7 +598,7 @@ def main() -> int:
                     availability = "available" if details["available"] else "missing"
                     print(f"{host}: {availability}; {details.get('version') or '-'}")
                 print(
-                    f"layered-delivery: {result['pluginVersion']}; "
+                    f"delivery-graph: {result['pluginVersion']}; "
                     f"tools: {result['toolCount']}; model invocation: no"
                 )
             return 0

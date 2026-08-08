@@ -1,0 +1,20 @@
+{
+  "name": "delivery-graph-development",
+  "interface": {
+    "displayName": "分层交付 Graph 控制面"
+  },
+  "plugins": [
+    {
+      "name": "delivery-graph",
+      "source": {
+        "source": "local",
+        "path": "./plugins/delivery-graph"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -20,15 +20,15 @@ class RemovedAgentDiscoveryBoundaryTests(unittest.TestCase):
         )
         for relative_path in (
             "src/hdg/agent_discovery.py",
-            "skills/layered-delivery/scripts/hdg/agent_discovery.py",
-            "plugins/layered-delivery/skills/layered-delivery/"
+            "skills/delivery-graph/scripts/hdg/agent_discovery.py",
+            "plugins/delivery-graph/skills/delivery-graph/"
             "scripts/hdg/agent_discovery.py",
         ):
             with self.subTest(path=relative_path):
                 self.assertFalse(Path(ROOT, relative_path).exists())
         for relative_path in (
-            "plugins/layered-delivery/.codex-plugin/plugin.json",
-            "plugins/layered-delivery/.claude-plugin/plugin.json",
+            "plugins/delivery-graph/.codex-plugin/plugin.json",
+            "plugins/delivery-graph/.claude-plugin/plugin.json",
         ):
             with self.subTest(manifest=relative_path):
                 self.assertNotIn(

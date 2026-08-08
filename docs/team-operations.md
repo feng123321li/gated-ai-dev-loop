@@ -1,15 +1,15 @@
 # 团队安装与运维
 
-本文面向团队管理员和普通使用者，覆盖 `layered-delivery` 0.35.0 的安装、升级、恢复、卸载与回滚。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 和标准库。
+本文面向团队管理员和普通使用者，覆盖 `delivery-graph` 0.37.0 的安装、升级、恢复、卸载与回滚。展示名为“分层交付 Graph 控制面”。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 和标准库。
 
 ## 安装前检查
 
 - 安装 Python 3.10 或更高版本，并确保 `python --version` 可在宿主终端运行。
 - 安装至少一个受支持宿主：Codex 或 Claude Code。
 - 确认能够访问公司内部 Marketplace 仓库。
-- 在实际项目的新会话中使用 Plugin；不要在维护 `layered-delivery` 源码仓库时创建业务运行包。
+- 在实际项目的新会话中使用 Plugin；不要在维护 `delivery-graph` 源码仓库时创建业务运行包。
 
-当前发布验证基线是 Codex CLI 0.146.0 和 Claude Code 2.1.220。这是已验证版本，不代表 Codex 的硬编码最低版本；Claude Code 的敏感工具交互至少需要 2.1.199。
+当前本地探测到的 0.37.0 真实宿主候选基线是 Codex CLI 0.147.0 和 Claude Code 2.1.226。这两个版本是本轮冒烟目标，不是永久最低版本。在兼容矩阵回填真实运行结果前，只能表述为“候选验证中”。
 
 ## 安装
 
@@ -17,7 +17,7 @@
 
 ```text
 codex plugin marketplace add git@git.i-sanger.com:ai/skill/marketplace.git --ref master
-codex plugin add layered-delivery@majorbio-skills
+codex plugin add delivery-graph@majorbio-skills
 codex plugin list --json
 ```
 
@@ -27,7 +27,7 @@ codex plugin list --json
 
 ```text
 claude plugin marketplace add git@git.i-sanger.com:ai/skill/marketplace.git
-claude plugin install layered-delivery@majorbio-skills --scope user
+claude plugin install delivery-graph@majorbio-skills --scope user
 claude plugin list --json
 ```
 
@@ -41,7 +41,7 @@ claude plugin list --json
 python scripts/host_smoke.py probe --json
 ```
 
-结果必须报告 Plugin 版本 0.35.0 和 28 个 MCP 工具，并如实标记本机已安装的宿主。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器，普通成员也不需要重复付费冒烟。
+结果必须报告 Plugin 版本 0.37.0 和 29 个 MCP 工具，并如实标记本机已安装的宿主。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器。
 
 真实冒烟默认先只展示计划，必须显式增加 `--execute` 才调用模型。两个宿主分别运行，绝不从一个终端跨调另一个 Agent：
 
@@ -53,7 +53,15 @@ python scripts/host_smoke.py run --host codex --scenario light
 python scripts/host_smoke.py run --host codex --scenario light --execute
 ```
 
-Claude 命令从当前源码候选的 `--plugin-dir` 加载包，验证自动 Delivery 在稳定 linked worktree 启动后台 coordinator、主会话保持监控并由 PreToolUse Hook 注入工作区 attestation；Codex 命令要求 0.35.0 候选已经从 Marketplace 安装，并在临时 linked worktree 中验证项目任务路径。发布前的最小门禁可用 LIGHT 验证同宿主 claim/heartbeat/progress/result；发布管理员需要覆盖 Review 时再把 `--scenario light` 改成 `--scenario standard`。任何输出中的 `claimedAgents` 都必须只含命令指定的当前宿主。
+Claude 命令从当前 0.37.0 源码发布包的 `--plugin-dir` 加载 Plugin；Codex 命令要求候选 Plugin 已从 Marketplace 安装。发布前可用 LIGHT 验证同宿主 claim/heartbeat/progress/result，再用 STANDARD 覆盖分层 Review。任何输出中的 `claimedAgents` 都只能包含命令指定的当前宿主。Claude coordinator 的完整名称为 `delivery-graph:delivery-coordinator`。
+
+0.37.0 真实冒烟还必须覆盖以下交互和失败关闭边界：
+
+- `preview_hierarchy`、`workspace_status` 和手动接管只返回一个当前 `pendingInteraction`。缺少 `gitBinding` 时先处理 `DEVELOPMENT_BASELINE`，确认后才出现 `EXECUTION_MODE`；同一 Delivery 的后续 Revision 可复用已记忆基线。
+- 干净和脏工作树都进入这条基线流程。脏树确认必须回传原响应的 `dirtyStateFingerprint`；变化路径内容、暂存区或 porcelain 状态任一改变，旧指纹都失效。
+- `start_manual_handoff` 的单仓 Git 漂移先阻断且零写入。确认原 binding 时保持当前 Revision，确认新 binding 时生成下一不可变 Revision；多仓漂移 fail closed，要求用完整 project bindings 创建新的手动 Revision。
+- Controller 只读计算并冻结 binding；分支和 worktree 写操作始终由宿主完成。
+- Codex 只加载 `hooks/hooks.json` 中的 `SubagentStart`/`PreToolUse`，Claude 单独加载 `hooks/claude-hooks.json` 中的 `PreToolUse`/`StopFailure`。
 
 Codex 冒烟不能使用 `--ephemeral`：`SubagentStart` attestation 必须从宿主持久化 transcript 校验 parent/child/task。冒烟会留下一个可审计的 Codex 会话记录，但业务工作区仍位于自动清理的临时目录；若宿主无法提供该 transcript，claim 必须 fail closed。
 
@@ -73,15 +81,18 @@ Codex 冒烟不能使用 `--ephemeral`：`SubagentStart` attestation 必须从�
 ```text
 codex plugin marketplace upgrade majorbio-skills
 codex plugin remove layered-delivery@majorbio-skills
-codex plugin add layered-delivery@majorbio-skills
+codex plugin add delivery-graph@majorbio-skills
 codex plugin list --json
 ```
+
+0.36.0 → 0.37.0 是 Plugin/Skill identity 更名，因此先移除旧名再安装新名；不要删除项目中的 `.layered-delivery`，它仍是稳定的 schema v3 数据目录。
 
 ### Claude Code 升级
 
 ```text
 claude plugin marketplace update majorbio-skills
-claude plugin update layered-delivery@majorbio-skills
+claude plugin uninstall layered-delivery@majorbio-skills --scope user
+claude plugin install delivery-graph@majorbio-skills --scope user
 claude plugin list --json
 ```
 
@@ -107,13 +118,13 @@ Claude Code 更新后必须重启会话。若宿主提示命令名称不同，�
 ### Codex
 
 ```text
-codex plugin remove layered-delivery@majorbio-skills --json
+codex plugin remove delivery-graph@majorbio-skills --json
 ```
 
 ### Claude Code
 
 ```text
-claude plugin uninstall layered-delivery@majorbio-skills --scope user
+claude plugin uninstall delivery-graph@majorbio-skills --scope user
 ```
 
 卸载后新建会话，并用宿主的 Plugin 列表确认已移除。卸载 Plugin 不等于删除项目交付记录：项目中的 `.layered-delivery` 默认保留，便于审计或重新安装后恢复。需要清理这些数据时应单独评审精确路径、确认没有活动 Delivery，并使用可恢复方式处理。

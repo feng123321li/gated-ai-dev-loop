@@ -1,8 +1,10 @@
-# Layered Delivery 的 Graph Engineering 架构
+# ADR：分层交付 Graph Engineering 架构
+
+状态：**已采纳的历史架构决策**。本文解释为何采用 Delivery + 递归 GROUP/TASK + 分层 Review；它不是 0.37.0 的操作手册。Plugin identity、Git 接管、交互协议和 Hook 的现行事实以 [项目实现结构](project-engineering.md) 与 canonical Skill 为准。
 
 ## 结论
 
-`layered-delivery` 的职责是总览与调度，不是实现流程治理。
+`delivery-graph`（展示名“分层交付 Graph 控制面”）的职责是总览与调度，不是实现流程治理。项目数据目录为兼容既有 Delivery 继续使用 `.layered-delivery/`。
 
 ```text
 Delivery 顶层交付需求
@@ -32,7 +34,7 @@ Delivery 是一次交付的身份、总目标和最终验收边界，不是 work
 | Review Loop | 审查一个 TASK 结果、已汇合的 GROUP 边界或完整 Delivery | 改写被冻结的层级或解释完成点 |
 | Skill | 为某个 Loop 提供实现方法或领域规范 | 改写外层冻结 Graph |
 
-Graph 节点是自治工作单元，不是每一个内部动作。若某个 Java Loop 规定 Entity/Mapper/Service 的创建方式，它可以在 payload 和自身 Skill 中定义，不会与 layered-delivery 的文件 scope 冲突。
+Graph 节点是自治工作单元，不是每一个内部动作。若某个 Java Loop 规定 Entity/Mapper/Service 的创建方式，它可以在 payload 和自身 Skill 中定义，不会与 `delivery-graph` 的外层调度边界冲突。
 
 ## 递归 GROUP/TASK
 
@@ -189,7 +191,11 @@ Review 沿层级逐层向上收敛，但不会把同一个 Review 节点重复�
 
 冻结 Revision 只固定当前外层目标、依赖、资源声明、项目范围和拓扑，不固定 Loop 内部实现计划；显式 payload 也不是工程正确性的穷举清单。Gate 失败、普通实现缺陷或 Review finding 只要能在当前 scope 和权限内修正，就由当前 Loop 调整方案、修正并重新验证。`BLOCKED` 仅用于当前 Loop 已无可行的 scope 内路径，并要求显式 failure class；只有冻结的依赖、资源、项目范围或拓扑必须改变时才返回 `REPLAN_REQUIRED`。最终用户验收前的 replan 保持同一 `delivery.id` 并生成下一不可变 Revision，不再用取消旧 run 加新 Delivery ID 表达同一需求。
 
-Revision 连续性必须来自用户明确说明，而不是来自工作区恰好恢复了哪个 Active Delivery。不同工单或独立业务目标默认建立新 Delivery。Claude Code 裸 CLI 从项目 primary checkout 启动时可用 `EXCLUSIVE_PRIMARY_CHECKOUT` 绑定一个未结束 Delivery：有效 feature 分支直接就绪，主线或 detached 状态先在当前 checkout 建立 Delivery feature 分支；Codex 和并行/占用的 Claude Delivery 继续按 `HOST_NATIVE_LINKED_WORKTREE` 创建新的任务/会话与 linked worktree。Controller 不执行 Git 写入，而以 `worktreeProvenance` 明示实际宿主、策略、拓扑、基线选择来源和提交；分支只有未被其他 worktree/Delivery 使用、基线有效，且现存业务 diff 经用户按精确状态指纹确认后才可 adoption，`.layered-delivery/**` 不计入业务 dirty 状态。`preview_hierarchy` 仍只登记不绑定工作区的 `CHOICE_READY`，并在显示选项前生成数据库、总览、基线与关联投影；返回的 schema v2 `executionChoice` 要求 Codex/Claude 在映射工具可调用时使用原生选择器，仅在不可调用时逐字显示 Markdown，禁止 Agent 自行改写为回复提示。AUTOMATIC 由 `select_execution_mode` 先持久记录；Claude primary 只缺分支时由同一会话以 `workspace_status → resume_execution_mode` 续接，Codex primary 则通过 `hostDispatch` 创建 worktree 项目任务并按相同方式续接，两者都不重复业务确认。preview 中的 `projectScopes.workspaceRoot` 可作为仓库锚点，映射到当前独占 primary 或同一 Git common directory 下唯一匹配的 linked worktree。手动选择同样不绑定工作区。遗漏入口路由而在占用工作区 prepare 时，返回 `SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED / CREATE_INDEPENDENT_WORKTREE_TASK` 与 `worktreeSetup`。异步宿主若只返回排队标识，则保持 `WORKTREE_SETUP_QUEUED`，不重复创建，也不宣称 Graph 已冻结。初始自动或手动按钮选择由 Controller 一次应用，不触发第二次通用确认。
+Revision 连续性必须来自用户明确说明，而不是来自工作区恰好恢复了哪个 Active Delivery。不同工单或独立业务目标默认建立新 Delivery。0.37.0 的 Git 宿主策略统一为 `HOST_NATIVE_LINKED_WORKTREE`；历史方案中的 `EXCLUSIVE_PRIMARY_CHECKOUT` 已废止，不是现行规范。Controller 不执行 Git 写入，只通过 `worktreeProvenance` 和冻结 binding 描述实际宿主、拓扑与基线。
+
+`preview_hierarchy` 只登记不绑定工作区的 `CHOICE_READY`，并返回当前唯一 `pendingInteraction`：缺 binding 时先处理 `DEVELOPMENT_BASELINE`，之后才是 `EXECUTION_MODE`；兼容字段 `developmentBaseline` / `executionChoice` 指向同一对象。干净和脏工作树都遵循该顺序；dirty 指纹覆盖 porcelain、变化路径的 worktree blob 与 index state，`.layered-delivery/**` 不计入业务 dirty。宿主能调用原生选择器时必须使用原生交互，不能自行改写为自由文本确认。
+
+AUTOMATIC 由 `select_execution_mode` 持久记录后，通过 `hostDispatch` 在稳定 linked worktree 续接；Claude 使用 `delivery-graph:delivery-coordinator`，Codex 创建 worktree 项目任务。手动接管若发生单仓 Git 漂移，则在任何控制状态写入前返回基线重确认：确认原 binding 保持当前 Revision，确认新 binding 创建下一不可变 Revision。多仓漂移 fail closed，要求完整 project bindings，不能由单仓选择器局部修订。
 
 ## 逻辑递归与物理布局
 

@@ -10,13 +10,13 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PACKAGE = REPOSITORY_ROOT / "src" / "hdg"
-CANONICAL_SKILL = REPOSITORY_ROOT / "skills" / "layered-delivery"
+CANONICAL_SKILL = REPOSITORY_ROOT / "skills" / "delivery-graph"
 SKILL_SCRIPTS = CANONICAL_SKILL / "scripts"
 TARGET_PACKAGE = SKILL_SCRIPTS / "hdg"
 TARGET_ENTRY = SKILL_SCRIPTS / "hdg.py"
 TARGET_MCP_ENTRY = SKILL_SCRIPTS / "hdg_mcp.py"
-PLUGIN_ROOT = REPOSITORY_ROOT / "plugins" / "layered-delivery"
-PLUGIN_SKILL = PLUGIN_ROOT / "skills" / "layered-delivery"
+PLUGIN_ROOT = REPOSITORY_ROOT / "plugins" / "delivery-graph"
+PLUGIN_SKILL = PLUGIN_ROOT / "skills" / "delivery-graph"
 
 MCP_ENTRY = '''#!/usr/bin/env python3
 from __future__ import annotations

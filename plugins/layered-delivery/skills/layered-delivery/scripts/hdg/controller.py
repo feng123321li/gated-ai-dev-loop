@@ -30,6 +30,7 @@ from .graph_runtime import (
 )
 from .hierarchy_contract import hierarchy_contract
 from .planning import (
+    confirm_development_baseline,
     create_manual_handoff,
     delivery_revision_history,
     freeze_hierarchy,
@@ -54,6 +55,7 @@ CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "workspace_status": workspace_status,
     "hierarchy_contract": hierarchy_contract,
     "preview_hierarchy": preview_hierarchy,
+    "confirm_development_baseline": confirm_development_baseline,
     "select_execution_mode": select_execution_mode,
     "resume_execution_mode": resume_execution_mode,
     "create_manual_handoff": create_manual_handoff,
@@ -132,6 +134,7 @@ class LayeredDeliveryController:
                 "select_execution_mode",
                 "resume_execution_mode",
                 "start_manual_handoff",
+                "confirm_development_baseline",
             }:
                 selected = repository.hierarchy(root_id)
                 unbound_statuses = (
@@ -139,6 +142,7 @@ class LayeredDeliveryController:
                     if name in {
                         "select_execution_mode",
                         "resume_execution_mode",
+                        "confirm_development_baseline",
                     }
                     else {"HANDOFF_READY"}
                 )
@@ -173,6 +177,7 @@ class LayeredDeliveryController:
                     monitoring_from_control_root = True
             if name not in {
                 "workspace_status",
+                "confirm_development_baseline",
                 "prepare_delivery_revision",
                 "select_execution_mode",
                 "resume_execution_mode",
@@ -213,6 +218,7 @@ class LayeredDeliveryController:
             "workspace_status",
             "prepare_hierarchy",
             "prepare_delivery_revision",
+            "confirm_development_baseline",
             "select_execution_mode",
             "resume_execution_mode",
             "start_manual_handoff",
@@ -233,6 +239,7 @@ class LayeredDeliveryController:
         if name in {
             "workspace_status",
             "preview_hierarchy",
+            "confirm_development_baseline",
             "select_execution_mode",
             "resume_execution_mode",
         }:

@@ -456,6 +456,17 @@ class SchedulerRepository:
                 PRIMARY KEY(root_id, revision),
                 FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
             );
+            CREATE TABLE IF NOT EXISTS delivery_preferences (
+                root_id TEXT PRIMARY KEY,
+                branch_ref TEXT NOT NULL,
+                base_ref TEXT NOT NULL,
+                base_commit TEXT NOT NULL,
+                integration_target TEXT NOT NULL,
+                source TEXT NOT NULL,
+                chosen_by TEXT NOT NULL,
+                chosen_at TEXT NOT NULL,
+                FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
+            );
             CREATE TABLE IF NOT EXISTS dispatch_reservations (
                 reservation_id TEXT PRIMARY KEY,
                 run_id TEXT NOT NULL,
@@ -895,6 +906,17 @@ class SchedulerRepository:
                    created_at, updated_at,
                    CASE WHEN status = 'FROZEN' THEN updated_at ELSE NULL END
             FROM hierarchies;
+            CREATE TABLE IF NOT EXISTS delivery_preferences (
+                root_id TEXT PRIMARY KEY,
+                branch_ref TEXT NOT NULL,
+                base_ref TEXT NOT NULL,
+                base_commit TEXT NOT NULL,
+                integration_target TEXT NOT NULL,
+                source TEXT NOT NULL,
+                chosen_by TEXT NOT NULL,
+                chosen_at TEXT NOT NULL,
+                FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
+            );
             """
         )
         delivery_revision_columns = {
@@ -1403,6 +1425,80 @@ class SchedulerRepository:
                     {"rootId": row["root_id"], "status": status}
                 )
         return usage
+
+    def development_preference(self, root_id: str) -> dict[str, Any] | None:
+        """Return the remembered development baseline for one Delivery."""
+
+        self._assert_no_legacy_state()
+        if not self.database_path.is_file():
+            return None
+        with self.read() as connection:
+            row = connection.execute(
+                "SELECT branch_ref, base_ref, base_commit, "
+                "integration_target, source, chosen_by, chosen_at "
+                "FROM delivery_preferences WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "branchRef": row["branch_ref"],
+            "baseRef": row["base_ref"],
+            "baseCommit": row["base_commit"],
+            "integrationTarget": row["integration_target"],
+            "source": row["source"],
+            "chosenBy": row["chosen_by"],
+            "chosenAt": row["chosen_at"],
+        }
+
+    def record_development_preference(
+        self,
+        root_id: str,
+        *,
+        binding: dict[str, str],
+        source: str,
+        chosen_by: str,
+    ) -> dict[str, Any]:
+        """Persist (UPSERT) the chosen development baseline for one Delivery."""
+
+        chosen_at = timestamp(self.now)
+        with self.transaction() as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO delivery_preferences("
+                "root_id, branch_ref, base_ref, base_commit, "
+                "integration_target, source, chosen_by, chosen_at"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    root_id,
+                    binding["branchRef"],
+                    binding["baseRef"],
+                    binding["baseCommit"],
+                    binding["integrationTarget"],
+                    source,
+                    chosen_by,
+                    chosen_at,
+                ),
+            )
+        return {
+            "branchRef": binding["branchRef"],
+            "baseRef": binding["baseRef"],
+            "baseCommit": binding["baseCommit"],
+            "integrationTarget": binding["integrationTarget"],
+            "source": source,
+            "chosenBy": chosen_by,
+            "chosenAt": chosen_at,
+        }
+
+    def clear_development_preference(self, root_id: str) -> None:
+        """Drop the remembered development baseline (e.g. on abandon)."""
+
+        if not self.database_path.is_file():
+            return
+        with self.transaction() as connection:
+            connection.execute(
+                "DELETE FROM delivery_preferences WHERE root_id = ?",
+                (root_id,),
+            )
 
     def record_choice_ready(
         self,

@@ -222,6 +222,133 @@ def bind_delivery_to_git(
     return hierarchy
 
 
+class DevelopmentBaselineTests(unittest.TestCase):
+    def test_clean_worktree_without_binding_prompts_then_confirms_and_remembers(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            _repository, worktree, _base_commit, branch_ref = (
+                git_delivery_checkout(root, delivery_id="d-baseline")
+            )
+            hierarchy = isolated_task_hierarchy("d-baseline", "t-baseline")
+            preview = call_tool(
+                "preview_hierarchy",
+                {"hierarchy": hierarchy},
+                root=str(worktree),
+                workspace_root=str(worktree),
+                trusted_host_adapter="claude-code",
+            )
+            self.assertEqual(
+                preview["nextAction"],
+                "PRESENT_HOST_NATIVE_BASELINE_CHOICE",
+            )
+            self.assertIn("developmentBaseline", preview)
+            self.assertNotIn("executionChoice", preview)
+            option_ids = [
+                option["id"]
+                for option in preview["developmentBaseline"]["options"]
+            ]
+            self.assertIn(branch_ref, option_ids)
+            self.assertIn("NEW_FROM_MAINLINE", option_ids)
+            confirmed = call_tool(
+                "confirm_development_baseline",
+                {
+                    "root_id": "d-baseline",
+                    "selection": branch_ref,
+                    "expected_hierarchy_fingerprint": preview[
+                        "hierarchyFingerprint"
+                    ],
+                    "confirmed_by": "李锋",
+                },
+                root=str(worktree),
+                workspace_root=str(worktree),
+                trusted_host_adapter="claude-code",
+            )
+            self.assertIn("executionChoice", confirmed)
+            self.assertEqual(
+                confirmed["developmentBaselineConfirmed"]["branchRef"],
+                branch_ref,
+            )
+            # Regression for the master-default bug: executionChoice now carries
+            # the confirmed mainline base instead of None.
+            self.assertEqual(
+                confirmed["executionChoice"]["baseRef"], "main"
+            )
+            self.assertNotEqual(
+                confirmed["hierarchyFingerprint"],
+                preview["hierarchyFingerprint"],
+            )
+            remembered = call_tool(
+                "preview_hierarchy",
+                {
+                    "hierarchy": isolated_task_hierarchy(
+                        "d-baseline", "t-baseline"
+                    )
+                },
+                root=str(worktree),
+                workspace_root=str(worktree),
+                trusted_host_adapter="claude-code",
+            )
+            self.assertIn("executionChoice", remembered)
+            self.assertNotIn("developmentBaseline", remembered)
+
+    def test_dirty_worktree_does_not_prompt_for_baseline(self) -> None:
+        with TemporaryDirectory() as root:
+            _repository, worktree, _base_commit, _branch_ref = (
+                git_delivery_checkout(root, delivery_id="d-dirty")
+            )
+            Path(worktree, "uncommitted.txt").write_text(
+                "pending change\n", encoding="utf-8"
+            )
+            preview = call_tool(
+                "preview_hierarchy",
+                {"hierarchy": isolated_task_hierarchy("d-dirty", "t-dirty")},
+                root=str(worktree),
+                workspace_root=str(worktree),
+                trusted_host_adapter="claude-code",
+            )
+            self.assertNotIn("developmentBaseline", preview)
+            self.assertEqual(
+                preview["nextAction"],
+                "PRESENT_HOST_NATIVE_EXECUTION_CHOICE",
+            )
+
+    def test_new_from_mainline_pins_mainline_head(self) -> None:
+        with TemporaryDirectory() as root:
+            repository, worktree, _base_commit, _branch_ref = (
+                git_delivery_checkout(root, delivery_id="d-new")
+            )
+            mainline_head = git_command(repository, "rev-parse", "main")
+            preview = call_tool(
+                "preview_hierarchy",
+                {"hierarchy": isolated_task_hierarchy("d-new", "t-new")},
+                root=str(worktree),
+                workspace_root=str(worktree),
+                trusted_host_adapter="claude-code",
+            )
+            self.assertIn("developmentBaseline", preview)
+            confirmed = call_tool(
+                "confirm_development_baseline",
+                {
+                    "root_id": "d-new",
+                    "selection": "NEW_FROM_MAINLINE",
+                    "branch_name": "feature/new-baseline",
+                    "expected_hierarchy_fingerprint": preview[
+                        "hierarchyFingerprint"
+                    ],
+                    "confirmed_by": "李锋",
+                },
+                root=str(worktree),
+                workspace_root=str(worktree),
+                trusted_host_adapter="claude-code",
+            )
+            preference = confirmed["developmentBaselineConfirmed"]
+            self.assertEqual(preference["branchRef"], "feature/new-baseline")
+            self.assertEqual(preference["baseRef"], "main")
+            self.assertEqual(preference["baseCommit"], mainline_head)
+            self.assertEqual(preference["source"], "NEW_FROM_MAINLINE")
+
+
 class HierarchyContractTests(unittest.TestCase):
     def test_requirement_key_is_stable_and_exposed_for_delivery_continuity(
         self,
@@ -4118,7 +4245,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 28)
+            self.assertEqual(len(listed["result"]["tools"]), 29)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

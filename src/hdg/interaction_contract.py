@@ -112,6 +112,120 @@ def execution_choice_contract(
     }
 
 
+DEVELOPMENT_BASELINE_MARKDOWN = """请先选择开发基线（在确认开发方式之前确定开发分支）：
+
+从本地分支中选择一个作为开发基线，或从当前主线新建分支。仅列出本地分支，不含远端。选择会被记住，同一 Delivery 的后续 Revision 不再重复询问；Controller 不执行任何 Git 写操作，分支或 worktree 由宿主创建。
+"""
+
+
+def development_baseline_contract(
+    host_adapter_id: str | None = None,
+    *,
+    git_binding: dict[str, Any] | None = None,
+    candidate_branches: list[dict[str, Any]],
+    default_branch_ref: str | None,
+    expected_hierarchy_fingerprint: str,
+) -> dict[str, Any]:
+    """Return the controller-owned development-baseline interaction contract.
+
+    Sits before ``EXECUTION_MODE``: on a clean worktree with no remembered
+    baseline the host presents this selector over local feature branches plus a
+    ``NEW_FROM_MAINLINE`` option, then applies the choice via
+    ``confirm_development_baseline``. The presentation machinery mirrors
+    ``execution_choice_contract`` verbatim so the same native question tool is
+    used.
+    """
+
+    active_tool = HOST_NATIVE_QUESTION_TOOLS.get(host_adapter_id or "")
+    options: list[dict[str, Any]] = [
+        {
+            "id": branch["branchRef"],
+            "label": branch["branchRef"],
+            "description": (
+                f"本地分支；基线 {branch['baseRef']} @ "
+                f"{branch['baseCommit'][:12]}"
+            ),
+            "branchRef": branch["branchRef"],
+            "baseRef": branch["baseRef"],
+            "baseCommit": branch["baseCommit"],
+            "integrationTarget": branch["integrationTarget"],
+            "headCommit": branch["headCommit"],
+            "adoptable": branch["adoptable"],
+            "inUseBy": branch.get("inUseBy", []),
+            "recommended": branch["branchRef"] == default_branch_ref,
+            "nextAction": "CONFIRM_BASELINE_THEN_PRESENT_EXECUTION_CHOICE",
+        }
+        for branch in candidate_branches
+    ]
+    options.append(
+        {
+            "id": "NEW_FROM_MAINLINE",
+            "label": "从主线创建新分支",
+            "description": "从当前主线新建一个开发分支（需提供分支名）",
+            "requiresBranchName": True,
+            "recommended": default_branch_ref is None,
+            "nextAction": "CONFIRM_BASELINE_THEN_PRESENT_EXECUTION_CHOICE",
+        }
+    )
+    base_ref = None
+    if isinstance(git_binding, dict):
+        base_ref = git_binding.get("baseRef")
+    default_option = (
+        default_branch_ref
+        if default_branch_ref is not None
+        else "NEW_FROM_MAINLINE"
+    )
+    return {
+        "schemaVersion": 2,
+        "owner": "CONTROLLER",
+        "kind": "DEVELOPMENT_BASELINE",
+        "baseRef": base_ref,
+        "expectedHierarchyFingerprint": expected_hierarchy_fingerprint,
+        "selectionRequired": True,
+        "defaultOptionId": default_option,
+        "recommendedOptionId": default_option,
+        "presentationPolicy": {
+            "preferredMode": "HOST_NATIVE_SELECTOR",
+            "nativeSelectorRequiredWhenAvailable": True,
+            "availabilityRule": (
+                "MAPPED_TOOL_CALLABLE_IN_CURRENT_CONTEXT"
+            ),
+            "optionSourceField": "options",
+            "selectionValueField": "id",
+            "preserveOptionOrder": True,
+            "preserveOptionCopy": True,
+            "hostMappings": {
+                host_id: {"tool": tool}
+                for host_id, tool in HOST_NATIVE_QUESTION_TOOLS.items()
+            },
+            "fallback": {
+                "allowedOnlyWhen": (
+                    "MAPPED_NATIVE_SELECTOR_UNAVAILABLE"
+                ),
+                "mode": "EXACT_CONTROLLER_MARKDOWN",
+                "contentField": "markdown",
+                "agentRewriteAllowed": False,
+                "typedOptionPromptAllowed": False,
+            },
+        },
+        "activeHostMapping": (
+            {
+                "hostAdapterId": host_adapter_id,
+                "tool": active_tool,
+                "requiredWhenCallable": True,
+            }
+            if active_tool is not None
+            else None
+        ),
+        "freeformInput": {
+            "allowed": True,
+            "nextAction": "CONTINUE_REQUIREMENT_DISCUSSION",
+        },
+        "options": options,
+        "markdown": DEVELOPMENT_BASELINE_MARKDOWN,
+    }
+
+
 def manual_receiver_prompt(relative_handoff_path: str) -> str:
     """Return the exact prompt shown to and embedded for a manual receiver."""
 
@@ -130,8 +244,10 @@ def manual_receiver_prompt(relative_handoff_path: str) -> str:
 
 
 __all__ = (
+    "DEVELOPMENT_BASELINE_MARKDOWN",
     "EXECUTION_CHOICE_MARKDOWN",
     "HOST_NATIVE_QUESTION_TOOLS",
+    "development_baseline_contract",
     "execution_choice_contract",
     "manual_receiver_prompt",
 )

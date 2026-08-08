@@ -7,9 +7,11 @@ from .errors import fail
 from .fs_safe import atomic_write, safe_path
 from .git_binding import (
     _branch_worktree_count,
+    enumerate_local_feature_branches,
     find_delivery_linked_worktree,
     inspect_delivery_git_workspace,
     inspect_frozen_git_workspace_provenance,
+    resolve_branch_binding,
     verify_delivery_git_binding,
     verify_delivery_project_scopes,
 )
@@ -19,6 +21,7 @@ from .graph_model import (
     graph_summary,
 )
 from .interaction_contract import (
+    development_baseline_contract,
     execution_choice_contract,
     manual_receiver_prompt,
 )
@@ -428,10 +431,90 @@ def _automatic_workspace_setup(
     return result
 
 
+def _inject_remembered_baseline(
+    normalized: dict[str, Any],
+    repository: SchedulerRepository,
+    root_id: str,
+) -> bool:
+    """Inject a remembered development baseline when the hierarchy omits gitBinding.
+
+    Closes the carry-forward gap: a one-time baseline choice (stored in
+    ``delivery_preferences``) is re-supplied to previews, revisions and prepares
+    so the Controller never re-asks and the binding survives across revisions.
+    Returns True when a binding was injected.
+    """
+
+    delivery = normalized.get("delivery")
+    if not isinstance(delivery, dict) or delivery.get("gitBinding") is not None:
+        return False
+    preference = repository.development_preference(root_id)
+    if preference is None:
+        return False
+    delivery["gitBinding"] = {
+        "branchRef": preference["branchRef"],
+        "baseRef": preference["baseRef"],
+        "baseCommit": preference["baseCommit"],
+        "integrationTarget": preference["integrationTarget"],
+    }
+    return True
+
+
+def _development_baseline_if_needed(
+    normalized: dict[str, Any],
+    repository: SchedulerRepository,
+    workspace_root: str,
+    host_adapter_id: str | None,
+    expected_fingerprint: str,
+    choice_ready: bool,
+) -> dict[str, Any] | None:
+    """Build the DEVELOPMENT_BASELINE contract when a clean worktree has no
+    confirmed baseline yet; otherwise return None (proceed to executionChoice)."""
+
+    if not choice_ready:
+        return None
+    if normalized["delivery"].get("gitBinding") is not None:
+        return None
+    try:
+        discovery = inspect_delivery_git_workspace(
+            workspace_root, host_adapter_id=host_adapter_id
+        )
+        if discovery is None:
+            return None
+        if not discovery.get("workingTree", {}).get("clean"):
+            return None
+        candidates = enumerate_local_feature_branches(workspace_root)
+    except Exception:
+        # The baseline gate is best-effort: on any Git inspection failure,
+        # fall back to the normal executionChoice flow so preview stays stable.
+        return None
+    root_id = normalized["delivery"]["id"]
+    for branch in candidates:
+        usage = repository.git_branch_usage(branch["branchRef"])
+        branch["inUseBy"] = [
+            item["rootId"] for item in usage if item["rootId"] != root_id
+        ]
+    default_branch_ref = None
+    if discovery.get("branchAdoption", {}).get("state") in {
+        "READY",
+        "READY_WITH_CONFIRMED_CHANGES",
+    }:
+        default_branch_ref = discovery.get("gitWorkspace", {}).get(
+            "branchRef"
+        )
+    return development_baseline_contract(
+        host_adapter_id,
+        git_binding=None,
+        candidate_branches=candidates,
+        default_branch_ref=default_branch_ref,
+        expected_hierarchy_fingerprint=expected_fingerprint,
+    )
+
+
 def preview_hierarchy(
     *,
     root: str,
     hierarchy: object,
+    workspace_root: str | None = None,
     explicit_dogfood: bool = False,
     host_adapter_id: str | None = None,
     now: object = None,
@@ -444,6 +527,13 @@ def preview_hierarchy(
     normalized, graph, hierarchy_value, graph_value = _preview_values(
         hierarchy
     )
+    root_id = normalized["delivery"]["id"]
+    if _inject_remembered_baseline(normalized, repository, root_id):
+        hierarchy_value = hierarchy_fingerprint(normalized)
+        graph = compile_delivery_graph(
+            normalized, hierarchy_fingerprint=hierarchy_value
+        )
+        graph_value = graph_fingerprint(graph)
     staged = repository.record_choice_ready(
         normalized,
         graph,
@@ -451,13 +541,19 @@ def preview_hierarchy(
         graph_fingerprint=graph_value,
     )
     artifacts_ready = staged["artifactsReady"]
-    recorded_selection = repository.execution_selection(
-        normalized["delivery"]["id"]
-    )
+    recorded_selection = repository.execution_selection(root_id)
     choice_ready = (
         artifacts_ready
         and staged["status"] == "CHOICE_READY"
         and recorded_selection is None
+    )
+    development_baseline = _development_baseline_if_needed(
+        normalized,
+        repository,
+        workspace_root or root,
+        host_adapter_id,
+        hierarchy_value,
+        choice_ready,
     )
     next_actions = {
         "HANDOFF_READY": (
@@ -468,7 +564,7 @@ def preview_hierarchy(
         "ABANDONED": "DELIVERY_ABANDONED_NO_FURTHER_ACTION",
     }
     result = {
-        "rootId": normalized["delivery"]["id"],
+        "rootId": root_id,
         "status": staged["status"],
         "hierarchyFingerprint": hierarchy_value,
         "graphFingerprint": graph_value,
@@ -480,7 +576,9 @@ def preview_hierarchy(
         "controlStateCreated": staged["controlStateCreated"],
         "artifactsReady": artifacts_ready,
         "nextAction": (
-            "PRESENT_HOST_NATIVE_EXECUTION_CHOICE"
+            "PRESENT_HOST_NATIVE_BASELINE_CHOICE"
+            if development_baseline is not None
+            else "PRESENT_HOST_NATIVE_EXECUTION_CHOICE"
             if choice_ready
             else "RESUME_RECORDED_AUTOMATIC_SELECTION_IN_READY_WORKTREE"
             if recorded_selection is not None
@@ -492,7 +590,9 @@ def preview_hierarchy(
     }
     if artifacts_ready:
         result["humanArtifacts"] = _human_artifacts(normalized)
-    if choice_ready:
+    if development_baseline is not None:
+        result["developmentBaseline"] = development_baseline
+    elif choice_ready:
         result["executionChoice"] = execution_choice_contract(
             host_adapter_id,
             git_binding=normalized["delivery"].get("gitBinding"),
@@ -500,6 +600,141 @@ def preview_hierarchy(
     if recorded_selection is not None:
         result["executionSelection"] = recorded_selection
     return result
+
+
+def confirm_development_baseline(
+    *,
+    root: str,
+    root_id: str,
+    selection: str,
+    expected_hierarchy_fingerprint: str,
+    confirmed_by: str,
+    branch_name: str | None = None,
+    workspace_root: str | None = None,
+    explicit_dogfood: bool = False,
+    host_adapter_id: str | None = None,
+    now: object = None,
+    **_: Any,
+) -> dict[str, Any]:
+    """Apply one DEVELOPMENT_BASELINE option and re-stage the hierarchy.
+
+    Persists the per-Delivery preference, computes the Git binding read-only,
+    re-stages the hierarchy with the binding frozen in (via the idempotent
+    ``record_choice_ready`` path), and returns the updated fingerprint plus the
+    ``executionChoice``. The Controller performs no Git writes: a
+    ``NEW_FROM_MAINLINE`` choice pins ``baseCommit`` to the current mainline
+    HEAD and the host creates the branch during worktree setup.
+    """
+
+    if not isinstance(confirmed_by, str) or not confirmed_by.strip():
+        fail(
+            "SCHEDULER_USER_CONFIRMATION_REQUIRED",
+            "confirmed_by must identify the confirming human",
+        )
+    if not isinstance(selection, str) or not selection.strip():
+        fail(
+            "SCHEDULER_BASELINE_CHOICE_INVALID",
+            "selection must be a local branch_ref or NEW_FROM_MAINLINE",
+            selection=selection,
+        )
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    stored = repository.hierarchy(root_id)
+    if stored["hierarchyFingerprint"] != expected_hierarchy_fingerprint:
+        fail(
+            "SCHEDULER_BASELINE_CHOICE_STALE",
+            "The baseline choice does not match the generated hierarchy",
+            rootId=root_id,
+            actualHierarchyFingerprint=stored["hierarchyFingerprint"],
+        )
+    if stored["status"] != "CHOICE_READY":
+        fail(
+            "SCHEDULER_BASELINE_CHOICE_CONFLICT",
+            "A development baseline can only be confirmed while the Delivery "
+            "waits for an execution choice",
+            rootId=root_id,
+            status=stored["status"],
+        )
+    if repository.execution_selection(root_id) is not None:
+        fail(
+            "SCHEDULER_BASELINE_CHOICE_CONFLICT",
+            "An execution mode has already been selected for this Delivery",
+            rootId=root_id,
+        )
+    workspace = workspace_root or root
+    if selection == "NEW_FROM_MAINLINE":
+        if (
+            not isinstance(branch_name, str)
+            or not branch_name.strip()
+            or branch_name.strip() in {"main", "master"}
+        ):
+            fail(
+                "SCHEDULER_BASELINE_CHOICE_INVALID",
+                "NEW_FROM_MAINLINE requires a new branch name that is not "
+                "main or master",
+                branchName=branch_name,
+            )
+        chosen_branch = branch_name.strip()
+        source = "NEW_FROM_MAINLINE"
+    else:
+        chosen_branch = selection.strip()
+        available = {
+            item["branchRef"]
+            for item in enumerate_local_feature_branches(workspace)
+        }
+        if chosen_branch not in available:
+            fail(
+                "SCHEDULER_BASELINE_CHOICE_INVALID",
+                "The selected branch is not an available local feature branch",
+                selection=chosen_branch,
+            )
+        source = "LOCAL_BRANCH"
+    binding = resolve_branch_binding(workspace, branch_ref=chosen_branch)
+    terminal_statuses = {"COMPLETED", "CANCELLED", "SUPERSEDED"}
+    conflicting = [
+        item
+        for item in repository.git_branch_usage(binding["branchRef"])
+        if item["rootId"] != root_id
+        and item["status"] not in terminal_statuses
+    ]
+    if conflicting:
+        fail(
+            "SCHEDULER_BASELINE_BRANCH_IN_USE",
+            "The selected branch is already bound to another active Delivery",
+            branchRef=binding["branchRef"],
+            conflictingDeliveries=conflicting,
+        )
+    preference = repository.record_development_preference(
+        root_id,
+        binding=binding,
+        source=source,
+        chosen_by=confirmed_by.strip(),
+    )
+    hierarchy = stored["hierarchy"]
+    hierarchy["delivery"]["gitBinding"] = binding
+    normalized = validate_hierarchy_definition(hierarchy)
+    hierarchy_value = hierarchy_fingerprint(normalized)
+    graph = compile_delivery_graph(
+        normalized, hierarchy_fingerprint=hierarchy_value
+    )
+    graph_value = graph_fingerprint(graph)
+    repository.record_choice_ready(
+        normalized,
+        graph,
+        hierarchy_fingerprint=hierarchy_value,
+        graph_fingerprint=graph_value,
+    )
+    return {
+        "rootId": root_id,
+        "status": "CHOICE_READY",
+        "hierarchyFingerprint": hierarchy_value,
+        "graphFingerprint": graph_value,
+        "developmentBaselineConfirmed": preference,
+        "executionChoice": execution_choice_contract(
+            host_adapter_id, git_binding=binding
+        ),
+        "nextAction": "PRESENT_HOST_NATIVE_EXECUTION_CHOICE",
+    }
 
 
 def _assert_exact_project_authorization(
@@ -657,6 +892,9 @@ def prepare_hierarchy(
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     normalized = validate_hierarchy_definition(hierarchy)
+    _inject_remembered_baseline(
+        normalized, repository, normalized["delivery"]["id"]
+    )
     project_scopes = normalized["delivery"].get("projectScopes")
     verified_projects = verify_delivery_project_scopes(
         workspace_root or root,
@@ -762,6 +1000,7 @@ def prepare_delivery_revision(
             "A Delivery revision must retain the original Delivery ID",
             rootId=root_id,
         )
+    _inject_remembered_baseline(normalized, repository, root_id)
     verify_delivery_project_scopes(
         workspace_root or root,
         normalized["delivery"],

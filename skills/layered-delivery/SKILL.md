@@ -39,7 +39,7 @@ allowed-tools:
 | 状态 | 下一步 |
 |---|---|
 | `ABSENT` | 用户要求新交付时读取[规划说明](references/planning-quickstart.md)；只读问答不创建状态 |
-| `CHOICE_READY` | 基线与关联文档已生成；若无 `executionSelection`，原样展示 Controller 执行方式交互；若已记录 `AUTOMATIC`，按 `nextAction` 迁移 worktree 并调用 `resume_execution_mode`，不得再次展示选择器 |
+| `CHOICE_READY` | 基线与关联文档已生成；若无 `executionSelection`，按 `preview_hierarchy` 返回原样展示：返回 `developmentBaseline` 时先确认开发基线（见下「规划与冻结」），返回 `executionChoice` 时展示执行方式交互；若已记录 `AUTOMATIC`，按 `nextAction` 迁移 worktree 并调用 `resume_execution_mode`，不得再次展示选择器 |
 | `HANDOFF_READY` | 报告手动需求快照已登记、Graph Run 尚未创建；原样展示 handoff 接收提示。接收 CLI 在实际工作区调用 `start_manual_handoff` 后立即进入 frontier，不得直接开发 |
 | `PREPARED` | 读取规划说明并续接已有方案；需求未变时不要重复 prepare |
 | `ACTIVE` / `BLOCKED` / `PAUSED` | 读取[执行说明](references/execution-quickstart.md)，从 `graph_frontier` 恢复 |
@@ -59,7 +59,9 @@ MCP 写响应未知、连接恢复、Git 绑定异常或投影问题时，先读
 5. 用精确 `resourceClaims` 表达跨 Delivery 排他资源；worktree 不能替代数据库、端口或环境锁。并行 Delivery 改同一文件/区域时，在相关 TASK 声明同一个 claim 即自动串行（详见 planning-quickstart「并行 Delivery 与同资源串行化」）。
 6. 用户提供的 Skill 只登记为共享 `root.skillHints`，由各 Loop 根据真实上下文决定是否触发。
 7. 调用 `preview_hierarchy`（层级较大或 payload 详细时，先 Write 到工作区文件、用 `python -m json.tool` 校验，再以 `hierarchy_file` 传入，避免内联大 JSON 出错；详见 planning-quickstart）。只有响应为 `CHOICE_READY` 且 `artifactsReady=true`，确认共享数据库、根总览、baseline、progress、acceptance、revisions 与 work-items 已生成后，才展示执行方式。Controller 是交互文案的唯一所有者；宿主必须按 `executionChoice.presentationPolicy` 优先使用当前 Adapter 的原生选择器，从 `options` 机械映射顺序、ID、默认项、推荐项、标签、说明和自由输入行为。只有映射工具在当前上下文不可调用时才原样显示 `markdown`；不得改写降级文案、要求用户回复选项文字或增加第三个选项。
-8. 用户点选按钮后只调用一次 `select_execution_mode`。选择默认的 `AUTOMATIC` 时，Controller 先持久记录该次业务确认并返回 `worktreeSetup.hostDispatch`。Claude Code 机械执行 `agentDispatch`：创建/复用 Delivery worktree、在同一会话启动后台 `delivery-coordinator`，随后回到 primary；Codex 创建稳定的 worktree 项目任务。后台协调方用原双 fingerprint 调用 `workspace_status → resume_execution_mode`，再消费 frontier。不要求用户手动 `cd` 或启动新顶层 CLI。主会话不得自行实现、不得调用 `EnterWorktree` 后留在执行分支，也不得重复展示同一 handoff；它只按监控间隔读取 frontier。任何续接都不得再次展示执行方式、询问 Yes/No、改走 MANUAL 或自行拼出第三个解卡菜单。选择 `MANUAL` 时，Controller 生成 handoff、登记 `HANDOFF_READY`，宿主原样展示 `manualHandoff.receiverPrompt`；该提示词也已嵌入 handoff。接收 CLI 在实际工作区显式调用 `start_manual_handoff`，然后用 `CLAIM_MANUAL_TASK` 完成 TASK 实现，并让后续 Review 回到与自动执行相同的 `DISPATCH_LOOP`。用户直接输入修改意见时不调用选择工具，继续需求沟通；需求变化后用同一 Delivery 重新生成基线与关联文档，并使旧的待执行选择失效。
+8. 当 `preview_hierarchy` 返回 `developmentBaseline`（工作树干净、无已记忆基线、层级未带 `gitBinding` 时触发；即便已在 feature 分支上也会触发）时，先用当前 Adapter 的原生选择器展示其 `options`：仅本地分支（不含远端）加上「从主线创建新分支」（`NEW_FROM_MAINLINE` 需提供新分支名）。选择后只调用一次 `confirm_development_baseline`：它会记录该基线（同一 Delivery 后续 Revision 不再重复询问）、只读计算 `gitBinding` 并冻结回层级，再返回更新后的 `hierarchyFingerprint` 与 `executionChoice`。Controller 不创建分支或 worktree；`NEW_FROM_MAINLINE` 把 `baseCommit` 钉在当前主线 HEAD，分支由宿主在 worktree 准备时创建。已记忆基线、或工作树非干净、或非 Git 工作区时不触发，直接进入 `executionChoice`。
+
+9. 用户点选按钮后只调用一次 `select_execution_mode`。选择默认的 `AUTOMATIC` 时，Controller 先持久记录该次业务确认并返回 `worktreeSetup.hostDispatch`。Claude Code 机械执行 `agentDispatch`：创建/复用 Delivery worktree、在同一会话启动后台 `delivery-coordinator`，随后回到 primary；Codex 创建稳定的 worktree 项目任务。后台协调方用原双 fingerprint 调用 `workspace_status → resume_execution_mode`，再消费 frontier。不要求用户手动 `cd` 或启动新顶层 CLI。主会话不得自行实现、不得调用 `EnterWorktree` 后留在执行分支，也不得重复展示同一 handoff；它只按监控间隔读取 frontier。任何续接都不得再次展示执行方式、询问 Yes/No、改走 MANUAL 或自行拼出第三个解卡菜单。选择 `MANUAL` 时，Controller 生成 handoff、登记 `HANDOFF_READY`，宿主原样展示 `manualHandoff.receiverPrompt`；该提示词也已嵌入 handoff。接收 CLI 在实际工作区显式调用 `start_manual_handoff`，然后用 `CLAIM_MANUAL_TASK` 完成 TASK 实现，并让后续 Review 回到与自动执行相同的 `DISPATCH_LOOP`。用户直接输入修改意见时不调用选择工具，继续需求沟通；需求变化后用同一 Delivery 重新生成基线与关联文档，并使旧的待执行选择失效。
 
 需求连续性规则：
 

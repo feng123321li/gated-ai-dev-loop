@@ -592,6 +592,98 @@ def inspect_frozen_git_workspace_provenance(
     return result
 
 
+def enumerate_local_feature_branches(workspace_root: str) -> list[dict[str, Any]]:
+    """List local feature branches adoptable as a Delivery baseline.
+
+    Enumerates ``refs/heads/`` only (never remote refs), excludes the selected
+    mainline plus ``main``/``master``, and annotates each branch with its fork
+    point off the mainline and its current worktree count. Read-only: the
+    controller performs no Git writes; this feeds the ``DEVELOPMENT_BASELINE``
+    selector.
+    """
+
+    workspace = Path(workspace_root).absolute().resolve(strict=True)
+    selection = _select_mainline(workspace, None)
+    mainline_ref = selection.branch_ref
+    mainline_head = selection.head_commit
+    raw = _git_output(
+        workspace,
+        "for-each-ref",
+        "--format=%(refname:short)|%(objectname)",
+        "refs/heads/",
+    )
+    candidates: list[dict[str, Any]] = []
+    for line in raw.splitlines():
+        if not line:
+            continue
+        # objectname is pure hex (no '|'), so rpartition survives a '|' in a
+        # branch name.
+        name, _, head_commit = line.rpartition("|")
+        if not head_commit:
+            continue
+        if name == mainline_ref or name in {"main", "master"}:
+            continue
+        merge_base = _git(
+            workspace,
+            "merge-base",
+            head_commit,
+            mainline_head,
+            accepted=(0, 1),
+        )
+        if merge_base.returncode != 0 or not merge_base.stdout.strip():
+            # Shares no history with the mainline; not a valid fork point.
+            continue
+        worktree_count = _branch_worktree_count(workspace, name)
+        candidates.append(
+            {
+                "branchRef": name,
+                "headCommit": head_commit,
+                "baseRef": mainline_ref,
+                "baseCommit": merge_base.stdout.strip(),
+                "integrationTarget": mainline_ref,
+                "worktreeCount": worktree_count,
+                "adoptable": worktree_count <= 1,
+            }
+        )
+    candidates.sort(key=lambda item: item["branchRef"])
+    return candidates
+
+
+def resolve_branch_binding(
+    workspace_root: str,
+    *,
+    branch_ref: str,
+    base_ref: str | None = None,
+) -> dict[str, str]:
+    """Compute the frozen Git binding for a chosen development baseline.
+
+    ``branch_ref`` may name an existing local branch (its merge-base with the
+    mainline becomes ``baseCommit``) or a brand-new branch the host will create
+    from the mainline (``baseCommit`` is pinned to the current mainline HEAD).
+    Read-only: the controller never creates branches or worktrees.
+    """
+
+    workspace = Path(workspace_root).absolute().resolve(strict=True)
+    selection = _select_mainline(workspace, base_ref)
+    existing = _optional_commit(workspace, f"refs/heads/{branch_ref}")
+    if existing is not None:
+        base_commit = _merge_base(
+            workspace,
+            existing,
+            selection.head_commit,
+            branch_ref=branch_ref,
+            base_ref=selection.branch_ref,
+        )
+    else:
+        base_commit = selection.head_commit
+    return {
+        "branchRef": branch_ref,
+        "baseRef": selection.branch_ref,
+        "baseCommit": base_commit,
+        "integrationTarget": selection.branch_ref,
+    }
+
+
 def verify_delivery_git_binding(
     workspace_root: str,
     binding: object,
@@ -920,9 +1012,11 @@ def verify_delivery_project_scopes(
 
 
 __all__ = (
+    "enumerate_local_feature_branches",
     "find_delivery_linked_worktree",
     "inspect_delivery_git_workspace",
     "inspect_frozen_git_workspace_provenance",
+    "resolve_branch_binding",
     "verify_delivery_git_binding",
     "verify_delivery_project_scopes",
 )

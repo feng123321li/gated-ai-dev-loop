@@ -313,6 +313,36 @@ def _execution_choice_tool_schema() -> dict[str, Any]:
     )
 
 
+def _development_baseline_tool_schema() -> dict[str, Any]:
+    return _object(
+        {
+            "root_id": ROOT_ID,
+            "selection": {
+                "type": "string",
+                "description": (
+                    "A local branch_ref from developmentBaseline.options, or "
+                    "NEW_FROM_MAINLINE."
+                ),
+            },
+            "branch_name": {
+                "type": "string",
+                "description": (
+                    "Required when selection=NEW_FROM_MAINLINE: the new branch "
+                    "name the host will create from the mainline."
+                ),
+            },
+            "expected_hierarchy_fingerprint": FINGERPRINT,
+            "confirmed_by": _string("Human confirmer identity."),
+        },
+        required=[
+            "root_id",
+            "selection",
+            "expected_hierarchy_fingerprint",
+            "confirmed_by",
+        ],
+    )
+
+
 def _execution_resume_tool_schema() -> dict[str, Any]:
     return _object(
         {
@@ -436,6 +466,21 @@ TOOLS = (
             "run, or create a worktree."
         ),
         _prepare_hierarchy_tool_schema(),
+    ),
+    _tool(
+        "confirm_development_baseline",
+        (
+            "Apply one option returned by developmentBaseline before the "
+            "execution-mode choice: record the per-Delivery preference, "
+            "compute the Git binding read-only, re-stage the hierarchy with "
+            "the binding frozen in, and return the updated "
+            "hierarchyFingerprint plus executionChoice. The Controller never "
+            "creates branches or worktrees; NEW_FROM_MAINLINE pins baseCommit "
+            "to the mainline HEAD and the host creates the branch during "
+            "worktree setup. The choice is remembered and not re-asked on "
+            "subsequent revisions."
+        ),
+        _development_baseline_tool_schema(),
     ),
     _tool(
         "select_execution_mode",

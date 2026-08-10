@@ -3958,13 +3958,22 @@ class SchedulerRepository:
                 if (
                     state is None
                     or state["status"] != "READY"
+                    or state.get("manualHandoffEnabled") is True
                     or definition is None
                     or definition["loop"] is None
                 ):
                     rejected[node_id] = {
-                        "code": "DISPATCH_RESERVATION_NOT_READY",
+                        "code": (
+                            "DISPATCH_MANUAL_HANDOFF_ENABLED"
+                            if state is not None
+                            and state.get("manualHandoffEnabled") is True
+                            else "DISPATCH_RESERVATION_NOT_READY"
+                        ),
                         "message": (
-                            "The Loop is no longer ready for dispatch."
+                            "The TASK is reserved for manual receipt."
+                            if state is not None
+                            and state.get("manualHandoffEnabled") is True
+                            else "The Loop is no longer ready for dispatch."
                         ),
                     }
                     continue
@@ -4092,6 +4101,22 @@ class SchedulerRepository:
         executor_metadata: dict[tuple[str, int], dict[str, Any]] = {}
         first_heartbeats: dict[tuple[str, int], str] = {}
         latest_progress: dict[tuple[str, int], dict[str, Any]] = {}
+        manual_handoffs: dict[str, dict[str, Any]] = {}
+        handoff_rows = connection.execute(
+            "SELECT node_id, actor, operation_id, payload_json, recorded_at "
+            "FROM graph_events WHERE run_id = ? "
+            "AND event_type = 'LOOP_MANUAL_HANDOFF_ENABLED' "
+            "ORDER BY event_id",
+            (run_id,),
+        ).fetchall()
+        for handoff_row in handoff_rows:
+            payload = json.loads(handoff_row["payload_json"])
+            manual_handoffs[handoff_row["node_id"]] = {
+                "confirmedBy": handoff_row["actor"],
+                "reason": payload.get("reason"),
+                "handoffRequestId": handoff_row["operation_id"],
+                "enabledAt": handoff_row["recorded_at"],
+            }
         claim_rows = connection.execute(
             """
             SELECT node_id, attempt, payload_json
@@ -4224,6 +4249,12 @@ class SchedulerRepository:
                 "failureClass": row["failure_class"],
                 "progress": latest_progress.get(
                     (row["node_id"], row["attempt"])
+                ),
+                "manualHandoffEnabled": (
+                    row["node_id"] in manual_handoffs
+                ),
+                "manualTaskHandoff": manual_handoffs.get(
+                    row["node_id"]
                 ),
             }
             capacity_scope = pause_metadata.get("capacityScope")

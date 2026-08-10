@@ -14,6 +14,7 @@ from .dispatch_contracts import (
     automatic_dispatch_decision_fingerprint,
 )
 from .errors import fail
+from .git_binding import inspect_frozen_git_workspace_provenance
 from .graph_model import (
     FAILURE_CLASSES,
     LOOP_NODE_KINDS,
@@ -68,8 +69,12 @@ def _dispatch_mode_allowed(
     execution_mode: str,
     node_kind: str,
     dispatch_mode: str,
+    *,
+    manual_handoff_enabled: bool = False,
 ) -> bool:
     if execution_mode == "active":
+        if manual_handoff_enabled and node_kind == "TASK_LOOP":
+            return dispatch_mode == "MANUAL"
         return dispatch_mode == "AUTO"
     if execution_mode == "manual":
         if node_kind == "TASK_LOOP":
@@ -1042,6 +1047,9 @@ def dispatch_loop(
             run["execution_mode"],
             definition["kind"],
             dispatch_mode,
+            manual_handoff_enabled=bool(
+                state.get("manualHandoffEnabled")
+            ),
         ):
             fail(
                 "SCHEDULER_DISPATCH_MODE_INVALID",
@@ -1380,6 +1388,205 @@ def dispatch_loop(
         ),
         "operationId": operation_id,
         "leaseExpiresAt": expires,
+    }
+
+
+def handoff_ready_automatic_task(
+    *,
+    root: str,
+    root_id: str,
+    node_id: str,
+    expected_graph_fingerprint: str,
+    handoff_request_id: str,
+    confirmed_no_code_changes: bool,
+    confirmed_by: str,
+    reason: str,
+    workspace_root: str | None = None,
+    verified_project_scopes: list[dict[str, Any]] | None = None,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    """Switch one never-claimed READY automatic TASK to manual receipt."""
+
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    request_id = _identity(handoff_request_id, "handoff_request_id")
+    actor = _identity(confirmed_by, "confirmed_by")
+    if confirmed_no_code_changes is not True:
+        fail(
+            "SCHEDULER_MANUAL_HANDOFF_CONFIRMATION_REQUIRED",
+            "Manual recovery requires explicit confirmation that no code "
+            "changes were made for this TASK attempt",
+        )
+    if not isinstance(reason, str) or not reason.strip() or len(reason) > 1024:
+        fail(
+            "SCHEDULER_MANUAL_HANDOFF_REASON_INVALID",
+            "Manual recovery requires a concise non-empty reason",
+        )
+    normalized_reason = reason.strip()
+    stored = repository.hierarchy(root_id)
+    if expected_graph_fingerprint != stored["graphFingerprint"]:
+        fail(
+            "SCHEDULER_GRAPH_FINGERPRINT_MISMATCH",
+            "The expected Graph fingerprint is stale",
+            expectedGraphFingerprint=expected_graph_fingerprint,
+            actualGraphFingerprint=stored["graphFingerprint"],
+        )
+    actual_workspace = workspace_root or root
+    repository.assert_delivery_workspace(root_id, actual_workspace)
+    delivery = stored["hierarchy"]["delivery"]
+    git_workspaces: list[tuple[str, object]] = []
+    git_binding = delivery.get("gitBinding")
+    if git_binding is not None:
+        git_workspaces.append((actual_workspace, git_binding))
+    elif delivery.get("projectScopes") is not None:
+        if verified_project_scopes is None:
+            fail(
+                "SCHEDULER_MANUAL_HANDOFF_PROJECT_SCOPES_REQUIRED",
+                "Multi-project manual recovery requires verified project worktrees",
+            )
+        git_workspaces.extend(
+            (scope["workspaceRoot"], scope["gitBinding"])
+            for scope in verified_project_scopes
+            if scope.get("access") == "READ_WRITE"
+            and scope.get("gitBinding") is not None
+        )
+    for git_workspace_root, workspace_binding in git_workspaces:
+        provenance = inspect_frozen_git_workspace_provenance(
+            git_workspace_root,
+            workspace_binding,
+        )
+        working_tree = provenance["workingTree"]
+        if not working_tree["clean"]:
+            fail(
+                "SCHEDULER_MANUAL_HANDOFF_WORKTREE_DIRTY",
+                "Automatic TASK recovery requires every Delivery worktree to be clean",
+                workspaceRoot=git_workspace_root,
+                workingTreeStateFingerprint=working_tree[
+                    "stateFingerprint"
+                ],
+            )
+
+    replayed = False
+    with repository.transaction() as connection:
+        graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
+        existing_operation = connection.execute(
+            "SELECT * FROM graph_events WHERE operation_id = ? LIMIT 1",
+            (request_id,),
+        ).fetchone()
+        if existing_operation is not None:
+            if (
+                existing_operation["run_id"] != run["run_id"]
+                or existing_operation["node_id"] != node_id
+                or existing_operation["event_type"]
+                != "LOOP_MANUAL_HANDOFF_ENABLED"
+                or existing_operation["actor"] != actor
+            ):
+                fail(
+                    "SCHEDULER_OPERATION_REUSED",
+                    "handoff_request_id must be globally unique",
+                )
+            payload = json.loads(existing_operation["payload_json"])
+            if payload.get("reason") != normalized_reason:
+                fail(
+                    "SCHEDULER_OPERATION_REUSED",
+                    "A replayed handoff request must keep the same reason",
+                )
+            replayed = True
+        else:
+            if run["execution_mode"] != "active":
+                fail(
+                    "SCHEDULER_MANUAL_HANDOFF_AUTOMATIC_ONLY",
+                    "Only an active AUTOMATIC Graph can use TASK recovery handoff",
+                    executionMode=run["execution_mode"],
+                )
+            definition, state = _node(graph, nodes, node_id)
+            if definition["kind"] != "TASK_LOOP":
+                fail(
+                    "SCHEDULER_MANUAL_HANDOFF_TASK_ONLY",
+                    "Only a TASK implementation Loop can be handed to a manual receiver",
+                    nodeKind=definition["kind"],
+                )
+            if state["status"] != "READY":
+                fail(
+                    "SCHEDULER_MANUAL_HANDOFF_NOT_READY",
+                    "Manual recovery requires an unclaimed READY TASK Loop",
+                    status=state["status"],
+                )
+            if state.get("manualHandoffEnabled"):
+                fail(
+                    "SCHEDULER_MANUAL_HANDOFF_ALREADY_ENABLED",
+                    "This TASK Loop is already reserved for manual receipt",
+                )
+            claimed = connection.execute(
+                "SELECT 1 FROM graph_events WHERE run_id = ? AND node_id = ? "
+                "AND attempt = ? AND event_type = 'LOOP_CLAIMED' LIMIT 1",
+                (run["run_id"], node_id, state["attempt"]),
+            ).fetchone()
+            if claimed is not None:
+                fail(
+                    "SCHEDULER_MANUAL_HANDOFF_ALREADY_CLAIMED",
+                    "A previously claimed TASK attempt cannot be converted to manual recovery",
+                )
+            repository.expire_dispatch_reservations(connection, at=at)
+            live_reservation = connection.execute(
+                "SELECT reservation_id, expires_at FROM dispatch_reservations "
+                "WHERE run_id = ? AND node_id = ? AND attempt = ? "
+                "AND status = 'RESERVED' AND expires_at >= ? LIMIT 1",
+                (run["run_id"], node_id, state["attempt"], at),
+            ).fetchone()
+            if live_reservation is not None:
+                fail(
+                    "SCHEDULER_MANUAL_HANDOFF_RESERVATION_ACTIVE",
+                    "Wait for the current automatic dispatch reservation to expire before manual recovery",
+                    dispatchReservationId=live_reservation[
+                        "reservation_id"
+                    ],
+                    reservationExpiresAt=live_reservation["expires_at"],
+                )
+            repository.append_event(
+                connection,
+                run_id=run["run_id"],
+                node_id=node_id,
+                attempt=state["attempt"],
+                event_type="LOOP_MANUAL_HANDOFF_ENABLED",
+                actor=actor,
+                operation_id=request_id,
+                payload={
+                    "reason": normalized_reason,
+                    "confirmedNoCodeChanges": True,
+                    "dispatchMode": "MANUAL",
+                },
+                at=at,
+            )
+            connection.execute(
+                "UPDATE runs SET updated_at = ? WHERE run_id = ?",
+                (at, run["run_id"]),
+            )
+    repository.write_projections(root_id)
+    run_status = repository.run(root_id)
+    state = next(
+        item for item in run_status["nodes"] if item["nodeId"] == node_id
+    )
+    return {
+        "rootId": root_id,
+        "nodeId": node_id,
+        "attempt": state["attempt"],
+        "executionMode": run_status["executionMode"],
+        "handoffRequestId": request_id,
+        "handoffRequestReplayed": replayed,
+        "manualTaskHandoff": {
+            "state": "READY",
+            "dispatchMode": "MANUAL",
+            "receiverPrompt": (
+                "在独立人工接收上下文中继续已冻结 Delivery Graph；不要重新 "
+                "preview、确认 baseline 或选择执行模式。先读取 graph_frontier，"
+                f"再对 {root_id}/{node_id} 调用 dispatch_loop，明确提交 "
+                "dispatch_mode=MANUAL；完成 TASK 后照常上报结果，后续 Review "
+                "仍由 AUTOMATIC 独立 receiver 执行。"
+            ),
+        },
     }
 
 
@@ -3303,6 +3510,7 @@ def _rebuild_graph_run_locked(
         cursor = page[-1]["eventId"]
 
     graph = stored["graph"]
+    definitions = {node["id"]: node for node in graph["nodes"]}
     initial = {
         node["id"]: {
             "nodeId": node["id"],
@@ -3318,6 +3526,8 @@ def _rebuild_graph_run_locked(
             "finishedAt": None,
             "outcome": None,
             "failureClass": None,
+            "manualHandoffEnabled": False,
+            "manualTaskHandoff": None,
         }
         for node in graph["nodes"]
     }
@@ -3448,6 +3658,13 @@ def _rebuild_graph_run_locked(
                 "finishedAt": None,
                 "outcome": None,
                 "failureClass": None,
+                "manualHandoffEnabled": latest[node_id].get(
+                    "manualHandoffEnabled",
+                    False,
+                ),
+                "manualTaskHandoff": latest[node_id].get(
+                    "manualTaskHandoff"
+                ),
             }
             if state["attempt"] != latest[node_id]["attempt"] + 1:
                 fail(
@@ -3541,6 +3758,30 @@ def _rebuild_graph_run_locked(
             requirement["status"] = "FROZEN"
             requirement["updatedAt"] = at
             continue
+        if event_type == "LOOP_MANUAL_HANDOFF_ENABLED":
+            definition = definitions[node_id]
+            if (
+                execution_mode != "active"
+                or definition["kind"] != "TASK_LOOP"
+                or state["status"] != "READY"
+                or state.get("manualHandoffEnabled")
+                or payload.get("dispatchMode") != "MANUAL"
+                or payload.get("confirmedNoCodeChanges") is not True
+                or not isinstance(payload.get("reason"), str)
+                or not payload["reason"].strip()
+            ):
+                fail(
+                    "SCHEDULER_EVENT_REPLAY_INVALID",
+                    "Automatic TASK manual handoff event is invalid",
+                )
+            state["manualHandoffEnabled"] = True
+            state["manualTaskHandoff"] = {
+                "confirmedBy": event["actor"],
+                "reason": payload["reason"],
+                "handoffRequestId": event["operationId"],
+                "enabledAt": at,
+            }
+            continue
         if event_type == "NODE_READY":
             state["status"] = "READY"
         elif event_type == "JOIN_COMPLETED":
@@ -3554,6 +3795,9 @@ def _rebuild_graph_run_locked(
                 execution_mode,
                 definition["kind"],
                 payload.get("dispatchMode"),
+                manual_handoff_enabled=bool(
+                    state.get("manualHandoffEnabled")
+                ),
             ):
                 fail(
                     "SCHEDULER_EVENT_REPLAY_INVALID",
@@ -3852,6 +4096,7 @@ __all__ = (
     "dispatch_loop",
     "graph_events",
     "graph_status",
+    "handoff_ready_automatic_task",
     "heartbeat_loop",
     "loop_context",
     "pause_loop",

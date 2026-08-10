@@ -7,11 +7,14 @@ import json
 from pathlib import Path
 import shutil
 import sqlite3
+import subprocess
 from tempfile import TemporaryDirectory
 from threading import Event, Lock, Thread, current_thread
 import unittest
 from unittest.mock import patch
 
+import hdg.graph_runtime as graph_runtime
+from hdg.dispatch_planning import plan_dispatch_batch
 from hdg.errors import GatedLoopError
 from hdg.graph_frontier import get_graph_frontier
 from hdg.graph_model import (
@@ -447,6 +450,235 @@ class SchedulerRuntimeTests(unittest.TestCase):
             now=at(1),
         )
         return prepared
+
+    def test_ready_automatic_task_can_be_explicitly_handed_to_manual_receiver(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        task_node_id = loop_node_id("t-service")
+        assignment = plan_dispatch_batch(
+            root=self.root,
+            root_id=root_id,
+            expected_graph_fingerprint=prepared["graphFingerprint"],
+            host_adapter_id="codex",
+            host_native_agent_ids=("codex",),
+            now=at(2),
+        )["assignments"][0]
+
+        with self.assertRaises(GatedLoopError) as live_reservation:
+            graph_runtime.handoff_ready_automatic_task(
+                root=self.root,
+                root_id=root_id,
+                node_id=task_node_id,
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                handoff_request_id="handoff-live-reservation",
+                confirmed_no_code_changes=True,
+                confirmed_by="human",
+                reason="Codex receiver attestation injection failed.",
+                workspace_root=self.root,
+                now=at(3),
+            )
+        self.assertEqual(
+            live_reservation.exception.code,
+            "SCHEDULER_MANUAL_HANDOFF_RESERVATION_ACTIVE",
+        )
+
+        handed_off = call_tool(
+            "handoff_ready_automatic_task",
+            {
+                "root_id": root_id,
+                "node_id": task_node_id,
+                "expected_graph_fingerprint": prepared[
+                    "graphFingerprint"
+                ],
+                "handoff_request_id": (
+                    "handoff-after-attestation-failure"
+                ),
+                "confirmed_no_code_changes": True,
+                "confirmed_by": "human",
+                "reason": (
+                    "Codex receiver attestation injection failed twice."
+                ),
+            },
+            root=self.root,
+            workspace_root=self.root,
+            trusted_host_adapter="codex",
+        )
+        replayed = graph_runtime.handoff_ready_automatic_task(
+            root=self.root,
+            root_id=root_id,
+            node_id=task_node_id,
+            expected_graph_fingerprint=prepared["graphFingerprint"],
+            handoff_request_id="handoff-after-attestation-failure",
+            confirmed_no_code_changes=True,
+            confirmed_by="human",
+            reason="Codex receiver attestation injection failed twice.",
+            workspace_root=self.root,
+            now=at(9),
+        )
+        rebuilt = rebuild_graph_run(root=self.root, root_id=root_id)
+        frontier = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(9),
+        )
+        dispatch = plan_dispatch_batch(
+            root=self.root,
+            root_id=root_id,
+            expected_graph_fingerprint=prepared["graphFingerprint"],
+            host_adapter_id="codex",
+            host_native_agent_ids=("codex",),
+            now=at(9),
+        )
+        claimed = runtime_dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=task_node_id,
+            owner="manual-cli",
+            operation_id="op-manual-recovery",
+            agent_id="codex",
+            receiver_context_id="manual-cli",
+            dispatch_mode="MANUAL",
+            host_adapter_id="codex",
+            now=at(10),
+        )
+        record_loop_result(
+            root=self.root,
+            root_id=root_id,
+            node_id=task_node_id,
+            operation_id="op-manual-recovery",
+            outcome=success("Recovered TASK completed."),
+            now=at(11),
+        )
+        review_frontier = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(12),
+        )
+
+        self.assertEqual(assignment["nodeId"], task_node_id)
+        self.assertEqual(handed_off["manualTaskHandoff"]["state"], "READY")
+        self.assertFalse(handed_off["handoffRequestReplayed"])
+        self.assertTrue(replayed["handoffRequestReplayed"])
+        rebuilt_task = next(
+            item
+            for item in rebuilt["nodes"]
+            if item["nodeId"] == task_node_id
+        )
+        self.assertTrue(rebuilt_task["manualHandoffEnabled"])
+        self.assertIn(
+            "CLAIM_MANUAL_TASK",
+            {action["action"] for action in frontier["actions"]},
+        )
+        self.assertEqual(dispatch["assignments"], [])
+        self.assertEqual(claimed["dispatchMode"], "MANUAL")
+        self.assertIn(
+            task_review_node_id("t-service"),
+            {
+                action["nodeId"]
+                for action in review_frontier["actions"]
+                if action["action"] == "DISPATCH_LOOP"
+            },
+        )
+        self.assertEqual(graph_status(root=self.root, root_id=root_id)[
+            "executionMode"
+        ], "active")
+
+    def test_ready_automatic_task_handoff_fails_closed(self) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        task_node_id = loop_node_id("t-service")
+
+        with self.assertRaises(GatedLoopError) as confirmation:
+            graph_runtime.handoff_ready_automatic_task(
+                root=self.root,
+                root_id=root_id,
+                node_id=task_node_id,
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                handoff_request_id="handoff-without-confirmation",
+                confirmed_no_code_changes=False,
+                confirmed_by="human",
+                reason="Host attestation failed.",
+                workspace_root=self.root,
+                now=at(2),
+            )
+        self.assertEqual(
+            confirmation.exception.code,
+            "SCHEDULER_MANUAL_HANDOFF_CONFIRMATION_REQUIRED",
+        )
+
+        with self.assertRaises(GatedLoopError) as review:
+            graph_runtime.handoff_ready_automatic_task(
+                root=self.root,
+                root_id=root_id,
+                node_id=task_review_node_id("t-service"),
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                handoff_request_id="handoff-review",
+                confirmed_no_code_changes=True,
+                confirmed_by="human",
+                reason="Host attestation failed.",
+                workspace_root=self.root,
+                now=at(2),
+            )
+        self.assertEqual(
+            review.exception.code,
+            "SCHEDULER_MANUAL_HANDOFF_TASK_ONLY",
+        )
+
+    def test_ready_automatic_task_handoff_rejects_dirty_git_worktree(
+        self,
+    ) -> None:
+        def git(*arguments: str) -> str:
+            completed = subprocess.run(
+                ["git", "-C", self.root, *arguments],
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            return completed.stdout.strip()
+
+        git("init", "--initial-branch=main")
+        git("config", "user.name", "Scheduler Tests")
+        git("config", "user.email", "scheduler@example.invalid")
+        tracked = Path(self.root, "tracked.txt")
+        tracked.write_text("baseline\n", encoding="utf-8")
+        git("add", "tracked.txt")
+        git("commit", "-m", "baseline")
+        base_commit = git("rev-parse", "HEAD")
+        git("switch", "-c", "feature/manual-recovery")
+        hierarchy = task_hierarchy()
+        hierarchy["delivery"]["gitBinding"] = {
+            "branchRef": "feature/manual-recovery",
+            "baseRef": "main",
+            "baseCommit": base_commit,
+            "integrationTarget": "main",
+        }
+        prepared = self.prepare_and_freeze(hierarchy)
+        tracked.write_text("dirty\n", encoding="utf-8")
+
+        with self.assertRaises(GatedLoopError) as dirty:
+            graph_runtime.handoff_ready_automatic_task(
+                root=self.root,
+                root_id=prepared["rootId"],
+                node_id=loop_node_id("t-service"),
+                expected_graph_fingerprint=prepared[
+                    "graphFingerprint"
+                ],
+                handoff_request_id="handoff-dirty-worktree",
+                confirmed_no_code_changes=True,
+                confirmed_by="human",
+                reason="Codex receiver startup failed.",
+                workspace_root=self.root,
+                now=at(2),
+            )
+
+        self.assertEqual(
+            dirty.exception.code,
+            "SCHEDULER_MANUAL_HANDOFF_WORKTREE_DIRTY",
+        )
 
     def complete_task_delivery(
         self,
@@ -3079,6 +3311,17 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "requiresLiveLease": True,
                     "action": "PAUSE_AND_HANDOFF",
                     "loopOutcome": "NONE",
+                },
+                "unclaimedAutomaticRecovery": {
+                    "tool": "handoff_ready_automatic_task",
+                    "requiresReadyTask": True,
+                    "requiresNeverClaimedAttempt": True,
+                    "requiresNoLiveReservation": True,
+                    "requiresCleanWorktree": True,
+                    "requiresNoCodeChangesConfirmation": True,
+                    "taskDispatchMode": "MANUAL",
+                    "graphExecutionModeRemains": "active",
+                    "reviewsRemain": "AUTO",
                 },
                 "progressReporting": {
                     "tool": "report_loop_progress",

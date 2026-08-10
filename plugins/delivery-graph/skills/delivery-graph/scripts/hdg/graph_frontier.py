@@ -194,8 +194,11 @@ def build_graph_frontier(
                     )
                 )
                 manual_task = (
-                    run.get("executionMode") == "manual"
-                    and kind == "TASK_LOOP"
+                    kind == "TASK_LOOP"
+                    and (
+                        run.get("executionMode") == "manual"
+                        or state.get("manualHandoffEnabled") is True
+                    )
                 )
                 actions.append(
                     {

@@ -1184,6 +1184,7 @@ class McpSurfaceTests(unittest.TestCase):
                 "cancel_graph_run",
                 "refreeze_task_requirement",
                 "unfreeze_task_requirement",
+                "handoff_ready_automatic_task",
             },
         )
         by_name = {tool["name"]: tool for tool in tools}
@@ -1417,6 +1418,26 @@ class McpSurfaceTests(unittest.TestCase):
                 "_host_workspace_attestation",
             },
         )
+        recovery = by_name["handoff_ready_automatic_task"]
+        self.assertEqual(
+            recovery["inputSchema"]["required"],
+            [
+                "root_id",
+                "node_id",
+                "expected_graph_fingerprint",
+                "handoff_request_id",
+                "confirmed_no_code_changes",
+                "confirmed_by",
+                "reason",
+            ],
+        )
+        self.assertTrue(
+            recovery["inputSchema"]["properties"][
+                "confirmed_no_code_changes"
+            ]["const"]
+        )
+        self.assertTrue(recovery["annotations"]["idempotentHint"])
+        self.assertIn("Review", recovery["description"])
         pause_schema = by_name["pause_loop"]["inputSchema"]
         self.assertNotIn("resume_at", pause_schema["required"])
         self.assertEqual(
@@ -4710,7 +4731,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 32)
+            self.assertEqual(len(listed["result"]["tools"]), 33)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

@@ -1060,9 +1060,11 @@ TOOLS = (
                     "enum": ["AUTO", "MANUAL"],
                     "description": (
                         "AUTO is required for every automatically routed Loop. "
-                        "MANUAL is allowed only for TASK implementation Loops "
-                        "in a Graph started by start_manual_handoff; Review "
-                        "Loops remain AUTO and independent."
+                        "MANUAL is allowed for TASK implementation Loops in "
+                        "a Graph started by start_manual_handoff, or for one "
+                        "READY automatic TASK explicitly recovered through "
+                        "handoff_ready_automatic_task. Review Loops remain "
+                        "AUTO and independent."
                     ),
                 },
                 "receiver_context_id": _string(
@@ -1108,6 +1110,65 @@ TOOLS = (
                 "operation_id",
             ],
         ),
+    ),
+    _tool(
+        "handoff_ready_automatic_task",
+        (
+            "Recover one active AUTOMATIC TASK after native receiver startup "
+            "has failed. This explicit mutation is allowed only while the "
+            "TASK Loop is READY, its current attempt has never been claimed, "
+            "the Delivery worktree is clean, no automatic reservation is "
+            "live, and the user confirms no code changes were made. It "
+            "switches only that TASK to MANUAL receipt without changing the "
+            "Graph execution mode, baseline, fingerprints, or Revision. "
+            "Automatic dispatch remains disabled for that TASK; every Review "
+            "Loop stays host-native AUTOMATIC. Reuse the same "
+            "handoff_request_id only to recover an unknown response."
+        ),
+        _object(
+            {
+                "root_id": ROOT_ID,
+                "node_id": NODE_ID,
+                "expected_graph_fingerprint": FINGERPRINT,
+                "handoff_request_id": _string(
+                    "Unique idempotency key for this explicit recovery."
+                ),
+                "confirmed_no_code_changes": {
+                    "type": "boolean",
+                    "const": True,
+                    "description": (
+                        "Explicit confirmation that no implementation change "
+                        "was made for the unclaimed TASK attempt."
+                    ),
+                },
+                "confirmed_by": SCHEDULER_IDENTITY,
+                "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 1024,
+                    "description": (
+                        "Why native automatic receiver startup cannot safely "
+                        "continue, such as a SubagentStart attestation fault."
+                    ),
+                },
+            },
+            required=[
+                "root_id",
+                "node_id",
+                "expected_graph_fingerprint",
+                "handoff_request_id",
+                "confirmed_no_code_changes",
+                "confirmed_by",
+                "reason",
+            ],
+        ),
+        annotations={
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+        human=True,
     ),
     _tool(
         "heartbeat_loop",

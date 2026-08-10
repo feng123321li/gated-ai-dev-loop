@@ -61,8 +61,25 @@ def _account_home() -> Path:
     return Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
 
 
-def _trusted_codex_sessions_root() -> Path:
-    codex_home = (_account_home() / ".codex").resolve()
+def _trusted_codex_sessions_root(
+    transcript_path: str | None = None,
+) -> Path:
+    """Resolve the host-owned sessions root across desktop sandboxes.
+
+    Codex Desktop may execute hooks as an isolated OS account while keeping
+    the signed-in user's transcript under ``USERPROFILE``. The lifecycle
+    event supplies the transcript path, so on Windows we accept that host
+    profile only when the transcript is actually below its canonical Codex
+    sessions directory. A custom ``CODEX_HOME`` remains rejected.
+    """
+
+    account_home = _account_home()
+    host_profile = account_home
+    if os.name == "nt":
+        configured_profile = os.environ.get("USERPROFILE")
+        if configured_profile:
+            host_profile = Path(configured_profile).expanduser().resolve()
+    codex_home = (host_profile / ".codex").resolve()
     configured_home = os.environ.get("CODEX_HOME")
     if (
         configured_home
@@ -71,7 +88,16 @@ def _trusted_codex_sessions_root() -> Path:
         raise OSError(
             "Custom CODEX_HOME lacks a host-authenticated sessions root"
         )
-    return (codex_home / "sessions").resolve()
+    sessions_root = (codex_home / "sessions").resolve()
+    if transcript_path is not None:
+        transcript = Path(transcript_path).expanduser().resolve(strict=True)
+        try:
+            transcript.relative_to(sessions_root)
+        except ValueError as error:
+            raise OSError(
+                "Codex transcript is outside the host sessions root"
+            ) from error
+    return sessions_root
 
 
 def _session_meta_from_transcript(
@@ -79,7 +105,7 @@ def _session_meta_from_transcript(
     *,
     session_id: str,
 ) -> dict[str, object] | None:
-    sessions_root = _trusted_codex_sessions_root()
+    sessions_root = _trusted_codex_sessions_root(transcript_path)
     transcript = Path(transcript_path).expanduser().resolve(strict=True)
     try:
         transcript.relative_to(sessions_root)

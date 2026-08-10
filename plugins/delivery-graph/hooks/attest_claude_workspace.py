@@ -12,6 +12,7 @@ SENSITIVE_ADMINISTRATIVE_TOOLS = frozenset(
         "cancel_graph_run",
         "rebuild_graph_run",
         "refreeze_task_requirement",
+        "handoff_ready_automatic_task",
         "unfreeze_task_requirement",
     }
 )

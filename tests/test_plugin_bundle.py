@@ -259,7 +259,7 @@ class PluginBundleTests(unittest.TestCase):
             )
         )
         hook_main = hook_module["main"]
-        hook_main.__globals__["_trusted_codex_sessions_root"] = lambda: (
+        hook_main.__globals__["_trusted_codex_sessions_root"] = lambda _path=None: (
             codex_home / "sessions"
         ).resolve()
         stdout = io.StringIO()
@@ -295,7 +295,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         support = types.ModuleType("attest_codex_subagent_receiver")
         support.__dict__.update(support_globals)
-        trusted_sessions = lambda: (
+        trusted_sessions = lambda _path=None: (
             codex_home / "sessions"
         ).resolve()
         support._trusted_codex_sessions_root = trusted_sessions
@@ -719,6 +719,7 @@ class PluginBundleTests(unittest.TestCase):
                 "cancel_graph_run",
                 "unfreeze_task_requirement",
                 "refreeze_task_requirement",
+                "handoff_ready_automatic_task",
             },
         )
         self.assertLessEqual(matchers, names)
@@ -738,6 +739,7 @@ class PluginBundleTests(unittest.TestCase):
                     "rebuild_graph_run",
                     "refreeze_task_requirement",
                     "unfreeze_task_requirement",
+                    "handoff_ready_automatic_task",
                 }
             ),
         )
@@ -1471,6 +1473,93 @@ class PluginBundleTests(unittest.TestCase):
         self.assertEqual(claimed["status"], "CLAIMED")
         self.assertIsNone(claimed["actualModelId"])
 
+    def test_codex_hook_trusts_host_profile_across_desktop_sandbox(self) -> None:
+        hook_module = runpy.run_path(
+            str(
+                PLUGIN
+                / "hooks"
+                / "attest_codex_subagent_receiver.py"
+            )
+        )
+        resolver = hook_module["_trusted_codex_sessions_root"]
+        with TemporaryDirectory() as root:
+            host_profile = Path(root, "host-profile")
+            sessions = host_profile / ".codex" / "sessions"
+            sessions.mkdir(parents=True)
+            transcript = sessions / "rollout-child.jsonl"
+            transcript.write_text("{}\n", encoding="utf-8")
+            sandbox_profile = Path(root, "sandbox-profile")
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"USERPROFILE": str(host_profile)},
+                    clear=False,
+                ),
+                mock.patch.dict(os.environ, {"CODEX_HOME": ""}),
+                mock.patch.object(
+                    resolver.__globals__["sys"],
+                    "platform",
+                    "win32",
+                ),
+                mock.patch.object(
+                    resolver.__globals__["os"],
+                    "name",
+                    "nt",
+                ),
+                mock.patch.dict(
+                    resolver.__globals__,
+                    {"_account_home": lambda: sandbox_profile},
+                ),
+            ):
+                resolved = resolver(str(transcript))
+
+        self.assertEqual(resolved, sessions.resolve())
+
+    def test_codex_hook_rejects_custom_home_even_for_matching_transcript(
+        self,
+    ) -> None:
+        hook_module = runpy.run_path(
+            str(
+                PLUGIN
+                / "hooks"
+                / "attest_codex_subagent_receiver.py"
+            )
+        )
+        resolver = hook_module["_trusted_codex_sessions_root"]
+        with TemporaryDirectory() as root:
+            host_profile = Path(root, "host-profile")
+            sessions = host_profile / ".codex" / "sessions"
+            sessions.mkdir(parents=True)
+            transcript = sessions / "rollout-child.jsonl"
+            transcript.write_text("{}\n", encoding="utf-8")
+            sandbox_profile = Path(root, "sandbox-profile")
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "USERPROFILE": str(host_profile),
+                        "CODEX_HOME": str(Path(root, "attacker-home")),
+                    },
+                    clear=False,
+                ),
+                mock.patch.object(
+                    resolver.__globals__["sys"],
+                    "platform",
+                    "win32",
+                ),
+                mock.patch.object(
+                    resolver.__globals__["os"],
+                    "name",
+                    "nt",
+                ),
+                mock.patch.dict(
+                    resolver.__globals__,
+                    {"_account_home": lambda: sandbox_profile},
+                ),
+            ):
+                with self.assertRaises(OSError):
+                    resolver(str(transcript))
+
     def test_codex_hook_claims_review_for_manual_graph(self) -> None:
         with TemporaryDirectory() as root:
             preview = preview_hierarchy(
@@ -1929,11 +2018,15 @@ class PluginBundleTests(unittest.TestCase):
             approvals["refreeze_task_requirement"]["approval_mode"],
             "prompt",
         )
+        self.assertEqual(
+            approvals["handoff_ready_automatic_task"]["approval_mode"],
+            "prompt",
+        )
         self.assertNotIn("update_orchestrator_settings", approvals)
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
         tool_count = len(tool_definitions())
-        self.assertEqual(tool_count, 32)
+        self.assertEqual(tool_count, 33)
         self.assertIn(
             "start_manual_handoff",
             {tool["name"] for tool in tool_definitions()},
@@ -2061,7 +2154,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-                32,
+            33,
         )
         preview_result = responses[2]["result"]["structuredContent"][
             "result"
@@ -2235,7 +2328,7 @@ class PluginBundleTests(unittest.TestCase):
         ]
         self.assertEqual(len(responses), 2)
         tools = responses[1]["result"]["tools"]
-        self.assertEqual(len(tools), 32)
+        self.assertEqual(len(tools), 33)
         self.assertNotIn(
             "open_orchestrator_settings",
             {tool["name"] for tool in tools},
@@ -2313,7 +2406,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-                32,
+            33,
         )
 
 

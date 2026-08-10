@@ -11,9 +11,12 @@
 - **数据库 baseline 门禁**：涉及建表、改表或删表的 TASK 必须在 preview 前声明结构化 `payload.databaseChanges`，完整冻结表级 before/after、全部字段、主键、唯一约束、索引、外键，以及正向迁移、回滚、回填、发布兼容和验证要求；每项资源锁必须与 TASK `resourceClaims` 精确对应，数据库变更强制使用 `STANDARD`。
 - **执行边界**：数据库 TASK Loop 只应用和验证冻结 after，不再承担表结构设计；任何必要偏离返回 `REPLAN_REQUIRED`，由同一 Delivery 的新 Revision 重新展示和确认 baseline。
 - **Stacked Delivery 基线**：primary 位于干净 feature 分支时，开发基线交互新增并默认推荐 `NEW_FROM_CURRENT_BRANCH`。Controller 冻结新的子分支名、父 feature HEAD 以及以父 feature 为 `baseRef/integrationTarget` 的 binding，AUTOMATIC 直接创建独立子分支 worktree，无需先把 primary 切回 main/master；dirty primary 不提供该路径。
+- **Codex Desktop attestation 修复**：Windows Hook 运行在 `CodexSandboxOffline` 隔离账户时，改由宿主 `USERPROFILE` 与生命周期事件 transcript 路径共同验证真实 `.codex/sessions` 根；继续拒绝自定义 `CODEX_HOME`，实际失败会话可恢复 child/parent/task 与 reservation 绑定。
+- **未领取自动 TASK 人工恢复**：新增 `handoff_ready_automatic_task`。只有 active AUTOMATIC Graph 中 READY、当前 attempt 从未领取、无有效 reservation、Delivery worktree 干净且用户确认无代码改动的 TASK 才能切换为 MANUAL receipt；Graph、Revision、基线和双 fingerprint 不变，AUTO 不再派遣该 TASK，后续 Review 仍自动执行。
 - **人类投影**：投影模板升级到版本 16。每个数据库 TASK 生成 `database-changes.md` 索引和每表详情，Delivery/TASK baseline 与 MCP `humanArtifacts` 串联可审阅契约。
 - **兼容性**：继续只维护 schema v3，不增加旧 schema 迁移入口；未声明数据库变更的现有 Delivery 不受影响。
-- **验证**：本地 Python 全量 336 项测试通过（1 项按环境条件跳过）；`compileall`、canonical Skill/Plugin 镜像一致性、Claude Plugin 校验、发布校验与 `git diff --check` 均通过。
+- **协议面**：MCP 工具数由 32 增至 33。
+- **验证**：本地 Python 全量 341 项测试通过（1 项按环境条件跳过）；`compileall`、canonical Skill/Plugin 镜像一致性、Claude Plugin 校验、发布校验与 `git diff --check` 均通过。
 
 ## 0.38.0 — 2026-08-09
 

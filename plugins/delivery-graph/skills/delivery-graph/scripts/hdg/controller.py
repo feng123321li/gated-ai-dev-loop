@@ -19,6 +19,7 @@ from .graph_runtime import (
     dispatch_loop,
     graph_events,
     graph_status,
+    handoff_ready_automatic_task,
     heartbeat_loop,
     loop_context,
     pause_loop,
@@ -81,6 +82,7 @@ CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "advance_graph": advance_graph,
     "loop_context": loop_context,
     "dispatch_loop": dispatch_loop,
+    "handoff_ready_automatic_task": handoff_ready_automatic_task,
     "heartbeat_loop": heartbeat_loop,
     "report_loop_progress": report_loop_progress,
     "pause_loop": pause_loop,
@@ -238,10 +240,15 @@ class LayeredDeliveryController:
             "report_worktree_setup",
             "resume_execution_mode",
             "start_manual_handoff",
+            "handoff_ready_automatic_task",
         }:
             arguments_value["workspace_root"] = workspace_root
         if name == "loop_context":
             arguments_value["workspace_root"] = workspace_root
+            arguments_value["verified_project_scopes"] = (
+                verified_projects
+            )
+        if name == "handoff_ready_automatic_task":
             arguments_value["verified_project_scopes"] = (
                 verified_projects
             )

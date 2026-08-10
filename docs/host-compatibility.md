@@ -9,7 +9,7 @@
 
 ## 0.39.0 发布候选矩阵
 
-0.39.0 保持 32 个 MCP 工具和一个静态 MCP Apps Resource，并新增数据库 baseline 强制契约及 clean primary feature 的 stacked 子分支基线。核心契约必须验证数据库结构在执行前生成并冻结、缺失设计或 LIGHT fail closed、Loop 只执行 after，以及 `NEW_FROM_CURRENT_BRANCH` 的 child/base/integration binding 与 hostDispatch 完全一致。Modern/Legacy 两种 wire shim 继续共享同一 tools/resources dispatcher，`open_delivery_dashboard` 只读取当前状态，UI 不包含控制面写工具或外部资源，无 UI 宿主仍能使用文字与 `structuredContent`。
+0.39.0 提供 33 个 MCP 工具和一个静态 MCP Apps Resource，并新增数据库 baseline 强制契约、clean primary feature 的 stacked 子分支基线、Codex Desktop sandbox transcript 识别及未领取自动 TASK 的显式人工恢复。核心契约必须验证数据库结构在执行前生成并冻结、缺失设计或 LIGHT fail closed、Loop 只执行 after，以及 `NEW_FROM_CURRENT_BRANCH` 的 child/base/integration binding 与 hostDispatch 完全一致。`SubagentStart` 必须在 Hook 隔离账户与宿主 profile 不同时仍验证真实 transcript；`handoff_ready_automatic_task` 只允许 clean、READY、从未领取且无有效 reservation 的 TASK，并保持 Review 自动派遣。Modern/Legacy 两种 wire shim 继续共享同一 tools/resources dispatcher，`open_delivery_dashboard` 只读取当前状态，UI 不包含控制面写工具或外部资源，无 UI 宿主仍能使用文字与 `structuredContent`。
 
 | 环境 | Python | 核心契约 | 真实宿主 | 发布用途 |
 |---|---:|---|---|---|

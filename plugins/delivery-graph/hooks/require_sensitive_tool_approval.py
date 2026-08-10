@@ -23,6 +23,9 @@ SENSITIVE_TOOL_REASONS = {
     f"{MCP_PERMISSION_PREFIX}refreeze_task_requirement": (
         "重新冻结修改后的 TASK 需求前需要用户明确确认。"
     ),
+    f"{MCP_PERMISSION_PREFIX}handoff_ready_automatic_task": (
+        "把未领取的自动 TASK 改为人工接收前，需要用户明确确认无代码改动。"
+    ),
 }
 
 

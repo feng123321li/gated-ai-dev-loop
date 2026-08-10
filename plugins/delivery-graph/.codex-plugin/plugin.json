@@ -51,6 +51,9 @@
         },
         "refreeze_task_requirement": {
           "approval_mode": "prompt"
+        },
+        "handoff_ready_automatic_task": {
+          "approval_mode": "prompt"
         }
       }
     }

@@ -92,8 +92,9 @@ allowed-tools:
 持续调用 `graph_frontier` 并完整消费当前批次 action；精确 claim、reservation、heartbeat、资源锁和接收协议见[执行说明](references/execution-quickstart.md)。
 
 - `REFREEZE_TASK_REQUIREMENT`：停止派遣该 TASK，只修改用户授权的需求字段，重新冻结后刷新 frontier。
-- `CLAIM_MANUAL_TASK`：为手动 Graph 创建独立 TASK receiver；只有 TASK 可 MANUAL claim，后续 Review 仍走可信宿主自动派遣。
+- `CLAIM_MANUAL_TASK`：为手动 Graph，或已由 `handoff_ready_automatic_task` 显式恢复的单个自动 TASK，创建独立人工 receiver；只有 TASK 可 MANUAL claim，后续 Review 仍走可信宿主自动派遣。
 - `DISPATCH_LOOP`：按 `plan_dispatch_batch` 返回的并发组立即创建独立 receiver；不要在 reservation 后继续分析，不要跨 Delivery 复用 receiver 或工作区。
+- 自动 receiver 最多重派一次仍因宿主 attestation/启动故障失败时，不得由总协调器直接 claim。等待旧 reservation 失效，确认 TASK 从未领取、Delivery worktree 干净且无代码改动后，取得用户明确授权调用 `handoff_ready_automatic_task`；它只把当前 READY TASK 改为人工接收，保留 AUTOMATIC Graph、Revision、基线和双 fingerprint，Review 不降级。
 - claim 成功后，让 receiver 读取一次 `loop_context`，并在任何代码工作前提交首次独立 `heartbeat_loop`。
 - 只让可信外层 receiver 调用 claim、heartbeat、progress、pause、resume 和 `record_loop_result`。内部 Worker 不得持有控制面凭据。
 - 让 receiver 使用已验证的 `projectScopes`，按租约 heartbeat，并在关键阶段报告 progress；progress 不续租。

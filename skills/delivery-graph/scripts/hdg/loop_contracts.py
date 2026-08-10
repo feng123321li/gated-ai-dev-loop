@@ -32,6 +32,17 @@ _LOOP_EXECUTION_POLICY = {
         "action": "PAUSE_AND_HANDOFF",
         "loopOutcome": "NONE",
     },
+    "unclaimedAutomaticRecovery": {
+        "tool": "handoff_ready_automatic_task",
+        "requiresReadyTask": True,
+        "requiresNeverClaimedAttempt": True,
+        "requiresNoLiveReservation": True,
+        "requiresCleanWorktree": True,
+        "requiresNoCodeChangesConfirmation": True,
+        "taskDispatchMode": "MANUAL",
+        "graphExecutionModeRemains": "active",
+        "reviewsRemain": "AUTO",
+    },
     "progressReporting": {
         "tool": "report_loop_progress",
         "language": "USER_PREFERRED",

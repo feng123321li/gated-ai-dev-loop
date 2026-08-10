@@ -91,6 +91,8 @@ Delivery
 
 新会话从 `workspace_status` 恢复当前 Delivery，再读取 Graph frontier。worktree setup 与活动 receiver 都有独立 heartbeat 和 lease；前者通过 `worktreeSetup.progressMonitor` 在主仓显示全部项目，后者通过 Graph `progressMonitor` 显示 TASK 与 Review。失联、租约过期或可重试失败只在各自安全边界恢复。需求发生变化时创建同一 Delivery 的下一 Revision，不覆写已经冻结的版本。
 
+Codex Desktop 的 `SubagentStart` Hook 会在隔离账户与登录用户 profile 不同时，继续以宿主 transcript 路径验证真实 sessions 根。自动 receiver 最多重派一次仍无法启动时，用户可对 clean、READY、从未领取且无有效 reservation 的单个 TASK 显式调用 `handoff_ready_automatic_task`；只把该 TASK 改为人工接收，AUTOMATIC Graph、Revision、基线、双 fingerprint 和后续自动 Review 均保持不变。
+
 ## 安装
 
 Plugin 同时面向 Codex 和 Claude Code。安装前准备 Python 3.10+，并确保 `python` 在宿主终端可用。

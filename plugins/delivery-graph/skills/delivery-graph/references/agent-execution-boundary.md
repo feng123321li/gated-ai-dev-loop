@@ -6,7 +6,16 @@ Delivery Graph 是 SOP 与 Graph 控制面。它决定哪个 TASK/Review Loop �
 
 ## 外层 receiver
 
-自动派遣只创建当前可信宿主 Adapter 的独立 receiver：
+所有 Graph claim 都只交给当前可信宿主 Adapter 的独立原生 receiver。AUTO 与 MANUAL 使用相同身份强度：
+
+| 模式 | 授权来源 | receiver attestation |
+|---|---|---|
+| `AUTO` | `plan_dispatch_batch` 为当前 node/attempt 签发的短租约 assignment | 一次性证明绑定真实 child/parent/workspace，`reservation_id` 必须为非空且精确匹配 |
+| `MANUAL` | 已启动的 manual Graph，或指定自动 TASK 的显式人工接管事件 | 一次性证明绑定相同的 child/parent/workspace，`reservation_id` 必须为 `NULL` |
+
+两者在 attestation 消费后共同进入同一 claim、项目 scope、operation、heartbeat、progress、pause、result 和 lease 校验。MANUAL 只是不经过自动 planning/reservation，不是无认证或总协调器直领路径。
+
+AUTO assignment 还具有以下派遣约束：
 
 - assignment 绑定 `hostAdapterId`、`receiverAgentId`、reservation、节点、attempt、
   receiving context 和 `modelPolicy=CURRENT_HOST_INHERIT`。
@@ -18,9 +27,11 @@ Delivery Graph 是 SOP 与 Graph 控制面。它决定哪个 TASK/Review Loop �
   新 attempt、reservation 和独立 receiver 重新领取。旧 operation 立即失效。
 
 Codex、Claude Code 或其他宿主只有在 Plugin 存在对应可信外层 Adapter、能通过
-宿主原生生命周期事件证明 child/parent/reservation 关系，并能为后续控制面操作持续
-证明同一 receiver 身份时，才能自动领取 Loop。PATH 中存在 CLI、普通 helper、
+宿主原生生命周期事件证明 child/parent/workspace（AUTO 另含 reservation）关系，并能为后续控制面操作持续
+证明同一 receiver 身份时，才能领取 Loop。PATH 中存在 CLI、普通 helper、
 外部进程或本机 Profile 都不构成这种权限。
+
+Codex AUTO planning 在创建 reservation 前还要求 `plan_dispatch_batch` PreToolUse Hook 的一次性 workspace attestation。安装或升级后必须在新任务的 `/hooks` 中审查并信任 Plugin Hook；未激活时返回 `SCHEDULER_HOST_HOOK_NOT_READY`，不会留下 reservation。AUTO `SubagentStart` 和 MANUAL `dispatch_loop` 都只接受可信 sessions 根内的真实 child transcript。AUTO 启动证明失败时，只有尚未签发 receiver 身份且节点仍 READY 才立即释放 reservation，并要求 child 在仓库操作前停止。
 
 ## Loop 内部 Worker
 
@@ -86,8 +97,10 @@ receiver 负责验证、整合并以自己的受信身份更新控制面。
 ## 手动 Graph
 
 手动 handoff 在 `start_manual_handoff` 前不绑定工作区或 receiver。启动后，TASK
-仍由独立外层 receiver MANUAL claim；后续 Review 使用当前可信宿主 Adapter 的独立
-receiver。自动与手动模式都遵守相同的内部 Worker 边界和遥测规则。
+仍由独立宿主原生 receiver MANUAL claim；Adapter PreToolUse Hook 为它签发
+`reservation_id` 为 `NULL` 的一次性 receiver attestation，Controller 原子消费并绑定真实
+child、parent、workspace 与 operation。后续 Review 使用当前可信宿主 Adapter 的独立
+AUTO receiver。自动与手动模式都遵守相同的内部 Worker、mutation 和遥测规则。
 
 ## 容量与额度
 

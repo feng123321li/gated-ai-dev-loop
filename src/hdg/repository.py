@@ -3245,6 +3245,71 @@ class SchedulerRepository:
             (at,),
         )
 
+    def expire_dispatch_reservation_now(
+        self,
+        reservation_id: str,
+        *,
+        root_id: str,
+        host_adapter_id: str,
+        failure_code: str,
+    ) -> bool:
+        """Release one failed host-start reservation without a TTL wait."""
+
+        with self.transaction() as connection:
+            reservation = connection.execute(
+                "SELECT d.* FROM dispatch_reservations d "
+                "JOIN node_runs n ON n.run_id = d.run_id "
+                "AND n.node_id = d.node_id AND n.attempt = d.attempt "
+                "LEFT JOIN host_receiver_identities h "
+                "ON h.reservation_id = d.reservation_id "
+                "WHERE d.reservation_id = ? AND d.root_id = ? "
+                "AND d.agent_id = ? "
+                "AND d.status = 'RESERVED' AND n.status = 'READY' "
+                "AND h.attestation_digest IS NULL LIMIT 1",
+                (reservation_id, root_id, host_adapter_id),
+            ).fetchone()
+            if reservation is None:
+                return False
+            updated = connection.execute(
+                "UPDATE dispatch_reservations SET status = 'EXPIRED' "
+                "WHERE reservation_id = ? AND root_id = ? "
+                "AND run_id = ? AND node_id = ? AND attempt = ? "
+                "AND decision_fingerprint = ? AND status = 'RESERVED'",
+                (
+                    reservation_id,
+                    root_id,
+                    reservation["run_id"],
+                    reservation["node_id"],
+                    reservation["attempt"],
+                    reservation["decision_fingerprint"],
+                ),
+            )
+            if updated.rowcount != 1:
+                return False
+            self.append_event(
+                connection,
+                run_id=reservation["run_id"],
+                node_id=reservation["node_id"],
+                attempt=reservation["attempt"],
+                event_type="DISPATCH_RECEIVER_START_FAILED",
+                actor=host_adapter_id,
+                operation_id=None,
+                payload={
+                    "dispatchReservationId": reservation_id,
+                    "hostAdapterId": host_adapter_id,
+                    "graphFingerprint": reservation[
+                        "graph_fingerprint"
+                    ],
+                    "dispatchDecisionFingerprint": reservation[
+                        "decision_fingerprint"
+                    ],
+                    "failureCode": failure_code,
+                    "reservationReleased": True,
+                },
+                at=timestamp(self.now),
+            )
+        return True
+
     def active_dispatch_reservations(
         self,
         connection: sqlite3.Connection,

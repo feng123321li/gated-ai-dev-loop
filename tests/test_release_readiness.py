@@ -314,6 +314,13 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         self.assertIn("dispatch_loop first, then loop_context", prompt)
         self.assertIn("`delivery-graph smoke\\n`", prompt)
 
+    def test_codex_host_smoke_uses_subagent_start_atomic_claim(self) -> None:
+        prompt = _prompt("light", "codex")
+        self.assertIn("SubagentStart hook atomically claims", prompt)
+        self.assertIn("must not call dispatch_loop", prompt)
+        self.assertIn("reads loop_context once", prompt)
+        self.assertNotIn("dispatch_loop first, then loop_context", prompt)
+
     def test_release_surfaces_and_public_automatic_contract_match(self) -> None:
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         version = re.search(

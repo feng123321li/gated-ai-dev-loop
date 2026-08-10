@@ -130,7 +130,7 @@ def _session_meta_from_transcript(
     return session_meta
 
 
-def _subagent_claim_metadata(
+def _subagent_host_metadata(
     transcript_path: str,
     *,
     receiver_context_id: str,
@@ -164,12 +164,31 @@ def _subagent_claim_metadata(
     if not isinstance(agent_path, str):
         return None
     task_name = agent_path.replace("\\", "/").rsplit("/", 1)[-1]
+    return {
+        "parentContextId": parent_session_id,
+        "agentType": transcript_agent_type,
+        "taskName": task_name,
+    }
+
+
+def _subagent_claim_metadata(
+    transcript_path: str,
+    *,
+    receiver_context_id: str,
+) -> dict[str, str] | None:
+    metadata = _subagent_host_metadata(
+        transcript_path,
+        receiver_context_id=receiver_context_id,
+    )
+    if metadata is None:
+        return None
+    task_name = metadata["taskName"]
     matched = DISPATCH_TASK_NAME.fullmatch(task_name)
     if matched is None:
         return None
     return {
-        "parentContextId": parent_session_id,
-        "agentType": transcript_agent_type,
+        "parentContextId": metadata["parentContextId"],
+        "agentType": metadata["agentType"],
         "dispatchReservationId": str(uuid.UUID(hex=matched.group(1))),
     }
 
@@ -239,26 +258,22 @@ def _dispatch_reservation_from_transcript(
     return metadata["dispatchReservationId"]
 
 
-def _wait_for_direct_subagent_reservation(
+def _wait_for_direct_subagent_claim_metadata(
     transcript_path: str,
     *,
     receiver_context_id: str,
-    parent_session_id: str,
-    agent_type: str,
-) -> str | None:
+) -> dict[str, str] | None:
     deadline = time.monotonic() + CHILD_TRANSCRIPT_WAIT_SECONDS
     while True:
         try:
-            reservation = _dispatch_reservation_from_transcript(
+            metadata = _subagent_claim_metadata(
                 transcript_path,
                 receiver_context_id=receiver_context_id,
-                parent_session_id=parent_session_id,
-                agent_type=agent_type,
             )
         except (json.JSONDecodeError, OSError, ValueError):
-            reservation = None
-        if reservation is not None:
-            return reservation
+            metadata = None
+        if metadata is not None:
+            return metadata
         if time.monotonic() >= deadline:
             return None
         time.sleep(CHILD_TRANSCRIPT_POLL_SECONDS)
@@ -285,12 +300,17 @@ def _dispatch_reservation_from_subagent_start(
 
     transcript_name = Path(transcript_path).name
     if transcript_name.endswith(f"-{receiver_context_id}.jsonl"):
-        return _wait_for_direct_subagent_reservation(
+        metadata = _wait_for_direct_subagent_claim_metadata(
             transcript_path,
             receiver_context_id=receiver_context_id,
-            parent_session_id=parent_session_id,
-            agent_type=agent_type,
         )
+        if (
+            metadata is not None
+            and metadata["parentContextId"] == parent_session_id
+            and metadata["agentType"] == agent_type
+        ):
+            return metadata["dispatchReservationId"]
+        return None
 
     child_transcript = _child_transcript_from_parent(
         transcript_path,
@@ -314,7 +334,7 @@ def main() -> int:
         or hook_input.get("hook_event_name") != "SubagentStart"
     ):
         return 0
-    parent_session_id = hook_input.get("session_id")
+    hook_session_id = hook_input.get("session_id")
     receiver_context_id = hook_input.get("agent_id")
     agent_type = hook_input.get("agent_type")
     model_value = hook_input.get("model")
@@ -328,7 +348,7 @@ def main() -> int:
     if not all(
         isinstance(value, str) and value
         for value in (
-            parent_session_id,
+            hook_session_id,
             receiver_context_id,
             agent_type,
             cwd,
@@ -338,23 +358,65 @@ def main() -> int:
         return 0
 
     try:
-        dispatch_reservation_id = _dispatch_reservation_from_subagent_start(
+        direct_metadata = _subagent_claim_metadata(
             transcript_path,
             receiver_context_id=receiver_context_id,
-            parent_session_id=parent_session_id,
-            agent_type=agent_type,
         )
     except (json.JSONDecodeError, KeyError, OSError, ValueError):
-        return 0
-    if dispatch_reservation_id is None:
-        return 0
+        direct_metadata = None
+    startup_failure_code = None
+    if hook_session_id == receiver_context_id:
+        if direct_metadata is None:
+            direct_metadata = _wait_for_direct_subagent_claim_metadata(
+                transcript_path,
+                receiver_context_id=receiver_context_id,
+            )
+        if direct_metadata is None:
+            return 0
+        parent_session_id = direct_metadata["parentContextId"]
+        dispatch_reservation_id = direct_metadata[
+            "dispatchReservationId"
+        ]
+        if direct_metadata["agentType"] != agent_type:
+            startup_failure_code = (
+                "SCHEDULER_CODEX_SUBAGENT_CONTEXT_MISMATCH"
+            )
+    elif direct_metadata is not None:
+        parent_session_id = direct_metadata["parentContextId"]
+        dispatch_reservation_id = direct_metadata[
+            "dispatchReservationId"
+        ]
+        if (
+            direct_metadata["agentType"] != agent_type
+            or hook_session_id != parent_session_id
+        ):
+            startup_failure_code = (
+                "SCHEDULER_CODEX_SUBAGENT_CONTEXT_MISMATCH"
+            )
+    else:
+        try:
+            dispatch_reservation_id = (
+                _dispatch_reservation_from_subagent_start(
+                    transcript_path,
+                    receiver_context_id=receiver_context_id,
+                    parent_session_id=hook_session_id,
+                    agent_type=agent_type,
+                )
+            )
+        except (json.JSONDecodeError, KeyError, OSError, ValueError):
+            return 0
+        if dispatch_reservation_id is None:
+            return 0
+        parent_session_id = hook_session_id
 
     sys.path.insert(0, str(_runtime_path()))
-    from hdg.errors import GatedLoopError
+    from hdg.errors import GatedLoopError, fail
     from hdg.graph_runtime import claim_codex_subagent_receiver
     from hdg.host_policy import ProjectRootBinding
     from hdg.repository import DATABASE_FILE, GOVERNANCE_DIRECTORY
 
+    repository = None
+    root_id = None
     try:
         binding = ProjectRootBinding.from_startup(_workspace_start(cwd))
         resolution = binding.resolve_request(None, stateless=False)
@@ -378,6 +440,11 @@ def main() -> int:
             or status.get("executionMode") not in {"active", "manual"}
         ):
             return 0
+        if startup_failure_code is not None:
+            fail(
+                startup_failure_code,
+                "Codex SubagentStart does not match the reserved receiver",
+            )
         assignment = claim_codex_subagent_receiver(
             root=resolution.project_root,
             root_id=root_id,
@@ -387,9 +454,38 @@ def main() -> int:
             actual_model_id=model_id,
             dispatch_reservation_id=dispatch_reservation_id,
         )
-    except (GatedLoopError, OSError, ValueError):
-        # SubagentStart cannot block startup. Missing or stale state stays
-        # silent, so no new authoritative claim is created for this child.
+    except Exception as error:
+        code = getattr(error, "code", "HOST_CONTEXT_INVALID")
+        if repository is not None and isinstance(root_id, str):
+            try:
+                repository.expire_dispatch_reservation_now(
+                    dispatch_reservation_id,
+                    root_id=root_id,
+                    host_adapter_id="codex",
+                    failure_code=code,
+                )
+            except (GatedLoopError, OSError, ValueError):
+                pass
+        print(
+            json.dumps(
+                {
+                    "hookSpecificOutput": {
+                        "hookEventName": "SubagentStart",
+                        "additionalContext": (
+                            "Delivery Graph could not attest this AUTO "
+                            f"receiver ({code}). Do not inspect or modify "
+                            "the repository and do not call Loop tools. "
+                            "Report this startup failure to the coordinator.\n"
+                            "DELIVERY_GRAPH_STARTUP_ERROR="
+                            + code
+                        ),
+                    }
+                },
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
         return 0
 
     context = {

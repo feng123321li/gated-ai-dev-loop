@@ -4,7 +4,7 @@
 
 `delivery-graph` 把已经确认的软件需求冻结为可执行、可审查、可恢复的 Delivery Graph，再协调宿主原生 Agent 完成实现、分层 Review 和最终验收。
 
-当前版本：**0.39.1** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
+当前版本：**0.39.2** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
 
 ## 它做什么
 
@@ -62,7 +62,7 @@ Delivery
 | 模式 | 行为 |
 |---|---|
 | 自动执行 | 宿主创建或复用稳定的 linked worktree，启动后台协调任务，并派遣独立的宿主原生 receiver 消费 Graph frontier |
-| 手动开发 | 先生成自包含 handoff；接收 CLI 在选定工作区启动同一 Graph，人工完成 TASK，随后仍进入相同的自动 Review Graph |
+| 手动开发 | 先生成自包含 handoff；接收宿主在选定工作区启动同一 Graph，由经 Adapter 认证的独立原生 receiver 人工完成 TASK，随后仍进入相同的自动 Review Graph |
 
 自动模式不会让 Controller 创建分支或切换 worktree；这些动作由 Codex 或 Claude Code 的宿主能力完成。手动模式不会绕过 Review，也不会把 Review 降级为手动 claim。
 
@@ -82,6 +82,7 @@ Delivery
 - 工作树已有业务改动时，用户必须确认这些改动属于本 Delivery，并回传精确状态指纹。
 - 手动 handoff 启动前若 Git 基线漂移，启动会先被阻断；重新确认后恢复原 Revision，或在 binding 变化时生成下一不可变 Revision。
 - 一个 Delivery 可以覆盖多个本地 Git 项目，但每个 Git project scope 都必须提供完整 binding；缺失时提前 fail closed，不从顶层偏好猜测其他仓库。
+- 普通单仓 Delivery 可以只冻结顶层 `delivery.gitBinding`；运行时会从该 binding 与实际 Delivery workspace 合成并验证唯一 `primary` scope，receiver 不会取得空的 `projectScopes`。
 - 分支占用按 Git common directory 区分；不同仓库可以使用同名 feature 分支，同一仓库不能被两个活动 Delivery 预留同一分支。
 - 多仓手动启动出现 Git 漂移时 fail closed；必须恢复冻结基线，或用完整多仓 bindings 显式创建下一 Revision。
 
@@ -91,7 +92,9 @@ Delivery
 
 新会话从 `workspace_status` 恢复当前 Delivery，再读取 Graph frontier。worktree setup 与活动 receiver 都有独立 heartbeat 和 lease；前者通过 `worktreeSetup.progressMonitor` 在主仓显示全部项目，后者通过 Graph `progressMonitor` 显示 TASK 与 Review。失联、租约过期或可重试失败只在各自安全边界恢复。需求发生变化时创建同一 Delivery 的下一 Revision，不覆写已经冻结的版本。
 
-Codex Desktop 的 `SubagentStart` Hook 会在隔离账户与登录用户 profile 不同时，继续以宿主 transcript 路径验证真实 sessions 根。自动 receiver 最多重派一次仍无法启动时，用户可对 clean、READY、从未领取且无有效 reservation 的单个 TASK 显式调用 `handoff_ready_automatic_task`；只把该 TASK 改为人工接收，AUTOMATIC Graph、Revision、基线、双 fingerprint 和后续自动 Review 均保持不变。
+AUTO 与 MANUAL 使用同一条 receiver 安全链：当前可信宿主 Adapter 必须先为真实原生 child 签发一次性 attestation，再由 Controller 原子消费并绑定 claim、项目 scope、operation、heartbeat、progress、pause 和 result。AUTO attestation 绑定非空 reservation；MANUAL attestation 的 reservation 为 `NULL`，授权来自 manual Graph 或指定 TASK 的显式人工接管事件，不能由总协调器直接认领。
+
+Codex manifest 显式加载 `hooks/hooks.json`。安装或升级后必须在新任务的 `/hooks` 中审查并信任 delivery-graph Hook；否则 `plan_dispatch_batch` 会在创建 reservation 前返回 `SCHEDULER_HOST_HOOK_NOT_READY`。AUTO `SubagentStart` 只信任真实 child transcript；若 Hook 已定位 reservation、但身份、workspace 或 scope 验证失败，Controller 会在尚未 claim 的安全边界立即释放 reservation，并让 child 停止仓库操作、向协调器报告，而不是等待 300 秒 TTL。自动 receiver 仍无法启动时，用户可对 clean、READY、从未领取且无有效 reservation 的单个 TASK 显式调用 `handoff_ready_automatic_task`；AUTOMATIC Graph、Revision、基线、双 fingerprint 和后续自动 Review 均保持不变。
 
 ## 安装
 
@@ -103,6 +106,8 @@ Codex：
 codex plugin marketplace add git@git.i-sanger.com:ai/skill/marketplace.git --ref master
 codex plugin add delivery-graph@majorbio-skills
 ```
+
+安装后新建 Codex 任务，打开 `/hooks`，确认并信任 `delivery-graph` 注册的 `SubagentStart` 与 `PreToolUse` Hook。Hook 未激活时 AUTO preflight 会 fail closed，不会先留下 dispatch reservation。
 
 Claude Code：
 
@@ -139,7 +144,7 @@ claude plugin install delivery-graph@majorbio-skills --scope user
 - **Codex**：Plugin Skill、MCP Server、工具授权 Hook 和宿主原生 worktree receiver。
 - **Claude Code**：Plugin Skill、MCP Server、工作区证明 Hook、结构化限额处理和宿主原生 receiver。
 
-外部 CLI 可以接收手动 handoff，但不会因此成为可自动派遣的可信 receiver。Plugin 只信任能证明宿主生命周期和接收身份的 Adapter。
+外部 CLI 可以承载手动 handoff 的协调入口，但实际 TASK claim 仍必须进入受支持宿主的独立原生 child，并由 Adapter 签发一次性 receiver attestation。Plugin 不把“人工模式”解释为降低身份要求，只信任能证明宿主生命周期和接收身份的 Adapter。
 
 ## 项目结构
 

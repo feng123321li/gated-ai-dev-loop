@@ -259,9 +259,10 @@ def validate_release() -> list[str]:
         if not isinstance(mcp_servers, dict) or not mcp_servers:
             raise ValueError("mcpServers must be a non-empty inline object")
         declared_hooks = codex_manifest.get("hooks")
-        if declared_hooks is not None:
-            if _plugin_path(declared_hooks, field="hooks") != CODEX_HOOKS.resolve():
-                raise ValueError("Codex hooks override must resolve to hooks.json")
+        if declared_hooks is None:
+            raise ValueError("Codex manifest must explicitly declare hooks")
+        if _plugin_path(declared_hooks, field="hooks") != CODEX_HOOKS.resolve():
+            raise ValueError("Codex hooks override must resolve to hooks.json")
         interface = codex_manifest.get("interface")
         if not isinstance(interface, dict):
             raise ValueError("interface must be an object")

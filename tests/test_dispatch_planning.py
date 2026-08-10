@@ -314,6 +314,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 ],
                 host_adapter_id="codex",
                 host_native_agent_ids=("codex",),
+                require_receiver_attestation=False,
             )
             state = graph_status(
                 root=root,
@@ -344,6 +345,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
                     dispatch_decision_fingerprint="0" * 64,
                     host_adapter_id="codex",
                     host_native_agent_ids=("codex",),
+                    require_receiver_attestation=False,
                 )
 
         self.assertEqual(

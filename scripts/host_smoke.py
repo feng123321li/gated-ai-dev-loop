@@ -156,6 +156,21 @@ def _prompt(scenario: str, host: str) -> str:
             "question, and dispatch through a real host-native child Agent."
         )
     )
+    receiver_start_requirement = (
+        "The child must call dispatch_loop first, then loop_context once, "
+        "then heartbeat_loop immediately before any Bash, Read, Write, "
+        "Edit, analysis of implementation, or extra discovery. A Claude "
+        "child omits receiver_context_id and receiver_attestation_id so the "
+        "PreToolUse hook can inject them; it must never invent placeholders."
+        if host == "claude-code"
+        else (
+            "The Codex SubagentStart hook atomically claims the AUTO Loop "
+            "before exposing the assignment. The child must not call "
+            "dispatch_loop; it reads loop_context once, then calls "
+            "heartbeat_loop immediately before any shell, file read/write, "
+            "implementation analysis, or extra discovery."
+        )
+    )
     return textwrap.dedent(
         f"""
         Run the official delivery-graph {profile} real-host smoke test in this
@@ -196,11 +211,7 @@ def _prompt(scenario: str, host: str) -> str:
 
         When HOST_NATIVE_DISPATCH_PLAN is returned, start the current-host child
         immediately; do not read more documentation or inspect Plugin source.
-        The child must call dispatch_loop first, then loop_context once, then
-        heartbeat_loop immediately before any Bash, Read, Write, Edit, analysis
-        of implementation, or extra discovery.
-        A Claude child omits receiver_context_id and receiver_attestation_id so
-        the PreToolUse hook can inject them; it must never invent placeholders.
+        {receiver_start_requirement}
 
         {execution_requirement} Every child must send at least one heartbeat
         immediately after claim before reporting structured progress and

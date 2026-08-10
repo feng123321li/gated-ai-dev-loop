@@ -25,6 +25,7 @@ allowed-tools:
 - 一个工作区最多绑定一个未结束 Delivery。新业务目标默认创建新 Delivery；只有同一需求延续或 `REPLAN_REQUIRED` 才创建同一 Delivery 的 Revision。
 - 为同一需求保持稳定 `delivery.id`、`requirementKey` 和 `.layered-delivery/<delivery-id>/`；不要创建共享 handoff 目录或第二套控制面。
 - 在手动接收方检查、分析、修改或测试代码前调用 `start_manual_handoff`。`HANDOFF_READY` 只是冻结的 handoff，不是已启动的 Graph Run。
+- AUTO 与 MANUAL 都只允许受支持宿主的独立原生 child 成为外层 receiver。两者都必须由当前可信 Adapter 签发并一次性消费 receiver attestation；AUTO 绑定非空 reservation，MANUAL 的 reservation 为 `NULL`，不得由总协调器、普通 helper 或内部 Worker 直接 claim。
 - 只有真实用户确认后才记录最终完成。
 
 ## 入口路由
@@ -68,6 +69,7 @@ allowed-tools:
 4. 让 Controller 只读冻结 `gitBinding`。`NEW_FROM_MAINLINE` 把 `baseCommit` 钉在确认时的主线 HEAD；`NEW_FROM_CURRENT_BRANCH` 把 clean 当前 feature 的 HEAD 钉为 `baseCommit`，并让该父 feature 同时成为 `baseRef/integrationTarget`。不要在这里创建分支或 worktree，也不要要求 primary 释放父分支。
 5. 对 Git 探测错误 fail closed。仅当确认不是 Git 工作区时跳过基线交互。
 6. 多 Git 项目必须在每个 `projectScopes[*]` 显式提供完整 `gitBinding`；任一缺失就停止，不得用顶层偏好推断其他仓库。
+7. 普通单仓 Delivery 可以省略 `projectScopes`；运行时必须从顶层 `delivery.gitBinding` 与实际 Delivery workspace 合成并验证唯一 `primary` scope。`loop_context.projectScopes` 为空时停止开发，不把 primary checkout 或模型输入路径当作隐式授权。
 
 确认成功后继续处理返回的 `pendingInteraction(kind=EXECUTION_MODE)`。
 
@@ -78,7 +80,7 @@ allowed-tools:
 - 严格遵循 `hostDispatch.launchPolicy`：`IMMEDIATE` 才创建；`DO_NOT_REISSUE` 等待既有 setup；secondary scope 的 `CONTINUE_EXISTING_WORKTREE_TASK` 由当前 coordinator 完成，不另起 coordinator。`branchRef/gitBinding` 是宿主 Git 写入的精确目标，不得自行生成替代分支。
 - `WORKTREE_SETUP_LEASE_EXPIRED` 或 `WORKTREE_SETUP_FAILED` 时停止重发。只有确认旧进程已停止且半成品目录/worktree 已安全核对后，才用唯一 `retry_request_id` 调用 `report_worktree_setup(RETRY_CONFIRMED)`；只消费 Controller 原子授予的新 attempt，未知响应仅用同一 ID 恢复。
 - `FROZEN_DELIVERY_BRANCH_REQUIRED` 只允许在干净 worktree 恢复冻结分支；`FROZEN_DELIVERY_BRANCH_DIRTY` 必须先审查并处理现有改动，不能直接切换。所有 project worktree 为 `READY` 后才调用 `resume_execution_mode`。
-- 选择 `MANUAL` 时，原样展示 `manualHandoff.receiverPrompt`。让接收 CLI 在实际工作区调用 `start_manual_handoff` 后再消费 frontier。
+- 选择 `MANUAL` 时，原样展示 `manualHandoff.receiverPrompt`。让接收宿主在实际工作区调用 `start_manual_handoff` 后，再创建独立原生 TASK child；其 `dispatch_loop(MANUAL)` 必须由 Adapter PreToolUse Hook 注入 reservation 为 `NULL` 的一次性 receiver attestation，然后才能消费 frontier。
 
 ## 手动启动的 Git 漂移
 
@@ -92,10 +94,10 @@ allowed-tools:
 持续调用 `graph_frontier` 并完整消费当前批次 action；精确 claim、reservation、heartbeat、资源锁和接收协议见[执行说明](references/execution-quickstart.md)。
 
 - `REFREEZE_TASK_REQUIREMENT`：停止派遣该 TASK，只修改用户授权的需求字段，重新冻结后刷新 frontier。
-- `CLAIM_MANUAL_TASK`：为手动 Graph，或已由 `handoff_ready_automatic_task` 显式恢复的单个自动 TASK，创建独立人工 receiver；只有 TASK 可 MANUAL claim，后续 Review 仍走可信宿主自动派遣。
-- `DISPATCH_LOOP`：按 `plan_dispatch_batch` 返回的并发组立即创建独立 receiver；不要在 reservation 后继续分析，不要跨 Delivery 复用 receiver 或工作区。
-- 自动 receiver 最多重派一次仍因宿主 attestation/启动故障失败时，不得由总协调器直接 claim。等待旧 reservation 失效，确认 TASK 从未领取、Delivery worktree 干净且无代码改动后，取得用户明确授权调用 `handoff_ready_automatic_task`；它只把当前 READY TASK 改为人工接收，保留 AUTOMATIC Graph、Revision、基线和双 fingerprint，Review 不降级。
-- claim 成功后，让 receiver 读取一次 `loop_context`，并在任何代码工作前提交首次独立 `heartbeat_loop`。
+- `CLAIM_MANUAL_TASK`：为手动 Graph，或已由 `handoff_ready_automatic_task` 显式恢复的单个自动 TASK，创建独立人工 receiver；只有 TASK 可 MANUAL claim，后续 Review 仍走可信宿主自动派遣。MANUAL 不带 AUTO reservation，但绝不能省略 Adapter attestation、真实 child/parent/workspace 校验或后续 operation 门禁。
+- `DISPATCH_LOOP`：按 `plan_dispatch_batch` 返回的并发组立即创建独立 receiver；不要在 reservation 后继续分析，不要跨 Delivery 复用 receiver 或工作区。Codex 调用 planning 前必须由 `PreToolUse` preflight 注入一次性工作区证明；`SCHEDULER_HOST_HOOK_NOT_READY` 表示 `/hooks` 尚未激活可信 Hook，且本次没有创建 reservation。
+- AUTO receiver 启动失败时不得由总协调器直接 claim。Codex `SubagentStart` 已定位 reservation、但身份/workspace/scope 验证失败时，安全边界满足即立即释放 reservation，并要求 child 不检查或修改仓库；刷新 frontier 后修复前置条件。仍需人工接管时，确认 TASK 从未领取、无有效 reservation、Delivery worktree 干净且无代码改动，再取得用户明确授权调用 `handoff_ready_automatic_task`；它只把当前 READY TASK 改为人工接收，保留 AUTOMATIC Graph、Revision、基线和双 fingerprint，Review 不降级。
+- claim 成功后，让 receiver 读取一次 `loop_context`，确认至少一个已验证的 `projectScopes`，并在任何代码工作前提交首次独立 `heartbeat_loop`。
 - 只让可信外层 receiver 调用 claim、heartbeat、progress、pause、resume 和 `record_loop_result`。内部 Worker 不得持有控制面凭据。
 - 让 receiver 使用已验证的 `projectScopes`，按租约 heartbeat，并在关键阶段报告 progress；progress 不续租。
 - 数据库 TASK 只应用和验证冻结 `databaseChanges[*].after`，不得在 Loop 内另行设计字段、索引、约束或迁移策略；任何必要偏离都提交 `REPLAN_REQUIRED`。
@@ -104,11 +106,10 @@ allowed-tools:
 
 ## 恢复
 
-- 对 `PAUSED` 或 `RESUME_LOOP_IN_INDEPENDENT_CONTEXT`，路由到新的独立接收上下文并调用 `resume_loop`；不要重新 prepare/freeze。
-- 对租约过期、receiver 失联或基础设施失败，刷新 frontier 并交给 `advance_graph`；不得复用旧 operation。
+- 对 `PAUSED` 或 `RESUME_LOOP_IN_INDEPENDENT_CONTEXT`，路由到新的独立接收上下文并调用 `resume_loop`，不要重新 prepare/freeze；对租约过期、receiver 失联或基础设施失败，刷新 frontier 并交给 `advance_graph`，不得复用旧 operation。
+- Codex planning 返回 `SCHEDULER_HOST_HOOK_NOT_READY` 时，在新任务的 `/hooks` 审查并信任当前 Plugin Hook，再重新读取 frontier；该错误发生在 reservation 创建前。child 返回 `DELIVERY_GRAPH_STARTUP_ERROR` 时立即停止仓库与 Loop 操作，只把稳定错误码报告协调器。
 - 仅根据宿主提供的结构化容量状态与 `resetAt` 等待；不要从文本猜测额度或静默切换模型/Adapter。
-- 对物化状态损坏，调用 `rebuild_graph_run` 从已校验事件链重建；不要修改事件。
-- 对需求范围、依赖、资源或 Review 契约变化，记录 `REPLAN_REQUIRED`，等待用户决定是否准备同一 Delivery 的下一 Revision。
+- 对物化状态损坏，调用 `rebuild_graph_run` 从已校验事件链重建且不要修改事件；对需求范围、依赖、资源或 Review 契约变化，记录 `REPLAN_REQUIRED`，等待用户决定是否准备同一 Delivery 的下一 Revision。
 
 ## 按需读取
 

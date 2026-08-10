@@ -451,6 +451,26 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         return prepared
 
+    def test_runtime_dispatch_requires_receiver_attestation_by_default(
+        self,
+    ) -> None:
+        with self.assertRaises(GatedLoopError) as missing:
+            runtime_dispatch_loop(
+                root=self.root,
+                root_id="d-service",
+                node_id="loop:t-service",
+                owner="codex-child",
+                operation_id="op-default-attestation",
+                agent_id="codex",
+                receiver_context_id="codex-child",
+                dispatch_mode="MANUAL",
+                host_adapter_id="codex",
+            )
+        self.assertEqual(
+            missing.exception.code,
+            "SCHEDULER_RECEIVER_ATTESTATION_REQUIRED",
+        )
+
     def test_ready_automatic_task_can_be_explicitly_handed_to_manual_receiver(
         self,
     ) -> None:
@@ -541,6 +561,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             receiver_context_id="manual-cli",
             dispatch_mode="MANUAL",
             host_adapter_id="codex",
+            require_receiver_attestation=False,
             now=at(10),
         )
         record_loop_result(
@@ -1440,6 +1461,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                         receiver_context_id=receiver_context_id,
                         dispatch_mode="MANUAL",
                         operation_id=operation_id,
+                        require_receiver_attestation=False,
                         now=at(index),
                     )
                     outcome = success("Manual TASK completed.")
@@ -1600,6 +1622,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             receiver_context_id="context-manual-task",
             dispatch_mode="MANUAL",
             operation_id="op-manual-task",
+            require_receiver_attestation=False,
             now=at(3),
         )
         record_loop_result(
@@ -1621,6 +1644,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 receiver_context_id="context-manual-review",
                 dispatch_mode="MANUAL",
                 operation_id="op-manual-review",
+                require_receiver_attestation=False,
                 now=at(5),
             )
         self.assertEqual(
@@ -1664,6 +1688,17 @@ class SchedulerRuntimeTests(unittest.TestCase):
             now=at(2),
         )
         node_id = loop_node_id("t-manual-codex-child")
+        attestation = attest_loop_receiver(
+            root=self.root,
+            root_id=handoff["rootId"],
+            node_id=node_id,
+            receiver_context_id="codex-child-manual",
+            parent_context_id="codex-parent",
+            host_adapter_id="codex",
+            dispatch_reservation_id=None,
+            dispatch_mode="MANUAL",
+            now=at(3),
+        )
         claimed = runtime_dispatch_loop(
             root=self.root,
             root_id=handoff["rootId"],
@@ -1673,6 +1708,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
             receiver_context_id="codex-child-manual",
             dispatch_mode="MANUAL",
             host_adapter_id="codex",
+            receiver_attestation_id=attestation[
+                "receiverAttestationId"
+            ],
+            require_receiver_attestation=True,
             operation_id="op-codex-child-manual",
             now=at(3),
         )
@@ -1688,7 +1727,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             now=at(4),
         )
 
-        self.assertFalse(claimed["receiverAttested"])
+        self.assertTrue(claimed["receiverAttested"])
         self.assertEqual(
             authorization["operationId"],
             claimed["operationId"],
@@ -2612,7 +2651,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )["events"]
 
         with patch(
-            "hdg.controller.verify_delivery_project_scopes",
+            "hdg.controller.verify_runtime_delivery_project_scopes",
             side_effect=AssertionError(
                 "Archival must not revalidate a completed Git workspace"
             ),

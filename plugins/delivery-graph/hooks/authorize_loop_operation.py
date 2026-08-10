@@ -123,6 +123,7 @@ def main() -> int:
     ):
         return 0
     tool_input = hook_input.get("tool_input")
+    tool_use_id = hook_input.get("tool_use_id")
     session_id = hook_input.get("session_id")
     transcript_path = hook_input.get("transcript_path")
     cwd = hook_input.get("cwd")
@@ -133,6 +134,7 @@ def main() -> int:
             for value in (
                 session_id,
                 cwd,
+                tool_use_id,
             )
         )
     ):
@@ -237,7 +239,11 @@ def main() -> int:
         authorize_codex_subagent_operation,
     )
     from hdg.host_policy import ProjectRootBinding
-    from hdg.repository import DATABASE_FILE, GOVERNANCE_DIRECTORY
+    from hdg.repository import (
+        DATABASE_FILE,
+        GOVERNANCE_DIRECTORY,
+        SchedulerRepository,
+    )
 
     try:
         binding = ProjectRootBinding.from_startup(_workspace_start(cwd))
@@ -268,6 +274,17 @@ def main() -> int:
                 receiver_context_id=receiver_context_id,
                 parent_context_id=parent_context_id,
             )
+        receiver_operation_attestation = SchedulerRepository(
+            resolution.project_root
+        ).issue_host_workspace_attestation(
+            host_adapter_id=host_adapter_id,
+            context_id=receiver_context_id,
+            tool_name=(
+                "receiver_operation:" + tool_name.rsplit("__", 1)[-1]
+            ),
+            tool_use_id=tool_use_id,
+            workspace_root=resolution.workspace_root,
+        )
     except GatedLoopError as error:
         return _deny(
             "The current host context does not own this Loop "
@@ -278,6 +295,9 @@ def main() -> int:
 
     updated_input = dict(tool_input)
     updated_input["operation_id"] = authorization["operationId"]
+    updated_input["_host_receiver_operation_attestation"] = (
+        receiver_operation_attestation
+    )
     print(
         json.dumps(
             {

@@ -828,23 +828,70 @@ def _call_scheduler_tool(
             "_host_workspace_attestation",
             None,
         )
+        receiver_operation_attestation = tool_arguments.pop(
+            "_host_receiver_operation_attestation",
+            None,
+        )
         workspace_root = root_resolution.workspace_root
+        host_hook_attested = False
+        host_receiver_operation_attested = False
         if workspace_attestation is not None:
             if (
-                connection.trusted_host_adapter != "claude-code"
+                connection.trusted_host_adapter
+                not in {"claude-code", "codex"}
                 or not isinstance(workspace_attestation, str)
             ):
                 raise GatedLoopError(
                     "SCHEDULER_HOST_WORKSPACE_ATTESTATION_UNTRUSTED",
-                    "Only the Claude Code host Hook may attest a workspace",
+                    "Only a trusted host Hook may attest a workspace",
                 )
-            workspace_root = SchedulerRepository(
+            repository = SchedulerRepository(
                 root_resolution.project_root
-            ).consume_host_workspace_attestation(
+            )
+            attested_workspace = repository.consume_host_workspace_attestation(
                 workspace_attestation,
-                host_adapter_id="claude-code",
+                host_adapter_id=connection.trusted_host_adapter,
                 tool_name=name,
             )
+            if connection.trusted_host_adapter == "claude-code":
+                workspace_root = attested_workspace
+            elif repository.workspace_key(
+                attested_workspace
+            ) != repository.workspace_key(workspace_root):
+                raise GatedLoopError(
+                    "SCHEDULER_HOST_WORKSPACE_ATTESTATION_MISMATCH",
+                    "The Codex Hook workspace does not match trusted request metadata",
+                )
+            host_hook_attested = True
+        if receiver_operation_attestation is not None:
+            if (
+                connection.trusted_host_adapter
+                not in {"claude-code", "codex"}
+                or not isinstance(receiver_operation_attestation, str)
+            ):
+                raise GatedLoopError(
+                    "SCHEDULER_RECEIVER_OPERATION_NOT_ATTESTED",
+                    "Only a trusted receiver Hook may attest a Loop mutation",
+                )
+            repository = SchedulerRepository(
+                root_resolution.project_root
+            )
+            attested_workspace = repository.consume_host_workspace_attestation(
+                receiver_operation_attestation,
+                host_adapter_id=connection.trusted_host_adapter,
+                tool_name=f"receiver_operation:{name}",
+            )
+            if connection.trusted_host_adapter == "claude-code":
+                workspace_root = attested_workspace
+            elif repository.workspace_key(
+                attested_workspace
+            ) != repository.workspace_key(workspace_root):
+                raise GatedLoopError(
+                    "SCHEDULER_HOST_WORKSPACE_ATTESTATION_MISMATCH",
+                    "The Codex receiver Hook workspace does not match "
+                    "trusted request metadata",
+                )
+            host_receiver_operation_attested = True
         business_result = call_tool(
             name,
             tool_arguments,
@@ -853,6 +900,10 @@ def _call_scheduler_tool(
             explicit_dogfood=explicit_dogfood,
             client_info=(dict(client_info) if client_info else None),
             trusted_host_adapter=connection.trusted_host_adapter,
+            host_hook_attested=host_hook_attested,
+            host_receiver_operation_attested=(
+                host_receiver_operation_attested
+            ),
         )
         payload = {
             "ok": True,

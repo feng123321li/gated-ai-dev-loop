@@ -234,6 +234,16 @@ def _tool(
                 "ordinary MCP clients must omit this internal field."
             ),
         }
+        properties["_host_receiver_operation_attestation"] = {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 256,
+            "description": (
+                "Host-injected one-time receiver-operation evidence. "
+                "Models and ordinary MCP clients must omit this internal "
+                "field."
+            ),
+        }
     result: dict[str, Any] = {
         "name": name,
         "title": title or name.replace("_", " ").title(),
@@ -1614,6 +1624,8 @@ def call_tool(
     controller: LayeredDeliveryController = DEFAULT_CONTROLLER,
     client_info: dict[str, Any] | None = None,
     trusted_host_adapter: str | None = None,
+    host_hook_attested: bool = False,
+    host_receiver_operation_attested: bool = False,
     **_: Any,
 ) -> dict[str, Any]:
     internal_arguments = validate_tool_arguments(name, arguments)
@@ -1631,6 +1643,10 @@ def call_tool(
                 trusted_host_adapter
             ),
             host_adapter_id=trusted_host_adapter,
+            host_hook_attested=host_hook_attested,
+            host_receiver_operation_attested=(
+                host_receiver_operation_attested
+            ),
         ),
     )
     return result

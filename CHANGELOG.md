@@ -4,6 +4,18 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.2 — 2026-08-10
+
+发布提交：以 tag `v0.39.2` 指向的提交为准
+
+- **AUTO/MANUAL 统一 receiver 身份链**：两种模式都必须由当前可信宿主 Adapter 为真实原生 child 签发并一次性消费 receiver attestation，再进入相同的 claim、项目 scope、operation、heartbeat、progress、pause 和 result 授权链。AUTO attestation 必须绑定非空 dispatch reservation；MANUAL attestation 的 reservation 固定为 `NULL`，其授权来源是完整 manual Graph 或指定自动 TASK 的显式人工接管事件，而不是较弱的无认证 claim。
+- **Codex Hook 激活前置门禁**：Codex manifest 现在显式声明 `./hooks/hooks.json`。安装或升级后必须在新任务的 `/hooks` 中审查并信任该 Plugin 的 Hook；`plan_dispatch_batch` 的 PreToolUse preflight 会签发一次性宿主工作区证明，Hook 未加载、未信任或未注入证明时，Controller 在创建任何 reservation 前返回 `SCHEDULER_HOST_HOOK_NOT_READY`。
+- **真实 child transcript 绑定**：Codex AUTO 的 `SubagentStart` 和 MANUAL 的 `dispatch_loop` PreToolUse 都只接受宿主可信 `.codex/sessions` 根内的真实 child transcript，并精确核对 child、parent、角色、task/reservation 与 Delivery workspace。模型输入、root/helper、内部 Worker、自定义 `CODEX_HOME` 和伪造 transcript 不能取得 receiver 或 operation 权限。
+- **单仓运行 scope 修复**：未显式声明 `delivery.projectScopes` 的普通单仓 Delivery 会从顶层 `delivery.gitBinding` 与已绑定工作区合成并验证唯一 `primary` runtime scope；AUTO claim 与 `loop_context.projectScopes` 不再返回空数组。多仓冻结规则保持不变，仍要求每个 scope 显式完整 binding。
+- **启动失败立即释放**：Codex `SubagentStart` 已定位 reservation 但身份、workspace 或 scope attestation 失败时，在 TASK 仍为 READY 且尚未签发 receiver 身份的前提下立即把该 reservation 标记为过期，并记录 `DISPATCH_RECEIVER_START_FAILED`；child 收到只报告协调器、不得检查或修改仓库的稳定错误上下文，不再等待 300 秒 TTL。
+- **兼容性**：继续只维护 schema v3，MCP 工具面保持 33 个；新增行为属于宿主 Adapter、Hook 和运行时 scope 校验收紧，不增加旧协议旁路。
+- **验证**：本地 Python 全量 351 项测试通过（1 项按环境条件跳过），并完成编译、Skill/Plugin 生成镜像、发布门禁、Claude Plugin 与差异校验。
+
 ## 0.39.1 — 2026-08-10
 
 发布提交：以 tag `v0.39.1` 指向的提交为准

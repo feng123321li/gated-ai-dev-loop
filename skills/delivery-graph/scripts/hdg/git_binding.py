@@ -1077,6 +1077,51 @@ def verify_delivery_project_scopes(
     return sorted(verified, key=lambda item: item["id"])
 
 
+def verify_runtime_delivery_project_scopes(
+    workspace_root: str,
+    delivery: dict[str, Any],
+    *,
+    preparing: bool,
+) -> list[dict[str, Any]]:
+    """Verify runtime scopes, including the implicit single-project scope.
+
+    ``projectScopes`` is optional in the frozen hierarchy because a normal
+    single-repository Delivery is already anchored by ``delivery.gitBinding``.
+    Runtime receivers still need an explicit, verified authorization scope,
+    so synthesize that primary scope without changing the frozen schema.
+    """
+
+    if delivery.get("projectScopes") is not None:
+        return verify_delivery_project_scopes(
+            workspace_root,
+            delivery,
+            preparing=preparing,
+        )
+
+    primary_root = Path(workspace_root).absolute().resolve(strict=True)
+    binding = delivery.get("gitBinding")
+    git_workspace = verify_delivery_git_binding(
+        str(primary_root),
+        binding,
+        preparing=preparing,
+    )
+    primary_scope: dict[str, Any] = {
+        "id": "primary",
+        "workspaceRoot": str(primary_root),
+        "access": "READ_WRITE",
+        "scopeSource": (
+            "DELIVERY_GIT_BINDING"
+            if binding is not None
+            else "DELIVERY_WORKSPACE"
+        ),
+    }
+    if binding is not None:
+        primary_scope["gitBinding"] = binding
+    if git_workspace is not None:
+        primary_scope["gitWorkspace"] = git_workspace
+    return [primary_scope]
+
+
 __all__ = (
     "enumerate_local_feature_branches",
     "find_delivery_linked_worktree",
@@ -1086,4 +1131,5 @@ __all__ = (
     "resolve_branch_binding",
     "verify_delivery_git_binding",
     "verify_delivery_project_scopes",
+    "verify_runtime_delivery_project_scopes",
 )

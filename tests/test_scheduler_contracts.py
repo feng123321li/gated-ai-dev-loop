@@ -20,6 +20,7 @@ from hdg.controller import (
     LayeredDeliveryController,
 )
 from hdg.errors import GatedLoopError
+from hdg.graph_model import loop_node_id
 from hdg.git_binding import inspect_frozen_git_workspace_provenance
 from hdg.hierarchy_contract import hierarchy_contract
 from hdg.host_policy import ProjectRootBinding
@@ -1233,6 +1234,7 @@ class McpSurfaceTests(unittest.TestCase):
                 "base_ref",
                 "confirmed_dirty_state_fingerprint",
                 "_host_workspace_attestation",
+                "_host_receiver_operation_attestation",
             },
         )
         self.assertIn(
@@ -1363,6 +1365,7 @@ class McpSurfaceTests(unittest.TestCase):
                 "root_id",
                 "expected_graph_fingerprint",
                 "_host_workspace_attestation",
+                "_host_receiver_operation_attestation",
             },
         )
         self.assertNotIn("_meta", by_name["plan_dispatch_batch"])
@@ -1416,6 +1419,7 @@ class McpSurfaceTests(unittest.TestCase):
                 "receiver_attestation_id",
                 "operation_id",
                 "_host_workspace_attestation",
+                "_host_receiver_operation_attestation",
             },
         )
         recovery = by_name["handoff_ready_automatic_task"]
@@ -2590,6 +2594,138 @@ class McpSurfaceTests(unittest.TestCase):
                 "SCHEDULER_HOST_WORKSPACE_ATTESTATION_CONSUMED",
             )
 
+    def test_codex_plan_consumes_hook_preflight_attestation(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="human",
+            )
+            scheduler = SchedulerRepository(root)
+            attestation = scheduler.issue_host_workspace_attestation(
+                host_adapter_id="codex",
+                context_id="codex-coordinator",
+                tool_name="plan_dispatch_batch",
+                tool_use_id="codex-plan-tool",
+                workspace_root=root,
+            )
+            connection = McpConnection(
+                project_root=ProjectRootBinding.from_startup(root),
+                trusted_host_adapter="codex",
+            )
+            handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "initialize",
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": LEGACY_PREFERRED_PROTOCOL_VERSION,
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "codex",
+                            "version": "test",
+                        },
+                    },
+                },
+                connection=connection,
+            )
+            handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/initialized",
+                    "params": {},
+                },
+                connection=connection,
+            )
+            response = handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "codex-plan",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "plan_dispatch_batch",
+                        "arguments": {
+                            "root_id": prepared["rootId"],
+                            "expected_graph_fingerprint": prepared[
+                                "graphFingerprint"
+                            ],
+                            "_host_workspace_attestation": attestation,
+                        },
+                    },
+                },
+                connection=connection,
+            )
+
+        structured = response["result"]["structuredContent"]
+        self.assertTrue(structured["ok"])
+        self.assertEqual(len(structured["result"]["assignments"]), 1)
+
+    def test_missing_receiver_operation_never_becomes_internal_error(
+        self,
+    ) -> None:
+        cases = {
+            "heartbeat_loop": {
+                "root_id": "d-service",
+                "node_id": "loop:t-service",
+            },
+            "report_loop_progress": {
+                "root_id": "d-service",
+                "node_id": "loop:t-service",
+                "phase": "STARTING",
+                "summary_zh": "开始处理",
+            },
+            "pause_loop": {
+                "root_id": "d-service",
+                "node_id": "loop:t-service",
+            },
+            "record_loop_result": {
+                "root_id": "d-service",
+                "node_id": "loop:t-service",
+                "outcome": {
+                    "status": "SUCCEEDED",
+                    "summary": "done",
+                    "result": {},
+                },
+            },
+        }
+        with TemporaryDirectory() as root:
+            for name, arguments in cases.items():
+                with self.subTest(name=name):
+                    with self.assertRaises(GatedLoopError) as caught:
+                        call_tool(
+                            name,
+                            arguments,
+                            root=root,
+                            trusted_host_adapter="codex",
+                        )
+                    self.assertEqual(
+                        caught.exception.code,
+                        "SCHEDULER_RECEIVER_OPERATION_NOT_ATTESTED",
+                    )
+                with self.subTest(name=name, forged_operation=True):
+                    with self.assertRaises(GatedLoopError) as forged:
+                        call_tool(
+                            name,
+                            {
+                                **arguments,
+                                "operation_id": "known-but-unattested-op",
+                            },
+                            root=root,
+                            trusted_host_adapter="codex",
+                        )
+                    self.assertEqual(
+                        forged.exception.code,
+                        "SCHEDULER_RECEIVER_OPERATION_NOT_ATTESTED",
+                    )
+
     def test_claude_cli_linked_worktree_requires_exact_dirty_confirmation(
         self,
     ) -> None:
@@ -3051,6 +3187,68 @@ class McpSurfaceTests(unittest.TestCase):
                 git_command(second, "branch", "--show-current"),
                 second_branch,
             )
+
+    def test_single_project_loop_context_synthesizes_verified_scope(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            repository, worktree, base_commit, branch_ref = (
+                git_delivery_checkout(root)
+            )
+            hierarchy = bind_delivery_to_git(
+                task_hierarchy(),
+                branch_ref=branch_ref,
+                base_commit=base_commit,
+            )
+            prepared = call_tool(
+                "prepare_hierarchy",
+                {"hierarchy": hierarchy},
+                root=str(repository),
+                workspace_root=str(worktree),
+            )
+            call_tool(
+                "freeze_hierarchy",
+                {
+                    "root_id": prepared["rootId"],
+                    "expected_delivery_revision": 1,
+                    "expected_hierarchy_fingerprint": prepared[
+                        "hierarchyFingerprint"
+                    ],
+                    "authorized_project_ids": [],
+                    "confirmed_by": "human",
+                },
+                root=str(repository),
+                workspace_root=str(worktree),
+            )
+
+            context = call_tool(
+                "loop_context",
+                {
+                    "root_id": prepared["rootId"],
+                    "node_id": loop_node_id("t-service"),
+                },
+                root=str(repository),
+                workspace_root=str(worktree),
+                trusted_host_adapter="codex",
+            )
+
+        self.assertEqual(context["projectScopeAnchors"], [])
+        self.assertEqual(len(context["projectScopes"]), 1)
+        scope = context["projectScopes"][0]
+        self.assertEqual(scope["id"], "primary")
+        self.assertEqual(scope["access"], "READ_WRITE")
+        self.assertEqual(scope["scopeSource"], "DELIVERY_GIT_BINDING")
+        self.assertEqual(scope["workspaceRoot"], str(worktree.resolve()))
+        self.assertEqual(
+            scope["gitBinding"],
+            hierarchy["delivery"]["gitBinding"],
+        )
+        self.assertIn("gitWorkspace", scope)
+        self.assertTrue(
+            context["rules"][
+                "projectScopeWorkspaceRootsAreRuntimeVerified"
+            ]
+        )
 
     def test_clean_host_native_worktree_is_ready_for_branch_adoption(
         self,

@@ -7,6 +7,24 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.39.2 发布候选矩阵
+
+0.39.2 保持 33 个 MCP 工具，把 MANUAL 与 AUTOMATIC 收敛到同一可信 receiver 身份链，并修复 Codex Plugin Hook 未被 manifest 激活、单仓 runtime `projectScopes=[]` 和失败 reservation 必须等待 TTL 的问题。两种 dispatch 都要求宿主 Adapter 为真实原生 child 签发并一次性消费 attestation；AUTO 必须绑定非空 reservation，MANUAL 的 `reservation_id` 必须为 `NULL`。claim 后的 scope、operation、heartbeat、progress、pause、result 和 lease 门禁完全一致，差异只在授权来源。
+
+Codex 候选包必须在 manifest 中显式声明 `./hooks/hooks.json`。真实宿主验证先在新任务的 `/hooks` 审查并信任该 Plugin 的 Hook，再覆盖以下边界：
+
+- Hook 未加载或未信任时，`plan_dispatch_batch` 在创建任何 reservation 前返回 `SCHEDULER_HOST_HOOK_NOT_READY`；恢复信任后才能重新计划。
+- AUTO `SubagentStart` 与 MANUAL `dispatch_loop` PreToolUse 都从宿主可信 `.codex/sessions` 中验证真实 child/parent，root/helper、内部 Worker、自定义 `CODEX_HOME` 和伪造 transcript 均 fail closed。
+- 普通单仓 Delivery 从顶层 `gitBinding` 与实际 Delivery workspace 合成唯一 `primary` runtime scope；AUTO claim 和 `loop_context` 必须返回该 scope，多仓仍逐 scope 验证。
+- `SubagentStart` 已定位 AUTO reservation、但身份/workspace/scope attestation 失败时，TASK 保持 READY，尚未绑定 receiver 的 reservation 立即释放，child 在任何仓库检查或修改前停止。
+
+| 环境 | Python | 核心契约 | 真实宿主 | 发布用途 |
+|---|---:|---|---|---|
+| Linux Runner | 3.10 / 3.12 / 3.14 | CI 自动 | 不适用 | Adapter attestation、scope 合成、reservation 原子释放与 Hook 配置回归 |
+| Windows 自托管 Runner | 3.10+ | 发布任务 | 候选验证中：Codex/Claude 结果待回填 | `/hooks` 信任、AUTO/MANUAL 原生 child、真实 transcript 与 mutation 链 |
+
+候选宿主版本继续使用 Codex CLI 0.147.0 和 Claude Code 2.1.226；Codex Desktop 的历史故障实例为 0.147.0-alpha.6.5。版本号只用于本轮复现与验证，不构成永久最低版本承诺。
+
 ## 0.39.1 发布候选矩阵
 
 0.39.1 保持 33 个 MCP 工具，修复 Codex Desktop `SubagentStart` 先于直接 child transcript 首条 `session_meta` 落盘时的 claim 竞态。核心契约必须模拟 transcript 先为空、随后写入合法 session metadata，并验证 Hook 只在当前 child 文件名、可信 sessions 根、精确 parent/role/task 和有效 reservation 全部匹配后原子 claim；超时、伪造路径、自定义 `CODEX_HOME`、错误角色和过期 reservation 继续 fail closed。

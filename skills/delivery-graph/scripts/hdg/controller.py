@@ -10,7 +10,7 @@ from .errors import GatedLoopError, fail
 from .graph_frontier import get_graph_frontier
 from .git_binding import (
     verify_delivery_git_binding,
-    verify_delivery_project_scopes,
+    verify_runtime_delivery_project_scopes,
 )
 from .graph_runtime import (
     advance_graph,
@@ -106,6 +106,8 @@ class ControllerContext:
     explicit_dogfood: bool = False
     host_native_agent_ids: tuple[str, ...] | None = None
     host_adapter_id: str | None = None
+    host_hook_attested: bool = False
+    host_receiver_operation_attested: bool = False
 
 
 class LayeredDeliveryController:
@@ -136,6 +138,28 @@ class LayeredDeliveryController:
             )
         workspace_root = context.workspace_root or context.project_root
         arguments_value = dict(arguments)
+        protected_receiver_mutation = name in {
+            "heartbeat_loop",
+            "report_loop_progress",
+            "pause_loop",
+            "record_loop_result",
+        }
+        if protected_receiver_mutation and (
+            not (
+                isinstance(arguments_value.get("operation_id"), str)
+                and arguments_value["operation_id"].strip()
+            )
+            or (
+                context.host_adapter_id in {"claude-code", "codex"}
+                and not context.host_receiver_operation_attested
+            )
+        ):
+            fail(
+                "SCHEDULER_RECEIVER_OPERATION_NOT_ATTESTED",
+                "The trusted host receiver Hook did not bind this Loop "
+                "mutation to a claimed operation",
+                hostAdapterId=context.host_adapter_id,
+            )
         root_id = arguments_value.get("root_id")
         git_binding = None
         git_workspace = None
@@ -207,7 +231,7 @@ class LayeredDeliveryController:
                 project_scopes = stored["hierarchy"]["delivery"].get(
                     "projectScopes"
                 )
-                verified_projects = verify_delivery_project_scopes(
+                verified_projects = verify_runtime_delivery_project_scopes(
                     workspace_root,
                     stored["hierarchy"]["delivery"],
                     preparing=False,
@@ -270,12 +294,27 @@ class LayeredDeliveryController:
         }:
             arguments_value["host_adapter_id"] = context.host_adapter_id
         if name == "plan_dispatch_batch":
+            if (
+                context.host_adapter_id in {"claude-code", "codex"}
+                and not context.host_hook_attested
+            ):
+                fail(
+                    "SCHEDULER_HOST_HOOK_NOT_READY",
+                    "The trusted host dispatch Hook did not attest this "
+                    "plan_dispatch_batch call; no reservation was created",
+                    hostAdapterId=context.host_adapter_id,
+                    requiredAction=(
+                        "REVIEW_AND_TRUST_DELIVERY_GRAPH_PLUGIN_HOOKS"
+                        if context.host_adapter_id == "codex"
+                        else "RELOAD_DELIVERY_GRAPH_HOST_HOOKS"
+                    ),
+                    reservationCreated=False,
+                )
             arguments_value["host_adapter_id"] = context.host_adapter_id
         if name == "dispatch_loop":
             arguments_value["host_adapter_id"] = context.host_adapter_id
-            arguments_value["require_receiver_attestation"] = (
-                arguments_value.get("dispatch_mode") == "AUTO"
-            )
+            arguments_value["require_receiver_attestation"] = True
+            arguments_value["verified_project_scopes"] = verified_projects
         result = operation(
             root=context.project_root,
             explicit_dogfood=context.explicit_dogfood,

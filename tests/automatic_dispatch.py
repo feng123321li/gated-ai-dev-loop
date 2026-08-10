@@ -96,7 +96,9 @@ def dispatch_loop(**arguments: Any) -> dict[str, Any]:
         "dispatch_decision_fingerprint",
     }
     if provenance_fields.intersection(arguments):
-        return runtime_dispatch_loop(**arguments)
+        direct_arguments = dict(arguments)
+        direct_arguments.setdefault("require_receiver_attestation", False)
+        return runtime_dispatch_loop(**direct_arguments)
 
     agent_id = arguments.get("agent_id")
     if agent_id is None:
@@ -115,6 +117,7 @@ def dispatch_loop(**arguments: Any) -> dict[str, Any]:
     )
 
     claimed_arguments = dict(arguments)
+    claimed_arguments.setdefault("require_receiver_attestation", False)
     claimed_arguments.update(
         {
             "agent_id": agent_id,

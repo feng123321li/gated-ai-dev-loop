@@ -14,7 +14,10 @@ from .dispatch_contracts import (
     automatic_dispatch_decision_fingerprint,
 )
 from .errors import fail
-from .git_binding import inspect_frozen_git_workspace_provenance
+from .git_binding import (
+    inspect_frozen_git_workspace_provenance,
+    verify_runtime_delivery_project_scopes,
+)
 from .graph_model import (
     FAILURE_CLASSES,
     LOOP_NODE_KINDS,
@@ -826,8 +829,9 @@ def dispatch_loop(
     dispatch_decision_fingerprint: str | None = None,
     host_native_agent_ids: tuple[str, ...] | None = None,
     host_adapter_id: str | None = None,
-    require_receiver_attestation: bool = False,
+    require_receiver_attestation: bool = True,
     host_receiver_parent_context_id: str | None = None,
+    verified_project_scopes: list[dict[str, Any]] | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
@@ -899,10 +903,10 @@ def dispatch_loop(
             "Host-side identity issuance requires attested dispatch",
         )
     if require_receiver_attestation:
-        if dispatch_mode != "AUTO":
+        if host_adapter_id not in HOST_ADAPTER_AGENTS:
             fail(
-                "SCHEDULER_RECEIVER_ATTESTATION_INVALID",
-                "Only automatic host-native dispatch uses receiver attestation",
+                "SCHEDULER_HOST_ADAPTER_UNTRUSTED",
+                "Attested dispatch requires an exact trusted host adapter",
             )
         if (
             actual_receiver_attestation_id is None
@@ -1368,6 +1372,7 @@ def dispatch_loop(
             root=root,
             root_id=root_id,
             node_id=node_id,
+            verified_project_scopes=verified_project_scopes,
             explicit_dogfood=explicit_dogfood,
         ),
         "owner": owner,
@@ -1580,7 +1585,9 @@ def handoff_ready_automatic_task(
             "state": "READY",
             "dispatchMode": "MANUAL",
             "receiverPrompt": (
-                "在独立人工接收上下文中继续已冻结 Delivery Graph；不要重新 "
+                "在宿主原生 child 独立接收上下文中继续已冻结 Delivery Graph；"
+                "Adapter Hook 必须为本次 MANUAL claim 注入一次性 receiver "
+                "attestation，且不得携带 AUTO reservation。不要重新 "
                 "preview、确认 baseline 或选择执行模式。先读取 graph_frontier，"
                 f"再对 {root_id}/{node_id} 调用 dispatch_loop，明确提交 "
                 "dispatch_mode=MANUAL；完成 TASK 后照常上报结果，后续 Review "
@@ -1598,7 +1605,8 @@ def attest_loop_receiver(
     receiver_context_id: str,
     parent_context_id: str,
     host_adapter_id: str,
-    dispatch_reservation_id: str,
+    dispatch_reservation_id: str | None,
+    dispatch_mode: str = "AUTO",
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
@@ -1616,9 +1624,18 @@ def attest_loop_receiver(
             "SCHEDULER_HOST_ADAPTER_UNTRUSTED",
             "Receiver attestations require an exact trusted host adapter",
         )
-    reservation_id = _identity(
-        dispatch_reservation_id,
-        "dispatch_reservation_id",
+    if dispatch_mode not in DISPATCH_MODES:
+        fail(
+            "SCHEDULER_DISPATCH_MODE_INVALID",
+            "dispatch_mode must be AUTO or MANUAL",
+        )
+    reservation_id = (
+        _identity(
+            dispatch_reservation_id,
+            "dispatch_reservation_id",
+        )
+        if dispatch_reservation_id is not None
+        else None
     )
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
@@ -1634,28 +1651,41 @@ def attest_loop_receiver(
         if not _dispatch_mode_allowed(
             run["execution_mode"],
             definition["kind"],
-            "AUTO",
+            dispatch_mode,
+            manual_handoff_enabled=bool(
+                state.get("manualHandoffEnabled")
+            ),
         ):
             fail(
                 "SCHEDULER_STATE_INVALID",
-                "Receiver attestations require an automatically dispatched Loop",
+                "Receiver attestation is not authorized for this Graph mode",
             )
-        reservation = connection.execute(
-            "SELECT * FROM dispatch_reservations "
-            "WHERE reservation_id = ?",
-            (reservation_id,),
-        ).fetchone()
-        if (
-            reservation is None
-            or reservation["status"] != "RESERVED"
-            or reservation["expires_at"] < at
-            or reservation["run_id"] != run["run_id"]
-            or reservation["node_id"] != node_id
-            or reservation["attempt"] != state["attempt"]
-        ):
+        if dispatch_mode == "AUTO":
+            reservation = (
+                connection.execute(
+                    "SELECT * FROM dispatch_reservations "
+                    "WHERE reservation_id = ?",
+                    (reservation_id,),
+                ).fetchone()
+                if reservation_id is not None
+                else None
+            )
+            if (
+                reservation is None
+                or reservation["status"] != "RESERVED"
+                or reservation["expires_at"] < at
+                or reservation["run_id"] != run["run_id"]
+                or reservation["node_id"] != node_id
+                or reservation["attempt"] != state["attempt"]
+            ):
+                fail(
+                    "SCHEDULER_RECEIVER_ATTESTATION_RESERVATION_INVALID",
+                    "Automatic receiver attestation requires its live reservation",
+                )
+        elif reservation_id is not None:
             fail(
                 "SCHEDULER_RECEIVER_ATTESTATION_RESERVATION_INVALID",
-                "Automatic receiver attestation requires its live reservation",
+                "Manual receiver attestation must not carry an AUTO reservation",
             )
         attestation_id = repository.issue_receiver_attestation(
             connection,
@@ -1675,6 +1705,7 @@ def attest_loop_receiver(
         "receiverContextId": receiver_context_id,
         "receiverAttestationId": attestation_id,
         "hostAdapterId": host_adapter_id,
+        "dispatchMode": dispatch_mode,
     }
 
 
@@ -1695,6 +1726,17 @@ def claim_codex_subagent_receiver(
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     repository.assert_delivery_workspace(root_id, workspace_root)
+    stored = repository.hierarchy(root_id)
+    verified_project_scopes = verify_runtime_delivery_project_scopes(
+        workspace_root,
+        stored["hierarchy"]["delivery"],
+        preparing=False,
+    )
+    if not verified_project_scopes:
+        fail(
+            "SCHEDULER_PROJECT_SCOPE_INVALID",
+            "Codex receiver claim requires at least one verified project scope",
+        )
     receiver_context_id = _identity(
         receiver_context_id,
         "receiver_context_id",
@@ -1755,6 +1797,7 @@ def claim_codex_subagent_receiver(
             ],
             "operationId": row["operation_id"],
             "leaseExpiresAt": row["lease_expires_at"],
+            "projectScopes": deepcopy(verified_project_scopes),
         }
 
     with repository.transaction() as connection:
@@ -1813,6 +1856,7 @@ def claim_codex_subagent_receiver(
             host_adapter_id="codex",
             require_receiver_attestation=True,
             host_receiver_parent_context_id=parent_context_id,
+            verified_project_scopes=verified_project_scopes,
             explicit_dogfood=explicit_dogfood,
             now=now,
         )
@@ -1891,15 +1935,42 @@ def authorize_codex_subagent_operation(
             isinstance(payload, dict)
             and payload.get("dispatchMode") == "MANUAL"
         ):
+            attestation = connection.execute(
+                "SELECT 1 FROM receiver_attestations "
+                "WHERE run_id = ? AND root_id = ? AND node_id = ? "
+                "AND attempt = ? AND receiver_context_id = ? "
+                "AND parent_context_id = ? "
+                "AND host_adapter_id = 'codex' "
+                "AND reservation_id IS NULL AND status = 'CONSUMED' "
+                "AND operation_id = ? LIMIT 1",
+                (
+                    run["run_id"],
+                    root_id,
+                    node_id,
+                    state["attempt"],
+                    receiver_context_id,
+                    parent_context_id,
+                    state["operationId"],
+                ),
+            ).fetchone()
             if (
-                run["execution_mode"] != "manual"
-                or definition["kind"] != "TASK_LOOP"
+                not _dispatch_mode_allowed(
+                    run["execution_mode"],
+                    definition["kind"],
+                    "MANUAL",
+                    manual_handoff_enabled=bool(
+                        state.get("manualHandoffEnabled")
+                    ),
+                )
                 or payload.get("receiverContextId")
                 != receiver_context_id
+                or payload.get("receiverParentContextId")
+                != parent_context_id
                 or payload.get("hostAdapterId") != "codex"
                 or payload.get("agentId") != "codex"
-                or payload.get("receiverAttested") is not False
+                or payload.get("receiverAttested") is not True
                 or reservation_id is not None
+                or attestation is None
             ):
                 fail(
                     "SCHEDULER_CODEX_RECEIVER_OPERATION_UNAUTHORIZED",
@@ -1982,8 +2053,13 @@ def authorize_claude_subagent_operation(
                 "SCHEDULER_CLAUDE_RECEIVER_OPERATION_UNAUTHORIZED",
                 "The current Claude context has no live Loop",
             )
+        if state["owner"] != receiver_context_id:
+            fail(
+                "SCHEDULER_CLAUDE_RECEIVER_OPERATION_UNAUTHORIZED",
+                "The current Claude context does not own this live Loop",
+            )
         attestation = connection.execute(
-            "SELECT 1 FROM receiver_attestations "
+            "SELECT reservation_id FROM receiver_attestations "
             "WHERE run_id = ? AND root_id = ? AND node_id = ? "
             "AND attempt = ? AND receiver_context_id = ? "
             "AND parent_context_id = ? "
@@ -2021,13 +2097,23 @@ def authorize_claude_subagent_operation(
             and payload.get("dispatchMode") == "MANUAL"
         ):
             if (
-                run["execution_mode"] != "manual"
-                or definition["kind"] != "TASK_LOOP"
+                not _dispatch_mode_allowed(
+                    run["execution_mode"],
+                    definition["kind"],
+                    "MANUAL",
+                    manual_handoff_enabled=bool(
+                        state.get("manualHandoffEnabled")
+                    ),
+                )
                 or payload.get("receiverContextId")
                 != receiver_context_id
+                or payload.get("receiverParentContextId")
+                != parent_context_id
                 or payload.get("hostAdapterId") != "claude-code"
                 or payload.get("agentId") != "claude-code"
-                or payload.get("receiverAttested") is not False
+                or payload.get("receiverAttested") is not True
+                or attestation is None
+                or attestation["reservation_id"] is not None
             ):
                 fail(
                     "SCHEDULER_CLAUDE_RECEIVER_OPERATION_UNAUTHORIZED",

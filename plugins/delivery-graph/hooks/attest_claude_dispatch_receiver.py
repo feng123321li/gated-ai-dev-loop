@@ -53,31 +53,13 @@ def main() -> int:
     if reservation_id is not None and not isinstance(reservation_id, str):
         return _block("Delivery Graph dispatch reservation is invalid.")
 
-    if tool_input.get("dispatch_mode") == "MANUAL":
-        updated_input: dict[str, Any] = dict(tool_input)
-        updated_input.pop("receiver_attestation_id", None)
-        updated_input.pop("model_id", None)
-        updated_input.pop("actual_model_id", None)
-        updated_input["agent_id"] = "claude-code"
-        updated_input["receiver_context_id"] = agent_id
-        print(
-            json.dumps(
-                {
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "allow",
-                        "permissionDecisionReason": (
-                            "Bound the manual TASK claim to this Claude child."
-                        ),
-                        "updatedInput": updated_input,
-                    }
-                },
-                ensure_ascii=True,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
+    dispatch_mode = tool_input.get("dispatch_mode")
+    if dispatch_mode not in {"AUTO", "MANUAL"}:
+        return _block("Delivery Graph dispatch mode is invalid.")
+    if dispatch_mode == "MANUAL" and reservation_id is not None:
+        return _block(
+            "Delivery Graph MANUAL dispatch cannot use an AUTO reservation."
         )
-        return 0
 
     sys.path.insert(0, str(_runtime_path()))
     from hdg.errors import GatedLoopError
@@ -100,6 +82,7 @@ def main() -> int:
             parent_context_id=parent_session_id,
             host_adapter_id="claude-code",
             dispatch_reservation_id=reservation_id,
+            dispatch_mode=dispatch_mode,
         )
     except (GatedLoopError, OSError, ValueError) as error:
         return _block(f"Delivery Graph receiver attestation failed: {error}")
@@ -108,6 +91,7 @@ def main() -> int:
     updated_input.pop("model_id", None)
     updated_input.pop("actual_model_id", None)
     updated_input["agent_id"] = "claude-code"
+    updated_input["owner"] = agent_id
     updated_input["receiver_context_id"] = agent_id
     updated_input["receiver_attestation_id"] = attestation[
         "receiverAttestationId"

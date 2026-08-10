@@ -234,8 +234,12 @@ class PluginBundleTests(unittest.TestCase):
                 encoding="utf-8",
             )
         event = {
-                "hook_event_name": "SubagentStart",
-                "session_id": parent_session_id,
+            "hook_event_name": "SubagentStart",
+            "session_id": (
+                parent_session_id
+                if start_transcript_is_parent
+                else agent_id
+            ),
                 "turn_id": "codex-turn-1",
                 "agent_id": agent_id,
                 "agent_type": agent_type,
@@ -328,6 +332,57 @@ class PluginBundleTests(unittest.TestCase):
             returncode = hook_module["main"]()
         return subprocess.CompletedProcess(
             args=["in-process-loop-operation-hook"],
+            returncode=returncode,
+            stdout=stdout.getvalue(),
+            stderr=stderr.getvalue(),
+        )
+
+    @staticmethod
+    def run_codex_manual_dispatch_hook(
+        hook_event: dict,
+        codex_home: Path,
+    ) -> subprocess.CompletedProcess:
+        support_globals = runpy.run_path(
+            str(
+                PLUGIN
+                / "hooks"
+                / "attest_codex_subagent_receiver.py"
+            )
+        )
+        support = types.ModuleType("attest_codex_subagent_receiver")
+        support.__dict__.update(support_globals)
+        trusted_sessions = lambda _path=None: (
+            codex_home / "sessions"
+        ).resolve()
+        support._trusted_codex_sessions_root = trusted_sessions
+        support._session_meta_from_transcript.__globals__[
+            "_trusted_codex_sessions_root"
+        ] = trusted_sessions
+        hook_module = runpy.run_path(
+            str(
+                PLUGIN
+                / "hooks"
+                / "attest_codex_dispatch_receiver.py"
+            )
+        )
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with (
+            mock.patch.dict(
+                sys.modules,
+                {"attest_codex_subagent_receiver": support},
+            ),
+            mock.patch.object(
+                sys,
+                "stdin",
+                io.StringIO(json.dumps(hook_event)),
+            ),
+            redirect_stdout(stdout),
+            redirect_stderr(stderr),
+        ):
+            returncode = hook_module["main"]()
+        return subprocess.CompletedProcess(
+            args=["in-process-codex-manual-dispatch-hook"],
             returncode=returncode,
             stdout=stdout.getvalue(),
             stderr=stderr.getvalue(),
@@ -1143,8 +1198,8 @@ class PluginBundleTests(unittest.TestCase):
             updated["receiver_context_id"],
             "claude-agent-child-manual",
         )
-        self.assertNotIn("receiver_attestation_id", updated)
-        self.assertFalse(claimed["receiverAttested"])
+        self.assertIn("receiver_attestation_id", updated)
+        self.assertTrue(claimed["receiverAttested"])
         self.assertEqual(claimed["dispatchMode"], "MANUAL")
         self.assertEqual(mutation_output["permissionDecision"], "allow")
         self.assertEqual(
@@ -1158,7 +1213,7 @@ class PluginBundleTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertNotIn("hooks", manifest)
+        self.assertEqual(manifest["hooks"], "./hooks/hooks.json")
         self.assertEqual(
             manifest["mcpServers"]["delivery-graph"]["env"][
                 "HDG_HOST_ADAPTER"
@@ -1189,6 +1244,32 @@ class PluginBundleTests(unittest.TestCase):
             operation_hooks[0]["matcher"],
             "^mcp__.*__(heartbeat_loop|report_loop_progress|pause_loop|record_loop_result)$",
         )
+        preflight_hooks = [
+            entry
+            for entry in hooks["hooks"]["PreToolUse"]
+            if (
+                "attest_codex_dispatch_preflight.py"
+                in entry["hooks"][0]["command"]
+            )
+        ]
+        manual_dispatch_hooks = [
+            entry
+            for entry in hooks["hooks"]["PreToolUse"]
+            if (
+                "attest_codex_dispatch_receiver.py"
+                in entry["hooks"][0]["command"]
+            )
+        ]
+        self.assertEqual(len(preflight_hooks), 1)
+        self.assertEqual(
+            preflight_hooks[0]["matcher"],
+            "^mcp__.*__plan_dispatch_batch$",
+        )
+        self.assertEqual(len(manual_dispatch_hooks), 1)
+        self.assertEqual(
+            manual_dispatch_hooks[0]["matcher"],
+            "^mcp__.*__dispatch_loop$",
+        )
         environment = dict(os.environ)
         environment["PLUGIN_ROOT"] = str(PLUGIN)
         launched = subprocess.run(
@@ -1202,6 +1283,361 @@ class PluginBundleTests(unittest.TestCase):
             env=environment,
         )
         self.assertEqual(launched.returncode, 0, launched.stderr)
+
+    def test_codex_manual_dispatch_hook_attests_native_child(self) -> None:
+        with TemporaryDirectory() as root:
+            hierarchy = task_hierarchy()
+            preview = preview_hierarchy(root=root, hierarchy=hierarchy)
+            handoff = create_manual_handoff(
+                root=root,
+                hierarchy=hierarchy,
+                expected_hierarchy_fingerprint=(
+                    preview["hierarchyFingerprint"]
+                ),
+                expected_graph_fingerprint=preview["graphFingerprint"],
+                authorized_project_ids=[],
+                confirmed=True,
+                confirmed_by="human",
+            )
+            start_manual_handoff(
+                root=root,
+                root_id=handoff["rootId"],
+                expected_hierarchy_fingerprint=(
+                    handoff["hierarchyFingerprint"]
+                ),
+                expected_graph_fingerprint=handoff["graphFingerprint"],
+                started_by="codex-parent-manual",
+                workspace_root=root,
+            )
+            child_event, codex_home = self.codex_subagent_event(
+                root,
+                agent_id="codex-manual-child",
+                model_id="host-observed-manual-model",
+                task_name="manual_delivery_receiver",
+                cwd=root,
+                parent_session_id="codex-parent-manual",
+            )
+            dispatch_tool = (
+                "mcp__plugin_delivery-graph_delivery-graph"
+                "__dispatch_loop"
+            )
+            dispatch_event = {
+                **child_event,
+                "hook_event_name": "PreToolUse",
+                "tool_name": dispatch_tool,
+                "tool_use_id": "codex-manual-dispatch",
+                "tool_input": {
+                    "root_id": handoff["rootId"],
+                    "node_id": loop_node_id("t-service"),
+                    "owner": "untrusted-owner",
+                    "agent_id": "untrusted-agent",
+                    "receiver_context_id": "untrusted-context",
+                    "receiver_attestation_id": "untrusted-attestation",
+                    "dispatch_mode": "MANUAL",
+                    "operation_id": "op-codex-manual",
+                },
+            }
+
+            completed = self.run_codex_manual_dispatch_hook(
+                dispatch_event,
+                codex_home,
+            )
+            output = json.loads(completed.stdout)["hookSpecificOutput"]
+            updated = output["updatedInput"]
+            claimed = call_tool(
+                "dispatch_loop",
+                updated,
+                root=root,
+                trusted_host_adapter="codex",
+            )
+            heartbeat = self.run_loop_operation_hook(
+                {
+                    **dispatch_event,
+                    "tool_name": (
+                        "mcp__plugin_delivery-graph_delivery-graph"
+                        "__heartbeat_loop"
+                    ),
+                    "tool_use_id": "codex-manual-heartbeat",
+                    "tool_input": {
+                        "root_id": handoff["rootId"],
+                        "node_id": loop_node_id("t-service"),
+                    },
+                },
+                codex_home,
+            )
+            heartbeat_output = json.loads(heartbeat.stdout)[
+                "hookSpecificOutput"
+            ]
+            heartbeat_arguments = dict(heartbeat_output["updatedInput"])
+            operation_attestation = heartbeat_arguments.pop(
+                "_host_receiver_operation_attestation"
+            )
+            attested_workspace = SchedulerRepository(
+                root
+            ).consume_host_workspace_attestation(
+                operation_attestation,
+                host_adapter_id="codex",
+                tool_name="receiver_operation:heartbeat_loop",
+            )
+            heartbeat_result = call_tool(
+                "heartbeat_loop",
+                heartbeat_arguments,
+                root=root,
+                trusted_host_adapter="codex",
+                host_receiver_operation_attested=True,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(output["permissionDecision"], "allow")
+        self.assertEqual(updated["agent_id"], "codex")
+        self.assertEqual(updated["owner"], "codex-manual-child")
+        self.assertEqual(
+            updated["receiver_context_id"],
+            "codex-manual-child",
+        )
+        self.assertIn("receiver_attestation_id", updated)
+        self.assertTrue(claimed["receiverAttested"])
+        self.assertEqual(claimed["dispatchMode"], "MANUAL")
+        self.assertEqual(
+            claimed["actualModelId"],
+            "host-observed-manual-model",
+        )
+        self.assertEqual(heartbeat_output["permissionDecision"], "allow")
+        self.assertEqual(
+            heartbeat_output["updatedInput"]["operation_id"],
+            claimed["operationId"],
+        )
+        self.assertIn(
+            "_host_receiver_operation_attestation",
+            heartbeat_output["updatedInput"],
+        )
+        self.assertEqual(attested_workspace, str(Path(root).resolve()))
+        self.assertEqual(heartbeat_result["nodeId"], loop_node_id("t-service"))
+
+    def test_codex_auto_preflight_fails_before_reservation_without_hook(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="human",
+            )
+            arguments = {
+                "root_id": prepared["rootId"],
+                "expected_graph_fingerprint": prepared[
+                    "graphFingerprint"
+                ],
+            }
+            with self.assertRaises(GatedLoopError) as missing_hook:
+                call_tool(
+                    "plan_dispatch_batch",
+                    arguments,
+                    root=root,
+                    trusted_host_adapter="codex",
+                )
+            database = Path(root, ".layered-delivery", "scheduler.db")
+            connection = sqlite3.connect(database)
+            try:
+                before = connection.execute(
+                    "SELECT COUNT(*) FROM dispatch_reservations"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+
+            hook = subprocess.run(
+                [
+                    sys.executable,
+                    "-X",
+                    "utf8",
+                    str(
+                        PLUGIN
+                        / "hooks"
+                        / "attest_codex_dispatch_preflight.py"
+                    ),
+                ],
+                input=json.dumps(
+                    {
+                        "hook_event_name": "PreToolUse",
+                        "tool_name": (
+                            "mcp__plugin_delivery-graph_delivery-graph"
+                            "__plan_dispatch_batch"
+                        ),
+                        "tool_use_id": "codex-plan-preflight",
+                        "session_id": "codex-coordinator",
+                        "cwd": root,
+                        "tool_input": arguments,
+                    }
+                ),
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+            updated = json.loads(hook.stdout)["hookSpecificOutput"][
+                "updatedInput"
+            ]
+            token = updated.pop("_host_workspace_attestation")
+            resolved = SchedulerRepository(
+                root
+            ).consume_host_workspace_attestation(
+                token,
+                host_adapter_id="codex",
+                tool_name="plan_dispatch_batch",
+            )
+            planned = call_tool(
+                "plan_dispatch_batch",
+                updated,
+                root=root,
+                trusted_host_adapter="codex",
+                host_hook_attested=True,
+            )
+
+        self.assertEqual(
+            missing_hook.exception.code,
+            "SCHEDULER_HOST_HOOK_NOT_READY",
+        )
+        self.assertEqual(before, 0)
+        self.assertEqual(hook.returncode, 0, hook.stderr)
+        self.assertEqual(resolved, str(Path(root).resolve()))
+        self.assertEqual(len(planned["assignments"]), 1)
+
+    def test_codex_start_failure_releases_exact_reservation(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="human",
+            )
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                host_adapter_id="codex",
+                host_native_agent_ids=("codex",),
+            )["assignments"][0]
+            wrong_adapter_release = SchedulerRepository(
+                root
+            ).expire_dispatch_reservation_now(
+                assignment["dispatchReservationId"],
+                root_id=prepared["rootId"],
+                host_adapter_id="claude-code",
+                failure_code="WRONG_ADAPTER",
+            )
+            database = Path(root, ".layered-delivery", "scheduler.db")
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    "UPDATE dispatch_reservations "
+                    "SET decision_fingerprint = ? "
+                    "WHERE reservation_id = ?",
+                    ("0" * 64, assignment["dispatchReservationId"]),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            event, codex_home = self.codex_subagent_event(
+                root,
+                agent_id="codex-failed-start-child",
+                model_id="host-model",
+                task_name=assignment["hostTaskName"],
+                cwd=root,
+            )
+
+            completed = self.run_codex_hook(event, codex_home)
+            connection = sqlite3.connect(database)
+            try:
+                status = connection.execute(
+                    "SELECT status FROM dispatch_reservations "
+                    "WHERE reservation_id = ?",
+                    (assignment["dispatchReservationId"],),
+                ).fetchone()[0]
+                failure_events = connection.execute(
+                    "SELECT COUNT(*) FROM graph_events "
+                    "WHERE event_type = 'DISPATCH_RECEIVER_START_FAILED'"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+            state = graph_status(root=root, root_id=prepared["rootId"])
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("DELIVERY_GRAPH_STARTUP_ERROR=", completed.stdout)
+        self.assertFalse(wrong_adapter_release)
+        self.assertEqual(status, "EXPIRED")
+        self.assertEqual(failure_events, 1)
+        task_state = next(
+            item
+            for item in state["nodes"]
+            if item["nodeId"] == assignment["nodeId"]
+        )
+        self.assertEqual(task_state["status"], "READY")
+
+    def test_codex_reserved_child_role_mismatch_fails_closed(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="human",
+            )
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                host_adapter_id="codex",
+                host_native_agent_ids=("codex",),
+            )["assignments"][0]
+            event, codex_home = self.codex_subagent_event(
+                root,
+                agent_id="codex-role-mismatch-child",
+                model_id="host-model",
+                task_name=assignment["hostTaskName"],
+                cwd=root,
+            )
+            event["agent_type"] = "reviewer"
+
+            completed = self.run_codex_hook(event, codex_home)
+            database = Path(root, ".layered-delivery", "scheduler.db")
+            connection = sqlite3.connect(database)
+            try:
+                reservation_status = connection.execute(
+                    "SELECT status FROM dispatch_reservations "
+                    "WHERE reservation_id = ?",
+                    (assignment["dispatchReservationId"],),
+                ).fetchone()[0]
+            finally:
+                connection.close()
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn(
+            "SCHEDULER_CODEX_SUBAGENT_CONTEXT_MISMATCH",
+            completed.stdout,
+        )
+        self.assertIn("Do not inspect or modify", completed.stdout)
+        self.assertEqual(reservation_status, "EXPIRED")
 
     def test_codex_subagent_hook_attests_automatic_receiver(self) -> None:
         with TemporaryDirectory() as root:
@@ -1658,6 +2094,7 @@ class PluginBundleTests(unittest.TestCase):
                 dispatch_mode="MANUAL",
                 host_adapter_id="codex",
                 operation_id="op-manual-codex-task",
+                require_receiver_attestation=False,
             )
             record_loop_result(
                 root=root,

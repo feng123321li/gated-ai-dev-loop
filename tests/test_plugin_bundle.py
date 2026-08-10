@@ -33,6 +33,7 @@ from hdg.mcp_adapter import (
     MODERN_PROTOCOL_VERSION,
     PROTOCOL_VERSION_META_KEY,
 )
+from hdg.mcp_apps import DASHBOARD_RESOURCE_URI, MCP_APP_MIME_TYPE
 from hdg.model_core import validate_hierarchy_definition
 from hdg.planning import (
     create_manual_handoff,
@@ -1933,7 +1934,7 @@ class PluginBundleTests(unittest.TestCase):
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
         tool_count = len(tool_definitions())
-        self.assertEqual(tool_count, 31)
+        self.assertEqual(tool_count, 32)
         self.assertIn(
             "start_manual_handoff",
             {tool["name"] for tool in tool_definitions()},
@@ -2061,7 +2062,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-                31,
+                32,
         )
         preview_result = responses[2]["result"]["structuredContent"][
             "result"
@@ -2072,6 +2073,94 @@ class PluginBundleTests(unittest.TestCase):
         self.assertEqual(handoff["status"], "HANDOFF_READY")
         self.assertEqual(handoff["requirementSnapshotStatus"], "FROZEN")
         self.assertFalse(handoff["graphRunCreated"])
+
+    def test_canonical_and_plugin_bundled_mcp_serve_dashboard_resource(
+        self,
+    ) -> None:
+        request_meta = {
+            PROTOCOL_VERSION_META_KEY: MODERN_PROTOCOL_VERSION,
+            CLIENT_CAPABILITIES_META_KEY: {},
+            CLIENT_INFO_META_KEY: {
+                "name": "bundle-resource-test",
+                "version": "1.0.0",
+            },
+        }
+        messages = [
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "server/discover",
+                "params": {"_meta": request_meta},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "resources/list",
+                "params": {"_meta": request_meta},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "resources/read",
+                "params": {
+                    "uri": DASHBOARD_RESOURCE_URI,
+                    "_meta": request_meta,
+                },
+            },
+        ]
+        request = "".join(
+            json.dumps(message, separators=(",", ":")) + "\n"
+            for message in messages
+        )
+        entries = {
+            "canonical-skill": SKILL / "scripts" / "hdg_mcp.py",
+            "plugin-copy": PLUGIN_SKILL / "scripts" / "hdg_mcp.py",
+        }
+
+        for bundle, entry in entries.items():
+            with self.subTest(bundle=bundle):
+                with TemporaryDirectory() as project_root:
+                    process = subprocess.Popen(
+                        [
+                            sys.executable,
+                            "-X",
+                            "utf8",
+                            str(entry),
+                            "--project-root",
+                            project_root,
+                        ],
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        encoding="utf-8",
+                        env=dict(os.environ),
+                    )
+                    stdout, stderr = process.communicate(
+                        request,
+                        timeout=10,
+                    )
+
+                self.assertEqual(process.returncode, 0, stderr)
+                responses = [
+                    json.loads(line)
+                    for line in stdout.splitlines()
+                    if line
+                ]
+                self.assertEqual(len(responses), 3)
+                self.assertIn(
+                    "resources",
+                    responses[0]["result"]["capabilities"],
+                )
+                resources = responses[1]["result"]["resources"]
+                self.assertEqual(len(resources), 1)
+                self.assertEqual(resources[0]["uri"], DASHBOARD_RESOURCE_URI)
+                self.assertEqual(resources[0]["mimeType"], MCP_APP_MIME_TYPE)
+                content = responses[2]["result"]["contents"][0]
+                self.assertEqual(content["uri"], DASHBOARD_RESOURCE_URI)
+                self.assertEqual(content["mimeType"], MCP_APP_MIME_TYPE)
+                self.assertIn("<html", content["text"].lower())
+                self.assertIn("open_delivery_dashboard", content["text"])
 
     def test_bundled_mcp_ignores_retired_orchestrator_config(self) -> None:
         entry = SKILL / "scripts" / "hdg_mcp.py"
@@ -2147,7 +2236,7 @@ class PluginBundleTests(unittest.TestCase):
         ]
         self.assertEqual(len(responses), 2)
         tools = responses[1]["result"]["tools"]
-        self.assertEqual(len(tools), 31)
+        self.assertEqual(len(tools), 32)
         self.assertNotIn(
             "open_orchestrator_settings",
             {tool["name"] for tool in tools},
@@ -2225,7 +2314,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-                31,
+                32,
         )
 
 

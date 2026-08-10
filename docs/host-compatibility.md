@@ -7,6 +7,17 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.38.0 发布候选矩阵
+
+0.38.0 提供 32 个 MCP 工具和一个静态 MCP Apps Resource。核心契约必须验证 Modern/Legacy 两种 wire shim 共享同一 tools/resources dispatcher，`open_delivery_dashboard` 只读取当前状态，UI 不包含控制面写工具或外部资源，无 UI 宿主仍能使用文字与 `structuredContent`。真实宿主应分别记录是否支持 MCP Apps 内嵌渲染；不支持 UI 只能标记 UI 不兼容，不能把文本降级成功写成 UI 已验证。
+
+| 环境 | Python | 核心契约 | 真实宿主 | 发布用途 |
+|---|---:|---|---|---|
+| Linux Runner | 3.10 / 3.12 / 3.14 | CI 自动 | 不适用 | Adapter、Resource、只读 snapshot 与 UI 静态契约 |
+| Windows 自托管 Runner | 3.10+ | 发布任务 | 候选验证中：Codex/Claude 结果待回填 | MCP Apps 渲染、刷新和文本降级 |
+
+候选宿主版本继续使用 Codex CLI 0.147.0 和 Claude Code 2.1.226；这是本轮验证目标，不是永久最低版本。UI 刷新不得调用 `graph_frontier`，按钮也不得绕过宿主审批或 Controller 权限。
+
 ## 0.37.3 发布候选矩阵
 
 0.37.3 提供 31 个 MCP 工具，在 0.37.2 的 worktree setup 监控基础上新增显式的完成后 `archive_delivery`。真实宿主必须验证：归档只接受 `COMPLETED`，归档操作经过敏感工具审批，默认状态发现与根总览隐藏归档项，而显式 `root_id` 仍保留完成 run、Revision 历史、事件链和详情投影。

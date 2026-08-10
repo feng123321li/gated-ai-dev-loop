@@ -1,6 +1,6 @@
 {
   "name": "delivery-graph",
-  "version": "0.37.3",
+  "version": "0.38.0",
   "description": "确认 Git 基线，冻结并调度分层 GROUP/TASK Graph，支持自动派遣、冻结开发包、分层审查与恢复",
   "author": {
     "name": "delivery-graph contributors",
@@ -58,7 +58,7 @@
   "interface": {
     "displayName": "分层交付 Graph 控制面",
     "shortDescription": "冻结基线、调度 Graph、分层审查与恢复",
-    "longDescription": "每个 Delivery 使用稳定身份和不可变 Revision 管理验收前的需求调整；自动模式由当前可信宿主预留独立 receiver 并继承宿主模型，不在控制面推荐或调整模型。手动模式先冻结自包含 handoff，接收 CLI 开发前启动同一 Graph；只有 TASK 实现使用手动 claim，TASK、GROUP、Delivery Review 与最终确认均沿用完整治理流程。内部 Worker 的模型信息只读展示，同时以中文表格汇总后台进度、测试、心跳、剩余租约和失联预警。",
+    "longDescription": "每个 Delivery 使用稳定身份和不可变 Revision 管理验收前的需求调整；自动模式由当前可信宿主预留独立 receiver 并继承宿主模型，不在控制面推荐或调整模型。手动模式先冻结自包含 handoff，接收 CLI 开发前启动同一 Graph；只有 TASK 实现使用手动 claim，TASK、GROUP、Delivery Review 与最终确认均沿用完整治理流程。内部 Worker 的模型信息只读展示，同时以中文表格和 MCP Apps 运行看板汇总后台进度、测试、心跳、剩余租约和失联预警。",
     "developerName": "delivery-graph contributors",
     "category": "Productivity",
     "capabilities": [

@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import importlib.util
 import inspect
 import json
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
+import zipfile
 
 from hdg import __version__
 from hdg.graph_model import (
@@ -123,7 +126,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         self.assertEqual(set(result["hosts"]), {"codex", "claude-code"})
         self.assertFalse(result["modelInvocationStarted"])
         self.assertEqual(result["pluginVersion"], __version__)
-        self.assertEqual(result["toolCount"], 31)
+        self.assertEqual(result["toolCount"], 32)
 
     def test_codex_probe_finds_candidate_alongside_installed_old_version(
         self,
@@ -338,7 +341,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
             f"当前版本：**{expected_version}**",
             (ROOT / "README.md").read_text(encoding="utf-8"),
         )
-        self.assertEqual(len(tool_definitions()), 31)
+        self.assertEqual(len(tool_definitions()), 32)
         self.assertNotIn("execution_mode", inspect.signature(freeze_hierarchy).parameters)
         tools = {tool["name"]: tool for tool in tool_definitions()}
         self.assertNotIn(
@@ -350,6 +353,106 @@ class TeamReleaseReadinessTests(unittest.TestCase):
                 "dispatch_mode"
             ]["enum"],
             ["AUTO", "MANUAL"],
+        )
+
+    def test_dashboard_resource_is_declared_as_wheel_package_data(
+        self,
+    ) -> None:
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        package_data = re.search(
+            r"\[tool\.setuptools\.package-data\]\s+"
+            r"hdg\s*=\s*\[(?P<patterns>[^]]+)\]",
+            pyproject,
+        )
+        self.assertIsNotNone(package_data)
+        self.assertIn('"assets/*.html"', package_data.group("patterns"))
+
+        source = ROOT / "src" / "hdg" / "assets" / "delivery-dashboard.html"
+        canonical = (
+            ROOT
+            / "skills"
+            / "delivery-graph"
+            / "scripts"
+            / "hdg"
+            / "assets"
+            / "delivery-dashboard.html"
+        )
+        plugin = (
+            ROOT
+            / "plugins"
+            / "delivery-graph"
+            / "skills"
+            / "delivery-graph"
+            / "scripts"
+            / "hdg"
+            / "assets"
+            / "delivery-dashboard.html"
+        )
+        self.assertEqual(canonical.read_bytes(), source.read_bytes())
+        self.assertEqual(plugin.read_bytes(), source.read_bytes())
+
+    def test_offline_built_wheel_contains_dashboard_resource(self) -> None:
+        if any(
+            importlib.util.find_spec(module) is None
+            for module in ("pip", "setuptools", "wheel")
+        ):
+            self.skipTest(
+                "offline wheel build requires installed pip, setuptools, "
+                "and wheel"
+            )
+
+        with TemporaryDirectory() as temporary:
+            temporary_root = Path(temporary)
+            project = temporary_root / "project"
+            distribution = temporary_root / "dist"
+            project.mkdir()
+            shutil.copy2(ROOT / "pyproject.toml", project / "pyproject.toml")
+            shutil.copytree(
+                ROOT / "src",
+                project / "src",
+                ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pip",
+                    "wheel",
+                    "--no-deps",
+                    "--no-build-isolation",
+                    "--no-index",
+                    "--disable-pip-version-check",
+                    "--wheel-dir",
+                    str(distribution),
+                    str(project),
+                ],
+                cwd=temporary_root,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(
+                completed.returncode,
+                0,
+                completed.stdout + completed.stderr,
+            )
+            wheels = list(distribution.glob("*.whl"))
+            self.assertEqual(len(wheels), 1)
+            with zipfile.ZipFile(wheels[0]) as archive:
+                dashboard = archive.read(
+                    "hdg/assets/delivery-dashboard.html"
+                )
+
+        self.assertEqual(
+            dashboard,
+            (
+                ROOT
+                / "src"
+                / "hdg"
+                / "assets"
+                / "delivery-dashboard.html"
+            ).read_bytes(),
         )
 
     def test_release_validator_passes_current_candidate(self) -> None:

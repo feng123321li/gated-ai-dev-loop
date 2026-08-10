@@ -4,6 +4,17 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.38.0 — 2026-08-09
+
+发布提交：以 tag `v0.38.0` 指向的提交为准
+
+- **只读 MCP Apps 运行看板**：新增 `open_delivery_dashboard` 与 `ui://delivery-graph/dashboard.html` Resource。看板展示当前 Delivery/Revision、真实 Graph 依赖、节点状态、活动 Loop、进度/心跳/租约告警和 Revision 元数据；不展示控制凭证，不读取本地文件或网络，也不提供调度写按钮。
+- **无 Node 运行时**：UI 由随 Plugin 发布的自包含 HTML/CSS/原生 JavaScript 实现，MCP Server 继续只依赖 Python 3.10+ 标准库。无 UI 的宿主仍获得文字与 `structuredContent` 降级结果。
+- **Adapter 单一分发路径**：Modern `2026-07-28` 与 Legacy `2025-11-25` 保留各自 discovery/initialize wire shim，初始化后的 tools/resources list/read/call 统一进入一个协议中立 dispatcher，避免双协议功能漂移。
+- **只读边界**：Dashboard snapshot 只使用 `graph_status` 和只读 repository 查询，不调用会先执行 `advance_graph` 的 `graph_frontier`。刷新不会推进 Graph、回收租约或改变任何控制面状态。
+- **协议面**：MCP 工具数增至 32；两代协议都广告静态 Resources，并支持 `resources/list`、`resources/read`。Modern 响应继续发布 complete/TTL/cache metadata，Legacy envelope 保持原形。
+- **验证**：本地 Python 全量 327 项测试通过（1 项因当前解释器未安装离线 wheel 构建后端而明确跳过）；`compileall`、canonical Skill/Plugin 镜像一致性、bundled stdio Resource 冒烟、Claude Plugin 校验、双宿主本地 probe、发布校验、桌面/移动视觉 QA 与 `git diff --check` 均通过。
+
 ## 0.37.3 — 2026-08-08
 
 发布提交：以 tag `v0.37.3` 指向的提交为准

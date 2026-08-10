@@ -14,9 +14,11 @@
 
 Plugin 优先使用 MCP `2026-07-28`。现代客户端可先调用 `server/discover`，随后每次请求都携带协议版本、客户端能力和宿主提供的项目上下文，不依赖连接或初始化会话。旧客户端继续使用 `initialize`，最高协商到 `2025-11-25`。
 
+宿主支持 MCP Apps UI 时，已知存在 Graph run 的 Delivery 可调用 `open_delivery_dashboard(root_id)` 显示只读运行看板。该工具返回当前 Graph 真实 edges、节点状态、活动 Loop、告警和 Revision 元数据；不返回 Loop payload、operation ID、Revision 原因或操作者。面板的“刷新状态”只重放这个只读工具，不能用 `graph_frontier` 代替，因为后者会先调用 `advance_graph` 并可能改变控制面状态。宿主不支持 UI 时，继续展示工具返回的文字和 `structuredContent`，不要因此改用 SQLite、投影文件或第二套接口。
+
 所有等待用户选择的响应统一发布 `pendingInteraction`；当前 `kind` 为 `DEVELOPMENT_BASELINE` 或 `EXECUTION_MODE`。`activeHostMapping` 指向当前可信 Adapter 的原生问题工具；该工具在当前上下文可调用时必须直接消费 `options`，不得先输出文本问题。只有工具未暴露或当前模式不可调用时，才按 `presentationPolicy.fallback` 逐字显示 `markdown`，不得追加“回复自动”等 Agent 文案。`developmentBaseline` / `executionChoice` 暂时指向同一对象作为兼容别名，不是第二套状态机。
 
-Claude Plugin 通过启动环境 `${CLAUDE_PROJECT_DIR}` 固定共享控制根，但执行工作区不再等同于该固定根。Claude 的 PreToolUse Hook 为每次 MCP 调用签发并消费一次性、工具绑定的真实 cwd 证明；因此主会话可以短暂 `EnterWorktree(path=...)` 完成后台 Delivery coordinator 启动后返回 primary，而后台 coordinator 与其 receiver 始终解析到稳定 linked worktree。模型输入的路径不能替代该证明。禁止启动新顶层 Claude 会话，也禁止在 receiver 内调用 `EnterWorktree`。Codex 的现代请求继续从每次请求 `_meta` 解析项目根；旧版 Codex 会话在首次合法元数据后绑定不可漂移的根。两种宿主的 primary 都使用 `HOST_NATIVE_LINKED_WORKTREE` 和 `hostDispatch`；主会话从共享控制根调用 `graph_frontier`、`graph_status` 或 `graph_events` 时只获得 `MONITOR_ONLY` 权限，不能借此变更执行工作区。宿主缺少后台 Agent/项目任务能力时报告 `HOST_NATIVE_WORKTREE_LAUNCH_UNAVAILABLE`。Controller 的单次 operation 同时区分共享 `.layered-delivery/` 控制根与经宿主证明的执行 workspace；二者都不等于 hierarchy 的 `delivery.id` 或递归 `root` 节点。
+Claude Plugin 通过启动环境 `${CLAUDE_PROJECT_DIR}` 固定共享控制根，但执行工作区不再等同于该固定根。Claude 的 PreToolUse Hook 为每次 MCP 调用签发并消费一次性、工具绑定的真实 cwd 证明；因此主会话可以短暂 `EnterWorktree(path=...)` 完成后台 Delivery coordinator 启动后返回 primary，而后台 coordinator 与其 receiver 始终解析到稳定 linked worktree。模型输入的路径不能替代该证明。禁止启动新顶层 Claude 会话，也禁止在 receiver 内调用 `EnterWorktree`。Codex 的现代请求继续从每次请求 `_meta` 解析项目根；旧版 Codex 会话在首次合法元数据后绑定不可漂移的根。两种宿主的 primary 都使用 `HOST_NATIVE_LINKED_WORKTREE` 和 `hostDispatch`；主会话从共享控制根调用 `graph_frontier`、`graph_status`、`graph_events` 或 `open_delivery_dashboard` 时只获得 `MONITOR_ONLY` 权限，不能借此变更执行工作区。宿主缺少后台 Agent/项目任务能力时报告 `HOST_NATIVE_WORKTREE_LAUNCH_UNAVAILABLE`。Controller 的单次 operation 同时区分共享 `.layered-delivery/` 控制根与经宿主证明的执行 workspace；二者都不等于 hierarchy 的 `delivery.id` 或递归 `root` 节点。
 
 控制面根使用共享 `.layered-delivery/scheduler.db`。每个 `delivery.id` 是稳定的需求目录 namespace，其可读投影固定为：
 

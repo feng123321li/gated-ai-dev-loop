@@ -135,7 +135,7 @@ Controller 只读发现和校验 Git，不执行 branch、worktree、stage、com
 - 规划与交接：`workspace_status`、`hierarchy_contract`、`preview_hierarchy`、`confirm_development_baseline`、`select_execution_mode`、`report_worktree_setup`、`resume_execution_mode`、`create_manual_handoff`、`start_manual_handoff`、`prepare_hierarchy`、`freeze_hierarchy`。`workspace_status(base_ref=...)` 可承接宿主明确选择的基线；未指定时按有效 `origin/HEAD`、本地 `main`、本地 `master` 降级发现。preview 先登记 `CHOICE_READY` 并生成关联投影，再返回唯一 `pendingInteraction`：缺 binding 时为 `DEVELOPMENT_BASELINE`，确认后为 `EXECUTION_MODE`。`developmentBaseline` / `executionChoice` 只是该对象的兼容别名。Codex 映射 `request_user_input`，Claude 映射 `AskUserQuestion`，可调用时必须使用原生选择器。AUTOMATIC 由 `hostDispatch` 在 linked worktree 后台续接，并在准备期间持续上报 setup progress；手动 Git 漂移遵循上一节的单仓双分支和多仓 fail-closed 规则。
 - Delivery 修订：`delivery_revision_history`、`prepare_delivery_revision`
 - 需求修订：`unfreeze_task_requirement`、`refreeze_task_requirement`
-- 查询：`graph_frontier`、`graph_status`、`graph_events`、`loop_context`
+- 查询：`graph_frontier`、`graph_status`、`graph_events`、`loop_context`、`open_delivery_dashboard`
 - Loop 控制：`dispatch_loop`、`heartbeat_loop`、`report_loop_progress`、`pause_loop`、`resume_loop`、`record_loop_result`
 
 公开的 `freeze_hierarchy` 不接收 `execution_mode`，自动路径固定创建 `active` run。只有 `start_manual_handoff` 能把精确 `HANDOFF_READY` 双 fingerprint 启动为 `manual` run；Git 漂移 blocker 在任何控制状态写入前返回。`dispatch_loop(MANUAL)` 只允许该 run 的 `TASK_LOOP`，要求显式 receiver context，且不接受自动 reservation、decision、transport、attestation 或模型参数。manual run 的 Review 继续使用可信外层 receiver 的 AUTO claim。
@@ -150,7 +150,9 @@ Plugin MCP 工具不接收业务 `root` 参数。Adapter 从宿主配置或请�
 
 `loop_context.completionPolicy` 明确输入和终态边界：payload 是目标、明确约束和已知验收点的输入，Loop 在运行时从真实代码、契约和数据链路推导 scope 内必要条件；冻结 Graph 不冻结内部实现计划，可修复 finding 必须在当前 Loop 内调整方案、修正并复验。`loop_context.projectScopes` 是按当前 Delivery workspace 与冻结 Git binding 验证后的实际 worktree 列表，`projectScopeAnchors` 才是 hierarchy 中不可变的 preview 路径；这两个层次分离后，并行 Delivery 的 receiver 不会回到同仓库主检出互相切分支。Loop 不拥有分支生命周期，只能在有效 scope 路径内开发。STANDARD 执行完整声明验收并保留分层 Review；LIGHT 对已声明改动做定向验证，并在实际内容或影响超出判断依据时以 `REPLAN_REQUIRED` 退出，不能继续借轻量档绕过 Review。初始 freeze 同时为所有 TASK 建立 revision 1 冻结记录；`unfreeze_task_requirement` 只接受未开始 TASK，`refreeze_task_requirement` 只替换标题、摘要和 payload，并原子更新 hierarchy/graph 双指纹、事件链和人类投影。`record_loop_result` 的 `BLOCKED` 要求显式 failure class，只用于当前 scope 和权限内没有继续路径的真实终态；调度器仍不解释不透明 finding，也不为返工创建 Graph 环。
 
-`controller.py` 是唯一共享应用入口；`mcp_tools.py` 把 31 个模型可调用工具映射到 Controller。每个工具发布人类可读 `title`、根对象 `inputSchema` / `outputSchema`，以及完整 `readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint` annotations；发布校验会逐工具检查。receiver 凭证签发和硬额度熔断是模型外宿主回调，不进入 MCP 工具目录。`mcp_adapter.py` 负责协议、精确启动 Adapter 身份与宿主策略。Controller 不扫描 PATH、不执行本机 CLI 版本探针，也不提供 Agent/模型发现或中央设置工具。
+`controller.py` 是唯一共享应用入口；`mcp_tools.py` 把 32 个模型可调用工具映射到 Controller。每个工具发布人类可读 `title`、根对象 `inputSchema` / `outputSchema`，以及完整 `readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint` annotations；发布校验会逐工具检查。receiver 凭证签发和硬额度熔断是模型外宿主回调，不进入 MCP 工具目录。`mcp_adapter.py` 只保留 Modern discovery 与 Legacy initialize/ping 两层 wire shim；初始化后的 tools/resources 方法共享一个 dispatcher，避免为两个协议各维护一套业务分支。Controller 不扫描 PATH、不执行本机 CLI 版本探针，也不提供 Agent/模型发现或中央设置工具。
+
+`mcp_apps.py` 发布固定的 `ui://delivery-graph/dashboard.html` Resource，`dashboard.py` 把当前定义、`graph_status` 与 Revision 历史投影成有界只读 view model。该投影删除 Loop payload、operation ID、Revision 原因和操作者等非展示字段；HTML 只通过 MCP Apps bridge 接收 `structuredContent`，不访问 SQLite、网络、Cookie 或宿主 DOM。手动刷新只重放 `open_delivery_dashboard`，绝不调用会先推进状态的 `graph_frontier`。无 UI 宿主继续消费同一工具的文字/结构化降级结果。
 
 `dispatch_planning.py` 内置 `maxConcurrentExecutors=4` 与固定 `quotaExhaustionPolicy=PAUSE_AND_RESUME`，不读取 Plugin 外的用户配置。它只消费当前 frontier、可信 `host_adapter_id` 和宿主可原生创建的 receiver Agent 集合；assignment 固定 `modelPolicy=CURRENT_HOST_INHERIT`，模型与 effort 不进入 planning、reservation、claim 或 decision fingerprint。预留和已认领 receiver 共同占用协调槽位，容量断路器继续跨 Delivery 生效。Claude Code receiver 消费绑定 node/attempt/context/reservation 的一次性 attestation；Codex assignment 返回唯一 `hostTaskName`，`SubagentStart` Hook 校验 child/parent/task 后在单一事务内签发身份、固定编排根、消费 reservation 并 claim。后续 heartbeat、progress、pause 和 result 由 PreToolUse Hook 为同一 receiver 注入 operation；普通 root/helper 与内部 Worker统一拒绝。前一 Loop 成功且无活跃 claim/凭据时，同一 Adapter 的新主会话可用 `IDLE_FRONTIER_HANDOFF` 接力下一层 Review，活跃 claim 期间仍禁止轮换。长时间 shell/build 必须与 heartbeat 解耦；`SUSPECT_LOST` 只表示控制面静默。Codex、Claude、Grok、DeepSeek 等内部 Worker 只把结果返回 receiver，并可在最终 `workerTelemetry` 中按 phase 非权威报告 agent/model/effort。
 
@@ -163,7 +165,7 @@ Codex 默认清单 `hooks/hooks.json` 只注册 `SubagentStart` 与 Loop mutatio
 1. `2026-07-28`：`server/discover`、每请求 `_meta`、无协议会话、`resultType`、`ttlMs/cacheScope`；
 2. `2025-11-25`：Claude Code 与旧 Codex 使用的 `initialize` 会话。
 
-现代请求必须包含 `io.modelcontextprotocol/protocolVersion` 和 `io.modelcontextprotocol/clientCapabilities`；不支持的版本返回 `-32022` 及有序支持列表。旧初始化只协商 `2025-11-25`。MCP Tasks 是可选扩展，当前不广告也不实现；Controller 的持久状态继续使用显式 Graph/Loop 标识。
+现代请求必须包含 `io.modelcontextprotocol/protocolVersion` 和 `io.modelcontextprotocol/clientCapabilities`；不支持的版本返回 `-32022` 及有序支持列表。旧初始化只协商 `2025-11-25`。两代协议都广告静态 `resources` 能力并提供同一个 Dashboard Resource；Modern 额外返回 complete/TTL/cache metadata。MCP Tasks 是可选扩展，当前不广告也不实现；Controller 的持久状态继续使用显式 Graph/Loop 标识。
 
 ## 构建
 

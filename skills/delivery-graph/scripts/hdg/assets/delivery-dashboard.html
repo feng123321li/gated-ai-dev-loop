@@ -1,0 +1,919 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Delivery Graph 运行看板</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system,
+          BlinkMacSystemFont, "Segoe UI", sans-serif;
+        --page: #f6f7f9;
+        --surface: #ffffff;
+        --surface-subtle: #f8f9fb;
+        --surface-blue: #edf4ff;
+        --border: #d9dde5;
+        --border-strong: #c5cad4;
+        --text: #16181d;
+        --muted: #5f6673;
+        --accent: #175cd3;
+        --accent-strong: #0b4eb5;
+        --on-accent: #ffffff;
+        --success: #147d50;
+        --warning: #8a4b08;
+        --danger: #b42318;
+        --neutral: #475467;
+        --focus: #2563eb;
+        --shadow: 0 10px 28px rgba(20, 28, 45, 0.08);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --page: #0f131a;
+          --surface: #151b24;
+          --surface-subtle: #1b2330;
+          --surface-blue: #142a4b;
+          --border: #344054;
+          --border-strong: #475467;
+          --text: #f4f6f9;
+          --muted: #a8b0bd;
+          --accent: #84adff;
+          --accent-strong: #a8c4ff;
+          --on-accent: #08111f;
+          --success: #75d6a7;
+          --warning: #f2b56b;
+          --danger: #ff938c;
+          --neutral: #c2c8d0;
+          --focus: #84adff;
+          --shadow: none;
+        }
+      }
+
+      * { box-sizing: border-box; }
+      [hidden] { display: none !important; }
+      body {
+        margin: 0;
+        padding: 12px;
+        color: var(--text);
+        background: transparent;
+        font-size: 14px;
+      }
+      button { font: inherit; }
+      button:focus-visible,
+      [tabindex]:focus-visible {
+        outline: 3px solid color-mix(in srgb, var(--focus) 36%, transparent);
+        outline-offset: 2px;
+      }
+      .dashboard {
+        width: min(100%, 1380px);
+        margin: 0 auto;
+        overflow: hidden;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: var(--page);
+        box-shadow: var(--shadow);
+      }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        padding: 18px 20px;
+        border-bottom: 1px solid var(--border);
+        background: var(--surface);
+      }
+      .title-row,
+      .toolbar-actions,
+      .meta-row,
+      .panel-heading,
+      .status-line,
+      .revision-line {
+        display: flex;
+        align-items: center;
+      }
+      .title-row { gap: 10px; flex-wrap: wrap; }
+      h1 { margin: 0; font-size: 20px; line-height: 1.3; letter-spacing: -0.01em; }
+      .subtitle { margin: 4px 0 0; color: var(--muted); line-height: 1.45; }
+      .meta-row { gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+      .badge,
+      .status-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 28px;
+        padding: 4px 9px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        color: var(--muted);
+        background: var(--surface-subtle);
+        font-size: 12px;
+        font-weight: 650;
+      }
+      .badge.readonly { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 32%, var(--border)); background: var(--surface-blue); }
+      .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+      .toolbar-actions { gap: 8px; flex: none; }
+      .button {
+        min-height: 42px;
+        border: 1px solid var(--border-strong);
+        border-radius: 10px;
+        padding: 8px 14px;
+        color: var(--text);
+        background: var(--surface);
+        font-weight: 680;
+        cursor: pointer;
+      }
+      .button.primary { border-color: var(--accent); color: var(--on-accent); background: var(--accent); }
+      .button.primary:hover { background: var(--accent-strong); }
+      .button:disabled { cursor: not-allowed; opacity: 0.55; }
+      .content { padding: 16px; }
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+        margin: 0 0 12px;
+        padding: 0;
+        list-style: none;
+      }
+      .summary-card,
+      .panel {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--surface);
+      }
+      .summary-card { min-height: 104px; padding: 14px 16px; }
+      .summary-label { color: var(--muted); font-size: 12px; font-weight: 650; }
+      .summary-value { display: block; margin-top: 9px; font-size: 25px; line-height: 1.1; font-weight: 730; }
+      .summary-foot { display: block; margin-top: 7px; color: var(--muted); font-size: 12px; }
+      .primary-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 330px;
+        gap: 12px;
+      }
+      .panel { min-width: 0; }
+      .panel-heading {
+        min-height: 57px;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 14px;
+        border-bottom: 1px solid var(--border);
+      }
+      .panel-heading h2 { margin: 0; font-size: 15px; }
+      .panel-hint { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
+      .filters { display: flex; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
+      .filter {
+        min-height: 34px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        padding: 5px 9px;
+        color: var(--muted);
+        background: transparent;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 650;
+      }
+      .filter[aria-pressed="true"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 32%, var(--border)); background: var(--surface-blue); }
+      .graph-viewport {
+        position: relative;
+        min-height: 420px;
+        overflow: auto;
+        padding: 24px;
+        background-image: radial-gradient(circle, color-mix(in srgb, var(--border) 72%, transparent) 1px, transparent 1px);
+        background-size: 20px 20px;
+      }
+      .edge-layer { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+      .edge-layer line { stroke: var(--border-strong); stroke-width: 1.5; }
+      .node-layer {
+        position: relative;
+        z-index: 1;
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: minmax(180px, 1fr);
+        gap: 28px 58px;
+        align-items: start;
+        min-width: max-content;
+      }
+      .graph-node {
+        display: grid;
+        width: 190px;
+        min-height: 96px;
+        align-content: start;
+        gap: 7px;
+        border: 1px solid var(--border-strong);
+        border-left: 4px solid var(--neutral);
+        border-radius: 11px;
+        padding: 11px 12px;
+        color: var(--text);
+        text-align: left;
+        background: var(--surface);
+        box-shadow: 0 5px 14px rgba(20, 28, 45, 0.06);
+        cursor: pointer;
+      }
+      .graph-node[data-tone="success"] { border-left-color: var(--success); }
+      .graph-node[data-tone="accent"] { border-left-color: var(--accent); }
+      .graph-node[data-tone="warning"] { border-left-color: var(--warning); }
+      .graph-node[data-tone="danger"] { border-left-color: var(--danger); }
+      .node-kind { color: var(--muted); font-size: 11px; font-weight: 680; letter-spacing: 0.02em; }
+      .node-title { font-weight: 720; line-height: 1.35; overflow-wrap: anywhere; }
+      .status-line { gap: 7px; color: var(--muted); font-size: 12px; }
+      .dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: currentColor; }
+      .tone-success { color: var(--success); }
+      .tone-accent { color: var(--accent); }
+      .tone-warning { color: var(--warning); }
+      .tone-danger { color: var(--danger); }
+      .tone-neutral { color: var(--neutral); }
+      .empty-state { display: grid; min-height: 220px; place-content: center; gap: 7px; padding: 28px; color: var(--muted); text-align: center; }
+      .empty-state strong { color: var(--text); }
+      .loops-list,
+      .frontier-list,
+      .revision-list,
+      .alert-list {
+        display: grid;
+        gap: 9px;
+        margin: 0;
+        padding: 12px;
+        list-style: none;
+      }
+      .loop-card,
+      .frontier-item,
+      .revision-item,
+      .alert-item {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 11px 12px;
+        background: var(--surface-subtle);
+      }
+      .loop-card h3 { margin: 0; font-size: 13px; overflow-wrap: anywhere; }
+      .loop-meta { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+      .loop-summary { margin: 9px 0 0; line-height: 1.48; }
+      progress { width: 100%; height: 7px; margin-top: 10px; accent-color: var(--accent); }
+      .lower-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px; }
+      .frontier-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 12px; }
+      .frontier-group h3 { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
+      .frontier-list { padding: 0; }
+      .frontier-item { padding: 9px 10px; font-size: 12px; }
+      .alert-list { padding-top: 0; }
+      .alert-item { border-color: color-mix(in srgb, var(--warning) 35%, var(--border)); color: var(--warning); background: color-mix(in srgb, var(--warning) 8%, var(--surface)); line-height: 1.45; }
+      .revision-line { justify-content: space-between; gap: 12px; }
+      .revision-number { font-weight: 720; }
+      .revision-time { display: block; margin-top: 6px; color: var(--muted); font-size: 12px; }
+      .footer {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 12px 16px 16px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      #live-status.error { color: var(--danger); }
+      dialog {
+        width: min(92vw, 520px);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 0;
+        color: var(--text);
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+      dialog::backdrop { background: rgba(15, 23, 42, 0.45); }
+      .dialog-heading { display: flex; justify-content: space-between; align-items: start; gap: 16px; padding: 16px; border-bottom: 1px solid var(--border); }
+      .dialog-heading h2 { margin: 0; font-size: 17px; overflow-wrap: anywhere; }
+      .dialog-body { display: grid; gap: 12px; padding: 16px; }
+      .detail-row { display: grid; grid-template-columns: 110px 1fr; gap: 12px; }
+      .detail-row dt { color: var(--muted); }
+      .detail-row dd { margin: 0; overflow-wrap: anywhere; }
+      .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+      @media (max-width: 1099px) {
+        .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .primary-grid { grid-template-columns: 1fr; }
+        .graph-viewport { min-height: 380px; }
+      }
+      @media (max-width: 719px) {
+        body { padding: 0; }
+        .dashboard { border-left: 0; border-right: 0; border-radius: 0; }
+        .toolbar { align-items: flex-start; flex-direction: column; padding: 16px; }
+        .toolbar-actions { width: 100%; }
+        .toolbar-actions .button { flex: 1; }
+        .content { padding: 10px; }
+        .summary-grid,
+        .lower-grid,
+        .frontier-groups { grid-template-columns: 1fr; }
+        .panel-heading { align-items: flex-start; flex-direction: column; }
+        .filters { justify-content: flex-start; }
+        .graph-viewport { min-height: 0; padding: 14px; background-image: none; }
+        .edge-layer { display: none; }
+        .node-layer { display: grid; grid-auto-flow: row; grid-template-columns: 1fr !important; min-width: 0; gap: 10px; }
+        .graph-node { width: 100%; min-height: 0; grid-column: 1 !important; grid-row: auto !important; }
+        .footer { flex-direction: column; }
+        .detail-row { grid-template-columns: 1fr; gap: 3px; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <main id="dashboard" class="dashboard" aria-labelledby="dashboard-title" aria-busy="true">
+      <header class="toolbar">
+        <div>
+          <div class="title-row">
+            <h1 id="dashboard-title">Delivery Graph 运行看板</h1>
+            <span class="badge readonly">只读</span>
+          </div>
+          <p id="delivery-title" class="subtitle">等待宿主返回当前 Delivery 状态</p>
+          <div class="meta-row">
+            <span class="badge mono" id="root-id">Delivery 未识别</span>
+            <span class="badge" id="revision-badge">Revision —</span>
+            <span class="badge" id="observed-badge">尚未观测</span>
+          </div>
+        </div>
+        <div class="toolbar-actions">
+          <button id="refresh" class="button primary" type="button" disabled>刷新状态</button>
+        </div>
+      </header>
+
+      <div class="content">
+        <section aria-labelledby="summary-title">
+          <h2 id="summary-title" class="sr-only">运行摘要</h2>
+          <ul class="summary-grid">
+            <li class="summary-card"><span class="summary-label">Delivery 状态</span><strong id="delivery-status" class="summary-value">—</strong><span id="delivery-status-foot" class="summary-foot">等待数据</span></li>
+            <li class="summary-card"><span class="summary-label">活动 Loop</span><strong id="active-count" class="summary-value">—</strong><span id="active-foot" class="summary-foot">当前领取中的执行节点</span></li>
+            <li class="summary-card"><span class="summary-label">待 Review</span><strong id="review-count" class="summary-value">—</strong><span class="summary-foot">已就绪的审查节点</span></li>
+            <li class="summary-card"><span class="summary-label">告警</span><strong id="alert-count" class="summary-value">—</strong><span class="summary-foot">健康告警与阻塞节点</span></li>
+          </ul>
+        </section>
+
+        <div class="primary-grid">
+          <section class="panel" aria-labelledby="graph-title">
+            <div class="panel-heading">
+              <div><h2 id="graph-title">当前 Graph</h2><p id="graph-hint" class="panel-hint">节点状态与真实依赖关系</p></div>
+              <div id="filters" class="filters" aria-label="筛选 Graph 节点">
+                <button class="filter" type="button" data-filter="all" aria-pressed="true">全部</button>
+                <button class="filter" type="button" data-filter="active" aria-pressed="false">运行中</button>
+                <button class="filter" type="button" data-filter="ready" aria-pressed="false">可执行</button>
+                <button class="filter" type="button" data-filter="done" aria-pressed="false">已完成</button>
+                <button class="filter" type="button" data-filter="issue" aria-pressed="false">异常</button>
+              </div>
+            </div>
+            <div id="graph-viewport" class="graph-viewport" tabindex="0" aria-label="Delivery Graph 节点图">
+              <svg id="edge-layer" class="edge-layer" aria-hidden="true"></svg>
+              <div id="node-layer" class="node-layer"></div>
+              <div id="graph-empty" class="empty-state"><strong>正在连接宿主</strong><span>工具结果到达后会在这里显示 Graph。</span></div>
+            </div>
+            <ol id="graph-text" class="sr-only" aria-label="Graph 文字说明"></ol>
+          </section>
+
+          <aside class="panel" aria-labelledby="loops-title">
+            <div class="panel-heading"><div><h2 id="loops-title">活动 Loop</h2><p class="panel-hint">阶段、进度、心跳与租约健康</p></div></div>
+            <ol id="active-loops" class="loops-list"></ol>
+            <div id="loops-empty" class="empty-state"><strong>暂无活动 Loop</strong><span>领取节点后会显示执行进度。</span></div>
+          </aside>
+        </div>
+
+        <div class="lower-grid">
+          <section class="panel" aria-labelledby="frontier-title">
+            <div class="panel-heading"><div><h2 id="frontier-title">只读 Frontier</h2><p class="panel-hint">刷新不会推进 Graph 或回收租约</p></div></div>
+            <div class="frontier-groups">
+              <div class="frontier-group"><h3>可执行</h3><ol id="ready-list" class="frontier-list"></ol></div>
+              <div class="frontier-group"><h3>暂停或阻塞</h3><ol id="blocked-list" class="frontier-list"></ol></div>
+            </div>
+            <ul id="alert-list" class="alert-list"></ul>
+          </section>
+
+          <section class="panel" aria-labelledby="revisions-title">
+            <div class="panel-heading"><div><h2 id="revisions-title">Revision 历史</h2><p class="panel-hint">仅展示元数据，不切换历史 Graph</p></div></div>
+            <ol id="revision-list" class="revision-list"></ol>
+            <div id="revisions-empty" class="empty-state"><strong>暂无 Revision 记录</strong><span>冻结后会显示历史元数据。</span></div>
+          </section>
+        </div>
+      </div>
+
+      <footer class="footer">
+        <span>数据源：Delivery Graph MCP Controller</span>
+        <span id="live-status" role="status" aria-live="polite">等待工具结果</span>
+      </footer>
+    </main>
+
+    <dialog id="node-detail" aria-labelledby="detail-title">
+      <div class="dialog-heading"><div><h2 id="detail-title">节点详情</h2><p id="detail-kind" class="panel-hint"></p></div><button id="close-detail" class="button" type="button">关闭</button></div>
+      <dl id="detail-body" class="dialog-body"></dl>
+    </dialog>
+
+    <script type="module">
+      const byId = (id) => document.getElementById(id);
+      const dashboard = byId("dashboard");
+      const refreshButton = byId("refresh");
+      const nodeLayer = byId("node-layer");
+      const edgeLayer = byId("edge-layer");
+      const graphEmpty = byId("graph-empty");
+      const liveStatus = byId("live-status");
+      const detailDialog = byId("node-detail");
+      const pending = new Map();
+      const RPC_TIMEOUT_MS = 15000;
+      let rpcId = 0;
+      let latest = null;
+      let currentFilter = "all";
+      let standardBridgeAvailable = false;
+      let resizeObserver = null;
+      let resizeFrame = null;
+      let tornDown = false;
+
+      const statusLabels = {
+        PENDING: "待前置", READY: "可执行", CLAIMED: "运行中",
+        SUCCEEDED: "已完成", BLOCKED: "已阻塞", PAUSED: "已暂停",
+        CANCELLED: "已取消", COMPLETED: "已确认", RUNNING: "执行中",
+        FROZEN: "已冻结", ARCHIVED: "已归档", SUPERSEDED: "已替代",
+      };
+      const kindLabels = {
+        TASK_LOOP: "任务实现", TASK_REVIEW_LOOP: "任务审查",
+        GROUP_JOIN: "分组汇合", GROUP_REVIEW_LOOP: "分组审查",
+        DELIVERY_REVIEW_LOOP: "交付审查", USER_CONFIRMATION: "用户确认",
+      };
+      const toneFor = (status) => {
+        if (["SUCCEEDED", "COMPLETED"].includes(status)) return "success";
+        if (["CLAIMED", "RUNNING", "READY"].includes(status)) return "accent";
+        if (["PAUSED", "PENDING"].includes(status)) return "warning";
+        if (["BLOCKED", "CANCELLED"].includes(status)) return "danger";
+        return "neutral";
+      };
+      const labelFor = (value, labels) => labels[value] || value || "未知";
+      const setText = (id, value) => { byId(id).textContent = value ?? "—"; };
+      const setLive = (message, error = false) => {
+        liveStatus.textContent = message;
+        liveStatus.className = error ? "error" : "";
+      };
+      const hasOpenAICompatibility = () => typeof window.openai?.callTool === "function";
+      const canCallHost = () => standardBridgeAvailable || hasOpenAICompatibility();
+      const updateRefreshState = () => {
+        refreshButton.disabled = tornDown || !canCallHost() || !latest?.delivery?.id;
+      };
+      const showFailure = (message) => {
+        dashboard.setAttribute("aria-busy", "false");
+        updateRefreshState();
+        setLive(message, true);
+        if (!latest) {
+          nodeLayer.hidden = true;
+          edgeLayer.hidden = true;
+          graphEmpty.hidden = false;
+          graphEmpty.querySelector("strong").textContent = "无法加载看板";
+          graphEmpty.querySelector("span").textContent = message;
+        }
+      };
+      const formatTime = (value) => {
+        if (!value || typeof value !== "string") return "时间未知";
+        const date = new Date(value);
+        return Number.isNaN(date.valueOf()) ? value : date.toLocaleString("zh-CN", { hour12: false });
+      };
+      const unwrap = (payload) => {
+        if (!payload || typeof payload !== "object") return null;
+        if (payload.ok === true && payload.result && typeof payload.result === "object") return payload.result;
+        if (payload.schemaVersion === 1 && payload.readOnly === true) return payload;
+        return null;
+      };
+      const nodeMatches = (node) => {
+        if (currentFilter === "all") return true;
+        if (currentFilter === "active") return node.status === "CLAIMED";
+        if (currentFilter === "ready") return node.status === "READY";
+        if (currentFilter === "done") return ["SUCCEEDED", "COMPLETED"].includes(node.status);
+        return ["BLOCKED", "PAUSED", "CANCELLED"].includes(node.status);
+      };
+
+      const createStatusLine = (status) => {
+        const line = document.createElement("span");
+        const tone = toneFor(status);
+        line.className = `status-line tone-${tone}`;
+        const dot = document.createElement("span");
+        dot.className = "dot";
+        dot.setAttribute("aria-hidden", "true");
+        const text = document.createElement("span");
+        text.textContent = labelFor(status, statusLabels);
+        line.append(dot, text);
+        return line;
+      };
+
+      const showNodeDetail = (node) => {
+        setText("detail-title", node.workItemId || node.id);
+        setText("detail-kind", `${labelFor(node.kind, kindLabels)} · ${node.id}`);
+        const body = byId("detail-body");
+        body.replaceChildren();
+        const rows = [
+          ["状态", labelFor(node.status, statusLabels)],
+          ["执行轮次", String(node.attempt ?? 0)],
+          ["执行器", node.agentId || "未领取"],
+          ["宿主模型", node.actualModelId || "未报告"],
+          ["当前阶段", node.monitor?.phaseZh || "未报告"],
+          ["当前说明", node.monitor?.summaryZh || "未报告"],
+          ["心跳与租约", node.monitor?.heartbeatZh || "未报告"],
+          ["健康状态", node.monitor?.healthZh || "未报告"],
+        ];
+        for (const [term, value] of rows) {
+          const wrapper = document.createElement("div");
+          wrapper.className = "detail-row";
+          const dt = document.createElement("dt");
+          dt.textContent = term;
+          const dd = document.createElement("dd");
+          dd.textContent = value;
+          wrapper.append(dt, dd);
+          body.append(wrapper);
+        }
+        if (typeof detailDialog.showModal === "function") detailDialog.showModal();
+        else detailDialog.setAttribute("open", "");
+      };
+
+      const graphRanks = (nodes, edges) => {
+        const ids = new Set(nodes.map((node) => node.id));
+        const incoming = new Map(nodes.map((node) => [node.id, 0]));
+        const outgoing = new Map(nodes.map((node) => [node.id, []]));
+        for (const edge of edges) {
+          if (!ids.has(edge.source) || !ids.has(edge.target)) continue;
+          incoming.set(edge.target, incoming.get(edge.target) + 1);
+          outgoing.get(edge.source).push(edge.target);
+        }
+        const queue = nodes.filter((node) => incoming.get(node.id) === 0).map((node) => node.id).sort();
+        const ranks = new Map(nodes.map((node) => [node.id, 0]));
+        let visited = 0;
+        while (queue.length) {
+          const id = queue.shift();
+          visited += 1;
+          for (const target of outgoing.get(id)) {
+            ranks.set(target, Math.max(ranks.get(target), ranks.get(id) + 1));
+            incoming.set(target, incoming.get(target) - 1);
+            if (incoming.get(target) === 0) { queue.push(target); queue.sort(); }
+          }
+        }
+        return visited === nodes.length ? ranks : new Map(nodes.map((node, index) => [node.id, index]));
+      };
+
+      const drawEdges = () => {
+        edgeLayer.replaceChildren();
+        if (!latest || window.matchMedia("(max-width: 719px)").matches) {
+          edgeLayer.removeAttribute("width");
+          edgeLayer.removeAttribute("height");
+          edgeLayer.removeAttribute("viewBox");
+          edgeLayer.style.width = "";
+          edgeLayer.style.height = "";
+          return;
+        }
+        const viewportRect = byId("graph-viewport").getBoundingClientRect();
+        const nodeElements = new Map([...nodeLayer.querySelectorAll("[data-node-id]")].map((element) => [element.dataset.nodeId, element]));
+        const viewport = byId("graph-viewport");
+        const width = Math.max(viewport.clientWidth, viewport.scrollWidth);
+        const height = Math.max(viewport.clientHeight, viewport.scrollHeight);
+        edgeLayer.setAttribute("width", String(width));
+        edgeLayer.setAttribute("height", String(height));
+        edgeLayer.setAttribute("viewBox", `0 0 ${width} ${height}`);
+        edgeLayer.style.width = `${width}px`;
+        edgeLayer.style.height = `${height}px`;
+        for (const edge of latest.graph?.edges || []) {
+          const source = nodeElements.get(edge.source);
+          const target = nodeElements.get(edge.target);
+          if (!source || !target) continue;
+          const a = source.getBoundingClientRect();
+          const b = target.getBoundingClientRect();
+          const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+          line.setAttribute("x1", String(a.right - viewportRect.left + byId("graph-viewport").scrollLeft));
+          line.setAttribute("y1", String(a.top + a.height / 2 - viewportRect.top + byId("graph-viewport").scrollTop));
+          line.setAttribute("x2", String(b.left - viewportRect.left + byId("graph-viewport").scrollLeft));
+          line.setAttribute("y2", String(b.top + b.height / 2 - viewportRect.top + byId("graph-viewport").scrollTop));
+          edgeLayer.append(line);
+        }
+      };
+
+      const renderGraph = () => {
+        nodeLayer.replaceChildren();
+        byId("graph-text").replaceChildren();
+        const nodes = (latest?.graph?.nodes || []).filter(nodeMatches);
+        const edges = latest?.graph?.edges || [];
+        graphEmpty.hidden = nodes.length > 0;
+        nodeLayer.hidden = nodes.length === 0;
+        edgeLayer.hidden = nodes.length === 0;
+        if (!nodes.length) return;
+        const ranks = graphRanks(nodes, edges);
+        const byRank = new Map();
+        for (const node of nodes) {
+          const rank = ranks.get(node.id) || 0;
+          if (!byRank.has(rank)) byRank.set(rank, []);
+          byRank.get(rank).push(node);
+        }
+        const maxRank = Math.max(...byRank.keys());
+        nodeLayer.style.gridTemplateColumns = `repeat(${maxRank + 1}, 190px)`;
+        for (const [rank, ranked] of [...byRank.entries()].sort((a, b) => a[0] - b[0])) {
+          ranked.sort((a, b) => `${a.workItemId}:${a.kind}`.localeCompare(`${b.workItemId}:${b.kind}`));
+          ranked.forEach((node, row) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "graph-node";
+            button.dataset.nodeId = node.id;
+            button.dataset.tone = toneFor(node.status);
+            button.style.gridColumn = String(rank + 1);
+            button.style.gridRow = String(row + 1);
+            button.setAttribute("aria-label", `${node.workItemId || node.id}，${labelFor(node.kind, kindLabels)}，${labelFor(node.status, statusLabels)}，打开只读详情`);
+            const kind = document.createElement("span");
+            kind.className = "node-kind";
+            kind.textContent = labelFor(node.kind, kindLabels);
+            const title = document.createElement("span");
+            title.className = "node-title";
+            title.textContent = node.workItemId || node.id;
+            button.append(kind, title, createStatusLine(node.status));
+            button.addEventListener("click", () => showNodeDetail(node));
+            nodeLayer.append(button);
+
+            const textItem = document.createElement("li");
+            const predecessors = edges.filter((edge) => edge.target === node.id).map((edge) => edge.source);
+            textItem.textContent = `${node.id}：${labelFor(node.status, statusLabels)}；前置节点：${predecessors.join("、") || "无"}`;
+            byId("graph-text").append(textItem);
+          });
+        }
+        requestAnimationFrame(drawEdges);
+      };
+
+      const renderLoops = () => {
+        const list = byId("active-loops");
+        list.replaceChildren();
+        const loops = latest?.frontier?.activeLoops || [];
+        byId("loops-empty").hidden = loops.length > 0;
+        for (const loop of loops) {
+          const item = document.createElement("li");
+          item.className = "loop-card";
+          const title = document.createElement("h3");
+          title.textContent = loop.workItemId || loop.id;
+          const meta = document.createElement("p");
+          meta.className = "loop-meta";
+          meta.textContent = `${labelFor(loop.kind, kindLabels)} · 第 ${loop.attempt || 1} 轮 · ${loop.agentId || "执行器未报告"}`;
+          const summary = document.createElement("p");
+          summary.className = "loop-summary";
+          summary.textContent = loop.monitor?.summaryZh || loop.monitor?.phaseZh || "已领取，等待进度报告。";
+          item.append(title, meta, summary, createStatusLine(loop.status));
+          const percent = loop.progress?.progressPercent;
+          if (Number.isInteger(percent) && percent >= 0 && percent <= 100) {
+            const progress = document.createElement("progress");
+            progress.max = 100;
+            progress.value = percent;
+            progress.setAttribute("aria-label", `${title.textContent} 进度 ${percent}%`);
+            item.append(progress);
+          }
+          list.append(item);
+        }
+      };
+
+      const renderSimpleList = (id, items, emptyText) => {
+        const list = byId(id);
+        list.replaceChildren();
+        if (!items.length) {
+          const item = document.createElement("li");
+          item.className = "frontier-item";
+          item.textContent = emptyText;
+          list.append(item);
+          return;
+        }
+        for (const node of items) {
+          const item = document.createElement("li");
+          item.className = "frontier-item";
+          item.textContent = `${node.workItemId || node.id} · ${labelFor(node.status, statusLabels)}`;
+          list.append(item);
+        }
+      };
+
+      const renderRevisions = () => {
+        const list = byId("revision-list");
+        list.replaceChildren();
+        const revisions = [...(latest?.revisions || [])].reverse();
+        byId("revisions-empty").hidden = revisions.length > 0;
+        for (const revision of revisions) {
+          const item = document.createElement("li");
+          item.className = "revision-item";
+          const line = document.createElement("div");
+          line.className = "revision-line";
+          const number = document.createElement("span");
+          number.className = "revision-number";
+          number.textContent = `Revision ${revision.revision}`;
+          const status = document.createElement("span");
+          status.className = "status-chip";
+          status.textContent = labelFor(revision.runStatus || revision.status, statusLabels);
+          line.append(number, status);
+          const time = document.createElement("time");
+          const timestamp = revision.completedAt || revision.supersededAt || revision.updatedAt || revision.createdAt;
+          time.className = "revision-time";
+          if (timestamp) time.dateTime = timestamp;
+          time.textContent = formatTime(timestamp);
+          item.append(line, time);
+          list.append(item);
+        }
+      };
+
+      const render = (payload) => {
+        const model = unwrap(payload);
+        if (!model) return false;
+        latest = model;
+        dashboard.setAttribute("aria-busy", "false");
+        setText("delivery-title", model.delivery?.title || "未命名 Delivery");
+        setText("root-id", model.delivery?.id || "Delivery 未识别");
+        setText("revision-badge", `Revision ${model.delivery?.revision ?? model.currentRevision ?? "—"}`);
+        setText("observed-badge", `观测于 ${formatTime(model.observedAt)}`);
+        const displayStatus = model.delivery?.status === "ARCHIVED"
+          ? "ARCHIVED"
+          : model.run?.status || model.delivery?.status;
+        setText("delivery-status", labelFor(displayStatus, statusLabels));
+        setText("delivery-status-foot", `${model.summary?.completedNodes ?? 0} / ${model.summary?.totalNodes ?? 0} 个节点已完成`);
+        setText("active-count", String(model.summary?.activeLoops ?? 0));
+        setText("active-foot", model.run?.executionMode ? `执行模式：${model.run.executionMode}` : "当前领取中的执行节点");
+        setText("review-count", String(model.summary?.pendingReviews ?? 0));
+        setText("alert-count", String(model.summary?.alerts ?? 0));
+        setText("graph-hint", `${model.graph?.nodes?.length ?? 0} 个节点 · ${model.graph?.edges?.length ?? 0} 条依赖`);
+        renderGraph();
+        renderLoops();
+        renderSimpleList("ready-list", model.frontier?.readyLoops || [], "暂无可执行 Loop");
+        renderSimpleList("blocked-list", [...(model.frontier?.pausedLoops || []), ...(model.frontier?.blockedLoops || [])], "暂无暂停或阻塞节点");
+        const alerts = byId("alert-list");
+        alerts.replaceChildren();
+        for (const alert of model.progressMonitor?.alerts || []) {
+          const item = document.createElement("li");
+          item.className = "alert-item";
+          item.textContent = alert.messageZh || alert.code || "检测到运行告警";
+          alerts.append(item);
+        }
+        renderRevisions();
+        updateRefreshState();
+        setLive(`状态已更新：${formatTime(model.observedAt)}`);
+        return true;
+      };
+
+      const notify = (method, params) => window.parent.postMessage({ jsonrpc: "2.0", method, params }, "*");
+      const respond = (id, result) => window.parent.postMessage({ jsonrpc: "2.0", id, result }, "*");
+      const isRpcId = (id) => typeof id === "string" || (typeof id === "number" && Number.isFinite(id));
+      const request = (method, params, timeoutMs = RPC_TIMEOUT_MS) => new Promise((resolve, reject) => {
+        const id = ++rpcId;
+        const timer = window.setTimeout(() => {
+          pending.delete(id);
+          reject(new Error("宿主响应超时"));
+        }, timeoutMs);
+        pending.set(id, { resolve, reject, timer });
+        window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+      });
+
+      const toolFailureMessage = (callResult) => {
+        if (!callResult || typeof callResult !== "object") return "宿主返回了无效的工具结果。";
+        const structured = callResult.structuredContent;
+        if (callResult.isError !== true && structured?.ok !== false) return null;
+        if (typeof structured?.error?.message === "string") return structured.error.message;
+        const text = callResult.content?.find((item) => item?.type === "text")?.text;
+        return typeof text === "string" && text ? text : "工具未能读取 Delivery 状态。";
+      };
+
+      const applyToolResult = (value) => {
+        const callResult = value && typeof value === "object" && (
+          Object.hasOwn(value, "structuredContent") || Object.hasOwn(value, "isError")
+        ) ? value : { structuredContent: value };
+        const failure = toolFailureMessage(callResult);
+        if (failure) {
+          showFailure(`读取失败：${failure}`);
+          return false;
+        }
+        if (!render(callResult.structuredContent)) {
+          showFailure("读取失败：宿主返回了无法识别的看板数据。");
+          return false;
+        }
+        return true;
+      };
+
+      const notifySize = () => {
+        if (!standardBridgeAvailable || tornDown) return;
+        const bounds = dashboard.getBoundingClientRect();
+        notify("ui/notifications/size-changed", {
+          width: Math.ceil(bounds.width),
+          height: Math.ceil(bounds.height),
+        });
+      };
+      const startSizeObserver = () => {
+        if (resizeObserver || typeof ResizeObserver !== "function") return;
+        resizeObserver = new ResizeObserver(() => {
+          if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+          resizeFrame = requestAnimationFrame(() => {
+            resizeFrame = null;
+            notifySize();
+          });
+        });
+        resizeObserver.observe(dashboard);
+      };
+      const teardown = () => {
+        tornDown = true;
+        standardBridgeAvailable = false;
+        resizeObserver?.disconnect();
+        resizeObserver = null;
+        if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+        resizeFrame = null;
+        for (const waiter of pending.values()) {
+          clearTimeout(waiter.timer);
+          waiter.reject(new Error("看板资源已由宿主释放"));
+        }
+        pending.clear();
+        dashboard.setAttribute("aria-busy", "false");
+        refreshButton.disabled = true;
+        setLive("看板资源已释放");
+      };
+
+      window.addEventListener("message", (event) => {
+        if (event.source !== window.parent) return;
+        const message = event.data;
+        if (!message || message.jsonrpc !== "2.0") return;
+
+        if (typeof message.method === "string") {
+          if (message.method === "ui/resource-teardown") {
+            teardown();
+            if (isRpcId(message.id)) respond(message.id, {});
+            return;
+          }
+          if (message.method === "ui/notifications/tool-result") {
+            applyToolResult(message.params);
+            return;
+          }
+          if (message.method === "ui/notifications/tool-cancelled") {
+            showFailure(message.params?.reason || "工具调用已取消。");
+            return;
+          }
+          if (message.method === "ui/notifications/tool-input") {
+            const args = message.params?.arguments || message.params;
+            if (args?.root_id) setText("root-id", args.root_id);
+          }
+          return;
+        }
+
+        if (isRpcId(message.id)) {
+          const waiter = pending.get(message.id);
+          if (!waiter) return;
+          pending.delete(message.id);
+          clearTimeout(waiter.timer);
+          if (message.error) waiter.reject(message.error);
+          else waiter.resolve(message.result);
+        }
+      }, { passive: true });
+
+      const bridgeReady = request("ui/initialize", {
+        appInfo: { name: "delivery-graph-dashboard", title: "Delivery Graph 运行看板", version: "1.0.0" },
+        appCapabilities: {},
+        protocolVersion: "2026-01-26",
+      }).then((result) => {
+        if (tornDown) return result;
+        standardBridgeAvailable = true;
+        notify("ui/notifications/initialized", {});
+        startSizeObserver();
+        updateRefreshState();
+        return result;
+      });
+
+      const callDashboard = async (rootId) => {
+        if (standardBridgeAvailable) {
+          return request("tools/call", {
+            name: "open_delivery_dashboard",
+            arguments: { root_id: rootId },
+          });
+        }
+        if (hasOpenAICompatibility()) {
+          return window.openai?.callTool("open_delivery_dashboard", { root_id: rootId });
+        }
+        await bridgeReady;
+        return request("tools/call", {
+          name: "open_delivery_dashboard",
+          arguments: { root_id: rootId },
+        });
+      };
+
+      refreshButton.addEventListener("click", async () => {
+        if (!latest?.delivery?.id || tornDown) return;
+        dashboard.setAttribute("aria-busy", "true");
+        refreshButton.disabled = true;
+        setLive("正在重新读取权威状态…");
+        try {
+          const response = await callDashboard(latest.delivery.id);
+          applyToolResult(response);
+        } catch (error) {
+          showFailure(`刷新失败：${error?.message || "宿主拒绝或连接不可用"}`);
+        }
+      });
+
+      byId("filters").addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-filter]");
+        if (!button) return;
+        currentFilter = button.dataset.filter;
+        for (const item of byId("filters").querySelectorAll("button")) item.setAttribute("aria-pressed", String(item === button));
+        renderGraph();
+      });
+      byId("close-detail").addEventListener("click", () => detailDialog.close());
+      detailDialog.addEventListener("click", (event) => { if (event.target === detailDialog) detailDialog.close(); });
+      window.addEventListener("resize", () => requestAnimationFrame(drawEdges), { passive: true });
+      byId("graph-viewport").addEventListener("scroll", () => requestAnimationFrame(drawEdges), { passive: true });
+
+      const compatibilityPayload = window.openai?.toolOutput;
+      if (compatibilityPayload) applyToolResult(compatibilityPayload);
+      bridgeReady.catch(() => {
+        standardBridgeAvailable = false;
+        if (tornDown) return;
+        updateRefreshState();
+        if (!latest && !hasOpenAICompatibility()) showFailure("当前宿主未提供 MCP Apps 交互桥；工具仍可返回文字进度。");
+      });
+      updateRefreshState();
+      window.__deliveryGraphDashboard = { render, applyToolResult };
+    </script>
+  </body>
+</html>

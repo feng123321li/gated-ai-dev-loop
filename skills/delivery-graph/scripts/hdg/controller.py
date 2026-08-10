@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from .dispatch_planning import plan_dispatch_batch
+from .dashboard import open_delivery_dashboard
 from .errors import GatedLoopError, fail
 from .graph_frontier import get_graph_frontier
 from .git_binding import (
@@ -50,7 +51,12 @@ from .repository import SchedulerRepository
 ControllerOperation = Callable[..., dict[str, Any]]
 
 CONTROL_ROOT_MONITOR_TOOLS = frozenset(
-    {"graph_frontier", "graph_status", "graph_events"}
+    {
+        "graph_frontier",
+        "graph_status",
+        "graph_events",
+        "open_delivery_dashboard",
+    }
 )
 
 CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
@@ -70,6 +76,7 @@ CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "freeze_hierarchy": freeze_hierarchy,
     "graph_frontier": get_graph_frontier,
     "graph_status": graph_status,
+    "open_delivery_dashboard": open_delivery_dashboard,
     "graph_events": graph_events,
     "advance_graph": advance_graph,
     "loop_context": loop_context,

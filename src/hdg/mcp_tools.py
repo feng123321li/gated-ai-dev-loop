@@ -14,6 +14,7 @@ from .errors import GatedLoopError, fail
 from .fs_safe import read_regular_file
 from .hierarchy_contract import hierarchy_input_schema
 from .jsonio import canonical_json
+from .mcp_apps import DASHBOARD_RESOURCE_URI
 from .model_core import validate_hierarchy_definition
 
 
@@ -195,6 +196,7 @@ READ_ONLY_TOOLS = frozenset(
         "delivery_revision_history",
         "graph_frontier",
         "graph_status",
+        "open_delivery_dashboard",
         "graph_events",
         "loop_context",
     }
@@ -934,6 +936,30 @@ TOOLS = (
             {"root_id": ROOT_ID},
             required=["root_id"],
         ),
+    ),
+    _tool(
+        "open_delivery_dashboard",
+        (
+            "Open a read-only MCP Apps dashboard for the current Delivery. "
+            "It returns a data-minimized snapshot of Graph nodes, active "
+            "Loops, alerts, and Revision history without advancing the "
+            "scheduler or changing control-plane state."
+        ),
+        _object(
+            {"root_id": ROOT_ID},
+            required=["root_id"],
+        ),
+        title="Open Delivery Dashboard",
+        meta={
+            "ui": {
+                "resourceUri": DASHBOARD_RESOURCE_URI,
+                "visibility": ["model", "app"],
+            },
+            "openai/outputTemplate": DASHBOARD_RESOURCE_URI,
+            "openai/widgetAccessible": True,
+            "openai/toolInvocation/invoking": "正在读取 Delivery 运行状态…",
+            "openai/toolInvocation/invoked": "Delivery 运行看板已更新",
+        },
     ),
     _tool(
         "graph_events",

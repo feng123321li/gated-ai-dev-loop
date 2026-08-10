@@ -16,6 +16,7 @@ from .host_policy import (
     ProjectRootBinding,
 )
 from .jsonio import redact
+from .mcp_apps import read_resource, resource_definitions
 from .repository import SchedulerRepository
 from .mcp_tools import (
     call_tool,
@@ -33,6 +34,8 @@ SUPPORTED_PROTOCOL_VERSIONS = (
     MODERN_PROTOCOL_VERSION,
     *LEGACY_PROTOCOL_VERSIONS,
 )
+_MODERN_PROTOCOL_ERA = "modern"
+_LEGACY_PROTOCOL_ERA = "legacy"
 
 PROTOCOL_VERSION_META_KEY = "io.modelcontextprotocol/protocolVersion"
 CLIENT_INFO_META_KEY = "io.modelcontextprotocol/clientInfo"
@@ -43,6 +46,7 @@ SERVER_INFO_META_KEY = "io.modelcontextprotocol/serverInfo"
 
 DISCOVERY_TTL_MS = 60 * 60 * 1000
 TOOLS_TTL_MS = 5 * 60 * 1000
+RESOURCES_TTL_MS = 60 * 60 * 1000
 CACHE_SCOPE = "private"
 
 SERVER_INSTRUCTIONS = (
@@ -319,10 +323,12 @@ def report_internal_error(
 
 @dataclass
 class McpConnection:
-    """Transport connection plus legacy-only handshake state."""
+    """Transport connection plus its pinned stdio protocol era."""
 
     project_root: ProjectRootBinding
     host_policy: HostCompatibilityPolicy = DEFAULT_HOST_POLICY
+    protocol_era: str | None = None
+    protocol_version: str | None = None
     legacy_initialize_requested: bool = False
     legacy_initialized: bool = False
     legacy_client_info: dict[str, object] | None = None
@@ -347,6 +353,10 @@ def _server_info() -> dict[str, str]:
 def _server_capabilities() -> dict[str, object]:
     return {
         "tools": {"listChanged": False},
+        "resources": {
+            "subscribe": False,
+            "listChanged": False,
+        },
         "experimental": {
             CODEX_SANDBOX_META_KEY: {},
         },
@@ -518,6 +528,50 @@ def _unsupported_protocol_version(
     )
 
 
+def _connection_protocol_mismatch(
+    request_id: object,
+    *,
+    connection: McpConnection,
+    requested: str,
+) -> dict[str, Any]:
+    if connection.protocol_version is not None:
+        supported = [connection.protocol_version]
+    elif connection.protocol_era == _MODERN_PROTOCOL_ERA:
+        supported = [MODERN_PROTOCOL_VERSION]
+    else:
+        supported = list(LEGACY_PROTOCOL_VERSIONS)
+    return _rpc_error(
+        request_id,
+        -32022,
+        "Unsupported protocol version",
+        data={
+            "supported": supported,
+            "requested": requested,
+        },
+    )
+
+
+def _requested_modern_version(params: object) -> str:
+    if isinstance(params, dict):
+        meta = params.get("_meta")
+        if isinstance(meta, dict):
+            version = meta.get(PROTOCOL_VERSION_META_KEY)
+            if isinstance(version, str):
+                return version
+    return MODERN_PROTOCOL_VERSION
+
+
+def _requested_legacy_version(
+    method: str,
+    params: object,
+) -> str:
+    if method == "initialize" and isinstance(params, dict):
+        version = params.get("protocolVersion")
+        if isinstance(version, str):
+            return version
+    return LEGACY_PREFERRED_PROTOCOL_VERSION
+
+
 def _valid_client_info(value: object) -> bool:
     if not isinstance(value, dict):
         return False
@@ -652,6 +706,69 @@ def _validate_call_params(
     return name, arguments
 
 
+def _validate_resource_read_params(
+    params: Mapping[str, object],
+) -> str | None:
+    if set(params) - {"uri", "_meta"}:
+        return None
+    uri = params.get("uri")
+    request_meta = params.get("_meta")
+    if (
+        not isinstance(uri, str)
+        or not uri
+        or (
+            request_meta is not None
+            and not isinstance(request_meta, dict)
+        )
+    ):
+        return None
+    return uri
+
+
+def _read_mcp_resource(
+    *,
+    request_id: object,
+    params: Mapping[str, object],
+    modern: bool,
+) -> dict[str, Any]:
+    uri = _validate_resource_read_params(params)
+    if uri is None:
+        return _invalid_params(request_id)
+    try:
+        result = read_resource(uri)
+    except GatedLoopError as error:
+        if error.code == "MCP_RESOURCE_NOT_FOUND":
+            return _rpc_error(
+                request_id,
+                -32602 if modern else -32002,
+                "Resource not found",
+                data={"uri": uri},
+            )
+        return _rpc_error(
+            request_id,
+            -32603,
+            "Internal error",
+        )
+    except Exception as error:
+        diagnostic_id = report_internal_error(
+            error,
+            operation="resources/read",
+        )
+        return _rpc_error(
+            request_id,
+            -32603,
+            "Internal error",
+            data={"diagnosticId": diagnostic_id},
+        )
+    if modern:
+        result = {
+            **result,
+            "ttlMs": RESOURCES_TTL_MS,
+            "cacheScope": CACHE_SCOPE,
+        }
+    return _rpc_result(request_id, result, modern=modern)
+
+
 def _call_scheduler_tool(
     *,
     request_id: object,
@@ -763,6 +880,64 @@ def _call_scheduler_tool(
         )
 
 
+def _dispatch_initialized_method(
+    *,
+    request_id: object,
+    method: str,
+    params: Mapping[str, object],
+    connection: McpConnection,
+    client_info: Mapping[str, object] | None,
+    modern: bool,
+    explicit_dogfood: bool,
+) -> dict[str, Any]:
+    """Dispatch shared MCP methods after the wire-specific handshake."""
+
+    if method == "tools/list":
+        if not _validate_list_params(params):
+            return _invalid_params(request_id)
+        payload: dict[str, Any] = {"tools": tool_definitions()}
+        if modern:
+            payload.update(
+                {
+                    "ttlMs": TOOLS_TTL_MS,
+                    "cacheScope": CACHE_SCOPE,
+                }
+            )
+        return _rpc_result(request_id, payload, modern=modern)
+
+    if method == "resources/list":
+        if not _validate_list_params(params):
+            return _invalid_params(request_id)
+        payload = {"resources": resource_definitions()}
+        if modern:
+            payload.update(
+                {
+                    "ttlMs": RESOURCES_TTL_MS,
+                    "cacheScope": CACHE_SCOPE,
+                }
+            )
+        return _rpc_result(request_id, payload, modern=modern)
+
+    if method == "resources/read":
+        return _read_mcp_resource(
+            request_id=request_id,
+            params=params,
+            modern=modern,
+        )
+
+    if method == "tools/call":
+        return _call_scheduler_tool(
+            request_id=request_id,
+            params=params,
+            connection=connection,
+            client_info=client_info,
+            modern=modern,
+            explicit_dogfood=explicit_dogfood,
+        )
+
+    return _rpc_error(request_id, -32601, "Method not found")
+
+
 def _handle_modern_request(
     *,
     request_id: object,
@@ -787,30 +962,15 @@ def _handle_modern_request(
             modern=True,
         )
 
-    if method == "tools/list":
-        if not _validate_list_params(params):
-            return _invalid_params(request_id)
-        return _rpc_result(
-            request_id,
-            {
-                "tools": tool_definitions(),
-                "ttlMs": TOOLS_TTL_MS,
-                "cacheScope": CACHE_SCOPE,
-            },
-            modern=True,
-        )
-
-    if method == "tools/call":
-        return _call_scheduler_tool(
-            request_id=request_id,
-            params=params,
-            connection=connection,
-            client_info=context.client_info,
-            modern=True,
-            explicit_dogfood=explicit_dogfood,
-        )
-
-    return _rpc_error(request_id, -32601, "Method not found")
+    return _dispatch_initialized_method(
+        request_id=request_id,
+        method=method,
+        params=params,
+        connection=connection,
+        client_info=context.client_info,
+        modern=True,
+        explicit_dogfood=explicit_dogfood,
+    )
 
 
 def _handle_legacy_request(
@@ -849,6 +1009,8 @@ def _handle_legacy_request(
         )
         connection.legacy_initialize_requested = True
         connection.legacy_client_info = dict(client_info)
+        connection.protocol_era = _LEGACY_PROTOCOL_ERA
+        connection.protocol_version = negotiated
         return _rpc_result(
             request_id,
             {
@@ -861,6 +1023,8 @@ def _handle_legacy_request(
         )
 
     if method == "ping":
+        if connection.protocol_era is None:
+            connection.protocol_era = _LEGACY_PROTOCOL_ERA
         return _rpc_result(request_id, {}, modern=False)
 
     if not connection.legacy_initialized:
@@ -870,26 +1034,15 @@ def _handle_legacy_request(
             "Server not initialized",
         )
 
-    if method == "tools/list":
-        if not _validate_list_params(params):
-            return _invalid_params(request_id)
-        return _rpc_result(
-            request_id,
-            {"tools": tool_definitions()},
-            modern=False,
-        )
-
-    if method == "tools/call":
-        return _call_scheduler_tool(
-            request_id=request_id,
-            params=params,
-            connection=connection,
-            client_info=connection.legacy_client_info,
-            modern=False,
-            explicit_dogfood=explicit_dogfood,
-        )
-
-    return _rpc_error(request_id, -32601, "Method not found")
+    return _dispatch_initialized_method(
+        request_id=request_id,
+        method=method,
+        params=params,
+        connection=connection,
+        client_info=connection.legacy_client_info,
+        modern=False,
+        explicit_dogfood=explicit_dogfood,
+    )
 
 
 def handle_message(
@@ -927,6 +1080,7 @@ def handle_message(
     if is_notification:
         if (
             method == "notifications/initialized"
+            and connection.protocol_era == _LEGACY_PROTOCOL_ERA
             and connection.legacy_initialize_requested
             and not _has_modern_metadata(params)
             and (params is None or isinstance(params, dict))
@@ -937,7 +1091,28 @@ def handle_message(
     if not isinstance(params, dict):
         return _invalid_params(request_id)
 
-    modern = _is_modern_request(method, params, connection)
+    requests_modern_era = (
+        method == "server/discover"
+        or _has_modern_metadata(params)
+    )
+    if connection.protocol_era == _MODERN_PROTOCOL_ERA:
+        if not requests_modern_era:
+            return _connection_protocol_mismatch(
+                request_id,
+                connection=connection,
+                requested=_requested_legacy_version(method, params),
+            )
+        modern = True
+    elif connection.protocol_era == _LEGACY_PROTOCOL_ERA:
+        if requests_modern_era:
+            return _connection_protocol_mismatch(
+                request_id,
+                connection=connection,
+                requested=_requested_modern_version(params),
+            )
+        modern = False
+    else:
+        modern = _is_modern_request(method, params, connection)
     if modern:
         context, error = _modern_request_context(
             params,
@@ -946,6 +1121,8 @@ def handle_message(
         if error is not None:
             return error
         assert context is not None
+        connection.protocol_era = _MODERN_PROTOCOL_ERA
+        connection.protocol_version = context.protocol_version
         return _handle_modern_request(
             request_id=request_id,
             method=method,

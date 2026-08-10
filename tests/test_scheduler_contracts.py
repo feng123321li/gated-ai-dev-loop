@@ -3611,7 +3611,7 @@ class McpSurfaceTests(unittest.TestCase):
                 },
             )
 
-    def test_branch_bound_to_another_delivery_is_not_adopted(
+    def test_recreated_worktree_resumes_delivery_by_stable_branch_identity(
         self,
     ) -> None:
         with TemporaryDirectory() as root:
@@ -3682,20 +3682,11 @@ class McpSurfaceTests(unittest.TestCase):
                 trusted_host_adapter="codex",
             )
 
-            self.assertNotIn("suggestedGitBinding", discovered)
-            self.assertEqual(
-                discovered["branchAdoption"],
-                {
-                    "state": "BRANCH_BOUND_TO_OTHER_DELIVERY",
-                    "nextAction": "CREATE_DELIVERY_FEATURE_BRANCH",
-                    "workingTreeClean": True,
-                    "conflictingDeliveries": [
-                        {"rootId": "d-existing", "status": "ACTIVE"}
-                    ],
-                },
-            )
+            self.assertEqual(discovered["rootId"], "d-existing")
+            self.assertEqual(discovered["status"], "ACTIVE")
+            self.assertNotIn("branchAdoption", discovered)
 
-    def test_branch_used_by_historical_delivery_is_not_adopted(
+    def test_recreated_worktree_finds_historical_delivery_identity(
         self,
     ) -> None:
         with TemporaryDirectory() as root:
@@ -3755,18 +3746,9 @@ class McpSurfaceTests(unittest.TestCase):
                 trusted_host_adapter="codex",
             )
 
-            self.assertNotIn("suggestedGitBinding", discovered)
-            self.assertEqual(
-                discovered["branchAdoption"],
-                {
-                    "state": "BRANCH_USED_BY_HISTORICAL_DELIVERY",
-                    "nextAction": "CREATE_DELIVERY_FEATURE_BRANCH",
-                    "workingTreeClean": True,
-                    "conflictingDeliveries": [
-                        {"rootId": "d-historical", "status": "CANCELLED"}
-                    ],
-                },
-            )
+            self.assertEqual(discovered["rootId"], "d-historical")
+            self.assertEqual(discovered["status"], "CANCELLED")
+            self.assertNotIn("branchAdoption", discovered)
 
     def test_git_delivery_binding_is_frozen_and_checked_at_runtime(
         self,

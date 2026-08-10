@@ -45,7 +45,7 @@ src/hdg/
 | `host_workspace_attestations` | 可信宿主 Hook 为精确 context/tool/tool-use/workspace 签发的一次性工作区证明；Codex AUTO preflight 和 Claude 工作区路由消费后即失效 |
 | `receiver_attestations` | Adapter 为真实原生 child 签发的一次性 receiver 证明；AUTO 行绑定非空 dispatch reservation，MANUAL 行的 reservation 为 `NULL`，消费时共同绑定 operation |
 | `host_receiver_identities` | Codex AUTO `SubagentStart` 在原子 claim 中保存的宿主 receiver 身份摘要；不向 child 暴露 bearer |
-| `delivery_workspaces` | Delivery 与对话工作区 `workspaceKey` 的绑定；linked worktree 共享主控制根但保持身份隔离 |
+| `delivery_workspaces` | Delivery 与对话工作区 `workspaceKey` 的绑定；Git key 由历史 lineage + 分支生成，不含绝对路径，linked worktree 共享主控制根但保持分支隔离 |
 | `runs` | 整体运行状态、冻结执行模式与宿主容量熔断 |
 | `node_runs` | 每个节点的 attempt、claim、lease 和 outcome |
 | `task_requirement_states` | 每个 TASK 当前 requirement revision、冻结/解冻状态与更新时间 |

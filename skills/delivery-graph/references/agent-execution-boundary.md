@@ -8,15 +8,14 @@ Delivery Graph 是 SOP 与 Graph 控制面。它决定哪个 TASK/Review Loop �
 
 所有 Graph claim 都只交给当前可信宿主 Adapter 认证的 receiver。Codex AUTOMATIC TASK 可由当前 Delivery 会话接收；Review 必须独立：
 
-| 模式 | 授权来源 | receiver attestation |
+| 执行模式 | TASK receiver | Review receiver |
 |---|---|---|
-| `INLINE_AUTO` | Codex `SessionStart` 对当前 Delivery task/session/worktree 的能力 | 无 reservation；只允许 `TASK_LOOP`，当前会话直接实现 |
-| `AUTO` | `plan_dispatch_batch` 为当前 node/attempt 签发的短租约 assignment | 一次性证明绑定真实 child/parent/workspace，`reservation_id` 必须为非空且精确匹配 |
-| `MANUAL` | 已启动的 manual Graph，或指定自动 TASK 的显式人工接管事件 | 一次性证明绑定相同的 child/parent/workspace，`reservation_id` 必须为 `NULL` |
+| `AUTOMATIC` | Codex 当前 Delivery 顶层会话由 `SessionStart` 或调用时 `PreToolUse` 认证后直接实现；无 reservation，只允许 `TASK_LOOP` | `plan_dispatch_batch` 为当前 node/attempt 签发短租约 assignment；一次性证明绑定真实 child/parent/workspace，`reservation_id` 非空且精确匹配 |
+| `MANUAL` | 已启动的 manual Graph 或指定自动 TASK 的显式人工接管；独立 receiver 的一次性证明绑定真实 child/parent/workspace，`reservation_id` 为 `NULL` | TASK 完成后仍使用与 `AUTOMATIC` 相同的独立自动 Review receiver |
 
-三者共同进入同一 claim、项目 scope、operation、heartbeat、progress、pause、result 和 lease 校验。`INLINE_AUTO` 不是无认证直领：缺少当前 SessionStart capability 时 fail closed；它只能 claim TASK，Review 仍走 `AUTO` child。
+对用户公开的执行模式始终只有 `AUTOMATIC` 和 `MANUAL`。`AUTOMATIC` 的当前会话 TASK 与独立 Review 是同一模式下的两条接收路径，不是第三种执行模式；它们共同进入相同的 claim、项目 scope、operation、heartbeat、progress、pause、result 和 lease 校验。当前会话 TASK 也不是无认证直领：缺少 lifecycle capability 且调用时 Hook 未认证时 fail closed，并且不能 claim Review。
 
-AUTO assignment 还具有以下派遣约束：
+AUTOMATIC Review assignment 还具有以下派遣约束：
 
 - assignment 绑定 `hostAdapterId`、`receiverAgentId`、reservation、节点、attempt、
   receiving context 和 `modelPolicy=CURRENT_HOST_INHERIT`。
@@ -32,7 +31,7 @@ Codex、Claude Code 或其他宿主只有在 Plugin 存在对应可信外层 Ada
 证明同一 receiver 身份时，才能领取 Loop。PATH 中存在 CLI、普通 helper、
 外部进程或本机 Profile 都不构成这种权限。
 
-Codex `SessionStart` 只为顶层 Delivery task 发放 `DELIVERY_COORDINATOR` session capability；数据库只保存哈希，能力绑定精确 session/worktree、自动轮换并有时效。它授权 `claim_current_task`、Review planning 和当前 receiver mutation，使 code-mode 不依赖当前宿主遗漏的 nested PreToolUse。Subagent 的普通 `SessionStart` 不发 coordinator capability；AUTO Review 的 `SubagentStart` 原子消费 reservation，并只为独立 child 发放 `LOOP_RECEIVER` capability，该能力只能变更已领取的 Review，不能领取 TASK 或规划下一批。安装或升级后必须审查并信任精确 Hook 定义；“始终信任”对当前哈希持久生效，Hook 内容变化后重新审查。执行权限和模型配置不替代 Hook trust。
+Codex `SessionStart` 优先只为顶层 Delivery task 发放 `DELIVERY_COORDINATOR` session capability；Desktop 未触发它时，受信任的 `claim_current_task` `PreToolUse` 可核对顶层 transcript、session 与 workspace 后按需发放等价能力。数据库只保存哈希，能力自动轮换并有时效。Subagent 不能取得 coordinator capability；AUTO Review 的 `SubagentStart` 原子消费 reservation，并只为独立 child 发放 `LOOP_RECEIVER` capability。安装或升级后必须审查并信任精确 Hook 定义；“始终信任”对当前定义哈希持久生效，定义变化后重新审查。执行权限和模型配置不替代 Hook trust。
 
 ## Loop 内部 Worker
 

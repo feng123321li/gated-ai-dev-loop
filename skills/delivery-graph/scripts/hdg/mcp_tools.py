@@ -1145,8 +1145,9 @@ TOOLS = (
         (
             "Claim one READY AUTOMATIC TASK directly in the current "
             "Hook-attested Codex Delivery session. This path never claims "
-            "a Review Loop and never works without the SessionStart "
-            "capability bound to this exact session and worktree."
+            "a Review Loop and requires either the SessionStart capability "
+            "or trusted current-task PreToolUse attestation for this exact "
+            "session and workspace."
         ),
         _object(
             {

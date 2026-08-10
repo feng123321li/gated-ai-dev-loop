@@ -4,6 +4,8 @@ from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import shutil
+import sqlite3
 import subprocess
 from tempfile import TemporaryDirectory
 import threading
@@ -14,6 +16,7 @@ from hdg.errors import GatedLoopError
 from hdg.git_binding import git_repository_identity
 from hdg.mcp_tools import call_tool
 from hdg.repository import SchedulerRepository
+from hdg.workspace_identity import legacy_path_workspace_key
 
 from .test_scheduler_contracts import (
     bind_delivery_to_git,
@@ -119,6 +122,225 @@ def _preview_and_select_at(
 
 
 class WorktreeSetupCoordinationTests(unittest.TestCase):
+    def test_legacy_path_binding_remains_discoverable_in_place(self) -> None:
+        with TemporaryDirectory() as root:
+            workspace = Path(root, "workspace")
+            workspace.mkdir()
+            hierarchy = isolated_task_hierarchy(
+                "d-legacy-workspace",
+                "t-legacy-workspace",
+            )
+            prepared = planning.prepare_hierarchy(
+                root=str(workspace),
+                hierarchy=hierarchy,
+                workspace_root=str(workspace),
+            )
+            planning.freeze_hierarchy(
+                root=str(workspace),
+                root_id=prepared["rootId"],
+                expected_delivery_revision=1,
+                expected_hierarchy_fingerprint=prepared[
+                    "hierarchyFingerprint"
+                ],
+                authorized_project_ids=[],
+                confirmed=True,
+                confirmed_by="human",
+            )
+            database = workspace / ".layered-delivery" / "scheduler.db"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    "UPDATE delivery_workspaces SET workspace_key = ? "
+                    "WHERE root_id = ?",
+                    (
+                        legacy_path_workspace_key(workspace),
+                        prepared["rootId"],
+                    ),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            status = call_tool(
+                "workspace_status",
+                {"root_id": prepared["rootId"]},
+                root=str(workspace),
+                workspace_root=str(workspace),
+            )
+
+            self.assertEqual(status["status"], "ACTIVE")
+            self.assertEqual(
+                status["workspaceIsolation"]["identityVersion"],
+                "PATH_V1",
+            )
+
+    def test_git_workspace_identity_survives_linked_worktree_move(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            repository = Path(root, "repository")
+            _repository(repository)
+            original = Path(root, "delivery-original")
+            moved = Path(root, "delivery-moved")
+            _git(
+                repository,
+                "worktree",
+                "add",
+                "-b",
+                "feature/stable-delivery",
+                str(original),
+                "main",
+            )
+            original_key = SchedulerRepository.workspace_key(original)
+
+            _git(
+                repository,
+                "worktree",
+                "move",
+                str(original),
+                str(moved),
+            )
+
+            self.assertEqual(
+                SchedulerRepository.workspace_key(moved),
+                original_key,
+            )
+
+    def test_git_workspace_identity_does_not_hash_repository_path(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            original = Path(root, "repository-original")
+            moved = Path(root, "repository-moved")
+            _repository(original)
+            original_key = SchedulerRepository.workspace_key(original)
+
+            shutil.move(str(original), str(moved))
+
+            self.assertEqual(
+                SchedulerRepository.workspace_key(moved),
+                original_key,
+            )
+
+    def test_active_delivery_survives_worktree_move_after_v1_upgrade(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            repository = Path(root, "repository")
+            base_commit = _repository(repository)
+            original = Path(root, "delivery-original")
+            moved = Path(root, "delivery-moved")
+            branch_ref = "feature/d-stable-move"
+            _git(
+                repository,
+                "worktree",
+                "add",
+                "-b",
+                branch_ref,
+                str(original),
+                "main",
+            )
+            hierarchy = bind_delivery_to_git(
+                isolated_task_hierarchy(
+                    "d-stable-move",
+                    "t-stable-move",
+                ),
+                branch_ref=branch_ref,
+                base_commit=base_commit,
+            )
+            prepared = planning.prepare_hierarchy(
+                root=str(repository),
+                hierarchy=hierarchy,
+                workspace_root=str(original),
+            )
+            planning.freeze_hierarchy(
+                root=str(repository),
+                root_id=prepared["rootId"],
+                expected_delivery_revision=1,
+                expected_hierarchy_fingerprint=prepared[
+                    "hierarchyFingerprint"
+                ],
+                authorized_project_ids=[],
+                confirmed=True,
+                confirmed_by="human",
+            )
+            database = repository / ".layered-delivery" / "scheduler.db"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    "UPDATE delivery_workspaces SET workspace_key = ? "
+                    "WHERE root_id = ?",
+                    (
+                        legacy_path_workspace_key(original),
+                        prepared["rootId"],
+                    ),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            upgraded = call_tool(
+                "workspace_status",
+                {"root_id": prepared["rootId"]},
+                root=str(repository),
+                workspace_root=str(original),
+                trusted_host_adapter="codex",
+            )
+
+            _git(
+                repository,
+                "worktree",
+                "move",
+                str(original),
+                str(moved),
+            )
+            resumed = call_tool(
+                "workspace_status",
+                {"root_id": prepared["rootId"]},
+                root=str(repository),
+                workspace_root=str(moved),
+                trusted_host_adapter="codex",
+            )
+
+            self.assertEqual(
+                upgraded["workspaceIsolation"]["identityVersion"],
+                "GIT_BRANCH_V1",
+            )
+            self.assertEqual(resumed["status"], "ACTIVE")
+            self.assertEqual(
+                resumed["workspaceIsolation"]["workspaceKey"],
+                upgraded["workspaceIsolation"]["workspaceKey"],
+            )
+
+    def test_git_workspace_identity_keeps_branches_isolated(self) -> None:
+        with TemporaryDirectory() as root:
+            repository = Path(root, "repository")
+            _repository(repository)
+            first = Path(root, "delivery-first")
+            second = Path(root, "delivery-second")
+            _git(
+                repository,
+                "worktree",
+                "add",
+                "-b",
+                "feature/first-delivery",
+                str(first),
+                "main",
+            )
+            _git(
+                repository,
+                "worktree",
+                "add",
+                "-b",
+                "feature/second-delivery",
+                str(second),
+                "main",
+            )
+
+            self.assertNotEqual(
+                SchedulerRepository.workspace_key(first),
+                SchedulerRepository.workspace_key(second),
+            )
+
     def test_worktree_progress_is_reported_in_workspace_monitor(self) -> None:
         with TemporaryDirectory() as root:
             repository = Path(root, "repository")

@@ -7,16 +7,17 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
-## 0.39.3 发布候选矩阵
+## 0.39.4 发布候选矩阵
 
-0.39.3 提供 34 个 MCP 工具。Codex AUTOMATIC 的 Delivery task 在 `SessionStart` Hook 认证后，使用 `claim_current_task` 以 `INLINE_AUTO/HOST_SESSION` 在当前会话直接实现 READY TASK；Review 继续由非空 reservation、`SubagentStart` 和独立 child 执行。Session capability 绑定精确 session/worktree、有时效、可轮换且数据库只存哈希，因此 Codex 0.147.0 code-mode 未触发 nested PreToolUse 时也无需修改模型 tool mode 或 `model_catalog_json`。
+0.39.4 提供 34 个 MCP 工具，用户可选执行模式仍只有 `AUTOMATIC` 和 `MANUAL`。Codex AUTOMATIC 的 Delivery task 优先由 `SessionStart` Hook 认证；Desktop 未触发生命周期 Hook 时，`claim_current_task` 的 PreToolUse Hook 可在工具调用时为当前顶层任务补发同等约束的 session capability，再由当前会话直接实现 READY TASK。Review 继续由非空 reservation、`SubagentStart` 和独立 child 执行。Session capability 绑定精确 session/workspace、Graph 与项目 scope，有时效、可轮换且数据库只存哈希。
 
-- `/hooks` 的“始终信任”只持久信任当前精确 Hook 哈希；相同版本后续不弹，Hook 更新后重新审查。
-- 缺少 SessionStart capability、跨 session/worktree、过期或复制给其他任务时，`claim_current_task`、planning 和 mutation 都必须 fail closed。
+- `/hooks` 的“始终信任”只持久信任当前精确 Hook 哈希；相同内容后续不弹，Hook 更新后重新审查。Desktop 不保证主动弹出信任窗口，首次信任仍通过 Codex CLI 的 `/hooks` 完成。
+- 缺少可信 lifecycle/current-task capability、跨 session/workspace、过期或复制给其他任务时，`claim_current_task`、planning 和 mutation 都必须 fail closed。
 - `claim_current_task` 必须拒绝 Review；TASK 成功后的 TASK/GROUP/Delivery Review receiver context 必须不同。
 - `SubagentStart` Review child 获得独立 session capability，code-mode heartbeat/progress/pause/result 不依赖 nested PreToolUse。
+- Git Delivery workspace identity 使用 Git 历史 lineage 与冻结分支，不使用仓库或 worktree 绝对路径；移动仓库或重建同分支 worktree可恢复，其他分支继续返回 Git branch mismatch，旧路径哈希绑定在原路径首次访问时升级。
 
-本地核心契约已完成 356 项 Python 测试（1 项按环境条件跳过）、compileall、UTF-8 Skill 校验、34 工具与生成镜像发布校验、Claude Plugin manifest 校验和差异检查。系统通用 Plugin validator 仍按旧 schema 拒绝 `hooks` 字段，不能替代当前 Codex manifest/Hook 契约校验。
+本地核心契约已完成 363 项 Python 测试（1 项按环境条件跳过）、compileall、UTF-8 Skill 校验、34 工具与生成镜像发布校验、Claude Plugin manifest 校验和差异检查。系统通用 Plugin validator 仍按旧 schema 拒绝 `hooks` 字段，不能替代当前 Codex manifest/Hook 契约校验。
 
 ## 0.39.2 发布候选矩阵
 

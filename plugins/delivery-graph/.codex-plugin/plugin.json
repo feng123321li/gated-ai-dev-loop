@@ -1,6 +1,6 @@
 {
   "name": "delivery-graph",
-  "version": "0.39.3",
+  "version": "0.39.4",
   "description": "确认 Git 基线，冻结并调度分层 GROUP/TASK Graph，支持自动派遣、冻结开发包、分层审查与恢复",
   "author": {
     "name": "delivery-graph contributors",
@@ -62,7 +62,7 @@
   "interface": {
     "displayName": "分层交付 Graph 控制面",
     "shortDescription": "冻结基线、调度 Graph、分层审查与恢复",
-    "longDescription": "每个 Delivery 使用稳定身份和不可变 Revision 管理验收前的需求调整；Codex 自动模式由 SessionStart Hook 认证当前 Delivery 会话并直接实现 TASK，所有 Review 仍由独立 receiver 完成，不需要修改模型 tool mode。手动模式先冻结自包含 handoff，接收 CLI 开发前启动同一 Graph；TASK、GROUP、Delivery Review 与最终确认均沿用完整治理流程。内部 Worker 的模型信息只读展示，同时以中文表格和 MCP Apps 运行看板汇总后台进度、测试、心跳、剩余租约和失联预警。",
+    "longDescription": "每个 Delivery 使用稳定身份和不可变 Revision 管理验收前的需求调整；Codex 自动模式由 SessionStart 或当前任务调用时 Hook 认证 Delivery 顶层会话并直接实现 TASK，所有 Review 仍由独立 receiver 完成，不需要修改模型 tool mode。Git workspace 身份绑定仓库与冻结分支，不受 linked worktree 路径移动影响。手动模式先冻结自包含 handoff，接收 CLI 开发前启动同一 Graph；TASK、GROUP、Delivery Review 与最终确认均沿用完整治理流程。",
     "developerName": "delivery-graph contributors",
     "category": "Productivity",
     "capabilities": [

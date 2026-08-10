@@ -246,7 +246,10 @@ class LayeredDeliveryController:
                     )
                     if (
                         error.code
-                        != "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH"
+                        not in {
+                            "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH",
+                            "SCHEDULER_GIT_BRANCH_MISMATCH",
+                        }
                         or not same_control_root
                     ):
                         raise
@@ -376,8 +379,8 @@ class LayeredDeliveryController:
             ):
                 fail(
                     "SCHEDULER_HOST_HOOK_NOT_READY",
-                    "The trusted Codex SessionStart Hook did not attest "
-                    "current-session TASK execution",
+                    "No trusted Codex lifecycle or current-task Hook "
+                    "attested current-session TASK execution",
                     hostAdapterId=context.host_adapter_id,
                     requiredAction=(
                         "REVIEW_AND_TRUST_DELIVERY_GRAPH_PLUGIN_HOOKS"

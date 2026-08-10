@@ -18,7 +18,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "^mcp__.*__plan_dispatch_batch$",
+        "matcher": "^mcp__.*__(plan_dispatch_batch|claim_current_task)$",
         "hooks": [
           {
             "type": "command",

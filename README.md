@@ -4,7 +4,7 @@
 
 `delivery-graph` 把已经确认的软件需求冻结为可执行、可审查、可恢复的 Delivery Graph，再协调宿主原生 Agent 完成实现、分层 Review 和最终验收。
 
-当前版本：**0.39.3** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
+当前版本：**0.39.4** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
 
 ## 它做什么
 
@@ -92,9 +92,9 @@ Delivery
 
 新会话从 `workspace_status` 恢复当前 Delivery，再读取 Graph frontier。worktree setup 与活动 receiver 都有独立 heartbeat 和 lease；前者通过 `worktreeSetup.progressMonitor` 在主仓显示全部项目，后者通过 Graph `progressMonitor` 显示 TASK 与 Review。失联、租约过期或可重试失败只在各自安全边界恢复。需求发生变化时创建同一 Delivery 的下一 Revision，不覆写已经冻结的版本。
 
-所有 Loop 都必须经过可信宿主 Hook。Codex AUTOMATIC 的 Delivery 任务在 `SessionStart` 时获得绑定精确 session/worktree 的能力，当前会话通过 `claim_current_task` 直接实现 READY TASK；所有 Review 仍由 reservation + `SubagentStart` 认证的独立 receiver 完成。MANUAL TASK 继续使用 reservation 为 `NULL` 的 receiver attestation。Controller 对三条路径统一绑定项目 scope、operation、heartbeat、progress、pause 和 result。
+所有 Loop 都必须经过可信宿主 Hook。Codex AUTOMATIC 的 Delivery 顶层任务优先在 `SessionStart` 时获得绑定 session/workspace 的能力；Desktop 未运行该 Hook 时，`claim_current_task` 的受信任 `PreToolUse` 可按需完成同等认证。当前会话直接实现 READY TASK；所有 Review 仍由 reservation + `SubagentStart` 认证的独立 receiver 完成。
 
-Codex manifest 显式加载 `hooks/hooks.json`。在 `/hooks` 选择始终信任后，信任对当前精确 Hook 哈希持久生效，日常任务不再弹窗；Plugin 升级改变 Hook 内容后重新审查。`SessionStart` capability 让 code-mode MCP 不再依赖当前宿主遗漏的 nested PreToolUse，也不需要修改 `model_catalog_json` 或模型 tool mode。Hook 缺失、跨 session/worktree、过期或被复制时均 fail closed。
+Codex manifest 显式加载 `hooks/hooks.json`。在 Codex CLI 交互界面的 `/hooks` 选择始终信任后，信任对当前精确 Hook 定义哈希持久生效；Desktop 不保证弹出信任窗口。`SessionStart` 与调用时认证互为受控入口，不需要修改 `model_catalog_json` 或模型 tool mode。Hook 缺失、跨 session/workspace、过期或被复制时均 fail closed。
 
 ## 安装
 
@@ -107,7 +107,7 @@ codex plugin marketplace add git@git.i-sanger.com:ai/skill/marketplace.git --ref
 codex plugin add delivery-graph@majorbio-skills
 ```
 
-安装后打开 `/hooks`，审查 `delivery-graph` 注册的 `SessionStart`、`SubagentStart` 与 `PreToolUse` Hook，并选择始终信任当前定义；随后新建或恢复 Delivery 任务。相同 Hook 哈希后续不再提示，升级变化后重新确认。
+安装后在 Codex CLI 交互界面打开 `/hooks`，审查 `delivery-graph` 注册的 `SessionStart`、`SubagentStart` 与 `PreToolUse` Hook，并选择始终信任当前定义；Desktop 输入框里的 `/hooks` 不是 Hook 浏览器。相同定义哈希后续不再提示，升级变化后重新确认。
 
 Claude Code：
 

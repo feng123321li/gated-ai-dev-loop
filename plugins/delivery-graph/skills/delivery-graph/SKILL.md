@@ -19,13 +19,13 @@ allowed-tools:
 - 只调用本 Plugin 注册的 MCP 工具。MCP 不可用时报告 `PLUGIN_MCP_UNAVAILABLE`，停止治理写入。
 - 只使用 schema v3；准备前调用 `hierarchy_contract` 获取精确契约，不从源码、示例或旧会话猜参数。
 - 把 SQLite 和 Graph 事件链视为机器权威。不得用 Shell、Python 或数据库连接读写 `scheduler.db`，不得人工修补 Graph 或 Markdown 投影。
-- primary 总协调上下文只规划、路由和监控。Codex AUTOMATIC 的 Delivery worktree 任务经 `SessionStart` Hook 认证后就是 TASK receiver，可在当前会话实现 TASK；任何 Review 都必须使用不同的独立 receiver，primary 和 TASK 会话都不得内联 Review。
+- primary 总协调上下文只规划、路由和监控。Codex AUTOMATIC 的 Delivery worktree 顶层任务经 `SessionStart` 或 `claim_current_task` 调用时的可信 `PreToolUse` Hook 认证后就是 TASK receiver，可在当前会话实现 TASK；任何 Review 都必须使用不同的独立 receiver，primary 和 TASK 会话都不得内联 Review。
 - 不把 Graph 范围当作 Git 或外部操作授权。创建/切换分支、commit、merge、push、发布、迁移和新增权限仍分别取得授权。
 - 不让 Controller 执行 Git 写操作。只读确认 binding；让宿主创建或复用 linked worktree，让 receiver 使用控制器验证后的实际项目路径。
 - 一个工作区最多绑定一个未结束 Delivery。新业务目标默认创建新 Delivery；只有同一需求延续或 `REPLAN_REQUIRED` 才创建同一 Delivery 的 Revision。
 - 为同一需求保持稳定 `delivery.id`、`requirementKey` 和 `.layered-delivery/<delivery-id>/`；不要创建共享 handoff 目录或第二套控制面。
 - 在手动接收方检查、分析、修改或测试代码前调用 `start_manual_handoff`。`HANDOFF_READY` 只是冻结的 handoff，不是已启动的 Graph Run。
-- 所有 Loop 都必须由受支持宿主 Hook 认证。Codex AUTOMATIC TASK 使用 `SessionStart` 签发的当前会话能力和无 reservation 的 `INLINE_AUTO` claim；AUTO Review 使用独立原生 child、非空 reservation 与 `SubagentStart` attestation；MANUAL TASK 继续使用独立 receiver 和 reservation 为 `NULL` 的 attestation。primary、普通 helper 和内部 Worker 均不得 claim。
+- 所有 Loop 都必须由受支持宿主 Hook 认证。执行模式只有 `AUTOMATIC` 和 `MANUAL`。Codex AUTOMATIC TASK 优先使用 `SessionStart` 会话能力；Desktop 启动时未运行它时，由受信任的 `claim_current_task` `PreToolUse` 为同一顶层任务按需签发等价能力，再执行无 reservation 的当前会话 claim。AUTOMATIC Review 使用独立原生 child、非空 reservation 与 `SubagentStart` attestation；MANUAL TASK 继续使用独立 receiver 和 reservation 为 `NULL` 的 attestation。primary、普通 helper 和内部 Worker 均不得 claim。
 - 只有真实用户确认后才记录最终完成。
 
 ## 入口路由
@@ -95,7 +95,7 @@ allowed-tools:
 
 - `REFREEZE_TASK_REQUIREMENT`：停止派遣该 TASK，只修改用户授权的需求字段，重新冻结后刷新 frontier。
 - `CLAIM_MANUAL_TASK`：为手动 Graph，或已由 `handoff_ready_automatic_task` 显式恢复的单个自动 TASK，创建独立人工 receiver；只有 TASK 可 MANUAL claim，后续 Review 仍走可信宿主自动派遣。MANUAL 不带 AUTO reservation，但绝不能省略 Adapter attestation、真实 child/parent/workspace 校验或后续 operation 门禁。
-- `DISPATCH_LOOP`：Codex 遇到 READY `TASK_LOOP` 时，必须使用 `SessionStart` 注入的当前会话能力调用 `claim_current_task`，claim 后立即 heartbeat，再在本会话实现；该工具拒绝所有 Review。Review（以及不支持当前会话 TASK 的 Adapter）才调用 `plan_dispatch_batch` 并立即创建独立 receiver，不要在 reservation 后继续分析。会话能力同样可授权 code-mode 内嵌 planning 和 mutation，不要求修改模型 tool mode。`SCHEDULER_HOST_HOOK_NOT_READY` 表示当前精确 Hook 定义尚未被信任或该任务启动时没有加载 Hook，本次不会 claim 或创建 reservation。
+- `DISPATCH_LOOP`：Codex 遇到 READY `TASK_LOOP` 时调用 `claim_current_task`；优先使用 `SessionStart` 注入的当前会话能力，Desktop 缺失时由该调用的可信 `PreToolUse` 按需认证同一顶层任务。claim 后立即 heartbeat，再在本会话实现；该工具拒绝所有 Review。Review（以及不支持当前会话 TASK 的 Adapter）才调用 `plan_dispatch_batch` 并立即创建独立 receiver，不要在 reservation 后继续分析。`SCHEDULER_HOST_HOOK_NOT_READY` 表示当前精确 Hook 定义尚未被信任，或当前调用既没有生命周期能力也没有触发调用时 Hook；本次不会 claim 或创建 reservation。
 - AUTO receiver 启动失败时不得由总协调器直接 claim。Codex `SubagentStart` 已定位 reservation、但身份/workspace/scope 验证失败时，安全边界满足即立即释放 reservation，并要求 child 不检查或修改仓库；刷新 frontier 后修复前置条件。仍需人工接管时，确认 TASK 从未领取、无有效 reservation、Delivery worktree 干净且无代码改动，再取得用户明确授权调用 `handoff_ready_automatic_task`；它只把当前 READY TASK 改为人工接收，保留 AUTOMATIC Graph、Revision、基线和双 fingerprint，Review 不降级。
 - claim 成功后，让当前 TASK 会话或独立 Review receiver 读取一次 `loop_context`，确认至少一个已验证的 `projectScopes`，并在任何代码工作前提交首次独立 `heartbeat_loop`。Codex 按 Hook 上下文携带私有 session 字段并省略 `operation_id`；不得向 Worker、日志、消息或用户输出这些字段。
 - 只让可信外层 receiver 调用 claim、heartbeat、progress、pause、resume 和 `record_loop_result`。内部 Worker 不得持有控制面凭据。
@@ -107,7 +107,7 @@ allowed-tools:
 ## 恢复
 
 - 对 `PAUSED` 或 `RESUME_LOOP_IN_INDEPENDENT_CONTEXT`，路由到新的独立接收上下文并调用 `resume_loop`，不要重新 prepare/freeze；对租约过期、receiver 失联或基础设施失败，刷新 frontier 并交给 `advance_graph`，不得复用旧 operation。
-- Codex 返回 `SCHEDULER_HOST_HOOK_NOT_READY` 时，在 `/hooks` 审查并选择始终信任当前 Plugin Hook 定义，然后新建或恢复 Delivery 任务以触发 `SessionStart`；信任对精确 Hook 哈希持久有效，只有 Hook 内容变化时才需重审。不要为此修改模型目录或 tool mode。child 返回 `DELIVERY_GRAPH_STARTUP_ERROR` 时立即停止仓库与 Loop 操作，只把稳定错误码报告协调器。
+- Codex 返回 `SCHEDULER_HOST_HOOK_NOT_READY` 时，用 **Codex CLI 交互界面**的 `/hooks` 审查并选择始终信任当前 Plugin Hook 定义；Desktop 任务输入框不会保证弹出信任对话框，也不能代替 CLI Hook 浏览器。信任后可直接重试 `claim_current_task` 触发调用时认证，不强制重建 worktree 或新建任务；信任对精确 Hook 哈希持久有效，只有 Hook 定义变化时才需重审。不要为此修改模型目录或 tool mode。child 返回 `DELIVERY_GRAPH_STARTUP_ERROR` 时立即停止仓库与 Loop 操作，只把稳定错误码报告协调器。
 - 仅根据宿主提供的结构化容量状态与 `resetAt` 等待；不要从文本猜测额度或静默切换模型/Adapter。
 - 对物化状态损坏，调用 `rebuild_graph_run` 从已校验事件链重建且不要修改事件；对需求范围、依赖、资源或 Review 契约变化，记录 `REPLAN_REQUIRED`，等待用户决定是否准备同一 Delivery 的下一 Revision。
 

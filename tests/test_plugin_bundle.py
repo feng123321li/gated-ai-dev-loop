@@ -1279,7 +1279,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertEqual(len(preflight_hooks), 1)
         self.assertEqual(
             preflight_hooks[0]["matcher"],
-            "^mcp__.*__plan_dispatch_batch$",
+            "^mcp__.*__(plan_dispatch_batch|claim_current_task)$",
         )
         self.assertEqual(len(manual_dispatch_hooks), 1)
         self.assertEqual(
@@ -1424,6 +1424,254 @@ class PluginBundleTests(unittest.TestCase):
         self.assertEqual(claimed["dispatchMode"], "INLINE_AUTO")
         self.assertEqual(claimed["dispatchTransport"], "HOST_SESSION")
         self.assertEqual(heartbeat["status"], "CLAIMED")
+
+    def test_codex_desktop_claim_is_attested_at_tool_time(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="human",
+            )
+            fake_lifecycle = types.ModuleType(
+                "attest_codex_subagent_receiver"
+            )
+            fake_lifecycle._runtime_path = lambda: ROOT / "src"
+            fake_lifecycle._workspace_start = lambda _cwd: root
+            fake_lifecycle._session_meta_from_transcript = (
+                lambda _path, session_id: {
+                    "id": session_id,
+                    "source": "cli",
+                }
+            )
+            fake_lifecycle._subagent_claim_metadata = (
+                lambda *_args, **_kwargs: None
+            )
+            claim_hook = runpy.run_path(
+                str(
+                    PLUGIN
+                    / "hooks"
+                    / "attest_codex_dispatch_preflight.py"
+                )
+            )
+            claim_stdout = io.StringIO()
+            claim_event = {
+                "hook_event_name": "PreToolUse",
+                "tool_name": (
+                    "mcp__plugin_delivery-graph_delivery-graph"
+                    "__claim_current_task"
+                ),
+                "tool_use_id": "codex-desktop-claim",
+                "session_id": "codex-desktop-session",
+                "transcript_path": str(Path(root, "session.jsonl")),
+                "cwd": root,
+                "tool_input": {
+                    "root_id": prepared["rootId"],
+                    "node_id": loop_node_id("t-service"),
+                    "expected_graph_fingerprint": prepared[
+                        "graphFingerprint"
+                    ],
+                },
+            }
+            with (
+                mock.patch.dict(
+                    sys.modules,
+                    {
+                        "attest_codex_subagent_receiver": (
+                            fake_lifecycle
+                        )
+                    },
+                ),
+                mock.patch.object(
+                    sys,
+                    "stdin",
+                    io.StringIO(json.dumps(claim_event)),
+                ),
+                redirect_stdout(claim_stdout),
+            ):
+                claim_returncode = claim_hook["main"]()
+            updated_claim = json.loads(claim_stdout.getvalue())[
+                "hookSpecificOutput"
+            ]["updatedInput"]
+            session_token = updated_claim.pop(
+                "_host_session_attestation"
+            )
+            session_context_id = updated_claim.pop(
+                "_host_session_context_id"
+            )
+            SchedulerRepository(
+                root
+            ).validate_host_workspace_attestation(
+                session_token,
+                host_adapter_id="codex",
+                context_id=session_context_id,
+                tool_name="delivery_session",
+            )
+            claimed = call_tool(
+                "claim_current_task",
+                updated_claim,
+                root=root,
+                workspace_root=root,
+                trusted_host_adapter="codex",
+                host_session_attested=True,
+                host_session_context_id=session_context_id,
+                host_session_role="DELIVERY_COORDINATOR",
+            )
+
+            mutation_hook = runpy.run_path(
+                str(
+                    PLUGIN
+                    / "hooks"
+                    / "authorize_loop_operation.py"
+                )
+            )
+            heartbeat_stdout = io.StringIO()
+            heartbeat_event = {
+                "hook_event_name": "PreToolUse",
+                "tool_name": (
+                    "mcp__plugin_delivery-graph_delivery-graph"
+                    "__heartbeat_loop"
+                ),
+                "tool_use_id": "codex-desktop-heartbeat",
+                "session_id": "codex-desktop-session",
+                "transcript_path": str(Path(root, "session.jsonl")),
+                "cwd": root,
+                "tool_input": {
+                    "root_id": prepared["rootId"],
+                    "node_id": loop_node_id("t-service"),
+                },
+            }
+            with (
+                mock.patch.dict(
+                    sys.modules,
+                    {
+                        "attest_codex_subagent_receiver": (
+                            fake_lifecycle
+                        )
+                    },
+                ),
+                mock.patch.object(
+                    sys,
+                    "stdin",
+                    io.StringIO(json.dumps(heartbeat_event)),
+                ),
+                redirect_stdout(heartbeat_stdout),
+            ):
+                heartbeat_returncode = mutation_hook["main"]()
+            updated_heartbeat = json.loads(
+                heartbeat_stdout.getvalue()
+            )["hookSpecificOutput"]["updatedInput"]
+            operation_token = updated_heartbeat.pop(
+                "_host_receiver_operation_attestation"
+            )
+            SchedulerRepository(
+                root
+            ).consume_host_workspace_attestation(
+                operation_token,
+                host_adapter_id="codex",
+                tool_name="receiver_operation:heartbeat_loop",
+            )
+            heartbeat = call_tool(
+                "heartbeat_loop",
+                updated_heartbeat,
+                root=root,
+                workspace_root=root,
+                trusted_host_adapter="codex",
+                host_receiver_operation_attested=True,
+            )
+
+        self.assertEqual(claim_returncode, 0)
+        self.assertEqual(heartbeat_returncode, 0)
+        self.assertEqual(claimed["dispatchMode"], "INLINE_AUTO")
+        self.assertEqual(heartbeat["status"], "CLAIMED")
+
+    def test_codex_desktop_claim_hook_rejects_subagent(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="human",
+            )
+            fake_lifecycle = types.ModuleType(
+                "attest_codex_subagent_receiver"
+            )
+            fake_lifecycle._runtime_path = lambda: ROOT / "src"
+            fake_lifecycle._workspace_start = lambda _cwd: root
+            fake_lifecycle._session_meta_from_transcript = (
+                lambda _path, session_id: {
+                    "id": session_id,
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": "codex-parent"
+                            }
+                        }
+                    },
+                }
+            )
+            hook_module = runpy.run_path(
+                str(
+                    PLUGIN
+                    / "hooks"
+                    / "attest_codex_dispatch_preflight.py"
+                )
+            )
+            stdout = io.StringIO()
+            event = {
+                "hook_event_name": "PreToolUse",
+                "tool_name": (
+                    "mcp__plugin_delivery-graph_delivery-graph"
+                    "__claim_current_task"
+                ),
+                "tool_use_id": "codex-child-claim",
+                "session_id": "codex-child",
+                "transcript_path": str(Path(root, "session.jsonl")),
+                "cwd": root,
+                "tool_input": {
+                    "root_id": prepared["rootId"],
+                    "node_id": loop_node_id("t-service"),
+                    "expected_graph_fingerprint": prepared[
+                        "graphFingerprint"
+                    ],
+                },
+            }
+            with (
+                mock.patch.dict(
+                    sys.modules,
+                    {
+                        "attest_codex_subagent_receiver": (
+                            fake_lifecycle
+                        )
+                    },
+                ),
+                mock.patch.object(
+                    sys,
+                    "stdin",
+                    io.StringIO(json.dumps(event)),
+                ),
+                redirect_stdout(stdout),
+            ):
+                returncode = hook_module["main"]()
+            output = json.loads(stdout.getvalue())["hookSpecificOutput"]
+
+        self.assertEqual(returncode, 0)
+        self.assertEqual(output["permissionDecision"], "deny")
+        self.assertNotIn("updatedInput", output)
 
     def test_codex_session_hook_does_not_attest_subagent_as_coordinator(
         self,

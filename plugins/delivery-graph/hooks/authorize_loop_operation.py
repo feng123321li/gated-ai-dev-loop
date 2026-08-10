@@ -151,6 +151,7 @@ def main() -> int:
 
     session_meta = None
     codex_receiver_context_id = None
+    codex_root_session = False
     if isinstance(transcript_path, str) and transcript_path:
         candidate_context_ids = [session_id]
         hook_agent_id = hook_input.get("agent_id")
@@ -179,36 +180,37 @@ def main() -> int:
     if session_meta is not None:
         if codex_receiver_context_id is None:
             return _deny("Loop mutation lacks a host receiver context")
-        try:
-            metadata = _subagent_claim_metadata(
-                transcript_path,
-                receiver_context_id=codex_receiver_context_id,
-            )
-        except (json.JSONDecodeError, KeyError, OSError, ValueError):
-            metadata = None
         source = session_meta.get("source")
         subagent = source.get("subagent") if isinstance(source, dict) else None
-        thread_spawn = (
-            subagent.get("thread_spawn")
-            if isinstance(subagent, dict)
-            else None
-        )
-        session_parent = session_meta.get("session_id")
-        if (
-            not isinstance(thread_spawn, dict)
-            or not isinstance(session_parent, str)
-            or not session_parent
-            or thread_spawn.get("parent_thread_id") != session_parent
-        ):
-            return _deny("Only a Codex child may mutate this Loop")
         host_adapter_id = "codex"
         receiver_context_id = codex_receiver_context_id
-        parent_context_id = session_parent
-        dispatch_reservation_id = (
-            metadata["dispatchReservationId"]
-            if metadata is not None
-            else None
-        )
+        if isinstance(subagent, dict):
+            try:
+                metadata = _subagent_claim_metadata(
+                    transcript_path,
+                    receiver_context_id=codex_receiver_context_id,
+                )
+            except (json.JSONDecodeError, KeyError, OSError, ValueError):
+                metadata = None
+            thread_spawn = subagent.get("thread_spawn")
+            session_parent = session_meta.get("session_id")
+            if (
+                not isinstance(thread_spawn, dict)
+                or not isinstance(session_parent, str)
+                or not session_parent
+                or thread_spawn.get("parent_thread_id") != session_parent
+            ):
+                return _deny("The Codex child parent identity is invalid")
+            parent_context_id = session_parent
+            dispatch_reservation_id = (
+                metadata["dispatchReservationId"]
+                if metadata is not None
+                else None
+            )
+        else:
+            codex_root_session = True
+            parent_context_id = codex_receiver_context_id
+            dispatch_reservation_id = None
     else:
         claude_agent_id = hook_input.get("agent_id")
         if (
@@ -235,6 +237,7 @@ def main() -> int:
     sys.path.insert(0, str(_runtime_path()))
     from hdg.errors import GatedLoopError
     from hdg.graph_runtime import (
+        authorize_host_session_operation,
         authorize_claude_subagent_operation,
         authorize_codex_subagent_operation,
     )
@@ -256,15 +259,25 @@ def main() -> int:
         if not database_path.is_file():
             return _deny("The workspace has no scheduler state")
         if host_adapter_id == "codex":
-            authorization = authorize_codex_subagent_operation(
-                root=resolution.project_root,
-                root_id=root_id,
-                node_id=node_id,
-                workspace_root=resolution.workspace_root,
-                receiver_context_id=receiver_context_id,
-                parent_context_id=parent_context_id,
-                dispatch_reservation_id=dispatch_reservation_id,
-            )
+            if codex_root_session:
+                authorization = authorize_host_session_operation(
+                    root=resolution.project_root,
+                    root_id=root_id,
+                    node_id=node_id,
+                    workspace_root=resolution.workspace_root,
+                    receiver_context_id=receiver_context_id,
+                    host_adapter_id="codex",
+                )
+            else:
+                authorization = authorize_codex_subagent_operation(
+                    root=resolution.project_root,
+                    root_id=root_id,
+                    node_id=node_id,
+                    workspace_root=resolution.workspace_root,
+                    receiver_context_id=receiver_context_id,
+                    parent_context_id=parent_context_id,
+                    dispatch_reservation_id=dispatch_reservation_id,
+                )
         else:
             authorization = authorize_claude_subagent_operation(
                 root=resolution.project_root,

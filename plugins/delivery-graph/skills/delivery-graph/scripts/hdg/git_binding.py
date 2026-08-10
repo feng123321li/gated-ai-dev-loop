@@ -30,10 +30,13 @@ def _git(
     *arguments: str,
     accepted: tuple[int, ...] = (0,),
 ) -> subprocess.CompletedProcess[str]:
+    environment = os.environ.copy()
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
     try:
         completed = subprocess.run(
             ["git", "-C", str(workspace), *arguments],
             capture_output=True,
+            env=environment,
             text=True,
             timeout=GIT_TIMEOUT_SECONDS,
             check=False,
@@ -901,6 +904,59 @@ def git_repository_identity(workspace_root: str) -> str | None:
     )
 
 
+def git_repository_lineage_identity(workspace_root: str) -> str | None:
+    """Return a path-independent identity for the history containing HEAD."""
+
+    workspace = Path(workspace_root).absolute().resolve(strict=True)
+    if _git_common_directory(workspace) is None:
+        return None
+    roots_result = _git(
+        workspace,
+        "rev-list",
+        "--max-parents=0",
+        "HEAD",
+        accepted=(0, 128),
+    )
+    root_commits = sorted(
+        {
+            commit.strip().lower()
+            for commit in roots_result.stdout.splitlines()
+            if commit.strip()
+        }
+    )
+    if roots_result.returncode != 0 or not root_commits:
+        return None
+    return fingerprint({"rootCommits": root_commits})
+
+
+def git_worktree_identity(
+    workspace_root: str,
+) -> dict[str, str] | None:
+    """Return a path-independent repository lineage + branch identity."""
+
+    workspace = Path(workspace_root).absolute().resolve(strict=True)
+    repository_key = git_repository_lineage_identity(str(workspace))
+    if repository_key is None:
+        return None
+    symbolic = _git(
+        workspace,
+        "symbolic-ref",
+        "--quiet",
+        "HEAD",
+        accepted=(0, 1),
+    )
+    if symbolic.returncode != 0:
+        return None
+    full_ref = symbolic.stdout.strip()
+    prefix = "refs/heads/"
+    if not full_ref.startswith(prefix) or full_ref == prefix:
+        return None
+    return {
+        "repositoryKey": repository_key,
+        "branchRef": full_ref.removeprefix(prefix),
+    }
+
+
 def _branch_worktrees(
     repository_workspace: Path,
     branch_ref: str,
@@ -1126,6 +1182,8 @@ __all__ = (
     "enumerate_local_feature_branches",
     "find_delivery_linked_worktree",
     "git_repository_identity",
+    "git_repository_lineage_identity",
+    "git_worktree_identity",
     "inspect_delivery_git_workspace",
     "inspect_frozen_git_workspace_provenance",
     "resolve_branch_binding",

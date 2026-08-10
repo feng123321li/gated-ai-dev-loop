@@ -1,6 +1,6 @@
 # 团队安装与运维
 
-本文面向团队管理员和普通使用者，覆盖 `delivery-graph` 0.39.3 的安装、升级、恢复、卸载与回滚。展示名为“分层交付 Graph 控制面”。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 和标准库。
+本文面向团队管理员和普通使用者，覆盖 `delivery-graph` 0.39.4 的安装、升级、恢复、卸载与回滚。展示名为“分层交付 Graph 控制面”。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 和标准库。
 
 ## 安装前检查
 
@@ -9,7 +9,7 @@
 - 确认能够访问公司内部 Marketplace 仓库。
 - 在实际项目的新会话中使用 Plugin；不要在维护 `delivery-graph` 源码仓库时创建业务运行包。
 
-当前本地探测到的 0.39.3 真实宿主候选基线是 Codex CLI 0.147.0 和 Claude Code 2.1.226。这两个版本是本轮冒烟目标，不是永久最低版本。在兼容矩阵回填真实运行结果前，只能表述为“候选验证中”。
+当前本地探测到的 0.39.4 真实宿主候选基线是 Codex CLI 0.147.0 和 Claude Code 2.1.226。这两个版本是本轮冒烟目标，不是永久最低版本。在兼容矩阵回填真实运行结果前，只能表述为“候选验证中”。
 
 ## 安装
 
@@ -41,7 +41,7 @@ claude plugin list --json
 python scripts/host_smoke.py probe --json
 ```
 
-结果必须报告 Plugin 版本 0.39.3 和 34 个 MCP 工具，并如实标记本机已安装的宿主。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器。
+结果必须报告 Plugin 版本 0.39.4 和 34 个 MCP 工具，并如实标记本机已安装的宿主。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器。
 
 真实冒烟默认先只展示计划，必须显式增加 `--execute` 才调用模型。两个宿主分别运行，绝不从一个终端跨调另一个 Agent：
 
@@ -53,9 +53,9 @@ python scripts/host_smoke.py run --host codex --scenario light
 python scripts/host_smoke.py run --host codex --scenario light --execute
 ```
 
-Claude 命令从当前 0.39.3 源码发布包的 `--plugin-dir` 加载 Plugin；Codex 命令要求候选 Plugin 已从 Marketplace 安装并在 `/hooks` 中信任。发布前可用 LIGHT 验证当前 session TASK claim/heartbeat/progress/result，再用 STANDARD 覆盖独立 Review。任何输出中的 `claimedAgents` 都只能包含命令指定的当前宿主。Claude coordinator 的完整名称为 `delivery-graph:delivery-coordinator`。
+Claude 命令从当前 0.39.4 源码发布包的 `--plugin-dir` 加载 Plugin；Codex 命令要求候选 Plugin 已从 Marketplace 安装并在 `/hooks` 中信任。发布前可用 LIGHT 验证当前 session TASK claim/heartbeat/progress/result，再用 STANDARD 覆盖独立 Review。任何输出中的 `claimedAgents` 都只能包含命令指定的当前宿主。Claude coordinator 的完整名称为 `delivery-graph:delivery-coordinator`。
 
-0.39.3 真实冒烟还必须覆盖以下交互和失败关闭边界：
+0.39.4 真实冒烟还必须覆盖以下交互和失败关闭边界：
 
 - `preview_hierarchy`、`workspace_status` 和手动接管只返回一个当前 `pendingInteraction`。缺少 `gitBinding` 时先处理 `DEVELOPMENT_BASELINE`，确认后才出现 `EXECUTION_MODE`；同一 Delivery 的后续 Revision 可复用已记忆基线。
 - 干净和脏工作树都进入这条基线流程。脏树确认必须回传原响应的 `dirtyStateFingerprint`；变化路径内容、暂存区或 porcelain 状态任一改变，旧指纹都失效。
@@ -67,7 +67,7 @@ Claude 命令从当前 0.39.3 源码发布包的 `--plugin-dir` 加载 Plugin；
 - `hostDispatch` 必须携带精确 `branchRef/gitBinding`；宿主错分支 clean 时可恢复，dirty 时停止审查。
 - 多项目 AUTOMATIC 必须准备全部 `READ_WRITE` scope 的 worktree，只启动一个 coordinator，并在共享控制根观察全部进度。
 - 未显式声明 `projectScopes` 的单仓 Delivery 必须在 AUTO claim 与 `loop_context` 中得到一个经顶层 `gitBinding` 和实际 workspace 验证的 `primary` scope；无效 binding 必须在 child 读取或修改仓库前 fail closed。
-- Codex AUTOMATIC TASK 必须由顶层 Delivery task 的 `SessionStart` coordinator capability 通过 `claim_current_task` 在当前会话 claim，reservation 为空且 dispatch mode 为 `INLINE_AUTO`；该工具必须拒绝所有 Review。普通 subagent 的 SessionStart 不签发 coordinator role；Review 仍使用非空 reservation 与独立 `SubagentStart` receiver capability，后者只能变更已领取 Review，不能 claim TASK 或规划下一批。MANUAL reservation 为 `NULL`。普通 helper 和内部 Worker 都不能持有 session capability。
+- 执行模式只允许 `AUTOMATIC` 和 `MANUAL`。Codex AUTOMATIC TASK 必须由顶层 Delivery task 的 `SessionStart` coordinator capability 或调用时 Hook 通过 `claim_current_task` 在当前会话 claim，reservation 为空；该工具必须拒绝所有 Review。普通 subagent 的 SessionStart 不签发 coordinator role；Review 仍使用非空 reservation 与独立 `SubagentStart` receiver capability，后者只能变更已领取 Review，不能 claim TASK 或规划下一批。MANUAL reservation 为 `NULL`。普通 helper 和内部 Worker都不能持有 session capability。
 - `archive_delivery` 只接受已完成 Delivery，默认状态发现和根总览不再列出它；显式 `root_id` 仍能读取 `ARCHIVED`、完成 run、Revision 历史和详情投影。
 - 对已有 run 输入“打开当前 Delivery 的进度面板”，支持 MCP Apps 的宿主应渲染 `Delivery Graph 运行看板`；点击“刷新状态”只能重读 `open_delivery_dashboard`。不支持 UI 的宿主必须继续返回可读文字和结构化结果，且不得改用 `graph_frontier` 模拟只读刷新。
 - Codex manifest 必须显式声明 `./hooks/hooks.json`；`SessionStart` 必须在 startup/resume/compact 发放当前 session capability，AUTO Review `SubagentStart` 必须原子 claim 并发放独立 child capability。code-mode 内嵌 MCP 未触发 nested PreToolUse 时，claim 与 mutation 仍须由 session capability fail closed。Claude 单独加载 `hooks/claude-hooks.json` 中的 `PreToolUse`/`StopFailure`。

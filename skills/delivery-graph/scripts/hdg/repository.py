@@ -43,17 +43,24 @@ from .model_rendering import (
     render_workspace_overview,
 )
 from .progress_reporting import attach_progress_monitor
+from .repository_attestations import (
+    HOST_WORKSPACE_ATTESTATION_SECONDS,
+    HostWorkspaceAttestationStore,
+)
+from .repository_workspaces import DeliveryWorkspaceStore
 from .storage_schema import (
     SCHEDULER_STATE_CONTRACT,
     initialize_scheduler_storage,
     verify_scheduler_state_contract,
+)
+from .workspace_identity import (
+    workspace_identity,
 )
 
 
 GOVERNANCE_DIRECTORY = ".layered-delivery"
 DATABASE_FILE = "scheduler.db"
 RECEIVER_ATTESTATION_SECONDS = 300
-HOST_WORKSPACE_ATTESTATION_SECONDS = 60
 WORKTREE_SETUP_HEARTBEAT_SECONDS = 30
 WORKTREE_SETUP_LEASE_SECONDS = 120
 WORKTREE_SETUP_POLL_SECONDS = 10
@@ -422,68 +429,17 @@ class SchedulerRepository:
         workspace_root: str | os.PathLike[str],
         lifetime_seconds: int = HOST_WORKSPACE_ATTESTATION_SECONDS,
     ) -> str:
-        """Bind one imminent MCP call to a host-observed workspace."""
-
-        if (
-            not isinstance(lifetime_seconds, int)
-            or isinstance(lifetime_seconds, bool)
-            or lifetime_seconds < 1
-            or lifetime_seconds > 86_400
-        ):
-            fail(
-                "SCHEDULER_HOST_WORKSPACE_ATTESTATION_INVALID",
-                "Host workspace evidence lifetime must be 1..86400 seconds",
-            )
-
-        workspace = str(
-            Path(workspace_root).absolute().resolve(strict=True)
+        return HostWorkspaceAttestationStore(
+            self,
+            timestamp_fn=timestamp,
+        ).issue(
+            host_adapter_id=host_adapter_id,
+            context_id=context_id,
+            tool_name=tool_name,
+            tool_use_id=tool_use_id,
+            workspace_root=workspace_root,
+            lifetime_seconds=lifetime_seconds,
         )
-        attestation = secrets.token_hex(32)
-        attestation_digest = hashlib.sha256(
-            attestation.encode("utf-8")
-        ).hexdigest()
-        context_digest = hashlib.sha256(
-            context_id.encode("utf-8")
-        ).hexdigest()
-        tool_use_digest = hashlib.sha256(
-            tool_use_id.encode("utf-8")
-        ).hexdigest()
-        at = timestamp(self.now)
-        expires_at = (
-            datetime.fromisoformat(at.replace("Z", "+00:00"))
-            + timedelta(seconds=lifetime_seconds)
-        ).isoformat().replace("+00:00", "Z")
-        with self.transaction() as connection:
-            connection.execute(
-                "UPDATE host_workspace_attestations "
-                "SET status = 'SUPERSEDED' "
-                "WHERE host_adapter_id = ? AND context_digest = ? "
-                "AND tool_use_digest = ? AND status = 'ISSUED'",
-                (
-                    host_adapter_id,
-                    context_digest,
-                    tool_use_digest,
-                ),
-            )
-            connection.execute(
-                "INSERT INTO host_workspace_attestations("
-                "attestation_digest, host_adapter_id, context_digest, "
-                "tool_name, tool_use_digest, workspace_root, "
-                "workspace_key, status, created_at, expires_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, 'ISSUED', ?, ?)",
-                (
-                    attestation_digest,
-                    host_adapter_id,
-                    context_digest,
-                    tool_name,
-                    tool_use_digest,
-                    workspace,
-                    self.workspace_key(workspace),
-                    at,
-                    expires_at,
-                ),
-            )
-        return attestation
 
     def validate_host_workspace_attestation(
         self,
@@ -493,52 +449,15 @@ class SchedulerRepository:
         context_id: str,
         tool_name: str,
     ) -> str:
-        """Validate a live session capability without consuming it."""
-
-        digest = hashlib.sha256(attestation.encode("utf-8")).hexdigest()
-        context_digest = hashlib.sha256(
-            context_id.encode("utf-8")
-        ).hexdigest()
-        at = timestamp(self.now)
-        with self.read() as connection:
-            row = connection.execute(
-                "SELECT * FROM host_workspace_attestations "
-                "WHERE attestation_digest = ?",
-                (digest,),
-            ).fetchone()
-        if row is None:
-            fail(
-                "SCHEDULER_HOST_SESSION_ATTESTATION_MISSING",
-                "Host session evidence does not exist",
-            )
-        if row["status"] != "ISSUED":
-            fail(
-                "SCHEDULER_HOST_SESSION_ATTESTATION_INACTIVE",
-                "Host session evidence is no longer active",
-            )
-        if row["expires_at"] < at:
-            fail(
-                "SCHEDULER_HOST_SESSION_ATTESTATION_EXPIRED",
-                "Host session evidence expired",
-            )
-        if (
-            row["host_adapter_id"] != host_adapter_id
-            or row["context_digest"] != context_digest
-            or row["tool_name"] != tool_name
-        ):
-            fail(
-                "SCHEDULER_HOST_SESSION_ATTESTATION_MISMATCH",
-                "Host session evidence targets another receiver",
-            )
-        workspace = str(
-            Path(row["workspace_root"]).absolute().resolve(strict=True)
+        return HostWorkspaceAttestationStore(
+            self,
+            timestamp_fn=timestamp,
+        ).validate_session(
+            attestation,
+            host_adapter_id=host_adapter_id,
+            context_id=context_id,
+            tool_name=tool_name,
         )
-        if self.workspace_key(workspace) != row["workspace_key"]:
-            fail(
-                "SCHEDULER_HOST_SESSION_ATTESTATION_MISMATCH",
-                "Host session evidence no longer matches its path",
-            )
-        return workspace
 
     def consume_host_workspace_attestation(
         self,
@@ -547,59 +466,14 @@ class SchedulerRepository:
         host_adapter_id: str,
         tool_name: str,
     ) -> str:
-        """Consume host workspace evidence and return its verified path."""
-
-        digest = hashlib.sha256(attestation.encode("utf-8")).hexdigest()
-        at = timestamp(self.now)
-        with self.transaction() as connection:
-            row = connection.execute(
-                "SELECT * FROM host_workspace_attestations "
-                "WHERE attestation_digest = ?",
-                (digest,),
-            ).fetchone()
-            if row is None:
-                fail(
-                    "SCHEDULER_HOST_WORKSPACE_ATTESTATION_MISSING",
-                    "Host workspace evidence does not exist",
-                )
-            if row["status"] != "ISSUED":
-                fail(
-                    "SCHEDULER_HOST_WORKSPACE_ATTESTATION_CONSUMED",
-                    "Host workspace evidence is no longer active",
-                )
-            if row["expires_at"] < at:
-                fail(
-                    "SCHEDULER_HOST_WORKSPACE_ATTESTATION_EXPIRED",
-                    "Host workspace evidence expired",
-                )
-            if (
-                row["host_adapter_id"] != host_adapter_id
-                or row["tool_name"] != tool_name
-            ):
-                fail(
-                    "SCHEDULER_HOST_WORKSPACE_ATTESTATION_MISMATCH",
-                    "Host workspace evidence targets another call",
-                )
-            workspace = str(
-                Path(row["workspace_root"]).absolute().resolve(strict=True)
-            )
-            if self.workspace_key(workspace) != row["workspace_key"]:
-                fail(
-                    "SCHEDULER_HOST_WORKSPACE_ATTESTATION_MISMATCH",
-                    "Host workspace evidence no longer matches its path",
-                )
-            updated = connection.execute(
-                "UPDATE host_workspace_attestations "
-                "SET status = 'CONSUMED', consumed_at = ? "
-                "WHERE attestation_digest = ? AND status = 'ISSUED'",
-                (at, digest),
-            )
-            if updated.rowcount != 1:
-                fail(
-                    "SCHEDULER_HOST_WORKSPACE_ATTESTATION_CONSUMED",
-                    "Host workspace evidence was consumed concurrently",
-                )
-        return workspace
+        return HostWorkspaceAttestationStore(
+            self,
+            timestamp_fn=timestamp,
+        ).consume(
+            attestation,
+            host_adapter_id=host_adapter_id,
+            tool_name=tool_name,
+        )
 
     @contextmanager
     def scheduler_lock(self) -> Iterator[None]:
@@ -720,26 +594,18 @@ class SchedulerRepository:
 
     @staticmethod
     def workspace_key(workspace_root: str | os.PathLike[str]) -> str:
-        workspace = Path(workspace_root).absolute().resolve(strict=True)
-        normalized = os.path.normcase(str(workspace))
-        return fingerprint({"workspace": normalized})
+        return workspace_identity(workspace_root).key
+
+    def _delivery_workspace_store(self) -> DeliveryWorkspaceStore:
+        return DeliveryWorkspaceStore(
+            self,
+            governance_directory=GOVERNANCE_DIRECTORY,
+            validate_stored_definition=_validated_stored_definition,
+            timestamp_fn=timestamp,
+        )
 
     def workspace_binding(self, root_id: str) -> dict[str, Any]:
-        with self.read() as connection:
-            row = connection.execute(
-                "SELECT workspace_key FROM delivery_workspaces "
-                "WHERE root_id = ?",
-                (root_id,),
-            ).fetchone()
-        if row is None:
-            fail(
-                "SCHEDULER_DELIVERY_WORKSPACE_MISSING",
-                f"Delivery workspace binding is missing: {root_id}",
-            )
-        return {
-            "mode": "DEDICATED_CONVERSATION_WORKSPACE",
-            "workspaceKey": row["workspace_key"],
-        }
+        return self._delivery_workspace_store().binding(root_id)
 
     def assert_delivery_workspace(
         self,
@@ -749,41 +615,12 @@ class SchedulerRepository:
         allow_unbound_manual: bool = False,
         allow_unbound_choice: bool = False,
     ) -> None:
-        if not self.database_path.is_file():
-            fail(
-                "SCHEDULER_STATE_ABSENT",
-                "No Delivery Graph scheduler state exists",
-            )
-        expected = self.workspace_key(workspace_root)
-        if allow_unbound_manual or allow_unbound_choice:
-            with self.read() as connection:
-                manual = connection.execute(
-                    "SELECT h.status, w.workspace_key "
-                    "FROM hierarchies h "
-                    "LEFT JOIN delivery_workspaces w "
-                    "ON w.root_id = h.root_id "
-                    "WHERE h.root_id = ?",
-                    (root_id,),
-                ).fetchone()
-            if (
-                manual is not None
-                and manual["status"]
-                in (
-                    {"HANDOFF_READY"}
-                    if not allow_unbound_choice
-                    else {"CHOICE_READY", "HANDOFF_READY"}
-                )
-                and manual["workspace_key"] is None
-            ):
-                return
-        binding = self.workspace_binding(root_id)
-        if binding["workspaceKey"] != expected:
-            fail(
-                "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH",
-                "This Delivery belongs to another conversation workspace",
-                rootId=root_id,
-                workspaceKey=binding["workspaceKey"],
-            )
+        self._delivery_workspace_store().assert_bound(
+            root_id,
+            workspace_root,
+            allow_unbound_manual=allow_unbound_manual,
+            allow_unbound_choice=allow_unbound_choice,
+        )
 
     def workspace_status(
         self,
@@ -791,190 +628,10 @@ class SchedulerRepository:
         root_id: str | None = None,
         workspace_root: str | os.PathLike[str] | None = None,
     ) -> dict[str, Any]:
-        self._assert_no_legacy_state()
-        if not self.database_path.is_file():
-            return {
-                "status": "ABSENT",
-                "controlRoot": GOVERNANCE_DIRECTORY,
-            }
-        with self.read() as connection:
-            rows = connection.execute(
-                "SELECT * "
-                "FROM hierarchies ORDER BY updated_at DESC"
-            ).fetchall()
-            if not rows:
-                return {
-                    "status": "ABSENT",
-                    "controlRoot": GOVERNANCE_DIRECTORY,
-                }
-            workspace_key = (
-                self.workspace_key(workspace_root)
-                if workspace_root is not None
-                else None
-            )
-            candidates = (
-                [row for row in rows if row["status"] != "ARCHIVED"]
-                if root_id is None
-                else rows
-            )
-            if root_id is not None:
-                candidates = [
-                    row for row in candidates if row["root_id"] == root_id
-                ]
-            if workspace_key is not None:
-                bound_ids = {
-                    row["root_id"]
-                    for row in connection.execute(
-                        "SELECT root_id FROM delivery_workspaces "
-                        "WHERE workspace_key = ?",
-                        (workspace_key,),
-                    ).fetchall()
-                }
-                candidates = [
-                    row
-                    for row in candidates
-                    if row["root_id"] in bound_ids
-                    or row["status"]
-                    in {"CHOICE_READY", "HANDOFF_READY"}
-                ]
-            if root_id is None:
-                active_ids = {
-                    row["root_id"]
-                    for row in connection.execute(
-                        "SELECT root_id FROM runs "
-                        "WHERE status NOT IN "
-                        "('COMPLETED', 'CANCELLED', 'SUPERSEDED')"
-                    ).fetchall()
-                }
-                active_candidates = [
-                    row
-                    for row in candidates
-                    if row["root_id"] in active_ids
-                ]
-                if active_candidates:
-                    candidates = active_candidates
-            if not candidates:
-                return {
-                    "status": "ABSENT",
-                    "controlRoot": GOVERNANCE_DIRECTORY,
-                    "workspaceIsolation": (
-                        {
-                            "mode": "DEDICATED_CONVERSATION_WORKSPACE",
-                            "workspaceKey": workspace_key,
-                        }
-                        if workspace_key is not None
-                        else None
-                    ),
-                }
-            latest = candidates[0]
-            latest_hierarchy, _ = _validated_stored_definition(latest)
-            run = connection.execute(
-                "SELECT status, execution_mode FROM runs "
-                "WHERE root_id = ? AND revision = ?",
-                (latest["root_id"], latest["revision"]),
-            ).fetchone()
-            if latest["status"] == "ARCHIVED":
-                revision = connection.execute(
-                    "SELECT status FROM delivery_revisions "
-                    "WHERE root_id = ? AND revision = ?",
-                    (latest["root_id"], latest["revision"]),
-                ).fetchone()
-                if (
-                    run is None
-                    or run["status"] != "COMPLETED"
-                    or revision is None
-                    or revision["status"] != "ARCHIVED"
-                ):
-                    fail(
-                        "SCHEDULER_STATE_INVALID",
-                        "Archived Delivery state is inconsistent",
-                        rootId=latest["root_id"],
-                    )
-        state = (
-            latest["status"]
-            if latest["status"] in {"ARCHIVED", "PREPARED"}
-            else (
-                run["status"]
-                if run is not None
-                else latest["status"]
-            )
+        return self._delivery_workspace_store().status(
+            root_id=root_id,
+            workspace_root=workspace_root,
         )
-        # Projection templates are rebuildable views, not stored schema.
-        # Refresh every stored schema-v3 Delivery so workspaces created by an
-        # earlier plugin release receive the current fixed projection set.
-        projection_issues: list[dict[str, str]] = []
-        for row in rows:
-            projection_root_id = row["root_id"]
-            try:
-                self.write_projections(
-                    projection_root_id,
-                    refresh_workspace_overview=False,
-                )
-            except (GatedLoopError, OSError) as error:
-                if projection_root_id == latest["root_id"]:
-                    raise
-                code = (
-                    error.code
-                    if isinstance(error, GatedLoopError)
-                    else "SCHEDULER_PROJECTION_REFRESH_FAILED"
-                )
-                message = (
-                    error.message
-                    if isinstance(error, GatedLoopError)
-                    else (
-                        "Controller could not refresh this Delivery "
-                        "projection"
-                    )
-                )
-                projection_issues.append(
-                    {
-                        "rootId": projection_root_id,
-                        "code": code,
-                        "message": message,
-                    }
-                )
-        self.write_workspace_overview()
-        result = {
-            "status": (
-                "PREPARED"
-                if state == "PREPARED"
-                else state
-            ),
-            "rootId": latest["root_id"],
-            "deliveryRevision": latest["revision"],
-            "controlRoot": GOVERNANCE_DIRECTORY,
-        }
-        if run is not None:
-            result["executionMode"] = run["execution_mode"]
-        if state == "ARCHIVED":
-            result["archivedAt"] = latest["updated_at"]
-            result["runStatus"] = run["status"]
-            result["nextAction"] = "START_NEW_DELIVERY"
-        if workspace_root is not None:
-            if state == "CHOICE_READY":
-                result["workspaceIsolation"] = {
-                    "mode": "UNBOUND_EXECUTION_CHOICE",
-                    "workspaceKey": None,
-                }
-            elif state == "HANDOFF_READY":
-                result["workspaceIsolation"] = {
-                    "mode": "UNBOUND_MANUAL_HANDOFF",
-                    "workspaceKey": None,
-                }
-            else:
-                result["workspaceIsolation"] = self.workspace_binding(
-                    latest["root_id"]
-                )
-        if projection_issues:
-            result["projectionIssues"] = projection_issues
-        git_binding = latest_hierarchy["delivery"].get("gitBinding")
-        if git_binding is not None:
-            result["gitBinding"] = git_binding
-        result["projectScopes"] = latest_hierarchy["delivery"].get(
-            "projectScopes",
-            [],
-        )
-        return result
 
     def git_branch_usage(
         self,

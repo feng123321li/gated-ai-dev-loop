@@ -1,6 +1,6 @@
 # 团队安装与运维
 
-本文面向团队管理员和普通使用者，覆盖 `delivery-graph` 0.39.2 的安装、升级、恢复、卸载与回滚。展示名为“分层交付 Graph 控制面”。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 和标准库。
+本文面向团队管理员和普通使用者，覆盖 `delivery-graph` 0.39.3 的安装、升级、恢复、卸载与回滚。展示名为“分层交付 Graph 控制面”。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 和标准库。
 
 ## 安装前检查
 
@@ -9,7 +9,7 @@
 - 确认能够访问公司内部 Marketplace 仓库。
 - 在实际项目的新会话中使用 Plugin；不要在维护 `delivery-graph` 源码仓库时创建业务运行包。
 
-当前本地探测到的 0.39.2 真实宿主候选基线是 Codex CLI 0.147.0 和 Claude Code 2.1.226。这两个版本是本轮冒烟目标，不是永久最低版本。在兼容矩阵回填真实运行结果前，只能表述为“候选验证中”。
+当前本地探测到的 0.39.3 真实宿主候选基线是 Codex CLI 0.147.0 和 Claude Code 2.1.226。这两个版本是本轮冒烟目标，不是永久最低版本。在兼容矩阵回填真实运行结果前，只能表述为“候选验证中”。
 
 ## 安装
 
@@ -21,7 +21,7 @@ codex plugin add delivery-graph@majorbio-skills
 codex plugin list --json
 ```
 
-安装后新建 Codex 任务，使 Skill、MCP Server 和 Hook 从同一版本重新加载。打开 `/hooks`，审查来源为当前 `delivery-graph` Plugin 的 `SubagentStart` 与 `PreToolUse` 命令并显式信任；不要把普通人工会话或总协调器加入白名单来绕过 Hook 信任。若 `/hooks` 未列出这组命令，先停止 AUTO 派遣并重新安装/升级 Plugin、再新建任务。
+安装后打开 `/hooks`，审查来源为当前 `delivery-graph` Plugin 的 `SessionStart`、`SubagentStart` 与 `PreToolUse` 命令并选择始终信任当前定义，再新建或恢复 Codex Delivery 任务。信任按精确内容哈希持久保存；未升级时不重复提示，Hook 内容变化后必须重审。不要用普通执行权限、模型配置或未来版本通配信任绕过此边界。
 
 ### Claude Code
 
@@ -41,7 +41,7 @@ claude plugin list --json
 python scripts/host_smoke.py probe --json
 ```
 
-结果必须报告 Plugin 版本 0.39.2 和 33 个 MCP 工具，并如实标记本机已安装的宿主。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器。
+结果必须报告 Plugin 版本 0.39.3 和 34 个 MCP 工具，并如实标记本机已安装的宿主。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器。
 
 真实冒烟默认先只展示计划，必须显式增加 `--execute` 才调用模型。两个宿主分别运行，绝不从一个终端跨调另一个 Agent：
 
@@ -53,9 +53,9 @@ python scripts/host_smoke.py run --host codex --scenario light
 python scripts/host_smoke.py run --host codex --scenario light --execute
 ```
 
-Claude 命令从当前 0.39.2 源码发布包的 `--plugin-dir` 加载 Plugin；Codex 命令要求候选 Plugin 已从 Marketplace 安装并在 `/hooks` 中信任。发布前可用 LIGHT 验证同宿主 claim/heartbeat/progress/result，再用 STANDARD 覆盖分层 Review。任何输出中的 `claimedAgents` 都只能包含命令指定的当前宿主。Claude coordinator 的完整名称为 `delivery-graph:delivery-coordinator`。
+Claude 命令从当前 0.39.3 源码发布包的 `--plugin-dir` 加载 Plugin；Codex 命令要求候选 Plugin 已从 Marketplace 安装并在 `/hooks` 中信任。发布前可用 LIGHT 验证当前 session TASK claim/heartbeat/progress/result，再用 STANDARD 覆盖独立 Review。任何输出中的 `claimedAgents` 都只能包含命令指定的当前宿主。Claude coordinator 的完整名称为 `delivery-graph:delivery-coordinator`。
 
-0.39.2 真实冒烟还必须覆盖以下交互和失败关闭边界：
+0.39.3 真实冒烟还必须覆盖以下交互和失败关闭边界：
 
 - `preview_hierarchy`、`workspace_status` 和手动接管只返回一个当前 `pendingInteraction`。缺少 `gitBinding` 时先处理 `DEVELOPMENT_BASELINE`，确认后才出现 `EXECUTION_MODE`；同一 Delivery 的后续 Revision 可复用已记忆基线。
 - 干净和脏工作树都进入这条基线流程。脏树确认必须回传原响应的 `dirtyStateFingerprint`；变化路径内容、暂存区或 porcelain 状态任一改变，旧指纹都失效。
@@ -67,10 +67,10 @@ Claude 命令从当前 0.39.2 源码发布包的 `--plugin-dir` 加载 Plugin；
 - `hostDispatch` 必须携带精确 `branchRef/gitBinding`；宿主错分支 clean 时可恢复，dirty 时停止审查。
 - 多项目 AUTOMATIC 必须准备全部 `READ_WRITE` scope 的 worktree，只启动一个 coordinator，并在共享控制根观察全部进度。
 - 未显式声明 `projectScopes` 的单仓 Delivery 必须在 AUTO claim 与 `loop_context` 中得到一个经顶层 `gitBinding` 和实际 workspace 验证的 `primary` scope；无效 binding 必须在 child 读取或修改仓库前 fail closed。
-- AUTO 与 MANUAL 都必须由对应宿主 Adapter 签发并一次性消费 receiver attestation。AUTO 行的 reservation 非空且精确匹配；MANUAL 行的 reservation 为 `NULL`，但 parent/child/workspace、后续 operation 与 mutation 门禁完全相同。总协调器、普通 helper 和内部 Worker 都不能 claim。
+- Codex AUTOMATIC TASK 必须由顶层 Delivery task 的 `SessionStart` coordinator capability 通过 `claim_current_task` 在当前会话 claim，reservation 为空且 dispatch mode 为 `INLINE_AUTO`；该工具必须拒绝所有 Review。普通 subagent 的 SessionStart 不签发 coordinator role；Review 仍使用非空 reservation 与独立 `SubagentStart` receiver capability，后者只能变更已领取 Review，不能 claim TASK 或规划下一批。MANUAL reservation 为 `NULL`。普通 helper 和内部 Worker 都不能持有 session capability。
 - `archive_delivery` 只接受已完成 Delivery，默认状态发现和根总览不再列出它；显式 `root_id` 仍能读取 `ARCHIVED`、完成 run、Revision 历史和详情投影。
 - 对已有 run 输入“打开当前 Delivery 的进度面板”，支持 MCP Apps 的宿主应渲染 `Delivery Graph 运行看板`；点击“刷新状态”只能重读 `open_delivery_dashboard`。不支持 UI 的宿主必须继续返回可读文字和结构化结果，且不得改用 `graph_frontier` 模拟只读刷新。
-- Codex manifest 必须显式声明 `./hooks/hooks.json`；`plan_dispatch_batch` PreToolUse preflight、MANUAL `dispatch_loop` PreToolUse、AUTO `SubagentStart` 和 Loop mutation PreToolUse 均须被实际触发。Claude 单独加载 `hooks/claude-hooks.json` 中的 `PreToolUse`/`StopFailure`。
+- Codex manifest 必须显式声明 `./hooks/hooks.json`；`SessionStart` 必须在 startup/resume/compact 发放当前 session capability，AUTO Review `SubagentStart` 必须原子 claim 并发放独立 child capability。code-mode 内嵌 MCP 未触发 nested PreToolUse 时，claim 与 mutation 仍须由 session capability fail closed。Claude 单独加载 `hooks/claude-hooks.json` 中的 `PreToolUse`/`StopFailure`。
 - 在 Codex `/hooks` 中暂不信任或禁用 Plugin Hook 后调用 `plan_dispatch_batch`，必须在创建 reservation 前返回 `SCHEDULER_HOST_HOOK_NOT_READY` 且 `reservationCreated=false`；恢复信任并新建任务后才允许重新计划。
 - Codex AUTO child 的 `SubagentStart` 若已从真实 transcript 定位 reservation、但 receiver/workspace/scope attestation 失败，TASK 必须保持 READY、reservation 立即释放并记录启动失败；child 只能报告协调器，不得调用 Loop 工具或检查、修改仓库。
 
@@ -118,7 +118,7 @@ Claude Code 更新后必须重启会话。若宿主提示命令名称不同，�
 | MCP 连接中断，写操作结果未知 | 先重连并读取 `workspace_status`、`graph_status` 或 `graph_frontier`，不要重放未知写操作 |
 | Loop 心跳和进度停止 | 等待租约回收；下一次 `graph_frontier` 触发 `WORKER_LOST`，随后使用新 attempt 和新接收上下文 |
 | Projection 缺失或损坏 | 对已校验事件链调用 `rebuild_graph_run`；不要直接写 Markdown 或 SQLite |
-| `plan_dispatch_batch` 返回 `SCHEDULER_HOST_HOOK_NOT_READY` | 在 Codex 新任务中打开 `/hooks`，核对并信任当前 Plugin Hook；不要重放旧派遣。该错误发生在 reservation 创建前，修复 Hook 后重新读取 frontier 并重新计划 |
+| `claim_current_task` 或 `plan_dispatch_batch` 返回 `SCHEDULER_HOST_HOOK_NOT_READY` | 在 `/hooks` 核对并始终信任当前精确 Plugin Hook，随后新建或恢复 Delivery 任务触发 `SessionStart`；不要改模型配置或无认证重放 |
 | AUTO child 返回 `DELIVERY_GRAPH_STARTUP_ERROR` | child 停止所有仓库和 Loop 操作，只把错误码报告协调器；Controller 已在安全前提满足时立即释放未领取 reservation，协调器刷新 frontier 后修复身份、workspace 或 scope 前置条件 |
 | Claude 结构化 429 | 由 StopFailure Hook 记录真实 reset 时间并暂停；到期由一次性宿主唤醒重新读取 frontier |
 | LIGHT 执行中发现影响扩大 | 提交 `REPLAN_REQUIRED`，保持同一 `delivery.id` 准备 `STANDARD` Revision |

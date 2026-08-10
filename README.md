@@ -4,7 +4,7 @@
 
 `delivery-graph` 把已经确认的软件需求冻结为可执行、可审查、可恢复的 Delivery Graph，再协调宿主原生 Agent 完成实现、分层 Review 和最终验收。
 
-当前版本：**0.39.2** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
+当前版本：**0.39.3** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
 
 ## 它做什么
 
@@ -92,9 +92,9 @@ Delivery
 
 新会话从 `workspace_status` 恢复当前 Delivery，再读取 Graph frontier。worktree setup 与活动 receiver 都有独立 heartbeat 和 lease；前者通过 `worktreeSetup.progressMonitor` 在主仓显示全部项目，后者通过 Graph `progressMonitor` 显示 TASK 与 Review。失联、租约过期或可重试失败只在各自安全边界恢复。需求发生变化时创建同一 Delivery 的下一 Revision，不覆写已经冻结的版本。
 
-AUTO 与 MANUAL 使用同一条 receiver 安全链：当前可信宿主 Adapter 必须先为真实原生 child 签发一次性 attestation，再由 Controller 原子消费并绑定 claim、项目 scope、operation、heartbeat、progress、pause 和 result。AUTO attestation 绑定非空 reservation；MANUAL attestation 的 reservation 为 `NULL`，授权来自 manual Graph 或指定 TASK 的显式人工接管事件，不能由总协调器直接认领。
+所有 Loop 都必须经过可信宿主 Hook。Codex AUTOMATIC 的 Delivery 任务在 `SessionStart` 时获得绑定精确 session/worktree 的能力，当前会话通过 `claim_current_task` 直接实现 READY TASK；所有 Review 仍由 reservation + `SubagentStart` 认证的独立 receiver 完成。MANUAL TASK 继续使用 reservation 为 `NULL` 的 receiver attestation。Controller 对三条路径统一绑定项目 scope、operation、heartbeat、progress、pause 和 result。
 
-Codex manifest 显式加载 `hooks/hooks.json`。安装或升级后必须在新任务的 `/hooks` 中审查并信任 delivery-graph Hook；否则 `plan_dispatch_batch` 会在创建 reservation 前返回 `SCHEDULER_HOST_HOOK_NOT_READY`。AUTO `SubagentStart` 只信任真实 child transcript；若 Hook 已定位 reservation、但身份、workspace 或 scope 验证失败，Controller 会在尚未 claim 的安全边界立即释放 reservation，并让 child 停止仓库操作、向协调器报告，而不是等待 300 秒 TTL。自动 receiver 仍无法启动时，用户可对 clean、READY、从未领取且无有效 reservation 的单个 TASK 显式调用 `handoff_ready_automatic_task`；AUTOMATIC Graph、Revision、基线、双 fingerprint 和后续自动 Review 均保持不变。
+Codex manifest 显式加载 `hooks/hooks.json`。在 `/hooks` 选择始终信任后，信任对当前精确 Hook 哈希持久生效，日常任务不再弹窗；Plugin 升级改变 Hook 内容后重新审查。`SessionStart` capability 让 code-mode MCP 不再依赖当前宿主遗漏的 nested PreToolUse，也不需要修改 `model_catalog_json` 或模型 tool mode。Hook 缺失、跨 session/worktree、过期或被复制时均 fail closed。
 
 ## 安装
 
@@ -107,7 +107,7 @@ codex plugin marketplace add git@git.i-sanger.com:ai/skill/marketplace.git --ref
 codex plugin add delivery-graph@majorbio-skills
 ```
 
-安装后新建 Codex 任务，打开 `/hooks`，确认并信任 `delivery-graph` 注册的 `SubagentStart` 与 `PreToolUse` Hook。Hook 未激活时 AUTO preflight 会 fail closed，不会先留下 dispatch reservation。
+安装后打开 `/hooks`，审查 `delivery-graph` 注册的 `SessionStart`、`SubagentStart` 与 `PreToolUse` Hook，并选择始终信任当前定义；随后新建或恢复 Delivery 任务。相同 Hook 哈希后续不再提示，升级变化后重新确认。
 
 Claude Code：
 

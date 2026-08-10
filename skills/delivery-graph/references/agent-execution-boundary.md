@@ -6,14 +6,15 @@ Delivery Graph 是 SOP 与 Graph 控制面。它决定哪个 TASK/Review Loop �
 
 ## 外层 receiver
 
-所有 Graph claim 都只交给当前可信宿主 Adapter 的独立原生 receiver。AUTO 与 MANUAL 使用相同身份强度：
+所有 Graph claim 都只交给当前可信宿主 Adapter 认证的 receiver。Codex AUTOMATIC TASK 可由当前 Delivery 会话接收；Review 必须独立：
 
 | 模式 | 授权来源 | receiver attestation |
 |---|---|---|
+| `INLINE_AUTO` | Codex `SessionStart` 对当前 Delivery task/session/worktree 的能力 | 无 reservation；只允许 `TASK_LOOP`，当前会话直接实现 |
 | `AUTO` | `plan_dispatch_batch` 为当前 node/attempt 签发的短租约 assignment | 一次性证明绑定真实 child/parent/workspace，`reservation_id` 必须为非空且精确匹配 |
 | `MANUAL` | 已启动的 manual Graph，或指定自动 TASK 的显式人工接管事件 | 一次性证明绑定相同的 child/parent/workspace，`reservation_id` 必须为 `NULL` |
 
-两者在 attestation 消费后共同进入同一 claim、项目 scope、operation、heartbeat、progress、pause、result 和 lease 校验。MANUAL 只是不经过自动 planning/reservation，不是无认证或总协调器直领路径。
+三者共同进入同一 claim、项目 scope、operation、heartbeat、progress、pause、result 和 lease 校验。`INLINE_AUTO` 不是无认证直领：缺少当前 SessionStart capability 时 fail closed；它只能 claim TASK，Review 仍走 `AUTO` child。
 
 AUTO assignment 还具有以下派遣约束：
 
@@ -31,7 +32,7 @@ Codex、Claude Code 或其他宿主只有在 Plugin 存在对应可信外层 Ada
 证明同一 receiver 身份时，才能领取 Loop。PATH 中存在 CLI、普通 helper、
 外部进程或本机 Profile 都不构成这种权限。
 
-Codex AUTO planning 在创建 reservation 前还要求 `plan_dispatch_batch` PreToolUse Hook 的一次性 workspace attestation。安装或升级后必须在新任务的 `/hooks` 中审查并信任 Plugin Hook；未激活时返回 `SCHEDULER_HOST_HOOK_NOT_READY`，不会留下 reservation。AUTO `SubagentStart` 和 MANUAL `dispatch_loop` 都只接受可信 sessions 根内的真实 child transcript。AUTO 启动证明失败时，只有尚未签发 receiver 身份且节点仍 READY 才立即释放 reservation，并要求 child 在仓库操作前停止。
+Codex `SessionStart` 只为顶层 Delivery task 发放 `DELIVERY_COORDINATOR` session capability；数据库只保存哈希，能力绑定精确 session/worktree、自动轮换并有时效。它授权 `claim_current_task`、Review planning 和当前 receiver mutation，使 code-mode 不依赖当前宿主遗漏的 nested PreToolUse。Subagent 的普通 `SessionStart` 不发 coordinator capability；AUTO Review 的 `SubagentStart` 原子消费 reservation，并只为独立 child 发放 `LOOP_RECEIVER` capability，该能力只能变更已领取的 Review，不能领取 TASK 或规划下一批。安装或升级后必须审查并信任精确 Hook 定义；“始终信任”对当前哈希持久生效，Hook 内容变化后重新审查。执行权限和模型配置不替代 Hook trust。
 
 ## Loop 内部 Worker
 

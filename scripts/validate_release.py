@@ -36,7 +36,7 @@ CODEX_HOOKS = PLUGIN / "hooks" / "hooks.json"
 CLAUDE_HOOKS = PLUGIN / "hooks" / "claude-hooks.json"
 REPO_MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 TEMPLATES = ROOT / "examples" / "team-loops"
-EXPECTED_TOOL_COUNT = 33
+EXPECTED_TOOL_COUNT = 34
 
 
 def _version_from_pyproject() -> str:

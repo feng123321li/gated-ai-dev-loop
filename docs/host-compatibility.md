@@ -7,6 +7,17 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.39.3 发布候选矩阵
+
+0.39.3 提供 34 个 MCP 工具。Codex AUTOMATIC 的 Delivery task 在 `SessionStart` Hook 认证后，使用 `claim_current_task` 以 `INLINE_AUTO/HOST_SESSION` 在当前会话直接实现 READY TASK；Review 继续由非空 reservation、`SubagentStart` 和独立 child 执行。Session capability 绑定精确 session/worktree、有时效、可轮换且数据库只存哈希，因此 Codex 0.147.0 code-mode 未触发 nested PreToolUse 时也无需修改模型 tool mode 或 `model_catalog_json`。
+
+- `/hooks` 的“始终信任”只持久信任当前精确 Hook 哈希；相同版本后续不弹，Hook 更新后重新审查。
+- 缺少 SessionStart capability、跨 session/worktree、过期或复制给其他任务时，`claim_current_task`、planning 和 mutation 都必须 fail closed。
+- `claim_current_task` 必须拒绝 Review；TASK 成功后的 TASK/GROUP/Delivery Review receiver context 必须不同。
+- `SubagentStart` Review child 获得独立 session capability，code-mode heartbeat/progress/pause/result 不依赖 nested PreToolUse。
+
+本地核心契约已完成 356 项 Python 测试（1 项按环境条件跳过）、compileall、UTF-8 Skill 校验、34 工具与生成镜像发布校验、Claude Plugin manifest 校验和差异检查。系统通用 Plugin validator 仍按旧 schema 拒绝 `hooks` 字段，不能替代当前 Codex manifest/Hook 契约校验。
+
 ## 0.39.2 发布候选矩阵
 
 0.39.2 保持 33 个 MCP 工具，把 MANUAL 与 AUTOMATIC 收敛到同一可信 receiver 身份链，并修复 Codex Plugin Hook 未被 manifest 激活、单仓 runtime `projectScopes=[]` 和失败 reservation 必须等待 TTL 的问题。两种 dispatch 都要求宿主 Adapter 为真实原生 child 签发并一次性消费 attestation；AUTO 必须绑定非空 reservation，MANUAL 的 `reservation_id` 必须为 `NULL`。claim 后的 scope、operation、heartbeat、progress、pause、result 和 lease 门禁完全一致，差异只在授权来源。

@@ -1,6 +1,21 @@
 {
   "description": "Codex lifecycle hooks for Delivery Graph receivers.",
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -X utf8 \"${PLUGIN_ROOT}/hooks/attest_codex_session_receiver.py\"",
+            "commandWindows": "python -X utf8 \"%PLUGIN_ROOT%\\hooks\\attest_codex_session_receiver.py\"",
+            "timeout": 15,
+            "statusMessage": "Attesting Delivery Graph session",
+            "additionalContextLimit": 1200
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "^mcp__.*__plan_dispatch_batch$",

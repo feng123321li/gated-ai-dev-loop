@@ -567,7 +567,7 @@ class PluginBundleTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("冻结", metadata)
 
-    def test_skill_auto_dispatches_current_host_receivers_in_parallel(self) -> None:
+    def test_skill_runs_current_codex_task_and_dispatches_independent_reviews(self) -> None:
         main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
         execution = (
             SKILL / "references" / "execution-quickstart.md"
@@ -582,14 +582,19 @@ class PluginBundleTests(unittest.TestCase):
             "modelPolicy=CURRENT_HOST_INHERIT",
             main + execution + recommendations,
         )
-        self.assertIn("并发创建", main + execution)
+        self.assertIn("`claim_current_task`", main + execution)
+        self.assertIn("当前 Delivery 会话", main + execution)
         self.assertIn(
-            "Codex 由 `SubagentStart` Hook 在 child 上下文可见前完成 host-side claim",
+            "互不冲突的 TASK 实现可按 frontier 并行执行",
+            execution,
+        )
+        self.assertIn(
+            "Codex 由 `SubagentStart` Hook 在 child 可见前完成 host-side claim",
             execution,
         )
         self.assertIn("WAIT_FOR_DISPATCH_RECEIVER", main + execution)
-        self.assertIn("dispatchReservationId", main + execution)
-        self.assertIn("decisionFingerprint", execution)
+        self.assertIn("非空 reservation", main + execution)
+        self.assertIn("决策指纹", execution)
         self.assertIn("始终继承当前宿主模型", execution)
         self.assertIn("不提供路由调整窗口", recommendations)
         self.assertIn("不接收", recommendations)
@@ -1225,6 +1230,17 @@ class PluginBundleTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
+        session_start = hooks["hooks"]["SessionStart"]
+        self.assertEqual(len(session_start), 1)
+        session_command = session_start[0]["hooks"][0]
+        self.assertIn(
+            "attest_codex_session_receiver.py",
+            session_command["command"],
+        )
+        self.assertEqual(
+            session_start[0]["matcher"],
+            "startup|resume|compact",
+        )
         subagent_start = hooks["hooks"]["SubagentStart"]
         self.assertEqual(len(subagent_start), 1)
         command = subagent_start[0]["hooks"][0]
@@ -1283,6 +1299,192 @@ class PluginBundleTests(unittest.TestCase):
             env=environment,
         )
         self.assertEqual(launched.returncode, 0, launched.stderr)
+
+    def test_codex_session_hook_claims_current_automatic_task(self) -> None:
+        with TemporaryDirectory() as root:
+            hierarchy = task_hierarchy()
+            preview = preview_hierarchy(
+                root=root,
+                hierarchy=hierarchy,
+            )
+            SchedulerRepository(root).record_automatic_selection(
+                preview["rootId"],
+                expected_hierarchy_fingerprint=(
+                    preview["hierarchyFingerprint"]
+                ),
+                expected_graph_fingerprint=preview["graphFingerprint"],
+                authorized_project_ids=[],
+                confirmed_by="human",
+            )
+            fake_lifecycle = types.ModuleType(
+                "attest_codex_subagent_receiver"
+            )
+            fake_lifecycle._runtime_path = lambda: ROOT / "src"
+            fake_lifecycle._workspace_start = lambda _cwd: root
+            fake_lifecycle._session_meta_from_transcript = (
+                lambda _path, session_id: {
+                    "id": session_id,
+                    "source": "cli",
+                }
+            )
+            hook_module = runpy.run_path(
+                str(
+                    PLUGIN
+                    / "hooks"
+                    / "attest_codex_session_receiver.py"
+                )
+            )
+            stdout = io.StringIO()
+            event = {
+                "hook_event_name": "SessionStart",
+                "source": "resume",
+                "session_id": "codex-current-session",
+                "transcript_path": str(Path(root, "session.jsonl")),
+                "cwd": root,
+            }
+            with (
+                mock.patch.dict(
+                    sys.modules,
+                    {
+                        "attest_codex_subagent_receiver": (
+                            fake_lifecycle
+                        )
+                    },
+                ),
+                mock.patch.object(
+                    sys,
+                    "stdin",
+                    io.StringIO(json.dumps(event)),
+                ),
+                redirect_stdout(stdout),
+            ):
+                returncode = hook_module["main"]()
+            output = json.loads(stdout.getvalue())[
+                "hookSpecificOutput"
+            ]["additionalContext"]
+            marker = "DELIVERY_GRAPH_SESSION_AUTH="
+            session_auth = json.loads(output.split(marker, 1)[1])
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=hierarchy,
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="human",
+            )
+            resolved = SchedulerRepository(
+                root
+            ).validate_host_workspace_attestation(
+                session_auth["session_attestation"],
+                host_adapter_id="codex",
+                context_id=session_auth["session_context_id"],
+                tool_name="delivery_session",
+            )
+            claimed = call_tool(
+                "claim_current_task",
+                {
+                    "root_id": prepared["rootId"],
+                    "node_id": loop_node_id("t-service"),
+                    "expected_graph_fingerprint": prepared[
+                        "graphFingerprint"
+                    ],
+                },
+                root=root,
+                workspace_root=root,
+                trusted_host_adapter="codex",
+                host_session_attested=True,
+                host_session_context_id=session_auth[
+                    "session_context_id"
+                ],
+                host_session_role="DELIVERY_COORDINATOR",
+            )
+            heartbeat = call_tool(
+                "heartbeat_loop",
+                {
+                    "root_id": prepared["rootId"],
+                    "node_id": loop_node_id("t-service"),
+                },
+                root=root,
+                workspace_root=root,
+                trusted_host_adapter="codex",
+                host_session_attested=True,
+                host_session_context_id=session_auth[
+                    "session_context_id"
+                ],
+                host_session_role="DELIVERY_COORDINATOR",
+            )
+
+        self.assertEqual(returncode, 0)
+        self.assertEqual(resolved, str(Path(root).resolve()))
+        self.assertEqual(claimed["dispatchMode"], "INLINE_AUTO")
+        self.assertEqual(claimed["dispatchTransport"], "HOST_SESSION")
+        self.assertEqual(heartbeat["status"], "CLAIMED")
+
+    def test_codex_session_hook_does_not_attest_subagent_as_coordinator(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            fake_lifecycle = types.ModuleType(
+                "attest_codex_subagent_receiver"
+            )
+            fake_lifecycle._runtime_path = lambda: ROOT / "src"
+            fake_lifecycle._workspace_start = lambda _cwd: root
+            fake_lifecycle._session_meta_from_transcript = (
+                lambda _path, session_id: {
+                    "id": session_id,
+                    "source": {
+                        "subagent": {
+                            "thread_spawn": {
+                                "parent_thread_id": "codex-parent",
+                            }
+                        }
+                    },
+                }
+            )
+            hook_module = runpy.run_path(
+                str(
+                    PLUGIN
+                    / "hooks"
+                    / "attest_codex_session_receiver.py"
+                )
+            )
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(
+                    sys.modules,
+                    {
+                        "attest_codex_subagent_receiver": (
+                            fake_lifecycle
+                        )
+                    },
+                ),
+                mock.patch.object(
+                    sys,
+                    "stdin",
+                    io.StringIO(
+                        json.dumps(
+                            {
+                                "hook_event_name": "SessionStart",
+                                "session_id": "codex-review-child",
+                                "transcript_path": str(
+                                    Path(root, "child.jsonl")
+                                ),
+                                "cwd": root,
+                            }
+                        )
+                    ),
+                ),
+                redirect_stdout(stdout),
+            ):
+                returncode = hook_module["main"]()
+
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout.getvalue(), "")
 
     def test_codex_manual_dispatch_hook_attests_native_child(self) -> None:
         with TemporaryDirectory() as root:
@@ -1508,7 +1710,12 @@ class PluginBundleTests(unittest.TestCase):
         self.assertEqual(before, 0)
         self.assertEqual(hook.returncode, 0, hook.stderr)
         self.assertEqual(resolved, str(Path(root).resolve()))
-        self.assertEqual(len(planned["assignments"]), 1)
+        self.assertEqual(planned["assignments"], [])
+        self.assertEqual(
+            planned["currentSessionTaskNodeIds"],
+            ["loop:t-service"],
+        )
+        self.assertEqual(planned["nextAction"], "CLAIM_CURRENT_TASK")
 
     def test_codex_start_failure_releases_exact_reservation(self) -> None:
         with TemporaryDirectory() as root:
@@ -2523,7 +2730,7 @@ class PluginBundleTests(unittest.TestCase):
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
         tool_count = len(tool_definitions())
-        self.assertEqual(tool_count, 33)
+        self.assertEqual(tool_count, 34)
         self.assertIn(
             "start_manual_handoff",
             {tool["name"] for tool in tool_definitions()},
@@ -2651,7 +2858,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            33,
+            34,
         )
         preview_result = responses[2]["result"]["structuredContent"][
             "result"
@@ -2825,7 +3032,7 @@ class PluginBundleTests(unittest.TestCase):
         ]
         self.assertEqual(len(responses), 2)
         tools = responses[1]["result"]["tools"]
-        self.assertEqual(len(tools), 33)
+        self.assertEqual(len(tools), 34)
         self.assertNotIn(
             "open_orchestrator_settings",
             {tool["name"] for tool in tools},
@@ -2903,7 +3110,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            33,
+            34,
         )
 
 

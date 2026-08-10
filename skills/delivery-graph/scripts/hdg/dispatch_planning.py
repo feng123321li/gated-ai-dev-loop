@@ -122,6 +122,7 @@ def plan_dispatch_batch(
     expected_graph_fingerprint: str,
     host_native_agent_ids: tuple[str, ...] | None = None,
     host_adapter_id: str | None = None,
+    review_only: bool = False,
     max_concurrent_executors: int = MAX_CONCURRENT_EXECUTORS,
     explicit_dogfood: bool = False,
     now: object = None,
@@ -178,11 +179,28 @@ def plan_dispatch_batch(
     graph = stored["graph"]
     definitions = {node["id"]: node for node in graph["nodes"]}
     states = {node["nodeId"]: node for node in run["nodes"]}
-    dispatch_node_ids = sorted(
+    frontier_dispatch_node_ids = sorted(
         action["nodeId"]
         for action in frontier["actions"]
         if action["action"] == "DISPATCH_LOOP"
     )
+    current_session_task_node_ids = (
+        [
+            node_id
+            for node_id in frontier_dispatch_node_ids
+            if definitions[node_id]["kind"] == "TASK_LOOP"
+        ]
+        if review_only
+        else []
+    )
+    dispatch_node_ids = [
+        node_id
+        for node_id in frontier_dispatch_node_ids
+        if not (
+            review_only
+            and definitions[node_id]["kind"] == "TASK_LOOP"
+        )
+    ]
     reserved_actions = {
         action["nodeId"]: action
         for action in frontier["actions"]
@@ -262,8 +280,14 @@ def plan_dispatch_batch(
         "hostAdapterId": actual_host_adapter_id,
         "receiverAgentId": receiver_agent_id,
         "dispatchNodeIds": dispatch_node_ids,
+        "currentSessionTaskNodeIds": current_session_task_node_ids,
         "assignments": reserved_assignments,
         "deferred": deferred,
+        "nextAction": (
+            "CLAIM_CURRENT_TASK"
+            if current_session_task_node_ids
+            else "CREATE_INDEPENDENT_REVIEW_RECEIVERS"
+        ),
         "dispatchPolicy": {
             "maxConcurrentExecutors": max_concurrent_executors,
             "quotaExhaustionPolicy": QUOTA_EXHAUSTION_POLICY,
@@ -277,15 +301,22 @@ def plan_dispatch_batch(
         "planFingerprint": fingerprint(plan_material),
         "assignments": reserved_assignments,
         "deferred": deferred,
+        "currentSessionTaskNodeIds": current_session_task_node_ids,
+        "nextAction": (
+            "CLAIM_CURRENT_TASK"
+            if current_session_task_node_ids
+            else "CREATE_INDEPENDENT_REVIEW_RECEIVERS"
+        ),
         "concurrentDispatchGroups": (
             [[item["nodeId"] for item in reserved_assignments]]
             if reserved_assignments
             else []
         ),
         "summary": {
-            "frontierDispatchLoops": len(dispatch_node_ids),
+            "frontierDispatchLoops": len(frontier_dispatch_node_ids),
             "dispatchable": len(reserved_assignments),
             "deferred": len(deferred),
+            "currentSessionTasks": len(current_session_task_node_ids),
             "concurrent": len(reserved_assignments) > 1,
         },
         "dispatchPolicy": {

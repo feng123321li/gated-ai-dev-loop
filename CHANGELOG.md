@@ -4,6 +4,17 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.3 — 2026-08-10
+
+发布提交：以 tag `v0.39.3` 指向的提交为准
+
+- **Codex 当前会话执行 TASK**：AUTOMATIC Delivery worktree 任务由可信 `SessionStart` Hook 绑定精确 Codex session、workspace、Graph 与项目 scope；READY `TASK_LOOP` 通过新增 `claim_current_task` 以 `INLINE_AUTO/HOST_SESSION` 直接在当前会话实现，不再为实现 TASK 启动 Subagent。
+- **Review 独立性保留**：`claim_current_task` 硬拒绝 `TASK_REVIEW_LOOP`、`GROUP_REVIEW_LOOP` 与 `DELIVERY_REVIEW_LOOP`。Review 继续由 `plan_dispatch_batch` 预留并通过独立原生 receiver 与 `SubagentStart` attestation 执行；上游为 Hook-attested current-session TASK 时，允许其只创建新的 Review child，但 receiver context 必须不同。
+- **Code-mode Hook 兼容**：顶层 Delivery task 的 `SessionStart` 发放 `DELIVERY_COORDINATOR` capability，AUTO Review 的 `SubagentStart` 只发放 `LOOP_RECEIVER` capability；两者都有时效、可轮换且数据库只保存哈希。普通 subagent 不取得 coordinator role，Review receiver 不能领取 TASK 或规划下一批。planning、claim、heartbeat、progress、pause 和 result 都由 Adapter 校验 capability、role、session 与可信 workspace 后解析 operation。即使 Codex 0.147.0 未对 code-mode 内嵌 MCP 触发 nested PreToolUse，也不需要切换模型 tool mode 或配置 `model_catalog_json`。
+- **Hook 信任体验**：用户可在 `/hooks` 选择始终信任当前精确 Hook 定义；相同内容哈希在后续任务中不再弹窗，只有 Plugin 升级改变 Hook 内容后重新审查。普通执行权限不会自动信任未来 Hook 版本。
+- **兼容性**：继续只维护 schema v3，不迁移现有 scheduler 数据；复用现有哈希 attestation 存储。MCP 工具面增加到 34 个。Claude 与 MANUAL child 流程保持原有 receiver attestation 语义。
+- **验证**：本地 Python 全量 356 项测试通过（1 项按环境条件跳过），并完成 compileall、UTF-8 Skill 校验、34 工具发布一致性校验、Claude Plugin manifest 校验与 `git diff --check`。系统通用 Plugin validator 仍使用拒绝 `hooks` 字段的旧 schema，与当前 Codex Hook manifest 契约不兼容，因此未作为本版本的发布门禁。
+
 ## 0.39.2 — 2026-08-10
 
 发布提交：以 tag `v0.39.2` 指向的提交为准

@@ -26,8 +26,10 @@ from hdg.graph_model import (
 from hdg.graph_runtime import (
     archive_delivery,
     attest_loop_receiver,
+    authorize_host_session_operation,
     authorize_codex_subagent_operation,
     cancel_graph_run,
+    claim_current_task,
     graph_events,
     graph_status,
     heartbeat_loop,
@@ -470,6 +472,103 @@ class SchedulerRuntimeTests(unittest.TestCase):
             missing.exception.code,
             "SCHEDULER_RECEIVER_ATTESTATION_REQUIRED",
         )
+
+    def test_attested_current_session_executes_task_and_spawns_review(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        task_node_id = loop_node_id("t-service")
+        claimed = claim_current_task(
+            root=self.root,
+            root_id=root_id,
+            node_id=task_node_id,
+            expected_graph_fingerprint=prepared["graphFingerprint"],
+            workspace_root=self.root,
+            receiver_context_id="codex-current-session",
+            host_adapter_id="codex",
+            host_native_agent_ids=("codex",),
+            verified_project_scopes=[],
+            now=at(2),
+        )
+        authorization = authorize_host_session_operation(
+            root=self.root,
+            root_id=root_id,
+            node_id=task_node_id,
+            workspace_root=self.root,
+            receiver_context_id="codex-current-session",
+            host_adapter_id="codex",
+            now=at(3),
+        )
+        heartbeat = heartbeat_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=task_node_id,
+            operation_id=authorization["operationId"],
+            now=at(3),
+        )
+        record_loop_result(
+            root=self.root,
+            root_id=root_id,
+            node_id=task_node_id,
+            operation_id=authorization["operationId"],
+            outcome=success("Inline TASK completed."),
+            now=at(4),
+        )
+        review_node_id = task_review_node_id("t-service")
+        assignment = plan_dispatch_batch(
+            root=self.root,
+            root_id=root_id,
+            expected_graph_fingerprint=prepared["graphFingerprint"],
+            host_adapter_id="codex",
+            host_native_agent_ids=("codex",),
+            now=at(5),
+        )["assignments"][0]
+        review_attestation = attest_loop_receiver(
+            root=self.root,
+            root_id=root_id,
+            node_id=review_node_id,
+            receiver_context_id="codex-review-child",
+            parent_context_id="codex-current-session",
+            host_adapter_id="codex",
+            dispatch_reservation_id=assignment[
+                "dispatchReservationId"
+            ],
+            dispatch_mode="AUTO",
+            now=at(5),
+        )
+        review = runtime_dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=review_node_id,
+            owner="codex-review-child",
+            operation_id="op-independent-review",
+            agent_id="codex",
+            receiver_context_id="codex-review-child",
+            receiver_attestation_id=review_attestation[
+                "receiverAttestationId"
+            ],
+            dispatch_mode="AUTO",
+            dispatch_transport="HOST_NATIVE",
+            dispatch_reservation_id=assignment[
+                "dispatchReservationId"
+            ],
+            dispatch_decision_fingerprint=assignment[
+                "decisionFingerprint"
+            ],
+            host_native_agent_ids=("codex",),
+            host_adapter_id="codex",
+            now=at(6),
+        )
+
+        self.assertEqual(claimed["dispatchMode"], "INLINE_AUTO")
+        self.assertEqual(
+            claimed["dispatchTransport"],
+            "HOST_SESSION",
+        )
+        self.assertEqual(heartbeat["status"], "CLAIMED")
+        self.assertEqual(review["nodeId"], review_node_id)
+        self.assertEqual(review["receiverContextId"], "codex-review-child")
 
     def test_ready_automatic_task_can_be_explicitly_handed_to_manual_receiver(
         self,
@@ -3510,7 +3609,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "selectSkillsAtRuntime": True,
                 "prioritizeApplicableSkillHints": True,
                 "returnOnlyStandardLoopOutcome": True,
-                "coordinatorMustNotExecuteLoopInline": True,
+                "hookAttestedCurrentSessionTaskExecutionAllowed": True,
+                "coordinatorMustNotReviewInline": True,
                 "accessOnlyAuthorizedProjectScopes": True,
                 "projectScopeWorkspaceRootsAreRuntimeVerified": False,
                 "loopsMustNotCreateSwitchOrCheckoutGitBranches": True,

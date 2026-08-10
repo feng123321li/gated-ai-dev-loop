@@ -1235,6 +1235,8 @@ class McpSurfaceTests(unittest.TestCase):
                 "confirmed_dirty_state_fingerprint",
                 "_host_workspace_attestation",
                 "_host_receiver_operation_attestation",
+                "_host_session_attestation",
+                "_host_session_context_id",
             },
         )
         self.assertIn(
@@ -1366,6 +1368,8 @@ class McpSurfaceTests(unittest.TestCase):
                 "expected_graph_fingerprint",
                 "_host_workspace_attestation",
                 "_host_receiver_operation_attestation",
+                "_host_session_attestation",
+                "_host_session_context_id",
             },
         )
         self.assertNotIn("_meta", by_name["plan_dispatch_batch"])
@@ -1420,6 +1424,8 @@ class McpSurfaceTests(unittest.TestCase):
                 "operation_id",
                 "_host_workspace_attestation",
                 "_host_receiver_operation_attestation",
+                "_host_session_attestation",
+                "_host_session_context_id",
             },
         )
         recovery = by_name["handoff_ready_automatic_task"]
@@ -2666,7 +2672,182 @@ class McpSurfaceTests(unittest.TestCase):
 
         structured = response["result"]["structuredContent"]
         self.assertTrue(structured["ok"])
-        self.assertEqual(len(structured["result"]["assignments"]), 1)
+        self.assertEqual(structured["result"]["assignments"], [])
+        self.assertEqual(
+            structured["result"]["currentSessionTaskNodeIds"],
+            ["loop:t-service"],
+        )
+        self.assertEqual(
+            structured["result"]["nextAction"],
+            "CLAIM_CURRENT_TASK",
+        )
+
+    def test_codex_session_capability_claims_and_heartbeats_current_task(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="human",
+            )
+            scheduler = SchedulerRepository(root)
+            capability = scheduler.issue_host_workspace_attestation(
+                host_adapter_id="codex",
+                context_id="codex-current-session",
+                tool_name="delivery_session",
+                tool_use_id="session:codex-current-session",
+                workspace_root=root,
+                lifetime_seconds=43_200,
+            )
+            receiver_capability = (
+                scheduler.issue_host_workspace_attestation(
+                    host_adapter_id="codex",
+                    context_id="codex-review-child",
+                    tool_name="receiver_session",
+                    tool_use_id="receiver:codex-review-child",
+                    workspace_root=root,
+                    lifetime_seconds=43_200,
+                )
+            )
+            connection = McpConnection(
+                project_root=ProjectRootBinding.from_startup(root),
+                trusted_host_adapter="codex",
+            )
+            handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "initialize",
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": LEGACY_PREFERRED_PROTOCOL_VERSION,
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "codex",
+                            "version": "test",
+                        },
+                    },
+                },
+                connection=connection,
+            )
+            handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/initialized",
+                    "params": {},
+                },
+                connection=connection,
+            )
+            private_session = {
+                "_host_session_attestation": capability,
+                "_host_session_context_id": "codex-current-session",
+            }
+            rejected_receiver_claim = handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "codex-receiver-inline-claim",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "claim_current_task",
+                        "arguments": {
+                            "root_id": prepared["rootId"],
+                            "node_id": "loop:t-service",
+                            "expected_graph_fingerprint": prepared[
+                                "graphFingerprint"
+                            ],
+                            "_host_session_attestation": (
+                                receiver_capability
+                            ),
+                            "_host_session_context_id": (
+                                "codex-review-child"
+                            ),
+                        },
+                    },
+                },
+                connection=connection,
+            )
+            plan_response = handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "codex-inline-plan",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "plan_dispatch_batch",
+                        "arguments": {
+                            "root_id": prepared["rootId"],
+                            "expected_graph_fingerprint": prepared[
+                                "graphFingerprint"
+                            ],
+                            **private_session,
+                        },
+                    },
+                },
+                connection=connection,
+            )
+            claim_response = handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "codex-inline-claim",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "claim_current_task",
+                        "arguments": {
+                            "root_id": prepared["rootId"],
+                            "node_id": "loop:t-service",
+                            "expected_graph_fingerprint": prepared[
+                                "graphFingerprint"
+                            ],
+                            **private_session,
+                        },
+                    },
+                },
+                connection=connection,
+            )
+            heartbeat_response = handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "codex-inline-heartbeat",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "heartbeat_loop",
+                        "arguments": {
+                            "root_id": prepared["rootId"],
+                            "node_id": "loop:t-service",
+                            **private_session,
+                        },
+                    },
+                },
+                connection=connection,
+            )
+
+        rejected = rejected_receiver_claim["result"]["structuredContent"]
+        plan = plan_response["result"]["structuredContent"]
+        claim = claim_response["result"]["structuredContent"]
+        heartbeat = heartbeat_response["result"]["structuredContent"]
+        self.assertFalse(rejected["ok"])
+        self.assertEqual(
+            rejected["error"]["code"],
+            "SCHEDULER_HOST_HOOK_NOT_READY",
+        )
+        self.assertTrue(plan["ok"])
+        self.assertEqual(plan["result"]["assignments"], [])
+        self.assertEqual(
+            plan["result"]["currentSessionTaskNodeIds"],
+            ["loop:t-service"],
+        )
+        self.assertEqual(plan["result"]["nextAction"], "CLAIM_CURRENT_TASK")
+        self.assertTrue(claim["ok"])
+        self.assertEqual(claim["result"]["dispatchMode"], "INLINE_AUTO")
+        self.assertTrue(heartbeat["ok"])
+        self.assertEqual(heartbeat["result"]["status"], "CLAIMED")
 
     def test_missing_receiver_operation_never_becomes_internal_error(
         self,
@@ -4595,7 +4776,12 @@ class McpSurfaceTests(unittest.TestCase):
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "plan_dispatch_batch atomically reserves each selected Loop",
+                "a Hook-attested Codex Delivery session uses "
+                "claim_current_task for READY TASK Loops",
+                initialized["result"]["instructions"],
+            )
+            self.assertIn(
+                "plan_dispatch_batch atomically reserves every Review Loop",
                 initialized["result"]["instructions"],
             )
             self.assertIn(
@@ -4929,7 +5115,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 33)
+            self.assertEqual(len(listed["result"]["tools"]), 34)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

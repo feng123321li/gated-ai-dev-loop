@@ -420,8 +420,20 @@ class SchedulerRepository:
         tool_name: str,
         tool_use_id: str,
         workspace_root: str | os.PathLike[str],
+        lifetime_seconds: int = HOST_WORKSPACE_ATTESTATION_SECONDS,
     ) -> str:
         """Bind one imminent MCP call to a host-observed workspace."""
+
+        if (
+            not isinstance(lifetime_seconds, int)
+            or isinstance(lifetime_seconds, bool)
+            or lifetime_seconds < 1
+            or lifetime_seconds > 86_400
+        ):
+            fail(
+                "SCHEDULER_HOST_WORKSPACE_ATTESTATION_INVALID",
+                "Host workspace evidence lifetime must be 1..86400 seconds",
+            )
 
         workspace = str(
             Path(workspace_root).absolute().resolve(strict=True)
@@ -439,7 +451,7 @@ class SchedulerRepository:
         at = timestamp(self.now)
         expires_at = (
             datetime.fromisoformat(at.replace("Z", "+00:00"))
-            + timedelta(seconds=HOST_WORKSPACE_ATTESTATION_SECONDS)
+            + timedelta(seconds=lifetime_seconds)
         ).isoformat().replace("+00:00", "Z")
         with self.transaction() as connection:
             connection.execute(
@@ -472,6 +484,61 @@ class SchedulerRepository:
                 ),
             )
         return attestation
+
+    def validate_host_workspace_attestation(
+        self,
+        attestation: str,
+        *,
+        host_adapter_id: str,
+        context_id: str,
+        tool_name: str,
+    ) -> str:
+        """Validate a live session capability without consuming it."""
+
+        digest = hashlib.sha256(attestation.encode("utf-8")).hexdigest()
+        context_digest = hashlib.sha256(
+            context_id.encode("utf-8")
+        ).hexdigest()
+        at = timestamp(self.now)
+        with self.read() as connection:
+            row = connection.execute(
+                "SELECT * FROM host_workspace_attestations "
+                "WHERE attestation_digest = ?",
+                (digest,),
+            ).fetchone()
+        if row is None:
+            fail(
+                "SCHEDULER_HOST_SESSION_ATTESTATION_MISSING",
+                "Host session evidence does not exist",
+            )
+        if row["status"] != "ISSUED":
+            fail(
+                "SCHEDULER_HOST_SESSION_ATTESTATION_INACTIVE",
+                "Host session evidence is no longer active",
+            )
+        if row["expires_at"] < at:
+            fail(
+                "SCHEDULER_HOST_SESSION_ATTESTATION_EXPIRED",
+                "Host session evidence expired",
+            )
+        if (
+            row["host_adapter_id"] != host_adapter_id
+            or row["context_digest"] != context_digest
+            or row["tool_name"] != tool_name
+        ):
+            fail(
+                "SCHEDULER_HOST_SESSION_ATTESTATION_MISMATCH",
+                "Host session evidence targets another receiver",
+            )
+        workspace = str(
+            Path(row["workspace_root"]).absolute().resolve(strict=True)
+        )
+        if self.workspace_key(workspace) != row["workspace_key"]:
+            fail(
+                "SCHEDULER_HOST_SESSION_ATTESTATION_MISMATCH",
+                "Host session evidence no longer matches its path",
+            )
+        return workspace
 
     def consume_host_workspace_attestation(
         self,

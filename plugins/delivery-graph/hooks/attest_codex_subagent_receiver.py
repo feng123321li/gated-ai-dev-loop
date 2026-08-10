@@ -500,15 +500,20 @@ def main() -> int:
         "dispatch_decision_fingerprint": assignment[
             "dispatchDecisionFingerprint"
         ],
+        "session_context_id": assignment["receiverContextId"],
+        "session_attestation": assignment["hostSessionAttestation"],
     }
     additional_context = (
         "The host already claimed one exact Delivery Graph AUTO Loop for "
         "this Codex-native context before exposing this message. Do not call "
         "dispatch_loop. Load the assigned node with loop_context, immediately "
         "call heartbeat_loop once before any other tool, then execute it. "
-        "Omit operation_id from heartbeat_loop, pause_loop, and "
-        "record_loop_result because PreToolUse injects it for this child. "
-        "This message contains no receiver or operation bearer.\n"
+        "Include session_context_id as _host_session_context_id and "
+        "session_attestation as _host_session_attestation in heartbeat_loop, "
+        "report_loop_progress, pause_loop, and record_loop_result. Omit "
+        "operation_id because the Controller resolves it from this "
+        "Hook-issued session capability. Never copy the capability to "
+        "workers, logs, messages, or user-visible output.\n"
         "DELIVERY_GRAPH_ASSIGNMENT="
         + json.dumps(
             context,

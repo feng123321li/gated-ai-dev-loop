@@ -62,10 +62,11 @@ DIRTY_STATE_FINGERPRINT = {
 }
 NODE_ID = _string("Exact graph node ID from graph_frontier.")
 OPERATION_ID = _string(
-    "Globally unique Loop operation ID. Codex-native children omit it for "
-    "heartbeat, progress, pause, and result calls so their PreToolUse Hook "
-    "can inject the attested value; every other caller must supply the claim "
-    "value."
+    "Globally unique Loop operation ID. Hook-attested Codex Delivery and "
+    "AUTO Review sessions omit it so the Controller can resolve the live "
+    "claim from their session capability. Claude and Codex MANUAL children "
+    "omit it only when their PreToolUse Hook injects the attested value; "
+    "every other caller must supply the claim value."
 )
 SCHEDULER_IDENTITY = {
     "type": "string",
@@ -242,6 +243,23 @@ def _tool(
                 "Host-injected one-time receiver-operation evidence. "
                 "Models and ordinary MCP clients must omit this internal "
                 "field."
+            ),
+        }
+        properties["_host_session_attestation"] = {
+            "type": "string",
+            "minLength": 32,
+            "maxLength": 256,
+            "description": (
+                "Session capability issued by a trusted lifecycle Hook. "
+                "Only the attested receiver session may replay it."
+            ),
+        }
+        properties["_host_session_context_id"] = {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "description": (
+                "Host session identity bound to the lifecycle capability."
             ),
         }
     result: dict[str, Any] = {
@@ -810,8 +828,9 @@ TOOLS = (
         "plan_dispatch_batch",
         (
             "Plan one concurrent batch for the current DISPATCH_LOOP "
-            "frontier. It reserves each assignment before the trusted "
-            "current host creates an independent outer receiver. The "
+            "frontier when an independent receiver is required, including "
+            "every Review Loop. It reserves each assignment before the "
+            "trusted current host creates an independent outer receiver. The "
             "receiver inherits the current host model; Delivery Graph "
             "does not inspect model inventory, recommend a model, or "
             "control Loop-internal workers. Returns receiver identities "
@@ -1118,6 +1137,27 @@ TOOLS = (
                 "agent_id",
                 "dispatch_mode",
                 "operation_id",
+            ],
+        ),
+    ),
+    _tool(
+        "claim_current_task",
+        (
+            "Claim one READY AUTOMATIC TASK directly in the current "
+            "Hook-attested Codex Delivery session. This path never claims "
+            "a Review Loop and never works without the SessionStart "
+            "capability bound to this exact session and worktree."
+        ),
+        _object(
+            {
+                "root_id": ROOT_ID,
+                "node_id": NODE_ID,
+                "expected_graph_fingerprint": FINGERPRINT,
+            },
+            required=[
+                "root_id",
+                "node_id",
+                "expected_graph_fingerprint",
             ],
         ),
     ),
@@ -1626,6 +1666,9 @@ def call_tool(
     trusted_host_adapter: str | None = None,
     host_hook_attested: bool = False,
     host_receiver_operation_attested: bool = False,
+    host_session_attested: bool = False,
+    host_session_context_id: str | None = None,
+    host_session_role: str | None = None,
     **_: Any,
 ) -> dict[str, Any]:
     internal_arguments = validate_tool_arguments(name, arguments)
@@ -1647,6 +1690,9 @@ def call_tool(
             host_receiver_operation_attested=(
                 host_receiver_operation_attested
             ),
+            host_session_attested=host_session_attested,
+            host_session_context_id=host_session_context_id,
+            host_session_role=host_session_role,
         ),
     )
     return result

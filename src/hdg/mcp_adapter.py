@@ -158,8 +158,11 @@ SERVER_INSTRUCTIONS = (
     "and Codex primary checkouts return host-owned stable linked-worktree "
     "background dispatch. The background Delivery coordinator calls "
     "workspace_status and resume_execution_mode without presenting the mode "
-    "selector or asking for confirmation again; the main conversation only "
-    "monitors and handles final user interaction. "
+    "selector or asking for confirmation again. In Codex, a trusted "
+    "SessionStart Hook binds that Delivery task to its exact session and "
+    "worktree, so READY TASK Loops execute in the current Delivery session; "
+    "Review Loops still use distinct native receivers. The primary "
+    "conversation only monitors and handles final user interaction. "
     "MANUAL creates the portable handoff and returns the exact receiverPrompt "
     "also embedded in that file. It registers HANDOFF_READY without binding "
     "a workspace or starting a Graph run. The receiving CLI must call "
@@ -233,9 +236,11 @@ SERVER_INSTRUCTIONS = (
     "DeepSeek, or another Agent integrates by adding one trusted outer "
     "Adapter lifecycle; its models and internal workers remain outside the "
     "Graph contract. For automatic "
-    "execution, plan_dispatch_batch atomically reserves each selected Loop "
-    "and its cross-Delivery host Agent slot, then returns concurrent outer-"
-    "receiver assignments with CURRENT_HOST_INHERIT model policy. A second "
+    "execution, a Hook-attested Codex Delivery session uses "
+    "claim_current_task for READY TASK Loops. plan_dispatch_batch "
+    "atomically reserves every Review Loop (and adapters that require child "
+    "TASK receivers) with its cross-Delivery host Agent slot, then returns "
+    "outer-receiver assignments with CURRENT_HOST_INHERIT model policy. A second "
     "dispatcher sees "
     "WAIT_FOR_DISPATCH_RECEIVER and cannot reserve or launch the same Loop. "
     "It never analyzes Loop payloads, starts Agents, or claims Loops. The "
@@ -245,7 +250,10 @@ SERVER_INSTRUCTIONS = (
     "receiver attestation, HOST_NATIVE transport, reservation ID, and the "
     "verified decision fingerprint. Only that outer receiver may heartbeat, "
     "report progress, or record the Loop result; internal workers have no "
-    "Graph authority. When no Loop is claimed and prior Loop success has "
+    "Graph authority. Codex session capabilities are issued only by "
+    "SessionStart/SubagentStart Hooks, stored only as hashes, scoped to the "
+    "exact session and Delivery worktree, and never shared with internal "
+    "workers. When no Loop is claimed and prior Loop success has "
     "reached the next frontier, the same trusted Adapter may rotate the "
     "orchestrator root to a new host session for the next Review; active "
     "claims and live credentials still forbid takeover. "
@@ -253,8 +261,9 @@ SERVER_INSTRUCTIONS = (
     "use handoff_ready_automatic_task only after its reservation expires, "
     "the Delivery worktree is clean, and the user confirms no code changes. "
     "That TASK accepts one MANUAL receiver while the Graph remains active "
-    "and every Review remains automatic. The orchestrator never claims the "
-    "TASK directly or fabricates attestation. The result may "
+    "and every Review remains automatic. A current Codex Delivery session "
+    "may claim only TASK Loops after SessionStart attestation; it can never "
+    "claim Review inline or fabricate attestation. The result may "
     "include display-only workerTelemetry by "
     "phase, with unknown Agent/model/effort values left unreported. Never "
     "spawn an autonomous CLI, subprocess, or companion script such as "
@@ -832,9 +841,19 @@ def _call_scheduler_tool(
             "_host_receiver_operation_attestation",
             None,
         )
+        host_session_attestation = tool_arguments.pop(
+            "_host_session_attestation",
+            None,
+        )
+        host_session_context_id = tool_arguments.pop(
+            "_host_session_context_id",
+            None,
+        )
         workspace_root = root_resolution.workspace_root
         host_hook_attested = False
         host_receiver_operation_attested = False
+        host_session_attested = False
+        host_session_role = None
         if workspace_attestation is not None:
             if (
                 connection.trusted_host_adapter
@@ -892,6 +911,56 @@ def _call_scheduler_tool(
                     "trusted request metadata",
                 )
             host_receiver_operation_attested = True
+        if (
+            host_session_attestation is not None
+            or host_session_context_id is not None
+        ):
+            if (
+                connection.trusted_host_adapter != "codex"
+                or not isinstance(host_session_attestation, str)
+                or not isinstance(host_session_context_id, str)
+                or not host_session_context_id
+            ):
+                raise GatedLoopError(
+                    "SCHEDULER_HOST_SESSION_ATTESTATION_UNTRUSTED",
+                    "Only a trusted Codex lifecycle Hook may attest a session",
+                )
+            repository = SchedulerRepository(
+                root_resolution.project_root
+            )
+            try:
+                attested_workspace = (
+                    repository.validate_host_workspace_attestation(
+                        host_session_attestation,
+                        host_adapter_id="codex",
+                        context_id=host_session_context_id,
+                        tool_name="delivery_session",
+                    )
+                )
+                host_session_role = "DELIVERY_COORDINATOR"
+            except GatedLoopError as error:
+                if error.code != (
+                    "SCHEDULER_HOST_SESSION_ATTESTATION_MISMATCH"
+                ):
+                    raise
+                attested_workspace = (
+                    repository.validate_host_workspace_attestation(
+                        host_session_attestation,
+                        host_adapter_id="codex",
+                        context_id=host_session_context_id,
+                        tool_name="receiver_session",
+                    )
+                )
+                host_session_role = "LOOP_RECEIVER"
+            if repository.workspace_key(
+                attested_workspace
+            ) != repository.workspace_key(workspace_root):
+                raise GatedLoopError(
+                    "SCHEDULER_HOST_SESSION_ATTESTATION_MISMATCH",
+                    "The Codex session Hook workspace does not match "
+                    "trusted request metadata",
+                )
+            host_session_attested = True
         business_result = call_tool(
             name,
             tool_arguments,
@@ -904,6 +973,11 @@ def _call_scheduler_tool(
             host_receiver_operation_attested=(
                 host_receiver_operation_attested
             ),
+            host_session_attested=host_session_attested,
+            host_session_context_id=(
+                host_session_context_id if host_session_attested else None
+            ),
+            host_session_role=host_session_role,
         )
         payload = {
             "ok": True,

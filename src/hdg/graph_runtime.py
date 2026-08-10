@@ -11,6 +11,7 @@ from typing import Any
 from .dispatch_contracts import (
     HOST_ADAPTER_RECEIVER_AGENTS,
     HOST_NATIVE_DISPATCH_TRANSPORT,
+    HOST_SESSION_DISPATCH_TRANSPORT,
     automatic_dispatch_decision_fingerprint,
 )
 from .errors import fail
@@ -57,7 +58,7 @@ from .progress_reporting import (
 
 IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,191}$")
 CAPACITY_SCOPES = frozenset({"EXECUTOR", "HOST"})
-DISPATCH_MODES = frozenset({"AUTO", "MANUAL"})
+DISPATCH_MODES = frozenset({"AUTO", "INLINE_AUTO", "MANUAL"})
 GRAPH_EXECUTION_MODES = frozenset({"active", "manual"})
 SHA256_FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
 HOST_ADAPTER_AGENTS = dict(HOST_ADAPTER_RECEIVER_AGENTS)
@@ -78,6 +79,8 @@ def _dispatch_mode_allowed(
     if execution_mode == "active":
         if manual_handoff_enabled and node_kind == "TASK_LOOP":
             return dispatch_mode == "MANUAL"
+        if node_kind == "TASK_LOOP":
+            return dispatch_mode in {"AUTO", "INLINE_AUTO"}
         return dispatch_mode == "AUTO"
     if execution_mode == "manual":
         if node_kind == "TASK_LOOP":
@@ -283,6 +286,35 @@ def _upstream_receiver_context_ids(
                 contexts.add(context_id)
         pending.extend(incoming.get(upstream_id, []))
     return contexts
+
+
+def _inline_upstream_receiver_context(
+    connection: Any,
+    *,
+    run_id: str,
+    receiver_context_id: str,
+) -> bool:
+    rows = connection.execute(
+        "SELECT payload_json FROM graph_events WHERE run_id = ? "
+        "AND event_type = 'LOOP_CLAIMED'",
+        (run_id,),
+    ).fetchall()
+    matched: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"])
+        except (TypeError, ValueError):
+            continue
+        if (
+            isinstance(payload, dict)
+            and payload.get("receiverContextId")
+            == receiver_context_id
+        ):
+            matched.append(payload)
+    return bool(matched) and all(
+        payload.get("dispatchMode") == "INLINE_AUTO"
+        for payload in matched
+    )
 
 
 def _active_claim(
@@ -783,7 +815,11 @@ def loop_context(
             "selectSkillsAtRuntime": True,
             "prioritizeApplicableSkillHints": True,
             "returnOnlyStandardLoopOutcome": True,
-            "coordinatorMustNotExecuteLoopInline": True,
+            "hookAttestedCurrentSessionTaskExecutionAllowed": (
+                run["executionMode"] == "active"
+                and definition["kind"] == "TASK_LOOP"
+            ),
+            "coordinatorMustNotReviewInline": True,
             "accessOnlyAuthorizedProjectScopes": True,
             "projectScopeWorkspaceRootsAreRuntimeVerified": (
                 verified_project_scopes is not None
@@ -852,9 +888,9 @@ def dispatch_loop(
     if dispatch_mode not in DISPATCH_MODES:
         fail(
             "SCHEDULER_DISPATCH_MODE_INVALID",
-            "dispatch_mode must be AUTO or MANUAL",
+            "dispatch_mode must be AUTO, INLINE_AUTO, or MANUAL",
         )
-    if dispatch_mode == "AUTO":
+    if dispatch_mode in {"AUTO", "INLINE_AUTO"}:
         if host_adapter_id not in HOST_ADAPTER_AGENTS:
             fail(
                 "SCHEDULER_HOST_ADAPTER_UNTRUSTED",
@@ -924,18 +960,30 @@ def dispatch_loop(
                 "SCHEDULER_RECEIVER_ATTESTATION_INVALID",
                 "Receiver identity may be supplied or host-issued, not both",
             )
-    if dispatch_mode == "AUTO" and (
-        dispatch_transport != HOST_NATIVE_DISPATCH_TRANSPORT
+    expected_transport = (
+        HOST_NATIVE_DISPATCH_TRANSPORT
+        if dispatch_mode == "AUTO"
+        else (
+            HOST_SESSION_DISPATCH_TRANSPORT
+            if dispatch_mode == "INLINE_AUTO"
+            else None
+        )
+    )
+    if expected_transport is not None and (
+        dispatch_transport != expected_transport
     ):
         fail(
             "SCHEDULER_DISPATCH_TRANSPORT_REQUIRED",
             (
-                "Automatic dispatch requires HOST_NATIVE transport; "
-                "external processes, CLI commands, and companion scripts "
-                "cannot claim an automatic assignment"
+                "Automatic dispatch requires its exact trusted host "
+                "transport; external processes, CLI commands, and "
+                "companion scripts cannot claim an automatic assignment"
             ),
         )
-    if dispatch_transport is not None and dispatch_mode != "AUTO":
+    if dispatch_transport is not None and dispatch_mode not in {
+        "AUTO",
+        "INLINE_AUTO",
+    }:
         fail(
             "SCHEDULER_DISPATCH_TRANSPORT_INVALID",
             "dispatch_transport is only valid for automatic dispatch",
@@ -990,7 +1038,7 @@ def dispatch_loop(
         else None
     )
     if (
-        dispatch_mode == "AUTO"
+        dispatch_mode in {"AUTO", "INLINE_AUTO"}
         and host_native_agent_ids is not None
         and host_native_agent_ids != (actual_agent_id,)
     ):
@@ -1181,6 +1229,13 @@ def dispatch_loop(
                 receiver_attestation is not None
                 and receiver_attestation["parentContextId"]
                 in upstream_context_ids
+                and not _inline_upstream_receiver_context(
+                    connection,
+                    run_id=run["run_id"],
+                    receiver_context_id=receiver_attestation[
+                        "parentContextId"
+                    ],
+                )
             ):
                 fail(
                     "SCHEDULER_REVIEW_CONTEXT_NOT_INDEPENDENT",
@@ -1627,7 +1682,7 @@ def attest_loop_receiver(
     if dispatch_mode not in DISPATCH_MODES:
         fail(
             "SCHEDULER_DISPATCH_MODE_INVALID",
-            "dispatch_mode must be AUTO or MANUAL",
+            "dispatch_mode must be AUTO, INLINE_AUTO, or MANUAL",
         )
     reservation_id = (
         _identity(
@@ -1685,7 +1740,7 @@ def attest_loop_receiver(
         elif reservation_id is not None:
             fail(
                 "SCHEDULER_RECEIVER_ATTESTATION_RESERVATION_INVALID",
-                "Manual receiver attestation must not carry an AUTO reservation",
+                "Non-reserved receiver attestation must not carry an AUTO reservation",
             )
         attestation_id = repository.issue_receiver_attestation(
             connection,
@@ -1706,6 +1761,175 @@ def attest_loop_receiver(
         "receiverAttestationId": attestation_id,
         "hostAdapterId": host_adapter_id,
         "dispatchMode": dispatch_mode,
+    }
+
+
+def claim_current_task(
+    *,
+    root: str,
+    root_id: str,
+    node_id: str,
+    expected_graph_fingerprint: str,
+    workspace_root: str,
+    receiver_context_id: str,
+    host_adapter_id: str,
+    host_native_agent_ids: tuple[str, ...] | None = None,
+    verified_project_scopes: list[dict[str, Any]] | None = None,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    """Claim an automatic TASK in its Hook-attested coordinator session."""
+
+    if host_adapter_id != "codex":
+        fail(
+            "SCHEDULER_HOST_SESSION_ATTESTATION_UNTRUSTED",
+            "Current-session automatic TASK execution is Codex-only",
+        )
+    if host_native_agent_ids != ("codex",):
+        fail(
+            "SCHEDULER_HOST_NATIVE_EXECUTOR_MISMATCH",
+            "The current host session is not a trusted Codex receiver",
+        )
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    repository.assert_delivery_workspace(root_id, workspace_root)
+    receiver_context_id = _identity(
+        receiver_context_id,
+        "receiver_context_id",
+    )
+    stored = repository.hierarchy(root_id)
+    if expected_graph_fingerprint != stored["graphFingerprint"]:
+        fail(
+            "SCHEDULER_GRAPH_FINGERPRINT_MISMATCH",
+            "The expected Graph fingerprint is stale",
+            expectedGraphFingerprint=expected_graph_fingerprint,
+            actualGraphFingerprint=stored["graphFingerprint"],
+        )
+    with repository.read() as connection:
+        graph, run, nodes = _loaded(connection, root_id)
+        definition, state = _node(graph, nodes, node_id)
+        if run["execution_mode"] != "active":
+            fail(
+                "SCHEDULER_INLINE_AUTOMATIC_DISABLED",
+                "Current-session automatic execution requires an active AUTOMATIC Graph",
+            )
+        if definition["kind"] != "TASK_LOOP":
+            fail(
+                "SCHEDULER_INLINE_AUTOMATIC_REVIEW_FORBIDDEN",
+                "Review Loops require an independent automatic receiver",
+            )
+        if state["status"] != "READY":
+            fail(
+                "SCHEDULER_LOOP_NOT_READY",
+                f"{node_id} is not ready for current-session execution",
+            )
+    attestation = attest_loop_receiver(
+        root=root,
+        root_id=root_id,
+        node_id=node_id,
+        receiver_context_id=receiver_context_id,
+        parent_context_id=receiver_context_id,
+        host_adapter_id="codex",
+        dispatch_reservation_id=None,
+        dispatch_mode="INLINE_AUTO",
+        explicit_dogfood=explicit_dogfood,
+        now=now,
+    )
+    return dispatch_loop(
+        root=root,
+        root_id=root_id,
+        node_id=node_id,
+        owner=receiver_context_id,
+        operation_id="codex-session-" + secrets.token_hex(24),
+        agent_id="codex",
+        receiver_context_id=receiver_context_id,
+        receiver_attestation_id=attestation["receiverAttestationId"],
+        dispatch_mode="INLINE_AUTO",
+        dispatch_transport=HOST_SESSION_DISPATCH_TRANSPORT,
+        host_native_agent_ids=("codex",),
+        host_adapter_id="codex",
+        require_receiver_attestation=True,
+        verified_project_scopes=verified_project_scopes,
+        explicit_dogfood=explicit_dogfood,
+        now=now,
+    )
+
+
+def authorize_host_session_operation(
+    *,
+    root: str,
+    root_id: str,
+    node_id: str,
+    workspace_root: str,
+    receiver_context_id: str,
+    host_adapter_id: str,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    """Resolve a live Loop operation owned by a Hook-attested session."""
+
+    if host_adapter_id != "codex":
+        fail(
+            "SCHEDULER_HOST_SESSION_ATTESTATION_UNTRUSTED",
+            "Session operations require the trusted Codex adapter",
+        )
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    repository.assert_delivery_workspace(root_id, workspace_root)
+    receiver_context_id = _identity(
+        receiver_context_id,
+        "receiver_context_id",
+    )
+    with repository.transaction() as connection:
+        graph, run, nodes = _loaded(connection, root_id)
+        at = _locked_timestamp(now, run["updated_at"])
+        _definition, state = _node(graph, nodes, node_id)
+        if (
+            not _active_claim(
+                state,
+                operation_id=state["operationId"],
+                at=at,
+            )
+            or state["owner"] != receiver_context_id
+        ):
+            fail(
+                "SCHEDULER_HOST_SESSION_OPERATION_UNAUTHORIZED",
+                "The attested Codex session does not own this live Loop",
+            )
+        claimed_event = connection.execute(
+            "SELECT payload_json FROM graph_events "
+            "WHERE run_id = ? AND node_id = ? AND attempt = ? "
+            "AND event_type = 'LOOP_CLAIMED' AND operation_id = ? "
+            "ORDER BY event_id DESC LIMIT 1",
+            (
+                run["run_id"],
+                node_id,
+                state["attempt"],
+                state["operationId"],
+            ),
+        ).fetchone()
+        payload = (
+            json.loads(claimed_event["payload_json"])
+            if claimed_event is not None
+            else None
+        )
+        if (
+            not isinstance(payload, dict)
+            or payload.get("receiverAttested") is not True
+            or payload.get("receiverContextId") != receiver_context_id
+            or payload.get("hostAdapterId") != "codex"
+            or payload.get("dispatchMode")
+            not in {"AUTO", "INLINE_AUTO", "MANUAL"}
+        ):
+            fail(
+                "SCHEDULER_HOST_SESSION_OPERATION_UNAUTHORIZED",
+                "The live Loop was not claimed by this attested Codex session",
+            )
+    return {
+        "rootId": root_id,
+        "nodeId": node_id,
+        "receiverContextId": receiver_context_id,
+        "operationId": state["operationId"],
     }
 
 
@@ -1751,6 +1975,21 @@ def claim_codex_subagent_receiver(
         dispatch_reservation_id,
         "dispatch_reservation_id",
     )
+
+    def attach_session_capability(
+        assignment: dict[str, Any],
+    ) -> dict[str, Any]:
+        assignment["hostSessionAttestation"] = (
+            repository.issue_host_workspace_attestation(
+                host_adapter_id="codex",
+                context_id=receiver_context_id,
+                tool_name="receiver_session",
+                tool_use_id=str(assignment["operationId"]),
+                workspace_root=workspace_root,
+                lifetime_seconds=86_400,
+            )
+        )
+        return assignment
 
     def committed_assignment(connection: Any) -> dict[str, Any] | None:
         row = connection.execute(
@@ -1803,41 +2042,42 @@ def claim_codex_subagent_receiver(
     with repository.transaction() as connection:
         graph, run, _nodes = _loaded(connection, root_id)
         recovered = committed_assignment(connection)
-        if recovered is not None:
-            return recovered
-        at = _locked_timestamp(now, run["updated_at"])
-        if run["execution_mode"] not in GRAPH_EXECUTION_MODES:
-            fail(
-                "SCHEDULER_CODEX_RECEIVER_RESERVATION_MISSING",
-                "Codex SubagentStart claim requires a governed Graph run",
-            )
-        repository.expire_dispatch_reservations(connection, at=at)
-        reservation = connection.execute(
-            "SELECT d.* FROM dispatch_reservations d "
-            "LEFT JOIN host_receiver_identities h "
-            "ON h.reservation_id = d.reservation_id "
-            "WHERE d.reservation_id = ? AND d.run_id = ? "
-            "AND d.root_id = ? AND d.agent_id = 'codex' "
-            "AND d.status = 'RESERVED' "
-            "AND d.expires_at >= ? AND h.attestation_digest IS NULL "
-            "LIMIT 1",
-            (
-                reservation_id,
-                run["run_id"],
-                root_id,
-                at,
-            ),
-        ).fetchone()
-        if reservation is None:
-            fail(
-                "SCHEDULER_CODEX_RECEIVER_RESERVATION_MISSING",
-                "Codex SubagentStart has no matching live AUTO reservation",
-            )
-        reservation_values = dict(reservation)
+        if recovered is None:
+            at = _locked_timestamp(now, run["updated_at"])
+            if run["execution_mode"] not in GRAPH_EXECUTION_MODES:
+                fail(
+                    "SCHEDULER_CODEX_RECEIVER_RESERVATION_MISSING",
+                    "Codex SubagentStart claim requires a governed Graph run",
+                )
+            repository.expire_dispatch_reservations(connection, at=at)
+            reservation = connection.execute(
+                "SELECT d.* FROM dispatch_reservations d "
+                "LEFT JOIN host_receiver_identities h "
+                "ON h.reservation_id = d.reservation_id "
+                "WHERE d.reservation_id = ? AND d.run_id = ? "
+                "AND d.root_id = ? AND d.agent_id = 'codex' "
+                "AND d.status = 'RESERVED' "
+                "AND d.expires_at >= ? AND h.attestation_digest IS NULL "
+                "LIMIT 1",
+                (
+                    reservation_id,
+                    run["run_id"],
+                    root_id,
+                    at,
+                ),
+            ).fetchone()
+            if reservation is None:
+                fail(
+                    "SCHEDULER_CODEX_RECEIVER_RESERVATION_MISSING",
+                    "Codex SubagentStart has no matching live AUTO reservation",
+                )
+            reservation_values = dict(reservation)
+    if recovered is not None:
+        return attach_session_capability(recovered)
 
     operation_id = "codex-claim-" + secrets.token_hex(24)
     try:
-        return dispatch_loop(
+        assignment = dispatch_loop(
             root=root,
             root_id=root_id,
             node_id=reservation_values["node_id"],
@@ -1860,11 +2100,12 @@ def claim_codex_subagent_receiver(
             explicit_dogfood=explicit_dogfood,
             now=now,
         )
+        return attach_session_capability(assignment)
     except Exception:
         with repository.transaction() as connection:
             recovered = committed_assignment(connection)
         if recovered is not None:
-            return recovered
+            return attach_session_capability(recovered)
         raise
 
 
@@ -4177,8 +4418,10 @@ __all__ = (
     "advance_graph",
     "archive_delivery",
     "attest_loop_receiver",
+    "authorize_host_session_operation",
     "cancel_graph_run",
     "claim_codex_subagent_receiver",
+    "claim_current_task",
     "dispatch_loop",
     "graph_events",
     "graph_status",

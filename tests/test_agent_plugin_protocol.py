@@ -42,7 +42,7 @@ class AgentPluginProtocolTests(unittest.TestCase):
 
     def test_all_tools_publish_current_structured_metadata(self) -> None:
         tools = tool_definitions()
-        self.assertEqual(len(tools), 33)
+        self.assertEqual(len(tools), 34)
 
         problems: list[str] = []
         for tool in tools:

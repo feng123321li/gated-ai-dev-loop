@@ -3,8 +3,9 @@ from __future__ import annotations
 from .jsonio import fingerprint
 
 
-DISPATCH_POLICY_VERSION = "HOST_NATIVE_RECEIVER_ROUTING_V5"
+DISPATCH_POLICY_VERSION = "HOST_NATIVE_RECEIVER_ROUTING_V6"
 HOST_NATIVE_DISPATCH_TRANSPORT = "HOST_NATIVE"
+HOST_SESSION_DISPATCH_TRANSPORT = "HOST_SESSION"
 
 # Receiver Agent IDs are host lifecycle identities, not development-model
 # recommendations.  A new Adapter must implement the same native receiver
@@ -43,5 +44,6 @@ __all__ = (
     "DISPATCH_POLICY_VERSION",
     "HOST_ADAPTER_RECEIVER_AGENTS",
     "HOST_NATIVE_DISPATCH_TRANSPORT",
+    "HOST_SESSION_DISPATCH_TRANSPORT",
     "automatic_dispatch_decision_fingerprint",
 )

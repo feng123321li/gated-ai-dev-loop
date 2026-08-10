@@ -151,9 +151,11 @@ def _prompt(scenario: str, host: str) -> str:
         "receivers from this main session."
         if host == "claude-code"
         else (
-            "Prepare and freeze the hierarchy, reserve the current frontier "
-            "through the trusted current host without asking another "
-            "question, and dispatch through a real host-native child Agent."
+            "Prepare and freeze the hierarchy, claim the READY TASK with "
+            "claim_current_task through the SessionStart capability, and "
+            "implement it in this current Delivery session. Reserve and "
+            "dispatch only the later Review Loops through real host-native "
+            "child Agents."
         )
     )
     receiver_start_requirement = (
@@ -164,11 +166,12 @@ def _prompt(scenario: str, host: str) -> str:
         "PreToolUse hook can inject them; it must never invent placeholders."
         if host == "claude-code"
         else (
-            "The Codex SubagentStart hook atomically claims the AUTO Loop "
-            "before exposing the assignment. The child must not call "
-            "dispatch_loop; it reads loop_context once, then calls "
-            "heartbeat_loop immediately before any shell, file read/write, "
-            "implementation analysis, or extra discovery."
+            "The Codex SessionStart hook attests this current Delivery "
+            "session. Call claim_current_task for the READY TASK, read "
+            "loop_context once, then call heartbeat_loop immediately before "
+            "any shell, file read/write, implementation analysis, or extra "
+            "discovery. SubagentStart remains mandatory for each later "
+            "independent Review receiver."
         )
     )
     return textwrap.dedent(
@@ -209,13 +212,14 @@ def _prompt(scenario: str, host: str) -> str:
         claim, the child calls heartbeat_loop once before editing any file. The
         smoke is failed if LOOP_HEARTBEAT is absent even when the task is short.
 
-        When HOST_NATIVE_DISPATCH_PLAN is returned, start the current-host child
-        immediately; do not read more documentation or inspect Plugin source.
+        When HOST_NATIVE_DISPATCH_PLAN is returned for a Review, start the
+        current-host child immediately; do not read more documentation or
+        inspect Plugin source.
         {receiver_start_requirement}
 
-        {execution_requirement} Every child must send at least one heartbeat
-        immediately after claim before reporting structured progress and
-        recording a truthful Loop result. Continue until the frontier reaches
+        {execution_requirement} Every TASK or Review receiver must send at
+        least one heartbeat immediately after claim before reporting structured
+        progress and recording a truthful Loop result. Continue until the frontier reaches
         RECORD_USER_CONFIRMATION. Stop there: final acceptance must remain a
         real user action and must not be fabricated. Do not commit, push,
         access the network, or modify anything outside this disposable
@@ -223,6 +227,70 @@ def _prompt(scenario: str, host: str) -> str:
 
         For Claude dispatch_loop, use `owner=claude-code` unless the host supplies
         another portable owner label; do not derive owner from a node ID.
+        """
+    ).strip()
+
+
+def _codex_bootstrap_prompt(scenario: str) -> str:
+    profile = "LIGHT" if scenario == "light" else "STANDARD"
+    review_requirement = (
+        "Use no Review Loop because this is a LIGHT single-TASK Graph."
+        if profile == "LIGHT"
+        else (
+            "Include the required TASK Review and Delivery Review Loops, "
+            "but do not dispatch them during this bootstrap turn."
+        )
+    )
+    return textwrap.dedent(
+        f"""
+        Bootstrap the official delivery-graph {profile} Codex host smoke in
+        this disposable feature worktree. Use only the installed Skill and
+        MCP tools. Create one root TASK with stable ID `t-smoke-artifact`.
+        Its frozen implementation is to create `smoke.txt` with exactly
+        `delivery-graph smoke\\n` and verify that exact content with one
+        Python command. {review_requirement}
+
+        The user has already explicitly selected AUTOMATIC. Complete the
+        baseline and execution-mode flow, adopt this existing host-created
+        linked worktree, and call resume_execution_mode until the Graph is
+        ACTIVE with the TASK READY. Do not claim any Loop, call
+        plan_dispatch_batch, inspect implementation files, create smoke.txt,
+        or record final user confirmation in this bootstrap turn. Stop as soon
+        as the READY frontier is visible. A second invocation will resume this
+        exact Codex session so SessionStart can attest the now-existing
+        Delivery.
+        """
+    ).strip()
+
+
+def _codex_resume_prompt(scenario: str) -> str:
+    review_requirement = (
+        "This LIGHT Graph has no Review Loop."
+        if scenario == "light"
+        else (
+            "After TASK success, reserve and start every required Review in "
+            "a distinct host-native child; SubagentStart must attest each one."
+        )
+    )
+    return textwrap.dedent(
+        f"""
+        Resume the already ACTIVE delivery-graph Codex host smoke. Do not
+        preview, prepare, freeze, or create another Delivery. The trusted
+        SessionStart Hook now provides the private capability for this exact
+        Delivery session and worktree. Call workspace_status and
+        graph_frontier, claim the READY `t-smoke-artifact` TASK through
+        claim_current_task, read loop_context once, and heartbeat immediately
+        before any implementation inspection or edit.
+
+        Create only `smoke.txt` with exactly `delivery-graph smoke\\n`, then
+        use one Python command to assert that exact content. Report structured
+        progress and a truthful result. {review_requirement} Every Review
+        receiver must heartbeat immediately after its SubagentStart claim and
+        before inspecting the repository. Never dispatch to another Agent,
+        fabricate final acceptance, commit, push, access the network, or
+        modify anything outside this disposable repository. Stop when the
+        frontier reaches RECORD_USER_CONFIRMATION; never call
+        record_user_confirmation.
         """
     ).strip()
 
@@ -280,8 +348,9 @@ def _host_command(
     workspace: Path,
     scenario: str,
     model: str | None,
+    prompt: str | None = None,
 ) -> list[str]:
-    prompt = _prompt(scenario, host)
+    prompt = prompt or _prompt(scenario, host)
     if host == "claude-code":
         executable = shutil.which("claude")
         if executable is None:
@@ -360,6 +429,52 @@ def _host_command(
         command.append(prompt)
         return command
     raise RuntimeError(f"unsupported host: {host}")
+
+
+def _codex_session_id(log_path: Path) -> str:
+    for line in log_path.read_text(
+        encoding="utf-8",
+        errors="replace",
+    ).splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") != "thread.started":
+            continue
+        thread_id = event.get("thread_id")
+        if isinstance(thread_id, str) and thread_id:
+            return thread_id
+    raise RuntimeError("Codex bootstrap output did not expose a thread id")
+
+
+def _codex_resume_command(
+    *,
+    session_id: str,
+    prompt: str,
+    model: str | None,
+) -> list[str]:
+    executable = shutil.which("codex")
+    if executable is None:
+        raise RuntimeError("Codex CLI is not available on PATH")
+    _, competing_plugin_ids = _codex_plugin_state()
+    command = [executable]
+    for plugin_id in competing_plugin_ids:
+        command.extend(
+            ["-c", f'plugins."{plugin_id}".enabled=false']
+        )
+    command.extend(
+        [
+            "exec",
+            "resume",
+            "--json",
+            "--dangerously-bypass-hook-trust",
+        ]
+    )
+    if model:
+        command.extend(["--model", model])
+    command.extend([session_id, prompt])
+    return command
 
 
 def _git_worktree_roots(repo_root: Path) -> list[Path]:
@@ -518,25 +633,68 @@ def run_smoke(args: argparse.Namespace) -> int:
         temporary_path = temporary_root
         control_root = temporary_root / "workspace"
         workspace = _prepare_workspace(control_root, args.host)
-        command = _host_command(
-            args.host,
-            workspace=workspace,
-            scenario=args.scenario,
-            model=args.model,
-        )
         log_path = temporary_root / "host-output.jsonl"
-        with log_path.open("w", encoding="utf-8", newline="\n") as log:
-            completed = subprocess.run(
-                command,
-                cwd=workspace,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                timeout=args.timeout,
-                check=False,
+        if args.host == "codex":
+            bootstrap_command = _host_command(
+                args.host,
+                workspace=workspace,
+                scenario=args.scenario,
+                model=args.model,
+                prompt=_codex_bootstrap_prompt(args.scenario),
             )
+            with log_path.open("w", encoding="utf-8", newline="\n") as log:
+                completed = subprocess.run(
+                    bootstrap_command,
+                    cwd=workspace,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    timeout=args.timeout,
+                    check=False,
+                )
+            if completed.returncode == 0:
+                resume_command = _codex_resume_command(
+                    session_id=_codex_session_id(log_path),
+                    prompt=_codex_resume_prompt(args.scenario),
+                    model=args.model,
+                )
+                with log_path.open(
+                    "a",
+                    encoding="utf-8",
+                    newline="\n",
+                ) as log:
+                    completed = subprocess.run(
+                        resume_command,
+                        cwd=workspace,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        timeout=args.timeout,
+                        check=False,
+                    )
+        else:
+            command = _host_command(
+                args.host,
+                workspace=workspace,
+                scenario=args.scenario,
+                model=args.model,
+            )
+            with log_path.open("w", encoding="utf-8", newline="\n") as log:
+                completed = subprocess.run(
+                    command,
+                    cwd=workspace,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    timeout=args.timeout,
+                    check=False,
+                )
         if completed.returncode != 0:
             tail = log_path.read_text(encoding="utf-8", errors="replace")[-8000:]
             raise RuntimeError(

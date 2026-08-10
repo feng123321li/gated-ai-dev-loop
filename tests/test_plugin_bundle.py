@@ -12,6 +12,7 @@ import sqlite3
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
+import threading
 import types
 import unittest
 from unittest import mock
@@ -1424,6 +1425,65 @@ class PluginBundleTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("DELIVERY_GRAPH_ASSIGNMENT=", completed.stdout)
+
+    def test_codex_subagent_start_waits_for_direct_child_transcript(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="human",
+            )
+            assignment = plan_dispatch_batch(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                host_adapter_id="codex",
+                host_native_agent_ids=("codex",),
+            )["assignments"][0]
+            hook_event, hook_codex_home = self.codex_subagent_event(
+                root,
+                agent_id="codex-delayed-child-transcript",
+                model_id="host-observed-model",
+                task_name=assignment["hostTaskName"],
+                cwd=root,
+            )
+            transcript = Path(hook_event["transcript_path"])
+            session_meta = transcript.read_text(encoding="utf-8")
+            transcript.write_text("", encoding="utf-8")
+            writer = threading.Timer(
+                0.1,
+                transcript.write_text,
+                args=(session_meta,),
+                kwargs={"encoding": "utf-8"},
+            )
+            writer.start()
+            try:
+                completed = self.run_codex_hook(
+                    hook_event,
+                    hook_codex_home,
+                )
+            finally:
+                writer.join()
+            state = graph_status(root=root, root_id=prepared["rootId"])
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("DELIVERY_GRAPH_ASSIGNMENT=", completed.stdout)
+        claimed = next(
+            item
+            for item in state["nodes"]
+            if item["nodeId"] == assignment["nodeId"]
+        )
+        self.assertEqual(claimed["status"], "CLAIMED")
 
     def test_codex_subagent_start_does_not_require_model_for_identity(
         self,

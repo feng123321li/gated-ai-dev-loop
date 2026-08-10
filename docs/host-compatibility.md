@@ -7,6 +7,17 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.39.1 发布候选矩阵
+
+0.39.1 保持 33 个 MCP 工具，修复 Codex Desktop `SubagentStart` 先于直接 child transcript 首条 `session_meta` 落盘时的 claim 竞态。核心契约必须模拟 transcript 先为空、随后写入合法 session metadata，并验证 Hook 只在当前 child 文件名、可信 sessions 根、精确 parent/role/task 和有效 reservation 全部匹配后原子 claim；超时、伪造路径、自定义 `CODEX_HOME`、错误角色和过期 reservation 继续 fail closed。
+
+| 环境 | Python | 核心契约 | 真实宿主 | 发布用途 |
+|---|---:|---|---|---|
+| Linux Runner | 3.10 / 3.12 / 3.14 | CI 自动 | 不适用 | Hook 时序、身份绑定与协议回归 |
+| Windows 自托管 Runner | 3.10+ | 发布任务 | Codex 空 transcript 竞态已复现；0.39.1 待重新派遣验证 | 原生 child claim、heartbeat 与后续 Loop |
+
+候选宿主版本继续使用 Codex CLI 0.147.0 和 Claude Code 2.1.226；Codex Desktop 实际失败实例为 0.147.0-alpha.6.5。版本号用于复现记录，不构成永久最低版本承诺。
+
 ## 0.39.0 发布候选矩阵
 
 0.39.0 提供 33 个 MCP 工具和一个静态 MCP Apps Resource，并新增数据库 baseline 强制契约、clean primary feature 的 stacked 子分支基线、Codex Desktop sandbox transcript 识别及未领取自动 TASK 的显式人工恢复。核心契约必须验证数据库结构在执行前生成并冻结、缺失设计或 LIGHT fail closed、Loop 只执行 after，以及 `NEW_FROM_CURRENT_BRANCH` 的 child/base/integration binding 与 hostDispatch 完全一致。`SubagentStart` 必须在 Hook 隔离账户与宿主 profile 不同时仍验证真实 transcript；`handoff_ready_automatic_task` 只允许 clean、READY、从未领取且无有效 reservation 的 TASK，并保持 Review 自动派遣。Modern/Legacy 两种 wire shim 继续共享同一 tools/resources dispatcher，`open_delivery_dashboard` 只读取当前状态，UI 不包含控制面写工具或外部资源，无 UI 宿主仍能使用文字与 `structuredContent`。

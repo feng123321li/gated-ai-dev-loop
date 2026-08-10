@@ -239,6 +239,31 @@ def _dispatch_reservation_from_transcript(
     return metadata["dispatchReservationId"]
 
 
+def _wait_for_direct_subagent_reservation(
+    transcript_path: str,
+    *,
+    receiver_context_id: str,
+    parent_session_id: str,
+    agent_type: str,
+) -> str | None:
+    deadline = time.monotonic() + CHILD_TRANSCRIPT_WAIT_SECONDS
+    while True:
+        try:
+            reservation = _dispatch_reservation_from_transcript(
+                transcript_path,
+                receiver_context_id=receiver_context_id,
+                parent_session_id=parent_session_id,
+                agent_type=agent_type,
+            )
+        except (json.JSONDecodeError, OSError, ValueError):
+            reservation = None
+        if reservation is not None:
+            return reservation
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(CHILD_TRANSCRIPT_POLL_SECONDS)
+
+
 def _dispatch_reservation_from_subagent_start(
     transcript_path: str,
     *,
@@ -246,14 +271,26 @@ def _dispatch_reservation_from_subagent_start(
     parent_session_id: str,
     agent_type: str,
 ) -> str | None:
-    direct_reservation = _dispatch_reservation_from_transcript(
-        transcript_path,
-        receiver_context_id=receiver_context_id,
-        parent_session_id=parent_session_id,
-        agent_type=agent_type,
-    )
+    try:
+        direct_reservation = _dispatch_reservation_from_transcript(
+            transcript_path,
+            receiver_context_id=receiver_context_id,
+            parent_session_id=parent_session_id,
+            agent_type=agent_type,
+        )
+    except (json.JSONDecodeError, OSError, ValueError):
+        direct_reservation = None
     if direct_reservation is not None:
         return direct_reservation
+
+    transcript_name = Path(transcript_path).name
+    if transcript_name.endswith(f"-{receiver_context_id}.jsonl"):
+        return _wait_for_direct_subagent_reservation(
+            transcript_path,
+            receiver_context_id=receiver_context_id,
+            parent_session_id=parent_session_id,
+            agent_type=agent_type,
+        )
 
     child_transcript = _child_transcript_from_parent(
         transcript_path,

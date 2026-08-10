@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.1 — 2026-08-10
+
+发布提交：以 tag `v0.39.1` 指向的提交为准
+
+- **Codex Desktop transcript 竞态修复**：`SubagentStart` 事件可能先于 child transcript 的首条 `session_meta` 落盘；当事件路径已精确指向当前 child 时，Hook 现在以 50ms 间隔有界等待最多 2 秒，再完成 parent/child/task/reservation 校验与原子 claim。
+- **安全边界不变**：等待只适用于文件名绑定当前 `receiver_context_id` 且位于宿主可信 `.codex/sessions` 根的 transcript；parent transcript 仍使用原 sibling 查找，自定义 `CODEX_HOME`、错误角色、错误任务名和过期 reservation 继续静默拒绝。
+- **真实故障证据**：Codex Desktop 0.147.0-alpha.6.5 的失败会话在 child 启动后约 70ms 才写入 `session_meta`，0.39.0 因读取到空 transcript 未 claim；Loop 未读取或修改业务仓库，reservation 到期后安全回到 `READY`。
+- **验证**：新增直接 child transcript 延迟写入回归；本地 Python 全量 342 项测试通过（1 项按环境条件跳过），并完成编译、Skill/Plugin、发布与差异校验。
+
 ## 0.39.0 — 2026-08-10
 
 发布提交：以 tag `v0.39.0` 指向的提交为准

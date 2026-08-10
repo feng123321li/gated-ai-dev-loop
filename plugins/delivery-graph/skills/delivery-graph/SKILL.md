@@ -51,9 +51,10 @@ allowed-tools:
 1. 检查真实代码和工作区；与用户确认目标、边界、验收点、项目范围、依赖和排他资源。
 2. 选择保障档。不确定时用 `STANDARD`；仅当单一根 TASK、局部低风险且定向验证充分时用 `LIGHT`，并写明 `assuranceRationale`。
 3. 只为真实分层、并行汇合或 Review 边界创建 `GROUP`。不要为单 TASK 制造形式层级。
-4. 把实现目标和约束放入 `loop.payload`；用 `resourceClaims` 表达跨 Delivery 排他资源；把用户指定 Skill 记录为共享 `root.skillHints`。
-5. 调用 `hierarchy_contract` 后构造 schema v3。较大层级先写 JSON 文件并校验，再通过 `hierarchy_file` 传给 `preview_hierarchy`。
-6. 仅在返回 `CHOICE_READY` 且 `artifactsReady=true` 后处理 `pendingInteraction`。
+4. 需求涉及建表、改表或删表时，在 preview 前读取真实当前结构、完成字段级 before/after 设计，并按 `projectionGuidance.databaseChanges` 写入负责 TASK 的 `loop.payload.databaseChanges`；不得把数据库设计留给执行 Loop。
+5. 把其他实现目标和约束放入 `loop.payload`；用 `resourceClaims` 表达跨 Delivery 排他资源；每项数据库变更的 `resourceClaim` 必须同时存在于该 TASK 的资源声明中；把用户指定 Skill 记录为共享 `root.skillHints`。
+6. 调用 `hierarchy_contract` 后构造 schema v3。较大层级先写 JSON 文件并校验，再通过 `hierarchy_file` 传给 `preview_hierarchy`。
+7. 仅在返回 `CHOICE_READY` 且 `artifactsReady=true` 后处理 `pendingInteraction`。
 
 ## 处理待确认交互
 
@@ -61,10 +62,10 @@ allowed-tools:
 
 ### `DEVELOPMENT_BASELINE`
 
-1. 展示 Controller 返回的本地分支和 `NEW_FROM_MAINLINE`；后者要求新分支名。
+1. 展示 Controller 返回的本地分支、`NEW_FROM_MAINLINE`，以及仅在干净 primary feature 工作区出现的 `NEW_FROM_CURRENT_BRANCH`；两个 NEW 选项都要求新分支名，后者是用户显式授权的 stacked Delivery 子分支。
 2. 调用 `confirm_development_baseline`，原样回传交互中的 hierarchy、Graph、Revision 和 baseline context fingerprints。
 3. 工作树非干净时，先让用户确认全部改动属于本 Delivery，再回传精确 `workingTree.stateFingerprint` 作为 `confirmed_dirty_state_fingerprint`。状态变化后必须重新确认。
-4. 让 Controller 只读冻结 `gitBinding`。`NEW_FROM_MAINLINE` 必须把 `baseCommit` 钉在确认时的主线 HEAD；不要在这里创建分支或 worktree。
+4. 让 Controller 只读冻结 `gitBinding`。`NEW_FROM_MAINLINE` 把 `baseCommit` 钉在确认时的主线 HEAD；`NEW_FROM_CURRENT_BRANCH` 把 clean 当前 feature 的 HEAD 钉为 `baseCommit`，并让该父 feature 同时成为 `baseRef/integrationTarget`。不要在这里创建分支或 worktree，也不要要求 primary 释放父分支。
 5. 对 Git 探测错误 fail closed。仅当确认不是 Git 工作区时跳过基线交互。
 6. 多 Git 项目必须在每个 `projectScopes[*]` 显式提供完整 `gitBinding`；任一缺失就停止，不得用顶层偏好推断其他仓库。
 
@@ -96,6 +97,7 @@ allowed-tools:
 - claim 成功后，让 receiver 读取一次 `loop_context`，并在任何代码工作前提交首次独立 `heartbeat_loop`。
 - 只让可信外层 receiver 调用 claim、heartbeat、progress、pause、resume 和 `record_loop_result`。内部 Worker 不得持有控制面凭据。
 - 让 receiver 使用已验证的 `projectScopes`，按租约 heartbeat，并在关键阶段报告 progress；progress 不续租。
+- 数据库 TASK 只应用和验证冻结 `databaseChanges[*].after`，不得在 Loop 内另行设计字段、索引、约束或迁移策略；任何必要偏离都提交 `REPLAN_REQUIRED`。
 - 只提交真实业务终态。实际范围或风险超出冻结契约时提交 `REPLAN_REQUIRED`，不要硬完成。
 - frontier 返回 `RECORD_USER_CONFIRMATION` 时，展示分层验收结果并等待真实用户确认。
 

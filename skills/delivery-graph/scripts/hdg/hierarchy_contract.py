@@ -55,8 +55,21 @@ def _loop_schema() -> dict[str, Any]:
                 "type": "object",
                 "description": (
                     "Opaque Loop-owned input. It may contain implementation "
-                    "plans, acceptance rules, tests, gates, and Skills."
+                    "plans, acceptance rules, tests, gates, and Skills. "
+                    "The controller validates and projects the reserved "
+                    "databaseChanges contract when it is declared."
                 ),
+                "properties": {
+                    "databaseChanges": {
+                        "type": "array",
+                        "items": _ref("databaseChange"),
+                        "minItems": 1,
+                        "description": (
+                            "Complete frozen table before/after designs, "
+                            "migration plans, and matching resource locks."
+                        ),
+                    }
+                },
                 "additionalProperties": True,
             },
             "resourceClaims": {
@@ -122,7 +135,9 @@ def _git_binding_schema() -> dict[str, Any]:
             "baseRef": {
                 **branch,
                 "description": (
-                    "Mainline branch from which the Delivery was created."
+                    "Branch from which the Delivery was created: normally "
+                    "mainline, or an explicitly confirmed parent feature "
+                    "for a stacked Delivery."
                 ),
             },
             "baseCommit": {
@@ -135,7 +150,8 @@ def _git_binding_schema() -> dict[str, Any]:
             "integrationTarget": {
                 **branch,
                 "description": (
-                    "Mainline branch that receives the final Delivery PR."
+                    "Branch that receives the final Delivery integration; "
+                    "it must equal baseRef."
                 ),
             },
         }
@@ -180,6 +196,191 @@ def _project_scopes_schema() -> dict[str, Any]:
             "requires explicit authorization of every listed project ID."
         ),
     }
+
+
+def _nullable_text() -> dict[str, Any]:
+    return {"type": ["string", "null"]}
+
+
+def _database_column_schema() -> dict[str, Any]:
+    return _object(
+        {
+            "name": _text("Exact column name."),
+            "type": _text("Complete database-native column type."),
+            "nullable": {"type": "boolean"},
+            "default": {
+                "type": ["string", "number", "integer", "boolean", "null"],
+            },
+            "comment": _nullable_text(),
+            "autoIncrement": {"type": "boolean"},
+            "generated": {"type": "boolean"},
+        },
+        required=["name", "type", "nullable", "default", "comment"],
+    )
+
+
+def _database_named_columns_schema() -> dict[str, Any]:
+    return _object(
+        {
+            "name": _text("Exact constraint name."),
+            "columns": {
+                "type": "array",
+                "items": _text("Exact column name."),
+                "minItems": 1,
+                "uniqueItems": True,
+            },
+        }
+    )
+
+
+def _database_index_schema() -> dict[str, Any]:
+    return _object(
+        {
+            "name": _text("Exact index name."),
+            "columns": {
+                "type": "array",
+                "items": _text("Indexed column or expression."),
+                "minItems": 1,
+                "uniqueItems": True,
+            },
+            "unique": {"type": "boolean"},
+            "method": _text("Optional database index method."),
+            "predicate": _text("Optional partial-index predicate."),
+        },
+        required=["name", "columns", "unique"],
+    )
+
+
+def _database_foreign_key_schema() -> dict[str, Any]:
+    return _object(
+        {
+            "name": _text("Exact foreign-key name."),
+            "columns": {
+                "type": "array",
+                "items": _text("Source column name."),
+                "minItems": 1,
+                "uniqueItems": True,
+            },
+            "referencedTable": _text("Referenced table identity."),
+            "referencedColumns": {
+                "type": "array",
+                "items": _text("Referenced column name."),
+                "minItems": 1,
+                "uniqueItems": True,
+            },
+            "onDelete": _text("Explicit ON DELETE behavior or NOT_APPLICABLE."),
+            "onUpdate": _text("Explicit ON UPDATE behavior or NOT_APPLICABLE."),
+        }
+    )
+
+
+def _database_snapshot_schema() -> dict[str, Any]:
+    return _object(
+        {
+            "comment": _nullable_text(),
+            "columns": {
+                "type": "array",
+                "items": _ref("databaseColumn"),
+                "minItems": 1,
+            },
+            "primaryKey": {
+                "oneOf": [_ref("databaseNamedColumns"), {"type": "null"}],
+            },
+            "uniqueConstraints": {
+                "type": "array",
+                "items": _ref("databaseNamedColumns"),
+            },
+            "indexes": {
+                "type": "array",
+                "items": _ref("databaseIndex"),
+            },
+            "foreignKeys": {
+                "type": "array",
+                "items": _ref("databaseForeignKey"),
+            },
+        }
+    )
+
+
+def _database_migration_schema() -> dict[str, Any]:
+    return _object(
+        {
+            "forward": _text("Forward migration procedure or artifact."),
+            "rollback": _text("Rollback procedure or explicit impossibility."),
+            "backfill": _text("Historical-data backfill plan or NOT_APPLICABLE."),
+            "compatibility": _text("Rollout compatibility and ordering."),
+            "verification": {
+                "type": "array",
+                "items": _text("Concrete migration verification."),
+                "minItems": 1,
+            },
+        }
+    )
+
+
+def _database_change_schema() -> dict[str, Any]:
+    base = _object(
+        {
+            "projectId": _text("Owning project ID when the Delivery spans projects."),
+            "database": _text("Database or datasource identity."),
+            "schema": _text("Database schema or namespace."),
+            "table": _text("Exact table name."),
+            "summary": _text("Business reason for this table change."),
+            "changeType": {
+                "type": "string",
+                "enum": ["CREATE", "MODIFY", "DELETE"],
+            },
+            "before": {
+                "oneOf": [_ref("databaseSnapshot"), {"type": "null"}],
+            },
+            "after": {
+                "oneOf": [_ref("databaseSnapshot"), {"type": "null"}],
+            },
+            "migration": _ref("databaseMigration"),
+            "resourceClaim": _text(
+                "Exact lock key also present in the TASK Loop resourceClaims."
+            ),
+        },
+        required=[
+            "table",
+            "summary",
+            "changeType",
+            "before",
+            "after",
+            "migration",
+            "resourceClaim",
+        ],
+    )
+    base["allOf"] = [
+        {
+            "if": {"properties": {"changeType": {"const": "CREATE"}}},
+            "then": {
+                "properties": {
+                    "before": {"const": None},
+                    "after": _ref("databaseSnapshot"),
+                }
+            },
+        },
+        {
+            "if": {"properties": {"changeType": {"const": "MODIFY"}}},
+            "then": {
+                "properties": {
+                    "before": _ref("databaseSnapshot"),
+                    "after": _ref("databaseSnapshot"),
+                }
+            },
+        },
+        {
+            "if": {"properties": {"changeType": {"const": "DELETE"}}},
+            "then": {
+                "properties": {
+                    "before": _ref("databaseSnapshot"),
+                    "after": {"const": None},
+                }
+            },
+        },
+    ]
+    return base
 
 
 def _depends_on_schema() -> dict[str, Any]:
@@ -308,6 +509,13 @@ def _group_node(*, root: bool) -> dict[str, Any]:
 def _definitions() -> dict[str, Any]:
     return {
         "loop": _loop_schema(),
+        "databaseColumn": _database_column_schema(),
+        "databaseNamedColumns": _database_named_columns_schema(),
+        "databaseIndex": _database_index_schema(),
+        "databaseForeignKey": _database_foreign_key_schema(),
+        "databaseSnapshot": _database_snapshot_schema(),
+        "databaseMigration": _database_migration_schema(),
+        "databaseChange": _database_change_schema(),
         "skillHint": _skill_hint_schema(),
         "childSummary": _child_summary_schema(),
         "taskRootDefinition": _task_definition(root=True),
@@ -612,6 +820,16 @@ def hierarchy_contract(
                 "defaultMainlinePreference": ["main", "master"],
                 "baseAndIntegrationTargetMustMatch": True,
                 "baseCommitRole": "IMMUTABLE_FORK_POINT",
+                "stackedDelivery": {
+                    "selection": "NEW_FROM_CURRENT_BRANCH",
+                    "eligibility": "CLEAN_PRIMARY_FEATURE_WORKTREE",
+                    "branchRef": "NEW_CHILD_BRANCH",
+                    "baseRef": "CURRENT_PARENT_FEATURE_BRANCH",
+                    "baseCommit": "CURRENT_PARENT_FEATURE_HEAD",
+                    "integrationTarget": "CURRENT_PARENT_FEATURE_BRANCH",
+                    "defaultWhenEligible": True,
+                    "controllerGitWrites": False,
+                },
                 "taskBranchPolicy": "SHARED_DELIVERY_FEATURE_BRANCH",
                 "taskBranchBindingsSupported": False,
                 "taskCommitPolicy": (
@@ -633,7 +851,11 @@ def hierarchy_contract(
                     "suggestedGitBinding into delivery.gitBinding. Each "
                     "writable repository in one Delivery uses the same "
                     "feature branch name, created from that repository's "
-                    "mainline (main, falling back to master). All TASKs "
+                    "mainline (main, falling back to master), unless the user "
+                    "explicitly selects a stacked child from the clean current "
+                    "feature branch. In that case the parent feature is both "
+                    "baseRef and integrationTarget, so the primary checkout "
+                    "does not need to release it. All TASKs "
                     "share those Delivery branches; TASK "
                     "agents do not create, bind, or switch internal branches. "
                     "When separately authorized, each TASK may stage and "
@@ -698,6 +920,84 @@ def hierarchy_contract(
                     "reports; the Delivery report summarizes and links the "
                     "root work-item report. Lower-layer payloads, evidence, "
                     "and review findings are not copied upward."
+                ),
+            },
+            "databaseChanges": {
+                "location": (
+                    "TASK definition.execution.loop.payload.databaseChanges"
+                ),
+                "requiredBeforePreviewWhen": (
+                    "FEATURE_ADDS_MODIFIES_OR_DELETES_TABLE_SCHEMA"
+                ),
+                "designOwner": "PLANNING_CONTEXT_BEFORE_BASELINE_CONFIRMATION",
+                "executionRole": "APPLY_FROZEN_DATABASE_CONTRACT_ONLY",
+                "assuranceProfile": "STANDARD",
+                "changeTypes": ["CREATE", "MODIFY", "DELETE"],
+                "requiredFields": [
+                    "table",
+                    "summary",
+                    "changeType",
+                    "before",
+                    "after",
+                    "migration",
+                    "resourceClaim",
+                ],
+                "snapshotRequiredFields": [
+                    "comment",
+                    "columns",
+                    "primaryKey",
+                    "uniqueConstraints",
+                    "indexes",
+                    "foreignKeys",
+                ],
+                "columnRequiredFields": [
+                    "name",
+                    "type",
+                    "nullable",
+                    "default",
+                    "comment",
+                ],
+                "migrationRequiredFields": [
+                    "forward",
+                    "rollback",
+                    "backfill",
+                    "compatibility",
+                    "verification",
+                ],
+                "snapshotPolicy": {
+                    "CREATE": {"before": "NULL", "after": "COMPLETE"},
+                    "MODIFY": {"before": "COMPLETE", "after": "COMPLETE"},
+                    "DELETE": {"before": "COMPLETE", "after": "NULL"},
+                },
+                "resourcePolicy": (
+                    "EACH_CHANGE_RESOURCE_CLAIM_MUST_EXIST_IN_LOOP_CLAIMS"
+                ),
+                "fieldProjection": {
+                    "documents": {
+                        "index": "database-changes.md",
+                        "detailsDirectory": "database-changes/",
+                        "oneDocumentPerTable": True,
+                    },
+                    "sourceOfTruth": "FROZEN_AFTER_SNAPSHOT",
+                },
+                "changePolicy": (
+                    "IMPLEMENTATION_DEVIATION_REQUIRES_REPLAN_REQUIRED_AND_NEW_REVISION"
+                ),
+                "description": (
+                    "When a feature adds, changes, or deletes table schema, "
+                    "the planning context must inspect the real current "
+                    "schema and declare every affected table before calling "
+                    "preview_hierarchy. Each declaration contains complete "
+                    "before/after snapshots, forward and rollback migration, "
+                    "backfill, rollout compatibility, verification, and an "
+                    "exact scheduler resource claim. The controller rejects "
+                    "incomplete declarations and LIGHT assurance, then writes "
+                    "a TASK database index plus one field-level document per "
+                    "table. The frozen after snapshot is the only schema "
+                    "source of truth for the TASK Loop; the Loop applies and "
+                    "verifies it rather than designing a different schema. "
+                    "Any required deviation returns REPLAN_REQUIRED and is "
+                    "confirmed as a new immutable Delivery revision."
                 ),
             },
             "interfaces": {
@@ -869,12 +1169,17 @@ def hierarchy_contract(
             "Delivery is the frozen Graph and final acceptance boundary.",
             (
                 "Each writable Git project freezes the Delivery's shared "
-                "feature branch name, its own immutable mainline fork "
-                "commit, and the same per-project base/integration target."
+                "feature branch name, its own immutable base fork commit, "
+                "and the same per-project base/integration target."
             ),
             (
                 "One Delivery may span multiple local repositories; every "
                 "writable Git project uses the same feature branch name."
+            ),
+            (
+                "Table schema and migration changes are fully designed before "
+                "preview, use STANDARD assurance, and execute only the frozen "
+                "database before/after contract."
             ),
             "GROUP may recursively contain GROUP or TASK children.",
             "TASK is the only execution leaf and cannot contain children.",

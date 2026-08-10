@@ -9,7 +9,7 @@
 - 确认能够访问公司内部 Marketplace 仓库。
 - 在实际项目的新会话中使用 Plugin；不要在维护 `delivery-graph` 源码仓库时创建业务运行包。
 
-当前本地探测到的 0.38.0 真实宿主候选基线是 Codex CLI 0.147.0 和 Claude Code 2.1.226。这两个版本是本轮冒烟目标，不是永久最低版本。在兼容矩阵回填真实运行结果前，只能表述为“候选验证中”。
+当前本地探测到的 0.39.0 真实宿主候选基线是 Codex CLI 0.147.0 和 Claude Code 2.1.226。这两个版本是本轮冒烟目标，不是永久最低版本。在兼容矩阵回填真实运行结果前，只能表述为“候选验证中”。
 
 ## 安装
 
@@ -41,7 +41,7 @@ claude plugin list --json
 python scripts/host_smoke.py probe --json
 ```
 
-结果必须报告 Plugin 版本 0.38.0 和 32 个 MCP 工具，并如实标记本机已安装的宿主。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器。
+结果必须报告 Plugin 版本 0.39.0 和 32 个 MCP 工具，并如实标记本机已安装的宿主。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器。
 
 真实冒烟默认先只展示计划，必须显式增加 `--execute` 才调用模型。两个宿主分别运行，绝不从一个终端跨调另一个 Agent：
 
@@ -53,7 +53,7 @@ python scripts/host_smoke.py run --host codex --scenario light
 python scripts/host_smoke.py run --host codex --scenario light --execute
 ```
 
-Claude 命令从当前 0.38.0 源码发布包的 `--plugin-dir` 加载 Plugin；Codex 命令要求候选 Plugin 已从 Marketplace 安装。发布前可用 LIGHT 验证同宿主 claim/heartbeat/progress/result，再用 STANDARD 覆盖分层 Review。任何输出中的 `claimedAgents` 都只能包含命令指定的当前宿主。Claude coordinator 的完整名称为 `delivery-graph:delivery-coordinator`。
+Claude 命令从当前 0.39.0 源码发布包的 `--plugin-dir` 加载 Plugin；Codex 命令要求候选 Plugin 已从 Marketplace 安装。发布前可用 LIGHT 验证同宿主 claim/heartbeat/progress/result，再用 STANDARD 覆盖分层 Review。任何输出中的 `claimedAgents` 都只能包含命令指定的当前宿主。Claude coordinator 的完整名称为 `delivery-graph:delivery-coordinator`。
 
 0.38.0 真实冒烟还必须覆盖以下交互和失败关闭边界：
 

@@ -4,6 +4,17 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.0 — 2026-08-10
+
+发布提交：以 tag `v0.39.0` 指向的提交为准
+
+- **数据库 baseline 门禁**：涉及建表、改表或删表的 TASK 必须在 preview 前声明结构化 `payload.databaseChanges`，完整冻结表级 before/after、全部字段、主键、唯一约束、索引、外键，以及正向迁移、回滚、回填、发布兼容和验证要求；每项资源锁必须与 TASK `resourceClaims` 精确对应，数据库变更强制使用 `STANDARD`。
+- **执行边界**：数据库 TASK Loop 只应用和验证冻结 after，不再承担表结构设计；任何必要偏离返回 `REPLAN_REQUIRED`，由同一 Delivery 的新 Revision 重新展示和确认 baseline。
+- **Stacked Delivery 基线**：primary 位于干净 feature 分支时，开发基线交互新增并默认推荐 `NEW_FROM_CURRENT_BRANCH`。Controller 冻结新的子分支名、父 feature HEAD 以及以父 feature 为 `baseRef/integrationTarget` 的 binding，AUTOMATIC 直接创建独立子分支 worktree，无需先把 primary 切回 main/master；dirty primary 不提供该路径。
+- **人类投影**：投影模板升级到版本 16。每个数据库 TASK 生成 `database-changes.md` 索引和每表详情，Delivery/TASK baseline 与 MCP `humanArtifacts` 串联可审阅契约。
+- **兼容性**：继续只维护 schema v3，不增加旧 schema 迁移入口；未声明数据库变更的现有 Delivery 不受影响。
+- **验证**：本地 Python 全量 336 项测试通过（1 项按环境条件跳过）；`compileall`、canonical Skill/Plugin 镜像一致性、Claude Plugin 校验、发布校验与 `git diff --check` 均通过。
+
 ## 0.38.0 — 2026-08-09
 
 发布提交：以 tag `v0.38.0` 指向的提交为准

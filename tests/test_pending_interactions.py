@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from hdg.errors import GatedLoopError
+from hdg.interaction_contract import development_baseline_contract
 from hdg.mcp_tools import call_tool
 from hdg.repository import SchedulerRepository
 
@@ -81,6 +82,141 @@ class PendingInteractionTests(unittest.TestCase):
                 status["pendingInteraction"],
             )
             self.assertNotIn("executionChoice", status)
+
+    def test_baseline_fallback_markdown_preserves_structured_options(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            repository, worktree, _base_commit, _branch_ref = (
+                git_delivery_checkout(
+                    root,
+                    delivery_id="d-pending-fallback-markdown",
+                )
+            )
+            git_command(
+                repository,
+                "branch",
+                "feature/fallback-alternate",
+                "main",
+            )
+            preview = call_tool(
+                "preview_hierarchy",
+                {
+                    "hierarchy": isolated_task_hierarchy(
+                        "d-pending-fallback-markdown",
+                        "t-pending-fallback-markdown",
+                    )
+                },
+                root=str(worktree),
+                workspace_root=str(worktree),
+                trusted_host_adapter="codex",
+            )
+            interaction = preview["pendingInteraction"]
+            markdown = interaction["markdown"]
+            cursor = 0
+            self.assertGreaterEqual(len(interaction["options"]), 3)
+            self.assertEqual(
+                interaction["defaultOptionId"],
+                interaction["recommendedOptionId"],
+            )
+
+            for index, option in enumerate(interaction["options"], start=1):
+                option_start = markdown.index(
+                    f"{index}. {option['label']}",
+                    cursor,
+                )
+                line_end = markdown.find("\n", option_start)
+                option_line = markdown[
+                    option_start : line_end if line_end >= 0 else None
+                ]
+                self.assertIn(option["description"], option_line)
+                self.assertEqual(
+                    "默认" in option_line,
+                    option["id"] == interaction["defaultOptionId"],
+                )
+                self.assertEqual(
+                    "推荐" in option_line,
+                    option["id"] == interaction["recommendedOptionId"],
+                )
+                cursor = option_start + len(option_line)
+
+            status = call_tool(
+                "workspace_status",
+                {"root_id": "d-pending-fallback-markdown"},
+                root=str(worktree),
+                workspace_root=str(worktree),
+                trusted_host_adapter="codex",
+            )
+
+            self.assertEqual(
+                status["pendingInteraction"]["options"],
+                interaction["options"],
+            )
+            self.assertEqual(
+                status["pendingInteraction"]["markdown"],
+                markdown,
+            )
+
+    def test_new_from_mainline_fallback_is_default_and_recommended(
+        self,
+    ) -> None:
+        interaction = development_baseline_contract(
+            host_adapter_id="codex",
+            candidate_branches=[],
+            default_branch_ref=None,
+            expected_hierarchy_fingerprint="hierarchy-fingerprint",
+        )
+
+        self.assertEqual(interaction["defaultOptionId"], "NEW_FROM_MAINLINE")
+        self.assertEqual(
+            interaction["recommendedOptionId"],
+            "NEW_FROM_MAINLINE",
+        )
+        self.assertFalse(
+            interaction["presentationPolicy"]["fallback"][
+                "typedOptionPromptAllowed"
+            ]
+        )
+        self.assertIn(
+            "1. 从主线创建新分支（默认、推荐）："
+            "从当前主线新建一个开发分支（需提供分支名）",
+            interaction["markdown"],
+        )
+        self.assertIn(
+            "也可直接输入修改意见，继续需求沟通。",
+            interaction["markdown"],
+        )
+
+    def test_baseline_fallback_escapes_dynamic_markdown_text(self) -> None:
+        branch_ref = "feature/fallback_#|`<>&"
+        base_ref = "main_#|`<>&"
+        interaction = development_baseline_contract(
+            host_adapter_id="codex",
+            candidate_branches=[
+                {
+                    "branchRef": branch_ref,
+                    "baseRef": base_ref,
+                    "baseCommit": "0123456789abcdef",
+                    "integrationTarget": base_ref,
+                    "headCommit": "fedcba9876543210",
+                    "adoptable": True,
+                    "inUseBy": [],
+                }
+            ],
+            default_branch_ref=branch_ref,
+            expected_hierarchy_fingerprint="hierarchy-fingerprint",
+        )
+
+        self.assertEqual(interaction["options"][0]["id"], branch_ref)
+        self.assertEqual(interaction["options"][0]["label"], branch_ref)
+        self.assertIn(
+            "feature/fallback\\_\\#\\|\\`&lt;&gt;&amp;",
+            interaction["markdown"],
+        )
+        self.assertIn(
+            "main\\_\\#\\|\\`&lt;&gt;&amp;",
+            interaction["markdown"],
+        )
 
     def test_confirmed_baseline_advances_pending_interaction_to_execution_mode(
         self,

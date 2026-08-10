@@ -375,14 +375,16 @@ def _development_baseline_tool_schema() -> dict[str, Any]:
                 "type": "string",
                 "description": (
                     "A local branch_ref from the DEVELOPMENT_BASELINE "
-                    "pendingInteraction.options, or NEW_FROM_MAINLINE."
+                    "pendingInteraction.options, NEW_FROM_MAINLINE, or "
+                    "NEW_FROM_CURRENT_BRANCH."
                 ),
             },
             "branch_name": {
                 "type": "string",
                 "description": (
-                    "Required when selection=NEW_FROM_MAINLINE: the new branch "
-                    "name the host will create from the mainline."
+                    "Required for NEW_FROM_MAINLINE and "
+                    "NEW_FROM_CURRENT_BRANCH: the new Delivery branch name "
+                    "the host creates from the frozen base."
                 ),
             },
             "expected_hierarchy_fingerprint": FINGERPRINT,
@@ -653,8 +655,10 @@ TOOLS = (
             "immutable manual revision; an unchanged binding restores the "
             "existing revision. The Controller never "
             "creates branches or worktrees; NEW_FROM_MAINLINE pins baseCommit "
-            "to the mainline HEAD and the host creates the branch during "
-            "worktree setup. The choice is remembered and not re-asked on "
+            "to the mainline HEAD, while NEW_FROM_CURRENT_BRANCH pins a "
+            "stacked child to the clean current feature HEAD and makes that "
+            "parent feature the integration target. The host creates the "
+            "branch during worktree setup. The choice is remembered and not re-asked on "
             "subsequent revisions."
         ),
         _development_baseline_tool_schema(),
@@ -761,7 +765,9 @@ TOOLS = (
             "revision or controller-owned selection. For the initial "
             "execution choice, hosts call select_execution_mode(AUTOMATIC) "
             "instead of this low-level tool. Shared Skill "
-            "hints remain advisory, Loop payloads stay opaque, and a Git "
+            "hints remain advisory, Loop payloads stay opaque to scheduling; "
+            "the reserved databaseChanges contract is validated and projected "
+            "before dispatch. A Git "
             "Delivery feature-branch binding is verified read-only. Reject "
             "a different Delivery before writing when this workspace "
             "already owns an unfinished Delivery."

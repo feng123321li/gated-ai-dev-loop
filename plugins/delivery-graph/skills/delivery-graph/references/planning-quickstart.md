@@ -262,6 +262,36 @@ GROUP：
 `MCP_TOOL_ARGUMENT_INVALID`，不会创建或替换 `PREPARED` 结果；不要依赖
 Controller 事后修正无效 hierarchy。
 
+### 数据库结构基线约定
+
+需求涉及建表、修改字段/索引/约束或删表时，数据库设计属于 baseline 规划职责，
+不是 TASK Loop 的运行时设计工作。规划上下文必须在调用 `preview_hierarchy` 前读取
+真实当前结构，并在负责该表的 TASK
+`definition.execution.loop.payload.databaseChanges` 中逐表声明完整契约：
+
+- 每项包含 `table`、`summary`、`changeType`、`before`、`after`、`migration`
+  和 `resourceClaim`；跨项目时同时声明 `projectId`，需要定位时声明 `database` 与
+  `schema`；
+- `changeType` 使用 `CREATE`、`MODIFY` 或 `DELETE`；CREATE 的 before 为 null，
+  DELETE 的 after 为 null，MODIFY 两侧都必须是完整表快照；
+- 每个适用快照完整列出表注释、全部字段、主键、唯一约束、索引和外键；字段至少
+  明确名称、数据库原生类型、可空性、默认值和注释，不得只列变化字段；
+- `migration` 必须明确正向迁移、回滚、历史数据回填、滚动发布兼容与至少一个验证点；
+  “无需回填”等结论也要显式记录，不能留空或写占位符；
+- 每项 `resourceClaim` 必须精确出现在所属 TASK 的 `resourceClaims` 中，例如
+  `db-schema-orders`，用于跨 Delivery 串行化同一数据库结构资源；
+- 任何数据库结构或迁移都强制使用 `STANDARD`，不得使用 `LIGHT`。
+
+Controller 对上述保留字段执行结构校验；缺少完整设计时不能生成可确认的 baseline。
+每个有数据库变更的 TASK 生成 `database-changes.md` 索引，并在相邻
+`database-changes/` 目录为每张表生成字段比较、完整 before/after 快照及迁移方案。
+Delivery baseline 和 TASK baseline 只串联这些投影。
+
+冻结 after 是开发 Loop 的唯一表结构事实源。Loop 只执行迁移、适配代码和验证，
+不得重新选择字段类型、可空性、默认值、索引、约束或发布策略；如果真实实现必须
+偏离冻结契约，返回 `REPLAN_REQUIRED`，按同一 Delivery 的新 Revision 重新生成、
+展示和确认数据库 baseline 后再执行。
+
 ## 同级启动依赖
 
 `dependsOn` 是直接同级之间的启动屏障，允许 TASK→TASK、TASK→GROUP、GROUP→TASK 和 GROUP→GROUP：
@@ -351,7 +381,7 @@ Torna 必须保持相同的方法、路径或签名、字段层级、类型、�
 
 新 AUTOMATIC Delivery 的 `gitBinding.branchRef` 必须是一个**未被其他 worktree/Delivery 占用的新分支名**，或干脆省略 `gitBinding` 让 Controller 在 worktree setup 用 `suggestedGitBinding` 建议——**不要从已完成旧 Delivery 拷绑定**：若该分支正被 primary 占用，git 不允许两个 worktree 共用同一分支，Controller 会在 AUTOMATIC 派发前以 `SCHEDULER_GIT_BRANCH_IN_USE_BY_OTHER_WORKTREE` 拒绝。另外，单文件/小修直接在 primary 改即可，**不必套 AUTOMATIC**（它适合多 TASK/跨模块/可恢复的较大交付；小修套 AUTOMATIC 的 worktree + 协调器开销不划算）。
 
-preview 会先通过 `pendingInteraction.kind=DEVELOPMENT_BASELINE` 确认基线，再在 `EXECUTION_MODE` 交互中回显冻结后的 `baseRef`/`integrationTarget`。若基于进行中分支（如 `feature/m_lf_protein`）修 bug，在 `workspace_status(base_ref=...)`、基线交互或 hierarchy 的 `gitBinding` 里明确该分支，不得等到选择执行方式时才猜测基线。
+preview 会先通过 `pendingInteraction.kind=DEVELOPMENT_BASELINE` 确认基线，再在 `EXECUTION_MODE` 交互中回显冻结后的 `baseRef`/`integrationTarget`。若 primary 当前位于干净的进行中 feature（如 `feature/m_lf_protein`），Controller 额外提供并默认推荐 `NEW_FROM_CURRENT_BRANCH`：用户提供新的子分支名（如 `feature/m_lf_mprotein_409`），冻结结果以父 feature 当前 HEAD 为 `baseCommit`，父 feature 同时作为 `baseRef` 与 `integrationTarget`，AUTOMATIC 在独立 worktree 创建子分支，primary 无需切回 main/master 或释放父分支。该选择本身就是显式 stacked Delivery 授权；工作区存在业务 dirty 时不提供，避免未提交改动被错误当作子分支基线。其他“基于进行中分支”的情况必须通过 `workspace_status(base_ref=...)`、基线交互或 hierarchy 的 `gitBinding` 明确，不得等到选择执行方式时才猜测基线。
 
 ### Git 工作区设置
 
@@ -377,7 +407,7 @@ preview 会先通过 `pendingInteraction.kind=DEVELOPMENT_BASELINE` 确认基线
 #### 宿主承接与分支命名
 
 - Codex 承接新 Delivery 时把 `hostOperation=CREATE_CODEX_PROJECT_TASK` 映射为新的项目任务并设置 `environment=worktree`，将 `hostDispatch.prompt` 原样作为首条任务指令；主任务不切换目录或分支。宿主必须使用 dispatch 的精确 `branchRef/gitBinding`。Codex 管理的 worktree 若先处于 detached HEAD，则按 `CREATE_DELIVERY_FEATURE_BRANCH` 创建冻结分支；若宿主已生成另一 feature 分支，干净时按 `FROZEN_DELIVERY_BRANCH_REQUIRED` 恢复冻结分支，存在改动时以 `FROZEN_DELIVERY_BRANCH_DIRTY` 停止并审查，不能直接切换。完成创建或恢复后，重新调用 `workspace_status` 让 Controller 验证精确分支与基线。
-- Claude Code 从项目目录启动时保持 primary checkout 作为控制/监控根，主 checkout 保持 `main` 或 `master`。宿主创建或复用 Delivery linked worktree，并在同一顶层会话内启动后台 coordinator；`${CLAUDE_PROJECT_DIR}` 不漂移，执行 cwd 由 Hook 一次性证明。禁止要求用户启动第二个顶层 Claude 会话。
+- Claude Code 从项目目录启动时保持 primary checkout 作为控制/监控根；通常保持 `main`/`master`，显式 stacked Delivery 时可以继续停留在父 feature。宿主从冻结 `baseCommit` 创建或复用子 Delivery linked worktree，并在同一顶层会话内启动后台 coordinator；`${CLAUDE_PROJECT_DIR}` 不漂移，执行 cwd 由 Hook 一次性证明。禁止要求用户启动第二个顶层 Claude 会话。
 - feature 分支名称由宿主或用户已有分支策略决定；Delivery Graph 不生成 `feature/m_lf_` 等固定前缀，只冻结实际 checkout 的本地分支名。
 
 #### `projectScopes` 与 `gitBinding` 归属
@@ -388,7 +418,7 @@ preview 会先通过 `pendingInteraction.kind=DEVELOPMENT_BASELINE` 确认基线
 #### primary checkout 与并行 Delivery
 
 - Claude 与 Codex primary checkout 都返回 `DEDICATED_WORKTREE_REQUIRED / CREATE_INDEPENDENT_WORKTREE_TASK` 和 `hostDispatch`。linked worktree 位于主线或 detached HEAD 时返回 feature 分支动作；该动作由后台 Delivery 工作区完成，不移动 primary。
-- 在某个 Active Delivery 的 feature worktree 或主监控会话中收到另一个独立 Delivery 时，立即从宿主选择的基线或上述默认发现结果创建另一稳定 Delivery worktree；不得从当前 feature HEAD 分叉。只有用户明确要求 stacked delivery 时才允许建立真实的 Delivery 间 Git 依赖。
+- 在某个 Active Delivery 的 feature worktree 或主监控会话中收到另一个独立 Delivery 时，立即从宿主选择的基线或上述默认发现结果创建另一稳定 Delivery worktree；不得隐式从当前 feature HEAD 分叉。只有用户在开发基线交互中选择 `NEW_FROM_CURRENT_BRANCH`（或以等价明确指令授权 stacked Delivery）时，才从 clean 当前 feature HEAD 创建子分支并把父 feature 冻结为最终集成目标。
 
 #### 手动开发内容包
 
@@ -458,7 +488,7 @@ MCP 根固定只限制当前会话的主工作区锚点，不把同一 Delivery 
 3. 调用 `preview_hierarchy`。该调用先登记 `CHOICE_READY`，生成共享 `.layered-delivery/scheduler.db`、根 `overview.md`、Delivery 的 `overview.md`、`baseline.md`、`progress.md`、`acceptance.md`、`revisions.md`，以及 `humanArtifacts.workItems` 指向的全部节点投影；响应的 `controlStateCreated=true` 只表示这些选择前控制状态已创建。它不绑定 workspace、不生成 Graph Run 或 worktree。只有响应同时满足 `status=CHOICE_READY` 和 `artifactsReady=true`，才可向用户概述计划并进入选择。
 4. 完整清单后不展示模型建议。Delivery Graph 无论在选择前后都不推荐派遣模型；自动 receiver 继承当前宿主，内部 Worker 由 Loop 自主管理。
 5. Controller 是交互文案的唯一所有者。宿主统一读取 `pendingInteraction`，并优先把其 `options` 机械映射到 `AskUserQuestion`（Claude Code）或 `request_user_input`（Codex），保留顺序、ID、默认项、推荐项、标签和说明。只有映射工具在当前上下文不可调用时，才允许逐字显示该对象的 `markdown`。`developmentBaseline` 与 `executionChoice` 是当前兼容别名，宿主不得把它们当成两个并存问题。
-6. `pendingInteraction.kind=DEVELOPMENT_BASELINE` 时，选择本地分支或 `NEW_FROM_MAINLINE`，把交互给出的 hierarchy/Graph/Revision/context 指纹和真实确认人传给 `confirm_development_baseline`。脏工作树同样进入该门禁；只有用户确认全部现有改动都属于本 Delivery 后，才回传交互中的精确 `workingTree.stateFingerprint`。探测 Git HEAD、主线、权限或实现异常时必须 fail closed；非 Git 工作区才正常跳过。多 Git 项目不会从顶层偏好自动推断 secondary scope，所有 Git scope 必须显式提供完整 binding。
+6. `pendingInteraction.kind=DEVELOPMENT_BASELINE` 时，选择本地分支、`NEW_FROM_MAINLINE`，或 Controller 实际返回的 `NEW_FROM_CURRENT_BRANCH`，把交互给出的 hierarchy/Graph/Revision/context 指纹和真实确认人传给 `confirm_development_baseline`。两个 NEW 选项都提交新 `branch_name`；stacked 选项必须原样使用交互冻结的父 feature HEAD，不自行换父分支。脏工作树同样进入该门禁；只有用户确认全部现有改动都属于本 Delivery 后，才回传交互中的精确 `workingTree.stateFingerprint`，且 dirty primary feature 不允许创建 stacked 子分支。探测 Git HEAD、基线、权限或实现异常时必须 fail closed；非 Git 工作区才正常跳过。多 Git 项目不会从顶层偏好自动推断 secondary scope，所有 Git scope 必须显式提供完整 binding。
 7. `pendingInteraction.kind=EXECUTION_MODE` 时，原生对话框仍允许直接输入文字，但不为它创建“其他”选项。自由输入按 `freeformInput.nextAction=CONTINUE_REQUIREMENT_DISCUSSION` 继续需求沟通；需求发生变化后重新调用 preview。用户只是提问且需求未变时，回答后保留当前 fingerprint，并再次展示同一待处理交互，不得主动退回文本交互。`AUTOMATIC` 是默认和推荐项，`MANUAL` 是第二项。
 8. 用户点选执行方式后，把选项 ID、双 fingerprint、`requiredProjectAuthorizations` 的精确项目 ID 和真实确认人一次性传给 `select_execution_mode`：
    - `AUTOMATIC`：先记录业务确认。Git Delivery 返回 `selectionRecorded=true`、`automaticDispatchRequested=false` 和 `worktreeSetup.hostDispatch` 时，Claude/Codex 按 `launchPolicy=IMMEDIATE` 创建或复用后台 Delivery worktree 执行单元并发送内置 prompt；后台方用原双 fingerprint 调用 `resume_execution_mode`。主会话只监控，不追加第二次确认；成功后按 frontier 间隔持续读取进度。所有路径都不插入模型推荐或调整窗口，也不显示人工新会话命令。

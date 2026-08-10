@@ -7,9 +7,9 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
-## 0.38.0 发布候选矩阵
+## 0.39.0 发布候选矩阵
 
-0.38.0 提供 32 个 MCP 工具和一个静态 MCP Apps Resource。核心契约必须验证 Modern/Legacy 两种 wire shim 共享同一 tools/resources dispatcher，`open_delivery_dashboard` 只读取当前状态，UI 不包含控制面写工具或外部资源，无 UI 宿主仍能使用文字与 `structuredContent`。真实宿主应分别记录是否支持 MCP Apps 内嵌渲染；不支持 UI 只能标记 UI 不兼容，不能把文本降级成功写成 UI 已验证。
+0.39.0 保持 32 个 MCP 工具和一个静态 MCP Apps Resource，并新增数据库 baseline 强制契约及 clean primary feature 的 stacked 子分支基线。核心契约必须验证数据库结构在执行前生成并冻结、缺失设计或 LIGHT fail closed、Loop 只执行 after，以及 `NEW_FROM_CURRENT_BRANCH` 的 child/base/integration binding 与 hostDispatch 完全一致。Modern/Legacy 两种 wire shim 继续共享同一 tools/resources dispatcher，`open_delivery_dashboard` 只读取当前状态，UI 不包含控制面写工具或外部资源，无 UI 宿主仍能使用文字与 `structuredContent`。
 
 | 环境 | Python | 核心契约 | 真实宿主 | 发布用途 |
 |---|---:|---|---|---|

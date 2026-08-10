@@ -59,7 +59,7 @@ from .test_loop_architecture import (
     loop_descriptor,
     task_hierarchy,
 )
-from .test_scheduler_runtime import at
+from .test_scheduler_runtime import at, database_hierarchy
 from .automatic_dispatch import reserve_loop
 
 
@@ -230,6 +230,168 @@ def bind_delivery_to_git(
 
 
 class DevelopmentBaselineTests(unittest.TestCase):
+    def test_clean_primary_feature_recommends_stacked_child_branch(self) -> None:
+        with TemporaryDirectory() as root:
+            repository = Path(root, "repository")
+            repository.mkdir()
+            git_command(repository, "init", "--initial-branch=main")
+            git_command(repository, "config", "user.name", "Scheduler Tests")
+            git_command(
+                repository,
+                "config",
+                "user.email",
+                "scheduler-tests@example.invalid",
+            )
+            Path(repository, "README.md").write_text(
+                "# stacked delivery fixture\n",
+                encoding="utf-8",
+            )
+            git_command(repository, "add", "README.md")
+            git_command(repository, "commit", "-m", "Initial main baseline")
+            parent_branch = "feature/m_lf_protein"
+            child_branch = "feature/m_lf_mprotein_409"
+            git_command(repository, "switch", "-c", parent_branch)
+            Path(repository, "parent.txt").write_text(
+                "parent feature content\n",
+                encoding="utf-8",
+            )
+            git_command(repository, "add", "parent.txt")
+            git_command(repository, "commit", "-m", "Parent feature baseline")
+            parent_head = git_command(repository, "rev-parse", "HEAD")
+
+            preview = call_tool(
+                "preview_hierarchy",
+                {
+                    "hierarchy": isolated_task_hierarchy(
+                        "d-stacked-child",
+                        "t-stacked-child",
+                    )
+                },
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="codex",
+            )
+            interaction = preview["pendingInteraction"]
+            stacked = next(
+                option
+                for option in interaction["options"]
+                if option["id"] == "NEW_FROM_CURRENT_BRANCH"
+            )
+            self.assertEqual(
+                interaction["defaultOptionId"],
+                "NEW_FROM_CURRENT_BRANCH",
+            )
+            self.assertEqual(
+                interaction["recommendedOptionId"],
+                "NEW_FROM_CURRENT_BRANCH",
+            )
+            self.assertTrue(stacked["stackedDelivery"])
+            self.assertEqual(stacked["baseRef"], parent_branch)
+            self.assertEqual(stacked["baseCommit"], parent_head)
+            self.assertEqual(stacked["integrationTarget"], parent_branch)
+            self.assertIn(
+                "创建子分支（默认、推荐）",
+                interaction["markdown"],
+            )
+
+            confirmed = call_tool(
+                "confirm_development_baseline",
+                {
+                    "root_id": "d-stacked-child",
+                    "selection": "NEW_FROM_CURRENT_BRANCH",
+                    "branch_name": child_branch,
+                    "expected_hierarchy_fingerprint": preview[
+                        "hierarchyFingerprint"
+                    ],
+                    "expected_graph_fingerprint": preview[
+                        "graphFingerprint"
+                    ],
+                    "expected_delivery_revision": 1,
+                    "baseline_context_fingerprint": interaction[
+                        "baselineContextFingerprint"
+                    ],
+                    "confirmed_by": "李锋",
+                },
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="codex",
+            )
+            preference = confirmed["developmentBaselineConfirmed"]
+            self.assertEqual(preference["branchRef"], child_branch)
+            self.assertEqual(preference["baseRef"], parent_branch)
+            self.assertEqual(preference["baseCommit"], parent_head)
+            self.assertEqual(preference["integrationTarget"], parent_branch)
+            self.assertEqual(preference["source"], "NEW_FROM_CURRENT_BRANCH")
+            self.assertEqual(
+                confirmed["executionChoice"]["baseRef"],
+                parent_branch,
+            )
+            selected = call_tool(
+                "select_execution_mode",
+                {
+                    "root_id": "d-stacked-child",
+                    "selection": "AUTOMATIC",
+                    "expected_hierarchy_fingerprint": confirmed[
+                        "hierarchyFingerprint"
+                    ],
+                    "expected_graph_fingerprint": confirmed[
+                        "graphFingerprint"
+                    ],
+                    "authorized_project_ids": [],
+                    "confirmed_by": "李锋",
+                },
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="codex",
+            )
+            dispatch = selected["worktreeSetup"]["hostDispatch"]
+            self.assertEqual(dispatch["branchRef"], child_branch)
+            self.assertEqual(dispatch["baseRef"], parent_branch)
+            self.assertEqual(dispatch["baseCommit"], parent_head)
+            self.assertEqual(dispatch["integrationTarget"], parent_branch)
+            self.assertEqual(
+                git_command(repository, "branch", "--list", child_branch),
+                "",
+            )
+
+    def test_dirty_primary_feature_does_not_offer_stacked_child(self) -> None:
+        with TemporaryDirectory() as root:
+            repository = Path(root, "repository")
+            repository.mkdir()
+            git_command(repository, "init", "--initial-branch=main")
+            git_command(repository, "config", "user.name", "Scheduler Tests")
+            git_command(
+                repository,
+                "config",
+                "user.email",
+                "scheduler-tests@example.invalid",
+            )
+            Path(repository, "README.md").write_text("base\n", encoding="utf-8")
+            git_command(repository, "add", "README.md")
+            git_command(repository, "commit", "-m", "Initial baseline")
+            git_command(repository, "switch", "-c", "feature/parent")
+            Path(repository, "dirty.txt").write_text("dirty\n", encoding="utf-8")
+
+            preview = call_tool(
+                "preview_hierarchy",
+                {
+                    "hierarchy": isolated_task_hierarchy(
+                        "d-dirty-stacked",
+                        "t-dirty-stacked",
+                    )
+                },
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="claude-code",
+            )
+            self.assertNotIn(
+                "NEW_FROM_CURRENT_BRANCH",
+                {
+                    option["id"]
+                    for option in preview["pendingInteraction"]["options"]
+                },
+            )
+
     def test_clean_worktree_without_binding_prompts_then_confirms_and_remembers(
         self,
     ) -> None:
@@ -362,6 +524,70 @@ class DevelopmentBaselineTests(unittest.TestCase):
 
 
 class HierarchyContractTests(unittest.TestCase):
+    def test_database_changes_are_frozen_before_execution(self) -> None:
+        hierarchy = database_hierarchy()
+        normalized = validate_hierarchy_definition(hierarchy)
+        contract = hierarchy_contract(root_kind="TASK")
+        guidance = contract["projectionGuidance"]["databaseChanges"]
+
+        self.assertEqual(
+            guidance["requiredBeforePreviewWhen"],
+            "FEATURE_ADDS_MODIFIES_OR_DELETES_TABLE_SCHEMA",
+        )
+        self.assertEqual(
+            guidance["executionRole"],
+            "APPLY_FROZEN_DATABASE_CONTRACT_ONLY",
+        )
+        self.assertEqual(guidance["assuranceProfile"], "STANDARD")
+        self.assertEqual(
+            guidance["fieldProjection"]["documents"],
+            {
+                "index": "database-changes.md",
+                "detailsDirectory": "database-changes/",
+                "oneDocumentPerTable": True,
+            },
+        )
+        self.assertEqual(
+            normalized["root"]["definition"]["execution"]["loop"][
+                "payload"
+            ]["databaseChanges"][0]["table"],
+            "orders",
+        )
+
+    def test_database_change_rejects_incomplete_or_unlocked_design(self) -> None:
+        missing_before = database_hierarchy()
+        missing_before["root"]["definition"]["execution"]["loop"][
+            "payload"
+        ]["databaseChanges"][0]["before"] = None
+        with self.assertRaises(GatedLoopError) as caught:
+            validate_hierarchy_definition(missing_before)
+        self.assertEqual(
+            caught.exception.code,
+            "DATABASE_CHANGE_CONTRACT_INVALID",
+        )
+
+        unlocked = database_hierarchy()
+        unlocked["root"]["definition"]["execution"]["loop"][
+            "resourceClaims"
+        ] = []
+        with self.assertRaises(GatedLoopError) as caught:
+            validate_hierarchy_definition(unlocked)
+        self.assertEqual(
+            caught.exception.code,
+            "DATABASE_CHANGE_CONTRACT_INVALID",
+        )
+
+    def test_database_change_rejects_light_assurance(self) -> None:
+        hierarchy = database_hierarchy()
+        hierarchy["delivery"]["assuranceProfile"] = "LIGHT"
+        hierarchy["delivery"]["assuranceRationale"] = "局部字段变更。"
+        hierarchy["delivery"]["reviewLoop"] = None
+        hierarchy["root"]["reviewLoop"] = None
+        with self.assertRaises(GatedLoopError) as caught:
+            validate_hierarchy_definition(hierarchy)
+        self.assertEqual(caught.exception.code, "DELIVERY_ASSURANCE_INVALID")
+        self.assertIn("STANDARD", caught.exception.message)
+
     def test_requirement_key_is_stable_and_exposed_for_delivery_continuity(
         self,
     ) -> None:

@@ -83,6 +83,7 @@ PAYLOAD_FIELD_TEXT = MappingProxyType(
         "context": "背景信息",
         "deliverables": "交付物",
         "deliveryId": "交付标识",
+        "databaseChanges": "数据库变更契约",
         "dependencies": "依赖",
         "description": "说明",
         "evidence": "验证证据",
@@ -167,7 +168,7 @@ PAYLOAD_FIELD_ORDER = MappingProxyType(
     }
 )
 UTC_PLUS_8 = timezone(timedelta(hours=8))
-PROJECTION_TEMPLATE_VERSION = 15
+PROJECTION_TEMPLATE_VERSION = 16
 WORK_ITEM_DIRECTORY = "work-items"
 WORKSPACE_OVERVIEW_PROJECTION_TEMPLATE = Template(
     """# 未归档交付调度与进度总览
@@ -234,8 +235,8 @@ ${skill_hints}
 
 ## GROUP/TASK 清单
 
-| 层级路径 | 节点类型 | 上级 | 前置依赖 | 标题 | 需求基线 | 执行进展 | 验收记录 | 接口契约 |
-|---|---|---|---|---|---|---|---|---|
+| 层级路径 | 节点类型 | 上级 | 前置依赖 | 标题 | 需求基线 | 执行进展 | 验收记录 | 接口契约 | 数据库契约 |
+|---|---|---|---|---|---|---|---|---|---|
 ${checklist_rows}
 
 每个 GROUP/TASK 的详细摘要、Loop 引用、资源声明和结构化执行输入位于
@@ -327,6 +328,53 @@ ${request_table}
 ${response_table}
 """
 )
+DATABASE_CHANGES_PROJECTION_TEMPLATE = Template(
+    """# TASK 数据库变更契约
+
+## 数据库基线
+
+${database_status}
+- TASK 需求基线：[返回 TASK 基线](baseline.md)
+- Delivery 需求基线：[返回 Delivery 基线](${delivery_baseline})
+
+本文件只投影 baseline 冻结前已确认的 `databaseChanges`。每张表的完整
+before/after 结构与迁移方案位于 `database-changes/`。冻结后的 after 是
+TASK Loop 唯一允许实施的表结构；需要偏离时必须返回 `REPLAN_REQUIRED`。
+
+## 数据库变更清单
+
+${database_rows}
+"""
+)
+DATABASE_CHANGE_DETAIL_PROJECTION_TEMPLATE = Template(
+    """# 数据库表：${table}
+
+## 导航
+
+- [返回数据库变更清单](../database-changes.md)
+- [返回 TASK 基线](../baseline.md)
+
+## 变更定义
+
+${metadata}
+
+## 字段级比较
+
+${column_table}
+
+## 修改前完整结构
+
+${before_snapshot}
+
+## 修改后完整结构（执行事实源）
+
+${after_snapshot}
+
+## 迁移与验证
+
+${migration}
+"""
+)
 TASK_BASELINE_PROJECTION_TEMPLATE = Template(
     """# TASK 调度基线
 
@@ -366,6 +414,8 @@ ${parent_baseline}
 ${payload}
 
 ${interface_section}
+
+${database_section}
 
 ${review_section}
 
@@ -656,6 +706,32 @@ def task_has_interface_projection(
     """Return whether one TASK declares a projectable interface."""
 
     return bool(_task_interface_declarations(definition))
+
+
+def _task_database_declarations(
+    definition: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if definition["kind"] != "TASK":
+        return []
+    value = definition["execution"]["loop"]["payload"].get(
+        "databaseChanges"
+    )
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def has_database_projection(hierarchy: dict[str, Any]) -> bool:
+    return any(
+        task_has_database_projection(node["definition"])
+        for node in iter_hierarchy_nodes(hierarchy)
+    )
+
+
+def task_has_database_projection(
+    definition: dict[str, Any],
+) -> bool:
+    return bool(_task_database_declarations(definition))
 
 
 def _interface_scalar(
@@ -1297,6 +1373,7 @@ def render_work_item_baseline(
     )
     delivery = delivery or {}
     interface_declarations = _task_interface_declarations(definition)
+    database_declarations = _task_database_declarations(definition)
     parent_baseline = (
         "- [上级节点需求基线](../../baseline.md)"
         if definition["parentId"]
@@ -1354,7 +1431,13 @@ def render_work_item_baseline(
             {
                 key: value
                 for key, value in loop["payload"].items()
-                if key != "interfaces" or not interface_declarations
+                if not (
+                    (key == "interfaces" and interface_declarations)
+                    or (
+                        key == "databaseChanges"
+                        and database_declarations
+                    )
+                )
             },
             heading_level=3,
         ),
@@ -1362,6 +1445,12 @@ def render_work_item_baseline(
             "## 关联接口契约\n\n"
             "[查看本 TASK 的接口契约](interfaces.md)"
             if interface_declarations
+            else ""
+        ),
+        database_section=(
+            "## 关联数据库变更契约\n\n"
+            "[查看本 TASK 的数据库变更契约](database-changes.md)"
+            if database_declarations
             else ""
         ),
         review_section=_render_loop_baseline(
@@ -1904,6 +1993,13 @@ def render_delivery_baseline(
             if _task_interface_declarations(definition)
             else "无"
         )
+        database_link = (
+            f"[查看]("
+            f"{work_item_projection_relative_path(hierarchy, item_id, 'database-changes.md')}"
+            ")"
+            if _task_database_declarations(definition)
+            else "无"
+        )
         cells = [
             path,
             KIND_TEXT[definition["kind"]],
@@ -1920,6 +2016,7 @@ def render_delivery_baseline(
                     progress_link,
                     acceptance_link,
                     interface_link,
+                    database_link,
                 ]
             )
             + " |"
@@ -3206,6 +3303,242 @@ def render_task_interface_documents(
     return documents
 
 
+def _database_identity(change: dict[str, Any]) -> str:
+    return ".".join(
+        str(change[key]).strip()
+        for key in ("projectId", "database", "schema", "table")
+        if key in change and str(change[key]).strip()
+    )
+
+
+def _database_document_filename(
+    position: int,
+    change: dict[str, Any],
+) -> str:
+    slug = _interface_filename_slug(_database_identity(change))[
+        :64
+    ].rstrip("-")
+    return f"{position:03d}-{slug or 'table'}.md"
+
+
+def _database_scalar(value: object) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _database_column_table(change: dict[str, Any]) -> str:
+    before = change.get("before")
+    after = change.get("after")
+    before_columns = (
+        before.get("columns", []) if isinstance(before, dict) else []
+    )
+    after_columns = (
+        after.get("columns", []) if isinstance(after, dict) else []
+    )
+    before_by_name = {
+        item["name"]: item
+        for item in before_columns
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    after_by_name = {
+        item["name"]: item
+        for item in after_columns
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+    names = [
+        *before_by_name,
+        *(name for name in after_by_name if name not in before_by_name),
+    ]
+    attributes = ("type", "nullable", "default", "comment")
+    rows: list[str] = []
+    for name in names:
+        old = before_by_name.get(name)
+        new = after_by_name.get(name)
+        if old is None:
+            state = "新增"
+        elif new is None:
+            state = "删除"
+        elif any(old.get(key) != new.get(key) for key in attributes):
+            state = "修改"
+        else:
+            state = "未变"
+
+        def transition(key: str) -> str:
+            if old is None:
+                return _database_scalar(new.get(key))
+            if new is None:
+                return _database_scalar(old.get(key))
+            old_value = _database_scalar(old.get(key))
+            new_value = _database_scalar(new.get(key))
+            return (
+                old_value
+                if old_value == new_value
+                else f"{old_value} → {new_value}"
+            )
+
+        values = [name, state, *(transition(key) for key in attributes)]
+        if new is None:
+            values = [
+                value if index == 1 else f"~~{value}~~"
+                for index, value in enumerate(values)
+            ]
+        rows.append(_table_row(values))
+    return "\n".join(
+        [
+            (
+                "| 字段 | 变更 | 类型（修改前 → 修改后） | "
+                "可空（修改前 → 修改后） | 默认值（修改前 → 修改后） | "
+                "注释（修改前 → 修改后） |"
+            ),
+            "|---|---|---|---|---|---|",
+            *rows,
+        ]
+    )
+
+
+def _database_snapshot(value: object) -> str:
+    if value is None:
+        return "- 不适用"
+    serialized = json.dumps(
+        value,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+    return "\n".join(f"    {line}" for line in serialized.splitlines())
+
+
+def _render_database_change_detail(
+    change: dict[str, Any],
+) -> str:
+    migration = change["migration"]
+    metadata = "\n".join(
+        [
+            f"- 表标识：{_markdown_text(_database_identity(change))}",
+            (
+                "- 变更类型："
+                + _markdown_text(
+                    INTERFACE_CHANGE_TYPE_TEXT.get(
+                        change["changeType"],
+                        change["changeType"],
+                    )
+                )
+            ),
+            f"- 简介：{_markdown_text(change['summary'])}",
+            f"- 排他资源锁：{_markdown_text(change['resourceClaim'])}",
+        ]
+    )
+    migration_lines = [
+        f"- 正向迁移：{_markdown_text(migration['forward'])}",
+        f"- 回滚方案：{_markdown_text(migration['rollback'])}",
+        f"- 数据回填：{_markdown_text(migration['backfill'])}",
+        f"- 发布兼容：{_markdown_text(migration['compatibility'])}",
+        "- 验证要求：",
+        *(
+            f"  - {_markdown_text(item)}"
+            for item in migration["verification"]
+        ),
+    ]
+    return DATABASE_CHANGE_DETAIL_PROJECTION_TEMPLATE.substitute(
+        table=_markdown_text(_database_identity(change)),
+        metadata=metadata,
+        column_table=_database_column_table(change),
+        before_snapshot=_database_snapshot(change.get("before")),
+        after_snapshot=_database_snapshot(change.get("after")),
+        migration="\n".join(migration_lines),
+    )
+
+
+def render_task_database_changes(
+    definition: dict[str, Any],
+    *,
+    delivery_baseline: str = "../../baseline.md",
+    hierarchy_fingerprint: str | None = None,
+    graph_fingerprint: str | None = None,
+    hierarchy_status: str | None = None,
+    updated_at: str | None = None,
+) -> str:
+    if definition["kind"] != "TASK":
+        raise ValueError("Database projection requires a TASK definition")
+    rows: list[str] = []
+    for position, change in enumerate(
+        _task_database_declarations(definition),
+        start=1,
+    ):
+        filename = _database_document_filename(position, change)
+        name = (
+            f"[{_markdown_text(_database_identity(change))}]"
+            f"(database-changes/{filename})"
+        )
+        if change["changeType"] == "DELETE":
+            name = f"~~{name}~~"
+        before = change.get("before")
+        after = change.get("after")
+        rows.append(
+            _table_row(
+                [
+                    definition["id"],
+                    name,
+                    INTERFACE_CHANGE_TYPE_TEXT[change["changeType"]],
+                    str(len(before["columns"])) if before else "不适用",
+                    str(len(after["columns"])) if after else "不适用",
+                    change["resourceClaim"],
+                    change["summary"],
+                ],
+                raw_indices={1},
+            )
+        )
+    database_rows = "\n".join(
+        [
+            (
+                "| 来源 TASK | 表标识 | 变更类型 | 修改前字段数 | "
+                "修改后字段数 | 排他资源锁 | 简介 |"
+            ),
+            "|---|---|---|---|---|---|---|",
+            *rows,
+        ]
+    )
+    return DATABASE_CHANGES_PROJECTION_TEMPLATE.substitute(
+        database_status="\n".join(
+            _work_item_status_lines(
+                definition,
+                hierarchy_fingerprint=hierarchy_fingerprint,
+                graph_fingerprint=graph_fingerprint,
+                hierarchy_status=hierarchy_status,
+                updated_at=updated_at,
+            )
+        ),
+        delivery_baseline=delivery_baseline,
+        database_rows=database_rows,
+    )
+
+
+def render_task_database_documents(
+    definition: dict[str, Any],
+    **index_arguments: Any,
+) -> dict[str, str]:
+    documents = {
+        "database-changes.md": render_task_database_changes(
+            definition,
+            **index_arguments,
+        )
+    }
+    for position, change in enumerate(
+        _task_database_declarations(definition),
+        start=1,
+    ):
+        filename = _database_document_filename(position, change)
+        documents[f"database-changes/{filename}"] = (
+            _render_database_change_detail(change)
+        )
+    return documents
+
+
 def render_projection_documents(
     stored_definition: dict[str, Any],
     run: dict[str, Any] | None,
@@ -3395,12 +3728,29 @@ def render_work_item_projection_documents(
             )
             for filename, content in interface_documents.items():
                 documents[f"{tree_directory}/{filename}"] = content
+        if _task_database_declarations(definition):
+            database_documents = render_task_database_documents(
+                definition,
+                delivery_baseline=delivery_baseline,
+                hierarchy_fingerprint=stored_definition[
+                    "hierarchyFingerprint"
+                ],
+                graph_fingerprint=stored_definition[
+                    "graphFingerprint"
+                ],
+                hierarchy_status=stored_definition["status"],
+                updated_at=stored_definition["updatedAt"],
+            )
+            for filename, content in database_documents.items():
+                documents[f"{tree_directory}/{filename}"] = content
     return documents
 
 
 __all__ = (
     "ACCEPTANCE_PROJECTION_TEMPLATE",
     "BASELINE_PROJECTION_TEMPLATE",
+    "DATABASE_CHANGE_DETAIL_PROJECTION_TEMPLATE",
+    "DATABASE_CHANGES_PROJECTION_TEMPLATE",
     "INTERFACE_DETAIL_PROJECTION_TEMPLATE",
     "INTERFACES_PROJECTION_TEMPLATE",
     "PROGRESS_PROJECTION_TEMPLATE",
@@ -3413,6 +3763,7 @@ __all__ = (
     "WORK_ITEM_PROGRESS_PROJECTION_TEMPLATE",
     "WORKSPACE_OVERVIEW_PROJECTION_TEMPLATE",
     "has_interface_projection",
+    "has_database_projection",
     "raw_definition",
     "render_delivery_acceptance",
     "render_delivery_baseline",
@@ -3423,6 +3774,8 @@ __all__ = (
     "render_scheduling_plan",
     "render_task_interface_documents",
     "render_task_interfaces",
+    "render_task_database_changes",
+    "render_task_database_documents",
     "render_work_item_baseline",
     "render_work_item_acceptance",
     "render_work_item_progress",
@@ -3430,6 +3783,7 @@ __all__ = (
     "render_workspace_overview",
     "task_baseline_relative_path",
     "task_has_interface_projection",
+    "task_has_database_projection",
     "work_item_projection_relative_path",
     "work_item_projection_directories",
 )

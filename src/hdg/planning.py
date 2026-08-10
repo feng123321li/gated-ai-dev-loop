@@ -37,6 +37,7 @@ from .model_core import (
 from .model_rendering import (
     render_manual_handoff,
     task_baseline_relative_path,
+    task_has_database_projection,
     task_has_interface_projection,
     work_item_projection_relative_path,
 )
@@ -306,6 +307,15 @@ def _human_artifacts(
                     hierarchy,
                     item_id,
                     "interfaces.md",
+                )
+            )
+        if task_has_database_projection(definition):
+            artifacts["databaseChanges"] = (
+                f"{projection_root}/"
+                + work_item_projection_relative_path(
+                    hierarchy,
+                    item_id,
+                    "database-changes.md",
                 )
             )
         work_items[item_id] = artifacts
@@ -1089,6 +1099,25 @@ def _baseline_discovery(
         default_branch_ref = discovery.get("gitWorkspace", {}).get(
             "branchRef"
         )
+    git_workspace = discovery.get("gitWorkspace", {})
+    provenance = discovery.get("worktreeProvenance", {})
+    working_tree = discovery.get("workingTree", {})
+    current_branch = git_workspace.get("branchRef")
+    stacked_base = None
+    if (
+        provenance.get("topology") == "PRIMARY_WORKTREE"
+        and git_workspace.get("role") == "UNBOUND_BRANCH"
+        and isinstance(current_branch, str)
+        and current_branch
+        and current_branch not in {"main", "master"}
+        and current_branch != provenance.get("baseRef")
+        and working_tree.get("clean", False)
+    ):
+        stacked_base = {
+            "branchRef": current_branch,
+            "headCommit": git_workspace["headCommit"],
+        }
+        default_branch_ref = None
     context_value = fingerprint(
         {
             "rootId": root_id,
@@ -1104,12 +1133,14 @@ def _baseline_discovery(
             "worktreeSetup": discovery.get("worktreeSetup"),
             "branchAdoption": discovery.get("branchAdoption"),
             "candidates": candidates,
+            "stackedBase": stacked_base,
         }
     )
     return {
         "discovery": discovery,
         "candidateBranches": candidates,
         "defaultBranchRef": default_branch_ref,
+        "stackedBase": stacked_base,
         "baselineContextFingerprint": context_value,
     }
 
@@ -1154,6 +1185,7 @@ def _pending_interaction(
                 ],
                 interaction_context=interaction_context,
                 working_tree=context["discovery"].get("workingTree"),
+                stacked_base=context["stackedBase"],
             )
     return execution_choice_contract(
         host_adapter_id,
@@ -1286,8 +1318,10 @@ def confirm_development_baseline(
     re-stages the hierarchy with the binding frozen in (via the idempotent
     ``record_choice_ready`` path), and returns the updated fingerprint plus the
     ``executionChoice``. The Controller performs no Git writes: a
-    ``NEW_FROM_MAINLINE`` choice pins ``baseCommit`` to the current mainline
-    HEAD and the host creates the branch during worktree setup.
+    ``NEW_FROM_MAINLINE`` pins ``baseCommit`` to the current mainline HEAD.
+    ``NEW_FROM_CURRENT_BRANCH`` pins it to the clean current feature HEAD and
+    makes that parent feature both baseRef and integrationTarget. The host
+    creates either branch during worktree setup.
     """
 
     if not isinstance(confirmed_by, str) or not confirmed_by.strip():
@@ -1298,7 +1332,8 @@ def confirm_development_baseline(
     if not isinstance(selection, str) or not selection.strip():
         fail(
             "SCHEDULER_BASELINE_CHOICE_INVALID",
-            "selection must be a local branch_ref or NEW_FROM_MAINLINE",
+            "selection must be a local branch_ref, NEW_FROM_MAINLINE, or "
+            "NEW_FROM_CURRENT_BRANCH",
             selection=selection,
         )
     repository = SchedulerRepository(root, now=now)
@@ -1387,20 +1422,45 @@ def confirm_development_baseline(
                 "to this Delivery using the presented state fingerprint",
                 dirtyStateFingerprint=actual_dirty,
             )
-    if selection == "NEW_FROM_MAINLINE":
+    if selection in {"NEW_FROM_MAINLINE", "NEW_FROM_CURRENT_BRANCH"}:
+        stacked_base = context.get("stackedBase")
         if (
             not isinstance(branch_name, str)
             or not branch_name.strip()
             or branch_name.strip() in {"main", "master"}
+            or (
+                selection == "NEW_FROM_CURRENT_BRANCH"
+                and (
+                    stacked_base is None
+                    or branch_name.strip() == stacked_base["branchRef"]
+                )
+            )
         ):
             fail(
                 "SCHEDULER_BASELINE_CHOICE_INVALID",
-                "NEW_FROM_MAINLINE requires a new branch name that is not "
-                "main or master",
+                f"{selection} requires a distinct new Delivery branch name",
                 branchName=branch_name,
             )
         chosen_branch = branch_name.strip()
-        source = "NEW_FROM_MAINLINE"
+        available = {
+            item["branchRef"] for item in context["candidateBranches"]
+        }
+        if (
+            selection == "NEW_FROM_CURRENT_BRANCH"
+            and chosen_branch in available
+        ):
+            fail(
+                "SCHEDULER_BASELINE_CHOICE_INVALID",
+                "NEW_FROM_CURRENT_BRANCH requires a branch name that does "
+                "not already exist",
+                branchName=chosen_branch,
+            )
+        source = selection
+        base_ref = (
+            stacked_base["branchRef"]
+            if selection == "NEW_FROM_CURRENT_BRANCH"
+            else None
+        )
     else:
         chosen_branch = selection.strip()
         available = {
@@ -1413,7 +1473,12 @@ def confirm_development_baseline(
                 selection=chosen_branch,
             )
         source = "LOCAL_BRANCH"
-    binding = resolve_branch_binding(workspace, branch_ref=chosen_branch)
+        base_ref = None
+    binding = resolve_branch_binding(
+        workspace,
+        branch_ref=chosen_branch,
+        base_ref=base_ref,
+    )
     terminal_statuses = {
         "ARCHIVED",
         "COMPLETED",

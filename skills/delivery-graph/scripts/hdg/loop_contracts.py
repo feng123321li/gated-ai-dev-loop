@@ -94,6 +94,7 @@ _LOOP_COMPLETION_POLICY = {
     "payloadRole": "GOALS_CONSTRAINTS_AND_KNOWN_ACCEPTANCE_INPUT",
     "inScopeNecessaryConditions": "DERIVE_AND_VALIDATE_AT_RUNTIME",
     "implementationPlanWithinLoop": "MAY_ADAPT_WITHOUT_REPLAN",
+    "frozenDatabaseContract": "APPLY_AND_VERIFY_OR_REPLAN_REQUIRED",
     "actionableFinding": "RESOLVE_AND_REEVALUATE_IN_CURRENT_LOOP",
     "reviewCycle": "FIND_RESOLVE_VERIFY_AND_REREVIEW_UNTIL_TERMINAL",
     "reviewFindings": {

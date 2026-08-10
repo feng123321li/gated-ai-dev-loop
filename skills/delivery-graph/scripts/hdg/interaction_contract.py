@@ -115,8 +115,41 @@ def execution_choice_contract(
 
 DEVELOPMENT_BASELINE_MARKDOWN = """请先选择开发基线（在确认开发方式之前确定开发分支）：
 
-从本地分支中选择一个作为开发基线，或从当前主线新建分支。仅列出本地分支，不含远端。选择会被记住，同一 Delivery 的后续 Revision 不再重复询问；Controller 不执行任何 Git 写操作，分支或 worktree 由宿主创建。
+从本地分支中选择一个作为开发基线，或新建 Delivery 分支。主工作区位于已有 feature 分支且状态干净时，可显式选择从当前 feature 创建子分支，完成后合回该父分支。仅列出本地分支，不含远端。选择会被记住，同一 Delivery 的后续 Revision 不再重复询问；Controller 不执行任何 Git 写操作，分支或 worktree 由宿主创建。
 """
+
+
+def _markdown_text(value: object) -> str:
+    text = str(value)
+    text = text.replace("&", "&amp;")
+    text = text.replace("<", "&lt;").replace(">", "&gt;")
+    for character in ("\\", "`", "*", "_", "[", "]", "#", "|"):
+        text = text.replace(character, f"\\{character}")
+    return (
+        text.replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .replace("\n", "<br>")
+    )
+
+
+def _development_baseline_markdown(
+    options: list[dict[str, Any]],
+    default_option_id: str,
+) -> str:
+    lines = [DEVELOPMENT_BASELINE_MARKDOWN.rstrip(), ""]
+    for index, option in enumerate(options, start=1):
+        markers: list[str] = []
+        if option["id"] == default_option_id:
+            markers.append("默认")
+        if option.get("recommended", False):
+            markers.append("推荐")
+        marker = f"（{'、'.join(markers)}）" if markers else ""
+        lines.append(
+            f"{index}. {_markdown_text(option['label'])}{marker}："
+            f"{_markdown_text(option['description'])}"
+        )
+    lines.extend(["", "也可直接输入修改意见，继续需求沟通。", ""])
+    return "\n".join(lines)
 
 
 def development_baseline_contract(
@@ -131,12 +164,14 @@ def development_baseline_contract(
     baseline_context_fingerprint: str | None = None,
     interaction_context: str = "INITIAL_DELIVERY",
     working_tree: dict[str, Any] | None = None,
+    stacked_base: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Return the controller-owned development-baseline interaction contract.
 
     Sits before ``EXECUTION_MODE``: in a Git worktree with no remembered
-    baseline the host presents this selector over local feature branches plus a
-    ``NEW_FROM_MAINLINE`` option. A dirty worktree additionally requires exact
+    baseline the host presents this selector over local feature branches plus
+    new-from-mainline and, when eligible, new-stacked-child options. A dirty
+    worktree additionally requires exact
     state-fingerprint attribution. The host applies the choice via
     ``confirm_development_baseline``. The presentation machinery mirrors
     ``execution_choice_contract`` verbatim so the same native question tool is
@@ -164,13 +199,38 @@ def development_baseline_contract(
         }
         for branch in candidate_branches
     ]
+    if stacked_base is not None:
+        options.append(
+            {
+                "id": "NEW_FROM_CURRENT_BRANCH",
+                "label": (
+                    f"从当前分支 {stacked_base['branchRef']} 创建子分支"
+                ),
+                "description": (
+                    f"以 {stacked_base['branchRef']} @ "
+                    f"{stacked_base['headCommit'][:12]} 为基线新建 Delivery "
+                    "子分支，完成后合回该父分支（需提供子分支名）"
+                ),
+                "requiresBranchName": True,
+                "stackedDelivery": True,
+                "baseRef": stacked_base["branchRef"],
+                "baseCommit": stacked_base["headCommit"],
+                "integrationTarget": stacked_base["branchRef"],
+                "recommended": True,
+                "nextAction": (
+                    "CONFIRM_STACKED_BASELINE_THEN_PRESENT_EXECUTION_CHOICE"
+                ),
+            }
+        )
     options.append(
         {
             "id": "NEW_FROM_MAINLINE",
             "label": "从主线创建新分支",
             "description": "从当前主线新建一个开发分支（需提供分支名）",
             "requiresBranchName": True,
-            "recommended": default_branch_ref is None,
+            "recommended": (
+                default_branch_ref is None and stacked_base is None
+            ),
             "nextAction": "CONFIRM_BASELINE_THEN_PRESENT_EXECUTION_CHOICE",
         }
     )
@@ -178,9 +238,13 @@ def development_baseline_contract(
     if isinstance(git_binding, dict):
         base_ref = git_binding.get("baseRef")
     default_option = (
-        default_branch_ref
-        if default_branch_ref is not None
-        else "NEW_FROM_MAINLINE"
+        "NEW_FROM_CURRENT_BRANCH"
+        if stacked_base is not None
+        else (
+            default_branch_ref
+            if default_branch_ref is not None
+            else "NEW_FROM_MAINLINE"
+        )
     )
     result = {
         "schemaVersion": 2,
@@ -231,7 +295,7 @@ def development_baseline_contract(
             "nextAction": "CONTINUE_REQUIREMENT_DISCUSSION",
         },
         "options": options,
-        "markdown": DEVELOPMENT_BASELINE_MARKDOWN,
+        "markdown": _development_baseline_markdown(options, default_option),
     }
     if expected_graph_fingerprint is not None:
         result["expectedGraphFingerprint"] = expected_graph_fingerprint

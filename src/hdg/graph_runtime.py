@@ -30,6 +30,7 @@ from .loop_contracts import (
 )
 from .model_rendering import (
     task_baseline_relative_path,
+    task_has_database_projection,
     work_item_projection_relative_path,
 )
 from .model_core import (
@@ -700,6 +701,15 @@ def loop_context(
                     stored["hierarchy"],
                     item_id,
                     "interfaces.md",
+                )
+            )
+        if task_has_database_projection(work_item_definition):
+            work_item_artifacts["databaseChanges"] = (
+                projection_prefix
+                + work_item_projection_relative_path(
+                    stored["hierarchy"],
+                    item_id,
+                    "database-changes.md",
                 )
             )
         human_artifacts["workItem"] = work_item_artifacts

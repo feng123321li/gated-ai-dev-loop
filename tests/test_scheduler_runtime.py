@@ -333,6 +333,95 @@ def interface_hierarchy() -> dict:
     return source
 
 
+def database_hierarchy() -> dict:
+    source = task_hierarchy()
+    loop = source["root"]["definition"]["execution"]["loop"]
+    loop["resourceClaims"] = ["db-schema-orders"]
+    loop["payload"]["databaseChanges"] = [
+        {
+            "projectId": "erp-service",
+            "database": "erp",
+            "schema": "public",
+            "table": "orders",
+            "summary": "增加订单取消原因并建立状态查询索引。",
+            "changeType": "MODIFY",
+            "before": {
+                "comment": "订单主表",
+                "columns": [
+                    {
+                        "name": "id",
+                        "type": "bigint",
+                        "nullable": False,
+                        "default": None,
+                        "comment": "订单标识",
+                        "autoIncrement": True,
+                    },
+                    {
+                        "name": "status",
+                        "type": "varchar(32)",
+                        "nullable": False,
+                        "default": "CREATED",
+                        "comment": "订单状态",
+                    },
+                ],
+                "primaryKey": {"name": "pk_orders", "columns": ["id"]},
+                "uniqueConstraints": [],
+                "indexes": [],
+                "foreignKeys": [],
+            },
+            "after": {
+                "comment": "订单主表",
+                "columns": [
+                    {
+                        "name": "id",
+                        "type": "bigint",
+                        "nullable": False,
+                        "default": None,
+                        "comment": "订单标识",
+                        "autoIncrement": True,
+                    },
+                    {
+                        "name": "status",
+                        "type": "varchar(32)",
+                        "nullable": False,
+                        "default": "CREATED",
+                        "comment": "订单状态",
+                    },
+                    {
+                        "name": "cancel_reason",
+                        "type": "varchar(500)",
+                        "nullable": True,
+                        "default": None,
+                        "comment": "订单取消原因",
+                    },
+                ],
+                "primaryKey": {"name": "pk_orders", "columns": ["id"]},
+                "uniqueConstraints": [],
+                "indexes": [
+                    {
+                        "name": "idx_orders_status",
+                        "columns": ["status"],
+                        "unique": False,
+                    }
+                ],
+                "foreignKeys": [],
+            },
+            "migration": {
+                "forward": "新增 cancel_reason 并创建 idx_orders_status。",
+                "rollback": "删除索引后删除 cancel_reason。",
+                "backfill": "历史订单无需回填，保持 NULL。",
+                "compatibility": "先执行向后兼容迁移，再发布应用。",
+                "verification": [
+                    "核对字段类型、可空性与注释",
+                    "验证索引存在且迁移可回滚",
+                ],
+            },
+            "resourceClaim": "db-schema-orders",
+        }
+    ]
+    return source
+
+
 class SchedulerRuntimeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()
@@ -5569,6 +5658,68 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertNotIn("创建订单", task_baseline)
         self.assertNotIn("legacyCustomerNo", task_baseline)
+
+    def test_database_contract_projects_frozen_table_design_before_execution(
+        self,
+    ) -> None:
+        hierarchy = database_hierarchy()
+        prepared = prepare_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        projection_root = (
+            Path(self.root)
+            / ".layered-delivery"
+            / prepared["rootId"]
+        )
+        task_root = projection_root / WORK_ITEM_DIRECTORY / "t-service"
+        database_index = (task_root / "database-changes.md").read_text(
+            encoding="utf-8"
+        )
+        details = sorted((task_root / "database-changes").glob("*.md"))
+        self.assertEqual(
+            [path.name for path in details],
+            ["001-erp-service-erp-public-orders.md"],
+        )
+        detail = details[0].read_text(encoding="utf-8")
+        task_baseline = (task_root / "baseline.md").read_text(
+            encoding="utf-8"
+        )
+        delivery_baseline = (projection_root / "baseline.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("# TASK 数据库变更契约", database_index)
+        self.assertIn("erp-service.erp.public.orders", database_index)
+        self.assertIn("修改后字段数", database_index)
+        self.assertIn("db-schema-orders", database_index)
+        self.assertIn("# 数据库表：erp-service.erp.public.orders", detail)
+        self.assertIn("## 字段级比较", detail)
+        self.assertIn(r"| cancel\_reason | 新增 |", detail)
+        self.assertIn("## 修改前完整结构", detail)
+        self.assertIn("## 修改后完整结构（执行事实源）", detail)
+        self.assertIn('"name": "cancel_reason"', detail)
+        self.assertIn("先执行向后兼容迁移", detail)
+        self.assertIn("必须返回 `REPLAN_REQUIRED`", database_index)
+        self.assertIn(
+            "[查看本 TASK 的数据库变更契约](database-changes.md)",
+            task_baseline,
+        )
+        self.assertNotIn(r"cancel\_reason", task_baseline)
+        self.assertIn(
+            f"{WORK_ITEM_DIRECTORY}/t-service/database-changes.md",
+            delivery_baseline,
+        )
+        self.assertEqual(
+            prepared["humanArtifacts"]["workItems"]["t-service"][
+                "databaseChanges"
+            ],
+            (
+                f".layered-delivery/{prepared['rootId']}/"
+                f"{WORK_ITEM_DIRECTORY}/t-service/database-changes.md"
+            ),
+        )
 
     def test_interface_projection_renders_actual_wrapped_http_contract(
         self,

@@ -710,8 +710,10 @@ def resolve_branch_binding(
     """Compute the frozen Git binding for a chosen development baseline.
 
     ``branch_ref`` may name an existing local branch (its merge-base with the
-    mainline becomes ``baseCommit``) or a brand-new branch the host will create
-    from the mainline (``baseCommit`` is pinned to the current mainline HEAD).
+    selected base becomes ``baseCommit``) or a brand-new branch the host will
+    create from that base (``baseCommit`` is pinned to the selected base HEAD).
+    The base is normally main/master but may be an explicitly confirmed parent
+    feature branch for a stacked Delivery.
     Read-only: the controller never creates branches or worktrees.
     """
 
@@ -756,7 +758,7 @@ def verify_delivery_git_binding(
     if binding is None:
         fail(
             "SCHEDULER_GIT_BINDING_REQUIRED",
-            "A Git Delivery must declare its feature branch and mainline "
+            "A Git Delivery must declare its feature branch and immutable "
             "base binding",
         )
     normalized = validate_git_binding(binding)
@@ -844,7 +846,7 @@ def verify_delivery_git_binding(
     if not mainline_contains_base:
         fail(
             "SCHEDULER_GIT_BASE_INVALID",
-            "No local or origin mainline ref contains baseCommit",
+            "No local or origin baseRef contains baseCommit",
             baseCommit=base_commit,
             baseRef=normalized["baseRef"],
         )
@@ -863,7 +865,7 @@ def verify_delivery_git_binding(
         if base_commit not in merge_bases:
             fail(
                 "SCHEDULER_GIT_BASE_INVALID",
-                "baseCommit must be the feature branch fork point from "
+                "baseCommit must be the Delivery branch fork point from "
                 "baseRef when the Delivery is prepared",
                 expectedBaseCommits=list(merge_bases),
                 actualBaseCommit=base_commit,

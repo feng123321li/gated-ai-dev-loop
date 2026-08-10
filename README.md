@@ -4,7 +4,7 @@
 
 `delivery-graph` 把已经确认的软件需求冻结为可执行、可审查、可恢复的 Delivery Graph，再协调宿主原生 Agent 完成实现、分层 Review 和最终验收。
 
-当前版本：**0.38.0** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
+当前版本：**0.39.0** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
 
 ## 它做什么
 
@@ -78,7 +78,7 @@ Delivery
 主要安全边界：
 
 - Controller 只读检查 Git；不执行 `fetch`、`switch`、`commit`、`merge`、`push` 或发布。
-- 分支选择只枚举本地分支。选择“从主线创建”时会把基线提交固定为当时的主线 HEAD。
+- 分支选择只枚举本地分支。选择“从主线创建”时会把基线提交固定为当时的主线 HEAD；primary 位于干净 feature 时还会默认推荐 stacked 子分支，把父 feature HEAD 冻结为基线并最终合回父分支，无需切换 primary。
 - 工作树已有业务改动时，用户必须确认这些改动属于本 Delivery，并回传精确状态指纹。
 - 手动 handoff 启动前若 Git 基线漂移，启动会先被阻断；重新确认后恢复原 Revision，或在 binding 变化时生成下一不可变 Revision。
 - 一个 Delivery 可以覆盖多个本地 Git 项目，但每个 Git project scope 都必须提供完整 binding；缺失时提前 fail closed，不从顶层偏好猜测其他仓库。

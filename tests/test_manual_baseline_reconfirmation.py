@@ -137,6 +137,27 @@ class ManualBaselineReconfirmationTests(unittest.TestCase):
                 receiving_branch,
                 {option["id"] for option in interaction["options"]},
             )
+            cursor = 0
+            for index, option in enumerate(interaction["options"], start=1):
+                option_start = interaction["markdown"].index(
+                    f"{index}. {option['label']}",
+                    cursor,
+                )
+                cursor = option_start + len(option["label"])
+            receiving_index = next(
+                index
+                for index, option in enumerate(
+                    interaction["options"],
+                    start=1,
+                )
+                if option["id"] == receiving_branch
+            )
+            receiving_line = next(
+                line
+                for line in interaction["markdown"].splitlines()
+                if line.startswith(f"{receiving_index}. {receiving_branch}")
+            )
+            self.assertIn("默认、推荐", receiving_line)
             self.assertFalse(blocked["graphRunCreated"])
             self.assertEqual(blocked["deliveryRevision"], 1)
             self.assertEqual(

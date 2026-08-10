@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .constants import MAX_IDENTIFIER_LENGTH, SCHEMA_VERSION
+from .database_contracts import validate_task_database_contract
 from .errors import fail
 from .jsonio import fingerprint
 from .loop_contracts import (
@@ -354,6 +355,10 @@ def validate_work_item_definition(
                 field=f"{field}.execution.loop",
             ),
         }
+        validate_task_database_contract(
+            normalized["execution"]["loop"],
+            field=f"{field}.execution.loop",
+        )
         return normalized
 
     decomposition = definition["decomposition"]
@@ -669,8 +674,8 @@ def _git_binding(value: object, *, field: str) -> dict[str, str]:
     if base_ref != integration_target:
         fail(
             "DELIVERY_GIT_BINDING_INVALID",
-            "baseRef and integrationTarget must identify the same "
-            "mainline branch",
+            "baseRef and integrationTarget must identify the same base "
+            "integration branch",
             field=field,
         )
     if branch_ref == integration_target:
@@ -912,6 +917,17 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
 
     root = normalize_node(hierarchy["root"], None, field="root")
     root_definition = root["definition"]
+    if delivery.get("assuranceProfile", "STANDARD") == "LIGHT" and any(
+        node["definition"]["kind"] == "TASK"
+        and "databaseChanges"
+        in node["definition"]["execution"]["loop"]["payload"]
+        for node in iter_hierarchy_nodes({"root": root})
+    ):
+        fail(
+            "DELIVERY_ASSURANCE_INVALID",
+            "Database schema or migration changes require STANDARD assurance",
+            field="hierarchy.delivery.assuranceProfile",
+        )
     if delivery.get("assuranceProfile", "STANDARD") == "LIGHT":
         if root_definition["kind"] != "TASK":
             fail(

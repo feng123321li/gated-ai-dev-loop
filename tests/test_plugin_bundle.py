@@ -485,7 +485,8 @@ class PluginBundleTests(unittest.TestCase):
             "`requiresNewTopLevelSession=false`",
             main + planning,
         )
-        self.assertIn("主 checkout 保持 `main` 或 `master`", planning)
+        self.assertIn("主任务不切换目录或分支", planning)
+        self.assertIn("`NEW_FROM_CURRENT_BRANCH`", planning)
         self.assertIn("`CREATE_DELIVERY_FEATURE_BRANCH`", planning)
         self.assertIn("重新调用 `workspace_status`", planning)
         self.assertIn("`HOST_NATIVE_LINKED_WORKTREE`", planning)
@@ -585,10 +586,8 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("宿主显式选择", planning)
         self.assertIn("`origin/HEAD`", planning)
         self.assertIn("本地 `main`、本地 `master`", planning)
-        self.assertIn(
-            "不得从当前 feature HEAD 分叉",
-            planning,
-        )
+        self.assertIn("不得隐式从当前 feature HEAD 分叉", planning)
+        self.assertIn("显式 stacked Delivery 授权", planning)
         self.assertIn("新用户需求默认属于新 Delivery", planning)
         self.assertIn(
             "不得仅因 `workspace_status` 返回旧 Delivery 就进入 Revision",

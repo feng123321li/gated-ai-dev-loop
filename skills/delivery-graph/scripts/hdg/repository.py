@@ -471,6 +471,19 @@ class SchedulerRepository:
     def workspace_binding(self, root_id: str) -> dict[str, Any]:
         return self._delivery_workspace_store().binding(root_id)
 
+    def serial_workspace_turns(
+        self,
+        workspace_root: str | os.PathLike[str],
+        *,
+        exclude_root_id: str | None = None,
+        include_terminal: bool = False,
+    ) -> list[dict[str, str]]:
+        return self._delivery_workspace_store().serial_turns(
+            workspace_root,
+            exclude_root_id=exclude_root_id,
+            include_terminal=include_terminal,
+        )
+
     def assert_delivery_workspace(
         self,
         root_id: str,
@@ -557,6 +570,7 @@ class SchedulerRepository:
         authorized_project_ids: list[str],
         confirmed_by: str,
         worktree_requests: list[dict[str, str]] | None = None,
+        workspace_key: str | None = None,
     ) -> dict[str, Any]:
         return self._delivery_execution_setup_store().record_automatic_selection(
             root_id,
@@ -565,6 +579,15 @@ class SchedulerRepository:
             authorized_project_ids=authorized_project_ids,
             confirmed_by=confirmed_by,
             worktree_requests=worktree_requests,
+            workspace_key=workspace_key,
+        )
+
+    def serial_workspace_turn_state(
+        self,
+        root_id: str,
+    ) -> dict[str, Any]:
+        return self._delivery_execution_setup_store().serial_workspace_turn_state(
+            root_id
         )
 
     def execution_selection(
@@ -674,6 +697,15 @@ class SchedulerRepository:
             root_id,
         )
 
+    def revision_hierarchy(
+        self,
+        root_id: str,
+        revision: int,
+    ) -> dict[str, Any]:
+        return self._delivery_hierarchy_store().revision_hierarchy(
+            root_id, revision
+        )
+
     @staticmethod
     def _carriable_task_ids(
         previous_hierarchy: dict[str, Any],
@@ -721,6 +753,7 @@ class SchedulerRepository:
         expected_hierarchy_fingerprint: str,
         authorized_project_ids: list[str],
         confirmed_by: str,
+        workspace_turn_start: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._delivery_hierarchy_store().freeze(
             root_id,
@@ -728,6 +761,7 @@ class SchedulerRepository:
             expected_hierarchy_fingerprint=expected_hierarchy_fingerprint,
             authorized_project_ids=authorized_project_ids,
             confirmed_by=confirmed_by,
+            workspace_turn_start=workspace_turn_start,
         )
 
     def freeze_manual_handoff(
@@ -739,6 +773,7 @@ class SchedulerRepository:
         authorized_project_ids: list[str],
         confirmed_by: str,
         started_by: str,
+        workspace_turn_start: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._delivery_hierarchy_store().freeze_manual_handoff(
             root_id,
@@ -747,6 +782,7 @@ class SchedulerRepository:
             authorized_project_ids=authorized_project_ids,
             confirmed_by=confirmed_by,
             started_by=started_by,
+            workspace_turn_start=workspace_turn_start,
         )
 
     def _freeze(
@@ -759,6 +795,7 @@ class SchedulerRepository:
         confirmed_by: str,
         execution_mode: str = "active",
         graph_started_by: str | None = None,
+        workspace_turn_start: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._delivery_hierarchy_store()._freeze(
             root_id,
@@ -768,6 +805,7 @@ class SchedulerRepository:
             confirmed_by=confirmed_by,
             execution_mode=execution_mode,
             graph_started_by=graph_started_by,
+            workspace_turn_start=workspace_turn_start,
         )
 
     def _run_from_connection(
@@ -787,6 +825,226 @@ class SchedulerRepository:
         return self._delivery_hierarchy_store().run(
             root_id,
         )
+    def workspace_turn_start(
+        self,
+        root_id: str,
+    ) -> dict[str, Any] | None:
+        """Return Controller-captured Git state from GRAPH_RUN_STARTED."""
+
+        if not self.database_path.is_file():
+            return None
+        with self.read() as connection:
+            row = connection.execute(
+                "SELECT e.payload_json FROM graph_events e "
+                "JOIN runs r ON r.run_id = e.run_id "
+                "JOIN hierarchies h ON h.root_id = r.root_id "
+                "AND h.revision = r.revision "
+                "WHERE r.root_id = ? "
+                "AND e.event_type = 'GRAPH_RUN_STARTED' "
+                "ORDER BY e.event_id DESC LIMIT 1",
+                (root_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        payload = json.loads(row["payload_json"])
+        value = payload.get("workspaceTurnStart")
+        return value if isinstance(value, dict) else None
+
+    def workspace_turn_release(
+        self,
+        root_id: str,
+    ) -> dict[str, Any] | None:
+        if not self.database_path.is_file():
+            return None
+        with self.read() as connection:
+            row = connection.execute(
+                "SELECT e.payload_json FROM graph_events e "
+                "JOIN runs r ON r.run_id = e.run_id "
+                "WHERE r.root_id = ? "
+                "AND e.event_type = 'WORKSPACE_TURN_RELEASED' "
+                "ORDER BY e.event_id DESC LIMIT 1",
+                (root_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        payload = json.loads(row["payload_json"])
+        return payload if isinstance(payload, dict) else None
+
+    def unexpired_cancelled_receiver_leases(
+        self,
+        root_id: str,
+    ) -> list[dict[str, Any]]:
+        """Return receivers still live when a Run was cancelled or superseded.
+
+        A future lease timestamp alone is insufficient: successful and
+        otherwise finished Loops retain their last lease for audit purposes.
+        The claim must therefore be the node attempt's latest claim and have
+        no claim-ending event before the terminal Run event.
+        """
+
+        if not self.database_path.is_file():
+            return []
+        at = timestamp(self.now)
+        with self.read() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    r.run_id,
+                    r.revision,
+                    r.status AS run_status,
+                    n.node_id,
+                    n.attempt,
+                    n.owner,
+                    n.operation_id,
+                    n.claimed_at,
+                    n.last_heartbeat_at,
+                    n.lease_expires_at,
+                    claim.payload_json AS claim_payload_json
+                FROM runs r
+                JOIN node_runs n ON n.run_id = r.run_id
+                JOIN graph_events terminal
+                  ON terminal.run_id = r.run_id
+                 AND terminal.event_type = CASE r.status
+                       WHEN 'CANCELLED' THEN 'GRAPH_RUN_CANCELLED'
+                       ELSE 'GRAPH_RUN_SUPERSEDED'
+                     END
+                JOIN graph_events claim
+                  ON claim.run_id = r.run_id
+                 AND claim.node_id = n.node_id
+                 AND claim.attempt = n.attempt
+                 AND claim.event_type = 'LOOP_CLAIMED'
+                 AND claim.event_id = (
+                       SELECT MAX(candidate.event_id)
+                       FROM graph_events candidate
+                       WHERE candidate.run_id = r.run_id
+                         AND candidate.node_id = n.node_id
+                         AND candidate.attempt = n.attempt
+                         AND candidate.event_type = 'LOOP_CLAIMED'
+                     )
+                WHERE r.root_id = ?
+                  AND r.status IN ('CANCELLED', 'SUPERSEDED')
+                  AND n.status = 'CANCELLED'
+                  AND n.owner IS NOT NULL
+                  AND n.operation_id IS NOT NULL
+                  AND claim.operation_id = n.operation_id
+                  AND n.lease_expires_at IS NOT NULL
+                  AND julianday(n.lease_expires_at) >= julianday(?)
+                  AND claim.event_id < terminal.event_id
+                  AND NOT EXISTS (
+                        SELECT 1
+                        FROM graph_events ended
+                        WHERE ended.run_id = r.run_id
+                          AND ended.node_id = n.node_id
+                          AND ended.attempt = n.attempt
+                          AND ended.event_id > claim.event_id
+                          AND ended.event_id < terminal.event_id
+                          AND ended.event_type IN (
+                              'LOOP_SUCCEEDED',
+                              'LOOP_BLOCKED',
+                              'LOOP_REPLAN_REQUIRED',
+                              'LOOP_CANCELLED',
+                              'CLAIM_LEASE_EXPIRED',
+                              'NODE_PAUSED'
+                          )
+                    )
+                ORDER BY r.revision, n.node_id, n.attempt
+                """,
+                (root_id, at),
+            ).fetchall()
+        leases: list[dict[str, Any]] = []
+        for row in rows:
+            claim_payload = json.loads(row["claim_payload_json"])
+            receiver_context_id = (
+                claim_payload.get("receiverContextId")
+                if isinstance(claim_payload, dict)
+                else None
+            )
+            leases.append(
+                {
+                    "rootId": root_id,
+                    "runId": row["run_id"],
+                    "revision": row["revision"],
+                    "runStatus": row["run_status"],
+                    "nodeId": row["node_id"],
+                    "attempt": row["attempt"],
+                    "owner": row["owner"],
+                    "receiverContextId": (
+                        receiver_context_id
+                        if isinstance(receiver_context_id, str)
+                        and receiver_context_id
+                        else row["owner"]
+                    ),
+                    "operationId": row["operation_id"],
+                    "claimedAt": row["claimed_at"],
+                    "lastHeartbeatAt": row["last_heartbeat_at"],
+                    "leaseExpiresAt": row["lease_expires_at"],
+                }
+            )
+        return leases
+
+    def release_serial_workspace_turn(
+        self,
+        root_id: str,
+        *,
+        evidence: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Persist one idempotent terminal commit/clean release decision."""
+
+        with self.transaction() as connection:
+            run = connection.execute(
+                "SELECT r.* FROM runs r "
+                "JOIN hierarchies h ON h.root_id = r.root_id "
+                "AND h.revision = r.revision "
+                "WHERE r.root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if run is None:
+                fail(
+                    "SCHEDULER_RUN_MISSING",
+                    f"Graph run is missing: {root_id}",
+                )
+            existing = connection.execute(
+                "SELECT payload_json FROM graph_events "
+                "WHERE run_id = ? "
+                "AND event_type = 'WORKSPACE_TURN_RELEASED' "
+                "ORDER BY event_id DESC LIMIT 1",
+                (run["run_id"],),
+            ).fetchone()
+            if existing is not None:
+                payload = json.loads(existing["payload_json"])
+                return payload
+            if run["status"] not in {
+                "COMPLETED",
+                "CANCELLED",
+                "SUPERSEDED",
+            }:
+                fail(
+                    "SCHEDULER_WORKSPACE_TURN_NOT_TERMINAL",
+                    "A workspace turn can release only after its Run is "
+                    "terminal",
+                    rootId=root_id,
+                    status=run["status"],
+                )
+            at = _commit_timestamp(self.now, run["updated_at"])
+            payload = {
+                "state": "RELEASED",
+                "strategy": "CURRENT_WORKSPACE_SERIAL",
+                "releasedAt": at,
+                **evidence,
+            }
+            self.append_event(
+                connection,
+                run_id=run["run_id"],
+                node_id=None,
+                attempt=None,
+                event_type="WORKSPACE_TURN_RELEASED",
+                actor="CONTROLLER",
+                operation_id=None,
+                payload=payload,
+                at=at,
+            )
+        return payload
+
 
     def revision_history(self, root_id: str) -> dict[str, Any]:
         return self._delivery_hierarchy_store().revision_history(

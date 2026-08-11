@@ -5,7 +5,7 @@ from typing import Any
 
 EXECUTION_CHOICE_MARKDOWN = """请选择开发方式（默认：自动执行）：
 
-1. 自动执行（默认）：记录一次选择；工作区就绪时立即开始，否则按宿主要求准备分支或独立 worktree 后继续，不再确认。
+1. 自动执行（默认）：复用当前 workspace 串行执行；前一 Delivery 有可验证提交、工作树和索引干净、HEAD 未漂移且接收方已安全释放后，才切换到下一分支并调度。
 2. 手动开发：生成 handoff；接收 CLI 启动同一 Graph，手动完成 TASK，后续审查与自动执行一致。
 
 也可直接输入修改意见，继续需求沟通。
@@ -81,19 +81,21 @@ def execution_choice_contract(
         "options": [
             {
                 "id": "AUTOMATIC",
-                "label": "自动执行",
+                "label": "自动执行（当前 workspace 串行）",
                 "description": (
-                    "记录一次选择；工作区就绪时立即开始，否则按宿主要求"
-                    "准备分支或独立 worktree 后继续，不再确认。"
+                    "复用当前 workspace 串行执行；前一 Delivery 有可验证"
+                    "提交、工作树和索引干净、HEAD 未漂移且接收方已安全"
+                    "释放后，才调度下一项。"
                 ),
                 "recommended": True,
                 "requiresAdditionalConfirmation": False,
                 "nextAction": (
-                    "RECORD_SELECTION_THEN_PREPARE_OR_REQUEST_WORKSPACE"
+                    "RECORD_SELECTION_THEN_WAIT_OR_PREPARE_CURRENT_WORKSPACE"
                 ),
-                "worktreeContinuation": (
+                "workspaceContinuation": (
                     "RESUME_EXECUTION_MODE_WITHOUT_CONFIRMATION"
                 ),
+                "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
             },
             {
                 "id": "MANUAL",
@@ -115,7 +117,7 @@ def execution_choice_contract(
 
 DEVELOPMENT_BASELINE_MARKDOWN = """请先选择开发基线（在确认开发方式之前确定开发分支）：
 
-从本地分支中选择一个作为开发基线，或新建 Delivery 分支。主工作区位于已有 feature 分支且状态干净时，可显式选择从当前 feature 创建子分支，完成后合回该父分支。仅列出本地分支，不含远端。选择会被记住，同一 Delivery 的后续 Revision 不再重复询问；Controller 不执行任何 Git 写操作，分支或 worktree 由宿主创建。
+从本地分支中选择一个作为开发基线，或新建 Delivery 分支。当前 workspace 位于已有 feature 分支且状态干净时，可显式选择从当前 feature 创建子分支，完成后合回该父分支。仅列出本地分支，不含远端。选择会被记住，同一 Delivery 的后续 Revision 不再重复询问；Controller 不执行任何 Git 写操作，宿主仅在 CURRENT_WORKSPACE_SERIAL 的干净、安全释放边界创建或切换分支，不创建新的 worktree。
 """
 
 

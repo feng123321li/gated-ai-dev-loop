@@ -7,7 +7,6 @@ allowed-tools:
   - mcp__plugin_delivery-graph_delivery-graph__preview_hierarchy
   - mcp__plugin_delivery-graph_delivery-graph__confirm_development_baseline
   - mcp__plugin_delivery-graph_delivery-graph__select_execution_mode
-  - mcp__plugin_delivery-graph_delivery-graph__report_worktree_setup
   - mcp__plugin_delivery-graph_delivery-graph__resume_execution_mode
   - mcp__plugin_delivery-graph_delivery-graph__create_manual_handoff
   - mcp__plugin_delivery-graph_delivery-graph__start_manual_handoff
@@ -46,8 +45,8 @@ allowed-tools:
 - 把 SQLite 和 Graph 事件链视为机器权威。不得用 Shell、Python 或数据库连接读写 `scheduler.db`，不得人工修补 Graph 或 Markdown 投影。
 - primary 总协调上下文只规划、路由和监控。AUTOMATIC 的每个 TASK 与 Review 都先由 `plan_dispatch_batch` 预留，再交给不同的独立 receiver 调用 `dispatch_loop`；primary 不得领取或内联任何 Loop。
 - 不把 Graph 范围当作 Git 或外部操作授权。创建/切换分支、commit、merge、push、发布、迁移和新增权限仍分别取得授权。
-- 不让 Controller 执行 Git 写操作。只读确认 binding；让宿主创建或复用 linked worktree，让 receiver 使用控制器验证后的实际项目路径。
-- 一个工作区最多绑定一个未结束 Delivery。新业务目标默认创建新 Delivery；只有同一需求延续或 `REPLAN_REQUIRED` 才创建同一 Delivery 的 Revision。
+- 不让 Controller 执行 Git 写操作。只读确认 binding；宿主只在前一个 Delivery 已形成可验证 commit、working tree/index clean、HEAD 未漂移且 receiver 已安全释放后，创建或切换当前分支。现有 linked checkout 也只视为普通 current workspace，不自动创建新 worktree；receiver 只使用控制器验证后的实际项目路径。
+- 一个实际 workspace/worktree 可以绑定多个未结束 Delivery，控制状态始终以 `rootId` 隔离，但工作区策略只有 `CURRENT_WORKSPACE_SERIAL`：每个 Delivery 使用独立分支，同一物理 checkout 一次只运行一个 Delivery。后启动或后发现者等待前一个安全释放；资源冲突、dirty 或 HEAD 漂移时停止切换。禁止跨 Delivery 共享 checkout/branch 并行执行。新业务目标默认创建新 Delivery；只有同一需求延续或 `REPLAN_REQUIRED` 才创建同一 Delivery 的 Revision。
 - 为同一需求保持稳定 `delivery.id`、`requirementKey` 和 `.layered-delivery/<delivery-id>/`；不要创建共享 handoff 目录或第二套控制面。
 - 在手动接收方检查、分析、修改或测试代码前调用 `start_manual_handoff`。`HANDOFF_READY` 只是冻结的 handoff，不是已启动的 Graph Run。
 - 执行模式只有 `AUTOMATIC` 和 `MANUAL`。AUTOMATIC TASK 与 Review 都要求非空的一次性 reservation、匹配的 decision fingerprint、独立 receiver context 和显式 `operation_id`；MANUAL 只允许 TASK，省略 AUTO reservation 但仍要求独立 receiver、显式 `operation_id`、可信 Adapter 与已验证 workspace。primary、普通 helper 和内部 Worker 均不得 claim。
@@ -55,11 +54,12 @@ allowed-tools:
 
 ## 入口路由
 
-先调用 `workspace_status`；已知 Delivery 时传 `rootId`。新目标若撞上另一未结束 Delivery，切换到新宿主工作区后重新检查，不要续接旧 Graph。
+先调用 `workspace_status`；已知 Delivery 时始终传 `rootId`。无参返回 `DELIVERY_SELECTION_REQUIRED` 时只展示候选并按本会话持有的 `rootId` 重查，不能按更新时间猜选；仍可为新需求调用 `preview_hierarchy`。无参发现不恢复未绑定的 `CHOICE_READY/HANDOFF_READY`，这两种草稿必须用创建响应中的 `rootId` 显式续接。
 
 | 状态 | 执行 |
 |---|---|
 | `ABSENT` | 新交付读取[规划说明](references/planning-quickstart.md)；只读问答不创建状态 |
+| `DELIVERY_SELECTION_REQUIRED` | 不推进任何候选；按当前会话持有的 `rootId` 再调用 `workspace_status`，或为明确的新需求 preview 新 Delivery |
 | `CHOICE_READY` | 处理 `pendingInteraction`；已有 `executionSelection` 时按 `nextAction` 恢复，不重复询问 |
 | `HANDOFF_READY` | 在实际工作区调用 `start_manual_handoff`；Graph 启动前不得开发 |
 | `PREPARED` | 续接当前方案；需求未变时不要重复 prepare |
@@ -88,10 +88,10 @@ allowed-tools:
 
 ### `DEVELOPMENT_BASELINE`
 
-1. 展示 Controller 返回的本地分支、`NEW_FROM_MAINLINE`，以及仅在干净 primary feature 工作区出现的 `NEW_FROM_CURRENT_BRANCH`；两个 NEW 选项都要求新分支名，后者是用户显式授权的 stacked Delivery 子分支。
+1. 展示 Controller 返回的本地分支、`NEW_FROM_MAINLINE`，以及仅在干净的当前 feature workspace 出现的 `NEW_FROM_CURRENT_BRANCH`；两个 NEW 选项都要求新分支名，后者是用户显式授权的 stacked Delivery 子分支。
 2. 调用 `confirm_development_baseline`，原样回传交互中的 hierarchy、Graph、Revision 和 baseline context fingerprints。
 3. 工作树非干净时，先让用户确认全部改动属于本 Delivery，再回传精确 `workingTree.stateFingerprint` 作为 `confirmed_dirty_state_fingerprint`。状态变化后必须重新确认。
-4. 让 Controller 只读冻结 `gitBinding`。`NEW_FROM_MAINLINE` 把 `baseCommit` 钉在确认时的主线 HEAD；`NEW_FROM_CURRENT_BRANCH` 把 clean 当前 feature 的 HEAD 钉为 `baseCommit`，并让该父 feature 同时成为 `baseRef/integrationTarget`。不要在这里创建分支或 worktree，也不要要求 primary 释放父分支。
+4. 让 Controller 只读冻结 `gitBinding`。`NEW_FROM_MAINLINE` 把 `baseCommit` 钉在确认时的主线 HEAD；`NEW_FROM_CURRENT_BRANCH` 把 clean 当前 feature 的 HEAD 钉为 `baseCommit`，并让该父 feature 同时成为 `baseRef/integrationTarget`。不要在这里创建分支或 worktree；宿主只在父 Delivery 达到可验证 commit、clean、HEAD 未漂移与 receiver 安全释放边界后创建或切换子分支。
 5. 对 Git 探测错误 fail closed。仅当确认不是 Git 工作区时跳过基线交互。
 6. 多 Git 项目必须在每个 `projectScopes[*]` 显式提供完整 `gitBinding`；任一缺失就停止，不得用顶层偏好推断其他仓库。
 7. 普通单仓 Delivery 可以省略 `projectScopes`；运行时必须从顶层 `delivery.gitBinding` 与实际 Delivery workspace 合成并验证唯一 `primary` scope。`loop_context.projectScopes` 为空时停止开发，不把 primary checkout 或模型输入路径当作隐式授权。
@@ -100,11 +100,10 @@ allowed-tools:
 
 ### `EXECUTION_MODE`
 
-- 用户选择后只调用一次 `select_execution_mode`。用户输入需求修改意见时不要调用选择工具；继续规划并使旧选择失效。
-- 选择 `AUTOMATIC` 时，消费 `worktreeSetup.hostDispatch`；多项目同时完整消费 `projectWorktreeSetups`，为每个 `READ_WRITE` Git scope 准备精确 binding 的 linked worktree，但只启动一个后台 Delivery coordinator。创建开始后立即按 `hostDispatch.progressReporting` 调用 `report_worktree_setup`，之后按 30 秒心跳间隔上报阶段、摘要与百分比。后台用原双 fingerprint 调用 `workspace_status → resume_execution_mode → graph_frontier`，所有项目进度仍写入同一控制面。主会话留在 primary checkout，仅监控和处理用户交互。
-- 严格遵循 `hostDispatch.launchPolicy`：`IMMEDIATE` 才创建；`DO_NOT_REISSUE` 等待既有 setup；secondary scope 的 `CONTINUE_EXISTING_WORKTREE_TASK` 由当前 coordinator 完成，不另起 coordinator。`branchRef/gitBinding` 是宿主 Git 写入的精确目标，不得自行生成替代分支。
-- `WORKTREE_SETUP_LEASE_EXPIRED` 或 `WORKTREE_SETUP_FAILED` 时停止重发。只有确认旧进程已停止且半成品目录/worktree 已安全核对后，才用唯一 `retry_request_id` 调用 `report_worktree_setup(RETRY_CONFIRMED)`；只消费 Controller 原子授予的新 attempt，未知响应仅用同一 ID 恢复。
-- `FROZEN_DELIVERY_BRANCH_REQUIRED` 只允许在干净 worktree 恢复冻结分支；`FROZEN_DELIVERY_BRANCH_DIRTY` 必须先审查并处理现有改动，不能直接切换。所有 project worktree 为 `READY` 后才调用 `resume_execution_mode`。
+- 用户只确认一次执行模式；`select_execution_mode` 立即持久化该选择。若 Controller 返回 `PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION`，宿主完成串行释放检查和当前分支动作后调用 `resume_execution_mode`，不重试选择、不重新提问。用户输入需求修改意见时不要调用选择工具；继续规划并使旧选择失效。
+- 选择 `AUTOMATIC` 时只使用 `CURRENT_WORKSPACE_SERIAL`，不创建或预留新 worktree。当前 checkout 尚未位于该 Delivery 的独立分支时，后启动者等待前一个 Delivery 产生可验证 commit、working tree/index clean、HEAD 与冻结 binding 一致且 receiver 全部安全释放；随后宿主按 Controller 返回的当前工作区动作创建或切换分支，并用明确 `rootId` 与双 fingerprint 调用 `resume_execution_mode`，不再次询问用户。
+- 多项目 Delivery 的全部 `READ_WRITE` Git scope 必须同时满足上述切换条件；任一 scope 存在资源冲突、dirty、HEAD 漂移或无法证明安全释放时停止切换。现有 primary 或 linked checkout 都按当前实际 workspace 处理，不自动创建第二个 worktree。同一 checkout 一次只推进一个显式 `rootId`。
+- `FROZEN_DELIVERY_BRANCH_REQUIRED` 只允许在可验证 commit、clean tree、HEAD 未漂移且 receiver 安全释放后恢复冻结分支；`FROZEN_DELIVERY_BRANCH_DIRTY` 必须停止切换。全部 project workspace 验证通过后才按响应继续 `resume_execution_mode` 或 frontier。
 - 选择 `MANUAL` 时，原样展示 `manualHandoff.receiverPrompt`。让接收宿主在实际工作区调用 `start_manual_handoff` 后，再创建独立原生 TASK child；其 `dispatch_loop(MANUAL)` 省略 AUTO reservation，但必须提交自己的 receiver context 与新 `operation_id`，并通过 Adapter、workspace、Graph 与项目 scope 校验。
 
 ## 手动启动的 Git 漂移
@@ -121,12 +120,14 @@ allowed-tools:
 - `REFREEZE_TASK_REQUIREMENT`：停止派遣该 TASK，只修改用户授权的需求字段，重新冻结后刷新 frontier。
 - `CLAIM_MANUAL_TASK`：为手动 Graph，或已由 `handoff_ready_automatic_task` 显式恢复的单个自动 TASK，创建独立人工 receiver；只有 TASK 可 MANUAL claim，后续 Review 仍走 AUTOMATIC reservation 派遣。MANUAL 不带 AUTO reservation，但必须提交独立 receiver context 与新 `operation_id`，并通过 Adapter、workspace、Graph 和项目 scope 校验。
 - `DISPATCH_LOOP`：对每个 READY TASK 或 Review 调用一次 `plan_dispatch_batch`，完整消费 `concurrentDispatchGroups`，并立即创建独立 receiver；不要在 reservation 后继续分析。receiver 用 assignment 的 reservation、decision fingerprint、自己的 context 和新 `operation_id` 调用 `dispatch_loop(AUTO)`。同一 reservation 与 operation 的响应丢失重试必须返回已提交 assignment，不能重复领取。
-- AUTO receiver 启动或 claim 失败时不得由总协调器直接领取。刷新 frontier；仍有效的 reservation 只按原参数重试，已过期的 reservation 重新规划。仍需人工接管时，确认 TASK 从未领取、无有效 reservation、Delivery worktree 干净且无代码改动，再取得用户明确授权调用 `handoff_ready_automatic_task`；它只把当前 READY TASK 改为人工接收，Review 不降级。
+- AUTO receiver 启动或 claim 失败时不得由总协调器直接领取。刷新 frontier；仍有效的 reservation 只按原参数重试，已过期的 reservation 重新规划。仍需人工接管时，确认 TASK 从未领取、无有效 reservation、Delivery workspace 干净且无代码改动，再取得用户明确授权调用 `handoff_ready_automatic_task`；它只把当前 READY TASK 改为人工接收，Review 不降级。
 - claim 成功后，独立 receiver 读取一次 `loop_context`，确认至少一个已验证的 `projectScopes`，并在任何代码工作前用精确 `operation_id` 提交首次 `heartbeat_loop`。后续 heartbeat、progress、pause 与 result 都显式携带同一 operation。
 - 只让外层 receiver 持有 reservation 和 `operation_id` 并调用 claim、heartbeat、progress、pause、resume 和 `record_loop_result`。内部 Worker 不得持有控制面凭据。
 - 让 receiver 使用已验证的 `projectScopes`，按租约 heartbeat，并在关键阶段报告 progress；progress 不续租。
+- 跨 Delivery 出现相同 `resourceClaims` 或物理工作区冲突时，让后启动或后发现者等待。只有前一个 Delivery 已形成可验证 commit、工作树 clean、HEAD 未漂移且 receiver 安全释放后才能切换；任一条件不满足就停止切换。资源无交集也不能绕过 `CURRENT_WORKSPACE_SERIAL` 的单 checkout 串行边界。
 - 数据库 TASK 只应用和验证冻结 `databaseChanges[*].after`，不得在 Loop 内另行设计字段、索引、约束或迁移策略；任何必要偏离都提交 `REPLAN_REQUIRED`。
 - 只提交真实业务终态。实际范围或风险超出冻结契约时提交 `REPLAN_REQUIRED`，不要硬完成。
+- `record_loop_result` 成功时，Controller 从已验证的 `READ_WRITE` Git project scope 自动保存相对冻结 `baseCommit` 的工作区变更快照，并在 TASK 验收中展示文件清单和 diff；它是验收时刻的 workspace 证据，不替代 commit/clean/HEAD 归属判断。主控制目录中的 `acceptance.md` 必须相对链接 `workspace-changes.patch` 供审核。
 - frontier 返回 `RECORD_USER_CONFIRMATION` 时，展示分层验收结果并等待真实用户确认。
 
 ## 恢复

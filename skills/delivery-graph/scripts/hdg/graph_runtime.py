@@ -14,6 +14,7 @@ from .dispatch_contracts import (
 )
 from .errors import fail
 from .git_binding import (
+    capture_verified_workspace_changes,
     inspect_frozen_git_workspace_provenance,
     verify_runtime_delivery_project_scopes,
 )
@@ -2541,6 +2542,7 @@ def record_loop_result(
     operation_id: str,
     outcome: object,
     failure_class: str | None = None,
+    verified_project_scopes: list[dict[str, Any]] | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
@@ -2565,6 +2567,36 @@ def record_loop_result(
         )
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
+    if verified_project_scopes is not None:
+        # Reject an invalid bearer before reading any workspace content. The
+        # mutation transaction below repeats this check after the read-only
+        # Git capture, so lease or operation races still fail closed.
+        with repository.read() as connection:
+            graph, run, nodes = _loaded(connection, root_id)
+            at = _locked_timestamp(now, run["updated_at"])
+            definition, state = _node(graph, nodes, node_id)
+            if (
+                definition["kind"] not in LOOP_NODE_KINDS
+                or not _active_claim(
+                    state,
+                    operation_id=operation_id,
+                    at=at,
+                )
+            ):
+                fail(
+                    "SCHEDULER_OPERATION_INVALID",
+                    "Loop does not have the supplied active operation",
+                )
+        result_payload = dict(normalized["result"])
+        # This key is controller-owned on the MCP path. Overwrite any
+        # self-reported value so acceptance evidence always comes from the
+        # Adapter workspace and the Controller-verified Git scopes.
+        result_payload["workspaceChanges"] = (
+            capture_verified_workspace_changes(
+                verified_project_scopes,
+            )
+        )
+        normalized["result"] = result_payload
     event_by_status = {
         "SUCCEEDED": "LOOP_SUCCEEDED",
         "BLOCKED": "LOOP_BLOCKED",
@@ -3337,7 +3369,10 @@ def _rebuild_graph_run_locked(
                 "summary": payload["summary"],
             }
             completed_at = at
-        elif event_type == "RETRY_EXHAUSTED":
+        elif event_type in {
+            "RETRY_EXHAUSTED",
+            "WORKSPACE_TURN_RELEASED",
+        }:
             continue
         else:
             fail(

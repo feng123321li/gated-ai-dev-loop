@@ -7,6 +7,16 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.39.8 发布候选矩阵
+
+0.39.8 提供 32 个 MCP 工具、schema v3 与无 Hook 模式。同一物理 checkout 可以绑定多个 Delivery，但状态必须用显式 `rootId` 路由，执行统一为 `CURRENT_WORKSPACE_SERIAL`；Controller 不再公开 worktree setup 工具，也不自动创建 linked worktree。MCP Apps 标准 `tools/call` 失败或精确缺少 project root 时可回退兼容 bridge；服务端只允许同一 Codex legacy 连接、同一 `root_id` 复用此前成功 Dashboard 读取形成的只读 workspace grant。Modern 请求、非 Codex Adapter、显式空 metadata、其他 root、其他只读工具和全部写工具继续失败关闭。
+
+- 看板可见时每 15 秒串行自动刷新，隐藏时暂停；手动刷新仍立即读取 `open_delivery_dashboard`，任何路径都不得调用 `graph_frontier` 推进状态。
+- Dashboard Resource 使用 `ui://delivery-graph/dashboard-v2.html`，避免升级后命中旧缓存；无 UI 宿主仍返回相同的文字和 `structuredContent`。
+- Graph 宽屏按 rank 横向绘制依赖边；面板空间不足时纵向换行并在节点内显示前置项，不产生水平滚动或节点裁切。
+- 同一 checkout 的后续 Delivery 必须等待队首 Run 终态、取消 receiver 租约失效、产生可验证业务 commit、工作树与 index 干净且历史未改写；任何分支、HEAD、scope 或 dirty 漂移都失败关闭。
+- TASK/TASK Review 的 Controller 可信 Git 快照会投影为主控制目录下的 `workspace-changes.patch`，供编辑器未打开实际 checkout 时审核 committed、staged、unstaged 与 untracked 变化。
+- 核心候选已通过 369 项 Python 测试（1 项按环境跳过）、编译、Skill/Plugin 镜像、发布与差异校验；真实 Edge 已覆盖 1280/900/600/360 四档宽度。实际 Codex/Claude 会话仍需按本页定义验证面板自动/手动刷新与文本降级。
 ## 0.39.7 发布候选矩阵
 
 0.39.7 保持 33 个 MCP 工具、schema v3 与无 Hook 模式，修复 Codex Desktop 内嵌进度面板刷新，并把 Graph 改为按实际容器宽度切换布局。MCP Apps 标准 `tools/call` 失败或精确缺少 project root 时可回退兼容 bridge；服务端只允许同一 Codex legacy 连接、同一 `root_id` 复用此前成功 Dashboard 读取形成的只读 workspace grant。Modern 请求、非 Codex Adapter、显式空 metadata、其他 root、其他只读工具和全部写工具继续失败关闭。
@@ -15,6 +25,7 @@
 - Dashboard Resource 使用 `ui://delivery-graph/dashboard-v2.html`，避免升级后命中旧缓存；无 UI 宿主仍返回相同的文字和 `structuredContent`。
 - Graph 宽屏按 rank 横向绘制依赖边；面板空间不足时纵向换行并在节点内显示前置项，不产生水平滚动或节点裁切。
 - 核心候选已通过 342 项 Python 测试（1 项按环境跳过）、编译、Skill/Plugin 镜像、Claude Plugin、发布与差异校验；真实 Edge 已覆盖 1280/900/600/360 四档宽度。实际 Codex/Claude 会话仍需按本页定义验证面板自动/手动刷新与文本降级。
+
 
 ## 0.39.6 发布候选矩阵
 

@@ -4,6 +4,18 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.8 — 2026-08-11
+
+发布提交：以 tag `v0.39.8` 指向的提交为准
+
+- **多 Delivery workspace**：同一物理 checkout 可绑定多个 Delivery，Graph、Revision、Run 与验收继续按显式 `rootId` 隔离；无参状态遇到多个未结束绑定时返回 `DELIVERY_SELECTION_REQUIRED`，未绑定草稿只能按创建响应中的 `rootId` 恢复。
+- **当前 workspace 串行执行**：公开执行策略统一为 `CURRENT_WORKSPACE_SERIAL`，用户选择仍只有 `AUTOMATIC` / `MANUAL`。删除公开 `report_worktree_setup` 与自动 linked-worktree 创建、reservation、host dispatch 路径；已存在 linked checkout 只视为普通 current workspace。
+- **提交与冲突门禁**：选择、workspace 绑定和排队在同一 `BEGIN IMMEDIATE` 事务完成；coordinator 与 secondary `READ_WRITE` checkout 都只能由一个 Delivery 持有。前序 Run 必须终态、取消 receiver 租约结束、存在 turn-start 之后的非空业务 commit、历史未改写且工作树/index 干净，后序才可切分支并 resume；错分支、dirty、HEAD/scope 漂移与 FROZEN 重派遣全部失败关闭。
+- **验收可见性**：Controller 从已验证的可写 Git scope 捕获 committed、staged、unstaged 与 untracked 变化，持久化有界快照，并在主控制目录生成由 `acceptance.md` 相对链接的 `workspace-changes.patch`，无需先 commit 或打开实际 checkout 即可审核。
+- **协议与文档**：MCP 工具面收敛为 32 个；Skill、双宿主 Plugin、执行/验收 references、团队运维与兼容矩阵全部同步串行语义。删除两个已废弃的 linked-worktree 正向测试。
+- **验证**：本地 Python 全量 369 项测试通过（1 项按环境条件跳过）；`compileall`、canonical/Plugin 生成镜像、release candidate、Claude Plugin manifest 与 `git diff --check` 均通过。
+
+
 ## 0.39.7 — 2026-08-11
 
 发布提交：以 tag `v0.39.7` 指向的提交为准

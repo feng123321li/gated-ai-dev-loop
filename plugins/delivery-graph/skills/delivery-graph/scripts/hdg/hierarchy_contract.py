@@ -761,12 +761,15 @@ def hierarchy_contract(
                     "native selector whenever callable and may show exact "
                     "Markdown only when it is unavailable; skills do not "
                     "reconstruct, rewrite, or add options. Selecting "
-                    "AUTOMATIC is recorded once. Claude and Codex Git "
-                    "Deliveries use a host-native stable linked worktree and "
-                    "background Delivery coordinator while the main "
-                    "conversation remains monitor-only. The continuation "
-                    "calls resume_execution_mode without another user "
-                    "confirmation or a new top-level session."
+                    "AUTOMATIC is recorded once and fixes execution to "
+                    "CURRENT_WORKSPACE_SERIAL. One actual workspace runs one "
+                    "Delivery turn at a time. A later Delivery waits for a "
+                    "verifiable commit, a clean work tree and index, unchanged "
+                    "frozen HEAD binding, and safe release of every receiver. "
+                    "Only then may the host prepare the exact branch and call "
+                    "resume_execution_mode for the retained root ID, without "
+                    "another user confirmation. No additional checkout or "
+                    "workspace task is created."
                 ),
             },
             "deliveryContinuity": {
@@ -822,7 +825,7 @@ def hierarchy_contract(
                 "baseCommitRole": "IMMUTABLE_FORK_POINT",
                 "stackedDelivery": {
                     "selection": "NEW_FROM_CURRENT_BRANCH",
-                    "eligibility": "CLEAN_PRIMARY_FEATURE_WORKTREE",
+                    "eligibility": "CLEAN_CURRENT_FEATURE_WORKSPACE",
                     "branchRef": "NEW_CHILD_BRANCH",
                     "baseRef": "CURRENT_PARENT_FEATURE_BRANCH",
                     "baseCommit": "CURRENT_PARENT_FEATURE_HEAD",
@@ -854,8 +857,9 @@ def hierarchy_contract(
                     "mainline (main, falling back to master), unless the user "
                     "explicitly selects a stacked child from the clean current "
                     "feature branch. In that case the parent feature is both "
-                    "baseRef and integrationTarget, so the primary checkout "
-                    "does not need to release it. All TASKs "
+                    "baseRef and integrationTarget. The parent Delivery must "
+                    "reach the same clean, safely released serial boundary "
+                    "before the host creates or switches to the child. All TASKs "
                     "share those Delivery branches; TASK "
                     "agents do not create, bind, or switch internal branches. "
                     "When separately authorized, each TASK may stage and "
@@ -913,13 +917,25 @@ def hierarchy_contract(
                     "payload",
                     "evidence",
                     "reviewFindings",
+                    "workspaceChanges",
                 ],
+                "workspaceChangeEvidence": {
+                    "source": "CONTROLLER_CAPTURED_AT_RESULT",
+                    "scope": "VERIFIED_READ_WRITE_GIT_PROJECT_SCOPES",
+                    "comparison": (
+                        "FROZEN_BASE_COMMIT_TO_CURRENT_WORKTREE"
+                    ),
+                    "semantics": (
+                        "WORKSPACE_SNAPSHOT_NOT_EXCLUSIVE_OWNERSHIP"
+                    ),
+                },
                 "description": (
                     "Each acceptance report fully renders only its current "
                     "layer. GROUP reports summarize and link direct child "
                     "reports; the Delivery report summarizes and links the "
                     "root work-item report. Lower-layer payloads, evidence, "
-                    "and review findings are not copied upward."
+                    "review findings, and workspace snapshots are not copied "
+                    "upward."
                 ),
             },
             "databaseChanges": {

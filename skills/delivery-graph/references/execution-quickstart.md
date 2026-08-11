@@ -22,7 +22,7 @@
 
 不要自行增加 TASK/Gate 节点，也不要根据 payload 内容改变 frontier 顺序。
 
-用户选择自动执行时，`select_execution_mode(AUTOMATIC)` 已记录一次业务确认。Claude Code 与 Codex 的 Git Delivery 都消费 `worktreeSetup.hostDispatch`：Claude 在同一顶层会话内创建/进入稳定 Delivery worktree，启动后台 `delivery-graph:delivery-coordinator` 后立即返回 primary；Codex 创建 `environment=worktree` 的后台项目任务。该后台任务调用 `workspace_status(root_id)` 并以原双 fingerprint 调用 `resume_execution_mode`，随后按 frontier 为 READY TASK/Review 统一调用 `plan_dispatch_batch`，取得 reservation 后立即创建独立 receiver。primary 不切换协调 checkout、不实现或 claim Loop，只以 `MONITOR_ONLY` 从共享控制根读取 frontier。用户选择手动开发时仍按 handoff 协议启动 manual Run 和独立 TASK receiver。
+用户选择自动执行时，`select_execution_mode(AUTOMATIC)` 立即持久化一次业务确认；workspace strategy 固定为 `CURRENT_WORKSPACE_SERIAL`。同一物理 checkout 一次只运行一个 Delivery。后启动者等待前一个 Delivery 形成可验证 commit、working tree/index clean、HEAD 与冻结 binding 一致且所有 receiver 安全释放；宿主随后才创建或切换目标 Delivery 的独立分支。若选择响应返回 `PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION`，分支准备完成后以明确 `rootId` 和双 fingerprint 调用 `resume_execution_mode`，不得重试 `select_execution_mode`。资源冲突、dirty、HEAD 漂移或释放状态不明时停止切换。现有 linked checkout 只按普通 current workspace 处理，不自动创建新 worktree。状态恢复始终显式调用 `workspace_status(root_id=...)`。用户选择手动开发时仍按 handoff 协议启动 manual Run 和独立 TASK receiver。
 
 ### 宿主继承与内部 Worker
 
@@ -52,12 +52,12 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。`STANDARD` 不得
    - `MANUAL` 只能 claim manual Graph 的 `TASK_LOOP`；自动 Graph 的 TASK、任何模式的 TASK/GROUP/Delivery Review 都拒绝 MANUAL。Review 必须按宿主编排规则由与全部上游实现/Review context 不同、且不是上游 Loop 派生的独立宿主原生接收上下文 AUTO claim；Plugin 不对这种独立性提供密码学证明。
 2. 对当前 frontier 调用一次 `plan_dispatch_batch`。Controller 为所有可派遣的 Ready TASK/Review 原子创建短租约 reservation，绑定 node、attempt、Graph/Revision fingerprint、decision fingerprint、Adapter、receiver 类型、容量和资源锁；同一批次内也先预留冲突资源。
 3. 按 `concurrentDispatchGroups` 立即创建独立 receiver。每个 child 以 `dispatch_transport=HOST_NATIVE`、assignment 的 reservation/decision fingerprint 和新的显式 `operation_id` 调用 `dispatch_loop(AUTO)`；Controller 校验 live reservation 与当前状态后原子 claim。`HOST_NATIVE` 是编排要求，不是进程或身份的密码学证明。响应未知时只以同一 reservation/operation 重试恢复，不生成第二个 operation。claim 成功后 child 立即读取 `loop_context` 并提交首次 heartbeat。
-4. 接收方原生进入 delivery-graph，使用精确 `nodeId` 调用 `loop_context`。其中 `projectScopes` 是 Controller 按当前 Delivery 的冻结分支、Git common directory 与 workspace 绑定只读解析后的实际 worktree 路径；未显式声明 `delivery.projectScopes` 的普通单仓 Delivery 从顶层 `delivery.gitBinding` 合成并验证唯一 `primary` scope，多仓 Delivery 逐项验证显式 scope。`projectScopeAnchors` 保留 preview 时的冻结仓库锚点，仅供审计，不是开发目录。`projectScopes` 为空或 binding 无效时，在任何仓库工作前停止。receiver 必须直接使用这些 scope，不得为“校准环境”创建、`checkout` 或 `switch` 分支。TASK、TASK Review 与 GROUP Review Loop 同时取得控制器生成的 `humanArtifacts.workItem` baseline/progress/acceptance 路径；TASK 与 TASK Review 继续取得 `humanArtifacts.taskBaseline` 便捷路径，接口型 TASK 的 workItem 还包含自己的 `interfaces`。机器输入仍以 MCP 响应为准。
+4. 接收方原生进入 delivery-graph，使用精确 `nodeId` 调用 `loop_context`。其中 `projectScopes` 是 Controller 按当前 Delivery 的冻结分支、Git common directory 与 workspace 绑定只读解析后的实际 workspace 路径；未显式声明 `delivery.projectScopes` 的普通单仓 Delivery 从顶层 `delivery.gitBinding` 合成并验证唯一 `primary` scope，多仓 Delivery 逐项验证显式 scope。`projectScopeAnchors` 保留 preview 时的冻结仓库锚点，仅供审计，不是开发目录。`projectScopes` 为空或 binding 无效时，在任何仓库工作前停止。receiver 必须直接使用这些 scope，不得为“校准环境”创建、`checkout` 或 `switch` 分支。TASK、TASK Review 与 GROUP Review Loop 同时取得控制器生成的 `humanArtifacts.workItem` baseline/progress/acceptance 路径；TASK 与 TASK Review 继续取得 `humanArtifacts.taskBaseline` 便捷路径，接口型 TASK 的 workItem 还包含自己的 `interfaces`。机器输入仍以 MCP 响应为准。
 5. Plugin 不安装生命周期 Hook。Plugin 只接收宿主 Adapter 提供的请求 workspace、receiver 类型和 assignment 数据。宿主负责创建独立 child；Controller 无法密码学证明真实 parent-child、receiver 延续或 reviewer 独立性，但仍强制校验 reservation、decision fingerprint、attempt、workspace/Git/project scope、operation、lease 和资源锁。所有 mutation 都显式携带 claim 对应的 `operation_id`；该 bearer 不得进入 Worker 输入、终端、进度、result 或用户消息。
 6. 按 `loop.ref` 启动对应内部 TASK、TASK Review、GROUP Review 或 Delivery Review Loop，并把 `payload` 和共享 `skillHints` 原样交给该 Loop。
-   - Claude Code 与 Codex 的自动 Git Delivery 都使用独立、稳定的 linked worktree。Git `workspaceKey` 由当前历史的根提交集合（repository lineage）与本地 `branchRef` 生成，不包含仓库或 worktree 绝对路径；移动仓库，或移动、重建同一分支 worktree 后身份保持不变，不同分支仍隔离。旧的路径型绑定在原路径首次可信访问时原子升级为该稳定身份。Adapter 把固定 MCP 控制根与实际执行 workspace 分开提供，Controller 继续校验冻结 `gitBinding`，禁止另一个历史 lineage 或 feature 分支冒充 Delivery；`loop_context` 只把本 Delivery 已验证的 linked worktree 作为有效 `projectScopes` 下发，receiver 不读取或切换另一个 Delivery 的检出分支。
-   - 新的独立 Delivery 从已确认的开发基线创建 feature worktree；默认主线按 `origin/HEAD → main → master` 发现，但用户也可显式选择合法的本地进行中分支。不得未经确认从当前 Delivery feature HEAD 分叉。基线在创建后继续前进不改变已冻结 `baseCommit`；最终集成前由 Delivery 自己解决与集成目标最新状态的差异。
-   - 同一 Delivery 可以在 `projectScopes` 中覆盖多个本地仓库，例如主需求位于 `project-api`，同时修改 `project-provider` 与 `project-consumer`。所有 `READ_WRITE` Git 项目使用相同的 `branchRef`，但各自保留独立 `baseCommit`；Loop 只能访问当前 Revision 已授权的项目范围。所有 TASK 共享该 Delivery 在各仓库中的同名分支；TASK Agent 不创建、绑定或切换内部 Git 分支。获得相应 Git 写入授权后，TASK 可按各自 scope 单独执行 `git add` 和 `git commit`，在 Delivery 分支上形成独立 TASK commit；必须使用显式 pathspec 只暂存本 TASK 变更，提交前检查 staged/working-tree 状态，且同一 worktree 的 Git index/commit 写入不可并发。互不冲突的 TASK 实现可按 frontier 并行执行，会触及同一共享模块或外部环境的 TASK 必须声明相同精确 `resourceClaims` 以串行化。不要复制 `.layered-delivery` 或启动第二套 scheduler。worktree 不隔离数据库、端口或部署环境，所有 Delivery/TASK 继续遵守全局 `resourceClaims`。合并、删除 worktree、提交、推送和发布仍按各自授权边界执行。
+   - 一个实际 workspace/worktree 可以绑定多个 Delivery，控制状态仍按显式 `rootId` 隔离。Adapter 把 MCP 主控制根与实际执行 workspace 分开提供，Controller 校验当前 Delivery 的冻结 `gitBinding`；`loop_context` 只下发该 `rootId` 已验证的 `projectScopes`。receiver 不能切换分支，也不能在同一 checkout 与另一个 Delivery receiver 重叠运行；宿主必须在派遣前验证前一个 Delivery 的 commit、clean、HEAD 与安全释放边界。
+   - 每个独立 Delivery 都从已确认开发基线取得自己的 feature 分支。默认主线按 `origin/HEAD → main → master` 发现，但用户也可显式选择合法的本地进行中分支；不得未经确认从当前 Delivery feature HEAD 分叉。`CURRENT_WORKSPACE_SERIAL` 依次在当前 checkout 运行这些分支，不创建新 worktree。基线在创建后继续前进不改变已冻结 `baseCommit`；最终集成前由 Delivery 自己解决与集成目标最新状态的差异。
+   - 同一 Delivery 可以在 `projectScopes` 中覆盖多个本地仓库，例如主需求位于 `project-api`，同时修改 `project-provider` 与 `project-consumer`。所有 `READ_WRITE` Git 项目使用相同的 `branchRef`，但各自保留独立 `baseCommit`；Loop 只能访问当前 Revision 已授权的项目范围。所有 TASK 共享该 Delivery 在各仓库中的同名分支；TASK Agent 不创建、绑定或切换内部 Git 分支。获得相应 Git 写入授权后，TASK 可按各自 scope 单独执行 `git add` 和 `git commit`，在 Delivery 分支上形成独立 TASK commit；必须使用显式 pathspec 只暂存本 TASK 变更，且同一 workspace 的 Git index/commit 写入不可并发。同一 Delivery 内互不冲突的 TASK 可按 frontier 并行，但同一实际 workspace 的不同 Delivery 不并行；后启动或后发现者等待完整串行释放边界。
 7. 内部 Loop 先识别当前任务与宿主可用 Skill，再优先原生触发适用的 Skill Hint；不要因为 hierarchy 提供了提示，就假定每条提示都适用于当前 Loop。
 8. 让内部 Loop 自己选择其他必要 Skill。payload 是目标、明确约束和已知验收点的输入，不是完整实现规约；Loop 要结合真实代码、契约和数据链路推导当前 scope 的必要条件。冻结 Graph 不冻结内部实现计划。TASK Loop 自主管理实现、文件、测试、Gate 和修正；Review Loop 自主管理独立发现、修正协调、Gate 和复审。
 9. 当前目标内可修复的实现缺陷、测试失败、数据完整性或边界问题都留在当前 Loop：receiver 调整内部计划，按需创建成本合适的 Codex、Claude、Grok、DeepSeek 等 Worker，完成修正后重新验证。内部 Worker 只能向 receiver 返回结果；只有 receiver 能上报进度或终态。Review 必须保留独立复核，不要把“Review 未通过”提交成 `BLOCKED`。
@@ -68,6 +68,11 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。`STANDARD` 不得
 14. 硬 429 不由 Plugin 自动记录。宿主负责保留结构化 `resetAt`、执行自身审批/重试策略并停止继续调用供应商；receiver 仍能调用 MCP 时按第 12 步显式 pause，否则等待 lease 到期后由 `graph_frontier` 回收 attempt。需要恢复提示时由宿主按真实 `resetAt` 创建一次性唤醒，不从渲染文本或模型输出猜测时间。
 15. 普通 `pause_loop` 返回固定 handoff 数据。优先自动派遣新的接收 Agent；没有容量时输出人工交接。接收方使用同一 `rootId/nodeId` 调用 `resume_loop`，重新读取 frontier 和 `loop_context`，再以新 owner/operation dispatch；不重新 prepare/freeze。
 16. 只有真实业务终态才用 `record_loop_result` 提交标准结果。
+    - 接收方不构造或声称 `result.workspaceChanges` 的归属。Controller 会从本次
+      Adapter workspace 的已验证 `READ_WRITE` Git scopes 只读采集相对冻结
+      `baseCommit` 的工作区快照，并覆盖任何调用方自报的同名字段。
+    - 快照用于让主会话和用户查看实际文件与 diff，只代表提交时刻证据，不替代
+      可验证 commit、clean tree、HEAD 一致性或变更归属判断。快照会投影回主控制目录。
 
 ## 后台进度与失联预警
 
@@ -128,6 +133,13 @@ claim 超过 `leaseExpiresAt` 后，旧 operation 不能 heartbeat、pause 或�
 
 `result` 对外层调度器不透明。`workerTelemetry` 由外层 receiver 按 phase 报告内部 Worker 的 agent/model/effort；宿主无法权威观察的值写 `unreported`。它只用于展示、成本分析和后续 Review，不参与授权、路由、重试、指纹或独立性判断。Loop 也可在 result 中报告实际使用或跳过的 Skill；不要要求 delivery-graph 校验这些字段。
 
+`workspaceChanges` 是上述不透明 result 中唯一由 Controller 在 MCP
+`record_loop_result` 路径自动替换的验收证据字段。它随 outcome 和事件链持久化，
+投影重建不需要再次访问原执行 workspace。调用方不要自行填充、删改或把它当作
+文件写授权。TASK 投影同时在主控制根生成 `workspace-changes.patch`，并由同目录
+`acceptance.md` 相对链接；多阶段、多项目快照按带来源头的分段合并，仍明确声明
+快照本身不提供独占归属。
+
 ## 失败和重试
 
 - `BLOCKED + RETRYABLE_INFRA` 与租约丢失 `WORKER_LOST`：调度器在预算内创建新 attempt。
@@ -145,7 +157,7 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 
 ## 资源锁
 
-租约有效的已 claim Loop 占用其全部 `resourceClaims`。共享控制根内任何 Delivery 的另一个 Ready Loop 只要存在相同键就不能 dispatch；frontier 会用 `<rootId>/<nodeId>` 标识跨 Delivery 冲突。租约过期后不再占用跨 Delivery 资源；原 Delivery 下次推进时仍按 `WORKER_LOST` 回收旧 attempt。无交集则可并行。相同 frontier 批次内也必须先保留已选择 Loop 的 claim，避免同时派发冲突资源。不要从路径、仓库层级或模块前缀推导额外冲突。
+租约有效的已 claim Loop 占用其全部 `resourceClaims`。共享控制根内任何 Delivery 的另一个 Ready Loop 只要存在相同键就不能 dispatch；frontier 会用 `<rootId>/<nodeId>` 标识跨 Delivery 冲突。租约过期后不再占用跨 Delivery 资源；原 Delivery 下次推进时仍按 `WORKER_LOST` 回收旧 attempt。无 claim 交集也不能绕过 `CURRENT_WORKSPACE_SERIAL`：同一实际 workspace 的后启动或后发现 Delivery 继续等待，直到前一个 Delivery 已形成可验证 commit、working tree/index clean、HEAD 未漂移且 receiver 安全释放。冲突、dirty 或漂移在切换前发现时立即停止，不创建新 worktree 规避。不要从路径、仓库层级或模块前缀推导额外资源锁。
 
 ## 未开始 TASK 的需求修订
 

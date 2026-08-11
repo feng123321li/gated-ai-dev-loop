@@ -109,7 +109,11 @@ OUTCOME = _object(
                 "Opaque Loop-owned result payload. When the receiving "
                 "Agent used internal workers, workerTelemetry reports "
                 "display-only phase evidence; it never grants Graph "
-                "authority or affects acceptance."
+                "authority or affects acceptance. On record_loop_result, "
+                "the Controller replaces result.workspaceChanges with "
+                "read-only snapshots captured from verified writable Git "
+                "scopes; callers must not treat that snapshot as exclusive "
+                "TASK or Delivery ownership."
             ),
             "properties": {
                 "workerTelemetry": {
@@ -414,102 +418,6 @@ def _execution_resume_tool_schema() -> dict[str, Any]:
     )
 
 
-def _worktree_setup_report_tool_schema() -> dict[str, Any]:
-    return _object(
-        {
-            "root_id": ROOT_ID,
-            "project_id": ROOT_ID,
-            "reservation_id": FINGERPRINT,
-            "expected_attempt": {
-                "type": "integer",
-                "minimum": 1,
-                "description": (
-                    "Exact setupAttempt from the current hostDispatch."
-                ),
-            },
-            "event": {
-                "type": "string",
-                "enum": [
-                    "STARTED",
-                    "PROGRESS",
-                    "FAILED",
-                    "RETRY_CONFIRMED",
-                ],
-                "description": (
-                    "STARTED/PROGRESS renew the setup lease; FAILED blocks "
-                    "automatic reissue; RETRY_CONFIRMED atomically grants "
-                    "one new attempt after reconciliation."
-                ),
-            },
-            "phase": {
-                "type": "string",
-                "enum": [
-                    "STARTING",
-                    "CREATING_DIRECTORY",
-                    "CREATING_BRANCH",
-                    "CREATING_WORKTREE",
-                    "CHECKING_OUT",
-                    "VERIFYING",
-                    "RECONCILING",
-                    "FAILED",
-                ],
-            },
-            "summary_zh": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 500,
-                "description": (
-                    "Bounded user-visible setup progress without raw logs."
-                ),
-            },
-            "progress_percent": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 100,
-            },
-            "failure_code": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 96,
-                "description": "Required when event=FAILED.",
-            },
-            "retry_request_id": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 128,
-                "description": (
-                    "Required for RETRY_CONFIRMED. Reuse the same value only "
-                    "when recovering an unknown response so the granted "
-                    "attempt and dispatch can be returned idempotently."
-                ),
-            },
-            "confirmed_previous_attempt_stopped": {
-                "type": "boolean",
-                "description": (
-                    "Required true for RETRY_CONFIRMED after verifying the "
-                    "old host process cannot continue."
-                ),
-            },
-            "confirmed_partial_state_reconciled": {
-                "type": "boolean",
-                "description": (
-                    "Required true for RETRY_CONFIRMED after inspecting and "
-                    "safely reconciling partial paths/worktrees."
-                ),
-            },
-        },
-        required=[
-            "root_id",
-            "project_id",
-            "reservation_id",
-            "expected_attempt",
-            "event",
-            "phase",
-            "summary_zh",
-        ],
-    )
-
-
 def _manual_start_tool_schema() -> dict[str, Any]:
     return _object(
         {
@@ -576,17 +484,21 @@ TOOLS = (
     _tool(
         "workspace_status",
         (
-            "Inspect the Delivery bound to this conversation workspace, or "
-            "select it by root ID. An unbound Git feature worktree also "
-            "returns a suggested immutable Delivery Git binding; a "
-            "mainline or detached worktree returns host-owned setup steps. "
-            "A recorded automatic choice restores repository-scoped "
-            "projectWorktreeSetups, exact frozen-branch recovery, or a "
-            "DO_NOT_REISSUE wait state without duplicating host creation. "
-            "Its setup progressMonitor exposes per-project attempt, phase, "
-            "percent, lease health, and failure/expiry alerts. "
-            "While CHOICE_READY, it restores the single pendingInteraction "
-            "before attempting frozen-binding runtime verification."
+            "Inspect Deliveries bound to this actual workspace, or select "
+            "one by root ID. More than one unfinished bound Delivery returns "
+            "DELIVERY_SELECTION_REQUIRED and candidateDeliveries; callers "
+            "must retry with their retained root ID. Unbound CHOICE_READY or "
+            "HANDOFF_READY drafts are discoverable only by explicit root ID. "
+            "Every existing checkout is treated as the current workspace; "
+            "an existing linked checkout receives no special scheduling "
+            "behavior. CURRENT_WORKSPACE_SERIAL permits one Delivery turn at "
+            "a time. A later Delivery waits until the previous turn has a "
+            "verifiable commit, the work tree and index are clean, HEAD still "
+            "matches its frozen binding, and all receivers are safely "
+            "released. Resource conflicts, dirty state, HEAD drift, or "
+            "uncertain release return a stop or wait state instead of "
+            "switching. With explicit root ID, CHOICE_READY restores "
+            "pendingInteraction before frozen-binding runtime verification."
         ),
         _object(
             {
@@ -620,13 +532,13 @@ TOOLS = (
             "artifacts before returning one controller-owned "
             "pendingInteraction with a host-native-selector-first policy. A "
             "Git Delivery without a frozen binding first returns "
-            "DEVELOPMENT_BASELINE, including for a dirty worktree; a confirmed "
+            "DEVELOPMENT_BASELINE, including for a dirty workspace; a confirmed "
             "non-Git workspace proceeds to EXECUTION_MODE. Git discovery "
             "errors fail closed. "
             "The mapped native question tool is mandatory whenever callable; "
             "exact Markdown is only a capability fallback. It does not bind "
-            "a workspace, freeze a Graph, create a "
-            "run, or create a worktree."
+            "a workspace, freeze a Graph, create a run, or change the current "
+            "checkout."
         ),
         _prepare_hierarchy_tool_schema(),
     ),
@@ -641,13 +553,14 @@ TOOLS = (
             "hierarchyFingerprint plus the next pendingInteraction. During "
             "manual reconfirmation, a changed binding creates the next "
             "immutable manual revision; an unchanged binding restores the "
-            "existing revision. The Controller never "
-            "creates branches or worktrees; NEW_FROM_MAINLINE pins baseCommit "
+            "existing revision. The Controller computes the binding read-only "
+            "and never changes the checkout; NEW_FROM_MAINLINE pins baseCommit "
             "to the mainline HEAD, while NEW_FROM_CURRENT_BRANCH pins a "
             "stacked child to the clean current feature HEAD and makes that "
-            "parent feature the integration target. The host creates the "
-            "branch during worktree setup. The choice is remembered and not re-asked on "
-            "subsequent revisions."
+            "parent feature the integration target. The host may create or "
+            "switch to the required branch only at a clean, safely released "
+            "CURRENT_WORKSPACE_SERIAL boundary. The choice is remembered and "
+            "not re-asked on subsequent revisions."
         ),
         _development_baseline_tool_schema(),
     ),
@@ -655,48 +568,36 @@ TOOLS = (
         "select_execution_mode",
         (
             "Apply one exact option returned by an EXECUTION_MODE "
-            "pendingInteraction. AUTOMATIC "
-            "records the human choice before checking host workspace setup. "
-            "Claude and Codex Git primary checkouts return host-owned stable "
-            "linked-worktree background dispatch with exact branchRef and "
-            "gitBinding. Repository-scoped reservations reject another "
-            "Delivery on the same branch and make repeated selection "
-            "non-reissuing. Multi-project choices return every writable "
-            "projectWorktreeSetup while launching one coordinator. The "
-            "continuation completes "
-            "without another confirmation; the main conversation remains a "
-            "monitor-only coordinator while the background Delivery Agent "
-            "prepares and freezes the staged snapshot. "
-            "MANUAL creates the handoff and returns the exact "
+            "pendingInteraction for the retained root ID. AUTOMATIC records "
+            "the human choice immediately and fixes execution to "
+            "CURRENT_WORKSPACE_SERIAL: the actual workspace runs one Delivery "
+            "turn at a time. A later Delivery waits for a verifiable commit, "
+            "a clean work tree and index, unchanged frozen HEAD binding, and "
+            "safe release of every receiver before any branch transition. "
+            "Resource conflicts, dirty state, HEAD drift, or uncertain "
+            "release stop the transition. Existing linked checkouts are "
+            "ordinary current workspaces. If branch preparation is required, "
+            "the persisted selection returns "
+            "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION; after "
+            "preparing it, call resume_execution_mode and never retry the "
+            "selection. No additional checkout or separate workspace task is "
+            "scheduled. MANUAL creates the handoff "
+            "and returns the exact "
             "receiver prompt embedded in that file. Direct dialog text is "
             "not a tool option and continues requirement discussion."
         ),
         _execution_choice_tool_schema(),
     ),
     _tool(
-        "report_worktree_setup",
-        (
-            "Report bounded host progress while creating one reserved "
-            "Delivery project worktree. STARTED and PROGRESS renew a "
-            "120-second setup lease and update the shared workspace monitor; "
-            "FAILED or lease expiry blocks reissue. RETRY_CONFIRMED requires "
-            "proof that the old attempt stopped and partial paths/worktrees "
-            "were reconciled, then atomically grants exactly one new attempt. "
-            "This tool never performs Git or filesystem writes."
-        ),
-        _worktree_setup_report_tool_schema(),
-        annotations={"idempotentHint": False},
-    ),
-    _tool(
         "resume_execution_mode",
         (
             "Continue a previously recorded AUTOMATIC selection after the "
-            "trusted host prepares the required feature branch or linked "
-            "worktree for every writable project scope. Revalidate the exact "
-            "fingerprints and Git/project "
-            "bindings, then prepare, "
-            "freeze, and dispatch without asking the user to select or "
-            "confirm again. This tool never changes MANUAL into AUTOMATIC."
+            "trusted host reaches the required feature branch at a clean, "
+            "safely released CURRENT_WORKSPACE_SERIAL boundary. Revalidate "
+            "the exact fingerprints and Git/project bindings, then prepare, "
+            "freeze, and dispatch only that Delivery without asking the user "
+            "to select or confirm again. It never creates another checkout "
+            "and never changes MANUAL into AUTOMATIC."
         ),
         _execution_resume_tool_schema(),
     ),
@@ -723,7 +624,8 @@ TOOLS = (
             "delivery.id is rejected. "
             "This does not prepare, freeze, or start a Graph run; do not "
             "choose an Agent/model, create a receiving task, bind a workspace, "
-            "or initialize a worktree. The user may open the bundle in any "
+            "or initialize another checkout. The user may open the bundle in "
+            "any "
             "CLI, but that receiver must call start_manual_handoff before "
             "code work and then complete the full governed Graph."
         ),
@@ -755,10 +657,10 @@ TOOLS = (
             "instead of this low-level tool. Shared Skill "
             "hints remain advisory, Loop payloads stay opaque to scheduling; "
             "the reserved databaseChanges contract is validated and projected "
-            "before dispatch. A Git "
-            "Delivery feature-branch binding is verified read-only. Reject "
-            "a different Delivery before writing when this workspace "
-            "already owns an unfinished Delivery."
+            "before dispatch. A Git Delivery feature-branch binding is "
+            "verified read-only. One physical workspace may bind multiple "
+            "Delivery control states, routed by root ID, while actual "
+            "execution remains CURRENT_WORKSPACE_SERIAL."
         ),
         _prepare_hierarchy_tool_schema(),
     ),
@@ -996,7 +898,7 @@ TOOLS = (
         (
             "Read one opaque Loop descriptor, shared late-bound Skill hints, "
             "direct predecessors, transitive upstream results, TASK baseline "
-            "path, runtime-verified project worktree roots, frozen project "
+            "path, runtime-verified project workspace roots, frozen project "
             "scope anchors, completion policy for internal adaptation and "
             "rework, and the execution policy separating pre-claim capacity, "
             "live-lease handoff, and expired-lease recovery. Loops use the "
@@ -1103,7 +1005,8 @@ TOOLS = (
             "Recover one active AUTOMATIC TASK after native receiver startup "
             "has failed. This explicit mutation is allowed only while the "
             "TASK Loop is READY, its current attempt has never been claimed, "
-            "the Delivery worktree is clean, no automatic reservation is "
+            "the Delivery workspace and index are clean, no automatic "
+            "reservation is "
             "live, and the user confirms no code changes were made. It "
             "switches only that TASK to MANUAL receipt without changing the "
             "Graph execution mode, baseline, fingerprints, or Revision. "

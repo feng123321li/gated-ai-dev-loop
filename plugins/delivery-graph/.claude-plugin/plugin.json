@@ -1,7 +1,7 @@
 {
   "name": "delivery-graph",
-  "version": "0.39.7",
-  "description": "确认 Git 基线，冻结并调度分层 GROUP/TASK Graph，支持自动派遣、冻结开发包、分层审查与恢复",
+  "version": "0.39.8",
+  "description": "确认 Git 基线，以显式 rootId 管理多 Delivery，在当前 workspace 串行调度 GROUP/TASK，并支持冻结开发包、验收与恢复",
   "author": {
     "name": "delivery-graph contributors",
     "url": "https://github.com/feng123321li/layered-delivery"
@@ -16,7 +16,7 @@
     "manual-handoff",
     "review-governance",
     "automatic-agent-dispatch",
-    "git-worktree",
+    "serial-workspace",
     "group-task",
     "task-loop"
   ]

@@ -31,7 +31,6 @@ EXISTING_TOOL_NAMES = (
     "preview_hierarchy",
     "confirm_development_baseline",
     "select_execution_mode",
-    "report_worktree_setup",
     "resume_execution_mode",
     "create_manual_handoff",
     "start_manual_handoff",

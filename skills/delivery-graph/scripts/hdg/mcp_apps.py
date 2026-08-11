@@ -7,7 +7,7 @@ from typing import Any
 from .errors import fail
 
 
-DASHBOARD_RESOURCE_URI = "ui://delivery-graph/dashboard.html"
+DASHBOARD_RESOURCE_URI = "ui://delivery-graph/dashboard-v2.html"
 MCP_APP_MIME_TYPE = "text/html;profile=mcp-app"
 _ASSET = Path(__file__).with_name("assets") / "delivery-dashboard.html"
 

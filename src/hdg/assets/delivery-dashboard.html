@@ -175,28 +175,54 @@
       .filter[aria-pressed="true"] { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 32%, var(--border)); background: var(--surface-blue); }
       .graph-viewport {
         position: relative;
+        max-width: 100%;
         min-height: 420px;
-        overflow: auto;
+        overflow-x: clip;
+        overflow-y: visible;
         padding: 24px;
         background-image: radial-gradient(circle, color-mix(in srgb, var(--border) 72%, transparent) 1px, transparent 1px);
         background-size: 20px 20px;
       }
+      @supports not (overflow: clip) {
+        .graph-viewport { overflow-x: hidden; }
+      }
       .edge-layer { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
-      .edge-layer line { stroke: var(--border-strong); stroke-width: 1.5; }
+      .edge-layer path { fill: none; stroke: var(--border-strong); stroke-width: 1.5; }
       .node-layer {
         position: relative;
         z-index: 1;
         display: grid;
-        grid-auto-flow: column;
-        grid-auto-columns: minmax(180px, 1fr);
-        gap: 28px 58px;
+        width: 100%;
+        min-width: 0;
         align-items: start;
-        min-width: max-content;
+      }
+      .node-layer[data-layout="horizontal"] {
+        grid-template-columns: repeat(var(--rank-count), minmax(0, 1fr));
+        gap: clamp(20px, 3vw, 36px);
+      }
+      .node-layer[data-layout="vertical"] {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 38px;
+      }
+      .graph-rank {
+        display: grid;
+        min-width: 0;
+        gap: 14px;
+        align-content: start;
+      }
+      .node-layer[data-layout="horizontal"] .graph-rank {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .node-layer[data-layout="vertical"] .graph-rank {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
       }
       .graph-node {
         display: grid;
-        width: 190px;
+        width: 100%;
+        min-width: 0;
+        max-width: 220px;
         min-height: 96px;
+        justify-self: center;
         align-content: start;
         gap: 7px;
         border: 1px solid var(--border-strong);
@@ -215,6 +241,14 @@
       .graph-node[data-tone="danger"] { border-left-color: var(--danger); }
       .node-kind { color: var(--muted); font-size: 11px; font-weight: 680; letter-spacing: 0.02em; }
       .node-title { font-weight: 720; line-height: 1.35; overflow-wrap: anywhere; }
+      .node-dependencies {
+        display: none;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.4;
+        overflow-wrap: anywhere;
+      }
+      .node-layer[data-layout="vertical"] .node-dependencies { display: block; }
       .status-line { gap: 7px; color: var(--muted); font-size: 12px; }
       .dot { width: 8px; height: 8px; flex: none; border-radius: 50%; background: currentColor; }
       .tone-success { color: var(--success); }
@@ -302,9 +336,9 @@
         .panel-heading { align-items: flex-start; flex-direction: column; }
         .filters { justify-content: flex-start; }
         .graph-viewport { min-height: 0; padding: 14px; background-image: none; }
-        .edge-layer { display: none; }
-        .node-layer { display: grid; grid-auto-flow: row; grid-template-columns: 1fr !important; min-width: 0; gap: 10px; }
-        .graph-node { width: 100%; min-height: 0; grid-column: 1 !important; grid-row: auto !important; }
+        .node-layer[data-layout="vertical"] { gap: 32px; }
+        .node-layer[data-layout="vertical"] .graph-rank { grid-template-columns: minmax(0, 1fr); }
+        .graph-node { max-width: none; min-height: 0; }
         .footer { flex-direction: column; }
         .detail-row { grid-template-columns: 1fr; gap: 3px; }
       }
@@ -356,7 +390,7 @@
                 <button class="filter" type="button" data-filter="issue" aria-pressed="false">异常</button>
               </div>
             </div>
-            <div id="graph-viewport" class="graph-viewport" tabindex="0" aria-label="Delivery Graph 节点图">
+            <div id="graph-viewport" class="graph-viewport" aria-label="Delivery Graph 节点图">
               <svg id="edge-layer" class="edge-layer" aria-hidden="true"></svg>
               <div id="node-layer" class="node-layer"></div>
               <div id="graph-empty" class="empty-state"><strong>正在连接宿主</strong><span>工具结果到达后会在这里显示 Graph。</span></div>
@@ -390,7 +424,7 @@
       </div>
 
       <footer class="footer">
-        <span>数据源：Delivery Graph MCP Controller</span>
+        <span>数据源：Delivery Graph MCP Controller · 可见时每 15 秒自动刷新</span>
         <span id="live-status" role="status" aria-live="polite">等待工具结果</span>
       </footer>
     </main>
@@ -411,10 +445,14 @@
       const detailDialog = byId("node-detail");
       const pending = new Map();
       const RPC_TIMEOUT_MS = 15000;
+      const AUTO_REFRESH_MS = 15000;
       let rpcId = 0;
       let latest = null;
       let currentFilter = "all";
       let standardBridgeAvailable = false;
+      let preferCompatibilityCalls = false;
+      let refreshTimer = null;
+      let refreshInFlight = false;
       let resizeObserver = null;
       let resizeFrame = null;
       let tornDown = false;
@@ -446,7 +484,12 @@
       const hasOpenAICompatibility = () => typeof window.openai?.callTool === "function";
       const canCallHost = () => standardBridgeAvailable || hasOpenAICompatibility();
       const updateRefreshState = () => {
-        refreshButton.disabled = tornDown || !canCallHost() || !latest?.delivery?.id;
+        refreshButton.disabled = (
+          tornDown
+          || refreshInFlight
+          || !canCallHost()
+          || !latest?.delivery?.id
+        );
       };
       const showFailure = (message) => {
         dashboard.setAttribute("aria-busy", "false");
@@ -545,9 +588,29 @@
         return visited === nodes.length ? ranks : new Map(nodes.map((node, index) => [node.id, index]));
       };
 
+      const HORIZONTAL_RANK_MIN_WIDTH = 168;
+      const HORIZONTAL_RANK_GAP = 36;
+      const updateGraphLayout = () => {
+        if (tornDown) return;
+        const rankCount = Number(nodeLayer.dataset.rankCount || 0);
+        if (!rankCount || nodeLayer.hidden) return;
+        const requiredWidth = (
+          rankCount * HORIZONTAL_RANK_MIN_WIDTH
+          + Math.max(0, rankCount - 1) * HORIZONTAL_RANK_GAP
+        );
+        if (nodeLayer.clientWidth >= requiredWidth) {
+          nodeLayer.dataset.layout = "horizontal";
+        } else {
+          nodeLayer.dataset.layout = "vertical";
+        }
+        edgeLayer.hidden = nodeLayer.dataset.layout === "vertical";
+        nodeLayer.style.setProperty("--rank-count", String(rankCount));
+        requestAnimationFrame(drawEdges);
+      };
+
       const drawEdges = () => {
         edgeLayer.replaceChildren();
-        if (!latest || window.matchMedia("(max-width: 719px)").matches) {
+        if (!latest || nodeLayer.dataset.layout === "vertical") {
           edgeLayer.removeAttribute("width");
           edgeLayer.removeAttribute("height");
           edgeLayer.removeAttribute("viewBox");
@@ -555,36 +618,77 @@
           edgeLayer.style.height = "";
           return;
         }
-        const viewportRect = byId("graph-viewport").getBoundingClientRect();
-        const nodeElements = new Map([...nodeLayer.querySelectorAll("[data-node-id]")].map((element) => [element.dataset.nodeId, element]));
         const viewport = byId("graph-viewport");
-        const width = Math.max(viewport.clientWidth, viewport.scrollWidth);
-        const height = Math.max(viewport.clientHeight, viewport.scrollHeight);
+        const viewportRect = viewport.getBoundingClientRect();
+        const nodeElements = new Map(
+          [...nodeLayer.querySelectorAll("[data-node-id]")]
+            .map((element) => [element.dataset.nodeId, element])
+        );
+        const width = viewport.clientWidth;
+        const height = Math.max(
+          viewport.clientHeight,
+          nodeLayer.offsetTop + nodeLayer.offsetHeight + 24,
+        );
         edgeLayer.setAttribute("width", String(width));
         edgeLayer.setAttribute("height", String(height));
-        edgeLayer.setAttribute("viewBox", `0 0 ${width} ${height}`);
-        edgeLayer.style.width = `${width}px`;
-        edgeLayer.style.height = `${height}px`;
+        edgeLayer.setAttribute(
+          "viewBox",
+          ["0", "0", String(width), String(height)].join(" "),
+        );
+        edgeLayer.style.width = String(width) + "px";
+        edgeLayer.style.height = String(height) + "px";
+        const vertical = nodeLayer.dataset.layout === "vertical";
         for (const edge of latest.graph?.edges || []) {
           const source = nodeElements.get(edge.source);
           const target = nodeElements.get(edge.target);
           if (!source || !target) continue;
           const a = source.getBoundingClientRect();
           const b = target.getBoundingClientRect();
-          const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-          line.setAttribute("x1", String(a.right - viewportRect.left + byId("graph-viewport").scrollLeft));
-          line.setAttribute("y1", String(a.top + a.height / 2 - viewportRect.top + byId("graph-viewport").scrollTop));
-          line.setAttribute("x2", String(b.left - viewportRect.left + byId("graph-viewport").scrollLeft));
-          line.setAttribute("y2", String(b.top + b.height / 2 - viewportRect.top + byId("graph-viewport").scrollTop));
-          edgeLayer.append(line);
+          const x1 = (
+            vertical ? a.left + a.width / 2 : a.right
+          ) - viewportRect.left;
+          const y1 = (
+            vertical ? a.bottom : a.top + a.height / 2
+          ) - viewportRect.top;
+          const x2 = (
+            vertical ? b.left + b.width / 2 : b.left
+          ) - viewportRect.left;
+          const y2 = (
+            vertical ? b.top : b.top + b.height / 2
+          ) - viewportRect.top;
+          const path = document.createElementNS(
+            "http://www.w3.org/2000/svg",
+            "path",
+          );
+          if (vertical) {
+            const middleY = (y1 + y2) / 2;
+            path.setAttribute(
+              "d",
+              ["M", x1, y1, "C", x1, middleY, x2, middleY, x2, y2].join(" "),
+            );
+          } else {
+            const middleX = (x1 + x2) / 2;
+            path.setAttribute(
+              "d",
+              ["M", x1, y1, "C", middleX, y1, middleX, y2, x2, y2].join(" "),
+            );
+          }
+          edgeLayer.append(path);
         }
       };
 
       const renderGraph = () => {
         nodeLayer.replaceChildren();
         byId("graph-text").replaceChildren();
-        const nodes = (latest?.graph?.nodes || []).filter(nodeMatches);
+        const allNodes = latest?.graph?.nodes || [];
+        const nodes = allNodes.filter(nodeMatches);
         const edges = latest?.graph?.edges || [];
+        const nodeLabels = new Map(
+          allNodes.map((node) => [
+            node.id,
+            node.workItemId || node.id,
+          ])
+        );
         graphEmpty.hidden = nodes.length > 0;
         nodeLayer.hidden = nodes.length === 0;
         edgeLayer.hidden = nodes.length === 0;
@@ -596,18 +700,20 @@
           if (!byRank.has(rank)) byRank.set(rank, []);
           byRank.get(rank).push(node);
         }
-        const maxRank = Math.max(...byRank.keys());
-        nodeLayer.style.gridTemplateColumns = `repeat(${maxRank + 1}, 190px)`;
-        for (const [rank, ranked] of [...byRank.entries()].sort((a, b) => a[0] - b[0])) {
+        const rankEntries = [...byRank.entries()]
+          .sort((a, b) => a[0] - b[0]);
+        nodeLayer.dataset.rankCount = String(rankEntries.length);
+        for (const [rank, ranked] of rankEntries) {
+          const rankElement = document.createElement("div");
+          rankElement.className = "graph-rank";
+          rankElement.dataset.rank = String(rank);
           ranked.sort((a, b) => `${a.workItemId}:${a.kind}`.localeCompare(`${b.workItemId}:${b.kind}`));
-          ranked.forEach((node, row) => {
+          ranked.forEach((node) => {
             const button = document.createElement("button");
             button.type = "button";
             button.className = "graph-node";
             button.dataset.nodeId = node.id;
             button.dataset.tone = toneFor(node.status);
-            button.style.gridColumn = String(rank + 1);
-            button.style.gridRow = String(row + 1);
             button.setAttribute("aria-label", `${node.workItemId || node.id}，${labelFor(node.kind, kindLabels)}，${labelFor(node.status, statusLabels)}，打开只读详情`);
             const kind = document.createElement("span");
             kind.className = "node-kind";
@@ -615,17 +721,30 @@
             const title = document.createElement("span");
             title.className = "node-title";
             title.textContent = node.workItemId || node.id;
-            button.append(kind, title, createStatusLine(node.status));
+            const predecessors = edges
+              .filter((edge) => edge.target === node.id)
+              .map((edge) => nodeLabels.get(edge.source) || edge.source);
+            const dependency = document.createElement("span");
+            dependency.className = "node-dependencies";
+            dependency.textContent = (
+              "前置：" + (predecessors.join("、") || "无")
+            );
+            button.append(
+              kind,
+              title,
+              createStatusLine(node.status),
+              dependency,
+            );
             button.addEventListener("click", () => showNodeDetail(node));
-            nodeLayer.append(button);
+            rankElement.append(button);
 
             const textItem = document.createElement("li");
-            const predecessors = edges.filter((edge) => edge.target === node.id).map((edge) => edge.source);
             textItem.textContent = `${node.id}：${labelFor(node.status, statusLabels)}；前置节点：${predecessors.join("、") || "无"}`;
             byId("graph-text").append(textItem);
           });
+          nodeLayer.append(rankElement);
         }
-        requestAnimationFrame(drawEdges);
+        updateGraphLayout();
       };
 
       const renderLoops = () => {
@@ -736,6 +855,7 @@
         renderRevisions();
         updateRefreshState();
         setLive(`状态已更新：${formatTime(model.observedAt)}`);
+        scheduleAutoRefresh();
         return true;
       };
 
@@ -791,14 +911,22 @@
           if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
           resizeFrame = requestAnimationFrame(() => {
             resizeFrame = null;
+            updateGraphLayout();
             notifySize();
           });
         });
         resizeObserver.observe(dashboard);
+        resizeObserver.observe(byId("graph-viewport"));
       };
       const teardown = () => {
         tornDown = true;
         standardBridgeAvailable = false;
+        if (refreshTimer !== null) clearTimeout(refreshTimer);
+        refreshTimer = null;
+        document.removeEventListener(
+          "visibilitychange",
+          handleVisibilityChange,
+        );
         resizeObserver?.disconnect();
         resizeObserver = null;
         if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
@@ -850,7 +978,7 @@
       }, { passive: true });
 
       const bridgeReady = request("ui/initialize", {
-        appInfo: { name: "delivery-graph-dashboard", title: "Delivery Graph 运行看板", version: "1.0.0" },
+        appInfo: { name: "delivery-graph-dashboard", title: "Delivery Graph 运行看板", version: "1.1.0" },
         appCapabilities: {},
         protocolVersion: "2026-01-26",
       }).then((result) => {
@@ -859,38 +987,115 @@
         notify("ui/notifications/initialized", {});
         startSizeObserver();
         updateRefreshState();
+        scheduleAutoRefresh();
         return result;
       });
 
+      const callStandardDashboard = async (rootId) => request("tools/call", {
+        name: "open_delivery_dashboard",
+        arguments: { root_id: rootId },
+      });
+      const callCompatibilityDashboard = async (rootId) => window.openai?.callTool(
+        "open_delivery_dashboard",
+        { root_id: rootId },
+      );
+      const dashboardErrorCode = (value) => {
+        if (!value || typeof value !== "object") return null;
+        return value.structuredContent?.error?.code
+          || value.error?.code
+          || null;
+      };
       const callDashboard = async (rootId) => {
-        if (standardBridgeAvailable) {
-          return request("tools/call", {
-            name: "open_delivery_dashboard",
-            arguments: { root_id: rootId },
-          });
+        if (
+          (preferCompatibilityCalls || !standardBridgeAvailable)
+          && hasOpenAICompatibility()
+        ) {
+          return callCompatibilityDashboard(rootId);
         }
-        if (hasOpenAICompatibility()) {
-          return window.openai?.callTool("open_delivery_dashboard", { root_id: rootId });
+        if (!standardBridgeAvailable) await bridgeReady;
+        try {
+          const response = await callStandardDashboard(rootId);
+          if (
+            dashboardErrorCode(response) !== "PROJECT_ROOT_UNAVAILABLE"
+            || tornDown
+            || !hasOpenAICompatibility()
+          ) {
+            return response;
+          }
+          preferCompatibilityCalls = true;
+          updateRefreshState();
+          return callCompatibilityDashboard(rootId);
+        } catch (error) {
+          if (tornDown || !hasOpenAICompatibility()) throw error;
+          preferCompatibilityCalls = true;
+          updateRefreshState();
+          return callCompatibilityDashboard(rootId);
         }
-        await bridgeReady;
-        return request("tools/call", {
-          name: "open_delivery_dashboard",
-          arguments: { root_id: rootId },
-        });
       };
 
-      refreshButton.addEventListener("click", async () => {
-        if (!latest?.delivery?.id || tornDown) return;
+      const scheduleAutoRefresh = (delay = AUTO_REFRESH_MS) => {
+        if (refreshTimer !== null) clearTimeout(refreshTimer);
+        refreshTimer = null;
+        if (
+          tornDown
+          || document.hidden
+          || refreshInFlight
+          || !latest?.delivery?.id
+          || !canCallHost()
+        ) {
+          return;
+        }
+        refreshTimer = window.setTimeout(() => {
+          refreshTimer = null;
+          void refreshDashboard({ manual: false });
+        }, delay);
+      };
+      const refreshDashboard = async ({ manual }) => {
+        if (
+          !latest?.delivery?.id
+          || tornDown
+          || refreshInFlight
+        ) {
+          return;
+        }
+        if (refreshTimer !== null) clearTimeout(refreshTimer);
+        refreshTimer = null;
+        refreshInFlight = true;
         dashboard.setAttribute("aria-busy", "true");
-        refreshButton.disabled = true;
-        setLive("正在重新读取权威状态…");
+        updateRefreshState();
+        if (manual) setLive("正在重新读取权威状态…");
         try {
           const response = await callDashboard(latest.delivery.id);
           applyToolResult(response);
         } catch (error) {
-          showFailure(`刷新失败：${error?.message || "宿主拒绝或连接不可用"}`);
+          const prefix = manual ? "刷新失败：" : "自动刷新失败：";
+          showFailure(
+            prefix + (error?.message || "宿主拒绝或连接不可用"),
+          );
+        } finally {
+          refreshInFlight = false;
+          dashboard.setAttribute("aria-busy", "false");
+          updateRefreshState();
+          scheduleAutoRefresh();
         }
+      };
+      const handleVisibilityChange = () => {
+        if (document.hidden) {
+          if (refreshTimer !== null) clearTimeout(refreshTimer);
+          refreshTimer = null;
+          return;
+        }
+        scheduleAutoRefresh(1000);
+      };
+
+      refreshButton.addEventListener("click", () => {
+        void refreshDashboard({ manual: true });
       });
+      document.addEventListener(
+        "visibilitychange",
+        handleVisibilityChange,
+        { passive: true },
+      );
 
       byId("filters").addEventListener("click", (event) => {
         const button = event.target.closest("button[data-filter]");
@@ -901,8 +1106,7 @@
       });
       byId("close-detail").addEventListener("click", () => detailDialog.close());
       detailDialog.addEventListener("click", (event) => { if (event.target === detailDialog) detailDialog.close(); });
-      window.addEventListener("resize", () => requestAnimationFrame(drawEdges), { passive: true });
-      byId("graph-viewport").addEventListener("scroll", () => requestAnimationFrame(drawEdges), { passive: true });
+      window.addEventListener("resize", updateGraphLayout, { passive: true });
 
       const compatibilityPayload = window.openai?.toolOutput;
       if (compatibilityPayload) applyToolResult(compatibilityPayload);
@@ -910,6 +1114,7 @@
         standardBridgeAvailable = false;
         if (tornDown) return;
         updateRefreshState();
+        scheduleAutoRefresh();
         if (!latest && !hasOpenAICompatibility()) showFailure("当前宿主未提供 MCP Apps 交互桥；工具仍可返回文字进度。");
       });
       updateRefreshState();

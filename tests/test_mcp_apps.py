@@ -3,12 +3,13 @@ from __future__ import annotations
 from contextlib import redirect_stderr
 import io
 import json
+from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
 from hdg.errors import GatedLoopError
-from hdg.host_policy import ProjectRootBinding
+from hdg.host_policy import CODEX_SANDBOX_META_KEY, ProjectRootBinding
 from hdg.mcp_adapter import (
     CLIENT_CAPABILITIES_META_KEY,
     CLIENT_INFO_META_KEY,
@@ -21,7 +22,7 @@ from hdg.mcp_adapter import (
 from hdg.mcp_tools import tool_definitions
 
 
-DASHBOARD_RESOURCE_URI = "ui://delivery-graph/dashboard.html"
+DASHBOARD_RESOURCE_URI = "ui://delivery-graph/dashboard-v2.html"
 DASHBOARD_MIME_TYPE = "text/html;profile=mcp-app"
 
 EXISTING_TOOL_NAMES = (
@@ -109,6 +110,52 @@ class McpAppsContractTests(unittest.TestCase):
         )
         self.assertIsNone(notification)
         return connection
+
+    def _initialize_meta_bound_codex(self) -> McpConnection:
+        connection = McpConnection(
+            project_root=ProjectRootBinding.from_startup(
+                None,
+                from_sandbox_meta=True,
+            ),
+            trusted_host_adapter="codex",
+        )
+        initialized = handle_message(
+            {
+                "jsonrpc": "2.0",
+                "id": "initialize",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": LEGACY_PREFERRED_PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {
+                        "name": "codex-mcp-apps-contract-test",
+                        "version": "1.0.0",
+                    },
+                },
+            },
+            connection=connection,
+        )
+        self.assertEqual(
+            initialized["result"]["protocolVersion"],
+            LEGACY_PREFERRED_PROTOCOL_VERSION,
+        )
+        self.assertIsNone(handle_message(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {},
+            },
+            connection=connection,
+        ))
+        return connection
+
+    @staticmethod
+    def _sandbox_meta(root: str) -> dict[str, object]:
+        return {
+            CODEX_SANDBOX_META_KEY: {
+                "sandboxCwd": Path(root).resolve().as_uri(),
+            }
+        }
 
     def _modern_request(
         self,
@@ -336,9 +383,50 @@ class McpAppsContractTests(unittest.TestCase):
         self.assertIn("callResult.isError !== true", html)
         self.assertIn("structured?.ok !== false", html)
         self.assertIn("RPC_TIMEOUT_MS", html)
+        self.assertIn("AUTO_REFRESH_MS = 15000", html)
+        self.assertIn("const scheduleAutoRefresh =", html)
+        self.assertIn("refreshInFlight", html)
+        self.assertIn("document.addEventListener(", html)
+        self.assertIn('"visibilitychange"', html)
+        self.assertNotIn("setInterval(", html)
         self.assertIn('request("ui/initialize"', html)
+        self.assertIn('version: "1.1.0"', html)
         self.assertIn('name: "open_delivery_dashboard"', html)
         self.assertIn("window.openai?.callTool", html)
+        self.assertIn("const callStandardDashboard = async", html)
+        self.assertIn("const callCompatibilityDashboard = async", html)
+        call_dashboard = html.split(
+            "const callDashboard = async",
+            1,
+        )[1].split(
+            "refreshButton.addEventListener",
+            1,
+        )[0]
+        self.assertIn(
+            "const response = await callStandardDashboard(rootId)",
+            call_dashboard,
+        )
+        self.assertIn("catch (error)", call_dashboard)
+        self.assertIn(
+            'dashboardErrorCode(response) !== "PROJECT_ROOT_UNAVAILABLE"',
+            call_dashboard,
+        )
+        self.assertIn(
+            "preferCompatibilityCalls = true",
+            call_dashboard,
+        )
+        self.assertIn(
+            "return callCompatibilityDashboard(rootId)",
+            call_dashboard,
+        )
+        fallback_catch = call_dashboard.split(
+            "catch (error)",
+            1,
+        )[1]
+        self.assertIn(
+            "return callCompatibilityDashboard(rootId)",
+            fallback_catch,
+        )
         self.assertIn("--on-accent", html)
         self.assertIn(
             '["SUCCEEDED", "COMPLETED"].includes(node.status)',
@@ -348,6 +436,38 @@ class McpAppsContractTests(unittest.TestCase):
         self.assertNotIn("innerHTML", html)
         self.assertNotIn("localStorage", html)
         self.assertNotIn("fetch(", html)
+        graph_viewport = html.split(
+            ".graph-viewport {",
+            1,
+        )[1].split(
+            ".edge-layer",
+            1,
+        )[0]
+        self.assertNotIn("overflow: auto", graph_viewport)
+        self.assertIn("overflow-x: clip", graph_viewport)
+        self.assertNotIn("min-width: max-content", html)
+        self.assertNotIn(
+            "repeat(${maxRank + 1}, 190px)",
+            html,
+        )
+        self.assertNotIn(".edge-layer { display: none; }", html)
+        self.assertNotIn(
+            'window.matchMedia("(max-width: 719px)").matches',
+            html,
+        )
+        self.assertIn('className = "graph-rank"', html)
+        self.assertIn('nodeLayer.dataset.layout = "vertical"', html)
+        self.assertIn('nodeLayer.dataset.layout = "horizontal"', html)
+        self.assertIn(
+            "minmax(min(100%, 180px), 1fr)",
+            html,
+        )
+        self.assertIn('dependency.className = "node-dependencies"', html)
+        self.assertIn(
+            'edgeLayer.hidden = nodeLayer.dataset.layout === "vertical"',
+            html,
+        )
+        self.assertIn('"前置："', html)
         for write_tool in (
             "advance_graph",
             "archive_delivery",
@@ -696,6 +816,243 @@ class McpAppsContractTests(unittest.TestCase):
                 "resultType" in result,
                 modern_result,
             )
+
+    def test_legacy_codex_dashboard_refresh_reuses_exact_bound_workspace(
+        self,
+    ) -> None:
+        dashboard = {"rootId": "d-dashboard", "readOnly": True}
+        with TemporaryDirectory() as root, patch(
+            "hdg.mcp_adapter.call_tool",
+            return_value=dashboard,
+        ) as call:
+            connection = self._initialize_meta_bound_codex()
+            initial = self._legacy_request(
+                connection,
+                "tools/call",
+                {
+                    "name": "open_delivery_dashboard",
+                    "arguments": {"root_id": "d-dashboard"},
+                    "_meta": self._sandbox_meta(root),
+                },
+                request_id="initial-dashboard",
+            )
+            refreshed = self._legacy_request(
+                connection,
+                "tools/call",
+                {
+                    "name": "open_delivery_dashboard",
+                    "arguments": {"root_id": "d-dashboard"},
+                },
+                request_id="embedded-refresh",
+            )
+
+        self.assertTrue(initial["result"]["structuredContent"]["ok"])
+        self.assertTrue(refreshed["result"]["structuredContent"]["ok"])
+        self.assertEqual(call.call_count, 2)
+        first = call.call_args_list[0].kwargs
+        second = call.call_args_list[1].kwargs
+        self.assertEqual(second["root"], first["root"])
+        self.assertEqual(
+            second["workspace_root"],
+            first["workspace_root"],
+        )
+
+    def test_legacy_codex_dashboard_refresh_requires_same_root_grant(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root, patch(
+            "hdg.mcp_adapter.call_tool",
+            return_value={"rootId": "d-dashboard", "readOnly": True},
+        ) as call:
+            connection = self._initialize_meta_bound_codex()
+            unbound = self._legacy_request(
+                connection,
+                "tools/call",
+                {
+                    "name": "open_delivery_dashboard",
+                    "arguments": {"root_id": "d-dashboard"},
+                },
+                request_id="unbound-dashboard",
+            )
+            self._legacy_request(
+                connection,
+                "tools/call",
+                {
+                    "name": "open_delivery_dashboard",
+                    "arguments": {"root_id": "d-dashboard"},
+                    "_meta": self._sandbox_meta(root),
+                },
+                request_id="grant-dashboard",
+            )
+            different_root = self._legacy_request(
+                connection,
+                "tools/call",
+                {
+                    "name": "open_delivery_dashboard",
+                    "arguments": {"root_id": "d-other"},
+                },
+                request_id="different-dashboard",
+            )
+
+        for response in (unbound, different_root):
+            payload = response["result"]["structuredContent"]
+            self.assertFalse(payload["ok"])
+            self.assertEqual(
+                payload["error"]["code"],
+                "PROJECT_ROOT_UNAVAILABLE",
+            )
+        self.assertEqual(call.call_count, 1)
+
+    def test_legacy_codex_dashboard_grant_does_not_relax_other_tools(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root, patch(
+            "hdg.mcp_adapter.call_tool",
+            return_value={"rootId": "d-dashboard", "readOnly": True},
+        ) as call:
+            connection = self._initialize_meta_bound_codex()
+            self._legacy_request(
+                connection,
+                "tools/call",
+                {
+                    "name": "open_delivery_dashboard",
+                    "arguments": {"root_id": "d-dashboard"},
+                    "_meta": self._sandbox_meta(root),
+                },
+                request_id="grant-dashboard",
+            )
+            workspace_status = self._legacy_request(
+                connection,
+                "tools/call",
+                {"name": "workspace_status", "arguments": {}},
+                request_id="metadata-free-other-tool",
+            )
+
+        payload = workspace_status["result"]["structuredContent"]
+        self.assertFalse(payload["ok"])
+        self.assertEqual(
+            payload["error"]["code"],
+            "PROJECT_ROOT_UNAVAILABLE",
+        )
+        self.assertEqual(call.call_count, 1)
+
+    def test_dashboard_refresh_does_not_treat_empty_meta_as_bridge_omission(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root, patch(
+            "hdg.mcp_adapter.call_tool",
+            return_value={"rootId": "d-dashboard", "readOnly": True},
+        ) as call:
+            connection = self._initialize_meta_bound_codex()
+            self._legacy_request(
+                connection,
+                "tools/call",
+                {
+                    "name": "open_delivery_dashboard",
+                    "arguments": {"root_id": "d-dashboard"},
+                    "_meta": self._sandbox_meta(root),
+                },
+                request_id="grant-dashboard",
+            )
+            responses = [
+                self._legacy_request(
+                    connection,
+                    "tools/call",
+                    {
+                        "name": "open_delivery_dashboard",
+                        "arguments": {"root_id": "d-dashboard"},
+                        "_meta": explicit_meta,
+                    },
+                    request_id=f"explicit-meta-{index}",
+                )
+                for index, explicit_meta in enumerate((None, {}))
+            ]
+
+        for response in responses:
+            payload = response["result"]["structuredContent"]
+            self.assertFalse(payload["ok"])
+            self.assertEqual(
+                payload["error"]["code"],
+                "PROJECT_ROOT_UNAVAILABLE",
+            )
+        self.assertEqual(call.call_count, 1)
+
+    def test_failed_dashboard_read_does_not_create_refresh_grant(
+        self,
+    ) -> None:
+        failure = GatedLoopError(
+            "SCHEDULER_DELIVERY_NOT_FOUND",
+            "Delivery is not available",
+        )
+        with TemporaryDirectory() as root, patch(
+            "hdg.mcp_adapter.call_tool",
+            side_effect=failure,
+        ) as call:
+            connection = self._initialize_meta_bound_codex()
+            failed = self._legacy_request(
+                connection,
+                "tools/call",
+                {
+                    "name": "open_delivery_dashboard",
+                    "arguments": {"root_id": "d-dashboard"},
+                    "_meta": self._sandbox_meta(root),
+                },
+                request_id="failed-dashboard",
+            )
+            retry = self._legacy_request(
+                connection,
+                "tools/call",
+                {
+                    "name": "open_delivery_dashboard",
+                    "arguments": {"root_id": "d-dashboard"},
+                },
+                request_id="ungranted-refresh",
+            )
+
+        self.assertEqual(
+            failed["result"]["structuredContent"]["error"]["code"],
+            "SCHEDULER_DELIVERY_NOT_FOUND",
+        )
+        self.assertEqual(
+            retry["result"]["structuredContent"]["error"]["code"],
+            "PROJECT_ROOT_UNAVAILABLE",
+        )
+        self.assertEqual(call.call_count, 1)
+
+    def test_non_codex_connection_cannot_reuse_dashboard_grant(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root, patch(
+            "hdg.mcp_adapter.call_tool",
+            return_value={"rootId": "d-dashboard", "readOnly": True},
+        ) as call:
+            connection = self._initialize_meta_bound_codex()
+            self._legacy_request(
+                connection,
+                "tools/call",
+                {
+                    "name": "open_delivery_dashboard",
+                    "arguments": {"root_id": "d-dashboard"},
+                    "_meta": self._sandbox_meta(root),
+                },
+                request_id="claude-dashboard",
+            )
+            connection.trusted_host_adapter = "claude-code"
+            refreshed = self._legacy_request(
+                connection,
+                "tools/call",
+                {
+                    "name": "open_delivery_dashboard",
+                    "arguments": {"root_id": "d-dashboard"},
+                },
+                request_id="claude-refresh",
+            )
+
+        self.assertEqual(
+            refreshed["result"]["structuredContent"]["error"]["code"],
+            "PROJECT_ROOT_UNAVAILABLE",
+        )
+        self.assertEqual(call.call_count, 1)
 
     def test_dashboard_projection_is_read_only_and_data_minimized(
         self,

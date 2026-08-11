@@ -1,6 +1,6 @@
 {
   "name": "delivery-graph",
-  "version": "0.39.6",
+  "version": "0.39.7",
   "description": "确认 Git 基线，冻结并调度分层 GROUP/TASK Graph，支持自动派遣、冻结开发包、分层审查与恢复",
   "author": {
     "name": "delivery-graph contributors",

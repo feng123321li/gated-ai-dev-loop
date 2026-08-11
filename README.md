@@ -4,7 +4,7 @@
 
 `delivery-graph` 把已经确认的软件需求冻结为可执行、可审查、可恢复的 Delivery Graph，再协调宿主原生 Agent 完成实现、分层 Review 和最终验收。
 
-当前版本：**0.39.6** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
+当前版本：**0.39.7** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
 
 ## 它做什么
 
@@ -135,7 +135,7 @@ claude plugin install delivery-graph@majorbio-skills --scope user
 5. 执行期间查看当前 frontier、进度、测试、心跳和 Review findings。
 6. 所有要求完成后查看验收报告，并由你最终确认。
 
-执行期间可直接说“打开当前 Delivery 的进度面板”。宿主会调用 `open_delivery_dashboard`；支持 MCP Apps UI 时显示内嵌看板，不支持时继续返回相同的文字与结构化进度。面板刷新只读取状态，不调用会推进调度状态的 `graph_frontier`。
+执行期间可直接说“打开当前 Delivery 的进度面板”。宿主会调用 `open_delivery_dashboard`；支持 MCP Apps UI 时显示内嵌看板，不支持时继续返回相同的文字与结构化进度。看板在可见时每 15 秒自动重读权威状态，隐藏时暂停，也可手动立即刷新；这些路径都只调用 `open_delivery_dashboard`，不调用会推进调度状态的 `graph_frontier`。Graph 在宽面板中按依赖层横向显示连线，空间不足时改为纵向换行并在节点内显示前置项，不需要横向滚动。
 
 新业务目标默认创建新 Delivery。只有明确继续同一需求，或运行结果要求 replan，才沿用原 `delivery.id` 创建下一 Revision。
 

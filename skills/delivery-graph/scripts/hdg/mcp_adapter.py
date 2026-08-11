@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import sys
 import traceback
 from typing import Any, Mapping
@@ -14,6 +14,7 @@ from .host_policy import (
     DEFAULT_HOST_POLICY,
     HostCompatibilityPolicy,
     ProjectRootBinding,
+    ProjectRootResolution,
 )
 from .jsonio import redact
 from .mcp_apps import read_resource, resource_definitions
@@ -343,6 +344,12 @@ class McpConnection:
     legacy_initialized: bool = False
     legacy_client_info: dict[str, object] | None = None
     trusted_host_adapter: str | None = None
+    # The embedded app cannot mint workspace metadata. Reuse only a prior
+    # successful dashboard read from this exact legacy connection/root.
+    _dashboard_read_grants: dict[str, ProjectRootResolution] = field(
+        default_factory=dict,
+        repr=False,
+    )
 
 
 @dataclass(frozen=True)
@@ -811,11 +818,29 @@ def _call_scheduler_tool(
                 requires_user_interaction=name in _USER_INTERACTION_TOOLS,
                 client_info=client_info,
             )
-        root_resolution = connection.project_root.resolve_request(
-            params.get("_meta"),
-            stateless=modern,
-            require_sandbox_metadata=True,
+        dashboard_root_id = (
+            arguments.get("root_id")
+            if name == "open_delivery_dashboard"
+            else None
         )
+        root_resolution = None
+        if (
+            not modern
+            and name == "open_delivery_dashboard"
+            and "_meta" not in params
+            and isinstance(dashboard_root_id, str)
+            and connection.trusted_host_adapter == "codex"
+            and connection.project_root.from_sandbox_meta
+        ):
+            root_resolution = connection._dashboard_read_grants.get(
+                dashboard_root_id
+            )
+        if root_resolution is None:
+            root_resolution = connection.project_root.resolve_request(
+                params.get("_meta"),
+                stateless=modern,
+                require_sandbox_metadata=True,
+            )
         workspace_root = root_resolution.workspace_root
         business_result = call_tool(
             name,
@@ -826,6 +851,17 @@ def _call_scheduler_tool(
             client_info=(dict(client_info) if client_info else None),
             trusted_host_adapter=connection.trusted_host_adapter,
         )
+        if (
+            not modern
+            and name == "open_delivery_dashboard"
+            and "_meta" in params
+            and isinstance(dashboard_root_id, str)
+            and connection.trusted_host_adapter == "codex"
+            and connection.project_root.from_sandbox_meta
+        ):
+            connection._dashboard_read_grants[
+                dashboard_root_id
+            ] = root_resolution
         payload = {
             "ok": True,
             "result": business_result,

@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.7 — 2026-08-11
+
+发布提交：以 tag `v0.39.7` 指向的提交为准
+
+- **看板刷新恢复**：Codex legacy MCP Apps 连接只在此前成功、带 sandbox metadata 的 `open_delivery_dashboard` 调用后，为同一连接、同一 `root_id` 记录只读 workspace grant。内嵌 `tools/call` 缺失 metadata 时可复用该精确 grant；未授权 root、显式空/畸形 metadata、Modern 请求、非 Codex Adapter、其他只读工具和全部写工具继续 fail closed。
+- **桥接兼容与自动更新**：标准 MCP Apps `tools/call` 发生传输失败或精确返回 `PROJECT_ROOT_UNAVAILABLE` 时，可一次回退 `window.openai.callTool`，业务错误不重复调用。看板可见时每 15 秒串行自动刷新，隐藏时暂停，手动按钮仍可立即读取；刷新始终只调用只读 Dashboard 工具。
+- **响应式 Graph**：移除固定 190px 列、`min-width:max-content` 和内部横向滚动。宽面板按 rank 横向布局并绘制依赖曲线；空间不足时按 rank 纵向换行，在节点内显示前置项，避免移动端连线穿过卡片或丢失依赖语义。
+- **缓存隔离**：Dashboard Resource 升级为 `ui://delivery-graph/dashboard-v2.html`，UI 版本升至 1.1.0，避免 Plugin 更新后继续命中旧的一小时资源缓存。MCP 工具数、schema v3、Graph、事件链和运行数据库均不变。
+- **验证**：本地 Python 全量 342 项测试通过（1 项按环境条件跳过）；内嵌 JavaScript 与 Python 编译、canonical/Plugin Skill 镜像、Claude Plugin 严格校验、release candidate 和差异校验均通过。真实 Edge 在 1280/900/600/360 四档宽度执行 Dashboard，Graph 与页面无水平溢出，节点未裁切，并同时覆盖横向连线和纵向前置项布局。
+
 ## 0.39.6 — 2026-08-11
 
 发布提交：以 tag `v0.39.6` 指向的提交为准

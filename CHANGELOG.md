@@ -4,6 +4,14 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.5 — 2026-08-11
+
+发布提交：以 tag `v0.39.5` 指向的提交为准
+
+- **Repository 持久化边界**：执行模式/worktree setup、hierarchy/revision/run 生命周期、Graph event 状态、dispatch reservation/receiver identity 与人类投影分别迁移到职责独立的 store；加上已有 workspace binding 和 host attestation store，`SchedulerRepository` 收缩为 SQLite 连接/事务、共享定义校验与兼容 facade，公开方法签名与 schema v3 均保持不变。
+- **架构回归门禁**：新增 Store 所有权与 facade 签名一致性测试，并限制 `repository.py` 少于 1,800 行，避免持久化职责重新集中到单文件。
+- **验证**：相关 242 项行为与架构测试通过；本地 Python 全量 369 项测试通过（1 项按环境条件跳过），并完成 compileall、UTF-8 Skill 校验、34 工具生成一致性校验、Claude Plugin manifest 校验与 `git diff --check`。
+
 ## 0.39.4 — 2026-08-10
 
 发布提交：以 tag `v0.39.4` 指向的提交为准

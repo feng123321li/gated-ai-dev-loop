@@ -51,6 +51,8 @@ src/hdg/
 | `task_requirement_states` | 每个 TASK 当前 requirement revision、冻结/解冻状态与更新时间 |
 | `graph_events` | 带前序哈希的不可变调度事件 |
 
+`SchedulerRepository` 只保留 SQLite 连接/事务、共享定义校验与兼容 facade。workspace 绑定、宿主 workspace attestation、执行模式与 worktree setup、hierarchy/revision/run 生命周期、Graph 事件状态、dispatch/receiver identity 以及人类投影分别由 `repository_workspaces.py`、`repository_attestations.py`、`repository_execution_setup.py`、`repository_hierarchies.py`、`repository_events.py`、`repository_dispatch.py` 和 `repository_projections.py` 管理。各 store 复用同一事务连接与 SQLite schema，不引入第二套状态，也不改变外部方法签名。
+
 Loop payload/outcome 以不透明 JSON 保存。共享 `root.skillHints` 作为 hierarchy 输入原样持久化，并由 `loop_context` 在运行时交给各 TASK、TASK Review、递归 GROUP Review 和 Delivery Review Loop；数据库没有 Task-Skill 分配、文件 scope、开发计划、Gate evidence 或 Skill activation 表。
 
 ## Hierarchy 与 Graph

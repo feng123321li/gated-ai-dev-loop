@@ -9,7 +9,7 @@ src/hdg/
 ├── dispatch_contracts.py
 │                      # 外层 receiver 派遣决策指纹与策略版本
 ├── dispatch_planning.py
-│                      # 可信宿主 receiver 预留与并发批次规划
+│                      # 当前宿主 receiver 预留与并发批次规划
 ├── loop_contracts.py   # Loop descriptor、outcome、资源锁
 ├── model_core.py       # schema v3 Delivery 与递归 GROUP/TASK 校验
 ├── git_binding.py      # Git worktree/feature/mainline 只读发现与校验
@@ -42,16 +42,13 @@ src/hdg/
 | `delivery_preferences` | 每个 Delivery 已确认的单仓开发基线偏好，用于后续 Revision 缺省注入；多 Git scope 仍要求逐仓显式 binding |
 | `worktree_setup_reservations` | 自动执行前按 Git repository identity、分支、Delivery Revision 和项目原子预留 worktree setup；保存 attempt、阶段、进度、心跳租约、失败与核对状态，同一请求不重发且同仓同分支跨 Delivery 排他 |
 | `dispatch_reservations` | 宿主创建 Agent 前的短租约派遣票据；按 run/node/attempt 原子去重、绑定决策指纹并原子预留跨 Delivery Agent 槽位 |
-| `host_workspace_attestations` | 可信宿主 Hook 为精确 context/tool/tool-use/workspace 签发的一次性工作区证明；Codex AUTO preflight 和 Claude 工作区路由消费后即失效 |
-| `receiver_attestations` | Adapter 为真实原生 child 签发的一次性 receiver 证明；AUTO 行绑定非空 dispatch reservation，MANUAL 行的 reservation 为 `NULL`，消费时共同绑定 operation |
-| `host_receiver_identities` | Codex AUTO `SubagentStart` 在原子 claim 中保存的宿主 receiver 身份摘要；不向 child 暴露 bearer |
 | `delivery_workspaces` | Delivery 与对话工作区 `workspaceKey` 的绑定；Git key 由历史 lineage + 分支生成，不含绝对路径，linked worktree 共享主控制根但保持分支隔离 |
 | `runs` | 整体运行状态、冻结执行模式与宿主容量熔断 |
 | `node_runs` | 每个节点的 attempt、claim、lease 和 outcome |
 | `task_requirement_states` | 每个 TASK 当前 requirement revision、冻结/解冻状态与更新时间 |
 | `graph_events` | 带前序哈希的不可变调度事件 |
 
-`SchedulerRepository` 只保留 SQLite 连接/事务、共享定义校验与兼容 facade。workspace 绑定、宿主 workspace attestation、执行模式与 worktree setup、hierarchy/revision/run 生命周期、Graph 事件状态、dispatch/receiver identity 以及人类投影分别由 `repository_workspaces.py`、`repository_attestations.py`、`repository_execution_setup.py`、`repository_hierarchies.py`、`repository_events.py`、`repository_dispatch.py` 和 `repository_projections.py` 管理。各 store 复用同一事务连接与 SQLite schema，不引入第二套状态，也不改变外部方法签名。
+`SchedulerRepository` 只保留 SQLite 连接/事务、共享定义校验与兼容 facade。workspace 绑定、执行模式与 worktree setup、hierarchy/revision/run 生命周期、Graph 事件状态、dispatch reservation 以及人类投影分别由 `repository_workspaces.py`、`repository_execution_setup.py`、`repository_hierarchies.py`、`repository_events.py`、`repository_dispatch.py` 和 `repository_projections.py` 管理。各 store 复用同一事务连接与 SQLite schema，不引入第二套状态，也不改变外部方法签名。
 
 Loop payload/outcome 以不透明 JSON 保存。共享 `root.skillHints` 作为 hierarchy 输入原样持久化，并由 `loop_context` 在运行时交给各 TASK、TASK Review、递归 GROUP Review 和 Delivery Review Loop；数据库没有 Task-Skill 分配、文件 scope、开发计划、Gate evidence 或 Skill activation 表。
 
@@ -123,7 +120,7 @@ hierarchy
 
 - 自动与手动路径共享 `.layered-delivery/<delivery-id>/`，手动包额外生成 `handoff-<fingerprint>.md` 并先登记为 `HANDOFF_READY`。交接阶段不创建 run、事件链或 workspace binding。
 - `start_manual_handoff` 只有在接收工作区 Git binding 通过校验后才创建 `execution_mode=manual` 的 run。单仓漂移先返回 `DEVELOPMENT_BASELINE` 且零写入：确认原 binding 时保持当前 Revision、要求恢复分支后重试；确认新 binding 时生成下一不可变手动 Revision与新双 fingerprint。多仓漂移 fail closed，要求以完整 project bindings 创建手动 Revision，不能用单仓选择器局部改写。
-- 手动 run 只有 `TASK_LOOP` 可以 `dispatch_mode=MANUAL`；全部 TASK/GROUP/Delivery Review 仍由可信外层 receiver 自动领取，最终仍需用户确认。MANUAL 不是弱认证路径：宿主 Adapter 同样要为真实原生 child 签发并一次性消费 receiver attestation，只是其 `reservation_id` 为 `NULL`，授权来自 manual run 或指定自动 TASK 的人工接管事件。progress/acceptance 只由事件投影刷新。
+- 手动 run 只有 `TASK_LOOP` 可以 `dispatch_mode=MANUAL`；全部 TASK/GROUP/Delivery Review 仍由外层 receiver 自动领取，最终仍需用户确认。MANUAL 授权来自 manual run 或指定自动 TASK 的人工接管事件；独立 child 显式提交 receiving context 与新的 `operation_id`，且不携带 AUTO reservation 或 decision fingerprint。Controller 继续校验 workspace/Git/project scope、attempt、operation、lease 和资源锁；progress/acceptance 只由事件投影刷新。
 - Revision 连续性必须显式：`prepare_delivery_revision` 使用 `USER_EXPLICIT_SAME_DELIVERY`，或在已有 `REPLAN_REQUIRED` 时使用 `ACTIVE_LOOP_REPLAN`。候选 freeze 前不移动当前 hierarchy；取代时旧 run 原子标记为 `SUPERSEDED`。
 - 同一 `workspaceKey` 已有未结束 run 时，第二个 Delivery 在 prepare 写入前返回 `CREATE_INDEPENDENT_WORKTREE_TASK`。Codex 与 Claude Code 自动 Git Delivery 都采用 `HOST_NATIVE_LINKED_WORKTREE`；Claude 使用 `delivery-graph:delivery-coordinator`，Codex 创建 `environment=worktree` 项目任务。
 - 多仓 `projectScopes` 在冻结时要求精确项目授权。每个 Git scope 都必须带完整 `gitBinding`；可写仓库使用同名 feature 分支，但分别冻结自己的主线与 `baseCommit`。AUTOMATIC 为每个 `READ_WRITE` Git scope 返回 `projectWorktreeSetups`，全部就绪后才冻结 Graph；只启动一个 coordinator，所有进度仍写入共享控制根。普通单仓 Delivery 可以不声明该数组，运行时会从顶层 `delivery.gitBinding` 和已绑定 workspace 合成并验证唯一 `primary` scope。TASK receiver 不创建或切换分支。
@@ -136,14 +133,14 @@ Controller 只读发现和校验 Git，不执行 branch、worktree、stage、com
 
 工具分为六组：
 
-- 外层 receiver 派遣计划：`plan_dispatch_batch`。它按当前可信宿主 Adapter 直接预留 receiver，固定 `modelPolicy=CURRENT_HOST_INHERIT`，不接收模型 inventory、风险判级或 effort。
+- 外层 receiver 派遣计划：`plan_dispatch_batch`。它按当前宿主 Adapter 直接预留 receiver，固定 `modelPolicy=CURRENT_HOST_INHERIT`，不接收模型 inventory、风险判级或 effort。
 - 规划与交接：`workspace_status`、`hierarchy_contract`、`preview_hierarchy`、`confirm_development_baseline`、`select_execution_mode`、`report_worktree_setup`、`resume_execution_mode`、`create_manual_handoff`、`start_manual_handoff`、`prepare_hierarchy`、`freeze_hierarchy`。`workspace_status(base_ref=...)` 可承接宿主明确选择的基线；未指定时按有效 `origin/HEAD`、本地 `main`、本地 `master` 降级发现。preview 先登记 `CHOICE_READY` 并生成关联投影，再返回唯一 `pendingInteraction`：缺 binding 时为 `DEVELOPMENT_BASELINE`，确认后为 `EXECUTION_MODE`。`developmentBaseline` / `executionChoice` 只是该对象的兼容别名。Codex 映射 `request_user_input`，Claude 映射 `AskUserQuestion`，可调用时必须使用原生选择器。AUTOMATIC 由 `hostDispatch` 在 linked worktree 后台续接，并在准备期间持续上报 setup progress；手动 Git 漂移遵循上一节的单仓双分支和多仓 fail-closed 规则。
 - Delivery 修订：`delivery_revision_history`、`prepare_delivery_revision`
 - 需求修订：`unfreeze_task_requirement`、`refreeze_task_requirement`
 - 查询：`graph_frontier`、`graph_status`、`graph_events`、`loop_context`、`open_delivery_dashboard`
 - Loop 控制：`dispatch_loop`、`handoff_ready_automatic_task`、`heartbeat_loop`、`report_loop_progress`、`pause_loop`、`resume_loop`、`record_loop_result`
 
-公开的 `freeze_hierarchy` 不接收 `execution_mode`，自动路径固定创建 `active` run。只有 `start_manual_handoff` 能把精确 `HANDOFF_READY` 双 fingerprint 启动为 `manual` run；Git 漂移 blocker 在任何控制状态写入前返回。`dispatch_loop(MANUAL)` 通常只允许该 run 的 `TASK_LOOP`；唯一例外是 `handoff_ready_automatic_task` 已对 active Graph 中 READY、从未领取、clean 且无有效 reservation 的指定 TASK 记录显式人工恢复事件。两种 MANUAL claim 都拒绝自动 reservation、decision、transport 和模型选择，但必须由当前可信 Adapter 注入 reservation 为 `NULL` 的一次性 receiver attestation，并绑定真实 child/parent/workspace；Review 继续使用可信外层 receiver 的 AUTO claim。
+公开的 `freeze_hierarchy` 不接收 `execution_mode`，自动路径固定创建 `active` run。只有 `start_manual_handoff` 能把精确 `HANDOFF_READY` 双 fingerprint 启动为 `manual` run；Git 漂移 blocker 在任何控制状态写入前返回。`dispatch_loop(MANUAL)` 通常只允许该 run 的 `TASK_LOOP`；唯一例外是 `handoff_ready_automatic_task` 已对 active Graph 中 READY、从未领取、clean 且无有效 reservation 的指定 TASK 记录显式人工恢复事件。两种 MANUAL claim 都拒绝 AUTO reservation、decision fingerprint、transport 和模型选择，要求独立 receiver 显式提交 receiving context 与新的 `operation_id`；Review 继续使用统一 AUTO reservation/decision/独立 child 协议。
 
 `report_loop_progress` 写入有界的 `LOOP_PROGRESS_REPORTED` 可观测事件，不参与 Graph FSM、不续租。摘要、里程碑和下一步使用用户当前语言。`graph_status` 与会先推进租约的 `graph_frontier` 返回 `progressMonitor`：结构化行用于宿主监控，`markdownTable` 汇总 attempt、外层 receiver、当前阶段、摘要、里程碑、下一步、测试、心跳/租约和健康预警。内部 Worker 遥测只在最终 outcome 中显示为非权威信息。
 - 恢复：`advance_graph`、`rebuild_graph_run`
@@ -155,15 +152,15 @@ Plugin MCP 工具不接收业务 `root` 参数。Adapter 从宿主配置或请�
 
 `loop_context.completionPolicy` 明确输入和终态边界：payload 是目标、明确约束和已知验收点的输入，Loop 在运行时从真实代码、契约和数据链路推导 scope 内必要条件；冻结 Graph 不冻结内部实现计划，可修复 finding 必须在当前 Loop 内调整方案、修正并复验。`loop_context.projectScopes` 是按当前 Delivery workspace 与冻结 Git binding 验证后的实际 worktree 列表；单仓未声明 `projectScopes` 时包含合成的 `primary`，多仓则逐项验证显式 scope。`projectScopeAnchors` 才是 hierarchy 中不可变的 preview 路径；这两个层次分离后，并行 Delivery 的 receiver 不会回到同仓库主检出互相切分支。Loop 不拥有分支生命周期，只能在有效 scope 路径内开发。STANDARD 执行完整声明验收并保留分层 Review；LIGHT 对已声明改动做定向验证，并在实际内容或影响超出判断依据时以 `REPLAN_REQUIRED` 退出，不能继续借轻量档绕过 Review。初始 freeze 同时为所有 TASK 建立 revision 1 冻结记录；`unfreeze_task_requirement` 只接受未开始 TASK，`refreeze_task_requirement` 只替换标题、摘要和 payload，并原子更新 hierarchy/graph 双指纹、事件链和人类投影。`record_loop_result` 的 `BLOCKED` 要求显式 failure class，只用于当前 scope 和权限内没有继续路径的真实终态；调度器仍不解释不透明 finding，也不为返工创建 Graph 环。
 
-`controller.py` 是唯一共享应用入口；`mcp_tools.py` 把 34 个模型可调用工具映射到 Controller。每个工具发布人类可读 `title`、根对象 `inputSchema` / `outputSchema`，以及完整 `readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint` annotations；发布校验会逐工具检查。receiver 凭证签发和硬额度熔断是模型外宿主回调，不进入 MCP 工具目录。`mcp_adapter.py` 只保留 Modern discovery 与 Legacy initialize/ping 两层 wire shim；初始化后的 tools/resources 方法共享一个 dispatcher，避免为两个协议各维护一套业务分支。Controller 不扫描 PATH、不执行本机 CLI 版本探针，也不提供 Agent/模型发现或中央设置工具。
+`controller.py` 是唯一共享应用入口；`mcp_tools.py` 把 33 个模型可调用工具映射到 Controller。每个工具发布人类可读 `title`、根对象 `inputSchema` / `outputSchema`，以及完整 `readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint` annotations；发布校验会逐工具检查。`mcp_adapter.py` 只保留 Modern discovery 与 Legacy initialize/ping 两层 wire shim；初始化后的 tools/resources 方法共享一个 dispatcher，避免为两个协议各维护一套业务分支。Controller 不扫描 PATH、不执行本机 CLI 版本探针，也不提供 Agent/模型发现或中央设置工具。敏感调用是否执行由宿主审批；Plugin 不通过生命周期回调绕过或代替该审批。
 
 `mcp_apps.py` 发布固定的 `ui://delivery-graph/dashboard.html` Resource，`dashboard.py` 把当前定义、`graph_status` 与 Revision 历史投影成有界只读 view model。该投影删除 Loop payload、operation ID、Revision 原因和操作者等非展示字段；HTML 只通过 MCP Apps bridge 接收 `structuredContent`，不访问 SQLite、网络、Cookie 或宿主 DOM。手动刷新只重放 `open_delivery_dashboard`，绝不调用会先推进状态的 `graph_frontier`。无 UI 宿主继续消费同一工具的文字/结构化降级结果。
 
-`dispatch_planning.py` 内置 `maxConcurrentExecutors=4` 与固定 `quotaExhaustionPolicy=PAUSE_AND_RESUME`，不读取 Plugin 外的用户配置。它只消费当前 frontier、可信 `host_adapter_id` 和宿主可原生创建的 receiver Agent 集合；assignment 固定 `modelPolicy=CURRENT_HOST_INHERIT`，模型与 effort 不进入 planning、reservation、claim 或 decision fingerprint。预留和已认领 receiver 共同占用协调槽位，容量断路器继续跨 Delivery 生效。`plan_dispatch_batch` 进入 Controller 前必须已消费当前可信宿主 Hook 签发的一次性 workspace attestation；未证明 Hook 已激活时返回 `SCHEDULER_HOST_HOOK_NOT_READY`，且不会创建 reservation。AUTO 与 MANUAL 随后都消费绑定 node/attempt/context/parent 的一次性 receiver attestation：AUTO 行绑定 reservation，MANUAL 行的 reservation 为 `NULL`。Codex AUTO assignment 返回唯一 `hostTaskName`，`SubagentStart` Hook 校验 child/parent/task 后在单一事务内签发身份、固定编排根、消费 reservation 并 claim；Codex/Claude MANUAL 由 `dispatch_loop` PreToolUse 证明真实 child。后续 heartbeat、progress、pause 和 result 由 PreToolUse Hook 为同一 receiver 注入 operation；普通 root/helper 与内部 Worker 统一拒绝。前一 Loop 成功且无活跃 claim/凭据时，同一 Adapter 的新主会话可用 `IDLE_FRONTIER_HANDOFF` 接力下一层 Review，活跃 claim 期间仍禁止轮换。长时间 shell/build 必须与 heartbeat 解耦；`SUSPECT_LOST` 只表示控制面静默。Codex、Claude、Grok、DeepSeek 等内部 Worker 只把结果返回 receiver，并可在最终 `workerTelemetry` 中按 phase 非权威报告 agent/model/effort。
+`dispatch_planning.py` 内置 `maxConcurrentExecutors=4` 与固定 `quotaExhaustionPolicy=PAUSE_AND_RESUME`，不读取 Plugin 外的用户配置。它只消费当前 frontier、`host_adapter_id` 和宿主可原生创建的 receiver Agent 集合；assignment 固定 `modelPolicy=CURRENT_HOST_INHERIT`，模型与 effort 不进入 planning、reservation、claim 或 decision fingerprint。预留和已认领 receiver 共同占用协调槽位。`plan_dispatch_batch` 为所有 Ready TASK/Review 创建绑定 node/attempt/Graph fingerprint/decision fingerprint 的短租约 reservation；宿主立即创建独立 child，child 以 `dispatch_transport=HOST_NATIVE`、live reservation、匹配 decision fingerprint 和新的显式 `operation_id` 调用 `dispatch_loop(AUTO)`。MANUAL TASK 不进入 planning，以显式 receiving context/operation 调用 `dispatch_loop(MANUAL)`，且不带 AUTO reservation/decision/transport。后续 heartbeat、progress、pause 和 result 都显式携带 claim 对应的 operation；普通 coordinator/helper 与内部 Worker 不得持有 bearer。暂停后的 `resume_loop` 先恢复 Ready，再以新 operation 重新领取。`HOST_NATIVE` 只是编排要求；Controller 只看到 Adapter 提供的 workspace、receiver 类型和 assignment 数据，因此不密码学证明 parent-child、receiver 延续或 reviewer 独立性。宿主承担独立 child 编排，Controller 继续强制 workspace/Git/project scope、attempt、reservation、fingerprint、operation、lease 和资源锁。长时间 shell/build 必须与 heartbeat 解耦；`SUSPECT_LOST` 只表示控制面静默。内部 Worker 只把结果返回 receiver，并可在最终 `workerTelemetry` 中按 phase 非权威报告 agent/model/effort。
 
-Codex manifest 显式声明 `./hooks/hooks.json`；该清单注册 AUTO planning preflight、MANUAL `dispatch_loop`、AUTO `SubagentStart` 与 Loop mutation `PreToolUse`，通过 `${PLUGIN_ROOT}`（Windows 为 `%PLUGIN_ROOT%`）定位，不注册 Codex 不支持的 `StopFailure`。安装或升级后的新任务必须在 `/hooks` 审查并信任这组命令；只加载 Skill/MCP 而未激活 Hook 不是可运行状态。Claude manifest 单独指向 `hooks/claude-hooks.json`，其 `PreToolUse` 与 `StopFailure` 通过 `${CLAUDE_PLUGIN_ROOT}` 定位。Codex Hook 只接受宿主 profile 的 `.codex/sessions` 中与实际 child、parent、角色和 assignment `hostTaskName` 相符的真实 child transcript；Windows Desktop Hook 即使运行在 `CodexSandboxOffline` 隔离账户，也必须以宿主 `USERPROFILE` 与事件 transcript 的真实父子关系共同验证 sessions 根，自定义 `CODEX_HOME` 仍 fail closed。AUTO `SubagentStart` 已定位 reservation 但身份/workspace/scope 验证失败时，只有 TASK 仍 READY 且未签发 receiver 身份才原子释放该 reservation、记录 `DISPATCH_RECEIVER_START_FAILED`，并要求 child 在仓库操作前停止。普通 helper、内部 Worker、过期预留和重放均无控制面权限。transcript 内部格式不是稳定协议，因此解析失败必须 fail closed，并在每个目标 Codex 版本做真实子 Agent 冒烟。
+Codex 与 Claude Plugin 通过 Skill、Agent 描述、MCP 和宿主元数据工作，安装和升级不需要额外的生命周期信任。Codex manifest 对敏感 MCP 工具保留宿主 `approval_mode=prompt`，Claude Code 使用自身的工具审批，普通执行权限不能代替这些宿主决策。Adapter 提供当前 workspace 和 receiver 类型，Controller 再校验冻结 binding 与 project scope；workspace/scope 无效时在 claim 前 fail closed。Controller 不提供真实 parent-child、receiver 身份延续或 reviewer 独立性的密码学证明。AUTO 的安全边界是短租约 reservation、decision fingerprint、attempt、显式 operation、lease 与资源锁；MANUAL 的安全边界是允许人工领取的 TASK 状态、workspace/scope、显式 operation 与 lease。
 
-提供方限额按容量范围分流。软阈值只有宿主提供结构化 utilization/reset 时才提前暂停；标准 Claude CLI Hook 未暴露预警事件时不从模型文本猜测。硬 429 由模型外私有回调处理：Claude `StopFailure` 只解析 `error_details`，校验实际子 Agent 上下文，限制 reset 最远 24 小时并用 report ID 幂等去重。共享 `host_capacity_breakers` 会暂停同容量域的跨 Delivery claimed Loop并禁止新派遣；到点后 `advance_graph` 恢复同一 attempt。重建旧 run 时，恢复操作必须匹配原 `reportId/resetAt`，打开操作只有同一未恢复报告或更晚 `reportedAt` 才能更新共享行，不能覆盖另一 Delivery 的新断路器。该能力不在 MCP 工具目录中，失败模型无需也不能主动触发。
+提供方限额按容量范围分流。软阈值只有宿主提供结构化 utilization/reset 时才提前以当前 operation 调用 `pause_loop`；不从模型文本猜测。硬 429 不由 Plugin 自动记录，宿主负责停止供应商调用、保留真实 `resetAt` 并执行自己的审批/重试和一次性恢复计划；receiver 已无法显式 pause 时由 lease 到期和 `advance_graph` 进入新 attempt。
 
 本地 Tools-over-stdio profile 的协议优先级为：
 
@@ -181,7 +178,7 @@ Codex manifest 显式声明 `./hooks/hooks.json`；该清单注册 AUTO planning
 3. 生成 `hdg_mcp.py`；
 4. 将 canonical Skill 整体复制到双宿主 Plugin payload。
 
-canonical Skill 位于 `skills/delivery-graph/`，Plugin 位于 `plugins/delivery-graph/`。Plugin manifest 与 Hook 不在 canonical Skill 内，由仓库直接维护。
+canonical Skill 位于 `skills/delivery-graph/`，Plugin 位于 `plugins/delivery-graph/`。Plugin manifest 不在 canonical Skill 内，由仓库直接维护；当前 Plugin payload 由声明的 Skill、Agent 描述、MCP 和宿主元数据组成。
 
 ## 版本原则
 

@@ -25,11 +25,7 @@ from hdg.graph_model import (
 )
 from hdg.graph_runtime import (
     archive_delivery,
-    attest_loop_receiver,
-    authorize_host_session_operation,
-    authorize_codex_subagent_operation,
     cancel_graph_run,
-    claim_current_task,
     graph_events,
     graph_status,
     heartbeat_loop,
@@ -74,7 +70,6 @@ from .test_loop_architecture import (
     node,
     recursive_hierarchy,
     skill_hint,
-    task_definition,
     task_hierarchy,
 )
 from .automatic_dispatch import dispatch_loop, reserve_loop
@@ -453,122 +448,104 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         return prepared
 
-    def test_runtime_dispatch_requires_receiver_attestation_by_default(
-        self,
-    ) -> None:
-        with self.assertRaises(GatedLoopError) as missing:
-            runtime_dispatch_loop(
-                root=self.root,
-                root_id="d-service",
-                node_id="loop:t-service",
-                owner="codex-child",
-                operation_id="op-default-attestation",
-                agent_id="codex",
-                receiver_context_id="codex-child",
-                dispatch_mode="MANUAL",
-                host_adapter_id="codex",
-            )
-        self.assertEqual(
-            missing.exception.code,
-            "SCHEDULER_RECEIVER_ATTESTATION_REQUIRED",
-        )
-
-    def test_attested_current_session_executes_task_and_spawns_review(
-        self,
-    ) -> None:
+    def test_planned_task_and_review_dispatch_without_hooks(self) -> None:
         prepared = self.prepare_and_freeze(task_hierarchy())
         root_id = prepared["rootId"]
         task_node_id = loop_node_id("t-service")
-        claimed = claim_current_task(
+        task_plan = plan_dispatch_batch(
             root=self.root,
             root_id=root_id,
-            node_id=task_node_id,
             expected_graph_fingerprint=prepared["graphFingerprint"],
-            workspace_root=self.root,
-            receiver_context_id="codex-current-session",
             host_adapter_id="codex",
             host_native_agent_ids=("codex",),
-            verified_project_scopes=[],
             now=at(2),
         )
-        authorization = authorize_host_session_operation(
+        task_assignment = task_plan["assignments"][0]
+
+        task_claim = runtime_dispatch_loop(
             root=self.root,
             root_id=root_id,
             node_id=task_node_id,
-            workspace_root=self.root,
-            receiver_context_id="codex-current-session",
+            owner="codex-task-child",
+            operation_id="op-hookless-task",
+            agent_id="codex",
+            receiver_context_id="codex-task-child",
+            dispatch_mode="AUTO",
+            dispatch_transport=task_assignment["dispatchTransport"],
+            dispatch_reservation_id=task_assignment[
+                "dispatchReservationId"
+            ],
+            dispatch_decision_fingerprint=task_assignment[
+                "decisionFingerprint"
+            ],
+            host_native_agent_ids=("codex",),
             host_adapter_id="codex",
+            verified_project_scopes=[],
             now=at(3),
         )
         heartbeat = heartbeat_loop(
             root=self.root,
             root_id=root_id,
             node_id=task_node_id,
-            operation_id=authorization["operationId"],
+            operation_id="op-hookless-task",
             now=at(3),
         )
         record_loop_result(
             root=self.root,
             root_id=root_id,
             node_id=task_node_id,
-            operation_id=authorization["operationId"],
-            outcome=success("Inline TASK completed."),
+            operation_id="op-hookless-task",
+            outcome=success("TASK completed."),
             now=at(4),
         )
+
         review_node_id = task_review_node_id("t-service")
-        assignment = plan_dispatch_batch(
+        review_plan = plan_dispatch_batch(
             root=self.root,
             root_id=root_id,
             expected_graph_fingerprint=prepared["graphFingerprint"],
             host_adapter_id="codex",
             host_native_agent_ids=("codex",),
             now=at(5),
-        )["assignments"][0]
-        review_attestation = attest_loop_receiver(
-            root=self.root,
-            root_id=root_id,
-            node_id=review_node_id,
-            receiver_context_id="codex-review-child",
-            parent_context_id="codex-current-session",
-            host_adapter_id="codex",
-            dispatch_reservation_id=assignment[
-                "dispatchReservationId"
-            ],
-            dispatch_mode="AUTO",
-            now=at(5),
         )
-        review = runtime_dispatch_loop(
+        review_assignment = review_plan["assignments"][0]
+        review_claim = runtime_dispatch_loop(
             root=self.root,
             root_id=root_id,
             node_id=review_node_id,
             owner="codex-review-child",
-            operation_id="op-independent-review",
+            operation_id="op-hookless-review",
             agent_id="codex",
             receiver_context_id="codex-review-child",
-            receiver_attestation_id=review_attestation[
-                "receiverAttestationId"
-            ],
             dispatch_mode="AUTO",
-            dispatch_transport="HOST_NATIVE",
-            dispatch_reservation_id=assignment[
+            dispatch_transport=review_assignment["dispatchTransport"],
+            dispatch_reservation_id=review_assignment[
                 "dispatchReservationId"
             ],
-            dispatch_decision_fingerprint=assignment[
+            dispatch_decision_fingerprint=review_assignment[
                 "decisionFingerprint"
             ],
             host_native_agent_ids=("codex",),
             host_adapter_id="codex",
+            verified_project_scopes=[],
             now=at(6),
         )
 
-        self.assertEqual(claimed["dispatchMode"], "INLINE_AUTO")
         self.assertEqual(
-            claimed["dispatchTransport"],
-            "HOST_SESSION",
+            task_plan["nextAction"],
+            "CREATE_INDEPENDENT_RECEIVERS",
         )
+        self.assertEqual(task_assignment["nodeId"], task_node_id)
+        self.assertEqual(task_claim["operationId"], "op-hookless-task")
         self.assertEqual(heartbeat["status"], "CLAIMED")
-        self.assertEqual(review["nodeId"], review_node_id)
-        self.assertEqual(review["receiverContextId"], "codex-review-child")
+        self.assertNotIn("receiverAttested", task_claim)
+        self.assertEqual(review_assignment["nodeId"], review_node_id)
+        self.assertTrue(review_assignment["independence"]["required"])
+        self.assertEqual(
+            review_claim["receiverContextId"],
+            "codex-review-child",
+        )
+        self.assertNotIn("receiverAttested", review_claim)
 
     def test_ready_automatic_task_can_be_explicitly_handed_to_manual_receiver(
         self,
@@ -594,7 +571,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 handoff_request_id="handoff-live-reservation",
                 confirmed_no_code_changes=True,
                 confirmed_by="human",
-                reason="Codex receiver attestation injection failed.",
+                reason="Native receiver startup failed.",
                 workspace_root=self.root,
                 now=at(3),
             )
@@ -612,12 +589,12 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "graphFingerprint"
                 ],
                 "handoff_request_id": (
-                    "handoff-after-attestation-failure"
+                    "handoff-after-receiver-startup-failure"
                 ),
                 "confirmed_no_code_changes": True,
                 "confirmed_by": "human",
                 "reason": (
-                    "Codex receiver attestation injection failed twice."
+                    "Native receiver startup failed twice."
                 ),
             },
             root=self.root,
@@ -629,10 +606,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
             root_id=root_id,
             node_id=task_node_id,
             expected_graph_fingerprint=prepared["graphFingerprint"],
-            handoff_request_id="handoff-after-attestation-failure",
+            handoff_request_id="handoff-after-receiver-startup-failure",
             confirmed_no_code_changes=True,
             confirmed_by="human",
-            reason="Codex receiver attestation injection failed twice.",
+            reason="Native receiver startup failed twice.",
             workspace_root=self.root,
             now=at(9),
         )
@@ -660,7 +637,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
             receiver_context_id="manual-cli",
             dispatch_mode="MANUAL",
             host_adapter_id="codex",
-            require_receiver_attestation=False,
             now=at(10),
         )
         record_loop_result(
@@ -719,7 +695,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 handoff_request_id="handoff-without-confirmation",
                 confirmed_no_code_changes=False,
                 confirmed_by="human",
-                reason="Host attestation failed.",
+                reason="Native receiver startup failed.",
                 workspace_root=self.root,
                 now=at(2),
             )
@@ -737,7 +713,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 handoff_request_id="handoff-review",
                 confirmed_no_code_changes=True,
                 confirmed_by="human",
-                reason="Host attestation failed.",
+                reason="Native receiver startup failed.",
                 workspace_root=self.root,
                 now=at(2),
             )
@@ -1560,7 +1536,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
                         receiver_context_id=receiver_context_id,
                         dispatch_mode="MANUAL",
                         operation_id=operation_id,
-                        require_receiver_attestation=False,
                         now=at(index),
                     )
                     outcome = success("Manual TASK completed.")
@@ -1721,7 +1696,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
             receiver_context_id="context-manual-task",
             dispatch_mode="MANUAL",
             operation_id="op-manual-task",
-            require_receiver_attestation=False,
             now=at(3),
         )
         record_loop_result(
@@ -1743,7 +1717,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 receiver_context_id="context-manual-review",
                 dispatch_mode="MANUAL",
                 operation_id="op-manual-review",
-                require_receiver_attestation=False,
                 now=at(5),
             )
         self.assertEqual(
@@ -1751,86 +1724,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "SCHEDULER_DISPATCH_MODE_INVALID",
         )
 
-    def test_codex_manual_task_child_can_authorize_followup_operations(
-        self,
-    ) -> None:
-        hierarchy = delivery_task_hierarchy(
-            "d-manual-codex-child",
-            "t-manual-codex-child",
-        )
-        preview = preview_hierarchy(
-            root=self.root,
-            hierarchy=hierarchy,
-            now=at(0),
-        )
-        handoff = create_manual_handoff(
-            root=self.root,
-            hierarchy=hierarchy,
-            expected_hierarchy_fingerprint=(
-                preview["hierarchyFingerprint"]
-            ),
-            expected_graph_fingerprint=preview["graphFingerprint"],
-            authorized_project_ids=[],
-            confirmed=True,
-            confirmed_by="human",
-            now=at(1),
-        )
-        start_manual_handoff(
-            root=self.root,
-            root_id=handoff["rootId"],
-            expected_hierarchy_fingerprint=(
-                handoff["hierarchyFingerprint"]
-            ),
-            expected_graph_fingerprint=handoff["graphFingerprint"],
-            started_by="codex-parent",
-            workspace_root=self.root,
-            now=at(2),
-        )
-        node_id = loop_node_id("t-manual-codex-child")
-        attestation = attest_loop_receiver(
-            root=self.root,
-            root_id=handoff["rootId"],
-            node_id=node_id,
-            receiver_context_id="codex-child-manual",
-            parent_context_id="codex-parent",
-            host_adapter_id="codex",
-            dispatch_reservation_id=None,
-            dispatch_mode="MANUAL",
-            now=at(3),
-        )
-        claimed = runtime_dispatch_loop(
-            root=self.root,
-            root_id=handoff["rootId"],
-            node_id=node_id,
-            owner="codex-child-manual",
-            agent_id="codex",
-            receiver_context_id="codex-child-manual",
-            dispatch_mode="MANUAL",
-            host_adapter_id="codex",
-            receiver_attestation_id=attestation[
-                "receiverAttestationId"
-            ],
-            require_receiver_attestation=True,
-            operation_id="op-codex-child-manual",
-            now=at(3),
-        )
-
-        authorization = authorize_codex_subagent_operation(
-            root=self.root,
-            root_id=handoff["rootId"],
-            node_id=node_id,
-            workspace_root=self.root,
-            receiver_context_id="codex-child-manual",
-            parent_context_id="codex-parent",
-            dispatch_reservation_id=None,
-            now=at(4),
-        )
-
-        self.assertTrue(claimed["receiverAttested"])
-        self.assertEqual(
-            authorization["operationId"],
-            claimed["operationId"],
-        )
 
     def test_preview_rejects_duplicate_external_requirement_under_new_id(
         self,
@@ -3445,7 +3338,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     ),
                 },
                 "claimedLoopHandoff": {
-                    "trigger": "CONTEXT_OR_HOOK_PRESSURE",
+                    "trigger": "CONTEXT_PRESSURE",
                     "requiresLiveLease": True,
                     "action": "PAUSE_AND_HANDOFF",
                     "loopOutcome": "NONE",
@@ -3609,7 +3502,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "selectSkillsAtRuntime": True,
                 "prioritizeApplicableSkillHints": True,
                 "returnOnlyStandardLoopOutcome": True,
-                "hookAttestedCurrentSessionTaskExecutionAllowed": True,
+                "independentReceiverRequired": True,
+                "coordinatorMustNotExecuteLoopInline": True,
                 "coordinatorMustNotReviewInline": True,
                 "accessOnlyAuthorizedProjectScopes": True,
                 "projectScopeWorkspaceRootsAreRuntimeVerified": False,
@@ -4903,7 +4797,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
         first_workspace.mkdir()
         second_workspace.mkdir()
         claim = ["project:erp/environment:shared"]
-        prepared = []
         for delivery_id, task_id, workspace in (
             ("d-first", "t-first", first_workspace),
             ("d-second", "t-second", second_workspace),
@@ -4931,23 +4824,11 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 confirmed=True,
                 confirmed_by="human",
             )
-            prepared.append(current)
 
         first_reservation = reserve_loop(
             root=self.root,
             root_id="d-first",
             node_id=loop_node_id("t-first"),
-        )
-        first_attestation = attest_loop_receiver(
-            root=self.root,
-            root_id="d-first",
-            node_id=loop_node_id("t-first"),
-            receiver_context_id="context-first",
-            parent_context_id="codex-parent",
-            host_adapter_id="codex",
-            dispatch_reservation_id=first_reservation[
-                "dispatchReservationId"
-            ],
         )
         call_tool(
             "dispatch_loop",
@@ -4967,9 +4848,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "dispatchDecisionFingerprint"
                 ],
                 "receiver_context_id": "context-first",
-                "receiver_attestation_id": first_attestation[
-                    "receiverAttestationId"
-                ],
                 "operation_id": "op-first",
             },
             root=self.root,
@@ -4997,23 +4875,13 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 for action in frontier["actions"]
             )
         )
+
+        second_reservation = reserve_loop(
+            root=self.root,
+            root_id="d-second",
+            node_id=loop_node_id("t-second"),
+        )
         with self.assertRaises(GatedLoopError) as caught:
-            second_reservation = reserve_loop(
-                root=self.root,
-                root_id="d-second",
-                node_id=loop_node_id("t-second"),
-            )
-            second_attestation = attest_loop_receiver(
-                root=self.root,
-                root_id="d-second",
-                node_id=loop_node_id("t-second"),
-                receiver_context_id="context-second",
-                parent_context_id="codex-parent",
-                host_adapter_id="codex",
-                dispatch_reservation_id=second_reservation[
-                    "dispatchReservationId"
-                ],
-            )
             call_tool(
                 "dispatch_loop",
                 {
@@ -5021,9 +4889,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "node_id": loop_node_id("t-second"),
                     "owner": "agent-second",
                     "agent_id": second_reservation["agentId"],
-                    "dispatch_mode": second_reservation[
-                        "dispatchMode"
-                    ],
+                    "dispatch_mode": second_reservation["dispatchMode"],
                     "dispatch_transport": second_reservation[
                         "dispatchTransport"
                     ],
@@ -5034,9 +4900,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
                         "dispatchDecisionFingerprint"
                     ],
                     "receiver_context_id": "context-second",
-                    "receiver_attestation_id": second_attestation[
-                        "receiverAttestationId"
-                    ],
                     "operation_id": "op-second",
                 },
                 root=self.root,

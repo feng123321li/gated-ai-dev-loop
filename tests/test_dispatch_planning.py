@@ -7,14 +7,11 @@ import unittest
 from hdg.dispatch_planning import plan_dispatch_batch
 from hdg.errors import GatedLoopError
 from hdg.graph_runtime import (
-    authorize_codex_subagent_operation,
-    claim_codex_subagent_receiver,
     dispatch_loop,
-    graph_events,
     graph_status,
-    record_loop_result,
 )
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
+from hdg.repository import SchedulerRepository
 
 from .test_loop_architecture import group_hierarchy, task_hierarchy
 
@@ -71,6 +68,34 @@ class HostDispatchPlanningTests(unittest.TestCase):
             plan["assignments"][0]["dispatchReservationId"],
             r"^[0-9a-f-]{36}$",
         )
+        self.assertEqual(plan["nextAction"], "CREATE_INDEPENDENT_RECEIVERS")
+        self.assertTrue(
+            plan["assignments"][0]["independence"]["required"]
+        )
+        self.assertNotIn("currentSessionTaskNodeIds", plan)
+        self.assertNotIn("currentSessionTasks", plan["summary"])
+
+    def test_ready_legacy_hook_state_replans_without_migration(self) -> None:
+        retired_tables = (
+            "host_workspace_attestations",
+            "receiver_attestations",
+            "host_receiver_identities",
+            "run_receiver_roots",
+        )
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            repository = SchedulerRepository(root)
+            with repository.transaction() as connection:
+                for table_name in retired_tables:
+                    connection.execute(
+                        f"CREATE TABLE {table_name} (legacy_id TEXT)"
+                    )
+            plan = self.plan(root, prepared)
+
+        self.assertEqual(len(plan["assignments"]), 1)
+        self.assertTrue(
+            plan["assignments"][0]["independence"]["required"]
+        )
 
     def test_receiver_assignment_inherits_current_host_model_policy(
         self,
@@ -92,140 +117,6 @@ class HostDispatchPlanningTests(unittest.TestCase):
             "routeReview",
         ):
             self.assertNotIn(removed, assignment)
-
-    def test_codex_claim_authorizes_receiver_not_observed_model(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as root:
-            prepared = self.prepare_and_freeze(root, task_hierarchy())
-            assignment = self.plan(root, prepared)["assignments"][0]
-
-            claimed = claim_codex_subagent_receiver(
-                root=root,
-                root_id=prepared["rootId"],
-                workspace_root=root,
-                receiver_context_id="codex-v5-child",
-                parent_context_id="codex-v5-parent",
-                actual_model_id="host-observed-model-a",
-                dispatch_reservation_id=assignment[
-                    "dispatchReservationId"
-                ],
-            )
-            authorized = authorize_codex_subagent_operation(
-                root=root,
-                root_id=prepared["rootId"],
-                node_id=assignment["nodeId"],
-                workspace_root=root,
-                receiver_context_id="codex-v5-child",
-                parent_context_id="codex-v5-parent",
-                dispatch_reservation_id=assignment[
-                    "dispatchReservationId"
-                ],
-            )
-
-        self.assertEqual(claimed["agentId"], "codex")
-        self.assertNotIn("modelId", claimed)
-        self.assertEqual(
-            claimed["actualModelId"],
-            "host-observed-model-a",
-        )
-        self.assertNotIn("dispatchReasoningClass", claimed)
-        self.assertEqual(authorized["operationId"], claimed["operationId"])
-
-    def test_new_orchestrator_session_can_dispatch_next_review_at_idle_frontier(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as root:
-            prepared = self.prepare_and_freeze(root, task_hierarchy())
-            implementation = self.plan(root, prepared)["assignments"][0]
-            claimed = claim_codex_subagent_receiver(
-                root=root,
-                root_id=prepared["rootId"],
-                workspace_root=root,
-                receiver_context_id="implementation-child",
-                parent_context_id="orchestrator-session-one",
-                actual_model_id="host-model",
-                dispatch_reservation_id=implementation[
-                    "dispatchReservationId"
-                ],
-            )
-            record_loop_result(
-                root=root,
-                root_id=prepared["rootId"],
-                node_id=implementation["nodeId"],
-                operation_id=claimed["operationId"],
-                outcome={
-                    "status": "SUCCEEDED",
-                    "summary": "Implementation completed.",
-                    "result": {},
-                },
-            )
-
-            review = self.plan(root, prepared)["assignments"][0]
-            review_claim = claim_codex_subagent_receiver(
-                root=root,
-                root_id=prepared["rootId"],
-                workspace_root=root,
-                receiver_context_id="review-child",
-                parent_context_id="orchestrator-session-two",
-                actual_model_id="host-model",
-                dispatch_reservation_id=review[
-                    "dispatchReservationId"
-                ],
-            )
-
-            self.assertEqual(review_claim["nodeId"], review["nodeId"])
-            rotation = next(
-                event
-                for event in graph_events(
-                    root=root,
-                    root_id=prepared["rootId"],
-                )["events"]
-                if event["eventType"] == "RECEIVER_ROOT_ROTATED"
-            )
-            self.assertEqual(
-                rotation["payload"]["reason"],
-                "IDLE_FRONTIER_HANDOFF",
-            )
-
-    def test_new_orchestrator_session_cannot_take_over_active_claims(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as root:
-            prepared = self.prepare_and_freeze(
-                root,
-                parallel_group_hierarchy(),
-            )
-            assignments = self.plan(root, prepared)["assignments"]
-            claim_codex_subagent_receiver(
-                root=root,
-                root_id=prepared["rootId"],
-                workspace_root=root,
-                receiver_context_id="first-child",
-                parent_context_id="orchestrator-session-one",
-                actual_model_id="host-model",
-                dispatch_reservation_id=assignments[0][
-                    "dispatchReservationId"
-                ],
-            )
-
-            with self.assertRaises(GatedLoopError) as caught:
-                claim_codex_subagent_receiver(
-                    root=root,
-                    root_id=prepared["rootId"],
-                    workspace_root=root,
-                    receiver_context_id="second-child",
-                    parent_context_id="orchestrator-session-two",
-                    actual_model_id="host-model",
-                    dispatch_reservation_id=assignments[1][
-                        "dispatchReservationId"
-                    ],
-                )
-
-        self.assertEqual(
-            caught.exception.code,
-            "SCHEDULER_RECEIVER_PARENT_UNTRUSTED",
-        )
 
     def test_registered_adapter_is_the_only_extension_boundary(self) -> None:
         with TemporaryDirectory() as root:
@@ -291,7 +182,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
             1,
         )
 
-    def test_auto_claim_uses_v5_receiver_fingerprint_without_model(
+    def test_auto_claim_uses_reserved_receiver_fingerprint_without_model(
         self,
     ) -> None:
         with TemporaryDirectory() as root:
@@ -302,7 +193,8 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 root_id=prepared["rootId"],
                 node_id=assignment["nodeId"],
                 owner="receiver-context",
-                operation_id="operation-v5",
+                receiver_context_id="receiver-context",
+                operation_id="operation-hookless",
                 agent_id="codex",
                 dispatch_mode="AUTO",
                 dispatch_transport=assignment["dispatchTransport"],
@@ -314,14 +206,60 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 ],
                 host_adapter_id="codex",
                 host_native_agent_ids=("codex",),
-                require_receiver_attestation=False,
             )
+            replayed = dispatch_loop(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=assignment["nodeId"],
+                owner="receiver-context",
+                receiver_context_id="receiver-context",
+                operation_id="operation-hookless",
+                agent_id="codex",
+                dispatch_mode="AUTO",
+                dispatch_transport=assignment["dispatchTransport"],
+                dispatch_reservation_id=assignment[
+                    "dispatchReservationId"
+                ],
+                dispatch_decision_fingerprint=assignment[
+                    "decisionFingerprint"
+                ],
+                host_adapter_id="codex",
+                host_native_agent_ids=("codex",),
+            )
+            with self.assertRaises(GatedLoopError) as replay_caught:
+                dispatch_loop(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    node_id=assignment["nodeId"],
+                    owner="receiver-context",
+                    receiver_context_id="receiver-context",
+                    operation_id="operation-hookless",
+                    agent_id="codex",
+                    actual_model_id="different-model",
+                    dispatch_mode="AUTO",
+                    dispatch_transport=assignment["dispatchTransport"],
+                    dispatch_reservation_id=assignment[
+                        "dispatchReservationId"
+                    ],
+                    dispatch_decision_fingerprint=assignment[
+                        "decisionFingerprint"
+                    ],
+                    host_adapter_id="codex",
+                    host_native_agent_ids=("codex",),
+                )
             state = graph_status(
                 root=root,
                 root_id=prepared["rootId"],
             )
 
         self.assertEqual(claimed["status"], "CLAIMED")
+        self.assertFalse(claimed["dispatchReplayed"])
+        self.assertTrue(replayed["dispatchReplayed"])
+        self.assertEqual(replayed["operationId"], claimed["operationId"])
+        self.assertEqual(
+            replay_caught.exception.code,
+            "SCHEDULER_DISPATCH_REPLAY_MISMATCH",
+        )
         self.assertNotIn("modelId", claimed)
         self.assertNotIn("modelId", state["nodes"][0])
 
@@ -335,7 +273,8 @@ class HostDispatchPlanningTests(unittest.TestCase):
                     root_id=prepared["rootId"],
                     node_id=assignment["nodeId"],
                     owner="receiver-context",
-                    operation_id="operation-v5",
+                    receiver_context_id="receiver-context",
+                    operation_id="operation-hookless",
                     agent_id="codex",
                     dispatch_mode="AUTO",
                     dispatch_transport=assignment["dispatchTransport"],
@@ -345,7 +284,6 @@ class HostDispatchPlanningTests(unittest.TestCase):
                     dispatch_decision_fingerprint="0" * 64,
                     host_adapter_id="codex",
                     host_native_agent_ids=("codex",),
-                    require_receiver_attestation=False,
                 )
 
         self.assertEqual(

@@ -32,11 +32,9 @@ PLUGIN = ROOT / "plugins" / "delivery-graph"
 PLUGIN_SKILL = PLUGIN / "skills" / "delivery-graph"
 CODEX_MANIFEST = PLUGIN / ".codex-plugin" / "plugin.json"
 CLAUDE_MANIFEST = PLUGIN / ".claude-plugin" / "plugin.json"
-CODEX_HOOKS = PLUGIN / "hooks" / "hooks.json"
-CLAUDE_HOOKS = PLUGIN / "hooks" / "claude-hooks.json"
 REPO_MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 TEMPLATES = ROOT / "examples" / "team-loops"
-EXPECTED_TOOL_COUNT = 34
+EXPECTED_TOOL_COUNT = 33
 
 
 def _version_from_pyproject() -> str:
@@ -81,26 +79,6 @@ def _plugin_path(value: object, *, field: str) -> Path:
         raise ValueError(f"{field} does not exist: {candidate}")
     return candidate
 
-
-def _hook_commands(hooks: object) -> list[dict[str, object]]:
-    if not isinstance(hooks, dict):
-        raise ValueError("hooks must be an object")
-    commands: list[dict[str, object]] = []
-    for groups in hooks.values():
-        if not isinstance(groups, list):
-            raise ValueError("hook event entries must be arrays")
-        for group in groups:
-            if not isinstance(group, dict):
-                raise ValueError("hook groups must be objects")
-            handlers = group.get("hooks")
-            if not isinstance(handlers, list):
-                raise ValueError("hook group handlers must be arrays")
-            for handler in handlers:
-                if not isinstance(handler, dict):
-                    raise ValueError("hook handlers must be objects")
-                if handler.get("type") == "command":
-                    commands.append(handler)
-    return commands
 
 
 def _compare_trees(
@@ -258,11 +236,8 @@ def validate_release() -> list[str]:
         mcp_servers = codex_manifest.get("mcpServers")
         if not isinstance(mcp_servers, dict) or not mcp_servers:
             raise ValueError("mcpServers must be a non-empty inline object")
-        declared_hooks = codex_manifest.get("hooks")
-        if declared_hooks is None:
-            raise ValueError("Codex manifest must explicitly declare hooks")
-        if _plugin_path(declared_hooks, field="hooks") != CODEX_HOOKS.resolve():
-            raise ValueError("Codex hooks override must resolve to hooks.json")
+        if "hooks" in codex_manifest:
+            raise ValueError("Codex manifest must not declare lifecycle hooks")
         interface = codex_manifest.get("interface")
         if not isinstance(interface, dict):
             raise ValueError("interface must be an object")
@@ -280,46 +255,11 @@ def validate_release() -> list[str]:
         problems.append(f"invalid Agent Plugin manifest {CODEX_MANIFEST}: {error}")
 
     try:
-        codex_hook_document = _json_object(CODEX_HOOKS)
-        codex_events = codex_hook_document.get("hooks")
-        if not isinstance(codex_events, dict):
-            raise ValueError("hooks must be an object")
-        if "StopFailure" in codex_events:
-            raise ValueError("Codex hooks must not register Claude StopFailure")
-        codex_commands = _hook_commands(codex_events)
-        if not codex_commands:
-            raise ValueError("at least one Codex command hook is required")
-        for handler in codex_commands:
-            command = handler.get("command")
-            if not isinstance(command, str) or "${PLUGIN_ROOT}" not in command:
-                raise ValueError(
-                    "Codex command hooks must resolve through ${PLUGIN_ROOT}"
-                )
-            command_windows = handler.get("commandWindows")
-            if (
-                not isinstance(command_windows, str)
-                or "%PLUGIN_ROOT%" not in command_windows
-            ):
-                raise ValueError(
-                    "Codex command hooks must provide a PLUGIN_ROOT Windows command"
-                )
-    except (OSError, ValueError, json.JSONDecodeError) as error:
-        problems.append(f"invalid Codex hooks {CODEX_HOOKS}: {error}")
-
-    try:
         claude_manifest = _json_object(CLAUDE_MANIFEST)
-        declared_hooks = _plugin_path(
-            claude_manifest.get("hooks"),
-            field="Claude hooks",
-        )
-        if declared_hooks != CLAUDE_HOOKS.resolve():
-            raise ValueError("Claude manifest must point to claude-hooks.json")
-        claude_events = _json_object(CLAUDE_HOOKS).get("hooks")
-        if not isinstance(claude_events, dict) or "StopFailure" not in claude_events:
-            raise ValueError("Claude hooks must retain StopFailure")
-        _hook_commands(claude_events)
+        if "hooks" in claude_manifest:
+            raise ValueError("Claude manifest must not declare lifecycle hooks")
     except (OSError, ValueError, json.JSONDecodeError) as error:
-        problems.append(f"invalid Claude hooks {CLAUDE_HOOKS}: {error}")
+        problems.append(f"invalid Claude manifest {CLAUDE_MANIFEST}: {error}")
 
     try:
         marketplace = _json_object(REPO_MARKETPLACE)

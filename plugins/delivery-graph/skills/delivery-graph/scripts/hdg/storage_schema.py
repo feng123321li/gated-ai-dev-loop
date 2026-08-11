@@ -183,54 +183,6 @@ def initialize_scheduler_storage(connection: sqlite3.Connection) -> None:
         active_dispatch_reservation_by_node
         ON dispatch_reservations(run_id, node_id, attempt)
         WHERE status = 'RESERVED';
-        CREATE TABLE IF NOT EXISTS receiver_attestations (
-            attestation_id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            root_id TEXT NOT NULL,
-            node_id TEXT NOT NULL,
-            attempt INTEGER NOT NULL,
-            receiver_context_id TEXT NOT NULL,
-            parent_context_id TEXT NOT NULL,
-            host_adapter_id TEXT NOT NULL,
-            reservation_id TEXT,
-            status TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            consumed_at TEXT,
-            operation_id TEXT,
-            FOREIGN KEY(run_id) REFERENCES runs(run_id)
-        );
-        CREATE INDEX IF NOT EXISTS receiver_attestations_by_node
-        ON receiver_attestations(run_id, node_id, attempt, status);
-        CREATE TABLE IF NOT EXISTS host_receiver_identities (
-            attestation_digest TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL,
-            root_id TEXT NOT NULL,
-            node_id TEXT NOT NULL,
-            attempt INTEGER NOT NULL,
-            reservation_id TEXT NOT NULL UNIQUE,
-            host_adapter_id TEXT NOT NULL,
-            agent_id TEXT NOT NULL,
-            receiver_context_id TEXT NOT NULL,
-            parent_context_id TEXT NOT NULL,
-            status TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            consumed_at TEXT,
-            operation_id TEXT,
-            FOREIGN KEY(run_id) REFERENCES runs(run_id)
-        );
-        CREATE INDEX IF NOT EXISTS host_receiver_identities_by_context
-        ON host_receiver_identities(
-            run_id, host_adapter_id, receiver_context_id, status
-        );
-        CREATE TABLE IF NOT EXISTS run_receiver_roots (
-            run_id TEXT PRIMARY KEY,
-            host_adapter_id TEXT NOT NULL,
-            orchestrator_context_id TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(run_id) REFERENCES runs(run_id)
-        );
         CREATE TABLE IF NOT EXISTS host_capacity_breakers (
             capacity_key TEXT PRIMARY KEY,
             host_adapter_id TEXT NOT NULL,
@@ -241,23 +193,6 @@ def initialize_scheduler_storage(connection: sqlite3.Connection) -> None:
             reported_at TEXT NOT NULL,
             restored_at TEXT,
             reason TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS host_workspace_attestations (
-            attestation_digest TEXT PRIMARY KEY,
-            host_adapter_id TEXT NOT NULL,
-            context_digest TEXT NOT NULL,
-            tool_name TEXT NOT NULL,
-            tool_use_digest TEXT NOT NULL,
-            workspace_root TEXT NOT NULL,
-            workspace_key TEXT NOT NULL,
-            status TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL,
-            consumed_at TEXT
-        );
-        CREATE INDEX IF NOT EXISTS host_workspace_attestations_active
-        ON host_workspace_attestations(
-            host_adapter_id, context_digest, status, expires_at
         );
         """
     )

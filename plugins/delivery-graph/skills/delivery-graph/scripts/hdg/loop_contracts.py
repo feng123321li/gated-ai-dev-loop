@@ -27,7 +27,7 @@ _LOOP_EXECUTION_POLICY = {
         ),
     },
     "claimedLoopHandoff": {
-        "trigger": "CONTEXT_OR_HOOK_PRESSURE",
+        "trigger": "CONTEXT_PRESSURE",
         "requiresLiveLease": True,
         "action": "PAUSE_AND_HANDOFF",
         "loopOutcome": "NONE",

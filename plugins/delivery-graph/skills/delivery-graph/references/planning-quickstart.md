@@ -89,7 +89,7 @@
 
 `delivery.requirementKey` 是可选但在用户提供外部工单号时必须声明的业务身份；它与 `delivery.id` 一对一绑定，归档也不释放该映射。`delivery.id` 是稳定的 Delivery/Graph 标识，也是需求投影目录的 namespace。工作区未归档 Delivery 的入口位于 `.layered-delivery/overview.md`，这里只列 Delivery 标识、标题、状态、更新时间和详情链接；该 Delivery 自己的 TASK 进度与 GROUP 数量位于 `.layered-delivery/<delivery-id>/overview.md`。`STANDARD` 的 `delivery.reviewLoop` 在根终态之后执行；`LIGHT` 将其设为 `null`，根 TASK 成功后直接进入用户确认。
 
-同一需求的所有人类文件共用 `.layered-delivery/<delivery-id>/`。自动与手动开发都生成 overview、baseline、progress、acceptance、revisions 和同结构 work-items；手动开发另有 `.layered-delivery/<delivery-id>/handoff-<fingerprint>.md`，包含完整 schema v3。不得创建跨需求共享的 `.layered-delivery/handoffs/`。手动包以双 fingerprint 冻结需求内容并在 SQLite 登记为 `HANDOFF_READY`；交接阶段尚未形成 Graph Run。接收宿主必须在任何代码工作前以精确双 fingerprint 调用 `start_manual_handoff`，在实际工作区把同一快照启动为 manual Graph；随后由受支持 Adapter 认证的独立原生 child 领取 TASK，Graph 状态仍只以 MCP 返回和 SQLite 事件链为准。
+同一需求的所有人类文件共用 `.layered-delivery/<delivery-id>/`。自动与手动开发都生成 overview、baseline、progress、acceptance、revisions 和同结构 work-items；手动开发另有 `.layered-delivery/<delivery-id>/handoff-<fingerprint>.md`，包含完整 schema v3。不得创建跨需求共享的 `.layered-delivery/handoffs/`。手动包以双 fingerprint 冻结需求内容并在 SQLite 登记为 `HANDOFF_READY`；交接阶段尚未形成 Graph Run。接收宿主必须在任何代码工作前以精确双 fingerprint 调用 `start_manual_handoff`，在实际工作区把同一快照启动为 manual Graph；随后由独立原生 child 以显式 receiving context 与 `operation_id` 领取 TASK，Graph 状态仍只以 MCP 返回和 SQLite 事件链为准。
 
 一个 `delivery.id` 可以拥有多个不可变 Delivery Revision。Revision 1 是初次冻结范围；用户最终验收前的外层范围调整形成 Revision 2、3……，仍位于同一投影目录并通过 `revisions.md` 串联。旧 Revision 及其 run/event 不覆盖、不删除；新 Revision 冻结时，旧 run 变为 `SUPERSEDED`。
 
@@ -407,7 +407,7 @@ preview 会先通过 `pendingInteraction.kind=DEVELOPMENT_BASELINE` 确认基线
 #### 宿主承接与分支命名
 
 - Codex 承接新 Delivery 时把 `hostOperation=CREATE_CODEX_PROJECT_TASK` 映射为新的项目任务并设置 `environment=worktree`，将 `hostDispatch.prompt` 原样作为首条任务指令；主任务不切换目录或分支。宿主必须使用 dispatch 的精确 `branchRef/gitBinding`。Codex 管理的 worktree 若先处于 detached HEAD，则按 `CREATE_DELIVERY_FEATURE_BRANCH` 创建冻结分支；若宿主已生成另一 feature 分支，干净时按 `FROZEN_DELIVERY_BRANCH_REQUIRED` 恢复冻结分支，存在改动时以 `FROZEN_DELIVERY_BRANCH_DIRTY` 停止并审查，不能直接切换。完成创建或恢复后，重新调用 `workspace_status` 让 Controller 验证精确分支与基线。
-- Claude Code 从项目目录启动时保持 primary checkout 作为控制/监控根；通常保持 `main`/`master`，显式 stacked Delivery 时可以继续停留在父 feature。宿主从冻结 `baseCommit` 创建或复用子 Delivery linked worktree，并在同一顶层会话内启动后台 coordinator；`${CLAUDE_PROJECT_DIR}` 不漂移，执行 cwd 由 Hook 一次性证明。禁止要求用户启动第二个顶层 Claude 会话。
+- Claude Code 从项目目录启动时保持 primary checkout 作为控制/监控根；通常保持 `main`/`master`，显式 stacked Delivery 时可以继续停留在父 feature。宿主从冻结 `baseCommit` 创建或复用子 Delivery linked worktree，并在同一顶层会话内启动后台 coordinator；`${CLAUDE_PROJECT_DIR}` 不漂移，Adapter 为每次请求提供实际执行 workspace，Controller 再校验冻结 binding 与 project scope。禁止要求用户启动第二个顶层 Claude 会话。
 - feature 分支名称由宿主或用户已有分支策略决定；Delivery Graph 不生成 `feature/m_lf_` 等固定前缀，只冻结实际 checkout 的本地分支名。
 
 #### `projectScopes` 与 `gitBinding` 归属
@@ -422,7 +422,7 @@ preview 会先通过 `pendingInteraction.kind=DEVELOPMENT_BASELINE` 确认基线
 
 #### 手动开发内容包
 
-- 手动开发生成完整冻结内容包：固定写入本需求的 `.layered-delivery/<delivery-id>/`，包含与自动开发相同的 overview、baseline、progress、acceptance、revisions、work-items，以及自包含 `handoff-<fingerprint>.md`；同时必须生成共享 `.layered-delivery/scheduler.db` 与根 `overview.md`，把需求登记为 `HANDOFF_READY`。不创建共享 `handoffs` 目录；交接阶段不创建 Graph Run 或 workspace 绑定，不指定 Agent、模型或接收任务，也不创建 worktree。用户切换任意 CLI 后，在实际开发工作区调用 `start_manual_handoff`：基线未漂移时控制器绑定 workspace、启动同一冻结 Graph；漂移时先返回待确认基线且不写运行状态，binding 改变才生成下一不可变手动 Revision。启动后只让 TASK 实现走 MANUAL claim，完整 Review 和最终确认继续沿用自动执行协议。
+- 手动开发生成完整冻结内容包：固定写入本需求的 `.layered-delivery/<delivery-id>/`，包含与自动开发相同的 overview、baseline、progress、acceptance、revisions、work-items，以及自包含 `handoff-<fingerprint>.md`；同时必须生成共享 `.layered-delivery/scheduler.db` 与根 `overview.md`，把需求登记为 `HANDOFF_READY`。不创建共享 `handoffs` 目录；交接阶段不创建 Graph Run 或 workspace 绑定，不指定 Agent、模型或接收任务，也不创建 worktree。用户切换任意 CLI 后，在实际开发工作区调用 `start_manual_handoff`：基线未漂移时控制器绑定 workspace、启动同一冻结 Graph；漂移时先返回待确认基线且不写运行状态，binding 改变才生成下一不可变手动 Revision。启动后只让 TASK 实现走不带 AUTO reservation/decision fingerprint 的 MANUAL claim，完整 Review 和最终确认继续沿用统一 AUTO 协议。
 
 #### 异步排队与停止条件
 
@@ -492,7 +492,7 @@ MCP 根固定只限制当前会话的主工作区锚点，不把同一 Delivery 
 7. `pendingInteraction.kind=EXECUTION_MODE` 时，原生对话框仍允许直接输入文字，但不为它创建“其他”选项。自由输入按 `freeformInput.nextAction=CONTINUE_REQUIREMENT_DISCUSSION` 继续需求沟通；需求发生变化后重新调用 preview。用户只是提问且需求未变时，回答后保留当前 fingerprint，并再次展示同一待处理交互，不得主动退回文本交互。`AUTOMATIC` 是默认和推荐项，`MANUAL` 是第二项。
 8. 用户点选执行方式后，把选项 ID、双 fingerprint、`requiredProjectAuthorizations` 的精确项目 ID 和真实确认人一次性传给 `select_execution_mode`：
    - `AUTOMATIC`：先记录业务确认。Git Delivery 返回 `selectionRecorded=true`、`automaticDispatchRequested=false` 和 `worktreeSetup.hostDispatch` 时，Claude/Codex 按 `launchPolicy=IMMEDIATE` 创建或复用后台 Delivery worktree 执行单元并发送内置 prompt；后台方用原双 fingerprint 调用 `resume_execution_mode`。主会话只监控，不追加第二次确认；成功后按 frontier 间隔持续读取进度。所有路径都不插入模型推荐或调整窗口，也不显示人工新会话命令。
-   - `MANUAL`：生成同结构开发包和自包含 handoff，登记 `HANDOFF_READY`；交接阶段不创建 Graph Run、workspace 绑定、任务或 worktree。宿主展示 `manualHandoff.receiverPrompt`，不得改写；同一提示词已经嵌入 `manualHandoff.path` 指向的文件。接收宿主必须先调用 `start_manual_handoff`，再创建独立原生 child；Adapter 为其签发 reservation 为 `NULL` 的一次性 receiver attestation 后，才能按 frontier MANUAL claim TASK。Review 不允许 MANUAL，必须正常自动派遣。
+   - `MANUAL`：生成同结构开发包和自包含 handoff，登记 `HANDOFF_READY`；交接阶段不创建 Graph Run、workspace 绑定、任务或 worktree。宿主展示 `manualHandoff.receiverPrompt`，不得改写；同一提示词已经嵌入 `manualHandoff.path` 指向的文件。接收宿主必须先调用 `start_manual_handoff`，再创建独立原生 child；child 以显式 receiving context 和新 `operation_id` 按 frontier MANUAL claim TASK，不携带 AUTO reservation 或 decision fingerprint。Review 不允许 MANUAL，必须走统一 AUTO 预留与派遣。
 9. 自动或手动按钮选择本身就是该初始 Revision 的一次业务授权。`select_execution_mode` 不接受第二个确认步骤；自动 feature 分支/worktree 准备后只调用 `resume_execution_mode`，宿主不得再次调用选择器，也不得调用初始 `prepare_hierarchy`、`freeze_hierarchy` 或 `create_manual_handoff` 重放选择。需求内容改变会清除未执行的 AUTOMATIC 选择并重新生成交互。后续显式 Revision 继续使用各自的 Revision 工具和既有确认规则。
 10. 自动初次冻结后当前 Delivery Revision 的 Git/project binding、依赖、资源和拓扑固定，所有 TASK requirement revision 1 均为 `FROZEN`。手动开发把相同需求内容冻结为 SQLite 已登记的 `HANDOFF_READY` 可移植快照，返回 `requirementSnapshotStatus=FROZEN`；这不等于 Graph `FROZEN`。接收方调用 `start_manual_handoff` 时若 Git binding 已漂移，响应以 `manualStartState=BLOCKED_DEVELOPMENT_BASELINE_CONFIRMATION` 返回 `pendingInteraction`，且不创建 Run/绑定 workspace；宿主用精确上下文调用 `confirm_development_baseline`。binding 改变时取得同一 Delivery 的新 Revision 和新双指纹，未改变时恢复原 Revision，然后重试。基线未漂移时，同一 Revision 进入 `executionMode=manual` 的 Graph Run，所有 TASK requirement 同样冻结并接受完整调度、Review 与最终验收。
 

@@ -15,9 +15,7 @@ from .git_binding import (
 from .graph_runtime import (
     advance_graph,
     archive_delivery,
-    authorize_host_session_operation,
     cancel_graph_run,
-    claim_current_task,
     dispatch_loop,
     graph_events,
     graph_status,
@@ -83,7 +81,6 @@ CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "graph_events": graph_events,
     "advance_graph": advance_graph,
     "loop_context": loop_context,
-    "claim_current_task": claim_current_task,
     "dispatch_loop": dispatch_loop,
     "handoff_ready_automatic_task": handoff_ready_automatic_task,
     "heartbeat_loop": heartbeat_loop,
@@ -109,11 +106,6 @@ class ControllerContext:
     explicit_dogfood: bool = False
     host_native_agent_ids: tuple[str, ...] | None = None
     host_adapter_id: str | None = None
-    host_hook_attested: bool = False
-    host_receiver_operation_attested: bool = False
-    host_session_attested: bool = False
-    host_session_context_id: str | None = None
-    host_session_role: str | None = None
 
 
 class LayeredDeliveryController:
@@ -150,53 +142,14 @@ class LayeredDeliveryController:
             "pause_loop",
             "record_loop_result",
         }
-        if protected_receiver_mutation:
-            if (
-                context.host_adapter_id == "codex"
-                and context.host_session_attested
-                and isinstance(context.host_session_context_id, str)
-            ):
-                root_id_value = arguments_value.get("root_id")
-                node_id_value = arguments_value.get("node_id")
-                if not all(
-                    isinstance(value, str) and value
-                    for value in (root_id_value, node_id_value)
-                ):
-                    fail(
-                        "SCHEDULER_RECEIVER_OPERATION_NOT_ATTESTED",
-                        "A session-bound Loop mutation requires root and node",
-                    )
-                authorization = authorize_host_session_operation(
-                    root=context.project_root,
-                    root_id=root_id_value,
-                    node_id=node_id_value,
-                    workspace_root=workspace_root,
-                    receiver_context_id=(
-                        context.host_session_context_id
-                    ),
-                    host_adapter_id="codex",
-                    explicit_dogfood=context.explicit_dogfood,
-                )
-                arguments_value["operation_id"] = authorization[
-                    "operationId"
-                ]
-            elif (
-                not (
-                    isinstance(arguments_value.get("operation_id"), str)
-                    and arguments_value["operation_id"].strip()
-                )
-                or (
-                    context.host_adapter_id
-                    in {"claude-code", "codex"}
-                    and not context.host_receiver_operation_attested
-                )
-            ):
-                fail(
-                    "SCHEDULER_RECEIVER_OPERATION_NOT_ATTESTED",
-                    "The trusted host receiver Hook did not bind this Loop "
-                    "mutation to a claimed operation",
-                    hostAdapterId=context.host_adapter_id,
-                )
+        if protected_receiver_mutation and not (
+            isinstance(arguments_value.get("operation_id"), str)
+            and arguments_value["operation_id"].strip()
+        ):
+            fail(
+                "SCHEDULER_OPERATION_ID_REQUIRED",
+                "Loop mutations require the explicit claimed operation_id",
+            )
         root_id = arguments_value.get("root_id")
         git_binding = None
         git_workspace = None
@@ -319,7 +272,6 @@ class LayeredDeliveryController:
         if name in {
             "plan_dispatch_batch",
             "dispatch_loop",
-            "claim_current_task",
         }:
             arguments_value["host_native_agent_ids"] = (
                 context.host_native_agent_ids
@@ -335,67 +287,9 @@ class LayeredDeliveryController:
         }:
             arguments_value["host_adapter_id"] = context.host_adapter_id
         if name == "plan_dispatch_batch":
-            if (
-                context.host_adapter_id in {"claude-code", "codex"}
-                and not (
-                    context.host_hook_attested
-                    or context.host_session_attested
-                )
-            ):
-                fail(
-                    "SCHEDULER_HOST_HOOK_NOT_READY",
-                    "The trusted host dispatch Hook did not attest this "
-                    "plan_dispatch_batch call; no reservation was created",
-                    hostAdapterId=context.host_adapter_id,
-                    requiredAction=(
-                        "REVIEW_AND_TRUST_DELIVERY_GRAPH_PLUGIN_HOOKS"
-                        if context.host_adapter_id == "codex"
-                        else "RELOAD_DELIVERY_GRAPH_HOST_HOOKS"
-                    ),
-                    reservationCreated=False,
-                )
-            if (
-                context.host_adapter_id == "codex"
-                and context.host_session_attested
-                and context.host_session_role != "DELIVERY_COORDINATOR"
-            ):
-                fail(
-                    "SCHEDULER_HOST_SESSION_ROLE_INVALID",
-                    "Only the Hook-attested Codex Delivery session may "
-                    "plan independent Review receivers",
-                    hostAdapterId=context.host_adapter_id,
-                    reservationCreated=False,
-                )
             arguments_value["host_adapter_id"] = context.host_adapter_id
-            arguments_value["review_only"] = (
-                context.host_adapter_id == "codex"
-            )
-        if name == "claim_current_task":
-            if (
-                context.host_adapter_id != "codex"
-                or not context.host_session_attested
-                or not isinstance(context.host_session_context_id, str)
-                or context.host_session_role != "DELIVERY_COORDINATOR"
-            ):
-                fail(
-                    "SCHEDULER_HOST_HOOK_NOT_READY",
-                    "No trusted Codex lifecycle or current-task Hook "
-                    "attested current-session TASK execution",
-                    hostAdapterId=context.host_adapter_id,
-                    requiredAction=(
-                        "REVIEW_AND_TRUST_DELIVERY_GRAPH_PLUGIN_HOOKS"
-                    ),
-                    claimCreated=False,
-                )
-            arguments_value["workspace_root"] = workspace_root
-            arguments_value["receiver_context_id"] = (
-                context.host_session_context_id
-            )
-            arguments_value["host_adapter_id"] = "codex"
-            arguments_value["verified_project_scopes"] = verified_projects
         if name == "dispatch_loop":
             arguments_value["host_adapter_id"] = context.host_adapter_id
-            arguments_value["require_receiver_attestation"] = True
             arguments_value["verified_project_scopes"] = verified_projects
         result = operation(
             root=context.project_root,

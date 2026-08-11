@@ -130,7 +130,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         self.assertEqual(set(result["hosts"]), {"codex", "claude-code"})
         self.assertFalse(result["modelInvocationStarted"])
         self.assertEqual(result["pluginVersion"], __version__)
-        self.assertEqual(result["toolCount"], 34)
+        self.assertEqual(result["toolCount"], 33)
 
     def test_codex_probe_finds_candidate_alongside_installed_old_version(
         self,
@@ -315,22 +315,22 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         self.assertIn("Do not read prior Codex/Claude", prompt)
         self.assertIn("delivery-coordinator background agent", prompt)
         self.assertIn("Do not call TaskCreate", prompt)
-        self.assertIn("dispatch_loop first, then loop_context", prompt)
+        self.assertIn("call dispatch_loop first", prompt)
+        self.assertIn("operation_id", prompt)
         self.assertIn("`delivery-graph smoke\\n`", prompt)
 
-    def test_codex_host_smoke_uses_current_session_task_claim(self) -> None:
+    def test_codex_host_smoke_uses_reserved_independent_receivers(self) -> None:
         bootstrap = _codex_bootstrap_prompt("light")
         resumed = _codex_resume_prompt("light")
         self.assertIn("Do not claim any Loop", bootstrap)
         self.assertIn("second invocation will resume", bootstrap)
-        self.assertIn("SessionStart Hook now provides", resumed)
-        self.assertIn("claim_current_task", resumed)
+        self.assertIn("plan_dispatch_batch", resumed)
+        self.assertIn("dispatch_loop", resumed)
+        self.assertIn("operation_id", resumed)
         self.assertIn("read loop_context once", resumed)
-        self.assertIn("SubagentStart", _codex_resume_prompt("standard"))
-        self.assertNotIn(
-            "dispatch_loop first, then loop_context",
-            resumed,
-        )
+        self.assertIn("distinct host-native child", _codex_resume_prompt("standard"))
+        self.assertNotIn("SessionStart", resumed)
+        self.assertNotIn("claim_current_task", resumed)
 
     def test_codex_host_smoke_resumes_exact_bootstrap_thread(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -362,7 +362,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
                 model=None,
             )
         self.assertEqual(command[1:3], ["exec", "resume"])
-        self.assertIn("--dangerously-bypass-hook-trust", command)
+        self.assertNotIn("--dangerously-bypass-hook-trust", command)
         self.assertEqual(command[-2:], ["codex-smoke-thread", "continue"])
 
     def test_release_surfaces_and_public_automatic_contract_match(self) -> None:
@@ -392,7 +392,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
             f"当前版本：**{expected_version}**",
             (ROOT / "README.md").read_text(encoding="utf-8"),
         )
-        self.assertEqual(len(tool_definitions()), 34)
+        self.assertEqual(len(tool_definitions()), 33)
         self.assertNotIn("execution_mode", inspect.signature(freeze_hierarchy).parameters)
         tools = {tool["name"]: tool for tool in tool_definitions()}
         self.assertNotIn(

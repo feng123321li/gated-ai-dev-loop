@@ -42,7 +42,6 @@ from hdg.mcp_tools import (
     tool_definitions,
     validate_tool_arguments,
 )
-from hdg.graph_runtime import attest_loop_receiver
 from hdg.model_core import validate_hierarchy_definition
 from hdg.planning import workspace_status
 from hdg.planning import (
@@ -1165,6 +1164,8 @@ class McpSurfaceTests(unittest.TestCase):
     ) -> None:
         tools = tool_definitions()
         self.assertTrue(tools)
+        self.assertEqual(len(tools), 33)
+        self.assertNotIn("claim_current_task", {tool["name"] for tool in tools})
         self.assertTrue(
             all(
                 tool["inputSchema"]["additionalProperties"] is False
@@ -1233,17 +1234,7 @@ class McpSurfaceTests(unittest.TestCase):
                 "root_id",
                 "base_ref",
                 "confirmed_dirty_state_fingerprint",
-                "_host_workspace_attestation",
-                "_host_receiver_operation_attestation",
-                "_host_session_attestation",
-                "_host_session_context_id",
             },
-        )
-        self.assertIn(
-            "Host-injected",
-            by_name["workspace_status"]["inputSchema"]["properties"][
-                "_host_workspace_attestation"
-            ]["description"],
         )
         self.assertEqual(
             by_name["workspace_status"]["inputSchema"]["required"],
@@ -1363,14 +1354,7 @@ class McpSurfaceTests(unittest.TestCase):
         )
         self.assertEqual(
             set(dispatch_plan_schema["properties"]),
-            {
-                "root_id",
-                "expected_graph_fingerprint",
-                "_host_workspace_attestation",
-                "_host_receiver_operation_attestation",
-                "_host_session_attestation",
-                "_host_session_context_id",
-            },
+            {"root_id", "expected_graph_fingerprint"},
         )
         self.assertNotIn("_meta", by_name["plan_dispatch_batch"])
         dispatch_schema = by_name["dispatch_loop"]["inputSchema"]
@@ -1382,18 +1366,13 @@ class McpSurfaceTests(unittest.TestCase):
                 "owner",
                 "agent_id",
                 "dispatch_mode",
+                "receiver_context_id",
                 "operation_id",
             ],
         )
         self.assertIn(
-            "must omit",
+            "Caller-declared host-native receiving Agent context ID",
             dispatch_schema["properties"]["receiver_context_id"][
-                "description"
-            ],
-        )
-        self.assertIn(
-            "never invent",
-            dispatch_schema["properties"]["receiver_attestation_id"][
                 "description"
             ],
         )
@@ -1420,14 +1399,19 @@ class McpSurfaceTests(unittest.TestCase):
                 "dispatch_reservation_id",
                 "dispatch_decision_fingerprint",
                 "receiver_context_id",
-                "receiver_attestation_id",
                 "operation_id",
-                "_host_workspace_attestation",
-                "_host_receiver_operation_attestation",
-                "_host_session_attestation",
-                "_host_session_context_id",
             },
         )
+        for mutation in (
+            "heartbeat_loop",
+            "report_loop_progress",
+            "pause_loop",
+            "record_loop_result",
+        ):
+            self.assertIn(
+                "operation_id",
+                by_name[mutation]["inputSchema"]["required"],
+            )
         recovery = by_name["handoff_ready_automatic_task"]
         self.assertEqual(
             recovery["inputSchema"]["required"],
@@ -1748,24 +1732,11 @@ class McpSurfaceTests(unittest.TestCase):
             "actual_model_id": "host-observed-model",
             "dispatch_mode": "AUTO",
             "receiver_context_id": "context-1",
-            "receiver_attestation_id": "attestation-1",
             "operation_id": "op-1",
         }
         self.assertEqual(
             validate_tool_arguments("dispatch_loop", base),
             base,
-        )
-        host_injected = {
-            key: value
-            for key, value in base.items()
-            if key not in {
-                "receiver_context_id",
-                "receiver_attestation_id",
-            }
-        }
-        self.assertEqual(
-            validate_tool_arguments("dispatch_loop", host_injected),
-            host_injected,
         )
         without_model = {
             key: value
@@ -1778,6 +1749,16 @@ class McpSurfaceTests(unittest.TestCase):
         )
         for invalid in (
             {key: value for key, value in base.items() if key != "agent_id"},
+            {
+                key: value
+                for key, value in base.items()
+                if key != "receiver_context_id"
+            },
+            {
+                key: value
+                for key, value in base.items()
+                if key != "operation_id"
+            },
             {**base, "agent_id": "x" * 257},
             {**base, "actual_model_id": "x" * 257},
             {**base, "model_id": "gpt-5.6-sol"},
@@ -2449,64 +2430,13 @@ class McpSurfaceTests(unittest.TestCase):
             )
             self.assertTrue(dispatch["agentDispatch"]["runInBackground"])
 
-            attestation = SchedulerRepository(
-                str(repository)
-            ).issue_host_workspace_attestation(
-                host_adapter_id="claude-code",
-                context_id="background-coordinator",
-                tool_name="workspace_status",
-                tool_use_id="tool-use-workspace-status",
+            ready = call_tool(
+                "workspace_status",
+                {"root_id": "d-claude-cli"},
+                root=str(repository),
                 workspace_root=str(worktree),
-            )
-            connection = McpConnection(
-                project_root=ProjectRootBinding.from_startup(repository),
                 trusted_host_adapter="claude-code",
             )
-            handle_message(
-                {
-                    "jsonrpc": "2.0",
-                    "id": "initialize",
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": LEGACY_PREFERRED_PROTOCOL_VERSION,
-                        "capabilities": {},
-                        "clientInfo": {
-                            "name": "claude-code",
-                            "version": "test",
-                        },
-                    },
-                },
-                connection=connection,
-            )
-            handle_message(
-                {
-                    "jsonrpc": "2.0",
-                    "method": "notifications/initialized",
-                    "params": {},
-                },
-                connection=connection,
-            )
-            attested_response = handle_message(
-                {
-                    "jsonrpc": "2.0",
-                    "id": "workspace-status",
-                    "method": "tools/call",
-                    "params": {
-                        "name": "workspace_status",
-                        "arguments": {
-                            "root_id": "d-claude-cli",
-                            "_host_workspace_attestation": attestation,
-                        },
-                    },
-                },
-                connection=connection,
-            )
-            self.assertTrue(
-                attested_response["result"]["structuredContent"]["ok"]
-            )
-            ready = attested_response["result"]["structuredContent"][
-                "result"
-            ]
 
             self.assertEqual(
                 ready["gitBinding"],
@@ -2567,291 +2497,8 @@ class McpSurfaceTests(unittest.TestCase):
                 monitored["executionWorkspaceMutationAllowed"]
             )
 
-    def test_host_workspace_attestation_is_tool_bound_and_one_time(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as root:
-            repository, worktree, _base_commit, _branch_ref = (
-                git_delivery_checkout(root)
-            )
-            scheduler = SchedulerRepository(str(repository))
-            attestation = scheduler.issue_host_workspace_attestation(
-                host_adapter_id="claude-code",
-                context_id="agent-1",
-                tool_name="workspace_status",
-                tool_use_id="tool-use-1",
-                workspace_root=str(worktree),
-            )
 
-            resolved = scheduler.consume_host_workspace_attestation(
-                attestation,
-                host_adapter_id="claude-code",
-                tool_name="workspace_status",
-            )
-            self.assertEqual(resolved, str(worktree.resolve()))
-            with self.assertRaises(GatedLoopError) as replayed:
-                scheduler.consume_host_workspace_attestation(
-                    attestation,
-                    host_adapter_id="claude-code",
-                    tool_name="workspace_status",
-                )
-            self.assertEqual(
-                replayed.exception.code,
-                "SCHEDULER_HOST_WORKSPACE_ATTESTATION_CONSUMED",
-            )
-
-    def test_codex_plan_consumes_hook_preflight_attestation(self) -> None:
-        with TemporaryDirectory() as root:
-            prepared = prepare_hierarchy(
-                root=root,
-                hierarchy=task_hierarchy(),
-            )
-            freeze_hierarchy(
-                root=root,
-                root_id=prepared["rootId"],
-                expected_hierarchy_fingerprint=(
-                    prepared["hierarchyFingerprint"]
-                ),
-                confirmed=True,
-                confirmed_by="human",
-            )
-            scheduler = SchedulerRepository(root)
-            attestation = scheduler.issue_host_workspace_attestation(
-                host_adapter_id="codex",
-                context_id="codex-coordinator",
-                tool_name="plan_dispatch_batch",
-                tool_use_id="codex-plan-tool",
-                workspace_root=root,
-            )
-            connection = McpConnection(
-                project_root=ProjectRootBinding.from_startup(root),
-                trusted_host_adapter="codex",
-            )
-            handle_message(
-                {
-                    "jsonrpc": "2.0",
-                    "id": "initialize",
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": LEGACY_PREFERRED_PROTOCOL_VERSION,
-                        "capabilities": {},
-                        "clientInfo": {
-                            "name": "codex",
-                            "version": "test",
-                        },
-                    },
-                },
-                connection=connection,
-            )
-            handle_message(
-                {
-                    "jsonrpc": "2.0",
-                    "method": "notifications/initialized",
-                    "params": {},
-                },
-                connection=connection,
-            )
-            response = handle_message(
-                {
-                    "jsonrpc": "2.0",
-                    "id": "codex-plan",
-                    "method": "tools/call",
-                    "params": {
-                        "name": "plan_dispatch_batch",
-                        "arguments": {
-                            "root_id": prepared["rootId"],
-                            "expected_graph_fingerprint": prepared[
-                                "graphFingerprint"
-                            ],
-                            "_host_workspace_attestation": attestation,
-                        },
-                    },
-                },
-                connection=connection,
-            )
-
-        structured = response["result"]["structuredContent"]
-        self.assertTrue(structured["ok"])
-        self.assertEqual(structured["result"]["assignments"], [])
-        self.assertEqual(
-            structured["result"]["currentSessionTaskNodeIds"],
-            ["loop:t-service"],
-        )
-        self.assertEqual(
-            structured["result"]["nextAction"],
-            "CLAIM_CURRENT_TASK",
-        )
-
-    def test_codex_session_capability_claims_and_heartbeats_current_task(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as root:
-            prepared = prepare_hierarchy(
-                root=root,
-                hierarchy=task_hierarchy(),
-            )
-            freeze_hierarchy(
-                root=root,
-                root_id=prepared["rootId"],
-                expected_hierarchy_fingerprint=(
-                    prepared["hierarchyFingerprint"]
-                ),
-                confirmed=True,
-                confirmed_by="human",
-            )
-            scheduler = SchedulerRepository(root)
-            capability = scheduler.issue_host_workspace_attestation(
-                host_adapter_id="codex",
-                context_id="codex-current-session",
-                tool_name="delivery_session",
-                tool_use_id="session:codex-current-session",
-                workspace_root=root,
-                lifetime_seconds=43_200,
-            )
-            receiver_capability = (
-                scheduler.issue_host_workspace_attestation(
-                    host_adapter_id="codex",
-                    context_id="codex-review-child",
-                    tool_name="receiver_session",
-                    tool_use_id="receiver:codex-review-child",
-                    workspace_root=root,
-                    lifetime_seconds=43_200,
-                )
-            )
-            connection = McpConnection(
-                project_root=ProjectRootBinding.from_startup(root),
-                trusted_host_adapter="codex",
-            )
-            handle_message(
-                {
-                    "jsonrpc": "2.0",
-                    "id": "initialize",
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": LEGACY_PREFERRED_PROTOCOL_VERSION,
-                        "capabilities": {},
-                        "clientInfo": {
-                            "name": "codex",
-                            "version": "test",
-                        },
-                    },
-                },
-                connection=connection,
-            )
-            handle_message(
-                {
-                    "jsonrpc": "2.0",
-                    "method": "notifications/initialized",
-                    "params": {},
-                },
-                connection=connection,
-            )
-            private_session = {
-                "_host_session_attestation": capability,
-                "_host_session_context_id": "codex-current-session",
-            }
-            rejected_receiver_claim = handle_message(
-                {
-                    "jsonrpc": "2.0",
-                    "id": "codex-receiver-inline-claim",
-                    "method": "tools/call",
-                    "params": {
-                        "name": "claim_current_task",
-                        "arguments": {
-                            "root_id": prepared["rootId"],
-                            "node_id": "loop:t-service",
-                            "expected_graph_fingerprint": prepared[
-                                "graphFingerprint"
-                            ],
-                            "_host_session_attestation": (
-                                receiver_capability
-                            ),
-                            "_host_session_context_id": (
-                                "codex-review-child"
-                            ),
-                        },
-                    },
-                },
-                connection=connection,
-            )
-            plan_response = handle_message(
-                {
-                    "jsonrpc": "2.0",
-                    "id": "codex-inline-plan",
-                    "method": "tools/call",
-                    "params": {
-                        "name": "plan_dispatch_batch",
-                        "arguments": {
-                            "root_id": prepared["rootId"],
-                            "expected_graph_fingerprint": prepared[
-                                "graphFingerprint"
-                            ],
-                            **private_session,
-                        },
-                    },
-                },
-                connection=connection,
-            )
-            claim_response = handle_message(
-                {
-                    "jsonrpc": "2.0",
-                    "id": "codex-inline-claim",
-                    "method": "tools/call",
-                    "params": {
-                        "name": "claim_current_task",
-                        "arguments": {
-                            "root_id": prepared["rootId"],
-                            "node_id": "loop:t-service",
-                            "expected_graph_fingerprint": prepared[
-                                "graphFingerprint"
-                            ],
-                            **private_session,
-                        },
-                    },
-                },
-                connection=connection,
-            )
-            heartbeat_response = handle_message(
-                {
-                    "jsonrpc": "2.0",
-                    "id": "codex-inline-heartbeat",
-                    "method": "tools/call",
-                    "params": {
-                        "name": "heartbeat_loop",
-                        "arguments": {
-                            "root_id": prepared["rootId"],
-                            "node_id": "loop:t-service",
-                            **private_session,
-                        },
-                    },
-                },
-                connection=connection,
-            )
-
-        rejected = rejected_receiver_claim["result"]["structuredContent"]
-        plan = plan_response["result"]["structuredContent"]
-        claim = claim_response["result"]["structuredContent"]
-        heartbeat = heartbeat_response["result"]["structuredContent"]
-        self.assertFalse(rejected["ok"])
-        self.assertEqual(
-            rejected["error"]["code"],
-            "SCHEDULER_HOST_HOOK_NOT_READY",
-        )
-        self.assertTrue(plan["ok"])
-        self.assertEqual(plan["result"]["assignments"], [])
-        self.assertEqual(
-            plan["result"]["currentSessionTaskNodeIds"],
-            ["loop:t-service"],
-        )
-        self.assertEqual(plan["result"]["nextAction"], "CLAIM_CURRENT_TASK")
-        self.assertTrue(claim["ok"])
-        self.assertEqual(claim["result"]["dispatchMode"], "INLINE_AUTO")
-        self.assertTrue(heartbeat["ok"])
-        self.assertEqual(heartbeat["result"]["status"], "CLAIMED")
-
-    def test_missing_receiver_operation_never_becomes_internal_error(
-        self,
-    ) -> None:
+    def test_loop_mutations_require_explicit_operation_id(self) -> None:
         cases = {
             "heartbeat_loop": {
                 "root_id": "d-service",
@@ -2877,35 +2524,19 @@ class McpSurfaceTests(unittest.TestCase):
                 },
             },
         }
-        with TemporaryDirectory() as root:
-            for name, arguments in cases.items():
-                with self.subTest(name=name):
-                    with self.assertRaises(GatedLoopError) as caught:
-                        call_tool(
-                            name,
-                            arguments,
-                            root=root,
-                            trusted_host_adapter="codex",
-                        )
-                    self.assertEqual(
-                        caught.exception.code,
-                        "SCHEDULER_RECEIVER_OPERATION_NOT_ATTESTED",
-                    )
-                with self.subTest(name=name, forged_operation=True):
-                    with self.assertRaises(GatedLoopError) as forged:
-                        call_tool(
-                            name,
-                            {
-                                **arguments,
-                                "operation_id": "known-but-unattested-op",
-                            },
-                            root=root,
-                            trusted_host_adapter="codex",
-                        )
-                    self.assertEqual(
-                        forged.exception.code,
-                        "SCHEDULER_RECEIVER_OPERATION_NOT_ATTESTED",
-                    )
+        for name, arguments in cases.items():
+            with self.subTest(name=name):
+                with self.assertRaises(GatedLoopError) as caught:
+                    validate_tool_arguments(name, arguments)
+                self.assertEqual(
+                    caught.exception.code,
+                    "MCP_TOOL_ARGUMENT_INVALID",
+                )
+                validated = validate_tool_arguments(
+                    name,
+                    {**arguments, "operation_id": "op-explicit"},
+                )
+                self.assertEqual(validated["operation_id"], "op-explicit")
 
     def test_claude_cli_linked_worktree_requires_exact_dirty_confirmation(
         self,
@@ -4045,17 +3676,6 @@ class McpSurfaceTests(unittest.TestCase):
                     root_id=delivery_id,
                     node_id=f"loop:{task_id}",
                 )
-                attestation = attest_loop_receiver(
-                    root=str(repository),
-                    root_id=delivery_id,
-                    node_id=f"loop:{task_id}",
-                    receiver_context_id=f"context-{delivery_id}",
-                    parent_context_id="codex-parent",
-                    host_adapter_id="codex",
-                    dispatch_reservation_id=reservation[
-                        "dispatchReservationId"
-                    ],
-                )
                 dispatched = call_tool(
                     "dispatch_loop",
                     {
@@ -4076,9 +3696,6 @@ class McpSurfaceTests(unittest.TestCase):
                         "receiver_context_id": (
                             f"context-{delivery_id}"
                         ),
-                        "receiver_attestation_id": attestation[
-                            "receiverAttestationId"
-                        ],
                         "operation_id": f"op-{delivery_id}",
                     },
                     root=str(repository),
@@ -4661,7 +4278,6 @@ class McpSurfaceTests(unittest.TestCase):
                         "dispatch_reservation_id": "reservation-integrity",
                         "dispatch_decision_fingerprint": "0" * 64,
                         "receiver_context_id": "context-integrity",
-                        "receiver_attestation_id": "attestation-integrity",
                         "operation_id": "op-integrity",
                     },
                     root=root,
@@ -4758,12 +4374,13 @@ class McpSurfaceTests(unittest.TestCase):
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "a Hook-attested Codex Delivery session uses "
-                "claim_current_task for READY TASK Loops",
+                "plan_dispatch_batch atomically reserves every READY TASK "
+                "or Review Loop",
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "plan_dispatch_batch atomically reserves every Review Loop",
+                "operation ID is required for progress, pause, and result "
+                "writes",
                 initialized["result"]["instructions"],
             )
             self.assertIn(
@@ -5097,7 +4714,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 34)
+            self.assertEqual(len(listed["result"]["tools"]), 33)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(
@@ -5255,6 +4872,7 @@ class McpSurfaceTests(unittest.TestCase):
                 {
                     "root_id": "d-service",
                     "node_id": "loop:t-service",
+                    "operation_id": "op-telemetry",
                     "outcome": {
                         "status": "SUCCEEDED",
                         "summary": "Loop completed.",

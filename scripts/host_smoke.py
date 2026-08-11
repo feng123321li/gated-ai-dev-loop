@@ -151,28 +151,21 @@ def _prompt(scenario: str, host: str) -> str:
         "receivers from this main session."
         if host == "claude-code"
         else (
-            "Prepare and freeze the hierarchy, claim the READY TASK with "
-            "claim_current_task through the SessionStart capability, and "
-            "implement it in this current Delivery session. Reserve and "
-            "dispatch only the later Review Loops through real host-native "
-            "child Agents."
+            "Prepare and freeze the hierarchy, then call "
+            "plan_dispatch_batch for the READY TASK and every later Review. "
+            "Create a real host-native child for each assignment. The "
+            "coordinator must never call dispatch_loop, implement a Loop, "
+            "or reuse one receiver for multiple TASK or Review "
+            "assignments."
         )
     )
     receiver_start_requirement = (
-        "The child must call dispatch_loop first, then loop_context once, "
-        "then heartbeat_loop immediately before any Bash, Read, Write, "
-        "Edit, analysis of implementation, or extra discovery. A Claude "
-        "child omits receiver_context_id and receiver_attestation_id so the "
-        "PreToolUse hook can inject them; it must never invent placeholders."
-        if host == "claude-code"
-        else (
-            "The Codex SessionStart hook attests this current Delivery "
-            "session. Call claim_current_task for the READY TASK, read "
-            "loop_context once, then call heartbeat_loop immediately before "
-            "any shell, file read/write, implementation analysis, or extra "
-            "discovery. SubagentStart remains mandatory for each later "
-            "independent Review receiver."
-        )
+        "Each child must call dispatch_loop first with the exact "
+        "reservation_id and decision_fingerprint, its own "
+        "receiver_context_id, and a fresh operation_id; then call "
+        "loop_context once and heartbeat_loop with that operation_id "
+        "immediately before any shell, file read/write, implementation "
+        "analysis, or extra discovery."
     )
     return textwrap.dedent(
         f"""
@@ -212,7 +205,7 @@ def _prompt(scenario: str, host: str) -> str:
         claim, the child calls heartbeat_loop once before editing any file. The
         smoke is failed if LOOP_HEARTBEAT is absent even when the task is short.
 
-        When HOST_NATIVE_DISPATCH_PLAN is returned for a Review, start the
+        When HOST_NATIVE_DISPATCH_PLAN returns any assignment, start the
         current-host child immediately; do not read more documentation or
         inspect Plugin source.
         {receiver_start_requirement}
@@ -256,9 +249,8 @@ def _codex_bootstrap_prompt(scenario: str) -> str:
         ACTIVE with the TASK READY. Do not claim any Loop, call
         plan_dispatch_batch, inspect implementation files, create smoke.txt,
         or record final user confirmation in this bootstrap turn. Stop as soon
-        as the READY frontier is visible. A second invocation will resume this
-        exact Codex session so SessionStart can attest the now-existing
-        Delivery.
+        as the READY frontier is visible. A second invocation will resume the
+        same ACTIVE Delivery.
         """
     ).strip()
 
@@ -269,23 +261,26 @@ def _codex_resume_prompt(scenario: str) -> str:
         if scenario == "light"
         else (
             "After TASK success, reserve and start every required Review in "
-            "a distinct host-native child; SubagentStart must attest each one."
+            "a distinct host-native child with its own operation_id."
         )
     )
     return textwrap.dedent(
         f"""
         Resume the already ACTIVE delivery-graph Codex host smoke. Do not
-        preview, prepare, freeze, or create another Delivery. The trusted
-        SessionStart Hook now provides the private capability for this exact
-        Delivery session and worktree. Call workspace_status and
-        graph_frontier, claim the READY `t-smoke-artifact` TASK through
-        claim_current_task, read loop_context once, and heartbeat immediately
-        before any implementation inspection or edit.
+        preview, prepare, freeze, or create another Delivery. Call
+        workspace_status and graph_frontier, then plan_dispatch_batch for the
+        READY `t-smoke-artifact` TASK. Start its distinct current-host child
+        immediately. The child must call dispatch_loop with the exact
+        reservation_id and decision_fingerprint, its own receiver_context_id,
+        and a fresh operation_id; read loop_context once and call
+        heartbeat_loop with that operation_id before any implementation
+        inspection or edit. The coordinator must not inspect or edit
+        implementation files.
 
         Create only `smoke.txt` with exactly `delivery-graph smoke\\n`, then
         use one Python command to assert that exact content. Report structured
         progress and a truthful result. {review_requirement} Every Review
-        receiver must heartbeat immediately after its SubagentStart claim and
+        receiver must heartbeat immediately after its dispatch_loop claim and
         before inspecting the repository. Never dispatch to another Agent,
         fabricate final acceptance, commit, push, access the network, or
         modify anything outside this disposable repository. Stop when the
@@ -379,7 +374,6 @@ def _host_command(
             "--output-format",
             "stream-json",
             "--verbose",
-            "--include-hook-events",
             "--forward-subagent-text",
             "--permission-mode",
             "acceptEdits",
@@ -417,7 +411,6 @@ def _host_command(
             [
                 "exec",
                 "--json",
-                "--dangerously-bypass-hook-trust",
                 "--sandbox",
                 "workspace-write",
                 "--cd",
@@ -468,7 +461,6 @@ def _codex_resume_command(
             "exec",
             "resume",
             "--json",
-            "--dangerously-bypass-hook-trust",
         ]
     )
     if model:

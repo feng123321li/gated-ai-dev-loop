@@ -20,14 +20,7 @@ from .graph_model import (
 )
 from .jsonio import fingerprint
 from .model_core import validate_hierarchy_definition
-from .repository_attestations import (
-    HOST_WORKSPACE_ATTESTATION_SECONDS,
-    HostWorkspaceAttestationStore,
-)
-from .repository_dispatch import (
-    RECEIVER_ATTESTATION_SECONDS,
-    DeliveryDispatchStore,
-)
+from .repository_dispatch import DeliveryDispatchStore
 from .repository_events import DeliveryEventStore
 from .repository_execution_setup import (
     WORKTREE_SETUP_HEARTBEAT_SECONDS,
@@ -309,62 +302,6 @@ class SchedulerRepository:
             connection.close()
             raise
         return connection
-
-    def issue_host_workspace_attestation(
-        self,
-        *,
-        host_adapter_id: str,
-        context_id: str,
-        tool_name: str,
-        tool_use_id: str,
-        workspace_root: str | os.PathLike[str],
-        lifetime_seconds: int = HOST_WORKSPACE_ATTESTATION_SECONDS,
-    ) -> str:
-        return HostWorkspaceAttestationStore(
-            self,
-            timestamp_fn=timestamp,
-        ).issue(
-            host_adapter_id=host_adapter_id,
-            context_id=context_id,
-            tool_name=tool_name,
-            tool_use_id=tool_use_id,
-            workspace_root=workspace_root,
-            lifetime_seconds=lifetime_seconds,
-        )
-
-    def validate_host_workspace_attestation(
-        self,
-        attestation: str,
-        *,
-        host_adapter_id: str,
-        context_id: str,
-        tool_name: str,
-    ) -> str:
-        return HostWorkspaceAttestationStore(
-            self,
-            timestamp_fn=timestamp,
-        ).validate_session(
-            attestation,
-            host_adapter_id=host_adapter_id,
-            context_id=context_id,
-            tool_name=tool_name,
-        )
-
-    def consume_host_workspace_attestation(
-        self,
-        attestation: str,
-        *,
-        host_adapter_id: str,
-        tool_name: str,
-    ) -> str:
-        return HostWorkspaceAttestationStore(
-            self,
-            timestamp_fn=timestamp,
-        ).consume(
-            attestation,
-            host_adapter_id=host_adapter_id,
-            tool_name=tool_name,
-        )
 
     @contextmanager
     def scheduler_lock(self) -> Iterator[None]:
@@ -888,20 +825,6 @@ class SchedulerRepository:
             connection,
             at=at,
         )
-    def expire_dispatch_reservation_now(
-        self,
-        reservation_id: str,
-        *,
-        root_id: str,
-        host_adapter_id: str,
-        failure_code: str,
-    ) -> bool:
-        return self._delivery_dispatch_store().expire_dispatch_reservation_now(
-            reservation_id,
-            root_id=root_id,
-            host_adapter_id=host_adapter_id,
-            failure_code=failure_code,
-        )
     def active_dispatch_reservations(
         self,
         connection: sqlite3.Connection,
@@ -910,148 +833,6 @@ class SchedulerRepository:
     ) -> list[dict[str, Any]]:
         return self._delivery_dispatch_store().active_dispatch_reservations(
             connection,
-            at=at,
-        )
-    def issue_receiver_attestation(
-        self,
-        connection: sqlite3.Connection,
-        *,
-        run_id: str,
-        root_id: str,
-        node_id: str,
-        attempt: int,
-        receiver_context_id: str,
-        parent_context_id: str,
-        host_adapter_id: str,
-        reservation_id: str | None,
-        at: str,
-    ) -> str:
-        return self._delivery_dispatch_store().issue_receiver_attestation(
-            connection,
-            run_id=run_id,
-            root_id=root_id,
-            node_id=node_id,
-            attempt=attempt,
-            receiver_context_id=receiver_context_id,
-            parent_context_id=parent_context_id,
-            host_adapter_id=host_adapter_id,
-            reservation_id=reservation_id,
-            at=at,
-        )
-    def _assert_receiver_root(
-        self,
-        connection: sqlite3.Connection,
-        *,
-        run_id: str,
-        node_id: str,
-        attempt: int,
-        host_adapter_id: str,
-        parent_context_id: str,
-        at: str,
-        commit: bool,
-    ) -> None:
-        return self._delivery_dispatch_store()._assert_receiver_root(
-            connection,
-            run_id=run_id,
-            node_id=node_id,
-            attempt=attempt,
-            host_adapter_id=host_adapter_id,
-            parent_context_id=parent_context_id,
-            at=at,
-            commit=commit,
-        )
-    @staticmethod
-    def _idle_frontier_allows_receiver_root_rotation(
-        connection: sqlite3.Connection,
-        *,
-        run_id: str,
-        node_id: str,
-        attempt: int,
-        parent_context_id: str,
-        at: str,
-    ) -> bool:
-        return DeliveryDispatchStore._idle_frontier_allows_receiver_root_rotation(
-            connection,
-            run_id=run_id,
-            node_id=node_id,
-            attempt=attempt,
-            parent_context_id=parent_context_id,
-            at=at,
-        )
-    @staticmethod
-    def _worker_lost_retry_allows_receiver_root_rotation(
-        connection: sqlite3.Connection,
-        *,
-        run_id: str,
-        node_id: str,
-        attempt: int,
-        parent_context_id: str,
-        at: str,
-    ) -> bool:
-        return DeliveryDispatchStore._worker_lost_retry_allows_receiver_root_rotation(
-            connection,
-            run_id=run_id,
-            node_id=node_id,
-            attempt=attempt,
-            parent_context_id=parent_context_id,
-            at=at,
-        )
-    @staticmethod
-    def issue_host_receiver_identity(
-        connection: sqlite3.Connection,
-        *,
-        run_id: str,
-        root_id: str,
-        node_id: str,
-        attempt: int,
-        reservation_id: str,
-        host_adapter_id: str,
-        agent_id: str,
-        receiver_context_id: str,
-        parent_context_id: str,
-        at: str,
-    ) -> str:
-        return DeliveryDispatchStore.issue_host_receiver_identity(
-            connection,
-            run_id=run_id,
-            root_id=root_id,
-            node_id=node_id,
-            attempt=attempt,
-            reservation_id=reservation_id,
-            host_adapter_id=host_adapter_id,
-            agent_id=agent_id,
-            receiver_context_id=receiver_context_id,
-            parent_context_id=parent_context_id,
-            at=at,
-        )
-    def consume_receiver_attestation(
-        self,
-        connection: sqlite3.Connection,
-        *,
-        attestation_id: str,
-        run_id: str,
-        root_id: str,
-        node_id: str,
-        attempt: int,
-        receiver_context_id: str,
-        host_adapter_id: str,
-        agent_id: str,
-        reservation_id: str | None,
-        operation_id: str,
-        at: str,
-    ) -> dict[str, Any]:
-        return self._delivery_dispatch_store().consume_receiver_attestation(
-            connection,
-            attestation_id=attestation_id,
-            run_id=run_id,
-            root_id=root_id,
-            node_id=node_id,
-            attempt=attempt,
-            receiver_context_id=receiver_context_id,
-            host_adapter_id=host_adapter_id,
-            agent_id=agent_id,
-            reservation_id=reservation_id,
-            operation_id=operation_id,
             at=at,
         )
     @staticmethod

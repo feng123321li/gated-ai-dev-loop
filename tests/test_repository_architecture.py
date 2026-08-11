@@ -17,14 +17,7 @@ class RepositoryArchitectureTests(unittest.TestCase):
         expected_methods = {
             "claimed_resource_reservations",
             "expire_dispatch_reservations",
-            "expire_dispatch_reservation_now",
             "active_dispatch_reservations",
-            "issue_receiver_attestation",
-            "_assert_receiver_root",
-            "_idle_frontier_allows_receiver_root_rotation",
-            "_worker_lost_retry_allows_receiver_root_rotation",
-            "issue_host_receiver_identity",
-            "consume_receiver_attestation",
             "open_host_capacity_breaker",
             "reserve_dispatch_assignments",
             "consume_dispatch_reservation",
@@ -38,9 +31,6 @@ class RepositoryArchitectureTests(unittest.TestCase):
         )
         static_methods = {
             "expire_dispatch_reservations",
-            "_idle_frontier_allows_receiver_root_rotation",
-            "_worker_lost_retry_allows_receiver_root_rotation",
-            "issue_host_receiver_identity",
             "open_host_capacity_breaker",
         }
         for method_name in expected_methods:
@@ -67,6 +57,33 @@ class RepositoryArchitectureTests(unittest.TestCase):
                     )
                 ),
             )
+
+    def test_hook_identity_persistence_api_is_removed(self) -> None:
+        receiver_methods = {
+            "issue_receiver_attestation",
+            "_assert_receiver_root",
+            "_idle_frontier_allows_receiver_root_rotation",
+            "_worker_lost_retry_allows_receiver_root_rotation",
+            "issue_host_receiver_identity",
+            "consume_receiver_attestation",
+        }
+        workspace_methods = {
+            "issue_host_workspace_attestation",
+            "validate_host_workspace_attestation",
+            "consume_host_workspace_attestation",
+        }
+
+        for owner in (DeliveryDispatchStore, SchedulerRepository):
+            with self.subTest(owner=owner.__name__):
+                self.assertTrue(
+                    receiver_methods.isdisjoint(owner.__dict__)
+                )
+        self.assertTrue(
+            workspace_methods.isdisjoint(
+                SchedulerRepository.__dict__
+            )
+        )
+
 
     def test_repository_facade_stays_below_1800_lines(self) -> None:
         repository_path = (

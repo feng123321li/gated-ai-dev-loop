@@ -10,7 +10,6 @@ from hdg.mcp_tools import tool_definitions
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "plugins" / "delivery-graph"
 CODEX_MANIFEST = PLUGIN / ".codex-plugin" / "plugin.json"
-CODEX_HOOKS = PLUGIN / "hooks" / "hooks.json"
 REPO_MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 
 
@@ -42,7 +41,7 @@ class AgentPluginProtocolTests(unittest.TestCase):
 
     def test_all_tools_publish_current_structured_metadata(self) -> None:
         tools = tool_definitions()
-        self.assertEqual(len(tools), 34)
+        self.assertEqual(len(tools), 33)
 
         problems: list[str] = []
         for tool in tools:
@@ -132,23 +131,8 @@ class AgentPluginProtocolTests(unittest.TestCase):
                         )
                     )
 
-        hooks = manifest.get("hooks")
-        if hooks is None:
-            self.assertTrue(CODEX_HOOKS.is_file())
-        elif isinstance(hooks, str):
-            self.assert_plugin_relative_path(hooks, field="hooks")
-        elif isinstance(hooks, list):
-            self.assertTrue(hooks)
-            for index, path in enumerate(hooks):
-                if isinstance(path, str):
-                    self.assert_plugin_relative_path(
-                        path,
-                        field=f"hooks[{index}]",
-                    )
-                else:
-                    self.assertIsInstance(path, dict)
-        else:
-            self.assertIsInstance(hooks, dict)
+        self.assertNotIn("hooks", manifest)
+        self.assertFalse((PLUGIN / "hooks").exists())
 
         apps = manifest.get("apps")
         if apps is not None:
@@ -188,43 +172,10 @@ class AgentPluginProtocolTests(unittest.TestCase):
                 field=f"interface.screenshots[{index}]",
             )
 
-    def test_codex_and_claude_hooks_are_separated(self) -> None:
-        codex_hooks = _read_json(CODEX_HOOKS)
-        codex_events = codex_hooks.get("hooks")
-        self.assertIsInstance(codex_events, dict)
-        self.assertNotIn("StopFailure", codex_events)
-
-        claude_candidates: list[Path] = []
-        for path in sorted((PLUGIN / "hooks").glob("*.json")):
-            if path.resolve() == CODEX_HOOKS.resolve():
-                continue
-            candidate = _read_json(path).get("hooks")
-            if isinstance(candidate, dict) and "StopFailure" in candidate:
-                claude_candidates.append(path)
-        self.assertTrue(
-            claude_candidates,
-            "a separate Claude hooks JSON file must retain StopFailure",
-        )
-
-    def test_codex_hook_commands_use_plugin_root(self) -> None:
-        hooks = _read_json(CODEX_HOOKS)["hooks"]
-        self.assertIsInstance(hooks, dict)
-        commands: list[str] = []
-        for groups in hooks.values():
-            self.assertIsInstance(groups, list)
-            for group in groups:
-                self.assertIsInstance(group, dict)
-                handlers = group.get("hooks")
-                self.assertIsInstance(handlers, list)
-                for handler in handlers:
-                    self.assertIsInstance(handler, dict)
-                    if handler.get("type") != "command":
-                        continue
-                    command = handler.get("command")
-                    self.assertIsInstance(command, str)
-                    commands.append(command)
-                    self.assertIn("${PLUGIN_ROOT}", command)
-        self.assertTrue(commands)
+    def test_claude_manifest_is_hookless(self) -> None:
+        manifest = _read_json(PLUGIN / ".claude-plugin" / "plugin.json")
+        self.assertNotIn("hooks", manifest)
+        self.assertFalse((PLUGIN / "hooks").exists())
 
     def test_repo_marketplace_has_install_policy_and_category(self) -> None:
         self.assertTrue(

@@ -1,37 +1,42 @@
 # 外层接收与 Loop 内 Worker 边界
 
 Delivery Graph 是 SOP 与 Graph 控制面。它决定哪个 TASK/Review Loop 可以开始、
-为其预留哪个可信宿主接收上下文，并治理 claim、租约、进度、终态和恢复；它不推荐、
+为其预留哪个宿主接收上下文，并治理 claim、租约、进度、终态和恢复；它不推荐、
 选择或切换执行模型，也不编排 Loop 内部的 helper worker。
 
 ## 外层 receiver
 
-所有 Graph claim 都只交给当前可信宿主 Adapter 认证的 receiver。Codex AUTOMATIC TASK 可由当前 Delivery 会话接收；Review 必须独立：
+所有 Graph claim 都只交给当前宿主 Adapter 创建或指定的 receiver。Review 必须按编排规则使用与上游实现不同的独立接收上下文：
 
 | 执行模式 | TASK receiver | Review receiver |
 |---|---|---|
-| `AUTOMATIC` | Codex 当前 Delivery 顶层会话由 `SessionStart` 或调用时 `PreToolUse` 认证后直接实现；无 reservation，只允许 `TASK_LOOP` | `plan_dispatch_batch` 为当前 node/attempt 签发短租约 assignment；一次性证明绑定真实 child/parent/workspace，`reservation_id` 非空且精确匹配 |
-| `MANUAL` | 已启动的 manual Graph 或指定自动 TASK 的显式人工接管；独立 receiver 的一次性证明绑定真实 child/parent/workspace，`reservation_id` 为 `NULL` | TASK 完成后仍使用与 `AUTOMATIC` 相同的独立自动 Review receiver |
+| `AUTOMATIC` | `plan_dispatch_batch` 为 Ready TASK 签发短租约 assignment；宿主立即创建独立 child，child 以 `HOST_NATIVE` transport、reservation、decision fingerprint 和显式 `operation_id` 调用 `dispatch_loop(AUTO)` | 与 TASK 相同的统一 AUTO 协议，但宿主必须创建与全部上游实现/Review 不同的独立 child |
+| `MANUAL` | 已启动的 manual Graph 或指定自动 TASK 的显式人工接管；独立 receiver 以显式 context 和 `operation_id` 调用 `dispatch_loop(MANUAL)`，不带 AUTO reservation、decision fingerprint 或 transport | TASK 完成后仍使用与 `AUTOMATIC` 相同的独立 AUTO receiver |
 
-对用户公开的执行模式始终只有 `AUTOMATIC` 和 `MANUAL`。`AUTOMATIC` 的当前会话 TASK 与独立 Review 是同一模式下的两条接收路径，不是第三种执行模式；它们共同进入相同的 claim、项目 scope、operation、heartbeat、progress、pause、result 和 lease 校验。当前会话 TASK 也不是无认证直领：缺少 lifecycle capability 且调用时 Hook 未认证时 fail closed，并且不能 claim Review。
+对用户公开的执行模式始终只有 `AUTOMATIC` 和 `MANUAL`。两种模式共同进入相同的项目 scope、operation、heartbeat、progress、pause、result、lease 和资源锁校验；差异仅在 claim 输入。AUTO 必须先预留并核对决策指纹，MANUAL 必须来自允许人工领取的 TASK 状态且不创建 AUTO reservation。
 
-AUTOMATIC Review assignment 还具有以下派遣约束：
+AUTOMATIC assignment 还具有以下派遣约束：
 
 - assignment 绑定 `hostAdapterId`、`receiverAgentId`、reservation、节点、attempt、
-  receiving context 和 `modelPolicy=CURRENT_HOST_INHERIT`。
+  decision fingerprint 和 `modelPolicy=CURRENT_HOST_INHERIT`。
 - receiver 继承创建它的当前宿主模型与默认推理设置。`plan_dispatch_batch` 不接收
   model inventory、模型偏好、reasoning class 或 effort，也不返回模型建议。
 - Controller 不把模型或 effort 写入派遣决策指纹，不提供路由调整窗口，也不允许
   claim 后原地更换 receiver 身份。
-- 需要更换外层 receiver 时，必须先按协议 pause，或等待失联租约被回收；随后由
-  新 attempt、reservation 和独立 receiver 重新领取。旧 operation 立即失效。
+- 需要更换外层 receiver 时，必须先按协议 pause/resume，或等待失联租约被回收；随后以
+  新 receiving context/operation 重新领取，AUTO 另取新 reservation/decision。旧 operation 立即失效。
 
-Codex、Claude Code 或其他宿主只有在 Plugin 存在对应可信外层 Adapter、能通过
-宿主原生生命周期事件证明 child/parent/workspace（AUTO 另含 reservation）关系，并能为后续控制面操作持续
-证明同一 receiver 身份时，才能领取 Loop。PATH 中存在 CLI、普通 helper、
-外部进程或本机 Profile 都不构成这种权限。
+Codex、Claude Code 或其他宿主只有在 Plugin 存在对应外层 Adapter，并能提供当前
+workspace、原生 receiver 类型和独立 child 调度能力时，才可运行 AUTO。PATH 中存在 CLI、
+普通 helper、外部进程或本机 Profile 都不构成这种能力。每次 claim 后返回的 `operation_id`
+是该 attempt 后续 mutation 的 bearer；receiver 必须显式传递并保密，不能复制给 Worker、
+日志、进度、result 或用户消息。
 
-Codex `SessionStart` 优先只为顶层 Delivery task 发放 `DELIVERY_COORDINATOR` session capability；Desktop 未触发它时，受信任的 `claim_current_task` `PreToolUse` 可核对顶层 transcript、session 与 workspace 后按需发放等价能力。数据库只保存哈希，能力自动轮换并有时效。Subagent 不能取得 coordinator capability；AUTO Review 的 `SubagentStart` 原子消费 reservation，并只为独立 child 发放 `LOOP_RECEIVER` capability。安装或升级后必须审查并信任精确 Hook 定义；“始终信任”对当前定义哈希持久生效，定义变化后重新审查。执行权限和模型配置不替代 Hook trust。
+Controller 只看到 Adapter 提供的 workspace、receiver 类型和 assignment 数据，无法以
+密码学方式证明真实 parent-child 关系、receiver 身份延续或 reviewer 独立性；这些边界由
+宿主 Adapter 的 workspace 映射、独立 child 创建和编排规则承担。Controller 仍强制检查
+reservation、decision fingerprint、Graph attempt、workspace/Git/project scope、operation、
+lease 和资源锁。敏感 MCP 调用是否执行由宿主自己的审批机制决定。
 
 ## Loop 内部 Worker
 
@@ -45,12 +50,12 @@ receiver 取得冻结输入并完成首次独立 heartbeat 后，才可以按当
 - Delivery Graph 不解析 Worker inventory，不规定 tier，不比较供应商能力，也不把
   内部 Worker 选择写进 Graph、reservation、claim、decision fingerprint 或授权。
 - 新增 Worker 供应商不需要修改 Controller；只有要让该供应商成为可领取 Graph 的
-  外层 receiver 时，才新增并验证一个可信宿主 Adapter。
+  外层 receiver 时，才新增并验证一个对应宿主 Adapter。
 
 内部 Worker 不是 Graph receiver。它们不得调用 `dispatch_loop`、`heartbeat_loop`、
 `report_loop_progress`、`pause_loop`、`resume_loop` 或 `record_loop_result`，也不得接收
-operation、attestation、reservation bearer。它们只把工作结果返回外层 receiver；
-receiver 负责验证、整合并以自己的受信身份更新控制面。
+operation 或 AUTO reservation bearer。它们只把工作结果返回外层 receiver；
+receiver 负责验证、整合并以自己的 operation 更新控制面。
 
 ## Worker 遥测
 
@@ -97,10 +102,11 @@ receiver 负责验证、整合并以自己的受信身份更新控制面。
 ## 手动 Graph
 
 手动 handoff 在 `start_manual_handoff` 前不绑定工作区或 receiver。启动后，TASK
-仍由独立宿主原生 receiver MANUAL claim；Adapter PreToolUse Hook 为它签发
-`reservation_id` 为 `NULL` 的一次性 receiver attestation，Controller 原子消费并绑定真实
-child、parent、workspace 与 operation。后续 Review 使用当前可信宿主 Adapter 的独立
-AUTO receiver。自动与手动模式都遵守相同的内部 Worker、mutation 和遥测规则。
+仍由独立宿主原生 receiver MANUAL claim；receiver 显式提交 receiving context 与新的
+`operation_id`，且不携带 AUTO reservation、decision fingerprint 或 transport。Controller
+校验 manual run、TASK 状态、workspace/Git/project scope 后原子 claim。后续 Review 使用
+当前宿主 Adapter 的独立 AUTO receiver。自动与手动模式都遵守相同的 mutation、lease、
+资源锁、内部 Worker 和遥测规则。
 
 ## 容量与额度
 

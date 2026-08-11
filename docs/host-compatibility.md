@@ -2,22 +2,22 @@
 
 兼容性分成两层，不能混为一个“支持”：
 
-- **核心契约**：Python Controller、schema、SQLite、生成产物、Hook 单元测试和 stdio MCP 握手通过。
+- **核心契约**：Python Controller、schema、SQLite、生成产物、调度协议测试和 stdio MCP 握手通过。
 - **真实宿主**：实际 Codex 或 Claude Code 会话加载候选 Plugin，创建原生子 Agent，并完成 claim、progress、heartbeat、result，最后到达待用户确认门禁；冒烟程序不得代替用户确认。
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
-## 0.39.5 发布候选矩阵
+## 0.39.6 发布候选矩阵
 
-0.39.5 提供 34 个 MCP 工具，用户可选执行模式仍只有 `AUTOMATIC` 和 `MANUAL`。Codex AUTOMATIC 的 Delivery task 优先由 `SessionStart` Hook 认证；Desktop 未触发生命周期 Hook 时，`claim_current_task` 的 PreToolUse Hook 可在工具调用时为当前顶层任务补发同等约束的 session capability，再由当前会话直接实现 READY TASK。Review 继续由非空 reservation、`SubagentStart` 和独立 child 执行。Session capability 绑定精确 session/workspace、Graph 与项目 scope，有时效、可轮换且数据库只存哈希。本版本只重构内部 SQLite repository 职责边界，不改变 schema、MCP 工具或宿主交互契约。
+0.39.6 提供 33 个 MCP 工具，用户可选执行模式仍只有 `AUTOMATIC` 和 `MANUAL`。AUTOMATIC 的 TASK 与各级 Review 统一由 `plan_dispatch_batch` 预留，再由独立 child 用 reservation、decision fingerprint、receiver context 和 `operation_id` 调用 `dispatch_loop`。本候选删除生命周期 Hook、`claim_current_task` 和 attestation 持久化；新建状态不创建旧认证表，但 Graph compiler 契约仍为 `schema-v3-graph-compiler-v1`。旧 0.39.5 状态只有在 READY、从未 claim 且没有 reservation 时才承诺无需迁移续跑。
 
-- `/hooks` 的“始终信任”只持久信任当前精确 Hook 哈希；相同内容后续不弹，Hook 更新后重新审查。Desktop 不保证主动弹出信任窗口，首次信任仍通过 Codex CLI 的 `/hooks` 完成。
-- 缺少可信 lifecycle/current-task capability、跨 session/workspace、过期或复制给其他任务时，`claim_current_task`、planning 和 mutation 都必须 fail closed。
-- `claim_current_task` 必须拒绝 Review；TASK 成功后的 TASK/GROUP/Delivery Review receiver context 必须不同。
-- `SubagentStart` Review child 获得独立 session capability，code-mode heartbeat/progress/pause/result 不依赖 nested PreToolUse。
+- Plugin manifest 不声明 lifecycle Hook，安装和升级都没有 `/hooks` 信任步骤。
+- AUTO claim 必须匹配未过期 reservation、Graph/decision fingerprint、node/attempt 和显式 `operation_id`；同一 reservation 与 operation 的响应丢失重试幂等返回已提交 assignment。
+- heartbeat、progress、pause 与 result 都显式携带 claim 返回的 `operation_id`，并继续受 workspace、项目 scope、lease 与资源锁校验。
+- 独立 Review child 是宿主编排不变量，不再有真实 session、parent-child 或 reviewer 身份的密码学证明；这是无 Hook 模式的已知能力降级。
 - Git Delivery workspace identity 使用 Git 历史 lineage 与冻结分支，不使用仓库或 worktree 绝对路径；移动仓库或重建同分支 worktree可恢复，其他分支继续返回 Git branch mismatch，旧路径哈希绑定在原路径首次访问时升级。
 
-本地核心契约已完成 369 项 Python 测试（1 项按环境条件跳过）、compileall、UTF-8 Skill 校验、34 工具与生成镜像发布校验、Claude Plugin manifest 校验和差异检查。系统通用 Plugin validator 仍按旧 schema 拒绝 `hooks` 字段，不能替代当前 Codex manifest/Hook 契约校验。
+发布候选必须完成 Python 全量测试、compileall、UTF-8 Skill 校验、33 工具与生成镜像发布校验、Claude Plugin manifest 校验和差异检查；真实宿主 smoke 不再传递 Hook 事件或绕过 Hook trust。
 
 ## 0.39.2 发布候选矩阵
 

@@ -48,7 +48,6 @@ EXISTING_TOOL_NAMES = (
     "rebuild_graph_run",
     "loop_context",
     "dispatch_loop",
-    "claim_current_task",
     "handoff_ready_automatic_task",
     "heartbeat_loop",
     "report_loop_progress",

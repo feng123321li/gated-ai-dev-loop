@@ -1,6 +1,6 @@
 # ADR：分层交付 Graph Engineering 架构
 
-状态：**已采纳的历史架构决策**。本文解释为何采用 Delivery + 递归 GROUP/TASK + 分层 Review；它不是 0.37.0 的操作手册。Plugin identity、Git 接管、交互协议和 Hook 的现行事实以 [项目实现结构](project-engineering.md) 与 canonical Skill 为准。
+状态：**已采纳的历史架构决策**。本文解释为何采用 Delivery + 递归 GROUP/TASK + 分层 Review；它不是 0.37.0 的操作手册。Plugin identity、Git 接管、交互协议和派遣安全边界的现行事实以 [项目实现结构](project-engineering.md) 与 canonical Skill 为准。
 
 ## 结论
 
@@ -82,19 +82,19 @@ Delivery: d-commerce
 ## Receiver 与 Worker 晚绑定
 
 预览 hierarchy 表达开发内容；Frozen Graph 只表达哪个 TASK/Review 何时可运行。自动
-派遣把 Ready Loop 绑定到当前可信宿主的独立外层 receiver，并固定
+派遣把 Ready Loop 绑定到当前配置宿主的独立外层 receiver，并固定
 `modelPolicy=CURRENT_HOST_INHERIT`；不表达或推荐具体模型与 reasoning effort。
 
 ```text
-自动执行：当前可信宿主 Adapter → receiver reservation → 独立 receiver claim
+自动执行：当前配置宿主 Adapter → receiver reservation → 独立 receiver claim
 手动开发：冻结内容包 → 接收 CLI 启动同一 Graph → 独立 MANUAL receiver
 Loop 内部：receiver → 按成本/任务自主使用 Codex、Claude、Grok、DeepSeek 等 Worker
 ```
 
-只有外层 receiver 进入 Graph 权威身份链，能够 claim、heartbeat、progress、pause、
-resume 和提交 result。内部 Worker 不获得 operation、attestation 或 reservation，只把
-结果返回 receiver。新增 Worker 供应商不改变外层 Graph；只有要让供应商成为 receiver
-时才新增可信 Adapter，并提供与现有宿主等价的生命周期和身份校验。
+只有外层 receiver 持有 Graph mutation bearer，能够 claim、heartbeat、progress、pause、
+resume 和提交 result。内部 Worker 不获得 operation 或 reservation，只把结果返回 receiver。
+新增 Worker 供应商不改变外层 Graph；只有要让供应商成为 receiver 时才新增 Adapter，并
+提供 workspace 映射和独立 child 编排。独立性是宿主编排契约，不是 Controller 的密码学证明。
 
 内部 Worker 的 agent/model/effort 可以由 receiver 在最终
 `outcome.result.workerTelemetry` 中按 phase 报告。未知值写 `unreported`；该数据只用于

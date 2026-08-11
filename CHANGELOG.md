@@ -4,6 +4,17 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.6 — 2026-08-11
+
+发布提交：以 tag `v0.39.6` 指向的提交为准
+
+- **无 Hook Plugin**：Codex 与 Claude manifest 不再声明生命周期 Hook，删除完整 Hook 目录、`/hooks` 信任步骤、Claude 429 StopFailure 处理和宿主 transcript/session attestation。
+- **统一派遣路径**：删除 `claim_current_task`。AUTOMATIC 的 TASK、TASK Review、GROUP Review 与 Delivery Review 全部由 `plan_dispatch_batch` 预留，再由独立 receiver 使用 reservation、decision fingerprint、receiver context 与显式 `operation_id` 调用 `dispatch_loop`。
+- **能力边界**：Graph/attempt/fingerprint 新鲜度、workspace/project scope、reservation、资源锁、lease 与 operation mutation 门禁保留；不再密码学证明真实宿主 session、parent-child 或独立 reviewer 身份。
+- **持久化精简**：新建 scheduler 状态不再创建四张 attestation/receiver identity 表；Graph compiler 契约仍为 `schema-v3-graph-compiler-v1`。旧 0.39.5 状态中的同名表不再读取或写入；READY、从未 claim 且没有 reservation 的 Graph 无需迁移即可按新流程继续。
+- **工具审批**：Codex 敏感工具继续使用 manifest `prompt`；Claude Skill 用非敏感工具白名单替代 MCP wildcard，敏感操作与最终确认交给宿主逐次审批。MCP 工具面回到 33 个。
+- **发布验证**：336 项 Python 测试通过（1 项 skipped），并通过 `compileall`、canonical/Plugin Skill、Claude Plugin、release candidate 和差异校验。
+
 ## 0.39.5 — 2026-08-11
 
 发布提交：以 tag `v0.39.5` 指向的提交为准

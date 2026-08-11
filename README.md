@@ -4,7 +4,7 @@
 
 `delivery-graph` 把已经确认的软件需求冻结为可执行、可审查、可恢复的 Delivery Graph，再协调宿主原生 Agent 完成实现、分层 Review 和最终验收。
 
-当前版本：**0.39.5** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
+当前版本：**0.39.6** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
 
 ## 它做什么
 
@@ -92,9 +92,9 @@ Delivery
 
 新会话从 `workspace_status` 恢复当前 Delivery，再读取 Graph frontier。worktree setup 与活动 receiver 都有独立 heartbeat 和 lease；前者通过 `worktreeSetup.progressMonitor` 在主仓显示全部项目，后者通过 Graph `progressMonitor` 显示 TASK 与 Review。失联、租约过期或可重试失败只在各自安全边界恢复。需求发生变化时创建同一 Delivery 的下一 Revision，不覆写已经冻结的版本。
 
-所有 Loop 都必须经过可信宿主 Hook。Codex AUTOMATIC 的 Delivery 顶层任务优先在 `SessionStart` 时获得绑定 session/workspace 的能力；Desktop 未运行该 Hook 时，`claim_current_task` 的受信任 `PreToolUse` 可按需完成同等认证。当前会话直接实现 READY TASK；所有 Review 仍由 reservation + `SubagentStart` 认证的独立 receiver 完成。
+AUTOMATIC 的每个 READY TASK 与 Review 都先由 `plan_dispatch_batch` 生成一次性 reservation，再由独立宿主原生 receiver 用匹配的 decision fingerprint、自己的 context 和显式 `operation_id` 调用 `dispatch_loop`。后续 mutation 继续受 workspace、Graph、项目 scope、lease 与 operation 校验。
 
-Codex manifest 显式加载 `hooks/hooks.json`。在 Codex CLI 交互界面的 `/hooks` 选择始终信任后，信任对当前精确 Hook 定义哈希持久生效；Desktop 不保证弹出信任窗口。`SessionStart` 与调用时认证互为受控入口，不需要修改 `model_catalog_json` 或模型 tool mode。Hook 缺失、跨 session/workspace、过期或被复制时均 fail closed。
+Plugin 不注册生命周期 Hook，也没有 Hook trust 步骤。代价是 Controller 不再密码学证明真实宿主 session、parent-child 或 Review receiver 独立性；独立 child 由宿主编排协议保证，控制面只验证 Adapter/workspace、reservation/fingerprint 和 operation capability。
 
 ## 安装
 
@@ -107,7 +107,7 @@ codex plugin marketplace add git@git.i-sanger.com:ai/skill/marketplace.git --ref
 codex plugin add delivery-graph@majorbio-skills
 ```
 
-安装后在 Codex CLI 交互界面打开 `/hooks`，审查 `delivery-graph` 注册的 `SessionStart`、`SubagentStart` 与 `PreToolUse` Hook，并选择始终信任当前定义；Desktop 输入框里的 `/hooks` 不是 Hook 浏览器。相同定义哈希后续不再提示，升级变化后重新确认。
+Codex 安装后无需进入 `/hooks`。重建、取消、归档、需求解冻/再冻结和自动 TASK 人工接管继续由 manifest 的逐工具 `prompt` 审批控制。
 
 Claude Code：
 
@@ -116,7 +116,7 @@ claude plugin marketplace add git@git.i-sanger.com:ai/skill/marketplace.git
 claude plugin install delivery-graph@majorbio-skills --scope user
 ```
 
-安装或升级后新建会话，让 Skill、MCP Server 和 Hook 从同一版本加载。团队升级、卸载和回滚步骤见[团队运维](docs/team-operations.md)。
+安装或升级后新建会话，让 Skill 与 MCP Server 从同一版本加载。Claude Skill 只预批准非敏感 MCP 工具；敏感操作仍交给宿主逐次审批。团队升级、卸载和回滚步骤见[团队运维](docs/team-operations.md)。
 
 ## 使用
 
@@ -141,10 +141,10 @@ claude plugin install delivery-graph@majorbio-skills --scope user
 
 ## 支持的宿主
 
-- **Codex**：Plugin Skill、MCP Server、工具授权 Hook 和宿主原生 worktree receiver。
-- **Claude Code**：Plugin Skill、MCP Server、工作区证明 Hook、结构化限额处理和宿主原生 receiver。
+- **Codex**：Plugin Skill、MCP Server、manifest 工具审批和宿主原生 worktree receiver。
+- **Claude Code**：Plugin Skill、MCP Server、宿主工具审批和宿主原生 receiver。
 
-外部 CLI 可以承载手动 handoff 的协调入口，但实际 TASK claim 仍必须进入受支持宿主的独立原生 child，并由 Adapter 签发一次性 receiver attestation。Plugin 不把“人工模式”解释为降低身份要求，只信任能证明宿主生命周期和接收身份的 Adapter。
+外部 CLI 可以承载手动 handoff 的协调入口，但实际 TASK claim 仍必须进入受支持宿主的独立原生 child。Plugin 验证 Adapter、workspace、Graph、项目 scope 与 operation capability；没有生命周期 Hook 时不宣称能证明真实 parent-child 身份。
 
 ## 项目结构
 
@@ -154,7 +154,7 @@ claude plugin install delivery-graph@majorbio-skills --scope user
 | `skills/delivery-graph/` | 规范 Skill、references 与生成的运行包 |
 | `plugins/delivery-graph/` | Codex / Claude Code Plugin 产物 |
 | `.agents/plugins/marketplace.json` | 本仓库的 Agent Plugin 开发 Marketplace |
-| `tests/` | Graph、调度、Git、Hook、协议与投影测试 |
+| `tests/` | Graph、调度、Git、协议与投影测试 |
 | `examples/team-loops/` | 可校验的 LIGHT / STANDARD hierarchy 模板 |
 | `scripts/build_skill.py` | 从源码同步 Skill 与 Plugin 运行包 |
 | `scripts/validate_release.py` | 离线发布候选一致性校验 |

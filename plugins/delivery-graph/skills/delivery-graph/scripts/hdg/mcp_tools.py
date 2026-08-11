@@ -62,11 +62,9 @@ DIRTY_STATE_FINGERPRINT = {
 }
 NODE_ID = _string("Exact graph node ID from graph_frontier.")
 OPERATION_ID = _string(
-    "Globally unique Loop operation ID. Hook-attested Codex Delivery and "
-    "AUTO Review sessions omit it so the Controller can resolve the live "
-    "claim from their session capability. Claude and Codex MANUAL children "
-    "omit it only when their PreToolUse Hook injects the attested value; "
-    "every other caller must supply the claim value."
+    "Globally unique Loop operation ID returned by dispatch_loop. The "
+    "outer receiver must supply the exact claim value for every subsequent "
+    "Loop mutation."
 )
 SCHEDULER_IDENTITY = {
     "type": "string",
@@ -224,44 +222,6 @@ def _tool(
     meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     schema_value = deepcopy(schema)
-    properties = schema_value.get("properties")
-    if isinstance(properties, dict):
-        properties["_host_workspace_attestation"] = {
-            "type": "string",
-            "minLength": 32,
-            "maxLength": 256,
-            "description": (
-                "Host-injected one-time workspace evidence. Models and "
-                "ordinary MCP clients must omit this internal field."
-            ),
-        }
-        properties["_host_receiver_operation_attestation"] = {
-            "type": "string",
-            "minLength": 32,
-            "maxLength": 256,
-            "description": (
-                "Host-injected one-time receiver-operation evidence. "
-                "Models and ordinary MCP clients must omit this internal "
-                "field."
-            ),
-        }
-        properties["_host_session_attestation"] = {
-            "type": "string",
-            "minLength": 32,
-            "maxLength": 256,
-            "description": (
-                "Session capability issued by a trusted lifecycle Hook. "
-                "Only the attested receiver session may replay it."
-            ),
-        }
-        properties["_host_session_context_id"] = {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256,
-            "description": (
-                "Host session identity bound to the lifecycle capability."
-            ),
-        }
     result: dict[str, Any] = {
         "name": name,
         "title": title or name.replace("_", " ").title(),
@@ -1052,10 +1012,11 @@ TOOLS = (
         "dispatch_loop",
         (
             "Claim one ready TASK, TASK Review, GROUP Review, or Delivery "
-            "Review Loop "
-            "for its isolated outer receiver. The claim authenticates the "
-            "trusted Adapter and receiving context, not a development model. "
-            "Only this receiver may use the returned Loop operation ID."
+            "Review Loop for its orchestrated outer receiver. The claim binds "
+            "the configured trusted Adapter and request workspace to a "
+            "caller-declared receiving context; it does not authenticate a "
+            "real host session or development model. The caller must guard "
+            "the returned Loop operation ID as a bearer capability."
         ),
         _object(
             {
@@ -1067,9 +1028,9 @@ TOOLS = (
                     "minLength": 1,
                     "maxLength": 256,
                     "description": (
-                        "Actual receiving Agent ID, such as codex or "
-                        "claude-code. This is execution evidence, not an "
-                        "executor recommendation."
+                        "Caller-declared receiving Agent ID, such as codex or "
+                        "claude-code. Used for execution attribution, not "
+                        "authenticated identity or executor recommendation."
                     ),
                 },
                 "actual_model_id": {
@@ -1097,24 +1058,19 @@ TOOLS = (
                     ),
                 },
                 "receiver_context_id": _string(
-                    "Host-native receiving Agent context ID. Claude children "
-                    "must omit it from the model-authored call: PreToolUse "
-                    "injects the attested value. Review Loops must differ "
-                    "from every upstream receiving context."
-                ),
-                "receiver_attestation_id": _string(
-                    "One-time receiver grant issued and injected by the "
-                    "model-external Claude PreToolUse hook. The receiving "
-                    "model must omit it and must never invent a placeholder."
+                    "Caller-declared host-native receiving Agent context ID. "
+                    "Orchestration must provide the actual native context; "
+                    "Review Loops must differ from every upstream receiving "
+                    "context."
                 ),
                 "dispatch_transport": {
                     "type": "string",
                     "enum": ["HOST_NATIVE"],
                     "description": (
-                        "Required with dispatch_mode=AUTO. It certifies "
-                        "that the receiver was created through the current "
-                        "host's native Agent API, never through a CLI, "
-                        "subprocess, or companion script."
+                        "Required with dispatch_mode=AUTO. It expresses the "
+                        "orchestration requirement to use the current host's "
+                        "native Agent API, never a CLI, subprocess, or "
+                        "companion script; it is not process/session proof."
                     ),
                 },
                 "dispatch_reservation_id": _string(
@@ -1136,29 +1092,8 @@ TOOLS = (
                 "owner",
                 "agent_id",
                 "dispatch_mode",
+                "receiver_context_id",
                 "operation_id",
-            ],
-        ),
-    ),
-    _tool(
-        "claim_current_task",
-        (
-            "Claim one READY AUTOMATIC TASK directly in the current "
-            "Hook-attested Codex Delivery session. This path never claims "
-            "a Review Loop and requires either the SessionStart capability "
-            "or trusted current-task PreToolUse attestation for this exact "
-            "session and workspace."
-        ),
-        _object(
-            {
-                "root_id": ROOT_ID,
-                "node_id": NODE_ID,
-                "expected_graph_fingerprint": FINGERPRINT,
-            },
-            required=[
-                "root_id",
-                "node_id",
-                "expected_graph_fingerprint",
             ],
         ),
     ),
@@ -1199,7 +1134,7 @@ TOOLS = (
                     "maxLength": 1024,
                     "description": (
                         "Why native automatic receiver startup cannot safely "
-                        "continue, such as a SubagentStart attestation fault."
+                        "continue, such as repeated startup failure."
                     ),
                 },
             },
@@ -1230,7 +1165,7 @@ TOOLS = (
                 "node_id": NODE_ID,
                 "operation_id": OPERATION_ID,
             },
-            required=["root_id", "node_id"],
+            required=["root_id", "node_id", "operation_id"],
         ),
     ),
     _tool(
@@ -1323,7 +1258,7 @@ TOOLS = (
                     required=["passed", "failed", "skipped", "total"],
                 ),
             },
-            required=["root_id", "node_id", "phase", "summary_zh"],
+            required=["root_id", "node_id", "operation_id", "phase", "summary_zh"],
         ),
         annotations={
             "readOnlyHint": False,
@@ -1339,8 +1274,8 @@ TOOLS = (
             "current attempt and frozen Graph. Provide resume_at for a "
             "known provider soft-stop window and identify whether the "
             "limited capacity belongs to the executor or the native host. "
-            "A native host observing hard 429 uses its model-external "
-            "capacity callback instead."
+            "Use capacity_scope=HOST when the native host observes a hard "
+            "429 and provide its structured reset time."
         ),
         _object(
             {
@@ -1365,7 +1300,7 @@ TOOLS = (
                     ),
                 },
             },
-            required=["root_id", "node_id"],
+            required=["root_id", "node_id", "operation_id"],
         ),
     ),
     _tool(
@@ -1412,6 +1347,7 @@ TOOLS = (
             required=[
                 "root_id",
                 "node_id",
+                "operation_id",
                 "outcome",
             ],
         ),
@@ -1665,12 +1601,6 @@ def call_tool(
     controller: LayeredDeliveryController = DEFAULT_CONTROLLER,
     client_info: dict[str, Any] | None = None,
     trusted_host_adapter: str | None = None,
-    host_hook_attested: bool = False,
-    host_receiver_operation_attested: bool = False,
-    host_session_attested: bool = False,
-    host_session_context_id: str | None = None,
-    host_session_role: str | None = None,
-    **_: Any,
 ) -> dict[str, Any]:
     internal_arguments = validate_tool_arguments(name, arguments)
     _apply_hierarchy_file(internal_arguments, workspace_root or root)
@@ -1687,13 +1617,6 @@ def call_tool(
                 trusted_host_adapter
             ),
             host_adapter_id=trusted_host_adapter,
-            host_hook_attested=host_hook_attested,
-            host_receiver_operation_attested=(
-                host_receiver_operation_attested
-            ),
-            host_session_attested=host_session_attested,
-            host_session_context_id=host_session_context_id,
-            host_session_role=host_session_role,
         ),
     )
     return result

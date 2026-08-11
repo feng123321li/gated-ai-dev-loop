@@ -97,7 +97,10 @@ def dispatch_loop(**arguments: Any) -> dict[str, Any]:
     }
     if provenance_fields.intersection(arguments):
         direct_arguments = dict(arguments)
-        direct_arguments.setdefault("require_receiver_attestation", False)
+        direct_arguments.setdefault(
+            "receiver_context_id",
+            arguments.get("owner", f"receiver-{arguments['node_id']}"),
+        )
         return runtime_dispatch_loop(**direct_arguments)
 
     agent_id = arguments.get("agent_id")
@@ -117,7 +120,10 @@ def dispatch_loop(**arguments: Any) -> dict[str, Any]:
     )
 
     claimed_arguments = dict(arguments)
-    claimed_arguments.setdefault("require_receiver_attestation", False)
+    claimed_arguments.setdefault(
+        "receiver_context_id",
+        arguments.get("owner", f"receiver-{node_id}"),
+    )
     claimed_arguments.update(
         {
             "agent_id": agent_id,

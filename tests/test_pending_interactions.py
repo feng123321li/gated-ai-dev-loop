@@ -83,6 +83,62 @@ class PendingInteractionTests(unittest.TestCase):
             )
             self.assertNotIn("executionChoice", status)
 
+    def test_unbound_choice_ready_deliveries_require_explicit_root_id(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            workspace = Path(root, "workspace")
+            workspace.mkdir()
+            for delivery_id, task_id in (
+                ("d-choice-first", "t-choice-first"),
+                ("d-choice-second", "t-choice-second"),
+            ):
+                preview = call_tool(
+                    "preview_hierarchy",
+                    {
+                        "hierarchy": isolated_task_hierarchy(
+                            delivery_id,
+                            task_id,
+                        )
+                    },
+                    root=root,
+                    workspace_root=str(workspace),
+                )
+                rootless = call_tool(
+                    "workspace_status",
+                    {},
+                    root=root,
+                    workspace_root=str(workspace),
+                )
+                self.assertEqual(rootless["status"], "ABSENT")
+                self.assertNotIn("rootId", rootless)
+
+                self.assertEqual(preview["status"], "CHOICE_READY")
+
+            status = call_tool(
+                "workspace_status",
+                {},
+                root=root,
+                workspace_root=str(workspace),
+            )
+
+            self.assertEqual(status["status"], "ABSENT")
+            self.assertNotIn("candidateDeliveries", status)
+            for delivery_id in ("d-choice-first", "d-choice-second"):
+                selected = call_tool(
+                    "workspace_status",
+                    {"root_id": delivery_id},
+                    root=root,
+                    workspace_root=str(workspace),
+                )
+                self.assertEqual(selected["rootId"], delivery_id)
+                self.assertEqual(selected["status"], "CHOICE_READY")
+                self.assertEqual(
+                    selected["pendingInteraction"]["kind"],
+                    "EXECUTION_MODE",
+                )
+
+
     def test_baseline_fallback_markdown_preserves_structured_options(
         self,
     ) -> None:
@@ -263,6 +319,83 @@ class PendingInteractionTests(unittest.TestCase):
                 confirmed["pendingInteraction"],
             )
             self.assertNotIn("developmentBaseline", confirmed)
+
+    def test_two_deliveries_cannot_confirm_the_same_git_branch(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            _repository, worktree, _base_commit, branch_ref = (
+                git_delivery_checkout(root, delivery_id="d-shared-branch")
+            )
+            first_preview = call_tool(
+                "preview_hierarchy",
+                {
+                    "hierarchy": isolated_task_hierarchy(
+                        "d-shared-first",
+                        "t-shared-first",
+                    )
+                },
+                root=str(worktree),
+                workspace_root=str(worktree),
+                trusted_host_adapter="codex",
+            )
+            first = call_tool(
+                "confirm_development_baseline",
+                {
+                    "root_id": "d-shared-first",
+                    "selection": branch_ref,
+                    "expected_hierarchy_fingerprint": first_preview[
+                        "hierarchyFingerprint"
+                    ],
+                    "confirmed_by": "human",
+                },
+                root=str(worktree),
+                workspace_root=str(worktree),
+                trusted_host_adapter="codex",
+            )
+            second_preview = call_tool(
+                "preview_hierarchy",
+                {
+                    "hierarchy": isolated_task_hierarchy(
+                        "d-shared-second",
+                        "t-shared-second",
+                    )
+                },
+                root=str(worktree),
+                workspace_root=str(worktree),
+                trusted_host_adapter="codex",
+            )
+
+            with self.assertRaises(GatedLoopError) as raised:
+                call_tool(
+                    "confirm_development_baseline",
+                    {
+                        "root_id": "d-shared-second",
+                        "selection": branch_ref,
+                        "expected_hierarchy_fingerprint": second_preview[
+                            "hierarchyFingerprint"
+                        ],
+                        "confirmed_by": "human",
+                    },
+                    root=str(worktree),
+                    workspace_root=str(worktree),
+                    trusted_host_adapter="codex",
+                )
+
+            self.assertEqual(
+                raised.exception.code,
+                "SCHEDULER_BASELINE_BRANCH_IN_USE",
+            )
+            self.assertEqual(
+                first["developmentBaselineConfirmed"]["branchRef"],
+                branch_ref,
+            )
+            self.assertEqual(
+                raised.exception.details["conflictingDeliveries"][0][
+                    "rootId"
+                ],
+                "d-shared-first",
+            )
 
     def test_invalid_new_branch_does_not_poison_preference_or_choice_ready_state(
         self,

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import difflib
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import stat
 import subprocess
 from typing import Any
 
@@ -12,10 +14,23 @@ from .model_core import validate_git_binding
 
 
 GIT_TIMEOUT_SECONDS = 10
-EXCLUSIVE_PRIMARY_HOST_ADAPTERS = frozenset()
-HOST_NATIVE_LINKED_WORKTREE_ADAPTERS = frozenset(
-    {"claude-code", "codex"}
+MAX_WORKSPACE_DIFF_BYTES = 2 * 1024 * 1024
+_DELIVERY_PATHSPEC = (
+    ".",
+    ":(exclude).layered-delivery",
+    ":(exclude).layered-delivery/**",
 )
+_GIT_CHANGE_STATUS = {
+    "A": "ADDED",
+    "B": "BROKEN",
+    "C": "COPIED",
+    "D": "DELETED",
+    "M": "MODIFIED",
+    "R": "RENAMED",
+    "T": "TYPE_CHANGED",
+    "U": "UNMERGED",
+    "X": "UNKNOWN",
+}
 
 
 @dataclass(frozen=True)
@@ -255,31 +270,39 @@ def _worktree_topology(workspace: Path) -> str:
 
 
 def _working_tree_state(workspace: Path) -> dict[str, Any]:
-    pathspec = (
-        ".",
-        ":(exclude).layered-delivery",
-        ":(exclude).layered-delivery/**",
-    )
     porcelain = _git(
         workspace,
         "status",
         "--porcelain=v1",
         "--untracked-files=all",
         "--",
-        *pathspec,
+        *_DELIVERY_PATHSPEC,
     ).stdout
     changes = porcelain.splitlines() if porcelain else []
     changed_paths: set[str] = set()
     for arguments in (
-        ("diff", "--name-only", "-z", "--", *pathspec),
-        ("diff", "--cached", "--name-only", "-z", "--", *pathspec),
+        (
+            "diff",
+            "--name-only",
+            "-z",
+            "--",
+            *_DELIVERY_PATHSPEC,
+        ),
+        (
+            "diff",
+            "--cached",
+            "--name-only",
+            "-z",
+            "--",
+            *_DELIVERY_PATHSPEC,
+        ),
         (
             "ls-files",
             "--others",
             "--exclude-standard",
             "-z",
             "--",
-            *pathspec,
+            *_DELIVERY_PATHSPEC,
         ),
     ):
         output = _git(workspace, *arguments).stdout
@@ -345,12 +368,7 @@ def _worktree_provenance(
     base_commit: str,
     host_adapter_id: str | None,
 ) -> dict[str, Any]:
-    if topology == "LINKED_WORKTREE":
-        strategy = "HOST_NATIVE_LINKED_WORKTREE"
-    elif host_adapter_id in HOST_NATIVE_LINKED_WORKTREE_ADAPTERS:
-        strategy = "HOST_NATIVE_LINKED_WORKTREE"
-    else:
-        strategy = "PRIMARY_CHECKOUT"
+    strategy = "CURRENT_WORKSPACE_SERIAL"
     return {
         "strategy": strategy,
         "hostAdapterId": host_adapter_id,
@@ -403,53 +421,7 @@ def inspect_delivery_git_workspace(
     )
     topology = _worktree_topology(workspace)
     working_tree = _working_tree_state(workspace)
-    exclusive_primary = (
-        topology == "PRIMARY_WORKTREE"
-        and host_adapter_id in EXCLUSIVE_PRIMARY_HOST_ADAPTERS
-    )
-    if topology == "PRIMARY_WORKTREE" and not exclusive_primary:
-        if symbolic.returncode == 0:
-            full_ref = symbolic.stdout.strip()
-            if not full_ref.startswith("refs/heads/"):
-                fail(
-                    "SCHEDULER_GIT_BRANCH_MISMATCH",
-                    "Delivery worktree must use a local branch",
-                )
-            branch_ref = full_ref.removeprefix("refs/heads/")
-            git_workspace = {
-                "branchRef": branch_ref,
-                "headCommit": head_commit,
-                "role": (
-                    "MAINLINE"
-                    if branch_ref == selection.branch_ref
-                    or branch_ref in {"main", "master"}
-                    else "UNBOUND_BRANCH"
-                ),
-            }
-        else:
-            git_workspace = {
-                "role": "DETACHED_PRIMARY",
-                "headCommit": head_commit,
-            }
-        return {
-            "gitWorkspace": git_workspace,
-            "worktreeSetup": {
-                "state": "DEDICATED_WORKTREE_REQUIRED",
-                "owner": "HOST",
-                "nextAction": "CREATE_INDEPENDENT_WORKTREE_TASK",
-                "baseRef": selection.branch_ref,
-                "baseCommit": selection.head_commit,
-                "integrationTarget": selection.branch_ref,
-            },
-            "worktreeProvenance": _worktree_provenance(
-                workspace,
-                topology=topology,
-                selection=selection,
-                base_commit=selection.head_commit,
-                host_adapter_id=host_adapter_id,
-            ),
-            "workingTree": working_tree,
-        }
+    exclusive_primary = topology == "PRIMARY_WORKTREE"
     if symbolic.returncode != 0:
         base_commit = _merge_base(
             workspace,
@@ -523,7 +495,11 @@ def inspect_delivery_git_workspace(
         branch_ref=branch_ref,
         base_ref=selection.branch_ref,
     )
-    result["gitWorkspace"]["role"] = "DELIVERY_FEATURE"
+    result["gitWorkspace"]["role"] = (
+        "UNBOUND_BRANCH"
+        if topology == "PRIMARY_WORKTREE"
+        else "DELIVERY_FEATURE"
+    )
     binding = {
         "branchRef": branch_ref,
         "baseRef": selection.branch_ref,
@@ -883,6 +859,408 @@ def verify_delivery_git_binding(
     }
 
 
+def _git_change_entries(
+    workspace: Path,
+    base_commit: str,
+    head_commit: str | None = None,
+) -> list[dict[str, str]]:
+    revisions = (
+        (base_commit,)
+        if head_commit is None
+        else (base_commit, head_commit)
+    )
+    output = _git(
+        workspace,
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        "--name-status",
+        "-z",
+        *revisions,
+        "--",
+        *_DELIVERY_PATHSPEC,
+    ).stdout
+    tokens = output.split("\0")
+    if tokens and not tokens[-1]:
+        tokens.pop()
+    entries: list[dict[str, str]] = []
+    position = 0
+    while position < len(tokens):
+        status_token = tokens[position]
+        position += 1
+        if not status_token or position >= len(tokens):
+            fail(
+                "SCHEDULER_GIT_DIFF_INVALID",
+                "Git returned an invalid changed-file snapshot",
+            )
+        status_code = status_token[0]
+        first_path = tokens[position]
+        position += 1
+        item = {
+            "path": first_path,
+            "status": _GIT_CHANGE_STATUS.get(status_code, "UNKNOWN"),
+            "statusCode": status_code,
+        }
+        if status_code in {"C", "R"}:
+            if position >= len(tokens):
+                fail(
+                    "SCHEDULER_GIT_DIFF_INVALID",
+                    "Git returned an invalid renamed-file snapshot",
+                )
+            item["previousPath"] = first_path
+            item["path"] = tokens[position]
+            position += 1
+        entries.append(item)
+    return entries
+
+
+def inspect_business_commit_range(
+    workspace_root: str,
+    turn_start_commit: str,
+    head_commit: str,
+) -> dict[str, Any]:
+    """Describe net business changes in a serial workspace turn.
+
+    Control-plane files under .layered-delivery never count as Delivery
+    output. The explicit two-commit comparison also rejects rewritten history
+    instead of treating any different HEAD as proof that the turn committed
+    work.
+    """
+
+    workspace = Path(workspace_root).absolute().resolve(strict=True)
+    resolved_start = _commit(
+        workspace,
+        turn_start_commit,
+        code="SCHEDULER_GIT_TURN_START_INVALID",
+        message="Serial workspace turnStartCommit does not exist",
+    )
+    resolved_head = _commit(
+        workspace,
+        head_commit,
+        code="SCHEDULER_GIT_HEAD_INVALID",
+        message="Serial workspace turn HEAD does not exist",
+    )
+    ancestor = _git(
+        workspace,
+        "merge-base",
+        "--is-ancestor",
+        resolved_start,
+        resolved_head,
+        accepted=(0, 1),
+    ).returncode == 0
+    changed_files = _git_change_entries(
+        workspace,
+        resolved_start,
+        resolved_head,
+    )
+    tree_output = _git(
+        workspace,
+        "ls-tree",
+        "-r",
+        "-z",
+        "--full-tree",
+        resolved_head,
+    ).stdout
+    business_tree_entries = []
+    for entry in tree_output.split("\0"):
+        if not entry:
+            continue
+        _metadata, separator, relative_path = entry.partition("\t")
+        if not separator:
+            fail(
+                "SCHEDULER_GIT_DIFF_INVALID",
+                "Git returned an invalid business tree entry",
+            )
+        if (
+            relative_path == ".layered-delivery"
+            or relative_path.startswith(".layered-delivery/")
+        ):
+            continue
+        business_tree_entries.append(entry)
+    return {
+        "turnStartCommit": resolved_start,
+        "headCommit": resolved_head,
+        "turnStartCommitIsAncestor": ancestor,
+        "businessChangedFiles": changed_files,
+        "businessTreeFingerprint": fingerprint(
+            {
+                "kind": "GIT_BUSINESS_TREE_V1",
+                "entries": business_tree_entries,
+            }
+        ),
+    }
+
+
+def _safe_untracked_candidate(workspace: Path, relative_path: str) -> Path:
+    posix_path = PurePosixPath(relative_path)
+    if (
+        posix_path.is_absolute()
+        or not posix_path.parts
+        or any(part in {"", ".", ".."} for part in posix_path.parts)
+    ):
+        fail(
+            "SCHEDULER_GIT_DIFF_INVALID",
+            "Git returned an unsafe untracked path",
+        )
+    candidate = workspace.joinpath(*posix_path.parts)
+    try:
+        common = os.path.commonpath(
+            (str(workspace), str(candidate.absolute()))
+        )
+    except ValueError:
+        common = ""
+    if os.path.normcase(common) != os.path.normcase(str(workspace)):
+        fail(
+            "SCHEDULER_GIT_DIFF_INVALID",
+            "Git returned an untracked path outside the Delivery workspace",
+        )
+    return candidate
+
+
+def _untracked_file_patch(workspace: Path, relative_path: str) -> str:
+    candidate = _safe_untracked_candidate(workspace, relative_path)
+    try:
+        metadata = os.lstat(candidate)
+    except OSError:
+        fail(
+            "SCHEDULER_GIT_DIFF_CHANGED",
+            "An untracked file changed while its snapshot was captured",
+            path=relative_path,
+        )
+    if stat.S_ISLNK(metadata.st_mode):
+        content = os.readlink(candidate).encode("utf-8")
+        mode = "120000"
+    elif stat.S_ISREG(metadata.st_mode):
+        mode = "100755" if metadata.st_mode & stat.S_IXUSR else "100644"
+        if metadata.st_size > MAX_WORKSPACE_DIFF_BYTES:
+            return "\n".join(
+                [
+                    f"diff --git a/{relative_path} b/{relative_path}",
+                    f"new file mode {mode}",
+                    (
+                        "Content omitted from this snapshot because the "
+                        f"untracked file exceeds {MAX_WORKSPACE_DIFF_BYTES} "
+                        "bytes."
+                    ),
+                ]
+            )
+        try:
+            content = candidate.read_bytes()
+        except OSError:
+            fail(
+                "SCHEDULER_GIT_DIFF_CHANGED",
+                "An untracked file changed while its snapshot was captured",
+                path=relative_path,
+            )
+    else:
+        return "\n".join(
+            [
+                f"diff --git a/{relative_path} b/{relative_path}",
+                "Content omitted because the untracked path is not a file.",
+            ]
+        )
+    header = [
+        f"diff --git a/{relative_path} b/{relative_path}",
+        f"new file mode {mode}",
+    ]
+    if b"\0" in content:
+        return "\n".join(
+            [
+                *header,
+                f"Binary files /dev/null and b/{relative_path} differ",
+            ]
+        )
+    try:
+        text = content.decode("utf-8")
+    except UnicodeDecodeError:
+        return "\n".join(
+            [
+                *header,
+                (
+                    "File content is not UTF-8 text; the binary snapshot "
+                    "is omitted."
+                ),
+            ]
+        )
+    unified = list(
+        difflib.unified_diff(
+            [],
+            text.splitlines(),
+            fromfile="/dev/null",
+            tofile=f"b/{relative_path}",
+            lineterm="",
+        )
+    )
+    if not unified:
+        unified = ["--- /dev/null", f"+++ b/{relative_path}"]
+    return "\n".join([*header, *unified])
+
+
+def _bounded_workspace_diff(value: str) -> tuple[str, bool, int]:
+    encoded = value.encode("utf-8")
+    byte_count = len(encoded)
+    if byte_count <= MAX_WORKSPACE_DIFF_BYTES:
+        return value, False, byte_count
+    truncated = encoded[:MAX_WORKSPACE_DIFF_BYTES].decode(
+        "utf-8",
+        errors="ignore",
+    )
+    return (
+        truncated.rstrip()
+        + "\n\n... Controller workspace snapshot truncated at "
+        + f"{MAX_WORKSPACE_DIFF_BYTES} UTF-8 bytes.\n",
+        True,
+        byte_count,
+    )
+
+
+def capture_verified_workspace_changes(
+    verified_project_scopes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Capture reviewable Git snapshots for verified writable scopes.
+
+    The evidence compares each current worktree with its Delivery's frozen
+    baseCommit. It deliberately describes a workspace snapshot, not exclusive
+    ownership by the submitting Loop, TASK, or Delivery; several control-plane
+    Deliveries may share one physical workspace.
+    """
+
+    snapshots: list[dict[str, Any]] = []
+    for scope in sorted(
+        verified_project_scopes,
+        key=lambda item: str(item.get("id", "")),
+    ):
+        binding = scope.get("gitBinding")
+        if scope.get("access") != "READ_WRITE" or binding is None:
+            continue
+        workspace = Path(scope["workspaceRoot"]).absolute().resolve(
+            strict=True
+        )
+        normalized_binding = validate_git_binding(binding)
+        git_workspace = verify_delivery_git_binding(
+            str(workspace),
+            normalized_binding,
+            preparing=False,
+        )
+        if git_workspace is None:
+            fail(
+                "SCHEDULER_GIT_WORKTREE_REQUIRED",
+                "Workspace change evidence requires a Git worktree",
+            )
+        base_commit = normalized_binding["baseCommit"]
+        initial_working_tree = _working_tree_state(workspace)
+        changed_files = _git_change_entries(workspace, base_commit)
+        known_paths = {item["path"] for item in changed_files}
+        untracked_paths = sorted(
+            path
+            for path in _git(
+                workspace,
+                "ls-files",
+                "--others",
+                "--exclude-standard",
+                "-z",
+                "--",
+                *_DELIVERY_PATHSPEC,
+            ).stdout.split("\0")
+            if path and path not in known_paths
+        )
+        changed_files.extend(
+            {
+                "path": path,
+                "status": "UNTRACKED",
+                "statusCode": "?",
+            }
+            for path in untracked_paths
+        )
+        changed_files.sort(
+            key=lambda item: (
+                item["path"],
+                item.get("previousPath", ""),
+            )
+        )
+        tracked_diff = _git(
+            workspace,
+            "diff",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--no-renames",
+            "--unified=3",
+            base_commit,
+            "--",
+            *_DELIVERY_PATHSPEC,
+        ).stdout.rstrip()
+        patch_parts = [tracked_diff] if tracked_diff else []
+        patch_parts.extend(
+            _untracked_file_patch(workspace, path)
+            for path in untracked_paths
+        )
+        full_diff = "\n\n".join(
+            part.rstrip() for part in patch_parts if part
+        )
+        if full_diff:
+            full_diff += "\n"
+        final_git_workspace = verify_delivery_git_binding(
+            str(workspace),
+            normalized_binding,
+            preparing=False,
+        )
+        final_working_tree = _working_tree_state(workspace)
+        if (
+            final_git_workspace is None
+            or final_git_workspace["headCommit"]
+            != git_workspace["headCommit"]
+            or final_working_tree["stateFingerprint"]
+            != initial_working_tree["stateFingerprint"]
+        ):
+            fail(
+                "SCHEDULER_GIT_DIFF_CHANGED",
+                "The Delivery workspace changed while its result snapshot "
+                "was captured",
+                projectId=scope["id"],
+            )
+        rendered_diff, diff_truncated, diff_byte_count = (
+            _bounded_workspace_diff(full_diff)
+        )
+        snapshots.append(
+            {
+                "projectId": scope["id"],
+                "workspaceRoot": str(workspace),
+                "baseCommit": base_commit,
+                "headCommit": git_workspace["headCommit"],
+                "workingTreeStateFingerprint": initial_working_tree[
+                    "stateFingerprint"
+                ],
+                "evidenceKind": "WORKSPACE_CHANGE_SNAPSHOT",
+                "comparison": (
+                    "FROZEN_BASE_COMMIT_TO_CURRENT_WORKTREE"
+                ),
+                "attribution": (
+                    "NOT_EXCLUSIVE_TO_DELIVERY_TASK_OR_LOOP"
+                ),
+                "changedFiles": changed_files,
+                "diff": rendered_diff,
+                "diffTruncated": diff_truncated,
+                "diffByteCount": diff_byte_count,
+                "snapshotFingerprint": fingerprint(
+                    {
+                        "projectId": scope["id"],
+                        "workspaceRoot": str(workspace),
+                        "baseCommit": base_commit,
+                        "headCommit": git_workspace["headCommit"],
+                        "workingTreeStateFingerprint": (
+                            initial_working_tree["stateFingerprint"]
+                        ),
+                        "changedFiles": changed_files,
+                        "diff": full_diff,
+                    }
+                ),
+            }
+        )
+    return snapshots
+
+
 def _git_common_directory(workspace: Path) -> Path | None:
     if not (workspace / ".git").exists():
         return None
@@ -955,6 +1333,60 @@ def git_worktree_identity(
         "repositoryKey": repository_key,
         "branchRef": full_ref.removeprefix(prefix),
     }
+
+
+def git_physical_checkout_identity(
+    workspace_root: str,
+) -> dict[str, str] | None:
+    """Return one local repository's branch-independent checkout slot."""
+
+    workspace = Path(workspace_root).absolute().resolve(strict=True)
+    common = _git_common_directory(workspace)
+    repository_key = git_repository_lineage_identity(str(workspace))
+    repository_instance_key = git_repository_identity(str(workspace))
+    if (
+        common is None
+        or repository_key is None
+        or repository_instance_key is None
+    ):
+        return None
+    git_directory = Path(
+        _git_output(workspace, "rev-parse", "--git-dir")
+    )
+    if not git_directory.is_absolute():
+        git_directory = workspace / git_directory
+    git_directory = git_directory.resolve(strict=True)
+    if git_directory == common:
+        checkout_slot = "PRIMARY"
+    else:
+        worktrees_directory = (common / "worktrees").resolve(strict=True)
+        try:
+            relative_slot = git_directory.relative_to(worktrees_directory)
+        except ValueError:
+            fail(
+                "SCHEDULER_GIT_WORKTREE_MISMATCH",
+                "Git checkout metadata is outside the repository worktree "
+                "administration directory",
+            )
+        if len(relative_slot.parts) != 1:
+            fail(
+                "SCHEDULER_GIT_WORKTREE_MISMATCH",
+                "Git checkout metadata does not identify one worktree slot",
+            )
+        checkout_slot = PurePosixPath(
+            ".git",
+            "worktrees",
+            os.path.normcase(relative_slot.name),
+        ).as_posix()
+    identity = {
+        "repositoryKey": repository_key,
+        "repositoryInstanceKey": repository_instance_key,
+        "checkoutSlot": checkout_slot,
+    }
+    branch_identity = git_worktree_identity(str(workspace))
+    if branch_identity is not None:
+        identity["branchRef"] = branch_identity["branchRef"]
+    return identity
 
 
 def _branch_worktrees(
@@ -1179,8 +1611,10 @@ def verify_runtime_delivery_project_scopes(
 
 
 __all__ = (
+    "capture_verified_workspace_changes",
     "enumerate_local_feature_branches",
     "find_delivery_linked_worktree",
+    "git_physical_checkout_identity",
     "git_repository_identity",
     "git_repository_lineage_identity",
     "git_worktree_identity",

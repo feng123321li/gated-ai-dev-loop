@@ -890,13 +890,14 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertEqual(
             [item["label"] for item in choice["options"]],
-            ["自动执行", "手动开发"],
+            ["自动执行（当前 workspace 串行）", "手动开发"],
         )
         self.assertEqual(
             [item["description"] for item in choice["options"]],
             [
-                "记录一次选择；工作区就绪时立即开始，否则按宿主要求"
-                "准备分支或独立 worktree 后继续，不再确认。",
+                "复用当前 workspace 串行执行；前一 Delivery 有可验证"
+                "提交、工作树和索引干净、HEAD 未漂移且接收方已安全"
+                "释放后，才调度下一项。",
                 "生成 handoff；接收 CLI 启动同一 Graph，手动完成 TASK，"
                 "后续审查与自动执行一致。",
             ],
@@ -906,7 +907,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(
             [item["nextAction"] for item in choice["options"]],
             [
-                "RECORD_SELECTION_THEN_PREPARE_OR_REQUEST_WORKSPACE",
+                "RECORD_SELECTION_THEN_WAIT_OR_PREPARE_CURRENT_WORKSPACE",
                 "CREATE_HANDOFF_THEN_START_GOVERNED_MANUAL_GRAPH",
             ],
         )
@@ -914,8 +915,12 @@ class SchedulerRuntimeTests(unittest.TestCase):
             choice["options"][0]["requiresAdditionalConfirmation"]
         )
         self.assertEqual(
-            choice["options"][0]["worktreeContinuation"],
+            choice["options"][0]["workspaceContinuation"],
             "RESUME_EXECUTION_MODE_WITHOUT_CONFIRMATION",
+        )
+        self.assertEqual(
+            choice["options"][0]["workspaceStrategy"],
+            "CURRENT_WORKSPACE_SERIAL",
         )
         self.assertFalse(
             choice["options"][1]["requiresAdditionalConfirmation"]
@@ -3468,6 +3473,19 @@ class SchedulerRuntimeTests(unittest.TestCase):
             },
         )
         self.assertEqual(
+            context["completionPolicy"]["workspaceChanges"],
+            {
+                "resultField": "workspaceChanges",
+                "source": "CONTROLLER_CAPTURED_AT_RESULT",
+                "comparison": (
+                    "FROZEN_BASE_COMMIT_TO_CURRENT_WORKTREE"
+                ),
+                "semantics": (
+                    "WORKSPACE_SNAPSHOT_NOT_EXCLUSIVE_OWNERSHIP"
+                ),
+            },
+        )
+        self.assertEqual(
             context["humanArtifacts"],
             {
                 "taskBaseline": (
@@ -4286,6 +4304,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             freeze_hierarchy(
                 root=self.root,
                 root_id=delivery_id,
+                workspace_root=str(workspace),
                 expected_hierarchy_fingerprint=(
                     prepared["hierarchyFingerprint"]
                 ),
@@ -4816,6 +4835,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             freeze_hierarchy(
                 root=self.root,
                 root_id=current["rootId"],
+                workspace_root=str(workspace),
                 expected_delivery_revision=1,
                 expected_hierarchy_fingerprint=(
                     current["hierarchyFingerprint"]
@@ -4940,6 +4960,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             freeze_hierarchy(
                 root=self.root,
                 root_id=prepared["rootId"],
+                workspace_root=str(workspace),
                 expected_hierarchy_fingerprint=(
                     prepared["hierarchyFingerprint"]
                 ),
@@ -6327,8 +6348,24 @@ class SchedulerRuntimeTests(unittest.TestCase):
 
         status = workspace_status(root=self.root)
 
-        self.assertEqual(status["status"], "PREPARED")
-        self.assertEqual(status["rootId"], second["rootId"])
+        self.assertEqual(
+            status["status"],
+            "DELIVERY_SELECTION_REQUIRED",
+        )
+        self.assertNotIn("rootId", status)
+        self.assertEqual(
+            {
+                item["rootId"]
+                for item in status["candidateDeliveries"]
+            },
+            {first["rootId"], second["rootId"]},
+        )
+        for prepared in (first, second):
+            selected = workspace_status(
+                root=self.root,
+                root_id=prepared["rootId"],
+            )
+            self.assertEqual(selected["rootId"], prepared["rootId"])
         for index, projection_root in enumerate(projection_roots):
             for filename in (
                 "overview.md",
@@ -6377,6 +6414,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
     def test_invalid_delivery_does_not_block_another_delivery_frontier(
         self,
     ) -> None:
+        healthy_workspace = Path(self.root, "healthy-workspace")
+        healthy_workspace.mkdir()
         damaged = prepare_hierarchy(
             root=self.root,
             hierarchy=delivery_task_hierarchy(
@@ -6391,11 +6430,13 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "d-healthy",
                 "t-healthy",
             ),
+            workspace_root=str(healthy_workspace),
             now=at(1),
         )
         freeze_hierarchy(
             root=self.root,
             root_id=healthy["rootId"],
+            workspace_root=str(healthy_workspace),
             expected_hierarchy_fingerprint=(
                 healthy["hierarchyFingerprint"]
             ),
@@ -6436,6 +6477,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
         status = workspace_status(
             root=self.root,
             root_id=healthy["rootId"],
+            workspace_root=str(healthy_workspace),
         )
 
         self.assertEqual(frontier["rootId"], healthy["rootId"])

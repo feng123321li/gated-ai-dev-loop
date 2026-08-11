@@ -358,36 +358,6 @@ class DeliveryHierarchyStore:
                     "A prepared Delivery cannot move to another workspace",
                     rootId=root_id,
                 )
-            occupied = connection.execute(
-                "SELECT r.root_id, r.status "
-                "FROM delivery_workspaces w "
-                "JOIN runs r ON r.root_id = w.root_id "
-                "WHERE w.workspace_key = ? AND r.root_id != ? "
-                "AND r.status NOT IN "
-                "('COMPLETED', 'CANCELLED', 'SUPERSEDED') "
-                "LIMIT 1",
-                (workspace_key, root_id),
-            ).fetchone()
-            if occupied is not None:
-                fail(
-                    "SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED",
-                    (
-                        "An unfinished Delivery already owns this "
-                        "workspace; prepare the new Delivery in an "
-                        "independent worktree task"
-                    ),
-                    occupiedRootId=occupied["root_id"],
-                    occupiedStatus=occupied["status"],
-                    nextAction="CREATE_INDEPENDENT_WORKTREE_TASK",
-                    worktreeSetup={
-                        "owner": "HOST",
-                        "strategy": "HOST_NATIVE_LINKED_WORKTREE",
-                        "resumeAction": (
-                            "CALL_WORKSPACE_STATUS_IN_NEW_WORKTREE"
-                        ),
-                        "controllerCreatesWorktree": False,
-                    },
-                )
             frozen = connection.execute(
                 "SELECT status, revision, hierarchy_fingerprint, "
                 "graph_fingerprint, updated_at FROM hierarchies "
@@ -548,7 +518,7 @@ class DeliveryHierarchyStore:
             "hierarchyFingerprint": hierarchy_fingerprint,
             "graphFingerprint": graph_fingerprint,
             "workspaceIsolation": {
-                "mode": "DEDICATED_CONVERSATION_WORKSPACE",
+                "mode": "MULTI_DELIVERY_WORKSPACE",
                 "workspaceKey": workspace_key,
             },
         }
@@ -593,6 +563,27 @@ class DeliveryHierarchyStore:
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
         }
+
+    def revision_hierarchy(
+        self,
+        root_id: str,
+        revision: int,
+    ) -> dict[str, Any]:
+        with self.read() as connection:
+            row = connection.execute(
+                "SELECT * FROM delivery_revisions "
+                "WHERE root_id = ? AND revision = ?",
+                (root_id, revision),
+            ).fetchone()
+        if row is None:
+            fail(
+                "SCHEDULER_REVISION_MISSING",
+                "The requested Delivery revision is missing",
+                rootId=root_id,
+                deliveryRevision=revision,
+            )
+        hierarchy, _graph = self.validate_stored_definition(row)
+        return hierarchy
 
     @staticmethod
     def _carriable_task_ids(
@@ -823,7 +814,7 @@ class DeliveryHierarchyStore:
                 [],
             ),
             "workspaceIsolation": {
-                "mode": "DEDICATED_CONVERSATION_WORKSPACE",
+                "mode": "MULTI_DELIVERY_WORKSPACE",
                 "workspaceKey": workspace_key,
             },
         }
@@ -836,6 +827,7 @@ class DeliveryHierarchyStore:
         expected_hierarchy_fingerprint: str,
         authorized_project_ids: list[str],
         confirmed_by: str,
+        workspace_turn_start: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._freeze(
             root_id,
@@ -845,6 +837,7 @@ class DeliveryHierarchyStore:
             confirmed_by=confirmed_by,
             execution_mode="active",
             graph_started_by=None,
+            workspace_turn_start=workspace_turn_start,
         )
 
     def freeze_manual_handoff(
@@ -856,6 +849,7 @@ class DeliveryHierarchyStore:
         authorized_project_ids: list[str],
         confirmed_by: str,
         started_by: str,
+        workspace_turn_start: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self._freeze(
             root_id,
@@ -865,6 +859,132 @@ class DeliveryHierarchyStore:
             confirmed_by=confirmed_by,
             execution_mode="manual",
             graph_started_by=started_by,
+            workspace_turn_start=workspace_turn_start,
+        )
+
+    @staticmethod
+    def _project_workspace_keys(
+        workspace_turn_start: object,
+    ) -> tuple[str, ...]:
+        if not isinstance(workspace_turn_start, dict):
+            return ()
+        projects = workspace_turn_start.get("projects")
+        if not isinstance(projects, list):
+            return ()
+        return tuple(
+            sorted(
+                {
+                    item["workspaceKey"]
+                    for item in projects
+                    if isinstance(item, dict)
+                    and isinstance(item.get("workspaceKey"), str)
+                    and item["workspaceKey"]
+                }
+            )
+        )
+
+    def _assert_project_workspace_turn_owned(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        root_id: str,
+        delivery_revision: int,
+        hierarchy_status: str,
+        workspace_turn_start: dict[str, Any] | None,
+    ) -> None:
+        """Serialize every Controller-captured READ_WRITE checkout."""
+
+        started_rows = connection.execute(
+            "SELECT r.root_id, r.revision, r.run_id, r.status, "
+            "e.event_id, e.payload_json "
+            "FROM runs r "
+            "JOIN hierarchies h ON h.root_id = r.root_id "
+            "AND h.revision = r.revision "
+            "JOIN graph_events e ON e.run_id = r.run_id "
+            "WHERE e.event_type = 'GRAPH_RUN_STARTED' "
+            "AND NOT EXISTS ("
+            "SELECT 1 FROM graph_events released "
+            "WHERE released.run_id = r.run_id "
+            "AND released.event_type = 'WORKSPACE_TURN_RELEASED'"
+            ") "
+            "ORDER BY e.event_id ASC"
+        ).fetchall()
+        started_turns: list[dict[str, Any]] = []
+        for started in started_rows:
+            try:
+                payload = json.loads(started["payload_json"])
+            except (TypeError, json.JSONDecodeError):
+                fail(
+                    "SCHEDULER_WORKSPACE_TURN_EVIDENCE_INVALID",
+                    "Stored workspace turn evidence is not valid JSON",
+                    ownerRootId=started["root_id"],
+                    ownerRunId=started["run_id"],
+                )
+            turn_start = (
+                payload.get("workspaceTurnStart")
+                if isinstance(payload, dict)
+                else None
+            )
+            started_turns.append(
+                {
+                    "rootId": started["root_id"],
+                    "deliveryRevision": started["revision"],
+                    "runId": started["run_id"],
+                    "status": started["status"],
+                    "eventId": started["event_id"],
+                    "workspaceKeys": self._project_workspace_keys(
+                        turn_start
+                    ),
+                }
+            )
+
+        candidate_event_id: int | None = None
+        candidate_keys = self._project_workspace_keys(workspace_turn_start)
+        if hierarchy_status == "FROZEN":
+            persisted_candidate = next(
+                (
+                    item
+                    for item in started_turns
+                    if item["rootId"] == root_id
+                    and item["deliveryRevision"] == delivery_revision
+                ),
+                None,
+            )
+            if persisted_candidate is not None:
+                candidate_event_id = persisted_candidate["eventId"]
+                candidate_keys = persisted_candidate["workspaceKeys"]
+        if not candidate_keys:
+            return
+
+        candidate_key_set = set(candidate_keys)
+        conflicts = [
+            item
+            for item in started_turns
+            if item["rootId"] != root_id
+            and (
+                candidate_event_id is None
+                or item["eventId"] < candidate_event_id
+            )
+            and candidate_key_set.intersection(item["workspaceKeys"])
+        ]
+        if not conflicts:
+            return
+        owner = conflicts[0]
+        conflicting_keys = sorted(
+            candidate_key_set.intersection(owner["workspaceKeys"])
+        )
+        fail(
+            "SCHEDULER_WORKSPACE_TURN_NOT_OWNED",
+            "Another Delivery owns a READ_WRITE project workspace turn",
+            rootId=root_id,
+            workspaceKey=conflicting_keys[0],
+            conflictingWorkspaceKeys=conflicting_keys,
+            ownerRootId=owner["rootId"],
+            ownerStatus=owner["status"],
+            ownerRunId=owner["runId"],
+            ownerDeliveryRevision=owner["deliveryRevision"],
+            workspaceScope="READ_WRITE_PROJECT_CHECKOUTS",
+            queueOrder="GRAPH_RUN_STARTED_EVENT_ID",
         )
 
     def _freeze(
@@ -877,6 +997,7 @@ class DeliveryHierarchyStore:
         confirmed_by: str,
         execution_mode: str = "active",
         graph_started_by: str | None = None,
+        workspace_turn_start: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if execution_mode not in {"active", "manual"}:
             fail(
@@ -950,31 +1071,6 @@ class DeliveryHierarchyStore:
                     "SCHEDULER_DELIVERY_WORKSPACE_MISSING",
                     f"Delivery workspace binding is missing: {root_id}",
                 )
-            occupied = connection.execute(
-                "SELECT r.root_id FROM delivery_workspaces w "
-                "JOIN runs r ON r.root_id = w.root_id "
-                "WHERE w.workspace_key = ? AND r.root_id != ? "
-                "AND r.status NOT IN "
-                "('COMPLETED', 'CANCELLED', 'SUPERSEDED') "
-                "LIMIT 1",
-                (binding["workspace_key"], root_id),
-            ).fetchone()
-            if occupied is not None:
-                fail(
-                    "SCHEDULER_DELIVERY_WORKSPACE_OCCUPIED",
-                    "A second active Delivery requires another conversation "
-                    "worktree",
-                    rootId=occupied["root_id"],
-                    nextAction="CREATE_INDEPENDENT_WORKTREE_TASK",
-                    worktreeSetup={
-                        "owner": "HOST",
-                        "strategy": "HOST_NATIVE_LINKED_WORKTREE",
-                        "resumeAction": (
-                            "CALL_WORKSPACE_STATUS_IN_NEW_WORKTREE"
-                        ),
-                        "controllerCreatesWorktree": False,
-                    },
-                )
             if (
                 revision_row["hierarchy_fingerprint"]
                 != expected_hierarchy_fingerprint
@@ -1021,6 +1117,44 @@ class DeliveryHierarchyStore:
                         - set(required_project_ids)
                     ),
                 )
+            workspace_owner = connection.execute(
+                "SELECT w.root_id, w.created_at, "
+                "CASE WHEN r.status IS NOT NULL THEN r.status "
+                "ELSE h.status END AS effective_status "
+                "FROM delivery_workspaces w "
+                "JOIN hierarchies h ON h.root_id = w.root_id "
+                "LEFT JOIN runs r ON r.root_id = h.root_id "
+                "AND r.revision = h.revision "
+                "WHERE w.workspace_key = ? "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM graph_events e "
+                "WHERE e.run_id = r.run_id "
+                "AND e.event_type = 'WORKSPACE_TURN_RELEASED'"
+                ") "
+                "ORDER BY w.created_at ASC, w.root_id ASC LIMIT 1",
+                (binding["workspace_key"],),
+            ).fetchone()
+            if (
+                workspace_owner is not None
+                and workspace_owner["root_id"] != root_id
+            ):
+                fail(
+                    "SCHEDULER_WORKSPACE_TURN_NOT_OWNED",
+                    "Another Delivery owns the serial workspace turn",
+                    rootId=root_id,
+                    workspaceKey=binding["workspace_key"],
+                    ownerRootId=workspace_owner["root_id"],
+                    ownerStatus=workspace_owner["effective_status"],
+                    ownerCreatedAt=workspace_owner["created_at"],
+                    queueOrder="WORKSPACE_BINDING_CREATED_AT_ROOT_ID",
+                )
+            self._assert_project_workspace_turn_owned(
+                connection,
+                root_id=root_id,
+                delivery_revision=expected_delivery_revision,
+                hierarchy_status=row["status"],
+                workspace_turn_start=workspace_turn_start,
+            )
             if (
                 row["status"] == "FROZEN"
                 and row["revision"] == expected_delivery_revision
@@ -1240,6 +1374,11 @@ class DeliveryHierarchyStore:
                         if graph_started_by is not None
                         else {}
                     ),
+                    **(
+                        {"workspaceTurnStart": workspace_turn_start}
+                        if workspace_turn_start is not None
+                        else {}
+                    ),
                 },
                 at=at,
             )
@@ -1353,7 +1492,7 @@ class DeliveryHierarchyStore:
             "nodes": nodes,
             "taskRequirements": task_requirements,
             "workspaceIsolation": {
-                "mode": "DEDICATED_CONVERSATION_WORKSPACE",
+                "mode": "MULTI_DELIVERY_WORKSPACE",
                 "workspaceKey": workspace["workspace_key"],
             },
         }

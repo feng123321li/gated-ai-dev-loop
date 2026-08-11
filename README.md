@@ -4,7 +4,7 @@
 
 `delivery-graph` 把已经确认的软件需求冻结为可执行、可审查、可恢复的 Delivery Graph，再协调宿主原生 Agent 完成实现、分层 Review 和最终验收。
 
-当前版本：**0.39.7** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
+当前版本：**0.39.8** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
 
 ## 它做什么
 
@@ -61,12 +61,12 @@ Delivery
 
 | 模式 | 行为 |
 |---|---|
-| 自动执行 | 宿主创建或复用稳定的 linked worktree，启动后台协调任务，并派遣独立的宿主原生 receiver 消费 Graph frontier |
+| 自动执行 | `select_execution_mode` 立即持久化选择；若需准备当前分支，宿主完成动作后调用 `resume_execution_mode`，再派遣独立的宿主原生 receiver 消费 Graph frontier |
 | 手动开发 | 先生成自包含 handoff；接收宿主在选定工作区启动同一 Graph，由经 Adapter 认证的独立原生 receiver 人工完成 TASK，随后仍进入相同的自动 Review Graph |
 
-自动模式不会让 Controller 创建分支或切换 worktree；这些动作由 Codex 或 Claude Code 的宿主能力完成。手动模式不会绕过 Review，也不会把 Review 降级为手动 claim。
+执行模式与工作区绑定是两个维度，但工作区执行策略只有 `CURRENT_WORKSPACE_SERIAL`。同一物理 checkout 可以管理多个 Delivery 的控制状态，但同一时刻只运行其中一个；每个 Delivery 使用独立分支。切换前，前一个 Delivery 必须已经形成可验证 commit，working tree 与 index 必须 clean，HEAD 必须仍匹配其冻结 binding，且所有 receiver 已安全释放。后启动或后发现的 Delivery 等待；出现资源冲突、dirty 或 HEAD 漂移时停止切换，不提供同一 checkout 内的并行文件隔离。`AUTOMATIC` 选择只提交一次；返回 `PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION` 时，分支准备完成后以明确 `rootId` 与双 fingerprint 调用 `resume_execution_mode`，不得重试选择。
 
-自动选择会按 Git repository identity 和 `branchRef` 原子预留 worktree setup。同一 Delivery 的重复请求只恢复既有 setup，不会再次派发同一路径创建；不同 Delivery 不能预留同仓同分支。宿主通过 `report_worktree_setup` 上报创建阶段、百分比和心跳；超时或失败后先核对旧进程与半成品，再由 Controller 原子授予唯一重试。`hostDispatch` 始终携带精确 `gitBinding`，宿主生成了其他分支时先恢复冻结分支，错误分支已有改动则停止并审查。多项目 Delivery 会为全部 `READ_WRITE` Git scope 返回 `projectWorktreeSetups`；所有项目仍由一个后台 coordinator 管理并向同一控制面报告进度。
+Controller 只读 Git，不创建 worktree，也不执行分支切换。宿主只在上述安全释放边界按冻结 `gitBinding` 创建或切换当前分支；如果当前目录本身是既有 linked checkout，也只把它视为普通 current workspace，不自动创建新的 worktree。多项目 Delivery 的全部 `READ_WRITE` Git scope 必须一起满足 commit、clean、HEAD 与释放条件后才可切换。
 
 ## 交互与 Git 基线
 
@@ -78,19 +78,23 @@ Delivery
 主要安全边界：
 
 - Controller 只读检查 Git；不执行 `fetch`、`switch`、`commit`、`merge`、`push` 或发布。
-- 分支选择只枚举本地分支。选择“从主线创建”时会把基线提交固定为当时的主线 HEAD；primary 位于干净 feature 时还会默认推荐 stacked 子分支，把父 feature HEAD 冻结为基线并最终合回父分支，无需切换 primary。
+- 分支选择只枚举本地分支。选择“从主线创建”时会把基线提交固定为当时的主线 HEAD；当前 workspace 位于干净 feature 时还会默认推荐 stacked 子分支，把父 feature HEAD 冻结为基线并最终合回父分支。宿主仍须等父 Delivery 达到串行安全释放边界后，才创建或切换到子分支。
 - 工作树已有业务改动时，用户必须确认这些改动属于本 Delivery，并回传精确状态指纹。
 - 手动 handoff 启动前若 Git 基线漂移，启动会先被阻断；重新确认后恢复原 Revision，或在 binding 变化时生成下一不可变 Revision。
 - 一个 Delivery 可以覆盖多个本地 Git 项目，但每个 Git project scope 都必须提供完整 binding；缺失时提前 fail closed，不从顶层偏好猜测其他仓库。
 - 普通单仓 Delivery 可以只冻结顶层 `delivery.gitBinding`；运行时会从该 binding 与实际 Delivery workspace 合成并验证唯一 `primary` scope，receiver 不会取得空的 `projectScopes`。
-- 分支占用按 Git common directory 区分；不同仓库可以使用同名 feature 分支，同一仓库不能被两个活动 Delivery 预留同一分支。
+- 分支占用按 Git common directory 区分；不同仓库可以使用同名 feature 分支，同一仓库中的不同 Delivery 必须使用各自独立分支。`CURRENT_WORKSPACE_SERIAL` 只允许它们在可验证 commit、clean tree、HEAD 未漂移且 receiver 已释放后依次切换同一 checkout，不允许跨 Delivery 并行运行。
 - 多仓手动启动出现 Git 漂移时 fail closed；必须恢复冻结基线，或用完整多仓 bindings 显式创建下一 Revision。
 
 ## 状态与恢复
 
 `.layered-delivery/scheduler.db` 是需求和调度状态的机器权威，Markdown 文件只是人类可读投影。不要直接编辑数据库或控制面生成物。
+一个实际 workspace 可以绑定多个未结束 Delivery；每个 Graph、Revision、run 与验收仍按 `rootId` 隔离。无参 `workspace_status` 遇到多个未结束绑定时返回 `DELIVERY_SELECTION_REQUIRED`，调用方必须用当前会话保存的 `rootId` 显式重查，不能按更新时间猜选。未绑定的 `CHOICE_READY/HANDOFF_READY` 也只允许显式 `rootId` 恢复。控制状态隔离不等于文件隔离：同一物理 checkout 只能按 `CURRENT_WORKSPACE_SERIAL` 依次运行各 Delivery。
 
-新会话从 `workspace_status` 恢复当前 Delivery，再读取 Graph frontier。worktree setup 与活动 receiver 都有独立 heartbeat 和 lease；前者通过 `worktreeSetup.progressMonitor` 在主仓显示全部项目，后者通过 Graph `progressMonitor` 显示 TASK 与 Review。失联、租约过期或可重试失败只在各自安全边界恢复。需求发生变化时创建同一 Delivery 的下一 Revision，不覆写已经冻结的版本。
+TASK receiver 调用 `record_loop_result` 时，Controller 会从已验证的可写 Git scope 自动采集相对冻结 `baseCommit` 的当前 workspace 变更文件和有界 diff，并写入该 `rootId` 的 TASK 验收报告。它覆盖已提交、暂存、未暂存和未跟踪文本内容，因此验收可见性不依赖先 commit；该证据是提交时刻的 workspace 快照，不替代可验证 commit、clean tree 或归属判断。TASK 控制目录还会生成由 `acceptance.md` 相对链接的 `workspace-changes.patch`，用户可在主控制根直接审核；附件由 SQLite outcome 重建，不依赖原执行目录继续存在。
+
+
+新会话用保存的 `rootId` 显式调用 `workspace_status(root_id=...)` 恢复目标 Delivery，再读取 Graph frontier；无参调用出现多个候选时只做选择，不推进任何候选。活动 receiver 通过 Graph `progressMonitor` 显示 TASK 与 Review，并由 heartbeat 与 lease 治理；失联、租约过期或可重试失败只在各自安全边界恢复。需求发生变化时创建同一 Delivery 的下一 Revision，不覆写已经冻结的版本。
 
 AUTOMATIC 的每个 READY TASK 与 Review 都先由 `plan_dispatch_batch` 生成一次性 reservation，再由独立宿主原生 receiver 用匹配的 decision fingerprint、自己的 context 和显式 `operation_id` 调用 `dispatch_loop`。后续 mutation 继续受 workspace、Graph、项目 scope、lease 与 operation 校验。
 
@@ -141,7 +145,7 @@ claude plugin install delivery-graph@majorbio-skills --scope user
 
 ## 支持的宿主
 
-- **Codex**：Plugin Skill、MCP Server、manifest 工具审批和宿主原生 worktree receiver。
+- **Codex**：Plugin Skill、MCP Server、manifest 工具审批和宿主原生 receiver。
 - **Claude Code**：Plugin Skill、MCP Server、宿主工具审批和宿主原生 receiver。
 
 外部 CLI 可以承载手动 handoff 的协调入口，但实际 TASK claim 仍必须进入受支持宿主的独立原生 child。Plugin 验证 Adapter、workspace、Graph、项目 scope 与 operation capability；没有生命周期 Hook 时不宣称能证明真实 parent-child 身份。

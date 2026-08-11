@@ -76,7 +76,11 @@ class PluginBundleTests(unittest.TestCase):
             text,
         )
         self.assertIn("先记录业务确认", text)
-        self.assertIn("后台方用原双 fingerprint 调用 `resume_execution_mode`", text)
+        self.assertIn(
+            "再用明确 `rootId` 和原双 fingerprint 调用 "
+            "`resume_execution_mode`",
+            text,
+        )
         self.assertIn("展示 `manualHandoff.receiverPrompt`", text)
         self.assertIn("不把同一 Delivery 限制为单仓库", text)
         self.assertIn("不得为第二仓库另起 Delivery", text)
@@ -192,30 +196,34 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertIn("不指定 Agent、模型或接收任务", planning)
         self.assertIn("start_manual_handoff", planning)
-        self.assertIn("`environment=worktree`", planning)
-        self.assertIn("`${CLAUDE_PROJECT_DIR}`", planning)
-        self.assertIn("`hostDispatch`", main + planning)
-        self.assertNotIn("`EXCLUSIVE_PRIMARY_CHECKOUT`", main + planning)
-        self.assertIn("`HOST_NATIVE_LINKED_WORKTREE`", main + planning)
-        self.assertIn("启动后台 coordinator", main + planning)
-        self.assertIn("禁止要求用户启动第二个顶层 Claude 会话", planning)
-        self.assertIn(
+        public_execution_contract = main + plugin_main + planning
+        for removed_contract in (
+            "`environment=worktree`",
+            "`hostDispatch`",
+            "`EXCLUSIVE_PRIMARY_CHECKOUT`",
+            "`HOST_NATIVE_LINKED_WORKTREE`",
+            "启动后台 coordinator",
             "`manualDirectoryChangeRequired=false`",
-            main + planning,
-        )
-        self.assertIn(
             "`coordinatorCheckoutPolicy=PRESERVE_CURRENT_CHECKOUT`",
-            main + planning,
-        )
-        self.assertIn(
             "`requiresNewTopLevelSession=false`",
-            main + planning,
+        ):
+            self.assertNotIn(
+                removed_contract,
+                public_execution_contract,
+            )
+        for document in (main, plugin_main, planning, execution):
+            self.assertIn("`CURRENT_WORKSPACE_SERIAL`", document)
+        self.assertIn(
+            "`PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION`",
+            main + planning + execution,
         )
-        self.assertIn("主任务不切换目录或分支", planning)
+        self.assertIn("`resume_execution_mode`", main + planning + execution)
+        self.assertIn("不得重试选择", main + planning)
+        self.assertIn(
+            "同一物理 checkout 一次只运行一个 Delivery",
+            main + planning + execution,
+        )
         self.assertIn("`NEW_FROM_CURRENT_BRANCH`", planning)
-        self.assertIn("`CREATE_DELIVERY_FEATURE_BRANCH`", planning)
-        self.assertIn("重新调用 `workspace_status`", planning)
-        self.assertIn("`HOST_NATIVE_LINKED_WORKTREE`", planning)
         self.assertIn("`worktreeProvenance`", planning)
         self.assertIn("`baseHeadCommit`", planning)
         self.assertIn("`selectionSource`", planning)
@@ -266,7 +274,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("不提供路由调整窗口", recommendations)
         self.assertNotIn("打开中央编排器设置", readme)
 
-    def test_skill_isolates_deliveries_and_versions_task_requirements(
+    def test_skill_serializes_deliveries_and_versions_task_requirements(
         self,
     ) -> None:
         main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
@@ -277,8 +285,8 @@ class PluginBundleTests(unittest.TestCase):
             SKILL / "references" / "execution-quickstart.md"
         ).read_text(encoding="utf-8")
         for marker in (
-            "workspaceKey",
-            "linked worktree",
+            "CURRENT_WORKSPACE_SERIAL",
+            "rootId",
             "suggestedGitBinding",
             "delivery.gitBinding",
             "unfreeze_task_requirement",
@@ -293,18 +301,17 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("宿主显式选择", planning)
         self.assertIn("`origin/HEAD`", planning)
         self.assertIn("本地 `main`、本地 `master`", planning)
-        self.assertIn("不得隐式从当前 feature HEAD 分叉", planning)
+        self.assertIn("不得未经确认从当前 Delivery feature HEAD 分叉", execution)
         self.assertIn("显式 stacked Delivery 授权", planning)
         self.assertIn("新用户需求默认属于新 Delivery", planning)
         self.assertIn(
             "不得仅因 `workspace_status` 返回旧 Delivery 就进入 Revision",
             planning,
         )
-        self.assertIn("`WORKTREE_SETUP_QUEUED`", planning)
-        self.assertIn(
-            "排队期间不重试创建",
-            planning,
-        )
+        self.assertIn("不自动创建新 worktree", main + planning + execution)
+        self.assertIn("后启动或后发现者等待", main + planning + execution)
+        self.assertNotIn("`WORKTREE_SETUP_QUEUED`", planning)
+        self.assertNotIn("`AUTOMATIC_PARALLEL`", main + planning + execution)
         self.assertIn(
             "不应触发宿主通用确认弹窗",
             planning + execution,
@@ -448,7 +455,7 @@ class PluginBundleTests(unittest.TestCase):
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
         tool_count = len(tool_definitions())
-        self.assertEqual(tool_count, 33)
+        self.assertEqual(tool_count, 32)
         self.assertIn(
             "start_manual_handoff",
             {tool["name"] for tool in tool_definitions()},
@@ -576,7 +583,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            33,
+            32,
         )
         preview_result = responses[2]["result"]["structuredContent"][
             "result"
@@ -750,7 +757,7 @@ class PluginBundleTests(unittest.TestCase):
         ]
         self.assertEqual(len(responses), 2)
         tools = responses[1]["result"]["tools"]
-        self.assertEqual(len(tools), 33)
+        self.assertEqual(len(tools), 32)
         self.assertNotIn(
             "open_orchestrator_settings",
             {tool["name"] for tool in tools},
@@ -828,7 +835,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            33,
+            32,
         )
 
 

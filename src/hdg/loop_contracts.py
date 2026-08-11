@@ -114,6 +114,12 @@ _LOOP_COMPLETION_POLICY = {
         "p0p1": "RESOLVE_AND_REREVIEW_BEFORE_SUCCEEDED",
         "p2": "ALWAYS_LIST_IN_ACCEPTANCE_REPORT",
     },
+    "workspaceChanges": {
+        "resultField": "workspaceChanges",
+        "source": "CONTROLLER_CAPTURED_AT_RESULT",
+        "comparison": "FROZEN_BASE_COMMIT_TO_CURRENT_WORKTREE",
+        "semantics": "WORKSPACE_SNAPSHOT_NOT_EXCLUSIVE_OWNERSHIP",
+    },
     "blockedOutcome": (
         "ONLY_IF_NO_IN_SCOPE_PATH_CAN_PROGRESS_WITH_CURRENT_AUTHORITY"
     ),

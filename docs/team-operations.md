@@ -1,6 +1,6 @@
 # 团队安装与运维
 
-本文面向团队管理员和普通使用者，覆盖 `delivery-graph` 0.39.7 的安装、升级、恢复、卸载与回滚。展示名为“分层交付 Graph 控制面”。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 和标准库。
+本文面向团队管理员和普通使用者，覆盖 `delivery-graph` 0.39.8 的安装、升级、恢复、卸载与回滚。展示名为“分层交付 Graph 控制面”。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 和标准库。
 
 ## 安装前检查
 
@@ -9,7 +9,7 @@
 - 确认能够访问公司内部 Marketplace 仓库。
 - 在实际项目的新会话中使用 Plugin；不要在维护 `delivery-graph` 源码仓库时创建业务运行包。
 
-当前本地探测到的 0.39.7 真实宿主候选基线是 Codex CLI 0.147.0 和 Claude Code 2.1.226。这两个版本是本轮冒烟目标，不是永久最低版本。在兼容矩阵回填真实运行结果前，只能表述为“候选验证中”。
+当前本地探测到的 0.39.8 真实宿主候选基线是 Codex CLI 0.147.0 和 Claude Code 2.1.226。这两个版本是本轮冒烟目标，不是永久最低版本。在兼容矩阵回填真实运行结果前，只能表述为“候选验证中”。
 
 ## 安装
 
@@ -41,7 +41,7 @@ claude plugin list --json
 python scripts/host_smoke.py probe --json
 ```
 
-结果必须报告 Plugin 版本 0.39.7 和 33 个 MCP 工具，并如实标记本机已安装的宿主。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器。
+结果必须报告 Plugin 版本 0.39.8 和 32 个 MCP 工具，并如实标记本机已安装的宿主。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器。
 
 真实冒烟默认先只展示计划，必须显式增加 `--execute` 才调用模型。两个宿主分别运行，绝不从一个终端跨调另一个 Agent：
 
@@ -53,19 +53,20 @@ python scripts/host_smoke.py run --host codex --scenario light
 python scripts/host_smoke.py run --host codex --scenario light --execute
 ```
 
-Claude 命令从当前 0.39.7 源码发布包的 `--plugin-dir` 加载 Plugin；Codex 命令要求候选 Plugin 已从 Marketplace 安装。发布前可用 LIGHT 验证 `plan_dispatch_batch → 独立 TASK child → dispatch_loop(AUTO) → heartbeat/progress/result`，再用 STANDARD 覆盖独立 Review。任何输出中的 `claimedAgents` 都只能包含命令指定的当前宿主。Claude coordinator 的完整名称为 `delivery-graph:delivery-coordinator`。
+Claude 命令从当前 0.39.8 源码发布包的 `--plugin-dir` 加载 Plugin；Codex 命令要求候选 Plugin 已从 Marketplace 安装。发布前可用 LIGHT 验证 `plan_dispatch_batch → 独立 TASK child → dispatch_loop(AUTO) → heartbeat/progress/result`，再用 STANDARD 覆盖独立 Review。任何输出中的 `claimedAgents` 都只能包含命令指定的当前宿主。Claude coordinator 的完整名称为 `delivery-graph:delivery-coordinator`。
 
-0.39.7 真实冒烟还必须覆盖以下交互和失败关闭边界：
+0.39.8 真实冒烟还必须覆盖以下交互和失败关闭边界：
 
 - `preview_hierarchy`、`workspace_status` 和手动接管只返回一个当前 `pendingInteraction`。缺少 `gitBinding` 时先处理 `DEVELOPMENT_BASELINE`，确认后才出现 `EXECUTION_MODE`；同一 Delivery 的后续 Revision 可复用已记忆基线。
 - 干净和脏工作树都进入这条基线流程。脏树确认必须回传原响应的 `dirtyStateFingerprint`；变化路径内容、暂存区或 porcelain 状态任一改变，旧指纹都失效。
 - `start_manual_handoff` 的单仓 Git 漂移先阻断且零写入。确认原 binding 时保持当前 Revision，确认新 binding 时生成下一不可变 Revision；多仓漂移 fail closed，要求用完整 project bindings 创建新的手动 Revision。
-- Controller 只读计算并冻结 binding；分支和 worktree 写操作始终由宿主完成。
-- 同一 AUTOMATIC 选择并发触发时只允许一个 `IMMEDIATE` worktree 创建，其余必须 `DO_NOT_REISSUE`；同仓同分支跨 Delivery 必须原子拒绝。
-- worktree 创建开始后立即调用 `report_worktree_setup`，以后按 30 秒间隔续租；主仓监控应显示阶段、百分比、最后上报时间和 10 秒建议轮询。
-- setup 超时或显式失败后不得直接重放；只有确认旧进程停止且残留目录/worktree 已安全核对，才允许一个并发调用获得下一 attempt。
-- `hostDispatch` 必须携带精确 `branchRef/gitBinding`；宿主错分支 clean 时可恢复，dirty 时停止审查。
-- 多项目 AUTOMATIC 必须准备全部 `READ_WRITE` scope 的 worktree，只启动一个 coordinator，并在共享控制根观察全部进度。
+- Controller 只读计算并冻结 binding；当前 checkout 的分支创建或切换仍由宿主完成。Plugin 不公开 worktree setup 工具，也不自动创建 linked worktree；已存在的 linked checkout 仅作为普通 current workspace。
+- 同一物理 workspace 可以绑定多个 Delivery，但每个会话必须保存并显式传自己的 `rootId`。无参发现多个未结束绑定时只返回 `DELIVERY_SELECTION_REQUIRED`，不能按更新时间猜选。
+- AUTOMATIC 选择在排队时立即持久化。非队首 Delivery 返回 `WAITING_FOR_WORKSPACE_TURN` 或 `WAITING_FOR_WORKSPACE_COMMIT`，不创建 Run、不派遣 receiver；宿主准备好目标分支后只调用 `resume_execution_mode`，不能重选。
+- 前序 Delivery 只有在 Run 终态、被取消 receiver 的租约已结束、存在相对 turn-start 的非空业务 commit、历史未改写且工作树/index 干净时才释放。错分支、dirty、HEAD 或 scope 漂移全部失败关闭。
+- coordinator 与所有 secondary `READ_WRITE` checkout 都参与事务内 owner gate；任一 physical workspace 冲突时只允许先到 Delivery 运行。
+- TASK/TASK Review 的 Controller 可信 Git 快照必须生成 `workspace-changes.patch`，覆盖 committed、staged、unstaged 与 untracked 内容，供未打开实际 checkout 的用户审核。
+- 同一冻结分支仍不能同时属于两个未终结 Delivery；每个 Delivery 使用自己的 feature branch。
 - 未显式声明 `projectScopes` 的单仓 Delivery 必须在 AUTO claim 与 `loop_context` 中得到一个经顶层 `gitBinding` 和实际 workspace 验证的 `primary` scope；无效 binding 必须在 child 读取或修改仓库前 fail closed。
 - 执行模式只允许 `AUTOMATIC` 和 `MANUAL`。所有 AUTO TASK/Review 必须由 `plan_dispatch_batch` 创建绑定 decision fingerprint 的非空短租约 reservation，再由宿主创建独立 child，以 `dispatch_transport=HOST_NATIVE` 和新的显式 `operation_id` 调用 `dispatch_loop(AUTO)`。MANUAL 只允许 TASK，以显式 receiving context/operation claim，不带 AUTO reservation/decision/transport。普通 coordinator、helper 和内部 Worker 都不能持有 operation/reservation bearer。
 - `archive_delivery` 只接受已完成 Delivery，默认状态发现和根总览不再列出它；显式 `root_id` 仍能读取 `ARCHIVED`、完成 run、Revision 历史和详情投影。

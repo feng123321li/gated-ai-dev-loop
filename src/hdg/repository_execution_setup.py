@@ -333,7 +333,7 @@ class DeliveryExecutionSetupStore:
                             hierarchy_json,
                             graph_json,
                             (
-                                "自动执行已确认，等待实际开发 worktree"
+                                "自动执行已确认，等待当前 workspace 串行调度"
                                 if content_matches
                                 else "需求沟通后已重新生成基线，待选择开发方式"
                             ),
@@ -351,6 +351,13 @@ class DeliveryExecutionSetupStore:
                             "status = 'SUPERSEDED' WHERE root_id = ? "
                             "AND revision = ? AND status = 'PENDING'",
                             (root_id, existing["revision"]),
+                        )
+                        connection.execute(
+                            "DELETE FROM delivery_workspaces "
+                            "WHERE root_id = ? AND NOT EXISTS ("
+                            "SELECT 1 FROM runs WHERE root_id = ?"
+                            ")",
+                            (root_id, root_id),
                         )
                     staged = True
                     status = "CHOICE_READY"
@@ -374,6 +381,101 @@ class DeliveryExecutionSetupStore:
             "recordedAt": at,
         }
 
+    @staticmethod
+    def _serial_workspace_turn_state_from_connection(
+        connection: sqlite3.Connection,
+        *,
+        workspace_key: str,
+        requested_root_id: str,
+    ) -> dict[str, Any]:
+        rows = connection.execute(
+            "SELECT w.root_id, w.workspace_key, w.created_at, "
+            "h.status AS hierarchy_status, r.status AS run_status, "
+            "CASE WHEN EXISTS("
+            "SELECT 1 FROM graph_events e WHERE e.run_id = r.run_id "
+            "AND e.event_type = 'WORKSPACE_TURN_RELEASED'"
+            ") THEN 1 ELSE 0 END AS turn_released "
+            "FROM delivery_workspaces w "
+            "JOIN hierarchies h ON h.root_id = w.root_id "
+            "LEFT JOIN runs r "
+            "ON r.root_id = h.root_id AND r.revision = h.revision "
+            "WHERE w.workspace_key = ? "
+            "ORDER BY w.created_at ASC, w.root_id ASC",
+            (workspace_key,),
+        ).fetchall()
+        queue = []
+        for row in rows:
+            if bool(row["turn_released"]):
+                continue
+            queue.append(
+                {
+                    "rootId": row["root_id"],
+                    "status": (
+                        row["run_status"]
+                        if row["run_status"] is not None
+                        else row["hierarchy_status"]
+                    ),
+                    "workspaceKey": row["workspace_key"],
+                    "createdAt": row["created_at"],
+                }
+            )
+        requested_position = next(
+            (
+                index
+                for index, item in enumerate(queue, start=1)
+                if item["rootId"] == requested_root_id
+            ),
+            None,
+        )
+        if requested_position is None:
+            fail(
+                "SCHEDULER_WORKSPACE_TURN_STATE_INVALID",
+                "The selected Delivery is missing from its serial workspace "
+                "queue",
+                rootId=requested_root_id,
+                workspaceKey=workspace_key,
+            )
+        owner = queue[0]
+        acquired = owner["rootId"] == requested_root_id
+        return {
+            "state": (
+                "ACQUIRED"
+                if acquired
+                else "WAITING_FOR_WORKSPACE_TURN"
+            ),
+            "strategy": "CURRENT_WORKSPACE_SERIAL",
+            "workspaceKey": workspace_key,
+            "ownerRootId": owner["rootId"],
+            "ownerStatus": owner["status"],
+            "requestedRootId": requested_root_id,
+            "position": requested_position,
+            "queueLength": len(queue),
+            "releasePolicy": (
+                "OWNER_COMMIT_CLEAN_AND_TERMINAL_THEN_RELEASE"
+            ),
+        }
+
+    def serial_workspace_turn_state(
+        self,
+        root_id: str,
+    ) -> dict[str, Any]:
+        with self.read() as connection:
+            binding = connection.execute(
+                "SELECT workspace_key FROM delivery_workspaces "
+                "WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if binding is None:
+                fail(
+                    "SCHEDULER_DELIVERY_WORKSPACE_MISSING",
+                    f"Delivery workspace binding is missing: {root_id}",
+                )
+            return self._serial_workspace_turn_state_from_connection(
+                connection,
+                workspace_key=binding["workspace_key"],
+                requested_root_id=root_id,
+            )
+
     def record_automatic_selection(
         self,
         root_id: str,
@@ -383,8 +485,9 @@ class DeliveryExecutionSetupStore:
         authorized_project_ids: list[str],
         confirmed_by: str,
         worktree_requests: list[dict[str, str]] | None = None,
+        workspace_key: str | None = None,
     ) -> dict[str, Any]:
-        """Persist one human AUTOMATIC choice before host worktree setup."""
+        """Persist one human AUTOMATIC choice and its serial workspace turn."""
 
         with self.transaction() as connection:
             hierarchy = connection.execute(
@@ -452,6 +555,30 @@ class DeliveryExecutionSetupStore:
                     executionMode=revision["execution_mode"],
                 )
             at = self.commit_timestamp_fn(self.now, hierarchy["updated_at"])
+            workspace_turn = None
+            if workspace_key is not None:
+                existing_binding = connection.execute(
+                    "SELECT workspace_key FROM delivery_workspaces "
+                    "WHERE root_id = ?",
+                    (root_id,),
+                ).fetchone()
+                if (
+                    existing_binding is not None
+                    and existing_binding["workspace_key"] != workspace_key
+                ):
+                    fail(
+                        "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH",
+                        "A selected Delivery cannot move to another workspace",
+                        rootId=root_id,
+                    )
+                connection.execute(
+                    "INSERT INTO delivery_workspaces("
+                    "root_id, workspace_key, created_at, updated_at"
+                    ") VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(root_id) DO UPDATE SET "
+                    "updated_at = excluded.updated_at",
+                    (root_id, workspace_key, at, at),
+                )
             reservations: list[dict[str, Any]] = []
             for request in worktree_requests or []:
                 required_fields = {
@@ -583,7 +710,7 @@ class DeliveryExecutionSetupStore:
                 (
                     confirmed_by,
                     encoded_projects,
-                    "用户已选择自动执行，等待宿主完成实际开发 worktree",
+                    "用户已选择自动执行，等待当前 workspace 串行调度",
                     at,
                     root_id,
                     hierarchy["revision"],
@@ -593,15 +720,32 @@ class DeliveryExecutionSetupStore:
                 "UPDATE hierarchies SET updated_at = ? WHERE root_id = ?",
                 (at, root_id),
             )
+            if workspace_key is not None:
+                workspace_turn = (
+                    self._serial_workspace_turn_state_from_connection(
+                        connection,
+                        workspace_key=workspace_key,
+                        requested_root_id=root_id,
+                    )
+                )
         self.write_projections(root_id)
         return {
             "selection": "AUTOMATIC",
-            "state": "RECORDED_PENDING_WORKTREE",
+            "state": (
+                workspace_turn["state"]
+                if workspace_turn is not None
+                else "RECORDED_PENDING_WORKSPACE"
+            ),
             "confirmationRequired": False,
             "confirmedBy": confirmed_by,
             "authorizedProjectIds": list(authorized_project_ids),
             "selectionAlreadyApplied": selection_already_applied,
             "worktreeReservations": reservations,
+            **(
+                {"workspaceTurn": workspace_turn}
+                if workspace_turn is not None
+                else {}
+            ),
         }
 
     def execution_selection(
@@ -622,7 +766,7 @@ class DeliveryExecutionSetupStore:
         authorized = json.loads(row["authorized_project_ids_json"] or "[]")
         return {
             "selection": "AUTOMATIC",
-            "state": "RECORDED_PENDING_WORKTREE",
+            "state": "RECORDED_PENDING_WORKSPACE_TURN",
             "confirmationRequired": False,
             "confirmedBy": row["confirmed_by"],
             "authorizedProjectIds": authorized,

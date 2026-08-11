@@ -15,6 +15,14 @@ Delivery Graph 是 SOP 与 Graph 控制面。它决定哪个 TASK/Review Loop �
 
 对用户公开的执行模式始终只有 `AUTOMATIC` 和 `MANUAL`。两种模式共同进入相同的项目 scope、operation、heartbeat、progress、pause、result、lease 和资源锁校验；差异仅在 claim 输入。AUTO 必须先预留并核对决策指纹，MANUAL 必须来自允许人工领取的 TASK 状态且不创建 AUTO reservation。
 
+workspace strategy 不改变 receiver 身份协议，并且固定为
+`CURRENT_WORKSPACE_SERIAL`：同一实际 checkout 可绑定多个 Delivery 的控制状态，
+但一次只承载一个 Delivery 的 receiver，每个 Delivery 使用独立分支。后启动或后发现者
+必须等待前一个 Delivery 形成可验证 commit、working tree/index clean、HEAD 与冻结
+binding 一致且所有 receiver 安全释放后，宿主才可切换；workspace、`resourceClaims`
+冲突、dirty 或 HEAD 漂移都停止切换。现有 linked checkout 也只作为普通 current
+workspace，不自动创建新 worktree，也不允许跨 Delivery 并行。
+
 AUTOMATIC assignment 还具有以下派遣约束：
 
 - assignment 绑定 `hostAdapterId`、`receiverAgentId`、reservation、节点、attempt、
@@ -110,7 +118,7 @@ receiver 负责验证、整合并以自己的 operation 更新控制面。
 
 ## 容量与额度
 
-Controller 只治理外层 receiver 的 reservation、claim 和跨 Delivery 并发。内部
+Controller 只治理外层 receiver 的 reservation、claim、跨 Delivery 排队与容量。内部
 Worker 的并发与模型成本由 Loop/宿主自行管理，不占用另一个 Graph receiver 槽位。
 额度耗尽策略固定为 `PAUSE_AND_RESUME`：只有宿主提供结构化容量事实和真实
 `resetAt` 时才暂停并安排一次恢复；不得静默换模型、换供应商或把内部 Worker 提升

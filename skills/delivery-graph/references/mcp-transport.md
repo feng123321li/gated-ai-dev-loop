@@ -5,10 +5,9 @@
 ## 连接失败
 
 - Plugin 未安装、工具未注册或 MCP 未连接：报告 `PLUGIN_MCP_UNAVAILABLE` 并停止治理写入。
-- 运行中断连：报告 `PLUGIN_MCP_DISCONNECTED`，保留最后已知 root、node 与 operation。AUTOMATIC 已选择但尚待 worktree 时同时保留双 fingerprint；恢复同一个宿主后台 Delivery Agent/项目任务，由其从 `workspace_status(root_id)` 的 `executionSelection` 调用 `resume_execution_mode`，不得创建新顶层会话或再次展示选择器。
-- 响应未返回的写操作状态视为未知；重连后先调用 `workspace_status`。调用发生在当前对话工作区，已知 Delivery 时显式传 `root_id`。linked Git worktree 会映射到主 checkout 的共享控制根，但通过 `workspaceKey` 只访问本对话绑定的 Delivery。仅当返回 `ACTIVE`、`BLOCKED`、`PAUSED`、`COMPLETED` 或 `CANCELLED` 且存在 `rootId` 时，再调用 `graph_status` 和 `graph_frontier`；`ARCHIVED` 只读取显式 Delivery 历史，不恢复 Graph；`ABSENT` 或 `PREPARED` 按规划说明恢复，不调用尚不存在 run 的工具，也不盲目重放写操作。
-- `report_worktree_setup` 的 `RETRY_CONFIRMED` 必须携带本次核对请求唯一的 `retry_request_id`。响应未知时先用 `workspace_status.worktreeSetup.progressMonitor` 核对当前 reservation、attempt、租约与失败状态；若 attempt 已增加但 dispatch 未收到，只允许用同一 `retry_request_id` 重放并恢复同一新 attempt，不得生成另一个 ID。STARTED/PROGRESS 只允许当前有效 attempt，旧 attempt 的迟到上报必须被拒绝。
-- Git Delivery 重连时同时核对 `gitBinding` 与 `gitWorkspace`。如果只是临时切到其他分支，切回绑定的 feature 分支后重新调用 `workspace_status`；不要让控制器自动 `git switch`。HEAD 可以随本 Delivery commit 前进，但必须继续继承冻结的 `baseCommit`，且本地或 `origin` 的同名 `baseRef` / `integrationTarget` 必须仍包含该基线。未冻结的新工作区按宿主显式 `base_ref`、有效 `origin/HEAD`、本地 `main`、本地 `master` 的顺序发现基线，并从 `worktreeProvenance` 读取实际的 `selectionSource`、`baseRef`、`baseCommit`、`baseHeadCommit` 与 `integrationTarget`；不要从分支名前缀推断来源。脏 linked worktree 必须由用户确认当前全部 diff，并以原响应的精确 `workingTree.stateFingerprint` 作为 `confirmed_dirty_state_fingerprint` 重查；指纹变化或分支已被其他 worktree/Delivery 使用时不得复用。
+- 运行中断连：报告 `PLUGIN_MCP_DISCONNECTED`，保留最后已知 root、node、operation 与双 fingerprint。恢复时用显式 `workspace_status(root_id=...)` 读取同一 Delivery，继续 `CURRENT_WORKSPACE_SERIAL` 的当前分支状态；不得创建新顶层会话、猜选另一个 Delivery、创建新 worktree 或再次展示选择器。
+- 响应未返回的写操作状态视为未知；重连后先调用 `workspace_status`。调用发生在当前对话工作区，已知 Delivery 时必须显式传 `root_id`。一个 `workspaceKey` 可以绑定多个 Delivery；无参查询返回 `DELIVERY_SELECTION_REQUIRED` 时只展示候选并用本会话保存的 `rootId` 重查，不按更新时间选择。当前目录即使是既有 linked checkout，也只作为普通 current workspace。仅当显式查询返回 `ACTIVE`、`BLOCKED`、`PAUSED`、`COMPLETED` 或 `CANCELLED` 且存在 `rootId` 时，再调用 `graph_status` 和 `graph_frontier`。
+- Git Delivery 重连时同时核对 `gitBinding` 与 `gitWorkspace`。当前 checkout 若位于另一 Delivery 分支，必须先证明前一个 Delivery 已形成可验证 commit、working tree/index clean、HEAD 与冻结 binding 一致且没有在途 receiver，再由宿主切回目标 Delivery 的独立分支并显式重查；不要让 Controller 自动 `git switch`。已持久化的 `AUTOMATIC` 选择按 `selectionContinuation` 调用 `resume_execution_mode`，不得重试 `select_execution_mode`。未冻结的新工作区按宿主显式 `base_ref`、有效 `origin/HEAD`、本地 `main`、本地 `master` 的顺序发现基线。资源冲突、dirty、HEAD 漂移或无法证明安全释放时停止切换。
 
 ## 协议与项目根
 
@@ -18,13 +17,15 @@ Plugin 优先使用 MCP `2026-07-28`。现代客户端可先调用 `server/disco
 
 所有等待用户选择的响应统一发布 `pendingInteraction`；当前 `kind` 为 `DEVELOPMENT_BASELINE` 或 `EXECUTION_MODE`。`activeHostMapping` 指向当前 Adapter 的原生问题工具；该工具在当前上下文可调用时必须直接消费 `options`，不得先输出文本问题。只有工具未暴露或当前模式不可调用时，才按 `presentationPolicy.fallback` 逐字显示 `markdown`，不得追加“回复自动”等 Agent 文案。`developmentBaseline` / `executionChoice` 暂时指向同一对象作为兼容别名，不是第二套状态机。
 
-Claude Plugin 通过启动环境 `${CLAUDE_PROJECT_DIR}` 固定共享控制根，但执行工作区不再等同于该固定根。Adapter 为每次请求提供实际 workspace；因此主会话可以短暂 `EnterWorktree(path=...)` 完成后台 Delivery coordinator 启动后返回 primary，而后台 coordinator 与其 receiver 始终解析到稳定 linked worktree。模型输入的路径不能替代 Adapter workspace。禁止启动新顶层 Claude 会话，也禁止在 receiver 内调用 `EnterWorktree`。Codex 的现代请求继续从每次请求 `_meta` 解析项目根；旧版 Codex 会话在首次合法元数据后绑定不可漂移的根。两种宿主的 primary 都使用 `HOST_NATIVE_LINKED_WORKTREE` 和 `hostDispatch`；主会话从共享控制根调用 `graph_frontier`、`graph_status`、`graph_events` 或 `open_delivery_dashboard` 时只获得 `MONITOR_ONLY` 权限，不能借此变更执行工作区。宿主缺少后台 Agent/项目任务能力时报告 `HOST_NATIVE_WORKTREE_LAUNCH_UNAVAILABLE`。Controller 的单次 operation 同时区分共享 `.layered-delivery/` 控制根与经 Adapter 提供并由 Git/project binding 校验的执行 workspace；二者都不等于 hierarchy 的 `delivery.id` 或递归 `root` 节点。
+Claude Plugin 通过启动环境 `${CLAUDE_PROJECT_DIR}` 固定共享控制根，Codex 的现代请求从每次请求 `_meta` 解析项目根；Adapter 为每次请求提供实际执行 workspace，模型输入路径不能替代它。工作区执行固定为 `CURRENT_WORKSPACE_SERIAL`：宿主只在前一个 Delivery 已形成可验证 commit、working tree/index clean、HEAD 未漂移且 receiver 已安全释放后，切换到目标 Delivery 的独立分支；同一时刻只运行一个显式 `rootId`。既有 primary 或 linked checkout 都作为当前实际 workspace，不自动创建另一个 worktree。主会话从共享控制根读取状态时只有 `MONITOR_ONLY` 权限。
 
 Plugin 通过 Skill、Agent 描述、MCP 和宿主元数据工作，不需要额外的生命周期信任步骤。`plan_dispatch_batch` 对所有 Ready TASK 和 Review 使用同一条 AUTO 路径：在容量、资源锁、Graph attempt 和双 fingerprint 校验后创建绑定 decision fingerprint 的短租约 reservation；宿主立即为每项 assignment 创建独立 child，child 以 `dispatch_transport=HOST_NATIVE`、reservation、decision fingerprint 和新的显式 `operation_id` 调用 `dispatch_loop(AUTO)`。未知响应只按同一 reservation/operation 恢复，不生成第二个 claim。
 
 MANUAL TASK 不进入 AUTO planning。启动 manual run 后，独立 receiver 以显式 receiving context 和新的 `operation_id` 调用 `dispatch_loop(MANUAL)`，不带 AUTO reservation、decision fingerprint、transport 或模型选择。两种模式共享 workspace/Git/project scope、Graph attempt、operation、lease、mutation 和资源锁校验；heartbeat、progress、pause 与 result 都必须显式携带当前 `operation_id`。暂停后的 `resume_loop` 先把节点恢复为 Ready，再按对应模式以新 operation 重新领取。
 
 未显式声明 `delivery.projectScopes` 的单仓 Delivery 在运行时从顶层 `delivery.gitBinding` 与 Adapter 提供的 Delivery workspace 合成唯一 `primary` scope；多仓仍逐项验证显式 scope。workspace 或 scope 无法匹配时，`dispatch_loop` 在 claim 前 fail closed，reservation 只能按既有租约/恢复规则处理。Controller 只看到 Adapter 提供的 workspace、receiver 类型和 assignment 数据，不能以密码学方式证明真实 parent-child 关系、receiver 身份延续或 reviewer 独立性；宿主必须按 assignment 创建独立 child，Controller 则继续强制校验 reservation、decision fingerprint、attempt、workspace、scope、operation、lease 和资源锁。`operation_id` 严禁出现在用户输出、日志、进度、result 或 Worker 输入。
+
+同一实际 workspace 的多个 Delivery 只共享控制面绑定，不共享文件隔离。后启动或后发现者遇到 checkout 占用时等待；只有前一个 Delivery 已形成可验证 commit、工作树 clean、HEAD 未漂移且 receiver 已安全释放后才可切换。`resourceClaims`、端口、数据库或 workspace 冲突、dirty 和 HEAD 漂移都停止切换；不得跨 Delivery 并行运行同一 checkout/branch。
 
 控制面根使用共享 `.layered-delivery/scheduler.db`。每个 `delivery.id` 是稳定的需求目录 namespace，其可读投影固定为：
 
@@ -75,6 +76,15 @@ SQLite 是需求与调度状态的机器权威。手动开发包把双 fingerpri
 TASK 显式声明 `databaseChanges` 时，同目录生成 `database-changes.md` 和每表详情，完整展示字段、主键、唯一约束、索引、外键、before/after 结构及迁移方案。冻结 after 是数据库 Loop 的唯一结构事实源，执行中需要偏离时必须返回 `REPLAN_REQUIRED` 并形成新 Revision；没有完整设计时不能进入 baseline 确认。
 
 `preview_hierarchy` 的 `CHOICE_READY` 阶段就在展示 Controller 选项前生成四份 Delivery 人类主投影、revisions 和全部 GROUP/TASK 节点投影，有接口或数据库声明的 TASK 再生成自己的契约投影。`workspace_status` 会在待选择状态恢复同一 `pendingInteraction`，并在返回它之前避免把尚未确认的 binding 当成运行时漂移。自动 Graph 冻结后继续从 SQLite 刷新进度与验收 Markdown；手动接收宿主在任何代码工作前调用 `start_manual_handoff`，再由独立 child 以显式 context/operation 领取 TASK，也由 SQLite 事件链刷新同一套 progress/acceptance，不能人工维护或用 Markdown 替代 Review。若实际 Git 已偏离 handoff binding，启动操作只返回 `BLOCKED_DEVELOPMENT_BASELINE_CONFIRMATION` 与精确上下文，不创建 Run；binding 改变时 `confirm_development_baseline` 生成同一 Delivery 的下一不可变手动 Revision，未改变时恢复原 Revision，接收方按响应双指纹重试。已有 `HANDOFF_READY` 内容变化时，`create_manual_handoff` 必须携带当前 Revision、`USER_EXPLICIT_SAME_DELIVERY` 和修订原因，在原目录追加新 handoff 并把旧 Revision 标为 `SUPERSEDED`，不得换 ID 新建目录。`workspace_status` 会为当前 schema v3 Delivery 幂等补建适用的投影树，并清理旧机器 JSON，不从 Markdown 迁移 hierarchy、Graph、事件链或运行状态。
+
+`record_loop_result` 的受保护 MCP 路径会从 Adapter 提供并由 Controller 验证的
+`READ_WRITE` Git project scopes 自动采集工作区变更快照，将其作为
+`outcome.result.workspaceChanges` 与事件一同持久化，再生成当前层 acceptance
+投影。后续投影刷新只读取 SQLite outcome，不动态扫描已移动或已删除的执行目录。
+该证据是相对冻结 `baseCommit` 的提交时 workspace snapshot，不替代默认串行策略的
+干净切换边界或代码归属判断。TASK 投影还会从同一持久化快照生成
+`work-items/<taskId>/workspace-changes.patch`，让只打开主控制根的用户通过
+`acceptance.md` 相对链接直接审核内容。
 
 已激活 AUTOMATIC Graph 的 TASK 与 Review 都只走 `plan_dispatch_batch → 独立 child → dispatch_loop(AUTO)`。每个 assignment 必须带 live reservation 和匹配的 decision fingerprint，child 使用新的显式 `operation_id`；不得由当前协调会话直领。`handoff_ready_automatic_task` 只用于满足其显式安全条件后的 MANUAL 接管，Review 继续自动独立派遣。
 

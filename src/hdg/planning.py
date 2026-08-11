@@ -11,6 +11,7 @@ from .git_binding import (
     enumerate_local_feature_branches,
     find_delivery_linked_worktree,
     git_repository_identity,
+    inspect_business_commit_range,
     inspect_delivery_git_workspace,
     inspect_frozen_git_workspace_provenance,
     resolve_branch_binding,
@@ -63,7 +64,6 @@ WORKTREE_SETUP_PHASES = frozenset(
     }
 )
 
-
 def workspace_status(
     *,
     root: str,
@@ -81,6 +81,8 @@ def workspace_status(
         root_id=root_id,
         workspace_root=workspace_root,
     )
+    if result["status"] == "DELIVERY_SELECTION_REQUIRED":
+        return result
     selected_root_id = result.get("rootId")
     if isinstance(selected_root_id, str):
         if result["status"] == "ARCHIVED":
@@ -111,12 +113,39 @@ def workspace_status(
             _attach_pending_interaction(result, interaction)
             return result
         if selection is not None:
-            recorded_setup = _automatic_workspace_setup(
+            serial_gate = _resolve_serial_workspace_gate(
+                repository,
+                workspace_root or root,
+                selected_root_id,
+                _serial_turn_for_recorded_selection(
+                    repository,
+                    root_id=selected_root_id,
+                    stored=stored,
+                    selection=selection,
+                    workspace_root=workspace_root or root,
+                ),
+            )
+            result["workspaceStrategy"] = "CURRENT_WORKSPACE_SERIAL"
+            result["workspaceTurn"] = serial_gate["workspaceTurn"]
+            if serial_gate["state"] != "ACQUIRED":
+                previous_status = result["status"]
+                result["deliveryStatus"] = previous_status
+                result["status"] = serial_gate["state"]
+                result["automaticDispatchRequested"] = False
+                result["nextAction"] = (
+                    "WAIT_FOR_WORKSPACE_COMMIT"
+                    if serial_gate["state"]
+                    == "WAITING_FOR_WORKSPACE_COMMIT"
+                    else "WAIT_FOR_WORKSPACE_TURN"
+                )
+                if git_binding is not None:
+                    result["gitBinding"] = git_binding
+                result["projectScopes"] = project_scopes or []
+                return result
+            recorded_setup = _automatic_serial_workspace_setup(
                 control_root=root,
                 workspace_root=workspace_root or root,
                 hierarchy=stored["hierarchy"],
-                host_adapter_id=host_adapter_id,
-                repository=repository,
             )
             if recorded_setup is not None:
                 result["worktreeSetup"] = recorded_setup
@@ -471,6 +500,757 @@ def _automatic_worktree_requests(
         )
     return sorted(requests, key=lambda item: item["projectId"])
 
+def _request_workspace_root(
+    request: dict[str, Any],
+    workspace_root: str,
+) -> str:
+    return (
+        workspace_root
+        if request["coordinatorWorkspace"]
+        else request["repositoryRoot"]
+    )
+
+
+def _current_workspace_satisfies_worktree_request(
+    request: dict[str, Any],
+    workspace_root: str,
+) -> bool:
+    """Return whether the serial current workspace is branch-ready and clean."""
+
+    target_root = _request_workspace_root(request, workspace_root)
+    if git_repository_identity(target_root) != request["repositoryKey"]:
+        return False
+    try:
+        verify_delivery_git_binding(
+            target_root,
+            request["gitBinding"],
+            preparing=True,
+        )
+    except GatedLoopError as error:
+        if error.code in {
+            "SCHEDULER_GIT_BRANCH_MISMATCH",
+            "SCHEDULER_GIT_DETACHED_HEAD",
+        }:
+            return False
+        raise
+    discovery = inspect_delivery_git_workspace(target_root)
+    working_tree = (
+        discovery.get("workingTree", {})
+        if isinstance(discovery, dict)
+        else {}
+    )
+    return working_tree.get("clean") is True
+
+
+def _current_workspace_serial_setup(
+    requests: list[dict[str, Any]],
+    workspace_root: str,
+) -> dict[str, Any]:
+    project_setups = []
+    for request in requests:
+        target_root = _request_workspace_root(request, workspace_root)
+        discovery = inspect_delivery_git_workspace(target_root)
+        working_tree = (
+            discovery.get("workingTree", {})
+            if isinstance(discovery, dict)
+            else {}
+        )
+        dirty = working_tree.get("clean") is False
+        project_setups.append(
+            {
+                "projectId": request["projectId"],
+                "workspaceRoot": str(
+                    Path(target_root).absolute().resolve(strict=True)
+                ),
+                "repositoryKey": request["repositoryKey"],
+                "branchRef": request["branchRef"],
+                "gitBinding": request["gitBinding"],
+                "state": (
+                    "CURRENT_WORKSPACE_DIRTY"
+                    if dirty
+                    else "CURRENT_WORKSPACE_BRANCH_REQUIRED"
+                ),
+                "nextAction": (
+                    "REVIEW_CURRENT_WORKSPACE_CHANGES"
+                    if dirty
+                    else "CREATE_OR_SWITCH_CURRENT_WORKSPACE_BRANCH"
+                ),
+                "workingTree": working_tree,
+            }
+        )
+    dirty = any(
+        item["state"] == "CURRENT_WORKSPACE_DIRTY"
+        for item in project_setups
+    )
+    return {
+        "state": "CURRENT_WORKSPACE_SETUP_REQUIRED",
+        "owner": "HOST",
+        "strategy": "CURRENT_WORKSPACE_SERIAL",
+        "nextAction": (
+            "REVIEW_CURRENT_WORKSPACE_CHANGES"
+            if dirty
+            else "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION"
+        ),
+        "controllerCreatesBranch": False,
+        "controllerCreatesWorktree": False,
+        "projectSetups": project_setups,
+    }
+
+
+def _automatic_serial_workspace_setup(
+    *,
+    control_root: str,
+    workspace_root: str,
+    hierarchy: dict[str, Any],
+) -> dict[str, Any] | None:
+    requests = _automatic_worktree_requests(
+        control_root=control_root,
+        workspace_root=workspace_root,
+        hierarchy=hierarchy,
+    )
+    pending_requests = [
+        request
+        for request in requests
+        if not _current_workspace_satisfies_worktree_request(
+            request,
+            workspace_root,
+        )
+    ]
+    if not pending_requests:
+        return None
+    return _current_workspace_serial_setup(
+        pending_requests,
+        workspace_root,
+    )
+
+
+def _serial_commit_barrier(
+    repository: SchedulerRepository,
+    workspace_root: str,
+    previous_turn: dict[str, str],
+) -> dict[str, Any] | None:
+    """Return a fail-closed barrier until the previous Delivery is committed."""
+
+    if repository.workspace_turn_release(previous_turn["rootId"]) is not None:
+        return None
+    receiver_leases = repository.unexpired_cancelled_receiver_leases(
+        previous_turn["rootId"]
+    )
+    if receiver_leases:
+        return {
+            "state": "WAITING_FOR_WORKSPACE_COMMIT",
+            "ownerRootId": previous_turn["rootId"],
+            "ownerStatus": previous_turn["status"],
+            "reason": "CANCELLED_RECEIVER_LEASE_ACTIVE",
+            "releasePolicy": (
+                "OWNER_RECEIVER_RELEASE_COMMIT_CLEAN_AND_TERMINAL"
+            ),
+            "receiverLeases": receiver_leases,
+        }
+    previous = repository.hierarchy(previous_turn["rootId"])
+    requests = _automatic_worktree_requests(
+        control_root=str(repository.root),
+        workspace_root=workspace_root,
+        hierarchy=previous["hierarchy"],
+    )
+    turn_start = repository.workspace_turn_start(previous_turn["rootId"])
+    start_by_project = {
+        item["projectId"]: item
+        for item in (
+            turn_start.get("projects", [])
+            if isinstance(turn_start, dict)
+            else []
+        )
+        if isinstance(item, dict)
+        and isinstance(item.get("projectId"), str)
+    }
+    pending_projects: list[dict[str, Any]] = []
+    release_projects: list[dict[str, Any]] = []
+    for request in requests:
+        target_root = _request_workspace_root(request, workspace_root)
+        start = start_by_project.get(request["projectId"])
+        if not isinstance(start, dict):
+            pending_projects.append(
+                {
+                    "projectId": request["projectId"],
+                    "workspaceRoot": target_root,
+                    "state": "TURN_START_EVIDENCE_MISSING",
+                    "reason": "TURN_START_COMMIT_UNVERIFIED",
+                }
+            )
+            continue
+        try:
+            verified = verify_delivery_git_binding(
+                target_root,
+                request["gitBinding"],
+                preparing=False,
+            )
+            discovery = inspect_delivery_git_workspace(target_root)
+        except GatedLoopError as error:
+            pending_projects.append(
+                {
+                    "projectId": request["projectId"],
+                    "workspaceRoot": target_root,
+                    "state": "WORKSPACE_DRIFTED",
+                    "reason": error.code,
+                    "details": error.details,
+                }
+            )
+            continue
+        working_tree = (
+            discovery.get("workingTree", {})
+            if isinstance(discovery, dict)
+            else {}
+        )
+        if working_tree.get("clean") is not True:
+            pending_projects.append(
+                {
+                    "projectId": request["projectId"],
+                    "workspaceRoot": target_root,
+                    "state": "WORKSPACE_DIRTY",
+                    "reason": "UNCOMMITTED_CHANGES",
+                    "workingTree": working_tree,
+                }
+            )
+            continue
+        if verified is None:
+            pending_projects.append(
+                {
+                    "projectId": request["projectId"],
+                    "workspaceRoot": target_root,
+                    "state": "COMMIT_REQUIRED",
+                    "reason": "HEAD_COMMIT_UNVERIFIED",
+                    "turnStartCommit": start.get("turnStartCommit"),
+                    "headCommit": None,
+                    "workingTree": working_tree,
+                }
+            )
+            continue
+        commit_range = inspect_business_commit_range(
+            target_root,
+            str(start.get("turnStartCommit", "")),
+            verified["headCommit"],
+        )
+        if not commit_range["turnStartCommitIsAncestor"]:
+            pending_projects.append(
+                {
+                    "projectId": request["projectId"],
+                    "workspaceRoot": target_root,
+                    "state": "HISTORY_REWRITTEN",
+                    "reason": "TURN_START_COMMIT_NOT_ANCESTOR_OF_HEAD",
+                    "turnStartCommit": commit_range["turnStartCommit"],
+                    "headCommit": commit_range["headCommit"],
+                    "workingTree": working_tree,
+                }
+            )
+            continue
+        if not commit_range["businessChangedFiles"]:
+            pending_projects.append(
+                {
+                    "projectId": request["projectId"],
+                    "workspaceRoot": target_root,
+                    "state": "COMMIT_REQUIRED",
+                    "reason": (
+                        "HEAD_EQUALS_TURN_START_COMMIT"
+                        if commit_range["headCommit"]
+                        == commit_range["turnStartCommit"]
+                        else "NO_BUSINESS_CHANGES_SINCE_TURN_START"
+                    ),
+                    "turnStartCommit": commit_range["turnStartCommit"],
+                    "headCommit": commit_range["headCommit"],
+                    "workingTree": working_tree,
+                }
+            )
+            continue
+        release_projects.append(
+            {
+                "projectId": request["projectId"],
+                "workspaceRoot": str(
+                    Path(target_root).absolute().resolve(strict=True)
+                ),
+                "branchRef": request["gitBinding"]["branchRef"],
+                "turnStartCommit": commit_range["turnStartCommit"],
+                "headCommit": commit_range["headCommit"],
+                "businessChangedFiles": commit_range[
+                    "businessChangedFiles"
+                ],
+                "businessTreeFingerprint": commit_range[
+                    "businessTreeFingerprint"
+                ],
+                "workingTreeStateFingerprint": working_tree[
+                    "stateFingerprint"
+                ],
+            }
+        )
+    if not pending_projects:
+        repository.release_serial_workspace_turn(
+            previous_turn["rootId"],
+            evidence={"projects": release_projects},
+        )
+        return None
+    return {
+        "state": "WAITING_FOR_WORKSPACE_COMMIT",
+        "ownerRootId": previous_turn["rootId"],
+        "ownerStatus": previous_turn["status"],
+        "releasePolicy": "OWNER_COMMIT_CLEAN_AND_TERMINAL_THEN_RELEASE",
+        "projectBarriers": pending_projects,
+    }
+
+
+_SERIAL_TERMINAL_STATUSES = frozenset(
+    {"ARCHIVED", "COMPLETED", "CANCELLED", "SUPERSEDED"}
+)
+
+
+def _resolve_serial_workspace_gate(
+    repository: SchedulerRepository,
+    workspace_root: str,
+    root_id: str,
+    workspace_turn: dict[str, Any],
+) -> dict[str, Any]:
+    """Release verified terminal owners, otherwise return a stable wait gate."""
+
+    current = workspace_turn
+    visited: set[str] = set()
+    while current["state"] != "ACQUIRED":
+        owner_root_id = current["ownerRootId"]
+        owner_status = current["ownerStatus"]
+        if (
+            owner_root_id in visited
+            or owner_status not in _SERIAL_TERMINAL_STATUSES
+        ):
+            return {
+                "state": "WAITING_FOR_WORKSPACE_TURN",
+                "workspaceTurn": current,
+            }
+        visited.add(owner_root_id)
+        commit_barrier = _serial_commit_barrier(
+            repository,
+            workspace_root,
+            {
+                "rootId": owner_root_id,
+                "status": owner_status,
+            },
+        )
+        if commit_barrier is not None:
+            return {
+                "state": "WAITING_FOR_WORKSPACE_COMMIT",
+                "workspaceTurn": {
+                    **current,
+                    **commit_barrier,
+                },
+            }
+        current = repository.serial_workspace_turn_state(root_id)
+    return {
+        "state": "ACQUIRED",
+        "workspaceTurn": current,
+    }
+
+
+def _serial_turn_for_recorded_selection(
+    repository: SchedulerRepository,
+    *,
+    root_id: str,
+    stored: dict[str, Any],
+    selection: dict[str, Any],
+    workspace_root: str,
+) -> dict[str, Any]:
+    """Recover a pre-queue AUTOMATIC choice into the current serial queue."""
+
+    try:
+        workspace_turn = repository.serial_workspace_turn_state(root_id)
+    except GatedLoopError as error:
+        if error.code != "SCHEDULER_DELIVERY_WORKSPACE_MISSING":
+            raise
+        recorded = repository.record_automatic_selection(
+            root_id,
+            expected_hierarchy_fingerprint=stored[
+                "hierarchyFingerprint"
+            ],
+            expected_graph_fingerprint=stored["graphFingerprint"],
+            authorized_project_ids=selection["authorizedProjectIds"],
+            confirmed_by=selection["confirmedBy"],
+            worktree_requests=[],
+            workspace_key=SchedulerRepository.workspace_key(
+                workspace_root
+            ),
+        )
+        workspace_turn = recorded["workspaceTurn"]
+    repository.assert_delivery_workspace(root_id, workspace_root)
+    return workspace_turn
+
+
+def _capture_workspace_turn_start(
+    requests: list[dict[str, Any]],
+    workspace_root: str,
+) -> dict[str, Any]:
+    projects = []
+    for request in requests:
+        target_root = _request_workspace_root(request, workspace_root)
+        verified = verify_delivery_git_binding(
+            target_root,
+            request["gitBinding"],
+            preparing=False,
+        )
+        discovery = inspect_delivery_git_workspace(target_root)
+        working_tree = (
+            discovery.get("workingTree", {})
+            if isinstance(discovery, dict)
+            else {}
+        )
+        if working_tree.get("clean") is not True:
+            fail(
+                "SCHEDULER_WORKSPACE_TURN_DIRTY",
+                "A serial workspace turn must start from a clean business "
+                "working tree",
+                rootId=request.get("rootId"),
+                projectId=request["projectId"],
+                workspaceRoot=target_root,
+                workingTree=working_tree,
+            )
+        if verified is None:
+            fail(
+                "SCHEDULER_GIT_WORKTREE_REQUIRED",
+                "A Git-bound serial workspace turn requires a Git checkout",
+                projectId=request["projectId"],
+            )
+        projects.append(
+            {
+                "projectId": request["projectId"],
+                "workspaceRoot": str(
+                    Path(target_root).absolute().resolve(strict=True)
+                ),
+                "workspaceKey": SchedulerRepository.workspace_key(
+                    target_root
+                ),
+                "branchRef": request["gitBinding"]["branchRef"],
+                "baseCommit": request["gitBinding"]["baseCommit"],
+                "turnStartCommit": verified["headCommit"],
+                "workingTreeStateFingerprint": working_tree[
+                    "stateFingerprint"
+                ],
+            }
+        )
+    return {
+        "schemaVersion": 1,
+        "strategy": "CURRENT_WORKSPACE_SERIAL",
+        "projects": projects,
+    }
+
+
+def _workspace_turn_waiting(
+    error: GatedLoopError,
+) -> dict[str, Any]:
+    details = error.details
+    return {
+        "state": "WAITING_FOR_WORKSPACE_TURN",
+        "ownerRootId": details.get("ownerRootId"),
+        "ownerStatus": details.get("ownerStatus"),
+        "ownerCreatedAt": details.get("ownerCreatedAt"),
+        "workspaceKey": details.get("workspaceKey"),
+        "queueOrder": details.get("queueOrder"),
+        "releasePolicy": (
+            "OWNER_COMMIT_CLEAN_AND_TERMINAL_THEN_RELEASE"
+        ),
+    }
+
+
+
+def _verify_frozen_delivery_workspace(
+    stored: dict[str, Any],
+    workspace_root: str,
+) -> list[dict[str, Any]]:
+    """Recheck the immutable project/Git scopes before idempotent reuse."""
+
+    delivery = stored["hierarchy"]["delivery"]
+    writable_git_scopes: list[dict[str, str]] = []
+    verified_projects = verify_delivery_project_scopes(
+        workspace_root,
+        delivery,
+        preparing=False,
+    )
+    if delivery.get("projectScopes") is None:
+        verified_git = verify_delivery_git_binding(
+            workspace_root,
+            delivery.get("gitBinding"),
+            preparing=False,
+        )
+        if verified_git is not None:
+            writable_git_scopes.append(
+                {
+                    "projectId": delivery["id"],
+                    "workspaceRoot": workspace_root,
+                }
+            )
+    elif not verified_projects:
+        fail(
+            "SCHEDULER_PROJECT_SCOPE_INVALID",
+            "The frozen Delivery has no verified project scope",
+            rootId=stored["rootId"],
+        )
+    else:
+        writable_git_scopes.extend(
+            {
+                "projectId": project["id"],
+                "workspaceRoot": project["workspaceRoot"],
+            }
+            for project in verified_projects
+            if project["access"] == "READ_WRITE"
+            and isinstance(project.get("gitWorkspace"), dict)
+        )
+    for project in writable_git_scopes:
+        discovery = inspect_delivery_git_workspace(
+            project["workspaceRoot"]
+        )
+        working_tree = (
+            discovery.get("workingTree", {})
+            if isinstance(discovery, dict)
+            else {}
+        )
+        if working_tree.get("clean") is not True:
+            fail(
+                "SCHEDULER_WORKSPACE_TURN_DIRTY",
+                "A frozen Delivery cannot be redispatched while its "
+                "business working tree contains unfinished changes",
+                rootId=stored["rootId"],
+                projectId=project["projectId"],
+                workspaceRoot=project["workspaceRoot"],
+                workingTree=working_tree,
+                nextAction="REVIEW_OR_COMMIT_CURRENT_DELIVERY_CHANGES",
+            )
+    return verified_projects
+
+
+def _frozen_serial_workspace_gate(
+    repository: SchedulerRepository,
+    *,
+    stored: dict[str, Any],
+    workspace_root: str,
+) -> dict[str, Any]:
+    """Recheck physical binding and serial ownership for a frozen Run."""
+
+    repository.assert_delivery_workspace(
+        stored["rootId"],
+        workspace_root,
+    )
+    return _resolve_serial_workspace_gate(
+        repository,
+        workspace_root,
+        stored["rootId"],
+        repository.serial_workspace_turn_state(stored["rootId"]),
+    )
+
+
+def _unbound_manual_serial_workspace_gate(
+    repository: SchedulerRepository,
+    *,
+    root_id: str,
+    workspace_root: str,
+) -> dict[str, Any]:
+    """Release predecessors before an unbound manual handoff switches Git.
+
+    A HANDOFF_READY Delivery cannot join the persisted queue until its frozen
+    branch is current and prepare succeeds. Releasing a terminal predecessor
+    must happen before that branch switch, otherwise its commit evidence can
+    no longer be verified in the shared checkout.
+    """
+
+    while True:
+        turns = [
+            turn
+            for turn in repository.serial_workspace_turns(
+                workspace_root,
+                include_terminal=True,
+            )
+            if turn["rootId"] != root_id
+            and repository.workspace_turn_release(turn["rootId"]) is None
+        ]
+        if not turns:
+            workspace_key = SchedulerRepository.workspace_key(
+                workspace_root
+            )
+            return {
+                "state": "ACQUIRED",
+                "workspaceTurn": {
+                    "state": "ACQUIRED",
+                    "strategy": "CURRENT_WORKSPACE_SERIAL",
+                    "workspaceKey": workspace_key,
+                    "ownerRootId": root_id,
+                    "ownerStatus": "HANDOFF_READY",
+                    "requestedRootId": root_id,
+                    "position": 1,
+                    "queueLength": 1,
+                    "releasePolicy": (
+                        "OWNER_COMMIT_CLEAN_AND_TERMINAL_THEN_RELEASE"
+                    ),
+                },
+            }
+        owner = turns[0]
+        workspace_turn = {
+            "state": "WAITING_FOR_WORKSPACE_TURN",
+            "strategy": "CURRENT_WORKSPACE_SERIAL",
+            "workspaceKey": owner["workspaceKey"],
+            "ownerRootId": owner["rootId"],
+            "ownerStatus": owner["status"],
+            "requestedRootId": root_id,
+            "position": len(turns) + 1,
+            "queueLength": len(turns) + 1,
+            "releasePolicy": (
+                "OWNER_COMMIT_CLEAN_AND_TERMINAL_THEN_RELEASE"
+            ),
+        }
+        if owner["status"] not in _SERIAL_TERMINAL_STATUSES:
+            return {
+                "state": "WAITING_FOR_WORKSPACE_TURN",
+                "workspaceTurn": workspace_turn,
+            }
+        commit_barrier = _serial_commit_barrier(
+            repository,
+            workspace_root,
+            {
+                "rootId": owner["rootId"],
+                "status": owner["status"],
+            },
+        )
+        if commit_barrier is not None:
+            return {
+                "state": "WAITING_FOR_WORKSPACE_COMMIT",
+                "workspaceTurn": {
+                    **workspace_turn,
+                    **commit_barrier,
+                },
+            }
+
+
+def _manual_serial_workspace_gate(
+    repository: SchedulerRepository,
+    *,
+    stored: dict[str, Any],
+    workspace_root: str,
+) -> dict[str, Any]:
+    """Resolve the same serial gate for bound and unbound manual starts."""
+
+    repository.assert_delivery_workspace(
+        stored["rootId"],
+        workspace_root,
+        allow_unbound_manual=True,
+    )
+    try:
+        workspace_turn = repository.serial_workspace_turn_state(
+            stored["rootId"]
+        )
+    except GatedLoopError as error:
+        if error.code != "SCHEDULER_DELIVERY_WORKSPACE_MISSING":
+            raise
+        return _unbound_manual_serial_workspace_gate(
+            repository,
+            root_id=stored["rootId"],
+            workspace_root=workspace_root,
+        )
+    return _resolve_serial_workspace_gate(
+        repository,
+        workspace_root,
+        stored["rootId"],
+        workspace_turn,
+    )
+
+
+def _manual_workspace_waiting_result(
+    *,
+    stored: dict[str, Any],
+    started_by: str,
+    serial_gate: dict[str, Any],
+    already_applied: bool,
+) -> dict[str, Any]:
+    waiting_for_commit = (
+        serial_gate["state"] == "WAITING_FOR_WORKSPACE_COMMIT"
+    )
+    return {
+        "rootId": stored["rootId"],
+        "status": serial_gate["state"],
+        "deliveryStatus": stored["status"],
+        "hierarchyFingerprint": stored["hierarchyFingerprint"],
+        "graphFingerprint": stored["graphFingerprint"],
+        "startedBy": started_by,
+        "graphRunCreated": False,
+        "manualStartState": serial_gate["state"],
+        "manualStartAlreadyApplied": already_applied,
+        "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
+        "workspaceTurn": serial_gate["workspaceTurn"],
+        "nextAction": (
+            "WAIT_FOR_WORKSPACE_COMMIT"
+            if waiting_for_commit
+            else "WAIT_FOR_WORKSPACE_TURN"
+        ),
+    }
+
+
+def _frozen_automatic_result(
+    repository: SchedulerRepository,
+    *,
+    stored: dict[str, Any],
+    workspace_root: str,
+) -> dict[str, Any]:
+    """Return a frozen automatic Run only after every runtime guard passes."""
+
+    run = repository.run(stored["rootId"])
+    if run["executionMode"] != "active":
+        fail(
+            "SCHEDULER_EXECUTION_CHOICE_CONFLICT",
+            "This Delivery already has a non-automatic Graph run",
+            rootId=stored["rootId"],
+            executionMode=run["executionMode"],
+        )
+    serial_gate = _frozen_serial_workspace_gate(
+        repository,
+        stored=stored,
+        workspace_root=workspace_root,
+    )
+    if serial_gate["state"] != "ACQUIRED":
+        waiting_for_commit = (
+            serial_gate["state"] == "WAITING_FOR_WORKSPACE_COMMIT"
+        )
+        return {
+            "rootId": stored["rootId"],
+            "status": serial_gate["state"],
+            "deliveryStatus": stored["status"],
+            "hierarchyFingerprint": stored["hierarchyFingerprint"],
+            "graphFingerprint": stored["graphFingerprint"],
+            "selection": "AUTOMATIC",
+            "selectionRecorded": True,
+            "selectionAlreadyApplied": True,
+            "confirmationRequired": False,
+            "automaticDispatchRequested": False,
+            "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
+            "workspaceTurn": serial_gate["workspaceTurn"],
+            "selectionContinuation": {
+                "tool": "resume_execution_mode",
+                "confirmationRequired": False,
+                "selectionPreserved": True,
+            },
+            "nextAction": (
+                "WAIT_FOR_WORKSPACE_COMMIT"
+                if waiting_for_commit
+                else "WAIT_FOR_WORKSPACE_TURN"
+            ),
+        }
+    _verify_frozen_delivery_workspace(stored, workspace_root)
+    terminal = run["status"] in _SERIAL_TERMINAL_STATUSES
+    return {
+        **run,
+        "selection": "AUTOMATIC",
+        "selectionAlreadyApplied": True,
+        "confirmationRequired": False,
+        "automaticDispatchRequested": not terminal,
+        "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
+        "workspaceTurn": serial_gate["workspaceTurn"],
+        "nextAction": (
+            "GRAPH_RUN_ALREADY_TERMINAL"
+            if terminal
+            else "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH"
+        ),
+    }
+
 
 def _worktree_setup_progress(
     reservation: dict[str, Any] | None,
@@ -583,6 +1363,25 @@ def _project_worktree_setup(
         binding,
     )
     coordinator = bool(request["coordinatorWorkspace"])
+    if _current_workspace_satisfies_worktree_request(
+        request,
+        workspace_root,
+    ):
+        return {
+            **request,
+            "state": "READY",
+            "owner": "CONTROLLER_VERIFIED",
+            "nextAction": "NONE",
+            "workspaceRoot": str(
+                Path(_request_workspace_root(request, workspace_root))
+                .absolute()
+                .resolve(strict=True)
+            ),
+            "setupProgress": _worktree_setup_progress(
+                reservation_state,
+                ready=True,
+            ),
+        }
     dispatch_already_issued = bool(
         (reservation_state or {}).get("dispatchAlreadyIssued", False)
     )
@@ -1927,6 +2726,8 @@ def freeze_hierarchy(
     authorized_project_ids: list[str] | None = None,
     confirmed: bool,
     confirmed_by: str,
+    workspace_root: str | None = None,
+    workspace_turn_start: dict[str, Any] | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
@@ -1944,6 +2745,57 @@ def freeze_hierarchy(
         )
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
+    stored = repository.hierarchy(root_id)
+    actual_workspace = workspace_root or root
+    repository.assert_delivery_workspace(root_id, actual_workspace)
+    serial_gate = _resolve_serial_workspace_gate(
+        repository,
+        actual_workspace,
+        root_id,
+        repository.serial_workspace_turn_state(root_id),
+    )
+    if serial_gate["state"] != "ACQUIRED":
+        waiting_for_commit = (
+            serial_gate["state"] == "WAITING_FOR_WORKSPACE_COMMIT"
+        )
+        return {
+            "rootId": root_id,
+            "status": serial_gate["state"],
+            "deliveryStatus": stored["status"],
+            "deliveryRevision": expected_delivery_revision,
+            "hierarchyFingerprint": expected_hierarchy_fingerprint,
+            "graphFingerprint": stored["graphFingerprint"],
+            "graphRunCreated": False,
+            "automaticDispatchRequested": False,
+            "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
+            "workspaceTurn": serial_gate["workspaceTurn"],
+            "nextAction": (
+                "WAIT_FOR_WORKSPACE_COMMIT"
+                if waiting_for_commit
+                else "WAIT_FOR_WORKSPACE_TURN"
+            ),
+        }
+    revision_hierarchy = repository.revision_hierarchy(
+        root_id,
+        expected_delivery_revision,
+    )
+    captured_turn_start = _capture_workspace_turn_start(
+        _automatic_worktree_requests(
+            control_root=root,
+            workspace_root=actual_workspace,
+            hierarchy=revision_hierarchy,
+        ),
+        actual_workspace,
+    )
+    if (
+        workspace_turn_start is not None
+        and workspace_turn_start != captured_turn_start
+    ):
+        fail(
+            "SCHEDULER_WORKSPACE_TURN_CHANGED",
+            "The current workspace changed between turn capture and freeze",
+            rootId=root_id,
+        )
     result = repository.freeze(
         root_id,
         expected_delivery_revision=expected_delivery_revision,
@@ -1952,6 +2804,7 @@ def freeze_hierarchy(
         ),
         authorized_project_ids=authorized_project_ids or [],
         confirmed_by=confirmed_by.strip(),
+        workspace_turn_start=captured_turn_start,
     )
     return {
         **result,
@@ -2111,6 +2964,7 @@ def start_manual_handoff(
             actualHierarchyFingerprint=stored["hierarchyFingerprint"],
             actualGraphFingerprint=stored["graphFingerprint"],
         )
+    actual_workspace = workspace_root or root
     if stored["status"] == "FROZEN":
         existing_run = repository.run(root_id)
         if existing_run["executionMode"] != "manual":
@@ -2120,11 +2974,29 @@ def start_manual_handoff(
                 rootId=root_id,
                 executionMode=existing_run["executionMode"],
             )
+        serial_gate = _frozen_serial_workspace_gate(
+            repository,
+            stored=stored,
+            workspace_root=actual_workspace,
+        )
+        if serial_gate["state"] != "ACQUIRED":
+            return _manual_workspace_waiting_result(
+                stored=stored,
+                started_by=started_by.strip(),
+                serial_gate=serial_gate,
+                already_applied=True,
+            )
+        _verify_frozen_delivery_workspace(stored, actual_workspace)
+        terminal = existing_run["status"] in _SERIAL_TERMINAL_STATUSES
         return {
             **existing_run,
             "graphRunCreated": True,
             "manualStartAlreadyApplied": True,
-            "nextAction": "READ_GRAPH_FRONTIER",
+            "nextAction": (
+                "GRAPH_RUN_ALREADY_TERMINAL"
+                if terminal
+                else "READ_GRAPH_FRONTIER"
+            ),
         }
     if stored["status"] not in {"HANDOFF_READY", "PREPARED"}:
         fail(
@@ -2154,11 +3026,23 @@ def start_manual_handoff(
             "The frozen manual revision is missing its confirmation record",
             rootId=root_id,
         )
+    serial_gate = _manual_serial_workspace_gate(
+        repository,
+        stored=stored,
+        workspace_root=actual_workspace,
+    )
+    if serial_gate["state"] != "ACQUIRED":
+        return _manual_workspace_waiting_result(
+            stored=stored,
+            started_by=started_by.strip(),
+            serial_gate=serial_gate,
+            already_applied=False,
+        )
     if stored["status"] == "HANDOFF_READY":
         blocked = _manual_baseline_reconfirmation(
             stored=stored,
             repository=repository,
-            workspace_root=workspace_root or root,
+            workspace_root=actual_workspace,
             host_adapter_id=host_adapter_id,
         )
         if blocked is not None:
@@ -2166,7 +3050,7 @@ def start_manual_handoff(
         prepared = prepare_hierarchy(
             root=root,
             hierarchy=stored["hierarchy"],
-            workspace_root=workspace_root or root,
+            workspace_root=actual_workspace,
             explicit_dogfood=explicit_dogfood,
             now=now,
         )
@@ -2179,13 +3063,13 @@ def start_manual_handoff(
     else:
         delivery = stored["hierarchy"]["delivery"]
         verified_projects = verify_delivery_project_scopes(
-            workspace_root or root,
+            actual_workspace,
             delivery,
             preparing=False,
         )
         if delivery.get("projectScopes") is None:
             verify_delivery_git_binding(
-                workspace_root or root,
+                actual_workspace,
                 delivery.get("gitBinding"),
                 preparing=False,
             )
@@ -2195,14 +3079,49 @@ def start_manual_handoff(
                 "The interrupted manual adoption has no verified project",
                 rootId=root_id,
             )
-    result = repository.freeze_manual_handoff(
-        root_id,
-        expected_delivery_revision=current["revision"],
-        expected_hierarchy_fingerprint=expected_hierarchy_fingerprint,
-        authorized_project_ids=current["authorizedProjectIds"],
-        confirmed_by=current["confirmedBy"].strip(),
-        started_by=started_by.strip(),
+    prepared_stored = repository.hierarchy(root_id)
+    serial_gate = _manual_serial_workspace_gate(
+        repository,
+        stored=prepared_stored,
+        workspace_root=actual_workspace,
     )
+    if serial_gate["state"] != "ACQUIRED":
+        return _manual_workspace_waiting_result(
+            stored=prepared_stored,
+            started_by=started_by.strip(),
+            serial_gate=serial_gate,
+            already_applied=False,
+        )
+    turn_start = _capture_workspace_turn_start(
+        _automatic_worktree_requests(
+            control_root=root,
+            workspace_root=actual_workspace,
+            hierarchy=stored["hierarchy"],
+        ),
+        actual_workspace,
+    )
+    try:
+        result = repository.freeze_manual_handoff(
+            root_id,
+            expected_delivery_revision=current["revision"],
+            expected_hierarchy_fingerprint=expected_hierarchy_fingerprint,
+            authorized_project_ids=current["authorizedProjectIds"],
+            confirmed_by=current["confirmedBy"].strip(),
+            started_by=started_by.strip(),
+            workspace_turn_start=turn_start,
+        )
+    except GatedLoopError as error:
+        if error.code != "SCHEDULER_WORKSPACE_TURN_NOT_OWNED":
+            raise
+        return _manual_workspace_waiting_result(
+            stored=repository.hierarchy(root_id),
+            started_by=started_by.strip(),
+            serial_gate={
+                "state": "WAITING_FOR_WORKSPACE_TURN",
+                "workspaceTurn": _workspace_turn_waiting(error),
+            },
+            already_applied=False,
+        )
     return {
         **result,
         "startedBy": started_by.strip(),
@@ -2423,16 +3342,13 @@ def resume_execution_mode(
             actualHierarchyFingerprint=stored["hierarchyFingerprint"],
             actualGraphFingerprint=stored["graphFingerprint"],
         )
+    actual_workspace = workspace_root or root
     if stored["status"] == "FROZEN":
-        run = repository.run(root_id)
-        return {
-            **run,
-            "selection": "AUTOMATIC",
-            "selectionAlreadyApplied": True,
-            "confirmationRequired": False,
-            "automaticDispatchRequested": True,
-            "nextAction": "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH",
-        }
+        return _frozen_automatic_result(
+            repository,
+            stored=stored,
+            workspace_root=actual_workspace,
+        )
     selection = repository.execution_selection(root_id)
     if selection is None:
         fail(
@@ -2441,14 +3357,50 @@ def resume_execution_mode(
             "selection",
             rootId=root_id,
         )
-    actual_workspace = workspace_root or root
-    setup = _automatic_workspace_setup(
+    serial_gate = _resolve_serial_workspace_gate(
+        repository,
+        actual_workspace,
+        root_id,
+        _serial_turn_for_recorded_selection(
+            repository,
+            root_id=root_id,
+            stored=stored,
+            selection=selection,
+            workspace_root=actual_workspace,
+        ),
+    )
+    if serial_gate["state"] != "ACQUIRED":
+        waiting_for_commit = (
+            serial_gate["state"] == "WAITING_FOR_WORKSPACE_COMMIT"
+        )
+        return {
+            "rootId": root_id,
+            "status": serial_gate["state"],
+            "deliveryStatus": stored["status"],
+            "hierarchyFingerprint": stored["hierarchyFingerprint"],
+            "graphFingerprint": stored["graphFingerprint"],
+            "selection": "AUTOMATIC",
+            "selectionRecorded": True,
+            "selectionAlreadyApplied": True,
+            "confirmationRequired": False,
+            "automaticDispatchRequested": False,
+            "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
+            "workspaceTurn": serial_gate["workspaceTurn"],
+            "selectionContinuation": {
+                "tool": "resume_execution_mode",
+                "confirmationRequired": False,
+                "selectionPreserved": True,
+            },
+            "nextAction": (
+                "WAIT_FOR_WORKSPACE_COMMIT"
+                if waiting_for_commit
+                else "WAIT_FOR_WORKSPACE_TURN"
+            ),
+        }
+    setup = _automatic_serial_workspace_setup(
         control_root=root,
         workspace_root=actual_workspace,
         hierarchy=stored["hierarchy"],
-        host_adapter_id=host_adapter_id,
-        repository=repository,
-        reservation_states=_worktree_reservation_states,
     )
     if setup is not None:
         return {
@@ -2461,6 +3413,8 @@ def resume_execution_mode(
             "confirmationRequired": False,
             "automaticDispatchRequested": False,
             "worktreeSetup": setup,
+            "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
+            "workspaceTurn": serial_gate["workspaceTurn"],
             "selectionContinuation": {
                 "tool": "resume_execution_mode",
                 "confirmationRequired": False,
@@ -2497,17 +3451,55 @@ def resume_execution_mode(
             rootId=root_id,
             status=stored["status"],
         )
-    frozen = freeze_hierarchy(
-        root=root,
-        root_id=root_id,
-        expected_delivery_revision=prepared["deliveryRevision"],
-        expected_hierarchy_fingerprint=prepared["hierarchyFingerprint"],
-        authorized_project_ids=selection["authorizedProjectIds"],
-        confirmed=True,
-        confirmed_by=selection["confirmedBy"],
-        explicit_dogfood=explicit_dogfood,
-        now=now,
+    turn_start = _capture_workspace_turn_start(
+        _automatic_worktree_requests(
+            control_root=root,
+            workspace_root=actual_workspace,
+            hierarchy=stored["hierarchy"],
+        ),
+        actual_workspace,
     )
+    try:
+        frozen = freeze_hierarchy(
+            root=root,
+            root_id=root_id,
+            expected_delivery_revision=prepared["deliveryRevision"],
+            expected_hierarchy_fingerprint=prepared[
+                "hierarchyFingerprint"
+            ],
+            authorized_project_ids=selection["authorizedProjectIds"],
+            confirmed=True,
+            confirmed_by=selection["confirmedBy"],
+            workspace_root=actual_workspace,
+            workspace_turn_start=turn_start,
+            explicit_dogfood=explicit_dogfood,
+            now=now,
+        )
+    except GatedLoopError as error:
+        if error.code != "SCHEDULER_WORKSPACE_TURN_NOT_OWNED":
+            raise
+        return {
+            "rootId": root_id,
+            "status": "WAITING_FOR_WORKSPACE_TURN",
+            "deliveryStatus": "PREPARED",
+            "hierarchyFingerprint": prepared[
+                "hierarchyFingerprint"
+            ],
+            "graphFingerprint": expected_graph_fingerprint,
+            "selection": "AUTOMATIC",
+            "selectionRecorded": True,
+            "selectionAlreadyApplied": True,
+            "confirmationRequired": False,
+            "automaticDispatchRequested": False,
+            "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
+            "workspaceTurn": _workspace_turn_waiting(error),
+            "selectionContinuation": {
+                "tool": "resume_execution_mode",
+                "confirmationRequired": False,
+                "selectionPreserved": True,
+            },
+            "nextAction": "WAIT_FOR_WORKSPACE_TURN",
+        }
     return {
         **frozen,
         "selection": "AUTOMATIC",
@@ -2641,15 +3633,13 @@ def select_execution_mode(
             ),
         }
 
+    selected_strategy = "CURRENT_WORKSPACE_SERIAL"
     if stored["status"] == "FROZEN":
-        run = repository.run(root_id)
-        return {
-            **run,
-            "selection": "AUTOMATIC",
-            "selectionAlreadyApplied": True,
-            "automaticDispatchRequested": True,
-            "nextAction": "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH",
-        }
+        return _frozen_automatic_result(
+            repository,
+            stored=stored,
+            workspace_root=workspace_root or root,
+        )
     if stored["status"] == "HANDOFF_READY":
         fail(
             "SCHEDULER_EXECUTION_CHOICE_CONFLICT",
@@ -2676,19 +3666,83 @@ def select_execution_mode(
         workspace_root=actual_workspace,
         hierarchy=hierarchy,
     )
-    for request in worktree_requests:
-        _assert_automatic_git_branch_available(
-            {"delivery": {"gitBinding": request["gitBinding"]}},
-            request["repositoryRoot"],
-        )
     recorded = repository.record_automatic_selection(
         root_id,
         expected_hierarchy_fingerprint=expected_hierarchy_fingerprint,
         expected_graph_fingerprint=expected_graph_fingerprint,
         authorized_project_ids=authorized_project_ids or [],
         confirmed_by=confirmed_by.strip(),
-        worktree_requests=worktree_requests,
+        worktree_requests=[],
+        workspace_key=SchedulerRepository.workspace_key(actual_workspace),
     )
+    serial_gate = _resolve_serial_workspace_gate(
+        repository,
+        actual_workspace,
+        root_id,
+        recorded["workspaceTurn"],
+    )
+    if serial_gate["state"] != "ACQUIRED":
+        waiting_for_commit = (
+            serial_gate["state"] == "WAITING_FOR_WORKSPACE_COMMIT"
+        )
+        return {
+            "rootId": root_id,
+            "status": serial_gate["state"],
+            "deliveryStatus": stored["status"],
+            "selection": "AUTOMATIC",
+            "workspaceStrategy": selected_strategy,
+            "selectionRecorded": not recorded["selectionAlreadyApplied"],
+            "selectionAlreadyApplied": recorded[
+                "selectionAlreadyApplied"
+            ],
+            "automaticDispatchRequested": False,
+            "hierarchyFingerprint": stored["hierarchyFingerprint"],
+            "graphFingerprint": stored["graphFingerprint"],
+            "workspaceTurn": serial_gate["workspaceTurn"],
+            "nextAction": (
+                "WAIT_FOR_WORKSPACE_COMMIT"
+                if waiting_for_commit
+                else "WAIT_FOR_WORKSPACE_TURN"
+            ),
+        }
+
+    pending_requests = [
+        request
+        for request in worktree_requests
+        if not _current_workspace_satisfies_worktree_request(
+            request,
+            actual_workspace,
+        )
+    ]
+    if pending_requests:
+        setup = _current_workspace_serial_setup(
+            pending_requests,
+            actual_workspace,
+        )
+        return {
+            "rootId": root_id,
+            "status": stored["status"],
+            "selection": "AUTOMATIC",
+            "workspaceStrategy": selected_strategy,
+            "selectionRecorded": not recorded["selectionAlreadyApplied"],
+            "selectionAlreadyApplied": recorded[
+                "selectionAlreadyApplied"
+            ],
+            "automaticDispatchRequested": False,
+            "hierarchyFingerprint": stored[
+                "hierarchyFingerprint"
+            ],
+            "graphFingerprint": stored["graphFingerprint"],
+            "workspaceTurn": serial_gate["workspaceTurn"],
+            "worktreeSetup": setup,
+            "projectWorktreeSetup": setup["projectSetups"],
+            "selectionContinuation": {
+                "tool": "resume_execution_mode",
+                "selectionPreserved": True,
+                "confirmationRequired": False,
+            },
+            "nextAction": setup["nextAction"],
+        }
     resumed = resume_execution_mode(
         root=root,
         root_id=root_id,
@@ -2702,6 +3756,7 @@ def select_execution_mode(
     )
     return {
         **resumed,
+        "workspaceStrategy": selected_strategy,
         "selectionRecorded": not recorded["selectionAlreadyApplied"],
         "selectionAlreadyApplied": recorded["selectionAlreadyApplied"],
     }

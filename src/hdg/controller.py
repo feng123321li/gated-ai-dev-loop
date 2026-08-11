@@ -252,6 +252,7 @@ class LayeredDeliveryController:
             "workspace_status",
             "prepare_hierarchy",
             "prepare_delivery_revision",
+            "freeze_hierarchy",
             "confirm_development_baseline",
             "select_execution_mode",
             "report_worktree_setup",
@@ -262,6 +263,10 @@ class LayeredDeliveryController:
             arguments_value["workspace_root"] = workspace_root
         if name == "loop_context":
             arguments_value["workspace_root"] = workspace_root
+            arguments_value["verified_project_scopes"] = (
+                verified_projects
+            )
+        if name == "record_loop_result":
             arguments_value["verified_project_scopes"] = (
                 verified_projects
             )

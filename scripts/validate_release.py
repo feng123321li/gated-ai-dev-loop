@@ -34,7 +34,7 @@ CODEX_MANIFEST = PLUGIN / ".codex-plugin" / "plugin.json"
 CLAUDE_MANIFEST = PLUGIN / ".claude-plugin" / "plugin.json"
 REPO_MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 TEMPLATES = ROOT / "examples" / "team-loops"
-EXPECTED_TOOL_COUNT = 33
+EXPECTED_TOOL_COUNT = 32
 
 
 def _version_from_pyproject() -> str:

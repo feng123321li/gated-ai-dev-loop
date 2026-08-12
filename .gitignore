@@ -1,6 +1,7 @@
 .worktrees/
 .dev-loop-work/
 .layered-delivery/
+.zcode/
 __pycache__/
 *.py[cod]
 .venv/

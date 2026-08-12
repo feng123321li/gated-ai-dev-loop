@@ -396,10 +396,11 @@ class PluginBundleTests(unittest.TestCase):
         }
         self.assertEqual(plugin, canonical)
 
-    def test_dual_host_manifests_match_runtime_version(self) -> None:
+    def test_host_manifests_match_runtime_version(self) -> None:
         for relative in (
             ".codex-plugin/plugin.json",
             ".claude-plugin/plugin.json",
+            ".zcode-plugin/plugin.json",
         ):
             with self.subTest(relative=relative):
                 manifest = json.loads(
@@ -427,6 +428,15 @@ class PluginBundleTests(unittest.TestCase):
         self.assertEqual(
             claude_server["env"]["HDG_HOST_ADAPTER"],
             "claude-code",
+        )
+        zcode_server = json.loads(
+            (PLUGIN / ".zcode-plugin" / "plugin.json").read_text(
+                encoding="utf-8"
+            )
+        )["mcpServers"]["delivery-graph"]
+        self.assertEqual(
+            zcode_server["env"]["HDG_HOST_ADAPTER"],
+            "zcode",
         )
         self.assertEqual(
             server["default_tools_approval_mode"],

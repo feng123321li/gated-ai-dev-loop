@@ -17,7 +17,7 @@ Plugin 优先使用 MCP `2026-07-28`。现代客户端可先调用 `server/disco
 
 所有等待用户选择的响应统一发布 `pendingInteraction`；当前 `kind` 为 `DEVELOPMENT_BASELINE` 或 `EXECUTION_MODE`。`activeHostMapping` 指向当前 Adapter 的原生问题工具；该工具在当前上下文可调用时必须直接消费 `options`，不得先输出文本问题。只有工具未暴露或当前模式不可调用时，才按 `presentationPolicy.fallback` 逐字显示 `markdown`，不得追加“回复自动”等 Agent 文案。`developmentBaseline` / `executionChoice` 暂时指向同一对象作为兼容别名，不是第二套状态机。
 
-Claude Plugin 通过启动环境 `${CLAUDE_PROJECT_DIR}` 固定共享控制根，Codex 的现代请求从每次请求 `_meta` 解析项目根；Adapter 为每次请求提供实际执行 workspace，模型输入路径不能替代它。工作区执行固定为 `CURRENT_WORKSPACE_SERIAL`：宿主只在前一个 Delivery 已形成可验证 commit、working tree/index clean、HEAD 未漂移且 receiver 已安全释放后，切换到目标 Delivery 的独立分支；同一时刻只运行一个显式 `rootId`。既有 primary 或 linked checkout 都作为当前实际 workspace，不自动创建另一个 worktree。主会话从共享控制根读取状态时只有 `MONITOR_ONLY` 权限。
+Claude Plugin 通过启动环境 `${CLAUDE_PROJECT_DIR}` 固定共享控制根，Codex 与 ZCode 的现代请求从每次请求 `_meta` 解析项目根；Adapter 为每次请求提供实际执行 workspace，模型输入路径不能替代它。工作区执行固定为 `CURRENT_WORKSPACE_SERIAL`：宿主只在前一个 Delivery 已形成可验证 commit、working tree/index clean、HEAD 未漂移且 receiver 已安全释放后，切换到目标 Delivery 的独立分支；同一时刻只运行一个显式 `rootId`。既有 primary 或 linked checkout 都作为当前实际 workspace，不自动创建另一个 worktree。主会话从共享控制根读取状态时只有 `MONITOR_ONLY` 权限。
 
 Plugin 通过 Skill、Agent 描述、MCP 和宿主元数据工作，不需要额外的生命周期信任步骤。`plan_dispatch_batch` 对所有 Ready TASK 和 Review 使用同一条 AUTO 路径：在容量、资源锁、Graph attempt 和双 fingerprint 校验后创建绑定 decision fingerprint 的短租约 reservation；宿主立即为每项 assignment 创建独立 child，child 以 `dispatch_transport=HOST_NATIVE`、reservation、decision fingerprint 和新的显式 `operation_id` 调用 `dispatch_loop(AUTO)`。未知响应只按同一 reservation/operation 恢复，不生成第二个 claim。
 

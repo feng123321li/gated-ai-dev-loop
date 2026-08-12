@@ -16,6 +16,15 @@
 - 本节只确认 Adapter 核心契约；0.39.11 不新增 `.zcode-plugin` manifest，也不宣称 ZCode 真实宿主已完成原生 child 冒烟。Codex/Claude 的真实宿主验证要求保持不变。
 - 核心候选已在 CPython 3.10.19 与 3.14.6 各通过 383 项 Python 测试（各 1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Skill/Plugin manifest 与差异校验。实际 Codex/Claude 会话仍需按本页定义完成宿主原生 child 冒烟，并停在 `RECORD_USER_CONFIRMATION`。
 
+## 0.39.12 发布候选矩阵
+
+0.39.12 保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`，在 0.39.11 已补齐的 `zcode` Adapter 内部映射基础上新增独立 `.zcode-plugin/plugin.json` manifest。
+
+- 新增 `plugins/delivery-graph/.zcode-plugin/plugin.json`，以 `HDG_HOST_ADAPTER=zcode` 独立注入 Adapter 身份，不再借用 `.mcp.json` 的 `claude-code` 身份。ZCode 与 Codex 一样从请求 `_meta` 解析项目根（`--project-root-from-meta`），不依赖 `${CLAUDE_PROJECT_DIR}`。
+- ZCode 原生支持 `AskUserQuestion` 交互选择器，与 Claude Code 共用同一 `HOST_NATIVE_QUESTION_TOOLS` 映射；敏感工具审批策略与 Codex manifest 一致。
+- ZCode 不继承 Codex Desktop 的 Dashboard legacy bridge（`_dashboard_read_grants` 的 codex-only 复用路径）：非 Codex Adapter 的只读 Dashboard 请求继续按既有 fail-closed 规则处理。
+- 本节只确认 manifest 与核心契约一致；0.39.12 不宣称 ZCode 真实宿主已完成原生 child 冒烟。真实 ZCode 宿主冒烟候选验证中，结果待回填。
+
 ## 0.39.10 发布候选矩阵
 
 0.39.10 保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`，将 Graph 协调改为宿主事件优先，并让分层 Review 在独立判断不变的前提下复用与相关代码状态精确绑定的上游验证证据。
@@ -177,7 +186,7 @@ Codex 候选包必须在 manifest 中显式声明 `./hooks/hooks.json`。真实�
 
 发布管理员完成真实冒烟后，应在发布记录中填写准确宿主版本和结果；矩阵中的“CI 自动”不等于已经验证模型账户、Keyring、Hook 信任或原生 Agent 容量。
 
-当前矩阵只验证可信外层 receiver：Claude 宿主的 claim 必须来自受认证的 `claude-code` receiver，Codex 宿主的 claim 必须来自受认证的 `codex` receiver。PATH 中存在的 CLI 或 Loop 内 Worker 不能取得 Graph 控制面权限。新增外层供应商 Adapter 后必须作为独立矩阵维度验证，不能复用内部 Worker 成功记录宣称支持。
+当前矩阵只验证可信外层 receiver：Claude 宿主的 claim 必须来自受认证的 `claude-code` receiver，Codex 宿主的 claim 必须来自受认证的 `codex` receiver，ZCode 宿主的 claim 必须来自受认证的 `zcode` receiver。PATH 中存在的 CLI 或 Loop 内 Worker 不能取得 Graph 控制面权限。新增外层供应商 Adapter 后必须作为独立矩阵维度验证，不能复用内部 Worker 成功记录宣称支持。
 
 ## 0.36.0 历史真实宿主验证基线
 

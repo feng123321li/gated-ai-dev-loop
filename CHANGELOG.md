@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.12 — 2026-08-12
+
+发布提交：以 tag `v0.39.12` 指向的提交为准
+
+- **ZCode 独立 Plugin manifest**：新增 `plugins/delivery-graph/.zcode-plugin/plugin.json`，以 `HDG_HOST_ADAPTER=zcode` 独立注入 Adapter 身份，不再借用 `.mcp.json` 的 `claude-code` 身份。ZCode 与 Codex 一样从请求 `_meta` 解析项目根（`--project-root-from-meta`），不依赖 `${CLAUDE_PROJECT_DIR}`。
+- **边界明确**：ZCode 原生支持 `AskUserQuestion`，与 Claude Code 共用同一交互选择器映射；敏感工具审批策略与 Codex manifest 一致。ZCode 不继承 Codex Desktop 的 Dashboard legacy bridge，非 Codex Adapter 的只读 Dashboard 请求继续 fail closed。
+- **核心契约**：本版本只确认 manifest 与核心契约一致，不宣称 ZCode 真实宿主已完成原生 child 冒烟；真实 ZCode 宿主冒烟候选验证中，结果待回填。
+- **验证**：本地 Python 全量测试、`compileall`、canonical/Plugin 生成镜像、release candidate、Skill/Plugin manifest 与 `git diff --check` 均通过。
+
 ## 0.39.11 — 2026-08-12
 
 发布提交：以 tag `v0.39.11` 指向的提交为准

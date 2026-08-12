@@ -143,7 +143,7 @@ def main() -> int:
         entry, package = build_skill()
         print(f"Built Plugin MCP controller: {entry}")
         print(f"Bundled Plugin runtime package: {package}")
-        print(f"Built dual-host Plugin payload: {PLUGIN_SKILL}")
+        print(f"Built multi-host Plugin payload: {PLUGIN_SKILL}")
         return 0
     except Exception as error:
         print(f"Build failed: {error}", file=sys.stderr)

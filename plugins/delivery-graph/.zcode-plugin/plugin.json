@@ -32,7 +32,7 @@
       ],
       "cwd": ".",
       "env": {
-        "HDG_HOST_ADAPTER": "codex"
+        "HDG_HOST_ADAPTER": "zcode"
       },
       "supports_parallel_tool_calls": false,
       "default_tools_approval_mode": "approve",

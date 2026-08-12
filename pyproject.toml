@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "delivery-graph"
-version = "0.39.12"
+version = "0.39.13"
 description = "Delivery Graph control plane for Git baselines, layered execution, reviews, and recovery"
 requires-python = ">=3.10"
 dependencies = []

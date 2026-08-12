@@ -4,6 +4,14 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.13 — 2026-08-12
+
+发布提交：以 tag `v0.39.13` 指向的提交为准
+
+- **ZCode MCP 注册修复**：修正 0.39.12 的宿主绑定假设。ZCode 宿主不会像 Codex 那样在 MCP 请求 `_meta` 注入 sandbox 元数据，`--project-root-from-meta` 模式导致每个请求都返回 `PROJECT_ROOT_UNAVAILABLE`。`.zcode-plugin/plugin.json` 改为显式 `HDG_PROJECT_ROOT=${CLAUDE_PROJECT_DIR}`（ZCode 对 plugin 提供的 MCP server 支持该模板变量），与 Claude 侧 `.mcp.json` 的根解析方式一致；Codex 与 Claude manifest 不受影响。
+- **真实验证**：按 ZCode 启动方式（plugin 根为 cwd、`HDG_HOST_ADAPTER=zcode`、`HDG_PROJECT_ROOT` 指向工作区）端到端拉起 `hdg_mcp.py`，`initialize` 握手成功，`workspace_status` 项目根解析恢复正常；在 `delivery-graph` 源码仓库内按预期触发自托管防护 `SELF_HOSTING_DOGFOOD_REQUIRED`（未显式 `--dogfood` 不产生运行包）。
+- **验证**：本地 Python 全量 383 项测试通过（1 项按环境条件跳过）；`compileall`、canonical/Plugin 生成镜像、release candidate、Skill/Plugin manifest 与 `git diff --check` 均通过。
+
 ## 0.39.12 — 2026-08-12
 
 发布提交：以 tag `v0.39.12` 指向的提交为准

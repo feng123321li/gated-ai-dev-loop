@@ -16,6 +16,15 @@
 - 本节只确认 Adapter 核心契约；0.39.11 不新增 `.zcode-plugin` manifest，也不宣称 ZCode 真实宿主已完成原生 child 冒烟。Codex/Claude 的真实宿主验证要求保持不变。
 - 核心候选已在 CPython 3.10.19 与 3.14.6 各通过 383 项 Python 测试（各 1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Skill/Plugin manifest 与差异校验。实际 Codex/Claude 会话仍需按本页定义完成宿主原生 child 冒烟，并停在 `RECORD_USER_CONFIRMATION`。
 
+## 0.39.13 发布候选矩阵
+
+0.39.13 保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`，修正 0.39.12 的 ZCode 项目根解析假设，使 ZCode 宿主加载 Plugin 后 MCP 请求不再失败关闭于根目录解析。
+
+- **根因**：ZCode 宿主不会像 Codex 那样在每个 MCP 请求的 `_meta` 注入 `codex/sandbox-state-meta`；沿用 `--project-root-from-meta` 时，`workspace_status`、`hierarchy_contract` 等只读工具全部返回 `PROJECT_ROOT_UNAVAILABLE`（"Codex sandbox metadata is required on every MCP request"）。
+- **修复**：`.zcode-plugin/plugin.json` 不再使用 `--project-root-from-meta`，改为 `HDG_PROJECT_ROOT=${CLAUDE_PROJECT_DIR}`（ZCode 对 plugin 提供的 MCP server 展开该模板变量，指向当前工作区），与 Claude 侧 `.mcp.json` 的根解析方式一致；`HDG_HOST_ADAPTER=zcode` 保持独立注入。Codex 与 Claude manifest 不受影响。
+- **验证**：按 ZCode 启动方式（plugin 根为 cwd、`HDG_HOST_ADAPTER=zcode`、`HDG_PROJECT_ROOT` 指向工作区）端到端拉起 `hdg_mcp.py`，`initialize` 握手成功，`workspace_status` 项目根解析恢复正常；在 `delivery-graph` 源码仓库内按预期触发自托管防护 `SELF_HOSTING_DOGFOOD_REQUIRED`（未显式 `--dogfood` 不产生运行包）。
+- 本节只确认 manifest 与核心契约一致；0.39.13 不宣称 ZCode 真实宿主已完成原生 child 冒烟。真实 ZCode 宿主冒烟候选验证中，结果待回填。
+
 ## 0.39.12 发布候选矩阵
 
 0.39.12 保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`，在 0.39.11 已补齐的 `zcode` Adapter 内部映射基础上新增独立 `.zcode-plugin/plugin.json` manifest。

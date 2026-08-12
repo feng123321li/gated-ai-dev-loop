@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
+from .constants import (
+    MAX_DATABASE_CHANGES_PER_TASK,
+    MAX_DATABASE_COLUMNS_PER_TABLE,
+    MAX_DATABASE_CONSTRAINTS_PER_TABLE,
+    MAX_DATABASE_FOREIGN_KEYS_PER_TABLE,
+    MAX_DATABASE_INDEXES_PER_TABLE,
+    MAX_DATABASE_VERIFICATION_STEPS,
+)
 from .errors import fail
 
 
@@ -94,9 +102,22 @@ def _exact_object(
     return value
 
 
-def _named_columns(value: object, *, field: str) -> list[str]:
+def _named_columns(
+    value: object,
+    *,
+    field: str,
+    enforce_resource_limits: bool = True,
+) -> list[str]:
     if not isinstance(value, list) or not value:
         _invalid("Column references must be a non-empty array", field=field)
+    if (
+        enforce_resource_limits
+        and len(value) > MAX_DATABASE_COLUMNS_PER_TABLE
+    ):
+        _invalid(
+            "Column references exceed the per-table column limit",
+            field=field,
+        )
     result = [_text(item, field=f"{field}[{index}]") for index, item in enumerate(value)]
     if len(set(result)) != len(result):
         _invalid("Column references must be unique", field=field)
@@ -107,9 +128,18 @@ def _validate_named_constraints(
     value: object,
     *,
     field: str,
+    enforce_resource_limits: bool = True,
 ) -> None:
     if not isinstance(value, list):
         _invalid("Constraints must be an array", field=field)
+    if (
+        enforce_resource_limits
+        and len(value) > MAX_DATABASE_CONSTRAINTS_PER_TABLE
+    ):
+        _invalid(
+            "Unique constraints exceed the per-table constraint limit",
+            field=field,
+        )
     names: list[str] = []
     for index, raw in enumerate(value):
         item_field = f"{field}[{index}]"
@@ -120,14 +150,28 @@ def _validate_named_constraints(
             allowed=_CONSTRAINT_FIELDS,
         )
         names.append(_text(item["name"], field=f"{item_field}.name"))
-        _named_columns(item["columns"], field=f"{item_field}.columns")
+        _named_columns(
+            item["columns"],
+            field=f"{item_field}.columns",
+            enforce_resource_limits=enforce_resource_limits,
+        )
     if len(set(names)) != len(names):
         _invalid("Constraint names must be unique", field=field)
 
 
-def _validate_indexes(value: object, *, field: str) -> None:
+def _validate_indexes(
+    value: object,
+    *,
+    field: str,
+    enforce_resource_limits: bool = True,
+) -> None:
     if not isinstance(value, list):
         _invalid("Indexes must be an array", field=field)
+    if (
+        enforce_resource_limits
+        and len(value) > MAX_DATABASE_INDEXES_PER_TABLE
+    ):
+        _invalid("Indexes exceed the per-table index limit", field=field)
     names: list[str] = []
     for index, raw in enumerate(value):
         item_field = f"{field}[{index}]"
@@ -138,7 +182,11 @@ def _validate_indexes(value: object, *, field: str) -> None:
             allowed=_INDEX_FIELDS,
         )
         names.append(_text(item["name"], field=f"{item_field}.name"))
-        _named_columns(item["columns"], field=f"{item_field}.columns")
+        _named_columns(
+            item["columns"],
+            field=f"{item_field}.columns",
+            enforce_resource_limits=enforce_resource_limits,
+        )
         if not isinstance(item["unique"], bool):
             _invalid("Index unique must be boolean", field=f"{item_field}.unique")
         for optional in ("method", "predicate"):
@@ -148,9 +196,19 @@ def _validate_indexes(value: object, *, field: str) -> None:
         _invalid("Index names must be unique", field=field)
 
 
-def _validate_foreign_keys(value: object, *, field: str) -> None:
+def _validate_foreign_keys(
+    value: object,
+    *,
+    field: str,
+    enforce_resource_limits: bool = True,
+) -> None:
     if not isinstance(value, list):
         _invalid("Foreign keys must be an array", field=field)
+    if (
+        enforce_resource_limits
+        and len(value) > MAX_DATABASE_FOREIGN_KEYS_PER_TABLE
+    ):
+        _invalid("Foreign keys exceed the per-table foreign-key limit", field=field)
     names: list[str] = []
     for index, raw in enumerate(value):
         item_field = f"{field}[{index}]"
@@ -161,10 +219,15 @@ def _validate_foreign_keys(value: object, *, field: str) -> None:
             allowed=_FOREIGN_KEY_FIELDS,
         )
         names.append(_text(item["name"], field=f"{item_field}.name"))
-        columns = _named_columns(item["columns"], field=f"{item_field}.columns")
+        columns = _named_columns(
+            item["columns"],
+            field=f"{item_field}.columns",
+            enforce_resource_limits=enforce_resource_limits,
+        )
         referenced = _named_columns(
             item["referencedColumns"],
             field=f"{item_field}.referencedColumns",
+            enforce_resource_limits=enforce_resource_limits,
         )
         if len(columns) != len(referenced):
             _invalid(
@@ -177,7 +240,12 @@ def _validate_foreign_keys(value: object, *, field: str) -> None:
         _invalid("Foreign-key names must be unique", field=field)
 
 
-def _validate_snapshot(value: object, *, field: str) -> None:
+def _validate_snapshot(
+    value: object,
+    *,
+    field: str,
+    enforce_resource_limits: bool = True,
+) -> None:
     item = _exact_object(
         value,
         field=field,
@@ -189,6 +257,14 @@ def _validate_snapshot(value: object, *, field: str) -> None:
     columns = item["columns"]
     if not isinstance(columns, list) or not columns:
         _invalid("A table snapshot must contain all columns", field=f"{field}.columns")
+    if (
+        enforce_resource_limits
+        and len(columns) > MAX_DATABASE_COLUMNS_PER_TABLE
+    ):
+        _invalid(
+            "Table snapshot columns exceed the per-table column limit",
+            field=f"{field}.columns",
+        )
     column_names: list[str] = []
     for index, raw in enumerate(columns):
         column_field = f"{field}.columns[{index}]"
@@ -230,18 +306,33 @@ def _validate_snapshot(value: object, *, field: str) -> None:
         primary_columns = _named_columns(
             primary["columns"],
             field=f"{field}.primaryKey.columns",
+            enforce_resource_limits=enforce_resource_limits,
         )
         if not set(primary_columns).issubset(column_name_set):
             _invalid("Primary key references unknown columns", field=f"{field}.primaryKey")
     _validate_named_constraints(
         item["uniqueConstraints"],
         field=f"{field}.uniqueConstraints",
+        enforce_resource_limits=enforce_resource_limits,
     )
-    _validate_indexes(item["indexes"], field=f"{field}.indexes")
-    _validate_foreign_keys(item["foreignKeys"], field=f"{field}.foreignKeys")
+    _validate_indexes(
+        item["indexes"],
+        field=f"{field}.indexes",
+        enforce_resource_limits=enforce_resource_limits,
+    )
+    _validate_foreign_keys(
+        item["foreignKeys"],
+        field=f"{field}.foreignKeys",
+        enforce_resource_limits=enforce_resource_limits,
+    )
 
 
-def _validate_migration(value: object, *, field: str) -> None:
+def _validate_migration(
+    value: object,
+    *,
+    field: str,
+    enforce_resource_limits: bool = True,
+) -> None:
     item = _exact_object(
         value,
         field=field,
@@ -253,6 +344,14 @@ def _validate_migration(value: object, *, field: str) -> None:
     verification = item["verification"]
     if not isinstance(verification, list) or not verification:
         _invalid("Migration verification must be a non-empty array", field=f"{field}.verification")
+    if (
+        enforce_resource_limits
+        and len(verification) > MAX_DATABASE_VERIFICATION_STEPS
+    ):
+        _invalid(
+            "Migration verification exceeds the verification step limit",
+            field=f"{field}.verification",
+        )
     for index, check in enumerate(verification):
         _text(check, field=f"{field}.verification[{index}]")
 
@@ -261,6 +360,7 @@ def validate_task_database_contract(
     loop: dict[str, Any],
     *,
     field: str,
+    enforce_resource_limits: bool = True,
 ) -> bool:
     """Validate a TASK's explicitly declared frozen database contract."""
 
@@ -271,6 +371,14 @@ def validate_task_database_contract(
     if not isinstance(changes, list) or not changes:
         _invalid(
             "databaseChanges must be a non-empty array",
+            field=f"{field}.payload.databaseChanges",
+        )
+    if (
+        enforce_resource_limits
+        and len(changes) > MAX_DATABASE_CHANGES_PER_TASK
+    ):
+        _invalid(
+            "databaseChanges exceed the per-task database change limit",
             field=f"{field}.payload.databaseChanges",
         )
     identities: set[tuple[str, str, str, str]] = set()
@@ -304,10 +412,22 @@ def validate_task_database_contract(
         if change_type in {"CREATE", "MODIFY"} and after is None:
             _invalid(f"{change_type} requires a complete after snapshot", field=f"{change_field}.after")
         if before is not None:
-            _validate_snapshot(before, field=f"{change_field}.before")
+            _validate_snapshot(
+                before,
+                field=f"{change_field}.before",
+                enforce_resource_limits=enforce_resource_limits,
+            )
         if after is not None:
-            _validate_snapshot(after, field=f"{change_field}.after")
-        _validate_migration(change["migration"], field=f"{change_field}.migration")
+            _validate_snapshot(
+                after,
+                field=f"{change_field}.after",
+                enforce_resource_limits=enforce_resource_limits,
+            )
+        _validate_migration(
+            change["migration"],
+            field=f"{change_field}.migration",
+            enforce_resource_limits=enforce_resource_limits,
+        )
         resource_claim = _text(
             change["resourceClaim"],
             field=f"{change_field}.resourceClaim",

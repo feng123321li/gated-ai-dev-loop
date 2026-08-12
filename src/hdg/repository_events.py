@@ -378,19 +378,40 @@ class DeliveryEventStore:
             node["id"]: node["kind"]
             for node in graph["nodes"]
         }
-        while True:
-            current = {
-                node["nodeId"]: node
-                for node in self.latest_nodes(connection, run_id)
+        # Track which PENDING nodes still need re-evaluation. The readiness
+        # loop below only resolves PENDING nodes whose predecessors have all
+        # reached a terminal success state. Re-running the full latest_nodes
+        # projection on every iteration is wasteful because the only fields
+        # that matter here are node_id, attempt, and status, and only PENDING
+        # nodes can transition. We read the lightweight status snapshot once,
+        # mutate the in-memory dict as we flip nodes, and stop when no PENDING
+        # node can make further progress.
+        status_rows = connection.execute(
+            "SELECT n.node_id, n.attempt, n.status FROM node_runs n "
+            "JOIN ("
+            "SELECT node_id, MAX(attempt) AS attempt FROM node_runs "
+            "WHERE run_id = ? GROUP BY node_id"
+            ") latest ON n.node_id = latest.node_id "
+            "AND n.attempt = latest.attempt "
+            "WHERE n.run_id = ? ORDER BY n.node_id",
+            (run_id, run_id),
+        ).fetchall()
+        current_status: dict[str, dict[str, Any]] = {
+            row["node_id"]: {
+                "attempt": row["attempt"],
+                "status": row["status"],
             }
+            for row in status_rows
+        }
+        while True:
             changed = False
-            for node_id in sorted(current):
-                node = current[node_id]
+            for node_id in sorted(current_status):
+                node = current_status[node_id]
                 if node["status"] != "PENDING":
                     continue
                 predecessors = incoming[node_id]
                 if not all(
-                    current[source]["status"]
+                    current_status[source]["status"]
                     in {"SUCCEEDED", "COMPLETED"}
                     for source in predecessors
                 ):
@@ -425,6 +446,10 @@ class DeliveryEventStore:
                     payload={"predecessors": sorted(predecessors)},
                     at=at,
                 )
+                # Keep the in-memory snapshot in lockstep with the row we just
+                # mutated so subsequent iterations see the new status without
+                # re-querying every node.
+                node["status"] = status
                 changed = True
             if not changed:
                 break

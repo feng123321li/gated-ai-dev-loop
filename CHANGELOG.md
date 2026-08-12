@@ -4,6 +4,17 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.9 — 2026-08-12
+
+发布提交：以 tag `v0.39.9` 指向的提交为准
+
+- **worktree setup 清理完成**：删除自动 linked-worktree setup 的 reservation、进度上报、租约、SQLite 表与公开 Repository/MCP 路径，并移除 Claude `delivery-coordinator` Agent；既有 linked checkout 仍只作为普通 current workspace 使用。
+- **调度与存储优化**：为 hierarchy 与数据库变更契约增加有界资源限制，READY 刷新改用轻量状态快照和每节点最新 attempt，常用 run、lease、event 与 dispatch reservation 查询增加索引。
+- **兼容性修复**：同 state contract 的既有 hierarchy 不会因新增资源上限而失去可读性；既有 scheduler 数据库会在契约校验通过后幂等补齐兼容索引；重试节点不会再因查询计划变化误读旧 attempt 而永久停在 `PENDING`。
+- **宿主协议同步**：Claude 官方冒烟在当前 checkout 按冻结 `gitBinding` 准备分支并调用 `resume_execution_mode`，随后由主会话规划并派遣独立 receiver；文档和测试不再依赖旧 `hostDispatch`、后台 coordinator 或新建 linked worktree。
+- **验证**：本地 Python 全量 371 项测试通过（1 项按环境条件跳过）；`compileall`、canonical/Plugin 生成镜像、release candidate、Claude Plugin manifest 与 `git diff --check` 均通过。
+
+
 ## 0.39.8 — 2026-08-11
 
 发布提交：以 tag `v0.39.8` 指向的提交为准

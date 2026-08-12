@@ -124,15 +124,11 @@ def _prompt(scenario: str, host: str) -> str:
         )
     )
     workspace_requirement = (
-        "This Claude Code session runs in the primary checkout on `main` as "
-        "the monitor-only control root. After select_execution_mode(AUTOMATIC) "
-        "returns hostDispatch, spawn the delivery-coordinator background "
-        "agent exactly as its agentDispatch describes; the coordinator "
-        "creates and enters the stable Delivery linked worktree and drives "
-        "the Graph while this main session only monitors until "
-        "RECORD_USER_CONFIRMATION. Do not pre-create the worktree or feature "
-        "branch yourself, and do not refuse the worktree the coordinator "
-        "opens."
+        "This Claude Code session owns the CURRENT_WORKSPACE_SERIAL turn in "
+        "the current checkout on `main`. Keep all coordination in this main "
+        "session and do not open another checkout or run any `git worktree` "
+        "command. When the Controller requests current-branch preparation, "
+        "use only the exact branch and base commit in its gitBinding."
         if host == "claude-code"
         else (
             "The current Codex session is already running in a host-created "
@@ -142,13 +138,16 @@ def _prompt(scenario: str, host: str) -> str:
     )
     execution_requirement = (
         "Preview the hierarchy with the TASK and acceptance conditions above, "
-        "then call select_execution_mode(AUTOMATIC). When hostDispatch "
-        "returns, spawn the delivery-coordinator background agent exactly "
-        "as its agentDispatch describes; the coordinator resumes, freezes "
-        "and dispatches receivers in the stable linked worktree while this "
-        "main session only monitors the frontier. Do not call "
-        "resume_execution_mode, prepare or freeze the Graph, or dispatch "
-        "receivers from this main session."
+        "then call select_execution_mode(AUTOMATIC). If the Controller returns "
+        "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION, create or "
+        "switch to the exact gitBinding branch in the current checkout from "
+        "its frozen base commit, then call resume_execution_mode with the "
+        "retained rootId and fingerprints; never retry the execution choice. "
+        "Once the Graph is ACTIVE, this main session calls "
+        "plan_dispatch_batch and immediately starts one independent "
+        "current-host child Agent for each assignment. The main session must "
+        "never call dispatch_loop, implement a Loop, or reuse one receiver "
+        "for multiple TASK or Review assignments."
         if host == "claude-code"
         else (
             "Prepare and freeze the hierarchy, then call "
@@ -357,6 +356,7 @@ def _host_command(
             "Edit",
             "Bash(python *)",
             "Bash(py *)",
+            "Bash(git *)",
             *[
                 "mcp__plugin_delivery-graph_delivery-graph__"
                 f"{tool['name']}"

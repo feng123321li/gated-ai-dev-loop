@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from .constants import MAX_IDENTIFIER_LENGTH, SCHEMA_VERSION
+from .constants import MAX_HIERARCHY_DEPTH, MAX_IDENTIFIER_LENGTH, SCHEMA_VERSION
 from .database_contracts import validate_task_database_contract
 from .errors import fail
 from .jsonio import fingerprint
@@ -277,6 +277,7 @@ def validate_work_item_definition(
     *,
     parent: dict[str, Any] | None = None,
     field: str = "definition",
+    enforce_resource_limits: bool = True,
 ) -> dict[str, Any]:
     """Validate scheduler metadata without interpreting Loop payloads."""
 
@@ -358,6 +359,7 @@ def validate_work_item_definition(
         validate_task_database_contract(
             normalized["execution"]["loop"],
             field=f"{field}.execution.loop",
+            enforce_resource_limits=enforce_resource_limits,
         )
         return normalized
 
@@ -737,7 +739,11 @@ def _validate_dependency_dag(
         )
 
 
-def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
+def validate_hierarchy_definition(
+    hierarchy: object,
+    *,
+    enforce_resource_limits: bool = True,
+) -> dict[str, Any]:
     """Validate one Delivery with a recursive GROUP/TASK hierarchy."""
 
     expected = {"delivery", "root"}
@@ -757,7 +763,15 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
         parent: dict[str, Any] | None,
         *,
         field: str,
+        depth: int = 0,
     ) -> dict[str, Any]:
+        if enforce_resource_limits and depth > MAX_HIERARCHY_DEPTH:
+            fail(
+                "WORK_ITEM_HIERARCHY_TOO_DEEP",
+                f"Hierarchy nesting exceeds the {MAX_HIERARCHY_DEPTH} level "
+                "limit",
+                field=field,
+            )
         is_root = parent is None
         node_fields = {"definition", "reviewLoop", "children"}
         if is_root:
@@ -796,6 +810,7 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
             value["definition"],
             parent=parent,
             field=f"{field}.definition",
+            enforce_resource_limits=enforce_resource_limits,
         )
         review_loop = (
             None
@@ -885,6 +900,7 @@ def validate_hierarchy_definition(hierarchy: object) -> dict[str, Any]:
                 child,
                 definition,
                 field=f"{field}.children[{index}]",
+                depth=depth + 1,
             )
             for index, child in enumerate(value["children"])
         ]

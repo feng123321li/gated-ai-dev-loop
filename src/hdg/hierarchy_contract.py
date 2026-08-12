@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from .constants import MAX_IDENTIFIER_LENGTH, SCHEMA_VERSION
+from .constants import (
+    MAX_DATABASE_CHANGES_PER_TASK,
+    MAX_DATABASE_COLUMNS_PER_TABLE,
+    MAX_DATABASE_CONSTRAINTS_PER_TABLE,
+    MAX_DATABASE_FOREIGN_KEYS_PER_TABLE,
+    MAX_DATABASE_INDEXES_PER_TABLE,
+    MAX_DATABASE_VERIFICATION_STEPS,
+    MAX_IDENTIFIER_LENGTH,
+    SCHEMA_VERSION,
+)
 from .errors import fail
 from .interaction_contract import execution_choice_contract
 
@@ -64,6 +73,7 @@ def _loop_schema() -> dict[str, Any]:
                         "type": "array",
                         "items": _ref("databaseChange"),
                         "minItems": 1,
+                        "maxItems": MAX_DATABASE_CHANGES_PER_TASK,
                         "description": (
                             "Complete frozen table before/after designs, "
                             "migration plans, and matching resource locks."
@@ -227,6 +237,7 @@ def _database_named_columns_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": _text("Exact column name."),
                 "minItems": 1,
+                "maxItems": MAX_DATABASE_COLUMNS_PER_TABLE,
                 "uniqueItems": True,
             },
         }
@@ -241,6 +252,7 @@ def _database_index_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": _text("Indexed column or expression."),
                 "minItems": 1,
+                "maxItems": MAX_DATABASE_COLUMNS_PER_TABLE,
                 "uniqueItems": True,
             },
             "unique": {"type": "boolean"},
@@ -259,6 +271,7 @@ def _database_foreign_key_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": _text("Source column name."),
                 "minItems": 1,
+                "maxItems": MAX_DATABASE_COLUMNS_PER_TABLE,
                 "uniqueItems": True,
             },
             "referencedTable": _text("Referenced table identity."),
@@ -266,6 +279,7 @@ def _database_foreign_key_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": _text("Referenced column name."),
                 "minItems": 1,
+                "maxItems": MAX_DATABASE_COLUMNS_PER_TABLE,
                 "uniqueItems": True,
             },
             "onDelete": _text("Explicit ON DELETE behavior or NOT_APPLICABLE."),
@@ -282,6 +296,7 @@ def _database_snapshot_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": _ref("databaseColumn"),
                 "minItems": 1,
+                "maxItems": MAX_DATABASE_COLUMNS_PER_TABLE,
             },
             "primaryKey": {
                 "oneOf": [_ref("databaseNamedColumns"), {"type": "null"}],
@@ -289,14 +304,17 @@ def _database_snapshot_schema() -> dict[str, Any]:
             "uniqueConstraints": {
                 "type": "array",
                 "items": _ref("databaseNamedColumns"),
+                "maxItems": MAX_DATABASE_CONSTRAINTS_PER_TABLE,
             },
             "indexes": {
                 "type": "array",
                 "items": _ref("databaseIndex"),
+                "maxItems": MAX_DATABASE_INDEXES_PER_TABLE,
             },
             "foreignKeys": {
                 "type": "array",
                 "items": _ref("databaseForeignKey"),
+                "maxItems": MAX_DATABASE_FOREIGN_KEYS_PER_TABLE,
             },
         }
     )
@@ -313,6 +331,7 @@ def _database_migration_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": _text("Concrete migration verification."),
                 "minItems": 1,
+                "maxItems": MAX_DATABASE_VERIFICATION_STEPS,
             },
         }
     )

@@ -156,7 +156,6 @@ class SerialWorkspaceOwnerGateTests(unittest.TestCase):
                 expected_graph_fingerprint=stored["graphFingerprint"],
                 authorized_project_ids=[],
                 confirmed_by="test-user",
-                worktree_requests=[],
             )
 
             result = call_tool(
@@ -264,7 +263,6 @@ class SerialWorkspaceOwnerGateTests(unittest.TestCase):
                 expected_graph_fingerprint=preview["graphFingerprint"],
                 authorized_project_ids=[],
                 confirmed_by="test-user",
-                worktree_requests=[],
             )
             with self.assertRaises(GatedLoopError) as missing:
                 repository.workspace_binding(preview["rootId"])
@@ -312,7 +310,6 @@ class SerialWorkspaceOwnerGateTests(unittest.TestCase):
                 expected_graph_fingerprint=preview["graphFingerprint"],
                 authorized_project_ids=[],
                 confirmed_by="test-user",
-                worktree_requests=[],
                 workspace_key=SchedulerRepository.workspace_key(workspace),
             )
             self.assertEqual(

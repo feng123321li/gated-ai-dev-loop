@@ -7,6 +7,15 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.39.9 发布候选矩阵
+
+0.39.9 保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`，完成旧 worktree setup 协议的物理清理并修复调度优化中的存量状态与重试边界。Controller 不创建 linked worktree；当前目录即使是既有 linked checkout，也只作为普通 current workspace 使用。
+
+- Plugin 不再包含 `delivery-coordinator` Agent，也不公开 worktree setup reservation、progress、lease 或 report 路径。Claude 主会话按冻结 `gitBinding` 在当前 checkout 准备分支、调用 `resume_execution_mode`，再通过 `plan_dispatch_batch` 启动独立 receiver。
+- 新提交的 hierarchy、数据库变更、表字段、索引、约束、外键和验证步骤继续执行有界资源限制；同 state contract 下已持久化的数据仍按原指纹与规范形态读取，不因新上限失去可恢复性。
+- READY 刷新按 `run_id + node_id + MAX(attempt)` 选择最新尝试，不受 SQLite 索引扫描方向影响；既有 scheduler 数据库在 state contract 校验通过后幂等补齐 run、lease、event 与 dispatch reservation 索引。
+- 核心候选已通过 371 项 Python 测试（1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Claude Plugin manifest 与差异校验。实际 Codex/Claude 会话仍需按本页定义完成宿主原生 child 冒烟，并停在 `RECORD_USER_CONFIRMATION`。
+
 ## 0.39.8 发布候选矩阵
 
 0.39.8 提供 32 个 MCP 工具、schema v3 与无 Hook 模式。同一物理 checkout 可以绑定多个 Delivery，但状态必须用显式 `rootId` 路由，执行统一为 `CURRENT_WORKSPACE_SERIAL`；Controller 不再公开 worktree setup 工具，也不自动创建 linked worktree。MCP Apps 标准 `tools/call` 失败或精确缺少 project root 时可回退兼容 bridge；服务端只允许同一 Codex legacy 连接、同一 `root_id` 复用此前成功 Dashboard 读取形成的只读 workspace grant。Modern 请求、非 Codex Adapter、显式空 metadata、其他 root、其他只读工具和全部写工具继续失败关闭。

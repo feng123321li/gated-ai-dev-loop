@@ -736,7 +736,8 @@ class DeliveryHierarchyStore:
                     runStatus=previous_run["status"],
                 )
             previous_hierarchy = validate_hierarchy_definition(
-                json.loads(previous_revision_row["hierarchy_json"])
+                json.loads(previous_revision_row["hierarchy_json"]),
+                enforce_resource_limits=False,
             )
             previous_nodes = self.latest_nodes(
                 connection,
@@ -1200,7 +1201,8 @@ class DeliveryHierarchyStore:
                     )
                 if previous_run is not None:
                     previous_hierarchy = validate_hierarchy_definition(
-                        json.loads(previous_definition["hierarchy_json"])
+                        json.loads(previous_definition["hierarchy_json"]),
+                        enforce_resource_limits=False,
                     )
                     previous_node_values = self.latest_nodes(
                         connection,

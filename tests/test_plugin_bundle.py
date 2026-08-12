@@ -32,12 +32,9 @@ PLUGIN_SKILL = PLUGIN / "skills" / "delivery-graph"
 
 
 class PluginBundleTests(unittest.TestCase):
-    def test_plugin_registers_coordinator_without_lifecycle_hooks(
+    def test_plugin_omits_legacy_coordinator_and_lifecycle_hooks(
         self,
     ) -> None:
-        agent = (
-            PLUGIN / "agents" / "delivery-coordinator.md"
-        ).read_text(encoding="utf-8")
         manifests = [
             json.loads(
                 (PLUGIN / relative).read_text(encoding="utf-8")
@@ -48,10 +45,9 @@ class PluginBundleTests(unittest.TestCase):
             )
         ]
 
-        self.assertIn("name: delivery-coordinator", agent)
-        self.assertIn("background: true", agent)
-        self.assertIn("tools: Agent", agent)
-        self.assertNotIn("isolation: worktree", agent)
+        self.assertFalse(
+            (PLUGIN / "agents" / "delivery-coordinator.md").exists()
+        )
         self.assertFalse((PLUGIN / "hooks").exists())
         for manifest in manifests:
             self.assertNotIn("hooks", manifest)

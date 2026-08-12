@@ -4722,6 +4722,82 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "BLOCKED",
         )
 
+    def test_retry_readiness_uses_latest_attempt_with_desc_index(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        database = Path(
+            self.root,
+            ".layered-delivery",
+            "scheduler.db",
+        )
+        connection = sqlite3.connect(database)
+        try:
+            connection.execute(
+                "CREATE INDEX test_node_runs_latest_attempt_desc "
+                "ON node_runs(run_id, node_id, attempt DESC, status)"
+            )
+            run_id = connection.execute(
+                "SELECT run_id FROM runs WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()[0]
+            query_plan = connection.execute(
+                "EXPLAIN QUERY PLAN "
+                "SELECT node_id, attempt, status FROM node_runs "
+                "WHERE run_id = ? ORDER BY node_id",
+                (run_id,),
+            ).fetchall()
+            connection.commit()
+        finally:
+            connection.close()
+        self.assertTrue(
+            any(
+                "USING COVERING INDEX "
+                "test_node_runs_latest_attempt_desc" in row[3]
+                for row in query_plan
+            ),
+            query_plan,
+        )
+
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="agent-desc-index",
+            operation_id="op-desc-index-attempt-1",
+            now=at(2),
+        )
+        result = record_loop_result(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id="op-desc-index-attempt-1",
+            outcome={
+                "status": "BLOCKED",
+                "summary": "Worker transport failed.",
+                "result": {},
+            },
+            failure_class="RETRYABLE_INFRA",
+            now=at(3),
+        )
+
+        self.assertTrue(result["retried"])
+        self.assertEqual(result["nextAttempt"], 2)
+        self.assertEqual(result["schedulerStatus"], "READY")
+        retry_ready_events = [
+            event
+            for event in graph_events(
+                root=self.root,
+                root_id=root_id,
+            )["events"]
+            if event["eventType"] == "NODE_READY"
+            and event["nodeId"] == node_id
+            and event["attempt"] == 2
+        ]
+        self.assertEqual(len(retry_ready_events), 1)
+
     def test_blocked_outcome_requires_explicit_failure_class(
         self,
     ) -> None:

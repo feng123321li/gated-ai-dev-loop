@@ -23,9 +23,6 @@ from .model_core import validate_hierarchy_definition
 from .repository_dispatch import DeliveryDispatchStore
 from .repository_events import DeliveryEventStore
 from .repository_execution_setup import (
-    WORKTREE_SETUP_HEARTBEAT_SECONDS,
-    WORKTREE_SETUP_LEASE_SECONDS,
-    WORKTREE_SETUP_POLL_SECONDS,
     DeliveryExecutionSetupStore,
 )
 from .repository_hierarchies import DeliveryHierarchyStore
@@ -36,6 +33,7 @@ from .repository_projections import (
 from .repository_workspaces import DeliveryWorkspaceStore
 from .storage_schema import (
     SCHEDULER_STATE_CONTRACT,
+    ensure_compatible_scheduler_storage,
     initialize_scheduler_storage,
     verify_scheduler_state_contract,
 )
@@ -130,7 +128,14 @@ def _validated_stored_definition(
             rootId=root_id,
         )
     try:
-        normalized = validate_hierarchy_definition(hierarchy)
+        # Resource caps protect newly submitted payloads. State written under
+        # this same scheduler contract predates those caps and must remain
+        # readable; fingerprints and the canonical equality check below still
+        # enforce its integrity and shape.
+        normalized = validate_hierarchy_definition(
+            hierarchy,
+            enforce_resource_limits=False,
+        )
     except GatedLoopError as error:
         error.details.setdefault("rootId", root_id)
         raise
@@ -296,7 +301,9 @@ class SchedulerRepository:
             if database_exists:
                 verify_scheduler_state_contract(connection)
             connection.execute("PRAGMA journal_mode = WAL")
-            if not database_exists:
+            if database_exists:
+                ensure_compatible_scheduler_storage(connection)
+            else:
                 initialize_scheduler_storage(connection)
         except Exception:
             connection.close()
@@ -569,7 +576,6 @@ class SchedulerRepository:
         expected_graph_fingerprint: str,
         authorized_project_ids: list[str],
         confirmed_by: str,
-        worktree_requests: list[dict[str, str]] | None = None,
         workspace_key: str | None = None,
     ) -> dict[str, Any]:
         return self._delivery_execution_setup_store().record_automatic_selection(
@@ -578,7 +584,6 @@ class SchedulerRepository:
             expected_graph_fingerprint=expected_graph_fingerprint,
             authorized_project_ids=authorized_project_ids,
             confirmed_by=confirmed_by,
-            worktree_requests=worktree_requests,
             workspace_key=workspace_key,
         )
 
@@ -596,55 +601,6 @@ class SchedulerRepository:
     ) -> dict[str, Any] | None:
         return self._delivery_execution_setup_store().execution_selection(
             root_id,
-        )
-
-    def worktree_setup_reservations(
-        self,
-        root_id: str,
-    ) -> list[dict[str, Any]]:
-        return self._delivery_execution_setup_store().worktree_setup_reservations(
-            root_id,
-        )
-
-    def mark_worktree_setups_ready(
-        self,
-        root_id: str,
-        project_ids: list[str],
-    ) -> None:
-        return self._delivery_execution_setup_store().mark_worktree_setups_ready(
-            root_id,
-            project_ids,
-        )
-
-    def report_worktree_setup(
-        self,
-        root_id: str,
-        *,
-        project_id: str,
-        reservation_id: str,
-        expected_attempt: int,
-        event: str,
-        phase: str,
-        summary_zh: str,
-        progress_percent: int | None,
-        failure_code: str | None,
-        confirmed_previous_attempt_stopped: bool,
-        confirmed_partial_state_reconciled: bool,
-        retry_request_id: str | None,
-    ) -> dict[str, Any]:
-        return self._delivery_execution_setup_store().report_worktree_setup(
-            root_id,
-            project_id=project_id,
-            reservation_id=reservation_id,
-            expected_attempt=expected_attempt,
-            event=event,
-            phase=phase,
-            summary_zh=summary_zh,
-            progress_percent=progress_percent,
-            failure_code=failure_code,
-            confirmed_previous_attempt_stopped=confirmed_previous_attempt_stopped,
-            confirmed_partial_state_reconciled=confirmed_partial_state_reconciled,
-            retry_request_id=retry_request_id,
         )
 
     def record_manual_handoff(
@@ -1246,8 +1202,5 @@ __all__ = (
     "GOVERNANCE_DIRECTORY",
     "GovernanceRepository",
     "SchedulerRepository",
-    "WORKTREE_SETUP_HEARTBEAT_SECONDS",
-    "WORKTREE_SETUP_LEASE_SECONDS",
-    "WORKTREE_SETUP_POLL_SECONDS",
     "timestamp",
 )

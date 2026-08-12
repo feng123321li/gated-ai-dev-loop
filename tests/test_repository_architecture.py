@@ -129,9 +129,6 @@ class RepositoryArchitectureTests(unittest.TestCase):
             "record_choice_ready",
             "record_automatic_selection",
             "execution_selection",
-            "worktree_setup_reservations",
-            "mark_worktree_setups_ready",
-            "report_worktree_setup",
         }
 
         self._assert_store_boundary(

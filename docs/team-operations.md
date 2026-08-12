@@ -1,6 +1,6 @@
 # 团队安装与运维
 
-本文面向团队管理员和普通使用者，覆盖 `delivery-graph` 0.39.8 的安装、升级、恢复、卸载与回滚。展示名为“分层交付 Graph 控制面”。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 和标准库。
+本文面向团队管理员和普通使用者，覆盖 `delivery-graph` 0.39.9 的安装、升级、恢复、卸载与回滚。展示名为“分层交付 Graph 控制面”。Plugin 同时支持 Codex 和 Claude Code，项目运行时仅依赖 Python 3.10+ 和标准库。
 
 ## 安装前检查
 
@@ -9,7 +9,7 @@
 - 确认能够访问公司内部 Marketplace 仓库。
 - 在实际项目的新会话中使用 Plugin；不要在维护 `delivery-graph` 源码仓库时创建业务运行包。
 
-当前本地探测到的 0.39.8 真实宿主候选基线是 Codex CLI 0.147.0 和 Claude Code 2.1.226。这两个版本是本轮冒烟目标，不是永久最低版本。在兼容矩阵回填真实运行结果前，只能表述为“候选验证中”。
+当前本地探测到的 0.39.9 真实宿主候选基线是 Codex CLI 0.147.0 和 Claude Code 2.1.226。这两个版本是本轮冒烟目标，不是永久最低版本。在兼容矩阵回填真实运行结果前，只能表述为“候选验证中”。
 
 ## 安装
 
@@ -41,7 +41,7 @@ claude plugin list --json
 python scripts/host_smoke.py probe --json
 ```
 
-结果必须报告 Plugin 版本 0.39.8 和 32 个 MCP 工具，并如实标记本机已安装的宿主。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器。
+结果必须报告 Plugin 版本 0.39.9 和 32 个 MCP 工具，并如实标记本机已安装的宿主。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在 Codex、Claude Code 环境执行真实宿主冒烟任务；两个宿主不要求安装在同一台机器。
 
 真实冒烟默认先只展示计划，必须显式增加 `--execute` 才调用模型。两个宿主分别运行，绝不从一个终端跨调另一个 Agent：
 
@@ -53,9 +53,9 @@ python scripts/host_smoke.py run --host codex --scenario light
 python scripts/host_smoke.py run --host codex --scenario light --execute
 ```
 
-Claude 命令从当前 0.39.8 源码发布包的 `--plugin-dir` 加载 Plugin；Codex 命令要求候选 Plugin 已从 Marketplace 安装。发布前可用 LIGHT 验证 `plan_dispatch_batch → 独立 TASK child → dispatch_loop(AUTO) → heartbeat/progress/result`，再用 STANDARD 覆盖独立 Review。任何输出中的 `claimedAgents` 都只能包含命令指定的当前宿主。Claude coordinator 的完整名称为 `delivery-graph:delivery-coordinator`。
+Claude 命令从当前 0.39.9 源码发布包的 `--plugin-dir` 加载 Plugin；Codex 命令要求候选 Plugin 已从 Marketplace 安装。发布前可用 LIGHT 验证 `select_execution_mode → 当前 checkout 分支准备 → resume_execution_mode → plan_dispatch_batch → 独立 TASK child → dispatch_loop(AUTO) → heartbeat/progress/result`，再用 STANDARD 覆盖独立 Review。Claude 由主会话在 `CURRENT_WORKSPACE_SERIAL` 边界内协调当前分支和独立 receiver Agent，不启动专用后台 coordinator。任何输出中的 `claimedAgents` 都只能包含命令指定的当前宿主。
 
-0.39.8 真实冒烟还必须覆盖以下交互和失败关闭边界：
+0.39.9 真实冒烟还必须覆盖以下交互和失败关闭边界：
 
 - `preview_hierarchy`、`workspace_status` 和手动接管只返回一个当前 `pendingInteraction`。缺少 `gitBinding` 时先处理 `DEVELOPMENT_BASELINE`，确认后才出现 `EXECUTION_MODE`；同一 Delivery 的后续 Revision 可复用已记忆基线。
 - 干净和脏工作树都进入这条基线流程。脏树确认必须回传原响应的 `dirtyStateFingerprint`；变化路径内容、暂存区或 porcelain 状态任一改变，旧指纹都失效。
@@ -64,7 +64,7 @@ Claude 命令从当前 0.39.8 源码发布包的 `--plugin-dir` 加载 Plugin；
 - 同一物理 workspace 可以绑定多个 Delivery，但每个会话必须保存并显式传自己的 `rootId`。无参发现多个未结束绑定时只返回 `DELIVERY_SELECTION_REQUIRED`，不能按更新时间猜选。
 - AUTOMATIC 选择在排队时立即持久化。非队首 Delivery 返回 `WAITING_FOR_WORKSPACE_TURN` 或 `WAITING_FOR_WORKSPACE_COMMIT`，不创建 Run、不派遣 receiver；宿主准备好目标分支后只调用 `resume_execution_mode`，不能重选。
 - 前序 Delivery 只有在 Run 终态、被取消 receiver 的租约已结束、存在相对 turn-start 的非空业务 commit、历史未改写且工作树/index 干净时才释放。错分支、dirty、HEAD 或 scope 漂移全部失败关闭。
-- coordinator 与所有 secondary `READ_WRITE` checkout 都参与事务内 owner gate；任一 physical workspace 冲突时只允许先到 Delivery 运行。
+- 主会话当前 checkout 与所有 `READ_WRITE` project workspace 都参与事务内 owner gate；任一 physical workspace 冲突时只允许先到 Delivery 运行。
 - TASK/TASK Review 的 Controller 可信 Git 快照必须生成 `workspace-changes.patch`，覆盖 committed、staged、unstaged 与 untracked 内容，供未打开实际 checkout 的用户审核。
 - 同一冻结分支仍不能同时属于两个未终结 Delivery；每个 Delivery 使用自己的 feature branch。
 - 未显式声明 `projectScopes` 的单仓 Delivery 必须在 AUTO claim 与 `loop_context` 中得到一个经顶层 `gitBinding` 和实际 workspace 验证的 `primary` scope；无效 binding 必须在 child 读取或修改仓库前 fail closed。

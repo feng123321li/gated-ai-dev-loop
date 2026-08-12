@@ -192,12 +192,6 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                 selected["workspaceStrategy"],
                 "CURRENT_WORKSPACE_SERIAL",
             )
-            self.assertEqual(
-                SchedulerRepository(
-                    str(repository)
-                ).worktree_setup_reservations("d-serial-ready"),
-                [],
-            )
 
     def test_serial_choice_waits_for_current_delivery_branch(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -227,12 +221,6 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                     "selection"
                 ],
                 "AUTOMATIC",
-            )
-            self.assertEqual(
-                scheduler.worktree_setup_reservations(
-                    "d-serial-waiting"
-                ),
-                [],
             )
 
     def test_parallel_and_linked_worktree_inputs_are_removed(self) -> None:
@@ -282,10 +270,6 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
             self.assertIsNone(
                 scheduler.execution_selection("d-no-parallel")
             )
-            self.assertEqual(
-                scheduler.worktree_setup_reservations("d-no-parallel"),
-                [],
-            )
             with self.assertRaises(GatedLoopError) as missing:
                 scheduler.run("d-no-parallel")
             self.assertEqual(
@@ -315,15 +299,10 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
             )
             first_active = _select(repository, first)
             self.assertEqual(first_active["status"], "ACTIVE")
-            scheduler = SchedulerRepository(str(repository))
-            self.assertEqual(
-                scheduler.worktree_setup_reservations(
-                    "d-serial-first"
-                ),
-                [],
-            )
 
             second_waiting = _select(repository, second)
+
+            scheduler = SchedulerRepository(str(repository))
 
             self.assertEqual(
                 second_waiting["workspaceStrategy"],
@@ -338,7 +317,9 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                 second_waiting,
             )
             self.assertEqual(
-                scheduler.execution_selection("d-serial-second")[
+                SchedulerRepository(
+                    str(repository)
+                ).execution_selection("d-serial-second")[
                     "selection"
                 ],
                 "AUTOMATIC",
@@ -362,16 +343,12 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                 {"d-serial-first", "d-serial-second"},
             )
             with self.assertRaises(GatedLoopError) as missing:
-                scheduler.run("d-serial-second")
+                SchedulerRepository(str(repository)).run(
+                    "d-serial-second"
+                )
             self.assertEqual(
                 missing.exception.code,
                 "SCHEDULER_RUN_MISSING",
-            )
-            self.assertEqual(
-                scheduler.worktree_setup_reservations(
-                    "d-serial-second"
-                ),
-                [],
             )
 
             implementation = repository / "serial-first.txt"
@@ -398,12 +375,6 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                     ":(exclude).layered-delivery",
                     ":(exclude).layered-delivery/**",
                 )
-            )
-            self.assertEqual(
-                scheduler.worktree_setup_reservations(
-                    "d-serial-second"
-                ),
-                [],
             )
             with self.assertRaises(GatedLoopError) as dirty_missing:
                 scheduler.run("d-serial-second")
@@ -450,12 +421,6 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
             self.assertFalse(
                 committed_but_active["automaticDispatchRequested"]
             )
-            self.assertEqual(
-                scheduler.worktree_setup_reservations(
-                    "d-serial-second"
-                ),
-                [],
-            )
             with self.assertRaises(GatedLoopError) as active_missing:
                 scheduler.run("d-serial-second")
             self.assertEqual(
@@ -489,12 +454,6 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                 branch_preparation["nextAction"],
                 "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION",
             )
-            self.assertEqual(
-                scheduler.worktree_setup_reservations(
-                    "d-serial-second"
-                ),
-                [],
-            )
             git_command(
                 repository,
                 "switch",
@@ -517,12 +476,6 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                 scheduler.run("d-serial-second")["status"],
                 "ACTIVE",
             )
-            for root_id in ("d-serial-first", "d-serial-second"):
-                self.assertEqual(
-                    scheduler.worktree_setup_reservations(root_id),
-                    [],
-                )
-
     def test_terminal_turn_without_business_commit_keeps_successor_waiting(
         self,
     ) -> None:
@@ -592,14 +545,6 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                 missing.exception.code,
                 "SCHEDULER_RUN_MISSING",
             )
-            for root_id in (
-                "d-commit-gate-first",
-                "d-commit-gate-second",
-            ):
-                self.assertEqual(
-                    scheduler.worktree_setup_reservations(root_id),
-                    [],
-                )
 
             implementation = repository / "commit-gate-first.txt"
             implementation.write_text(
@@ -655,14 +600,6 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                 still_missing.exception.code,
                 "SCHEDULER_RUN_MISSING",
             )
-            for root_id in (
-                "d-commit-gate-first",
-                "d-commit-gate-second",
-            ):
-                self.assertEqual(
-                    scheduler.worktree_setup_reservations(root_id),
-                    [],
-                )
 
     def test_deliveries_cannot_share_branch(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -700,10 +637,6 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                 self.assertEqual(
                     missing.exception.code,
                     "SCHEDULER_RUN_MISSING",
-                )
-                self.assertEqual(
-                    scheduler.worktree_setup_reservations(root_id),
-                    [],
                 )
 
 

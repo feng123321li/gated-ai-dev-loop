@@ -47,11 +47,7 @@ from hdg.mcp_tools import (
 )
 from hdg.model_core import validate_hierarchy_definition
 from hdg.planning import workspace_status
-from hdg.planning import (
-    _assert_automatic_git_branch_available,
-    freeze_hierarchy,
-    prepare_hierarchy,
-)
+from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.repository import (
     SCHEDULER_STATE_CONTRACT,
     SchedulerRepository,
@@ -2534,10 +2530,6 @@ class McpSurfaceTests(unittest.TestCase):
                 scheduler.execution_selection("d-claude-cli")["selection"],
                 "AUTOMATIC",
             )
-            self.assertEqual(
-                scheduler.worktree_setup_reservations("d-claude-cli"),
-                [],
-            )
             with self.assertRaises(GatedLoopError) as wrong_workspace:
                 call_tool(
                     "workspace_status",
@@ -2788,12 +2780,6 @@ class McpSurfaceTests(unittest.TestCase):
                 ],
                 "AUTOMATIC",
             )
-            self.assertEqual(
-                scheduler.worktree_setup_reservations(
-                    "d-auto-transition"
-                ),
-                [],
-            )
             with self.assertRaises(GatedLoopError) as missing_run:
                 scheduler.run("d-auto-transition")
             self.assertEqual(
@@ -2880,12 +2866,6 @@ class McpSurfaceTests(unittest.TestCase):
             self.assertEqual(
                 git_command(repository, "branch", "--show-current"),
                 "master",
-            )
-            self.assertEqual(
-                SchedulerRepository(
-                    str(repository)
-                ).worktree_setup_reservations("d-codex-master"),
-                [],
             )
 
     def test_loop_context_keeps_parallel_deliveries_in_their_own_worktrees(
@@ -4280,6 +4260,61 @@ class McpSurfaceTests(unittest.TestCase):
 
         self.assertEqual(row[0], SCHEDULER_STATE_CONTRACT)
 
+    def test_existing_scheduler_recreates_compatible_indexes(self) -> None:
+        compatible_indexes = {
+            "node_runs_by_run_status",
+            "node_runs_by_lease_expires",
+            "graph_events_by_run_type_event_id",
+            "active_dispatch_reservations_by_expiry",
+        }
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+                now=at(0),
+            )
+            repository = SchedulerRepository(root)
+            stored_before_upgrade = repository.hierarchy(
+                prepared["rootId"]
+            )
+            database = Path(root, ".layered-delivery", "scheduler.db")
+            connection = sqlite3.connect(database)
+            try:
+                for index_name in compatible_indexes:
+                    connection.execute(
+                        f'DROP INDEX "{index_name}"'
+                    )
+                connection.commit()
+            finally:
+                connection.close()
+
+            stored_after_upgrade = SchedulerRepository(root).hierarchy(
+                prepared["rootId"]
+            )
+            stored_after_second_connect = SchedulerRepository(
+                root
+            ).hierarchy(prepared["rootId"])
+
+            inspection = sqlite3.connect(database)
+            try:
+                recreated_indexes = {
+                    row[0]
+                    for row in inspection.execute(
+                        "SELECT name FROM sqlite_master "
+                        "WHERE type = 'index'"
+                    )
+                    if row[0] in compatible_indexes
+                }
+            finally:
+                inspection.close()
+
+        self.assertEqual(stored_after_upgrade, stored_before_upgrade)
+        self.assertEqual(
+            stored_after_second_connect,
+            stored_before_upgrade,
+        )
+        self.assertEqual(recreated_indexes, compatible_indexes)
+
     def test_non_text_state_contract_is_rejected_as_unknown(self) -> None:
         with TemporaryDirectory() as root:
             control = Path(root, ".layered-delivery")
@@ -5110,82 +5145,6 @@ class HierarchyFileTests(unittest.TestCase):
             self.assertEqual(
                 caught.exception.code, "SCHEDULER_HIERARCHY_FILE_INVALID"
             )
-
-
-class AutomaticBranchOccupancyTests(unittest.TestCase):
-    """AUTOMATIC refuses a frozen branchRef already held by another worktree."""
-
-    @staticmethod
-    def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-        result = subprocess.run(
-            ["git", "-C", str(repo), *args],
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-        )
-        assert result.returncode == 0, (args, result.stderr)
-        return result
-
-    def _primary_repo(self) -> tuple[Path, str]:
-        temporary = TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        repo = Path(temporary.name)
-        self._git(repo, "-c", "init.defaultBranch=main", "init")
-        self._git(repo, "config", "user.email", "t@t")
-        self._git(repo, "config", "user.name", "t")
-        (repo / "f.txt").write_text("x", encoding="utf-8")
-        self._git(repo, "add", "-A")
-        self._git(repo, "commit", "-m", "m")
-        main_sha = self._git(repo, "rev-parse", "main").stdout.strip()
-        self._git(repo, "switch", "-c", "feature/m_lf_protein")
-        (repo / "g.txt").write_text("y", encoding="utf-8")
-        self._git(repo, "add", "-A")
-        self._git(repo, "commit", "-m", "p")
-        return repo, main_sha
-
-    @staticmethod
-    def _binding(branch: str, main_sha: str) -> dict:
-        return {
-            "branchRef": branch,
-            "baseRef": "main",
-            "baseCommit": main_sha,
-            "integrationTarget": "main",
-        }
-
-    def test_rejects_branchref_held_by_primary(self) -> None:
-        repo, main_sha = self._primary_repo()
-        with self.assertRaises(GatedLoopError) as caught:
-            _assert_automatic_git_branch_available(
-                {
-                    "delivery": {
-                        "gitBinding": self._binding(
-                            "feature/m_lf_protein", main_sha
-                        )
-                    }
-                },
-                str(repo),
-            )
-        self.assertEqual(
-            caught.exception.code,
-            "SCHEDULER_GIT_BRANCH_IN_USE_BY_OTHER_WORKTREE",
-        )
-
-    def test_allows_free_branch(self) -> None:
-        repo, main_sha = self._primary_repo()
-        _assert_automatic_git_branch_available(
-            {
-                "delivery": {
-                    "gitBinding": self._binding(
-                        "feature/free-branch", main_sha
-                    )
-                }
-            },
-            str(repo),
-        )
-
-    def test_allows_missing_gitbinding(self) -> None:
-        repo, _ = self._primary_repo()
-        _assert_automatic_git_branch_available({"delivery": {}}, str(repo))
 
 
 class DraftCleanupTests(unittest.TestCase):

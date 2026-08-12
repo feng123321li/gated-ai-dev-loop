@@ -8,6 +8,28 @@ from .errors import fail
 SCHEDULER_STATE_CONTRACT = "schema-v3-graph-compiler-v1"
 
 
+_COMPATIBLE_INDEX_SCHEMA = """
+CREATE INDEX IF NOT EXISTS node_runs_by_run_status
+ON node_runs(run_id, status);
+CREATE INDEX IF NOT EXISTS node_runs_by_lease_expires
+ON node_runs(lease_expires_at)
+WHERE lease_expires_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS graph_events_by_run_type_event_id
+ON graph_events(run_id, event_type, event_id);
+CREATE INDEX IF NOT EXISTS active_dispatch_reservations_by_expiry
+ON dispatch_reservations(status, expires_at)
+WHERE status = 'RESERVED';
+"""
+
+
+def ensure_compatible_scheduler_storage(
+    connection: sqlite3.Connection,
+) -> None:
+    """Apply non-destructive additions within the current state contract."""
+
+    connection.executescript(_COMPATIBLE_INDEX_SCHEMA)
+
+
 def initialize_scheduler_storage(connection: sqlite3.Connection) -> None:
     connection.executescript(
         """
@@ -131,38 +153,6 @@ def initialize_scheduler_storage(connection: sqlite3.Connection) -> None:
             chosen_at TEXT NOT NULL,
             FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
         );
-        CREATE TABLE IF NOT EXISTS worktree_setup_reservations (
-            reservation_id TEXT PRIMARY KEY,
-            root_id TEXT NOT NULL,
-            revision INTEGER NOT NULL,
-            project_id TEXT NOT NULL,
-            repository_key TEXT NOT NULL,
-            repository_root TEXT NOT NULL,
-            branch_ref TEXT NOT NULL,
-            hierarchy_fingerprint TEXT NOT NULL,
-            idempotency_key TEXT NOT NULL UNIQUE,
-            status TEXT NOT NULL,
-            attempt INTEGER NOT NULL DEFAULT 1,
-            phase TEXT,
-            summary_zh TEXT,
-            progress_percent INTEGER,
-            issued_at TEXT NOT NULL,
-            last_reported_at TEXT,
-            lease_expires_at TEXT,
-            ready_at TEXT,
-            failure_code TEXT,
-            failure_message_zh TEXT,
-            reconciled_at TEXT,
-            last_retry_request_id TEXT,
-            UNIQUE(root_id, revision, project_id),
-            FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS
-        active_worktree_setup_by_repository_branch
-        ON worktree_setup_reservations(repository_key, branch_ref)
-        WHERE status IN (
-            'PENDING', 'IN_PROGRESS', 'READY', 'FAILED', 'EXPIRED'
-        );
         CREATE TABLE IF NOT EXISTS dispatch_reservations (
             reservation_id TEXT PRIMARY KEY,
             run_id TEXT NOT NULL,
@@ -196,6 +186,7 @@ def initialize_scheduler_storage(connection: sqlite3.Connection) -> None:
         );
         """
     )
+    ensure_compatible_scheduler_storage(connection)
     connection.execute(
         "INSERT INTO scheduler_metadata(key, value) VALUES (?, ?)",
         ("state_contract", SCHEDULER_STATE_CONTRACT),

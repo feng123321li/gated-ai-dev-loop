@@ -175,7 +175,7 @@ class HooklessProtocolTests(unittest.TestCase):
             & context_fields
         )
 
-    def test_scheduler_schema_has_no_attestation_tables(self) -> None:
+    def test_scheduler_schema_has_no_legacy_coordination_tables(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             repository = SchedulerRepository(directory)
             with repository.transaction():
@@ -204,6 +204,7 @@ class HooklessProtocolTests(unittest.TestCase):
                 "receiver_attestations",
                 "host_receiver_identities",
                 "run_receiver_roots",
+                "worktree_setup_reservations",
             }
             & tables
         )

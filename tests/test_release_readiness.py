@@ -201,6 +201,24 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         )
         self.assertIn("NEVER call record_user_confirmation", command[-1])
 
+    def test_claude_smoke_allows_current_checkout_branch_preparation(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary:
+            with patch(
+                "scripts.host_smoke.shutil.which",
+                return_value="claude",
+            ):
+                command = _host_command(
+                    "claude-code",
+                    workspace=Path(temporary),
+                    scenario="light",
+                    model=None,
+                )
+        allowed_index = command.index("--allowedTools")
+        allowed_tools = command[allowed_index + 1].split(",")
+        self.assertIn("Bash(git *)", allowed_tools)
+
     def test_claude_smoke_starts_on_main_primary_checkout(
         self,
     ) -> None:
@@ -308,16 +326,32 @@ class TeamReleaseReadinessTests(unittest.TestCase):
             )
             self.assertEqual(_find_smoke_artifact(workspace), readme)
 
-    def test_host_smoke_prompt_forbids_cross_agent_dispatch(self) -> None:
+    def test_claude_host_smoke_uses_current_workspace_serial_dispatch(
+        self,
+    ) -> None:
         prompt = _prompt("light", "claude-code")
         self.assertIn("current-host dispatch only", prompt)
         self.assertIn("never dispatch to another Agent", prompt)
         self.assertIn("Do not read prior Codex/Claude", prompt)
-        self.assertIn("delivery-coordinator background agent", prompt)
         self.assertIn("Do not call TaskCreate", prompt)
+        self.assertIn("CURRENT_WORKSPACE_SERIAL", prompt)
+        self.assertIn(
+            "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION",
+            prompt,
+        )
+        self.assertIn("gitBinding", prompt)
+        self.assertIn("current checkout", prompt)
+        self.assertIn("resume_execution_mode", prompt)
+        self.assertIn("plan_dispatch_batch", prompt)
+        self.assertIn("independent current-host child", prompt)
         self.assertIn("call dispatch_loop first", prompt)
         self.assertIn("operation_id", prompt)
         self.assertIn("`delivery-graph smoke\\n`", prompt)
+        self.assertNotIn("hostDispatch", prompt)
+        self.assertNotIn("delivery-coordinator", prompt)
+        self.assertNotIn("background coordinator", prompt)
+        self.assertNotIn("linked worktree", prompt)
+        self.assertNotIn("git worktree add", prompt)
 
     def test_codex_host_smoke_uses_reserved_independent_receivers(self) -> None:
         bootstrap = _codex_bootstrap_prompt("light")

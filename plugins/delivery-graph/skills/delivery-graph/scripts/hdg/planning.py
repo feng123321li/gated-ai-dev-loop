@@ -7,9 +7,7 @@ from typing import Any
 from .errors import GatedLoopError, fail
 from .fs_safe import atomic_write, safe_path
 from .git_binding import (
-    _branch_worktree_count,
     enumerate_local_feature_branches,
-    find_delivery_linked_worktree,
     git_repository_identity,
     inspect_business_commit_range,
     inspect_delivery_git_workspace,
@@ -45,24 +43,8 @@ from .model_rendering import (
 from .repository import (
     GOVERNANCE_DIRECTORY,
     SchedulerRepository,
-    WORKTREE_SETUP_HEARTBEAT_SECONDS,
-    WORKTREE_SETUP_LEASE_SECONDS,
-    WORKTREE_SETUP_POLL_SECONDS,
 )
 
-
-WORKTREE_SETUP_PHASES = frozenset(
-    {
-        "STARTING",
-        "CREATING_DIRECTORY",
-        "CREATING_BRANCH",
-        "CREATING_WORKTREE",
-        "CHECKING_OUT",
-        "VERIFYING",
-        "RECONCILING",
-        "FAILED",
-    }
-)
 
 def workspace_status(
     *,
@@ -383,24 +365,16 @@ def _preview_values(hierarchy: object) -> tuple[
     )
 
 
-def _safe_worktree_component(value: str, *, limit: int = 48) -> str:
-    return "".join(
-        character if character.isalnum() else "-"
-        for character in value.casefold()
-    ).strip("-")[:limit]
-
-
-def _automatic_worktree_requests(
+def _automatic_workspace_requests(
     *,
     control_root: str,
     workspace_root: str,
     hierarchy: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Describe the repository/branch reservations for one Delivery."""
+    """Describe the current workspaces required by one Delivery."""
 
     delivery = hierarchy["delivery"]
     delivery_id = delivery["id"]
-    hierarchy_value = hierarchy_fingerprint(hierarchy)
     workspace_key = git_repository_identity(workspace_root)
     scopes = delivery.get("projectScopes")
     candidates: list[dict[str, Any]] = []
@@ -450,29 +424,7 @@ def _automatic_worktree_requests(
                 projectId=candidate["projectId"],
                 workspaceRoot=candidate["repositoryRoot"],
             )
-        project_id = candidate["projectId"]
-        multi_project = scopes is not None
-        name_base = _safe_worktree_component(delivery_id)
-        if multi_project:
-            name_base += "-" + _safe_worktree_component(project_id, limit=24)
-        worktree_name = (
-            f"ld-{name_base[:72]}-{hierarchy_value[:10]}"
-        )
-        idempotency_key = (
-            f"delivery-worktree:{delivery_id}:"
-            + (f"{project_id}:" if multi_project else "")
-            + hierarchy_value
-        )
         binding = validate_git_binding(candidate["gitBinding"])
-        reservation_id = fingerprint(
-            {
-                "rootId": delivery_id,
-                "projectId": project_id,
-                "repositoryKey": repository_key,
-                "branchRef": binding["branchRef"],
-                "hierarchyFingerprint": hierarchy_value,
-            }
-        )
         requests.append(
             {
                 **candidate,
@@ -480,9 +432,6 @@ def _automatic_worktree_requests(
                 "repositoryKey": repository_key,
                 "branchRef": binding["branchRef"],
                 "coordinatorWorkspace": repository_key == workspace_key,
-                "worktreeName": worktree_name,
-                "idempotencyKey": idempotency_key,
-                "reservationId": reservation_id,
             }
         )
     if requests and sum(
@@ -511,7 +460,7 @@ def _request_workspace_root(
     )
 
 
-def _current_workspace_satisfies_worktree_request(
+def _current_workspace_satisfies_request(
     request: dict[str, Any],
     workspace_root: str,
 ) -> bool:
@@ -603,7 +552,7 @@ def _automatic_serial_workspace_setup(
     workspace_root: str,
     hierarchy: dict[str, Any],
 ) -> dict[str, Any] | None:
-    requests = _automatic_worktree_requests(
+    requests = _automatic_workspace_requests(
         control_root=control_root,
         workspace_root=workspace_root,
         hierarchy=hierarchy,
@@ -611,7 +560,7 @@ def _automatic_serial_workspace_setup(
     pending_requests = [
         request
         for request in requests
-        if not _current_workspace_satisfies_worktree_request(
+        if not _current_workspace_satisfies_request(
             request,
             workspace_root,
         )
@@ -648,7 +597,7 @@ def _serial_commit_barrier(
             "receiverLeases": receiver_leases,
         }
     previous = repository.hierarchy(previous_turn["rootId"])
-    requests = _automatic_worktree_requests(
+    requests = _automatic_workspace_requests(
         control_root=str(repository.root),
         workspace_root=workspace_root,
         hierarchy=previous["hierarchy"],
@@ -870,7 +819,6 @@ def _serial_turn_for_recorded_selection(
             expected_graph_fingerprint=stored["graphFingerprint"],
             authorized_project_ids=selection["authorizedProjectIds"],
             confirmed_by=selection["confirmedBy"],
-            worktree_requests=[],
             workspace_key=SchedulerRepository.workspace_key(
                 workspace_root
             ),
@@ -1250,542 +1198,6 @@ def _frozen_automatic_result(
             else "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH"
         ),
     }
-
-
-def _worktree_setup_progress(
-    reservation: dict[str, Any] | None,
-    *,
-    ready: bool = False,
-) -> dict[str, Any]:
-    state = reservation or {}
-    status = "READY" if ready else str(state.get("status") or "PENDING")
-    health_by_status = {
-        "PENDING": "QUEUED",
-        "IN_PROGRESS": "ACTIVE",
-        "READY": "READY",
-        "FAILED": "FAILED",
-        "EXPIRED": "STALE",
-        "RELEASED": "RELEASED",
-        "SUPERSEDED": "SUPERSEDED",
-    }
-    result = {
-        "status": status,
-        "health": health_by_status.get(status, "UNKNOWN"),
-        "attempt": int(state.get("attempt") or 1),
-        "phase": "READY" if ready else (state.get("phase") or "QUEUED"),
-        "summaryZh": (
-            "精确 worktree 已由 Controller 验证"
-            if ready
-            else (state.get("summaryZh") or "等待宿主创建 worktree")
-        ),
-        "progressPercent": (
-            100
-            if ready
-            else (
-                state.get("progressPercent")
-                if state.get("progressPercent") is not None
-                else 0
-            )
-        ),
-        "issuedAt": state.get("issuedAt"),
-        "lastReportedAt": state.get("lastReportedAt"),
-        "leaseExpiresAt": None if ready else state.get("leaseExpiresAt"),
-        "heartbeatIntervalSeconds": WORKTREE_SETUP_HEARTBEAT_SECONDS,
-        "leaseSeconds": WORKTREE_SETUP_LEASE_SECONDS,
-    }
-    if state.get("failureCode") is not None:
-        result["failureCode"] = state["failureCode"]
-    if state.get("failureMessageZh") is not None:
-        result["failureMessageZh"] = state["failureMessageZh"]
-    return result
-
-
-def _worktree_progress_monitor(
-    project_setups: list[dict[str, Any]],
-) -> dict[str, Any]:
-    rows = [
-        {
-            "projectId": setup["projectId"],
-            **setup["setupProgress"],
-        }
-        for setup in project_setups
-    ]
-    alerts = []
-    for row in rows:
-        if row["health"] == "STALE":
-            alerts.append(
-                {
-                    "projectId": row["projectId"],
-                    "code": "WORKTREE_SETUP_LEASE_EXPIRED",
-                    "messageZh": (
-                        "创建心跳已超时；核对旧宿主和残留路径后再申请重试"
-                    ),
-                }
-            )
-        elif row["health"] == "FAILED":
-            alerts.append(
-                {
-                    "projectId": row["projectId"],
-                    "code": row.get(
-                        "failureCode",
-                        "WORKTREE_SETUP_FAILED",
-                    ),
-                    "messageZh": row.get(
-                        "failureMessageZh",
-                        "worktree 创建失败；必须先完成残留状态核对",
-                    ),
-                }
-            )
-    return {
-        "recommendedPollSeconds": WORKTREE_SETUP_POLL_SECONDS,
-        "rows": rows,
-        "alerts": alerts,
-    }
-
-
-def _project_worktree_setup(
-    *,
-    request: dict[str, Any],
-    workspace_root: str,
-    delivery_id: str,
-    hierarchy_value: str,
-    graph_value: str,
-    host_adapter_id: str | None,
-    reservation_state: dict[str, Any] | None,
-) -> dict[str, Any]:
-    """Describe one exact project worktree without performing Git writes."""
-
-    binding = request["gitBinding"]
-    repository_root = request["repositoryRoot"]
-    current_root = Path(workspace_root).absolute().resolve(strict=True)
-    exact_worktree = find_delivery_linked_worktree(
-        repository_root,
-        binding,
-    )
-    coordinator = bool(request["coordinatorWorkspace"])
-    if _current_workspace_satisfies_worktree_request(
-        request,
-        workspace_root,
-    ):
-        return {
-            **request,
-            "state": "READY",
-            "owner": "CONTROLLER_VERIFIED",
-            "nextAction": "NONE",
-            "workspaceRoot": str(
-                Path(_request_workspace_root(request, workspace_root))
-                .absolute()
-                .resolve(strict=True)
-            ),
-            "setupProgress": _worktree_setup_progress(
-                reservation_state,
-                ready=True,
-            ),
-        }
-    dispatch_already_issued = bool(
-        (reservation_state or {}).get("dispatchAlreadyIssued", False)
-    )
-    if exact_worktree is not None and (
-        not coordinator
-        or Path(exact_worktree).resolve(strict=True) == current_root
-    ):
-        return {
-            **request,
-            "state": "READY",
-            "owner": "CONTROLLER_VERIFIED",
-            "nextAction": "NONE",
-            "workspaceRoot": exact_worktree,
-            "setupProgress": _worktree_setup_progress(
-                reservation_state,
-                ready=True,
-            ),
-        }
-
-    inspected_root = (
-        workspace_root
-        if coordinator
-        else repository_root
-    )
-    discovery = inspect_delivery_git_workspace(
-        inspected_root,
-        base_ref=binding["baseRef"],
-        host_adapter_id=host_adapter_id,
-    )
-    if not isinstance(discovery, dict):
-        fail(
-            "SCHEDULER_GIT_WORKTREE_REQUIRED",
-            "A Git-bound project scope requires a Git worktree",
-            projectId=request["projectId"],
-        )
-    setup = discovery.get("worktreeSetup")
-    actual_branch = discovery.get("gitWorkspace", {}).get("branchRef")
-    if (
-        not isinstance(setup, dict)
-        and isinstance(actual_branch, str)
-        and actual_branch != binding["branchRef"]
-    ):
-        working_tree = discovery.get("workingTree", {})
-        setup = {
-            "state": (
-                "FROZEN_DELIVERY_BRANCH_REQUIRED"
-                if working_tree.get("clean")
-                else "FROZEN_DELIVERY_BRANCH_DIRTY"
-            ),
-            "owner": "HOST",
-            "nextAction": (
-                "CHECKOUT_FROZEN_DELIVERY_BRANCH"
-                if working_tree.get("clean")
-                else "REVIEW_CHANGES_BEFORE_FROZEN_BRANCH_CHECKOUT"
-            ),
-            "actualBranchRef": actual_branch,
-            "baseRef": binding["baseRef"],
-            "baseCommit": binding["baseCommit"],
-            "integrationTarget": binding["integrationTarget"],
-            "workingTree": working_tree,
-        }
-    elif not isinstance(setup, dict):
-        verify_delivery_git_binding(
-            inspected_root,
-            binding,
-            preparing=True,
-        )
-        return {
-            **request,
-            "state": "READY",
-            "owner": "CONTROLLER_VERIFIED",
-            "nextAction": "NONE",
-            "workspaceRoot": str(
-                Path(inspected_root).absolute().resolve(strict=True)
-            ),
-        }
-    else:
-        setup = dict(setup)
-
-    reservation_status = (reservation_state or {}).get("status")
-    if reservation_status == "EXPIRED":
-        setup.update(
-            {
-                "state": "WORKTREE_SETUP_LEASE_EXPIRED",
-                "owner": "HOST",
-                "nextAction": "RECONCILE_EXPIRED_WORKTREE_SETUP",
-            }
-        )
-    elif reservation_status == "FAILED":
-        setup.update(
-            {
-                "state": "WORKTREE_SETUP_FAILED",
-                "owner": "HOST",
-                "nextAction": "RECONCILE_FAILED_WORKTREE_SETUP",
-            }
-        )
-
-    setup.update(
-        {
-            "projectId": request["projectId"],
-            "access": request["access"],
-            "repositoryRoot": repository_root,
-            "repositoryKey": request["repositoryKey"],
-            "coordinatorWorkspace": coordinator,
-            "branchRef": binding["branchRef"],
-            "gitBinding": binding,
-            "strategy": discovery.get("worktreeProvenance", {}).get(
-                "strategy",
-                "HOST_NATIVE_LINKED_WORKTREE",
-            ),
-            "resumeAction": (
-                "CALL_WORKSPACE_STATUS_THEN_RESUME_EXECUTION_MODE"
-            ),
-            "resumeTool": "resume_execution_mode",
-            "controllerCreatesWorktree": False,
-            "selectionPreserved": True,
-            "reservationId": request["reservationId"],
-            "setupAttempt": int(
-                (reservation_state or {}).get("attempt") or 1
-            ),
-            "setupProgress": _worktree_setup_progress(
-                reservation_state,
-            ),
-        }
-    )
-    existing_worktree = exact_worktree
-    host_operations = {
-        "claude-code": "CREATE_CLAUDE_BACKGROUND_DELIVERY_AGENT",
-        "codex": "CREATE_CODEX_PROJECT_TASK",
-    }
-    if coordinator:
-        host_operation = host_operations.get(
-            host_adapter_id or "",
-            "CREATE_HOST_NATIVE_WORKTREE_TASK",
-        )
-    else:
-        host_operation = "PREPARE_PROJECT_LINKED_WORKTREE"
-    launch_policy = (
-        "BLOCKED"
-        if setup["state"]
-        in {
-            "FROZEN_DELIVERY_BRANCH_DIRTY",
-            "WORKTREE_SETUP_FAILED",
-            "WORKTREE_SETUP_LEASE_EXPIRED",
-        }
-        else (
-            "DO_NOT_REISSUE"
-            if dispatch_already_issued
-            and coordinator
-            and setup["state"] == "DEDICATED_WORKTREE_REQUIRED"
-            else (
-                "CONTINUE_EXISTING_WORKTREE_TASK"
-                if dispatch_already_issued
-                else "IMMEDIATE"
-            )
-        )
-    )
-    prompt = (
-        f"Prepare project {request['projectId']} for automatic Delivery "
-        f"{delivery_id} using exact branch {binding['branchRef']} from "
-        f"frozen base {binding['baseCommit']}. Do not invent or reuse a "
-        "different branch. Before the host action call "
-        f"report_worktree_setup for reservation {request['reservationId']} "
-        f"attempt {int((reservation_state or {}).get('attempt') or 1)} with "
-        "STARTED, then report each phase or heartbeat within 30 seconds; "
-        "report FAILED on an error and never retry until the Controller "
-        "grants a reconciled new attempt. Call workspace_status"
-        f"(root_id={delivery_id}) after the host-owned worktree action. "
-    )
-    if coordinator:
-        prompt += (
-            "Then complete every pending projectWorktreeSetup returned by "
-            "the Controller and call "
-            f"resume_execution_mode(root_id={delivery_id}, "
-            f"expected_hierarchy_fingerprint={hierarchy_value}, "
-            f"expected_graph_fingerprint={graph_value}). Remain the single "
-            "background Delivery coordinator and report all project "
-            "progress to the shared control root. Never start another "
-            "top-level CLI session."
-        )
-    else:
-        prompt += (
-            "Return the prepared workspace to the existing Delivery "
-            "coordinator; do not start another coordinator."
-        )
-    setup["hostDispatch"] = {
-        "action": (
-            "CREATE_HOST_NATIVE_WORKTREE_TASK"
-            if coordinator
-            else "PREPARE_PROJECT_LINKED_WORKTREE"
-        ),
-        "hostAdapterId": host_adapter_id,
-        "hostOperation": host_operation,
-        "launchPolicy": launch_policy,
-        "dispatchAlreadyIssued": dispatch_already_issued,
-        "environment": "worktree",
-        "deliveryId": delivery_id,
-        "projectId": request["projectId"],
-        "repositoryRoot": repository_root,
-        "repositoryKey": request["repositoryKey"],
-        "branchRef": binding["branchRef"],
-        "gitBinding": binding,
-        "title": f"Delivery {delivery_id} / {request['projectId']}",
-        "idempotencyKey": request["idempotencyKey"],
-        "reservationId": request["reservationId"],
-        "setupAttempt": int(
-            (reservation_state or {}).get("attempt") or 1
-        ),
-        "prompt": prompt,
-        "baseRef": binding["baseRef"],
-        "baseCommit": binding["baseCommit"],
-        "integrationTarget": binding["integrationTarget"],
-        "manualDirectoryChangeRequired": False,
-        "coordinatorCheckoutPolicy": "PRESERVE_CURRENT_CHECKOUT",
-        "stableDeliveryWorkspace": True,
-        "requiresNewTopLevelSession": False,
-        "manualSessionLaunchAllowed": False,
-        "sameSessionEnterWorktreeSupported": True,
-        "mainConversationRole": "MONITOR_ONLY",
-        "worktreeName": request["worktreeName"],
-        "existingWorktreeRoot": existing_worktree,
-        "launchCoordinator": coordinator,
-        "progressReporting": {
-            "tool": "report_worktree_setup",
-            "reservationId": request["reservationId"],
-            "projectId": request["projectId"],
-            "expectedAttempt": int(
-                (reservation_state or {}).get("attempt") or 1
-            ),
-            "heartbeatIntervalSeconds": WORKTREE_SETUP_HEARTBEAT_SECONDS,
-            "leaseSeconds": WORKTREE_SETUP_LEASE_SECONDS,
-            "reportAt": [
-                "STARTED",
-                "CREATING_DIRECTORY",
-                "CREATING_BRANCH",
-                "CREATING_WORKTREE",
-                "CHECKING_OUT",
-                "VERIFYING",
-                "FAILED",
-            ],
-            "progressRenewsLease": True,
-        },
-        "agentDispatch": (
-            {
-                "agentType": "delivery-graph:delivery-coordinator",
-                "name": request["worktreeName"],
-                "runInBackground": True,
-                "reusePolicy": "RESUME_BY_NAME",
-                "workspaceEntry": (
-                    "ENTER_EXISTING_WORKTREE"
-                    if existing_worktree is not None
-                    else "CREATE_LINKED_WORKTREE_THEN_ENTER"
-                ),
-                "returnMainConversationToCoordinatorCheckout": True,
-            }
-            if host_adapter_id == "claude-code" and coordinator
-            else (
-                {
-                    "taskEnvironment": "worktree",
-                    "runInBackground": True,
-                    "reusePolicy": "RESUME_PROJECT_TASK",
-                }
-                if coordinator
-                else {
-                    "taskEnvironment": "worktree",
-                    "runInBackground": False,
-                    "reusePolicy": "PREPARE_ONCE",
-                }
-            )
-        ),
-        "continuation": {
-            "firstTool": "workspace_status",
-            "thenTool": "resume_execution_mode",
-            "rootId": delivery_id,
-            "expectedHierarchyFingerprint": hierarchy_value,
-            "expectedGraphFingerprint": graph_value,
-            "confirmationRequired": False,
-        },
-    }
-    return setup
-
-
-def _automatic_workspace_setup(
-    *,
-    control_root: str,
-    workspace_root: str,
-    hierarchy: dict[str, Any],
-    host_adapter_id: str | None,
-    repository: SchedulerRepository,
-    reservation_states: list[dict[str, Any]] | None = None,
-) -> dict[str, Any] | None:
-    requests = _automatic_worktree_requests(
-        control_root=control_root,
-        workspace_root=workspace_root,
-        hierarchy=hierarchy,
-    )
-    if not requests:
-        return None
-    delivery_id = hierarchy["delivery"]["id"]
-    hierarchy_value = hierarchy_fingerprint(hierarchy)
-    graph = compile_delivery_graph(
-        hierarchy,
-        hierarchy_fingerprint=hierarchy_value,
-    )
-    graph_value = graph_fingerprint(graph)
-    states = {
-        item["projectId"]: item
-        for item in (
-            reservation_states
-            if reservation_states is not None
-            else repository.worktree_setup_reservations(delivery_id)
-        )
-    }
-    project_setups = [
-        _project_worktree_setup(
-            request=request,
-            workspace_root=workspace_root,
-            delivery_id=delivery_id,
-            hierarchy_value=hierarchy_value,
-            graph_value=graph_value,
-            host_adapter_id=host_adapter_id,
-            reservation_state=states.get(request["projectId"]),
-        )
-        for request in requests
-    ]
-    progress_monitor = _worktree_progress_monitor(project_setups)
-    for setup in project_setups:
-        setup["progressMonitor"] = progress_monitor
-    ready_project_ids = [
-        item["projectId"]
-        for item in project_setups
-        if item["state"] == "READY"
-    ]
-    repository.mark_worktree_setups_ready(
-        delivery_id,
-        ready_project_ids,
-    )
-    pending = [
-        item for item in project_setups if item["state"] != "READY"
-    ]
-    if not pending:
-        return None
-    if len(project_setups) == 1:
-        result = pending[0]
-        dispatch = result.get("hostDispatch", {})
-        if (
-            result["state"] == "DEDICATED_WORKTREE_REQUIRED"
-            and dispatch.get("dispatchAlreadyIssued")
-        ):
-            result["nextAction"] = "WAIT_FOR_EXISTING_WORKTREE_SETUP"
-        return result
-
-    coordinator_pending = next(
-        (
-            item
-            for item in pending
-            if item["coordinatorWorkspace"]
-        ),
-        None,
-    )
-    actionable = any(
-        item["state"] != "DEDICATED_WORKTREE_REQUIRED"
-        or not item["coordinatorWorkspace"]
-        or not item.get("hostDispatch", {}).get("dispatchAlreadyIssued")
-        for item in pending
-    )
-    primary_pending = next(
-        (
-            item
-            for item in pending
-            if item["coordinatorWorkspace"]
-        ),
-        pending[0],
-    )
-    result = {
-        "state": "PROJECT_WORKTREES_REQUIRED",
-        "owner": "HOST",
-        "nextAction": (
-            "CREATE_REQUIRED_PROJECT_WORKTREES"
-            if actionable
-            and not (
-                coordinator_pending is not None
-                and coordinator_pending.get("hostDispatch", {}).get(
-                    "dispatchAlreadyIssued"
-                )
-            )
-            else "WAIT_FOR_EXISTING_WORKTREE_SETUP"
-        ),
-        "strategy": "HOST_NATIVE_LINKED_WORKTREE",
-        "resumeAction": "CALL_WORKSPACE_STATUS_THEN_RESUME_EXECUTION_MODE",
-        "resumeTool": "resume_execution_mode",
-        "controllerCreatesWorktree": False,
-        "selectionPreserved": True,
-        "progressControlRoot": str(
-            Path(control_root).absolute().resolve(strict=True)
-        ),
-        "sharedProgressControlPlane": True,
-        "readyProjectIds": ready_project_ids,
-        "pendingProjectIds": [item["projectId"] for item in pending],
-        "projectWorktreeSetups": project_setups,
-        "progressMonitor": progress_monitor,
-        "hostDispatch": primary_pending["hostDispatch"],
-    }
-    return result
 
 
 def _inject_remembered_baseline(
@@ -2780,7 +2192,7 @@ def freeze_hierarchy(
         expected_delivery_revision,
     )
     captured_turn_start = _capture_workspace_turn_start(
-        _automatic_worktree_requests(
+        _automatic_workspace_requests(
             control_root=root,
             workspace_root=actual_workspace,
             hierarchy=revision_hierarchy,
@@ -3093,7 +2505,7 @@ def start_manual_handoff(
             already_applied=False,
         )
     turn_start = _capture_workspace_turn_start(
-        _automatic_worktree_requests(
+        _automatic_workspace_requests(
             control_root=root,
             workspace_root=actual_workspace,
             hierarchy=stored["hierarchy"],
@@ -3131,186 +2543,6 @@ def start_manual_handoff(
     }
 
 
-def report_worktree_setup(
-    *,
-    root: str,
-    root_id: str,
-    project_id: str,
-    reservation_id: str,
-    expected_attempt: int,
-    event: str,
-    phase: str,
-    summary_zh: str,
-    progress_percent: int | None = None,
-    failure_code: str | None = None,
-    retry_request_id: str | None = None,
-    confirmed_previous_attempt_stopped: bool = False,
-    confirmed_partial_state_reconciled: bool = False,
-    workspace_root: str | None = None,
-    explicit_dogfood: bool = False,
-    host_adapter_id: str | None = None,
-    now: object = None,
-    **_: Any,
-) -> dict[str, Any]:
-    """Report host worktree setup progress or grant one reconciled retry."""
-
-    for field_name, value, maximum in (
-        ("root_id", root_id, 192),
-        ("project_id", project_id, 192),
-        ("reservation_id", reservation_id, 128),
-        ("summary_zh", summary_zh, 500),
-    ):
-        if (
-            not isinstance(value, str)
-            or not value.strip()
-            or len(value) > maximum
-        ):
-            fail(
-                "SCHEDULER_WORKTREE_SETUP_REPORT_INVALID",
-                f"{field_name} must be a non-empty bounded string",
-                field=field_name,
-            )
-    if (
-        not isinstance(expected_attempt, int)
-        or isinstance(expected_attempt, bool)
-        or expected_attempt < 1
-    ):
-        fail(
-            "SCHEDULER_WORKTREE_SETUP_REPORT_INVALID",
-            "expected_attempt must be a positive integer",
-        )
-    if event not in {"STARTED", "PROGRESS", "FAILED", "RETRY_CONFIRMED"}:
-        fail(
-            "SCHEDULER_WORKTREE_SETUP_EVENT_INVALID",
-            "event must be STARTED, PROGRESS, FAILED, or RETRY_CONFIRMED",
-            event=event,
-        )
-    if phase not in WORKTREE_SETUP_PHASES:
-        fail(
-            "SCHEDULER_WORKTREE_SETUP_PHASE_INVALID",
-            "phase is not a supported worktree setup phase",
-            phase=phase,
-            allowed=sorted(WORKTREE_SETUP_PHASES),
-        )
-    if progress_percent is not None and (
-        not isinstance(progress_percent, int)
-        or isinstance(progress_percent, bool)
-        or not 0 <= progress_percent <= 100
-    ):
-        fail(
-            "SCHEDULER_WORKTREE_SETUP_REPORT_INVALID",
-            "progress_percent must be an integer from 0 through 100",
-        )
-    if event == "FAILED" and (
-        not isinstance(failure_code, str)
-        or not failure_code.strip()
-        or len(failure_code) > 96
-    ):
-        fail(
-            "SCHEDULER_WORKTREE_SETUP_REPORT_INVALID",
-            "FAILED requires a bounded failure_code",
-        )
-    if event == "RETRY_CONFIRMED" and (
-        not isinstance(retry_request_id, str)
-        or not retry_request_id.strip()
-        or len(retry_request_id) > 128
-    ):
-        fail(
-            "SCHEDULER_WORKTREE_SETUP_REPORT_INVALID",
-            "RETRY_CONFIRMED requires a bounded retry_request_id for safe "
-            "response replay",
-        )
-
-    repository = SchedulerRepository(root, now=now)
-    repository.assert_self_hosting_dogfood(explicit_dogfood)
-    stored = repository.hierarchy(root_id)
-    selection = repository.execution_selection(root_id)
-    if selection is None or stored["status"] not in {
-        "CHOICE_READY",
-        "PREPARED",
-    }:
-        fail(
-            "SCHEDULER_WORKTREE_SETUP_REPORT_CONFLICT",
-            "Worktree setup progress requires a pending AUTOMATIC selection",
-            rootId=root_id,
-            status=stored["status"],
-        )
-    # Persist lease expiry before an invalid late progress call can roll back
-    # its own transaction while reporting the stale-attempt error.
-    repository.worktree_setup_reservations(root_id)
-    updated = repository.report_worktree_setup(
-        root_id,
-        project_id=project_id.strip(),
-        reservation_id=reservation_id.strip(),
-        expected_attempt=expected_attempt,
-        event=event,
-        phase=phase,
-        summary_zh=summary_zh.strip(),
-        progress_percent=progress_percent,
-        failure_code=(
-            failure_code.strip()
-            if isinstance(failure_code, str)
-            else None
-        ),
-        confirmed_previous_attempt_stopped=(
-            confirmed_previous_attempt_stopped is True
-        ),
-        confirmed_partial_state_reconciled=(
-            confirmed_partial_state_reconciled is True
-        ),
-        retry_request_id=(
-            retry_request_id.strip()
-            if isinstance(retry_request_id, str)
-            else None
-        ),
-    )
-    reservation_states = repository.worktree_setup_reservations(root_id)
-    reservation_states = [
-        updated if item["projectId"] == project_id else item
-        for item in reservation_states
-    ]
-    setup = _automatic_workspace_setup(
-        control_root=root,
-        workspace_root=workspace_root or root,
-        hierarchy=stored["hierarchy"],
-        host_adapter_id=host_adapter_id,
-        repository=repository,
-        reservation_states=reservation_states,
-    )
-    result = {
-        "rootId": root_id,
-        "projectId": project_id,
-        "reservationId": reservation_id,
-        "setupAttempt": updated["attempt"],
-        "event": event,
-        "setupProgress": _worktree_setup_progress(updated),
-        "retryDispatchGranted": updated["retryDispatchGranted"],
-        "retryRequestReplayed": updated["retryRequestReplayed"],
-        "retryRequestId": updated.get("retryRequestId"),
-        "selectionPreserved": True,
-    }
-    if setup is None:
-        latest = next(
-            (
-                item
-                for item in repository.worktree_setup_reservations(root_id)
-                if item["projectId"] == project_id
-            ),
-            updated,
-        )
-        result["setupProgress"] = _worktree_setup_progress(
-            latest,
-            ready=latest.get("status") == "READY",
-        )
-        result["nextAction"] = (
-            "CALL_WORKSPACE_STATUS_THEN_RESUME_EXECUTION_MODE"
-        )
-    else:
-        result["worktreeSetup"] = setup
-        result["nextAction"] = setup["nextAction"]
-    return result
-
-
 def resume_execution_mode(
     *,
     root: str,
@@ -3321,7 +2553,6 @@ def resume_execution_mode(
     explicit_dogfood: bool = False,
     host_adapter_id: str | None = None,
     now: object = None,
-    _worktree_reservation_states: list[dict[str, Any]] | None = None,
     **_: Any,
 ) -> dict[str, Any]:
     """Continue one recorded AUTOMATIC choice in the ready worktree."""
@@ -3452,7 +2683,7 @@ def resume_execution_mode(
             status=stored["status"],
         )
     turn_start = _capture_workspace_turn_start(
-        _automatic_worktree_requests(
+        _automatic_workspace_requests(
             control_root=root,
             workspace_root=actual_workspace,
             hierarchy=stored["hierarchy"],
@@ -3513,38 +2744,6 @@ def resume_execution_mode(
         ),
         "nextAction": "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH",
     }
-
-
-def _assert_automatic_git_branch_available(
-    hierarchy: dict[str, Any],
-    workspace_root: str,
-) -> None:
-    """Refuse AUTOMATIC dispatch when a frozen branchRef is already checked
-    out by a worktree this Delivery cannot adopt (e.g. the primary checkout).
-
-    git forbids two worktrees on the same branch, so a Delivery that freezes
-    a branchRef already held by the primary can never create its dedicated
-    worktree and would stall the coordinator. Catch it before dispatch.
-    """
-    binding = hierarchy.get("delivery", {}).get("gitBinding")
-    if not isinstance(binding, dict):
-        return
-    branch_ref = binding.get("branchRef")
-    if not isinstance(branch_ref, str) or not branch_ref.strip():
-        return
-    workspace = Path(workspace_root).absolute().resolve(strict=True)
-    if _branch_worktree_count(workspace, branch_ref) < 1:
-        return
-    if find_delivery_linked_worktree(workspace_root, binding) is not None:
-        return  # an adoptable worktree on this branch already exists
-    fail(
-        "SCHEDULER_GIT_BRANCH_IN_USE_BY_OTHER_WORKTREE",
-        "The frozen branchRef is already checked out by another worktree "
-        "(commonly the primary checkout), so the AUTOMATIC dedicated "
-        "worktree cannot be created on it. Use a new branch for this "
-        "Delivery, or omit gitBinding so the Controller can suggest one.",
-        branchRef=branch_ref,
-    )
 
 
 def select_execution_mode(
@@ -3661,7 +2860,7 @@ def select_execution_mode(
         authorized_project_ids,
     )
     actual_workspace = workspace_root or root
-    worktree_requests = _automatic_worktree_requests(
+    workspace_requests = _automatic_workspace_requests(
         control_root=root,
         workspace_root=actual_workspace,
         hierarchy=hierarchy,
@@ -3672,7 +2871,6 @@ def select_execution_mode(
         expected_graph_fingerprint=expected_graph_fingerprint,
         authorized_project_ids=authorized_project_ids or [],
         confirmed_by=confirmed_by.strip(),
-        worktree_requests=[],
         workspace_key=SchedulerRepository.workspace_key(actual_workspace),
     )
     serial_gate = _resolve_serial_workspace_gate(
@@ -3708,8 +2906,8 @@ def select_execution_mode(
 
     pending_requests = [
         request
-        for request in worktree_requests
-        if not _current_workspace_satisfies_worktree_request(
+        for request in workspace_requests
+        if not _current_workspace_satisfies_request(
             request,
             actual_workspace,
         )
@@ -3752,7 +2950,6 @@ def select_execution_mode(
         explicit_dogfood=explicit_dogfood,
         host_adapter_id=host_adapter_id,
         now=now,
-        _worktree_reservation_states=recorded["worktreeReservations"],
     )
     return {
         **resumed,
@@ -3769,7 +2966,6 @@ __all__ = (
     "prepare_delivery_revision",
     "prepare_hierarchy",
     "preview_hierarchy",
-    "report_worktree_setup",
     "resume_execution_mode",
     "select_execution_mode",
     "start_manual_handoff",

@@ -1864,6 +1864,8 @@ def _host_native_agent_ids(
         return ("claude-code",)
     if trusted_host_adapter == "codex":
         return ("codex",)
+    if trusted_host_adapter == "zcode":
+        return ("zcode",)
     return ()
 
 

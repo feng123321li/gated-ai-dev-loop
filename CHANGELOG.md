@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.11 — 2026-08-12
+
+发布提交：以 tag `v0.39.11` 指向的提交为准
+
+- **Python 3.10 真实兼容**：移除验收投影中的 Python 3.12+ f-string 语法，源码、生成 Skill 与 Plugin payload 均可由 CPython 3.10.19 编译和导入。
+- **入口版本边界**：vendored stdio MCP 在导入 Controller 前检查 Python 版本；低于 3.10 时以稳定的 `PLUGIN_PYTHON_UNSUPPORTED` 错误退出，避免落入难以诊断的语法或导入错误。
+- **Adapter 契约一致性**：补齐现有受信任 `zcode` Adapter 的 native receiver、交互工具、同控制根监控与容量键映射，并以集合不变量测试防止可信 Adapter 缺少 capacity key。此版本不新增独立 ZCode Plugin manifest，也不把核心契约测试表述为真实宿主冒烟通过。
+- **验证**：CPython 3.10.19 与 3.14.6 均通过全量 383 项测试（各 1 项按环境条件跳过）和 `compileall`；canonical/Plugin 生成镜像、release candidate、Skill/Plugin validator 与 `git diff --check` 均通过。
+
 ## 0.39.10 — 2026-08-12
 
 发布提交：以 tag `v0.39.10` 指向的提交为准

@@ -694,6 +694,7 @@ class HierarchyContractTests(unittest.TestCase):
         for host_adapter, tool_name in (
             ("codex", "request_user_input"),
             ("claude-code", "AskUserQuestion"),
+            ("zcode", "AskUserQuestion"),
         ):
             with self.subTest(host_adapter=host_adapter):
                 with TemporaryDirectory() as root:

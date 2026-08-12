@@ -864,6 +864,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "hostMappings": {
                     "codex": {"tool": "request_user_input"},
                     "claude-code": {"tool": "AskUserQuestion"},
+                    "zcode": {"tool": "AskUserQuestion"},
                 },
                 "fallback": {
                     "allowedOnlyWhen": (
@@ -4234,6 +4235,12 @@ class SchedulerRuntimeTests(unittest.TestCase):
             root_id=root_id,
         )
         self.assertNotIn("hostCapacity", rebuilt_restored)
+
+    def test_every_trusted_host_adapter_has_a_capacity_key(self) -> None:
+        self.assertEqual(
+            set(graph_runtime.HOST_CAPACITY_KEYS),
+            set(graph_runtime.HOST_ADAPTER_AGENTS),
+        )
 
     def test_hard_quota_report_rejects_unbounded_reset_horizon(self) -> None:
         prepared = self.prepare_and_freeze(task_hierarchy())

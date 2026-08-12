@@ -67,6 +67,7 @@ HOST_ADAPTER_AGENTS = dict(HOST_ADAPTER_RECEIVER_AGENTS)
 HOST_CAPACITY_KEYS = {
     "claude-code": "claude-code:default",
     "codex": "codex:default",
+    "zcode": "zcode:default",
 }
 MAX_HOST_CAPACITY_RESET = timedelta(hours=24)
 

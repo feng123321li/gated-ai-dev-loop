@@ -7,6 +7,15 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.39.11 发布候选矩阵
+
+0.39.11 保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`，收紧项目声明的 Python 3.10+ 运行边界，并补齐现有受信任 `zcode` Adapter 的内部映射一致性。
+
+- CPython 3.10.19 可编译并导入源码、canonical Skill 与 Plugin payload；验收投影不再依赖 Python 3.12 才支持的 f-string 语法。vendored stdio MCP 在导入 Controller 前拒绝 Python 3.9 及更早版本，并返回稳定错误码。
+- `zcode` 与现有可信 Adapter 一样具有 native receiver、`AskUserQuestion` 交互 selector、同控制根监控权限和 `zcode:default` capacity key；集合不变量确保今后新增可信 Adapter 时不会遗漏容量断路器映射。
+- 本节只确认 Adapter 核心契约；0.39.11 不新增 `.zcode-plugin` manifest，也不宣称 ZCode 真实宿主已完成原生 child 冒烟。Codex/Claude 的真实宿主验证要求保持不变。
+- 核心候选已在 CPython 3.10.19 与 3.14.6 各通过 383 项 Python 测试（各 1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Skill/Plugin manifest 与差异校验。实际 Codex/Claude 会话仍需按本页定义完成宿主原生 child 冒烟，并停在 `RECORD_USER_CONFIRMATION`。
+
 ## 0.39.10 发布候选矩阵
 
 0.39.10 保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`，将 Graph 协调改为宿主事件优先，并让分层 Review 在独立判断不变的前提下复用与相关代码状态精确绑定的上游验证证据。

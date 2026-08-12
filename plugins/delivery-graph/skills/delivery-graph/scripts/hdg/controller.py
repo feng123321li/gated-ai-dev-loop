@@ -188,7 +188,7 @@ class LayeredDeliveryController:
                     )
                 except GatedLoopError as error:
                     same_control_root = (
-                        context.host_adapter_id in {"claude-code", "codex"}
+                        context.host_adapter_id in {"claude-code", "codex", "zcode"}
                         and name in CONTROL_ROOT_MONITOR_TOOLS
                         and os.path.normcase(workspace_root)
                         == os.path.normcase(context.project_root)

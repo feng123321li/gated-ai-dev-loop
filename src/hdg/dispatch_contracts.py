@@ -12,6 +12,7 @@ HOST_NATIVE_DISPATCH_TRANSPORT = "HOST_NATIVE"
 HOST_ADAPTER_RECEIVER_AGENTS = {
     "claude-code": "claude-code",
     "codex": "codex",
+    "zcode": "zcode",
 }
 
 

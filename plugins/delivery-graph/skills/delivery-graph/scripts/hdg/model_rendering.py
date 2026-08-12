@@ -2796,6 +2796,11 @@ def render_delivery_acceptance(
         states,
         _work_item_terminal_node_id(root_node),
     )
+    root_acceptance_path = work_item_projection_relative_path(
+        hierarchy,
+        root_definition["id"],
+        "acceptance.md",
+    )
     root_acceptance = "\n".join(
         [
             (
@@ -2810,15 +2815,7 @@ def render_delivery_acceptance(
                     root_definition["title"],
                     root_values["status"],
                     root_values["summary"],
-                    (
-                        "[查看]("
-                        f"{work_item_projection_relative_path(
-                            hierarchy,
-                            root_definition['id'],
-                            'acceptance.md',
-                        )}"
-                        ")"
-                    ),
+                    f"[查看]({root_acceptance_path})",
                 ],
                 raw_indices={5},
             ),

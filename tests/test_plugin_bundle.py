@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from contextlib import redirect_stderr
+import io
 import json
 import os
 from pathlib import Path
 import re
+import runpy
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 import hdg
 from hdg.mcp_tools import tool_definitions
@@ -473,6 +477,29 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertIsNotNone(documented)
         self.assertEqual(int(documented.group(1)), tool_count)
+
+    def test_bundled_mcp_rejects_python_older_than_3_10_cleanly(
+        self,
+    ) -> None:
+        entries = {
+            "canonical-skill": SKILL / "scripts" / "hdg_mcp.py",
+            "plugin-copy": PLUGIN_SKILL / "scripts" / "hdg_mcp.py",
+        }
+        for bundle, entry in entries.items():
+            with self.subTest(bundle=bundle):
+                stderr = io.StringIO()
+                with (
+                    patch.object(sys, "version_info", (3, 9, 18)),
+                    patch.object(sys, "path", sys.path.copy()),
+                    patch("hdg.mcp_server.main", return_value=0),
+                    redirect_stderr(stderr),
+                    self.assertRaises(SystemExit) as raised,
+                ):
+                    runpy.run_path(str(entry), run_name="__main__")
+
+                self.assertEqual(raised.exception.code, 1)
+                self.assertIn("PLUGIN_PYTHON_UNSUPPORTED", stderr.getvalue())
+                self.assertIn("Python 3.10+", stderr.getvalue())
 
     def test_bundled_mcp_prefers_modern_stdio_discovery(self) -> None:
         entry = SKILL / "scripts" / "hdg_mcp.py"

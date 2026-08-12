@@ -15,6 +15,7 @@ EXECUTION_CHOICE_MARKDOWN = """请选择开发方式（默认：自动执行）�
 HOST_NATIVE_QUESTION_TOOLS = {
     "codex": "request_user_input",
     "claude-code": "AskUserQuestion",
+    "zcode": "AskUserQuestion",
 }
 
 

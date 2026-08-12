@@ -773,7 +773,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
 
         self.assertEqual(
             dirty.exception.code,
-            "SCHEDULER_MANUAL_HANDOFF_WORKTREE_DIRTY",
+            "SCHEDULER_MANUAL_HANDOFF_WORKSPACE_DIRTY",
         )
 
     def complete_task_delivery(
@@ -3385,7 +3385,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "requiresReadyTask": True,
                     "requiresNeverClaimedAttempt": True,
                     "requiresNoLiveReservation": True,
-                    "requiresCleanWorktree": True,
+                    "requiresCleanWorkspace": True,
                     "requiresNoCodeChangesConfirmation": True,
                     "taskDispatchMode": "MANUAL",
                     "graphExecutionModeRemains": "active",
@@ -3522,7 +3522,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "resultField": "workspaceChanges",
                 "source": "CONTROLLER_CAPTURED_AT_RESULT",
                 "comparison": (
-                    "FROZEN_BASE_COMMIT_TO_CURRENT_WORKTREE"
+                    "FROZEN_BASE_COMMIT_TO_CURRENT_WORKSPACE"
                 ),
                 "semantics": (
                     "WORKSPACE_SNAPSHOT_NOT_EXCLUSIVE_OWNERSHIP"

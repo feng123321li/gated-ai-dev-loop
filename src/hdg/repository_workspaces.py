@@ -195,7 +195,7 @@ class DeliveryWorkspaceStore:
                 if actual_branch != expected_branch:
                     fail(
                         "SCHEDULER_GIT_BRANCH_MISMATCH",
-                        "Delivery worktree is checked out on another branch",
+                        "Delivery workspace is checked out on another branch",
                         expectedBranchRef=expected_branch,
                         actualBranchRef=actual_branch,
                     )

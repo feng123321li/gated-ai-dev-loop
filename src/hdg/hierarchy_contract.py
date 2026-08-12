@@ -139,7 +139,7 @@ def _git_binding_schema() -> dict[str, Any]:
             "branchRef": {
                 **branch,
                 "description": (
-                    "Delivery feature branch checked out by its worktree."
+                    "Delivery feature branch checked out by its workspace."
                 ),
             },
             "baseRef": {
@@ -180,7 +180,7 @@ def _project_scope_schema() -> dict[str, Any]:
                 "description": (
                     "Absolute local repository anchor authorized for this "
                     "Delivery revision. Runtime loop_context resolves it "
-                    "to this Delivery's verified worktree root."
+                    "to this Delivery's verified workspace root."
                 ),
             },
             "access": {
@@ -865,7 +865,7 @@ def hierarchy_contract(
                     "SEPARATE_GIT_WRITE_AUTHORIZATION",
                 ],
                 "runtimeValidation": [
-                    "WORKTREE_ROOT",
+                    "WORKSPACE_ROOT",
                     "BOUND_BRANCH",
                     "HEAD_INHERITS_BASE_COMMIT",
                     "MAINLINE_CONTAINS_BASE_COMMIT",
@@ -944,7 +944,7 @@ def hierarchy_contract(
                     "source": "CONTROLLER_CAPTURED_AT_RESULT",
                     "scope": "VERIFIED_READ_WRITE_GIT_PROJECT_SCOPES",
                     "comparison": (
-                        "FROZEN_BASE_COMMIT_TO_CURRENT_WORKTREE"
+                        "FROZEN_BASE_COMMIT_TO_CURRENT_WORKSPACE"
                     ),
                     "semantics": (
                         "WORKSPACE_SNAPSHOT_NOT_EXCLUSIVE_OWNERSHIP"

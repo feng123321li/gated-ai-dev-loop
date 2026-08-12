@@ -72,7 +72,7 @@ def _git(
     if completed.returncode not in accepted:
         fail(
             "SCHEDULER_GIT_COMMAND_FAILED",
-            "Git could not inspect the Delivery worktree",
+            "Git could not inspect the Delivery workspace",
             gitArguments=list(arguments),
             returnCode=completed.returncode,
         )
@@ -253,7 +253,7 @@ def _absolute_git_path(workspace: Path, *arguments: str) -> Path:
     return value.resolve(strict=True)
 
 
-def _worktree_topology(workspace: Path) -> str:
+def _checkout_topology(workspace: Path) -> str:
     git_dir = _absolute_git_path(
         workspace,
         "rev-parse",
@@ -266,9 +266,9 @@ def _worktree_topology(workspace: Path) -> str:
         "--git-common-dir",
     )
     return (
-        "LINKED_WORKTREE"
+        "LINKED_CHECKOUT"
         if git_dir != common_dir
-        else "PRIMARY_WORKTREE"
+        else "PRIMARY_CHECKOUT"
     )
 
 
@@ -314,9 +314,9 @@ def _working_tree_state(workspace: Path) -> dict[str, Any]:
     content_state: list[dict[str, Any]] = []
     for relative_path in sorted(changed_paths):
         candidate = workspace / relative_path
-        worktree_blob = None
+        workspace_blob = None
         if os.path.lexists(candidate):
-            worktree_blob = _git_output(
+            workspace_blob = _git_output(
                 workspace,
                 "hash-object",
                 "--no-filters",
@@ -334,7 +334,7 @@ def _working_tree_state(workspace: Path) -> dict[str, Any]:
         content_state.append(
             {
                 "path": relative_path,
-                "worktreeBlob": worktree_blob,
+                "workspaceBlob": workspace_blob,
                 "indexState": index_state,
             }
         )
@@ -487,7 +487,7 @@ def _evidence_scope_states(
             return {scope_id: None for scope_id, _ in scopes}
         content_by_file[relative_path] = {
             "path": relative_path,
-            "worktreeState": file_state,
+            "workspaceState": file_state,
         }
     results: dict[str, dict[str, Any] | None] = {}
     for scope_id, declared_paths in scopes:
@@ -525,7 +525,7 @@ def _evidence_scope_states(
     return results
 
 
-def _branch_worktree_count(workspace: Path, branch_ref: str) -> int:
+def _branch_checkout_count(workspace: Path, branch_ref: str) -> int:
     expected = f"branch refs/heads/{branch_ref}"
     return sum(
         line == expected
@@ -538,7 +538,7 @@ def _branch_worktree_count(workspace: Path, branch_ref: str) -> int:
     )
 
 
-def _worktree_provenance(
+def _workspace_provenance(
     workspace: Path,
     *,
     topology: str,
@@ -577,8 +577,8 @@ def inspect_delivery_git_workspace(
     ).resolve(strict=True)
     if top_level != workspace:
         fail(
-            "SCHEDULER_GIT_WORKTREE_MISMATCH",
-            "Delivery workspace must be the Git worktree root",
+            "SCHEDULER_GIT_CHECKOUT_MISMATCH",
+            "Delivery workspace must be the Git checkout root",
         )
     symbolic = _git(
         workspace,
@@ -591,15 +591,14 @@ def inspect_delivery_git_workspace(
         workspace,
         "HEAD",
         code="SCHEDULER_GIT_HEAD_INVALID",
-        message="Delivery worktree HEAD is not a commit",
+        message="Delivery workspace HEAD is not a commit",
     )
     selection = _select_mainline(
         workspace,
         base_ref,
     )
-    topology = _worktree_topology(workspace)
+    topology = _checkout_topology(workspace)
     working_tree = _working_tree_state(workspace)
-    exclusive_primary = topology == "PRIMARY_WORKTREE"
     if symbolic.returncode != 0:
         base_commit = _merge_base(
             workspace,
@@ -610,14 +609,10 @@ def inspect_delivery_git_workspace(
         )
         return {
             "gitWorkspace": {
-                "role": (
-                    "DETACHED_PRIMARY"
-                    if exclusive_primary
-                    else "DETACHED_WORKTREE"
-                ),
+                "role": "DETACHED_WORKSPACE",
                 "headCommit": head_commit,
             },
-            "worktreeSetup": {
+            "workspacePreparation": {
                 "state": "FEATURE_BRANCH_REQUIRED",
                 "owner": "HOST",
                 "nextAction": "CREATE_DELIVERY_FEATURE_BRANCH",
@@ -625,7 +620,7 @@ def inspect_delivery_git_workspace(
                 "baseCommit": base_commit,
                 "integrationTarget": selection.branch_ref,
             },
-            "worktreeProvenance": _worktree_provenance(
+            "workspaceProvenance": _workspace_provenance(
                 workspace,
                 topology=topology,
                 selection=selection,
@@ -638,7 +633,7 @@ def inspect_delivery_git_workspace(
     if not full_ref.startswith("refs/heads/"):
         fail(
             "SCHEDULER_GIT_BRANCH_MISMATCH",
-            "Delivery worktree must use a local feature branch",
+            "Delivery workspace must use a local feature branch",
         )
     branch_ref = full_ref.removeprefix("refs/heads/")
     result: dict[str, Any] = {
@@ -650,7 +645,7 @@ def inspect_delivery_git_workspace(
     }
     if branch_ref == selection.branch_ref or branch_ref in {"main", "master"}:
         result["gitWorkspace"]["role"] = "MAINLINE"
-        result["worktreeSetup"] = {
+        result["workspacePreparation"] = {
             "state": "FEATURE_BRANCH_REQUIRED",
             "owner": "HOST",
             "nextAction": "CREATE_DELIVERY_FEATURE_BRANCH",
@@ -658,7 +653,7 @@ def inspect_delivery_git_workspace(
             "baseCommit": selection.head_commit,
             "integrationTarget": selection.branch_ref,
         }
-        result["worktreeProvenance"] = _worktree_provenance(
+        result["workspaceProvenance"] = _workspace_provenance(
             workspace,
             topology=topology,
             selection=selection,
@@ -673,38 +668,34 @@ def inspect_delivery_git_workspace(
         branch_ref=branch_ref,
         base_ref=selection.branch_ref,
     )
-    result["gitWorkspace"]["role"] = (
-        "UNBOUND_BRANCH"
-        if topology == "PRIMARY_WORKTREE"
-        else "DELIVERY_FEATURE"
-    )
+    result["gitWorkspace"]["role"] = "UNBOUND_BRANCH"
     binding = {
         "branchRef": branch_ref,
         "baseRef": selection.branch_ref,
         "baseCommit": base_commit,
         "integrationTarget": selection.branch_ref,
     }
-    result["worktreeProvenance"] = _worktree_provenance(
+    result["workspaceProvenance"] = _workspace_provenance(
         workspace,
         topology=topology,
         selection=selection,
         base_commit=base_commit,
         host_adapter_id=host_adapter_id,
     )
-    branch_worktree_count = _branch_worktree_count(workspace, branch_ref)
-    if branch_worktree_count > 1:
+    branch_checkout_count = _branch_checkout_count(workspace, branch_ref)
+    if branch_checkout_count > 1:
         result["branchAdoption"] = {
-            "state": "BRANCH_IN_USE_BY_OTHER_WORKTREE",
+            "state": "BRANCH_IN_USE_BY_OTHER_CHECKOUT",
             "nextAction": "CREATE_DELIVERY_FEATURE_BRANCH",
             "workingTreeClean": working_tree["clean"],
-            "conflictingWorktreeCount": branch_worktree_count,
+            "conflictingCheckoutCount": branch_checkout_count,
         }
         return result
     if working_tree["clean"]:
         if confirmed_dirty_state_fingerprint is not None:
             fail(
                 "SCHEDULER_GIT_DIRTY_CONFIRMATION_INVALID",
-                "The worktree is clean and has no dirty state to confirm",
+                "The workspace is clean and has no dirty state to confirm",
             )
         result["branchAdoption"] = {
             "state": "READY",
@@ -726,7 +717,7 @@ def inspect_delivery_git_workspace(
     if confirmed_dirty_state_fingerprint != dirty_fingerprint:
         fail(
             "SCHEDULER_GIT_DIRTY_STATE_CHANGED",
-            "The worktree changed after its dirty state was presented",
+            "The workspace changed after its dirty state was presented",
             expectedDirtyStateFingerprint=(
                 confirmed_dirty_state_fingerprint
             ),
@@ -748,7 +739,7 @@ def inspect_frozen_git_workspace_provenance(
     *,
     host_adapter_id: str | None = None,
 ) -> dict[str, Any]:
-    """Report current worktree provenance for a frozen Git binding."""
+    """Report current workspace provenance for a frozen Git binding."""
 
     workspace = Path(workspace_root).absolute().resolve(strict=True)
     normalized = validate_git_binding(binding)
@@ -758,16 +749,16 @@ def inspect_frozen_git_workspace_provenance(
         head_commit=selected.head_commit,
         source="FROZEN_GIT_BINDING",
     )
-    provenance = _worktree_provenance(
+    provenance = _workspace_provenance(
         workspace,
-        topology=_worktree_topology(workspace),
+        topology=_checkout_topology(workspace),
         selection=selection,
         base_commit=normalized["baseCommit"],
         host_adapter_id=host_adapter_id,
     )
     provenance["integrationTarget"] = normalized["integrationTarget"]
     result: dict[str, Any] = {
-        "worktreeProvenance": provenance,
+        "workspaceProvenance": provenance,
         "workingTree": _working_tree_state(workspace),
     }
     frozen_base = normalized["baseCommit"]
@@ -786,15 +777,15 @@ def inspect_frozen_git_workspace_provenance(
     ):
         # The frozen base has fallen behind the integration target (another
         # Delivery merged past it). Surface a recoverable advisory; the host
-        # rebases the worktree onto the current base, then prepares a
+        # rebases the Delivery branch onto the current base, then prepares a
         # Delivery revision to re-pin baseCommit. The controller does no git.
-        result["worktreeRebase"] = {
+        result["workspaceRebase"] = {
             "required": True,
             "frozenBaseCommit": frozen_base,
             "currentBaseCommit": current_head,
             "integrationTarget": normalized["integrationTarget"],
             "nextAction": (
-                "REBASE_DELIVERY_WORKTREE_ONTO_CURRENT_BASE_THEN_"
+                "REBASE_DELIVERY_BRANCH_ONTO_CURRENT_BASE_THEN_"
                 "PREPARE_DELIVERY_REVISION"
             ),
         }
@@ -806,7 +797,7 @@ def enumerate_local_feature_branches(workspace_root: str) -> list[dict[str, Any]
 
     Enumerates ``refs/heads/`` only (never remote refs), excludes the selected
     mainline plus ``main``/``master``, and annotates each branch with its fork
-    point off the mainline and its current worktree count. Read-only: the
+    point off the mainline and its current checkout count. Read-only: the
     controller performs no Git writes; this feeds the ``DEVELOPMENT_BASELINE``
     selector.
     """
@@ -842,7 +833,7 @@ def enumerate_local_feature_branches(workspace_root: str) -> list[dict[str, Any]
         if merge_base.returncode != 0 or not merge_base.stdout.strip():
             # Shares no history with the mainline; not a valid fork point.
             continue
-        worktree_count = _branch_worktree_count(workspace, name)
+        checkout_count = _branch_checkout_count(workspace, name)
         candidates.append(
             {
                 "branchRef": name,
@@ -850,8 +841,8 @@ def enumerate_local_feature_branches(workspace_root: str) -> list[dict[str, Any]
                 "baseRef": mainline_ref,
                 "baseCommit": merge_base.stdout.strip(),
                 "integrationTarget": mainline_ref,
-                "worktreeCount": worktree_count,
-                "adoptable": worktree_count <= 1,
+                "checkoutCount": checkout_count,
+                "adoptable": checkout_count <= 1,
             }
         )
     candidates.sort(key=lambda item: item["branchRef"])
@@ -908,8 +899,8 @@ def verify_delivery_git_binding(
     if not has_git_metadata:
         if binding is not None:
             fail(
-                "SCHEDULER_GIT_WORKTREE_REQUIRED",
-                "A Delivery Git binding requires a Git worktree",
+                "SCHEDULER_GIT_CHECKOUT_REQUIRED",
+                "A Delivery Git binding requires a Git checkout",
             )
         return None
     if binding is None:
@@ -924,8 +915,8 @@ def verify_delivery_git_binding(
     ).resolve(strict=True)
     if top_level != workspace:
         fail(
-            "SCHEDULER_GIT_WORKTREE_MISMATCH",
-            "Delivery workspace must be the Git worktree root",
+            "SCHEDULER_GIT_CHECKOUT_MISMATCH",
+            "Delivery workspace must be the Git checkout root",
         )
     symbolic = _git(
         workspace,
@@ -937,14 +928,14 @@ def verify_delivery_git_binding(
     if symbolic.returncode != 0:
         fail(
             "SCHEDULER_GIT_DETACHED_HEAD",
-            "Delivery worktree must remain on its bound feature branch",
+            "Delivery workspace must remain on its bound feature branch",
         )
     actual_full_ref = symbolic.stdout.strip()
     expected_full_ref = f"refs/heads/{normalized['branchRef']}"
     if actual_full_ref != expected_full_ref:
         fail(
             "SCHEDULER_GIT_BRANCH_MISMATCH",
-            "Delivery worktree is checked out on another branch",
+            "Delivery workspace is checked out on another branch",
             expectedBranchRef=normalized["branchRef"],
             actualBranchRef=(
                 actual_full_ref.removeprefix("refs/heads/")
@@ -954,7 +945,7 @@ def verify_delivery_git_binding(
         workspace,
         "HEAD",
         code="SCHEDULER_GIT_HEAD_INVALID",
-        message="Delivery worktree HEAD is not a commit",
+        message="Delivery workspace HEAD is not a commit",
     )
     base_commit = _commit(
         workspace,
@@ -1298,7 +1289,7 @@ def capture_verified_workspace_changes(
 ) -> list[dict[str, Any]]:
     """Capture reviewable Git snapshots for verified writable scopes.
 
-    The evidence compares each current worktree with its Delivery's frozen
+    The evidence compares each current workspace with its Delivery's frozen
     baseCommit. It deliberately describes a workspace snapshot, not exclusive
     ownership by the submitting Loop, TASK, or Delivery; several control-plane
     Deliveries may share one physical workspace.
@@ -1323,8 +1314,8 @@ def capture_verified_workspace_changes(
         )
         if git_workspace is None:
             fail(
-                "SCHEDULER_GIT_WORKTREE_REQUIRED",
-                "Workspace change evidence requires a Git worktree",
+                "SCHEDULER_GIT_CHECKOUT_REQUIRED",
+                "Workspace change evidence requires a Git checkout",
             )
         base_commit = normalized_binding["baseCommit"]
         initial_working_tree = _working_tree_state(workspace)
@@ -1412,7 +1403,7 @@ def capture_verified_workspace_changes(
                 ],
                 "evidenceKind": "WORKSPACE_CHANGE_SNAPSHOT",
                 "comparison": (
-                    "FROZEN_BASE_COMMIT_TO_CURRENT_WORKTREE"
+                    "FROZEN_BASE_COMMIT_TO_CURRENT_WORKSPACE"
                 ),
                 "attribution": (
                     "NOT_EXCLUSIVE_TO_DELIVERY_TASK_OR_LOOP"
@@ -1611,7 +1602,7 @@ def _git_common_directory(workspace: Path) -> Path | None:
 
 
 def git_repository_identity(workspace_root: str) -> str | None:
-    """Return a stable local identity shared by all worktrees of one repo."""
+    """Return a stable local identity shared by all checkouts of one repo."""
 
     workspace = Path(workspace_root).absolute().resolve(strict=True)
     common = _git_common_directory(workspace)
@@ -1647,7 +1638,7 @@ def git_repository_lineage_identity(workspace_root: str) -> str | None:
     return fingerprint({"rootCommits": root_commits})
 
 
-def git_worktree_identity(
+def _git_branch_identity(
     workspace_root: str,
 ) -> dict[str, str] | None:
     """Return a path-independent repository lineage + branch identity."""
@@ -1704,13 +1695,13 @@ def git_physical_checkout_identity(
             relative_slot = git_directory.relative_to(worktrees_directory)
         except ValueError:
             fail(
-                "SCHEDULER_GIT_WORKTREE_MISMATCH",
+                "SCHEDULER_GIT_CHECKOUT_MISMATCH",
                 "Git checkout metadata is outside the repository worktree "
                 "administration directory",
             )
         if len(relative_slot.parts) != 1:
             fail(
-                "SCHEDULER_GIT_WORKTREE_MISMATCH",
+                "SCHEDULER_GIT_CHECKOUT_MISMATCH",
                 "Git checkout metadata does not identify one worktree slot",
             )
         checkout_slot = PurePosixPath(
@@ -1723,63 +1714,10 @@ def git_physical_checkout_identity(
         "repositoryInstanceKey": repository_instance_key,
         "checkoutSlot": checkout_slot,
     }
-    branch_identity = git_worktree_identity(str(workspace))
+    branch_identity = _git_branch_identity(str(workspace))
     if branch_identity is not None:
         identity["branchRef"] = branch_identity["branchRef"]
     return identity
-
-
-def _branch_worktrees(
-    repository_workspace: Path,
-    branch_ref: str,
-) -> list[Path]:
-    output = _git_output(
-        repository_workspace,
-        "worktree",
-        "list",
-        "--porcelain",
-    )
-    expected_ref = f"refs/heads/{branch_ref}"
-    worktrees: list[Path] = []
-    current: Path | None = None
-    for line in [*output.splitlines(), ""]:
-        if line.startswith("worktree "):
-            current = Path(line.removeprefix("worktree ")).resolve(
-                strict=True
-            )
-        elif line == f"branch {expected_ref}" and current is not None:
-            worktrees.append(current)
-        elif not line:
-            current = None
-    return worktrees
-
-
-def find_delivery_linked_worktree(
-    workspace_root: str,
-    binding: object,
-) -> str | None:
-    """Find the unique existing linked worktree for a Delivery branch."""
-
-    if binding is None:
-        return None
-    normalized = validate_git_binding(binding)
-    workspace = Path(workspace_root).absolute().resolve(strict=True)
-    matches = [
-        candidate
-        for candidate in _branch_worktrees(
-            workspace,
-            normalized["branchRef"],
-        )
-        if candidate != workspace
-    ]
-    if len(matches) != 1:
-        return None
-    verify_delivery_git_binding(
-        str(matches[0]),
-        normalized,
-        preparing=True,
-    )
-    return str(matches[0])
 
 
 def verify_delivery_project_scopes(
@@ -1852,21 +1790,6 @@ def verify_delivery_project_scopes(
         scope_binding = scope.get("gitBinding")
         if index == primary_index:
             project_root = primary_root
-        elif scope_binding is not None:
-            branch_roots = _branch_worktrees(
-                declared_root,
-                scope_binding["branchRef"],
-            )
-            if len(branch_roots) == 1:
-                project_root = branch_roots[0]
-            elif len(branch_roots) > 1:
-                fail(
-                    "SCHEDULER_PROJECT_SCOPE_INVALID",
-                    "A project feature branch resolves to multiple worktrees",
-                    projectId=scope["id"],
-                    branchRef=scope_binding["branchRef"],
-                    workspaceRoots=[str(item) for item in branch_roots],
-                )
         if project_root == primary_root:
             delivery_binding = delivery.get("gitBinding")
             if (
@@ -1894,9 +1817,7 @@ def verify_delivery_project_scopes(
         }
         if project_root != declared_root:
             item["declaredWorkspaceRoot"] = str(declared_root)
-            item["workspaceBindingSource"] = (
-                "SAME_REPOSITORY_LINKED_WORKTREE"
-            )
+            item["workspaceBindingSource"] = "CURRENT_REPOSITORY_CHECKOUT"
         if scope_binding is not None:
             item["gitBinding"] = scope_binding
         if git_workspace is not None:
@@ -1955,11 +1876,9 @@ __all__ = (
     "capture_verified_workspace_state",
     "capture_verified_workspace_changes",
     "enumerate_local_feature_branches",
-    "find_delivery_linked_worktree",
     "git_physical_checkout_identity",
     "git_repository_identity",
     "git_repository_lineage_identity",
-    "git_worktree_identity",
     "inspect_delivery_git_workspace",
     "inspect_frozen_git_workspace_provenance",
     "resolve_branch_binding",

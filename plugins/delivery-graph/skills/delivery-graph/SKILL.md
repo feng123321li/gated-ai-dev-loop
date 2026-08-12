@@ -101,7 +101,7 @@ allowed-tools:
 ### `EXECUTION_MODE`
 
 - 用户只确认一次执行模式；`select_execution_mode` 立即持久化该选择。若 Controller 返回 `PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION`，宿主完成串行释放检查和当前分支动作后调用 `resume_execution_mode`，不重试选择、不重新提问。用户输入需求修改意见时不要调用选择工具；继续规划并使旧选择失效。
-- 选择 `AUTOMATIC` 时只使用 `CURRENT_WORKSPACE_SERIAL`，不创建或预留新 worktree。当前 checkout 尚未位于该 Delivery 的独立分支时，后启动者等待前一个 Delivery 产生可验证 commit、working tree/index clean、HEAD 与冻结 binding 一致且 receiver 全部安全释放；随后宿主按 Controller 返回的当前工作区动作创建或切换分支，并用明确 `rootId` 与双 fingerprint 调用 `resume_execution_mode`，不再次询问用户。
+- 选择 `AUTOMATIC` 时只使用 `CURRENT_WORKSPACE_SERIAL`，不创建或预留新 worktree。当前 checkout 尚未位于该 Delivery 的独立分支时，响应只通过 `workspacePreparation.projectPreparations` 描述各项目在当前 workspace 的分支准备动作。后启动者等待前一个 Delivery 产生可验证 commit、working tree/index clean、HEAD 与冻结 binding 一致且 receiver 全部安全释放；随后宿主按 Controller 返回的当前工作区动作创建或切换分支，并用明确 `rootId` 与双 fingerprint 调用 `resume_execution_mode`，不再次询问用户。
 - 多项目 Delivery 的全部 `READ_WRITE` Git scope 必须同时满足上述切换条件；任一 scope 存在资源冲突、dirty、HEAD 漂移或无法证明安全释放时停止切换。现有 primary 或 linked checkout 都按当前实际 workspace 处理，不自动创建第二个 worktree。同一 checkout 一次只推进一个显式 `rootId`。
 - `FROZEN_DELIVERY_BRANCH_REQUIRED` 只允许在可验证 commit、clean tree、HEAD 未漂移且 receiver 安全释放后恢复冻结分支；`FROZEN_DELIVERY_BRANCH_DIRTY` 必须停止切换。全部 project workspace 验证通过后才按响应继续 `resume_execution_mode` 或 frontier。
 - 选择 `MANUAL` 时，原样展示 `manualHandoff.receiverPrompt`。让接收宿主在实际工作区调用 `start_manual_handoff` 后，再创建独立原生 TASK child；其 `dispatch_loop(MANUAL)` 省略 AUTO reservation，但必须提交自己的 receiver context 与新 `operation_id`，并通过 Adapter、workspace、Graph 与项目 scope 校验。

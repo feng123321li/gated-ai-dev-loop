@@ -353,27 +353,73 @@ class DevelopmentBaselineTests(unittest.TestCase):
                 selected["nextAction"],
                 "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION",
             )
-            setup = selected["worktreeSetup"]
-            self.assertEqual(setup["strategy"], "CURRENT_WORKSPACE_SERIAL")
-            self.assertFalse(setup["controllerCreatesWorktree"])
-            self.assertNotIn("hostDispatch", setup)
-            project_setup = setup["projectSetups"][0]
-            self.assertEqual(project_setup["branchRef"], child_branch)
+            preparation = selected["workspacePreparation"]
             self.assertEqual(
-                project_setup["gitBinding"]["baseRef"],
+                preparation["strategy"], "CURRENT_WORKSPACE_SERIAL"
+            )
+            self.assertNotIn("hostDispatch", preparation)
+            project_preparation = preparation["projectPreparations"][0]
+            self.assertEqual(project_preparation["branchRef"], child_branch)
+            self.assertEqual(
+                project_preparation["gitBinding"]["baseRef"],
                 parent_branch,
             )
             self.assertEqual(
-                project_setup["gitBinding"]["baseCommit"],
+                project_preparation["gitBinding"]["baseCommit"],
                 parent_head,
             )
             self.assertEqual(
-                project_setup["gitBinding"]["integrationTarget"],
+                project_preparation["gitBinding"]["integrationTarget"],
                 parent_branch,
             )
             self.assertEqual(
                 git_command(repository, "branch", "--list", child_branch),
                 "",
+            )
+
+    def test_clean_linked_checkout_uses_the_same_stacked_baseline_rule(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            repository, workspace, _base_commit, parent_branch = (
+                git_delivery_checkout(root, delivery_id="d-linked-stacked")
+            )
+            Path(workspace, "parent.txt").write_text(
+                "linked parent feature content\n",
+                encoding="utf-8",
+            )
+            git_command(workspace, "add", "parent.txt")
+            git_command(workspace, "commit", "-m", "Linked parent feature")
+            parent_head = git_command(workspace, "rev-parse", "HEAD")
+
+            preview = call_tool(
+                "preview_hierarchy",
+                {
+                    "hierarchy": isolated_task_hierarchy(
+                        "d-linked-stacked",
+                        "t-linked-stacked",
+                    )
+                },
+                root=str(repository),
+                workspace_root=str(workspace),
+                trusted_host_adapter="codex",
+            )
+
+            interaction = preview["pendingInteraction"]
+            stacked = next(
+                option
+                for option in interaction["options"]
+                if option["id"] == "NEW_FROM_CURRENT_BRANCH"
+            )
+            self.assertEqual(
+                interaction["defaultOptionId"],
+                "NEW_FROM_CURRENT_BRANCH",
+            )
+            self.assertEqual(stacked["baseRef"], parent_branch)
+            self.assertEqual(stacked["baseCommit"], parent_head)
+            self.assertEqual(
+                stacked["integrationTarget"],
+                parent_branch,
             )
 
     def test_dirty_primary_feature_does_not_offer_stacked_child(self) -> None:
@@ -897,7 +943,7 @@ class HierarchyContractTests(unittest.TestCase):
                 "source": "CONTROLLER_CAPTURED_AT_RESULT",
                 "scope": "VERIFIED_READ_WRITE_GIT_PROJECT_SCOPES",
                 "comparison": (
-                    "FROZEN_BASE_COMMIT_TO_CURRENT_WORKTREE"
+                    "FROZEN_BASE_COMMIT_TO_CURRENT_WORKSPACE"
                 ),
                 "semantics": (
                     "WORKSPACE_SNAPSHOT_NOT_EXCLUSIVE_OWNERSHIP"
@@ -2404,12 +2450,12 @@ class McpSurfaceTests(unittest.TestCase):
             self.assertEqual(
                 discovered["gitWorkspace"],
                 {
-                    "role": "DETACHED_WORKTREE",
+                    "role": "DETACHED_WORKSPACE",
                     "headCommit": base_commit,
                 },
             )
             self.assertEqual(
-                discovered["worktreeSetup"],
+                discovered["workspacePreparation"],
                 {
                     "state": "FEATURE_BRANCH_REQUIRED",
                     "owner": "HOST",
@@ -2420,12 +2466,12 @@ class McpSurfaceTests(unittest.TestCase):
                 },
             )
             self.assertEqual(
-                discovered["worktreeProvenance"],
+                discovered["workspaceProvenance"],
                 {
                     "strategy": "CURRENT_WORKSPACE_SERIAL",
                     "hostAdapterId": "codex",
                     "workspaceRoot": str(detached.resolve()),
-                    "topology": "LINKED_WORKTREE",
+                    "topology": "LINKED_CHECKOUT",
                     "selectionSource": "LOCAL_MAIN_FALLBACK",
                     "baseRef": "main",
                     "baseCommit": base_commit,
@@ -2472,16 +2518,16 @@ class McpSurfaceTests(unittest.TestCase):
 
             self.assertEqual(discovered["status"], "ABSENT")
             self.assertEqual(
-                discovered["worktreeSetup"]["state"],
+                discovered["workspacePreparation"]["state"],
                 "FEATURE_BRANCH_REQUIRED",
             )
             self.assertEqual(
-                discovered["worktreeSetup"]["nextAction"],
+                discovered["workspacePreparation"]["nextAction"],
                 "CREATE_DELIVERY_FEATURE_BRANCH",
             )
             self.assertEqual(
-                discovered["worktreeProvenance"]["topology"],
-                "PRIMARY_WORKTREE",
+                discovered["workspaceProvenance"]["topology"],
+                "PRIMARY_CHECKOUT",
             )
             self.assertNotIn("suggestedGitBinding", discovered)
 
@@ -2505,16 +2551,16 @@ class McpSurfaceTests(unittest.TestCase):
 
             self.assertEqual(mainline["status"], "ABSENT")
             self.assertEqual(
-                mainline["worktreeSetup"]["state"],
+                mainline["workspacePreparation"]["state"],
                 "FEATURE_BRANCH_REQUIRED",
             )
             self.assertEqual(
-                mainline["worktreeSetup"]["nextAction"],
+                mainline["workspacePreparation"]["nextAction"],
                 "CREATE_DELIVERY_FEATURE_BRANCH",
             )
             self.assertEqual(
-                mainline["worktreeProvenance"]["topology"],
-                "PRIMARY_WORKTREE",
+                mainline["workspaceProvenance"]["topology"],
+                "PRIMARY_CHECKOUT",
             )
 
             hierarchy = bind_delivery_to_git(
@@ -2560,17 +2606,21 @@ class McpSurfaceTests(unittest.TestCase):
                 selected["nextAction"],
                 "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION",
             )
-            setup = selected["worktreeSetup"]
-            self.assertEqual(setup["state"], "CURRENT_WORKSPACE_SETUP_REQUIRED")
-            self.assertEqual(setup["strategy"], "CURRENT_WORKSPACE_SERIAL")
-            self.assertFalse(setup["controllerCreatesWorktree"])
-            self.assertNotIn("hostDispatch", setup)
+            preparation = selected["workspacePreparation"]
             self.assertEqual(
-                setup["projectSetups"][0]["workspaceRoot"],
+                preparation["state"],
+                "CURRENT_WORKSPACE_PREPARATION_REQUIRED",
+            )
+            self.assertEqual(
+                preparation["strategy"], "CURRENT_WORKSPACE_SERIAL"
+            )
+            self.assertNotIn("hostDispatch", preparation)
+            self.assertEqual(
+                preparation["projectPreparations"][0]["workspaceRoot"],
                 str(repository.resolve()),
             )
             self.assertEqual(
-                setup["projectSetups"][0]["branchRef"],
+                preparation["projectPreparations"][0]["branchRef"],
                 branch_ref,
             )
             scheduler = SchedulerRepository(str(repository))
@@ -2785,28 +2835,32 @@ class McpSurfaceTests(unittest.TestCase):
                     "selectionPreserved": True,
                 },
             )
-            setup = selected["worktreeSetup"]
-            self.assertEqual(setup["state"], "CURRENT_WORKSPACE_SETUP_REQUIRED")
-            self.assertEqual(setup["strategy"], "CURRENT_WORKSPACE_SERIAL")
-            self.assertFalse(setup["controllerCreatesWorktree"])
-            self.assertNotIn("hostDispatch", setup)
-            project_setups = {
+            preparation = selected["workspacePreparation"]
+            self.assertEqual(
+                preparation["state"],
+                "CURRENT_WORKSPACE_PREPARATION_REQUIRED",
+            )
+            self.assertEqual(
+                preparation["strategy"], "CURRENT_WORKSPACE_SERIAL"
+            )
+            self.assertNotIn("hostDispatch", preparation)
+            project_preparations = {
                 item["projectId"]: item
-                for item in setup["projectSetups"]
+                for item in preparation["projectPreparations"]
             }
             self.assertEqual(
-                set(project_setups),
+                set(project_preparations),
                 {"erp-pm", "erp-protein"},
             )
             self.assertEqual(
-                project_setups["erp-protein"]["workspaceRoot"],
+                project_preparations["erp-protein"]["workspaceRoot"],
                 str(repository.resolve()),
             )
             self.assertEqual(
-                project_setups["erp-pm"]["workspaceRoot"],
+                project_preparations["erp-pm"]["workspaceRoot"],
                 str(secondary_repository.resolve()),
             )
-            for item in project_setups.values():
+            for item in project_preparations.values():
                 self.assertEqual(
                     item["state"],
                     "CURRENT_WORKSPACE_BRANCH_REQUIRED",
@@ -2890,21 +2944,20 @@ class McpSurfaceTests(unittest.TestCase):
                 selected["nextAction"],
                 "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION",
             )
-            setup = selected["worktreeSetup"]
-            self.assertFalse(setup["controllerCreatesWorktree"])
-            self.assertNotIn("hostDispatch", setup)
-            project_setup = setup["projectSetups"][0]
+            preparation = selected["workspacePreparation"]
+            self.assertNotIn("hostDispatch", preparation)
+            project_preparation = preparation["projectPreparations"][0]
             self.assertEqual(
-                project_setup["workspaceRoot"],
+                project_preparation["workspaceRoot"],
                 str(repository.resolve()),
             )
-            self.assertEqual(project_setup["branchRef"], branch_ref)
+            self.assertEqual(project_preparation["branchRef"], branch_ref)
             self.assertEqual(
-                project_setup["gitBinding"]["baseRef"],
+                project_preparation["gitBinding"]["baseRef"],
                 "master",
             )
             self.assertEqual(
-                project_setup["gitBinding"]["integrationTarget"],
+                project_preparation["gitBinding"]["integrationTarget"],
                 "master",
             )
             self.assertNotIn(
@@ -3104,18 +3157,22 @@ class McpSurfaceTests(unittest.TestCase):
             )
 
             self.assertEqual(
-                discovered["worktreeProvenance"],
+                discovered["workspaceProvenance"],
                 {
                     "strategy": "CURRENT_WORKSPACE_SERIAL",
                     "hostAdapterId": "codex",
                     "workspaceRoot": str(worktree.resolve()),
-                    "topology": "LINKED_WORKTREE",
+                    "topology": "LINKED_CHECKOUT",
                     "selectionSource": "LOCAL_MAIN_FALLBACK",
                     "baseRef": "main",
                     "baseCommit": base_commit,
                     "baseHeadCommit": base_commit,
                     "integrationTarget": "main",
                 },
+            )
+            self.assertEqual(
+                discovered["gitWorkspace"]["role"],
+                "UNBOUND_BRANCH",
             )
             self.assertEqual(
                 discovered["workingTree"],
@@ -3260,10 +3317,10 @@ class McpSurfaceTests(unittest.TestCase):
             self.assertEqual(
                 discovered["branchAdoption"],
                 {
-                    "state": "BRANCH_IN_USE_BY_OTHER_WORKTREE",
+                    "state": "BRANCH_IN_USE_BY_OTHER_CHECKOUT",
                     "nextAction": "CREATE_DELIVERY_FEATURE_BRANCH",
                     "workingTreeClean": True,
-                    "conflictingWorktreeCount": 2,
+                    "conflictingCheckoutCount": 2,
                 },
             )
 
@@ -4083,7 +4140,7 @@ class McpSurfaceTests(unittest.TestCase):
                 },
             )
             self.assertEqual(
-                discovered["worktreeProvenance"]["selectionSource"],
+                discovered["workspaceProvenance"]["selectionSource"],
                 "LOCAL_MASTER_FALLBACK",
             )
             hierarchy = bind_delivery_to_git(
@@ -4141,7 +4198,7 @@ class McpSurfaceTests(unittest.TestCase):
                 },
             )
             self.assertEqual(
-                discovered["worktreeProvenance"]["selectionSource"],
+                discovered["workspaceProvenance"]["selectionSource"],
                 "ORIGIN_HEAD",
             )
 
@@ -4176,7 +4233,7 @@ class McpSurfaceTests(unittest.TestCase):
                 },
             )
             self.assertEqual(
-                discovered["worktreeProvenance"]["selectionSource"],
+                discovered["workspaceProvenance"]["selectionSource"],
                 "LOCAL_MAIN_FALLBACK",
             )
 
@@ -4218,7 +4275,7 @@ class McpSurfaceTests(unittest.TestCase):
                 },
             )
             self.assertEqual(
-                discovered["worktreeProvenance"]["selectionSource"],
+                discovered["workspaceProvenance"]["selectionSource"],
                 "HOST_SELECTED",
             )
 
@@ -4252,7 +4309,7 @@ class McpSurfaceTests(unittest.TestCase):
             )
 
             self.assertEqual(
-                discovered["worktreeSetup"]["baseCommit"],
+                discovered["workspacePreparation"]["baseCommit"],
                 remote_commit,
             )
 
@@ -4286,7 +4343,7 @@ class McpSurfaceTests(unittest.TestCase):
                 "MAINLINE",
             )
             self.assertEqual(
-                discovered["worktreeSetup"]["baseRef"],
+                discovered["workspacePreparation"]["baseRef"],
                 "release",
             )
 
@@ -4830,7 +4887,7 @@ class McpSurfaceTests(unittest.TestCase):
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "worktreeProvenance",
+                "workspaceProvenance",
                 initialized["result"]["instructions"],
             )
             self.assertIn(
@@ -5463,7 +5520,7 @@ class DraftCleanupTests(unittest.TestCase):
 
 
 class StaleBaseRebaseAdvisoryTests(unittest.TestCase):
-    """workspace_status surfaces a worktreeRebase advisory when the frozen base falls behind main."""
+    """workspace_status reports a workspace rebase advisory for a stale base."""
 
     @staticmethod
     def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
@@ -5507,7 +5564,7 @@ class StaleBaseRebaseAdvisoryTests(unittest.TestCase):
         result = inspect_frozen_git_workspace_provenance(
             str(repo), self._binding(c0)
         )
-        self.assertNotIn("worktreeRebase", result)
+        self.assertNotIn("workspaceRebase", result)
 
     def test_advisory_when_main_advanced(self) -> None:
         repo, c0 = self._repo()
@@ -5520,7 +5577,7 @@ class StaleBaseRebaseAdvisoryTests(unittest.TestCase):
         result = inspect_frozen_git_workspace_provenance(
             str(repo), self._binding(c0)
         )
-        advisory = result["worktreeRebase"]
+        advisory = result["workspaceRebase"]
         self.assertTrue(advisory["required"])
         self.assertEqual(advisory["frozenBaseCommit"], c0)
         self.assertEqual(advisory["currentBaseCommit"], c2)

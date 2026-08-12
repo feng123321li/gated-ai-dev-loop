@@ -11,7 +11,7 @@ from .model_core import validate_git_binding
 
 
 class DeliveryExecutionSetupStore:
-    """Own execution-mode choices and worktree setup persistence."""
+    """Own execution-mode choices and serial workspace coordination."""
 
     def __init__(
         self,

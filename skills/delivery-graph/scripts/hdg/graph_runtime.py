@@ -1796,7 +1796,7 @@ def handoff_ready_automatic_task(
         if verified_project_scopes is None:
             fail(
                 "SCHEDULER_MANUAL_HANDOFF_PROJECT_SCOPES_REQUIRED",
-                "Multi-project manual recovery requires verified project worktrees",
+                "Multi-project manual recovery requires verified project workspaces",
             )
         git_workspaces.extend(
             (scope["workspaceRoot"], scope["gitBinding"])
@@ -1812,8 +1812,8 @@ def handoff_ready_automatic_task(
         working_tree = provenance["workingTree"]
         if not working_tree["clean"]:
             fail(
-                "SCHEDULER_MANUAL_HANDOFF_WORKTREE_DIRTY",
-                "Automatic TASK recovery requires every Delivery worktree to be clean",
+                "SCHEDULER_MANUAL_HANDOFF_WORKSPACE_DIRTY",
+                "Automatic TASK recovery requires every Delivery workspace to be clean",
                 workspaceRoot=git_workspace_root,
                 workingTreeStateFingerprint=working_tree[
                     "stateFingerprint"

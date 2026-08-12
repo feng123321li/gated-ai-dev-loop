@@ -392,15 +392,15 @@ preview 会先通过 `pendingInteraction.kind=DEVELOPMENT_BASELINE` 确认基线
 - 自动 Git Delivery 只使用 `CURRENT_WORKSPACE_SERIAL`。`select_execution_mode(AUTOMATIC)` 立即持久化选择。当前 checkout 已位于该 Delivery 的冻结分支且满足基线校验时可以启动；否则它返回 `PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION`，宿主等待前一个 Delivery 产生可验证 commit、working tree/index clean、HEAD 与冻结 binding 一致且所有 receiver 安全释放，再在这个 checkout 创建或切换目标分支，并以明确 `rootId` 与双 fingerprint 调用 `resume_execution_mode`。同一物理 checkout 一次只运行一个 Delivery，不能以多个 `rootId` 的控制状态隔离为由并行写文件、index 或 HEAD。
 - Controller 不创建、复用或预留新 worktree。当前目录本身是既有 linked checkout 时，也只按普通 current workspace 校验和调度。多项目 Delivery 的所有 `READ_WRITE` scope 必须同时满足 commit、clean、HEAD 与释放条件；任一 scope 冲突或漂移就停止切换。
 
-#### `worktreeProvenance` 与基线发现
+#### `workspaceProvenance` 与基线发现
 
-- 每次返回的 `worktreeProvenance` 都必须体现当前实际 workspace 的来源：`hostAdapterId`、`workspaceRoot`、`topology`、`selectionSource`、`baseRef`、`baseCommit`、`baseHeadCommit` 与 `integrationTarget`。`baseCommit` 是当前 HEAD 与所选主线的 merge-base；`baseHeadCommit` 是检查时所选本地或 remote-tracking 主线的 HEAD。无论当前目录最初如何创建，都不得省略或猜测这些字段。
-- Delivery 冻结后，`gitBinding` 中的 `baseRef/baseCommit/integrationTarget` 是权威基线；后续 `workspace_status` 仍返回 `worktreeProvenance`，并以 `selectionSource=FROZEN_GIT_BINDING` 区分冻结事实与当次主线发现，`baseHeadCommit` 继续表示当次可见的主线 HEAD。
+- 每次返回的 `workspaceProvenance` 都必须体现当前实际 workspace 的来源：`hostAdapterId`、`workspaceRoot`、`topology`、`selectionSource`、`baseRef`、`baseCommit`、`baseHeadCommit` 与 `integrationTarget`。`topology` 仅区分 `PRIMARY_CHECKOUT` / `LINKED_CHECKOUT` 以便诊断，不改变 `CURRENT_WORKSPACE_SERIAL` 调度、基线或 adoption 规则。`baseCommit` 是当前 HEAD 与所选主线的 merge-base；`baseHeadCommit` 是检查时所选本地或 remote-tracking 主线的 HEAD。无论当前目录最初如何创建，都不得省略或猜测这些字段。
+- Delivery 冻结后，`gitBinding` 中的 `baseRef/baseCommit/integrationTarget` 是权威基线；后续 `workspace_status` 仍返回 `workspaceProvenance`，并以 `selectionSource=FROZEN_GIT_BINDING` 区分冻结事实与当次主线发现，`baseHeadCommit` 继续表示当次可见的主线 HEAD。
 - 基线发现顺序固定为：调用方通过 `workspace_status(base_ref=...)` 提交的宿主显式选择（`HOST_SELECTED`）、有效的远端默认引用 `origin/HEAD`（`ORIGIN_HEAD`），再依次降级到本地 `main`、本地 `master`（对应 `LOCAL_MAIN_FALLBACK`、`LOCAL_MASTER_FALLBACK`）；全部无效时停止并要求明确选择。这里的远端引用是当前仓库已经持有的 remote-tracking ref，Controller 不执行 `fetch`。不会额外枚举或硬编码 `develop`、`origin/develop` 或其他分支名。显式 `base_ref` 必须能解析为本地分支或 `origin` tracking ref，并同时成为建议的 `baseRef` 与 `integrationTarget`。
 
 #### 分支 adoption 与 dirty 确认
 
-- 不能仅凭 feature 分支名判断“当前分支已是本 Delivery 的独立分支”。该分支不得绑定其他 Delivery 或被其他 worktree checkout，且基线关系必须有效。`BRANCH_BOUND_TO_OTHER_DELIVERY`、`BRANCH_USED_BY_HISTORICAL_DELIVERY` 或 `BRANCH_IN_USE_BY_OTHER_WORKTREE` 都停止切换；不得接管已有分支，也不得自动创建另一个 worktree 绕过。
+- 不能仅凭 feature 分支名判断“当前分支已是本 Delivery 的独立分支”。该分支不得绑定其他 Delivery 或被其他 checkout 使用，且基线关系必须有效。`BRANCH_BOUND_TO_OTHER_DELIVERY`、`BRANCH_USED_BY_HISTORICAL_DELIVERY` 或 `BRANCH_IN_USE_BY_OTHER_CHECKOUT` 都停止切换；不得接管已有分支，也不得自动创建另一个 worktree 绕过。
 - 当前实际 checkout/worktree 干净且唯一归属该 Delivery 时，`branchAdoption.state=READY` 并返回 `suggestedGitBinding`。把建议中的 `branchRef`、`baseRef`、`baseCommit`、`integrationTarget` 原样写入 `delivery.gitBinding`。
 - 当前 checkout/worktree 已有业务 diff 时，只返回 `candidateGitBinding` 和 `DIRTY_CONFIRMATION_REQUIRED`。`.layered-delivery/**` 是 Controller 控制面，不计入业务 dirty 状态。宿主必须向用户展示其余变更并确认全部属于本 Delivery；确认后立即把原响应的精确 `workingTree.stateFingerprint` 作为 `confirmed_dirty_state_fingerprint` 再次调用 `workspace_status`。只有 diff 未变化时才返回 `READY_WITH_CONFIRMED_CHANGES` 与 `suggestedGitBinding`；指纹变化以 `SCHEDULER_GIT_DIRTY_STATE_CHANGED` 停止并重新确认。`CURRENT_WORKSPACE_SERIAL` 下，这项确认仍不能授权在 dirty checkout 上切换到另一个 Delivery。
 
@@ -488,7 +488,7 @@ MCP 根固定只限制当前会话的主工作区锚点，不把同一 Delivery 
 6. `pendingInteraction.kind=DEVELOPMENT_BASELINE` 时，选择本地分支、`NEW_FROM_MAINLINE`，或 Controller 实际返回的 `NEW_FROM_CURRENT_BRANCH`，把交互给出的 hierarchy/Graph/Revision/context 指纹和真实确认人传给 `confirm_development_baseline`。两个 NEW 选项都提交新 `branch_name`；stacked 选项必须原样使用交互冻结的父 feature HEAD，不自行换父分支。脏工作树同样进入该门禁；只有用户确认全部现有改动都属于本 Delivery 后，才回传交互中的精确 `workingTree.stateFingerprint`，且 dirty 当前 feature workspace 不允许创建 stacked 子分支。探测 Git HEAD、基线、权限或实现异常时必须 fail closed；非 Git 工作区才正常跳过。多 Git 项目不会从顶层偏好自动推断 secondary scope，所有 Git scope 必须显式提供完整 binding。
 7. `pendingInteraction.kind=EXECUTION_MODE` 时，原生对话框仍允许直接输入文字，但不为它创建“其他”选项。自由输入按 `freeformInput.nextAction=CONTINUE_REQUIREMENT_DISCUSSION` 继续需求沟通；需求发生变化后重新调用 preview。用户只是提问且需求未变时，回答后保留当前 fingerprint，并再次展示同一待处理交互，不得主动退回文本交互。`AUTOMATIC` 是默认和推荐项，`MANUAL` 是第二项。
 8. 用户点选执行方式后，把选项 ID、双 fingerprint、`requiredProjectAuthorizations` 的精确项目 ID 和真实确认人一次性传给 `select_execution_mode`：
-   - `AUTOMATIC`：`select_execution_mode` 先记录业务确认，并只采用 `CURRENT_WORKSPACE_SERIAL`。当前 checkout 尚未位于冻结分支时返回 `PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION`；后启动者等待前一个 Delivery 产生可验证 commit、working tree/index clean、HEAD 未漂移且 receiver 安全释放，宿主随后创建/切换当前分支，再用明确 `rootId` 和原双 fingerprint 调用 `resume_execution_mode`，不再次询问用户。资源冲突、dirty、HEAD 漂移或释放状态不明时停止；不得创建新 worktree 或独立工作区任务绕过。
+   - `AUTOMATIC`：`select_execution_mode` 先记录业务确认，并只采用 `CURRENT_WORKSPACE_SERIAL`。当前 checkout 尚未位于冻结分支时返回 `PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION`，并只通过 `workspacePreparation.projectPreparations` 描述当前 workspace 的逐项目准备动作。后启动者等待前一个 Delivery 产生可验证 commit、working tree/index clean、HEAD 未漂移且 receiver 安全释放，宿主随后创建/切换当前分支，再用明确 `rootId` 和原双 fingerprint 调用 `resume_execution_mode`，不再次询问用户。资源冲突、dirty、HEAD 漂移或释放状态不明时停止；不得创建新 worktree 或独立工作区任务绕过。
    - `MANUAL`：生成同结构开发包和自包含 handoff，登记 `HANDOFF_READY`；交接阶段不创建 Graph Run、workspace 绑定、任务或 worktree。宿主展示 `manualHandoff.receiverPrompt`，不得改写；同一提示词已经嵌入 `manualHandoff.path` 指向的文件。接收宿主必须先调用 `start_manual_handoff`，再创建独立原生 child；child 以显式 receiving context 和新 `operation_id` 按 frontier MANUAL claim TASK，不携带 AUTO reservation 或 decision fingerprint。Review 不允许 MANUAL，必须走统一 AUTO 预留与派遣。
 9. 自动或手动按钮选择本身就是该初始 Revision 的一次业务授权，并由 `select_execution_mode` 立即持久化，不接受第二个用户确认。`CURRENT_WORKSPACE_SERIAL` 若返回 `PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION`，宿主只在可验证 commit、clean、HEAD 未漂移与 receiver 安全释放边界完成分支动作，再以明确 `rootId` 与双 fingerprint 调用 `resume_execution_mode`。不得重试选择，也不得重放用户交互、初始 `prepare_hierarchy`、`freeze_hierarchy` 或 `create_manual_handoff`。需求内容改变会清除未执行的 AUTOMATIC 选择并重新生成交互。
 10. 自动初次冻结后当前 Delivery Revision 的 Git/project binding、依赖、资源和拓扑固定，所有 TASK requirement revision 1 均为 `FROZEN`。手动开发把相同需求内容冻结为 SQLite 已登记的 `HANDOFF_READY` 可移植快照，返回 `requirementSnapshotStatus=FROZEN`；这不等于 Graph `FROZEN`。接收方调用 `start_manual_handoff` 时若 Git binding 已漂移，响应以 `manualStartState=BLOCKED_DEVELOPMENT_BASELINE_CONFIRMATION` 返回 `pendingInteraction`，且不创建 Run/绑定 workspace；宿主用精确上下文调用 `confirm_development_baseline`。binding 改变时取得同一 Delivery 的新 Revision 和新双指纹，未改变时恢复原 Revision，然后重试。基线未漂移时，同一 Revision 进入 `executionMode=manual` 的 Graph Run，所有 TASK requirement 同样冻结并接受完整调度、Review 与最终验收。
@@ -509,16 +509,16 @@ MCP 根固定只限制当前会话的主工作区锚点，不把同一 Delivery 
 
 ### 基线陈旧 rebase 恢复（0.35.0 起）
 
-某 Delivery 冻结的 `baseCommit` 落后于其 `integrationTarget`（例如别人已把 main 合并前进）时，`workspace_status` 会在 `gitWorkspace.worktreeRebase` 带出**可恢复 advisory**：
+某 Delivery 冻结的 `baseCommit` 落后于其 `integrationTarget`（例如别人已把 main 合并前进）时，`workspace_status` 会在顶层 `workspaceRebase` 带出**可恢复 advisory**：
 
 ```json
-{"worktreeRebase": {"required": true, "frozenBaseCommit": "<冻结基线>", "currentBaseCommit": "<当前 integrationTarget HEAD>", "integrationTarget": "main", "nextAction": "REBASE_DELIVERY_WORKTREE_ONTO_CURRENT_BASE_THEN_PREPARE_DELIVERY_REVISION"}}
+{"workspaceRebase": {"required": true, "frozenBaseCommit": "<冻结基线>", "currentBaseCommit": "<当前 integrationTarget HEAD>", "integrationTarget": "main", "nextAction": "REBASE_DELIVERY_BRANCH_ONTO_CURRENT_BASE_THEN_PREPARE_DELIVERY_REVISION"}}
 ```
 
 宿主/协调器看到它后的恢复流程（Controller 不执行 git）：
 
-1. 先暂停该 Delivery 在该 worktree 里在途的 claimed Loop（`pause_loop`），避免 rebase 干扰运行中的工作；
-2. 在该 Delivery worktree 内把 `branchRef` rebase 到 `currentBaseCommit`（如 `git rebase --onto <integrationTarget HEAD> <frozenBaseCommit> <branchRef>`，或 merge）；冲突由宿主解决，无法解决则相关 Loop 按 `BLOCKED`(`LOOP_BLOCKED`/`EXTERNAL_AUTHORITY`) 上报，不要静默换分支；
+1. 先暂停该 Delivery 在当前 workspace 里在途的 claimed Loop（`pause_loop`），避免 rebase 干扰运行中的工作；
+2. 在当前 workspace 内把该 Delivery 的 `branchRef` rebase 到 `currentBaseCommit`（如 `git rebase --onto <integrationTarget HEAD> <frozenBaseCommit> <branchRef>`，或 merge）；冲突由宿主解决，无法解决则相关 Loop 按 `BLOCKED`(`LOOP_BLOCKED`/`EXTERNAL_AUTHORITY`) 上报，不要静默换分支；
 3. 用新的 `gitBinding`（`baseCommit` = rebase 后 HEAD 与主线的 merge-base）调用 `prepare_delivery_revision`（连续性 `ACTIVE_LOOP_REPLAN` 或 `USER_EXPLICIT_SAME_DELIVERY`）重锚基线；`preparing=True` 重验 fork-point，旧 run 被 supersede；
 4. 在新 Revision 上恢复执行（`resume_execution_mode` / 继续 frontier）。
 

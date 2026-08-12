@@ -124,14 +124,14 @@ def workspace_status(
                     result["gitBinding"] = git_binding
                 result["projectScopes"] = project_scopes or []
                 return result
-            recorded_setup = _automatic_serial_workspace_setup(
+            recorded_preparation = _automatic_serial_workspace_preparation(
                 control_root=root,
                 workspace_root=workspace_root or root,
                 hierarchy=stored["hierarchy"],
             )
-            if recorded_setup is not None:
-                result["worktreeSetup"] = recorded_setup
-                result["nextAction"] = recorded_setup["nextAction"]
+            if recorded_preparation is not None:
+                result["workspacePreparation"] = recorded_preparation
+                result["nextAction"] = recorded_preparation["nextAction"]
                 if git_binding is not None:
                     result["gitBinding"] = git_binding
                 result["projectScopes"] = project_scopes or []
@@ -151,7 +151,7 @@ def workspace_status(
         )
         if (
             isinstance(discovery, dict)
-            and discovery.get("worktreeSetup") is not None
+            and discovery.get("workspacePreparation") is not None
         ):
             result.update(discovery)
             if git_binding is not None:
@@ -419,7 +419,7 @@ def _automatic_workspace_requests(
         )
         if repository_key is None:
             fail(
-                "SCHEDULER_GIT_WORKTREE_REQUIRED",
+                "SCHEDULER_GIT_CHECKOUT_REQUIRED",
                 "A Git-bound project scope requires a Git repository",
                 projectId=candidate["projectId"],
                 workspaceRoot=candidate["repositoryRoot"],
@@ -491,11 +491,11 @@ def _current_workspace_satisfies_request(
     return working_tree.get("clean") is True
 
 
-def _current_workspace_serial_setup(
+def _current_workspace_serial_preparation(
     requests: list[dict[str, Any]],
     workspace_root: str,
 ) -> dict[str, Any]:
-    project_setups = []
+    project_preparations = []
     for request in requests:
         target_root = _request_workspace_root(request, workspace_root)
         discovery = inspect_delivery_git_workspace(target_root)
@@ -505,7 +505,7 @@ def _current_workspace_serial_setup(
             else {}
         )
         dirty = working_tree.get("clean") is False
-        project_setups.append(
+        project_preparations.append(
             {
                 "projectId": request["projectId"],
                 "workspaceRoot": str(
@@ -529,10 +529,10 @@ def _current_workspace_serial_setup(
         )
     dirty = any(
         item["state"] == "CURRENT_WORKSPACE_DIRTY"
-        for item in project_setups
+        for item in project_preparations
     )
     return {
-        "state": "CURRENT_WORKSPACE_SETUP_REQUIRED",
+        "state": "CURRENT_WORKSPACE_PREPARATION_REQUIRED",
         "owner": "HOST",
         "strategy": "CURRENT_WORKSPACE_SERIAL",
         "nextAction": (
@@ -541,12 +541,11 @@ def _current_workspace_serial_setup(
             else "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION"
         ),
         "controllerCreatesBranch": False,
-        "controllerCreatesWorktree": False,
-        "projectSetups": project_setups,
+        "projectPreparations": project_preparations,
     }
 
 
-def _automatic_serial_workspace_setup(
+def _automatic_serial_workspace_preparation(
     *,
     control_root: str,
     workspace_root: str,
@@ -567,7 +566,7 @@ def _automatic_serial_workspace_setup(
     ]
     if not pending_requests:
         return None
-    return _current_workspace_serial_setup(
+    return _current_workspace_serial_preparation(
         pending_requests,
         workspace_root,
     )
@@ -858,7 +857,7 @@ def _capture_workspace_turn_start(
             )
         if verified is None:
             fail(
-                "SCHEDULER_GIT_WORKTREE_REQUIRED",
+                "SCHEDULER_GIT_CHECKOUT_REQUIRED",
                 "A Git-bound serial workspace turn requires a Git checkout",
                 projectId=request["projectId"],
             )
@@ -1281,6 +1280,7 @@ def _baseline_discovery(
     expected_hierarchy_fingerprint: str,
     expected_graph_fingerprint: str,
     expected_delivery_revision: int,
+    interaction_context: str,
 ) -> dict[str, Any] | None:
     """Discover one Git baseline context without hiding inspection errors."""
 
@@ -1311,12 +1311,12 @@ def _baseline_discovery(
             "branchRef"
         )
     git_workspace = discovery.get("gitWorkspace", {})
-    provenance = discovery.get("worktreeProvenance", {})
+    provenance = discovery.get("workspaceProvenance", {})
     working_tree = discovery.get("workingTree", {})
     current_branch = git_workspace.get("branchRef")
     stacked_base = None
     if (
-        provenance.get("topology") == "PRIMARY_WORKTREE"
+        interaction_context == "INITIAL_DELIVERY"
         and git_workspace.get("role") == "UNBOUND_BRANCH"
         and isinstance(current_branch, str)
         and current_branch
@@ -1341,10 +1341,11 @@ def _baseline_discovery(
             "frozenGitBinding": normalized["delivery"].get("gitBinding"),
             "gitWorkspace": discovery.get("gitWorkspace"),
             "workingTree": discovery.get("workingTree"),
-            "worktreeSetup": discovery.get("worktreeSetup"),
+            "workspacePreparation": discovery.get("workspacePreparation"),
             "branchAdoption": discovery.get("branchAdoption"),
             "candidates": candidates,
             "stackedBase": stacked_base,
+            "interactionContext": interaction_context,
         }
     )
     return {
@@ -1379,6 +1380,7 @@ def _pending_interaction(
             expected_hierarchy_fingerprint=expected_hierarchy_fingerprint,
             expected_graph_fingerprint=expected_graph_fingerprint,
             expected_delivery_revision=expected_delivery_revision,
+            interaction_context=interaction_context,
         )
         if context is not None:
             return development_baseline_contract(
@@ -1479,7 +1481,7 @@ def preview_hierarchy(
         "controlStateCreated": staged["controlStateCreated"],
         "artifactsReady": artifacts_ready,
         "nextAction": (
-            "RESUME_RECORDED_AUTOMATIC_SELECTION_IN_READY_WORKTREE"
+            "RESUME_RECORDED_AUTOMATIC_SELECTION_IN_READY_WORKSPACE"
             if recorded_selection is not None
             else next_actions.get(
                 staged["status"],
@@ -1532,7 +1534,7 @@ def confirm_development_baseline(
     ``NEW_FROM_MAINLINE`` pins ``baseCommit`` to the current mainline HEAD.
     ``NEW_FROM_CURRENT_BRANCH`` pins it to the clean current feature HEAD and
     makes that parent feature both baseRef and integrationTarget. The host
-    creates either branch during worktree setup.
+    creates either branch during workspace preparation.
     """
 
     if not isinstance(confirmed_by, str) or not confirmed_by.strip():
@@ -1596,11 +1598,16 @@ def confirm_development_baseline(
         expected_hierarchy_fingerprint=stored["hierarchyFingerprint"],
         expected_graph_fingerprint=stored["graphFingerprint"],
         expected_delivery_revision=stored["deliveryRevision"],
+        interaction_context=(
+            "MANUAL_HANDOFF_START"
+            if manual_reconfirmation
+            else "INITIAL_DELIVERY"
+        ),
     )
     if context is None:
         fail(
-            "SCHEDULER_GIT_WORKTREE_REQUIRED",
-            "A development baseline can only be confirmed in a Git worktree",
+            "SCHEDULER_GIT_CHECKOUT_REQUIRED",
+            "A development baseline can only be confirmed in a Git workspace",
             rootId=root_id,
         )
     if (
@@ -1629,7 +1636,7 @@ def confirm_development_baseline(
         if confirmed_dirty_state_fingerprint != actual_dirty:
             fail(
                 "SCHEDULER_GIT_DIRTY_CONFIRMATION_REQUIRED",
-                "All current worktree changes must be explicitly attributed "
+                "All current workspace changes must be explicitly attributed "
                 "to this Delivery using the presented state fingerprint",
                 dirtyStateFingerprint=actual_dirty,
             )
@@ -2231,7 +2238,7 @@ _RECOVERABLE_MANUAL_GIT_ERRORS = frozenset(
         "SCHEDULER_GIT_BINDING_REQUIRED",
         "SCHEDULER_GIT_BRANCH_MISMATCH",
         "SCHEDULER_GIT_DETACHED_HEAD",
-        "SCHEDULER_GIT_WORKTREE_REQUIRED",
+        "SCHEDULER_GIT_CHECKOUT_REQUIRED",
     }
 )
 
@@ -2297,6 +2304,7 @@ def _manual_baseline_reconfirmation(
             ],
             expected_graph_fingerprint=stored["graphFingerprint"],
             expected_delivery_revision=stored["deliveryRevision"],
+            interaction_context="MANUAL_HANDOFF_START",
         )
         if context is None:
             raise
@@ -2555,7 +2563,7 @@ def resume_execution_mode(
     now: object = None,
     **_: Any,
 ) -> dict[str, Any]:
-    """Continue one recorded AUTOMATIC choice in the ready worktree."""
+    """Continue one recorded AUTOMATIC choice in the ready workspace."""
 
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
@@ -2628,12 +2636,12 @@ def resume_execution_mode(
                 else "WAIT_FOR_WORKSPACE_TURN"
             ),
         }
-    setup = _automatic_serial_workspace_setup(
+    preparation = _automatic_serial_workspace_preparation(
         control_root=root,
         workspace_root=actual_workspace,
         hierarchy=stored["hierarchy"],
     )
-    if setup is not None:
+    if preparation is not None:
         return {
             "rootId": root_id,
             "status": stored["status"],
@@ -2643,7 +2651,7 @@ def resume_execution_mode(
             "selectionRecorded": True,
             "confirmationRequired": False,
             "automaticDispatchRequested": False,
-            "worktreeSetup": setup,
+            "workspacePreparation": preparation,
             "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
             "workspaceTurn": serial_gate["workspaceTurn"],
             "selectionContinuation": {
@@ -2651,7 +2659,7 @@ def resume_execution_mode(
                 "confirmationRequired": False,
                 "selectionPreserved": True,
             },
-            "nextAction": setup["nextAction"],
+            "nextAction": preparation["nextAction"],
         }
     if stored["status"] == "CHOICE_READY":
         prepared = prepare_hierarchy(
@@ -2913,7 +2921,7 @@ def select_execution_mode(
         )
     ]
     if pending_requests:
-        setup = _current_workspace_serial_setup(
+        preparation = _current_workspace_serial_preparation(
             pending_requests,
             actual_workspace,
         )
@@ -2932,14 +2940,16 @@ def select_execution_mode(
             ],
             "graphFingerprint": stored["graphFingerprint"],
             "workspaceTurn": serial_gate["workspaceTurn"],
-            "worktreeSetup": setup,
-            "projectWorktreeSetup": setup["projectSetups"],
+            "workspacePreparation": preparation,
+            "projectWorkspacePreparations": preparation[
+                "projectPreparations"
+            ],
             "selectionContinuation": {
                 "tool": "resume_execution_mode",
                 "selectionPreserved": True,
                 "confirmationRequired": False,
             },
-            "nextAction": setup["nextAction"],
+            "nextAction": preparation["nextAction"],
         }
     resumed = resume_execution_mode(
         root=root,

@@ -11,6 +11,7 @@ from hdg import planning
 from hdg.errors import GatedLoopError
 from hdg.git_binding import (
     git_repository_identity,
+    verify_delivery_project_scopes,
 )
 from hdg.mcp_tools import call_tool
 from hdg.repository import SchedulerRepository
@@ -51,7 +52,7 @@ def _repository(path: Path) -> str:
     return _git(path, "rev-parse", "HEAD")
 
 
-class WorktreeSetupCoordinationTests(unittest.TestCase):
+class WorkspaceCoordinationTests(unittest.TestCase):
     def test_legacy_path_binding_remains_discoverable_in_place(self) -> None:
         with TemporaryDirectory() as root:
             workspace = Path(root, "workspace")
@@ -277,6 +278,78 @@ class WorktreeSetupCoordinationTests(unittest.TestCase):
             self.assertEqual(
                 [item["rootId"] for item in secondary_usage],
                 ["d-scoped"],
+            )
+
+    def test_secondary_scope_does_not_jump_to_a_linked_checkout(self) -> None:
+        with TemporaryDirectory() as root:
+            primary = Path(root, "primary")
+            secondary = Path(root, "secondary")
+            primary_base = _repository(primary)
+            secondary_base = _repository(secondary)
+            branch_ref = "feature/current-workspace-only"
+            _git(primary, "switch", "-c", branch_ref)
+            linked_secondary = Path(root, "secondary-linked")
+            _git(
+                secondary,
+                "worktree",
+                "add",
+                "-b",
+                branch_ref,
+                str(linked_secondary),
+                "main",
+            )
+            delivery = {
+                "id": "d-current-workspace-only",
+                "gitBinding": {
+                    "branchRef": branch_ref,
+                    "baseRef": "main",
+                    "baseCommit": primary_base,
+                    "integrationTarget": "main",
+                },
+                "projectScopes": [
+                    {
+                        "id": "primary",
+                        "workspaceRoot": str(primary),
+                        "access": "READ_WRITE",
+                        "gitBinding": {
+                            "branchRef": branch_ref,
+                            "baseRef": "main",
+                            "baseCommit": primary_base,
+                            "integrationTarget": "main",
+                        },
+                    },
+                    {
+                        "id": "secondary",
+                        "workspaceRoot": str(secondary),
+                        "access": "READ_WRITE",
+                        "gitBinding": {
+                            "branchRef": branch_ref,
+                            "baseRef": "main",
+                            "baseCommit": secondary_base,
+                            "integrationTarget": "main",
+                        },
+                    },
+                ],
+            }
+
+            with self.assertRaises(GatedLoopError) as caught:
+                verify_delivery_project_scopes(
+                    str(primary),
+                    delivery,
+                    preparing=True,
+                )
+
+            self.assertEqual(
+                caught.exception.code,
+                "SCHEDULER_GIT_BRANCH_MISMATCH",
+            )
+            self.assertEqual(
+                _git(secondary, "branch", "--show-current"),
+                "main",
+            )
+            self.assertEqual(
+                _git(linked_secondary, "branch", "--show-current"),
+                branch_ref,
             )
 
     def test_shared_workspace_dirty_state_is_not_implicitly_attributed(

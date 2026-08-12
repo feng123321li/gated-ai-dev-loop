@@ -121,13 +121,15 @@ def _select(
 
 
 def _is_waiting_for_workspace_turn(result: dict) -> bool:
-    setup = result.get("worktreeSetup")
+    preparation = result.get("workspacePreparation")
     turn = result.get("workspaceTurn")
     values = {
         result.get("status"),
         result.get("nextAction"),
-        setup.get("state") if isinstance(setup, dict) else None,
-        setup.get("nextAction") if isinstance(setup, dict) else None,
+        preparation.get("state") if isinstance(preparation, dict) else None,
+        preparation.get("nextAction")
+        if isinstance(preparation, dict)
+        else None,
         turn.get("state") if isinstance(turn, dict) else None,
         turn.get("nextAction") if isinstance(turn, dict) else None,
     }
@@ -142,14 +144,16 @@ def _is_waiting_for_workspace_turn(result: dict) -> bool:
 
 
 def _is_waiting_for_workspace_commit(result: dict) -> bool:
-    setup = result.get("worktreeSetup")
+    preparation = result.get("workspacePreparation")
     turn = result.get("workspaceTurn")
     commit_gate = result.get("workspaceCommitGate")
     values = {
         result.get("status"),
         result.get("nextAction"),
-        setup.get("state") if isinstance(setup, dict) else None,
-        setup.get("nextAction") if isinstance(setup, dict) else None,
+        preparation.get("state") if isinstance(preparation, dict) else None,
+        preparation.get("nextAction")
+        if isinstance(preparation, dict)
+        else None,
         turn.get("state") if isinstance(turn, dict) else None,
         turn.get("nextAction") if isinstance(turn, dict) else None,
         (
@@ -208,8 +212,14 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
             self.assertEqual(selected["status"], "CHOICE_READY")
             self.assertTrue(selected["selectionRecorded"])
             self.assertEqual(
-                selected["worktreeSetup"]["strategy"],
+                selected["workspacePreparation"]["strategy"],
                 "CURRENT_WORKSPACE_SERIAL",
+            )
+            self.assertNotIn("worktreeSetup", selected)
+            self.assertNotIn("projectWorktreeSetup", selected)
+            self.assertNotIn(
+                "controllerCreatesWorktree",
+                selected["workspacePreparation"],
             )
             self.assertEqual(
                 selected["nextAction"],

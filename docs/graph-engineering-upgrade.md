@@ -191,9 +191,9 @@ Review 沿层级逐层向上收敛，但不会把同一个 Review 节点重复�
 
 冻结 Revision 只固定当前外层目标、依赖、资源声明、项目范围和拓扑，不固定 Loop 内部实现计划；显式 payload 也不是工程正确性的穷举清单。Gate 失败、普通实现缺陷或 Review finding 只要能在当前 scope 和权限内修正，就由当前 Loop 调整方案、修正并重新验证。`BLOCKED` 仅用于当前 Loop 已无可行的 scope 内路径，并要求显式 failure class；只有冻结的依赖、资源、项目范围或拓扑必须改变时才返回 `REPLAN_REQUIRED`。最终用户验收前的 replan 保持同一 `delivery.id` 并生成下一不可变 Revision，不再用取消旧 run 加新 Delivery ID 表达同一需求。
 
-Revision 连续性必须来自用户明确说明，而不是来自工作区恰好恢复了哪个 Active Delivery。不同工单或独立业务目标默认建立新 Delivery。现行 Git 宿主策略统一为 `CURRENT_WORKSPACE_SERIAL`；历史版本使用过的 `EXCLUSIVE_PRIMARY_CHECKOUT` 与 `HOST_NATIVE_LINKED_WORKTREE` 均已废止，不是现行规范。Controller 不执行 Git 写入，只通过 `worktreeProvenance` 和冻结 binding 描述当前实际 checkout、拓扑与基线。
+Revision 连续性必须来自用户明确说明，而不是来自工作区恰好恢复了哪个 Active Delivery。不同工单或独立业务目标默认建立新 Delivery。现行 Git 宿主策略统一为 `CURRENT_WORKSPACE_SERIAL`；历史版本使用过的 `EXCLUSIVE_PRIMARY_CHECKOUT` 与 `HOST_NATIVE_LINKED_WORKTREE` 均已废止，不是现行规范。Controller 不执行 Git 写入，只通过 `workspaceProvenance` 和冻结 binding 描述当前实际 checkout、拓扑与基线；checkout 拓扑不改变串行调度与基线规则。
 
-`preview_hierarchy` 只登记不绑定工作区的 `CHOICE_READY`，并返回当前唯一 `pendingInteraction`：缺 binding 时先处理 `DEVELOPMENT_BASELINE`，之后才是 `EXECUTION_MODE`；兼容字段 `developmentBaseline` / `executionChoice` 指向同一对象。干净和脏工作树都遵循该顺序；dirty 指纹覆盖 porcelain、变化路径的 worktree blob 与 index state，`.layered-delivery/**` 不计入业务 dirty。宿主能调用原生选择器时必须使用原生交互，不能自行改写为自由文本确认。
+`preview_hierarchy` 只登记不绑定工作区的 `CHOICE_READY`，并返回当前唯一 `pendingInteraction`：缺 binding 时先处理 `DEVELOPMENT_BASELINE`，之后才是 `EXECUTION_MODE`；兼容字段 `developmentBaseline` / `executionChoice` 指向同一对象。干净和脏工作区都遵循该顺序；dirty 指纹覆盖 porcelain、变化路径的 workspace blob 与 index state，`.layered-delivery/**` 不计入业务 dirty。宿主能调用原生选择器时必须使用原生交互，不能自行改写为自由文本确认。
 
 AUTOMATIC 由 `select_execution_mode` 持久记录后进入当前 workspace 的串行队列。宿主仅在前序 Delivery 已提交、clean、HEAD 未漂移且 receiver 安全释放后，按冻结 binding 在当前 checkout 创建或切换目标分支，再用原 `rootId` 与双 fingerprint 调用 `resume_execution_mode`；不创建新的 linked worktree，也不启动专用后台 coordinator。手动接管若发生单仓 Git 漂移，则在任何控制状态写入前返回基线重确认：确认原 binding 保持当前 Revision，确认新 binding 创建下一不可变 Revision。多仓漂移 fail closed，要求完整 project bindings，不能由单仓选择器局部修订。
 

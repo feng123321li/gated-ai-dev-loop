@@ -245,6 +245,7 @@ class LayeredDeliveryController:
                 )
         if name in {
             "workspace_status",
+            "preview_hierarchy",
             "prepare_hierarchy",
             "prepare_delivery_revision",
             "freeze_hierarchy",

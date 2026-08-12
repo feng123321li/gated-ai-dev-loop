@@ -171,10 +171,10 @@ def development_baseline_contract(
 ) -> dict[str, Any]:
     """Return the controller-owned development-baseline interaction contract.
 
-    Sits before ``EXECUTION_MODE``: in a Git worktree with no remembered
+    Sits before ``EXECUTION_MODE``: in a Git workspace with no remembered
     baseline the host presents this selector over local feature branches plus
     new-from-mainline and, when eligible, new-stacked-child options. A dirty
-    worktree additionally requires exact
+    dirty workspace additionally requires exact
     state-fingerprint attribution. The host applies the choice via
     ``confirm_development_baseline``. The presentation machinery mirrors
     ``execution_choice_contract`` verbatim so the same native question tool is

@@ -224,7 +224,7 @@ class PluginBundleTests(unittest.TestCase):
             main + planning + execution,
         )
         self.assertIn("`NEW_FROM_CURRENT_BRANCH`", planning)
-        self.assertIn("`worktreeProvenance`", planning)
+        self.assertIn("`workspaceProvenance`", planning)
         self.assertIn("`baseHeadCommit`", planning)
         self.assertIn("`selectionSource`", planning)
         self.assertIn("`DIRTY_CONFIRMATION_REQUIRED`", planning)

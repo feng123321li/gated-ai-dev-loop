@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.14 — 2026-08-12
+
+发布提交：以 tag `v0.39.14` 指向的提交为准
+
+- **自动 Delivery 持久队列**：`AUTOMATIC` 选择在当前 workspace 已有调度 owner 时持久标记为 `QUEUED`，返回队列位置、owner 与无需再次确认的 continuation；根概览和 Delivery 概览统一显示“排队中（等待自动调度）”。前序 Delivery 达到可验证 commit、working tree/index clean、HEAD 未漂移且 receiver 安全释放边界后，队首自动续调。
+- **脏工作区机械准备**：选择自动执行同时授权宿主在队首精确复核 dirty fingerprint，stash tracked、staged 与 untracked 业务改动并排除 `.layered-delivery/**`，再创建或切换独立 Delivery 分支并调用 `resume_execution_mode`。未合并冲突保持等待，且绝不 stash 正在运行 owner 的未完成改动。
+- **手动交接边界**：手动冻结继续持久化 Delivery、不可变 Revision、完整 hierarchy、双 fingerprint 和人类投影，状态保持 `HANDOFF_READY`；它不进入自动队列，也不创建 Graph Run 或 workspace binding，接收方显式调用 `start_manual_handoff` 后才尝试取得串行 turn。
+- **当前 workspace 串行化**：清理残留的 worktree 编排命名和并行入口；primary 与既有 linked checkout 统一作为普通 current workspace，每个 Delivery 使用独立分支，同一物理 checkout 一次只推进一个 Delivery。
+- **验证**：本地 Python 全量 388 项测试通过（1 项按环境条件跳过）；`compileall`、canonical/Plugin 生成镜像、release candidate、Skill/Plugin manifest 与 `git diff --check` 均通过。
+
 ## 0.39.13 — 2026-08-12
 
 发布提交：以 tag `v0.39.13` 指向的提交为准

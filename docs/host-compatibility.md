@@ -7,6 +7,16 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.39.14 发布候选矩阵
+
+0.39.14 保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`，把后续自动 Delivery 建模为持久队列，并允许宿主在队首按一次 `AUTOMATIC` 选择机械完成 stash 与分支准备。
+
+- 只有已记录 `AUTOMATIC` 的后续 Delivery 投影为 `QUEUED`，携带队列位置、owner 和无需再次确认的 continuation；前序 owner 满足可验证 commit、clean、HEAD 与 receiver 释放边界后续调队首。
+- 队首若存在非 owner 的既存业务改动，宿主按精确 fingerprint stash tracked/staged/untracked 内容并排除 `.layered-delivery/**`，创建或切换冻结 Delivery 分支后调用 `resume_execution_mode`。未合并冲突继续等待，运行中 owner 的未完成改动不可被 stash 绕过。
+- 手动冻结同样持久化完整 Delivery 快照，但保持 `HANDOFF_READY`，不进入自动队列；`start_manual_handoff` 后才创建 manual Run 与 workspace binding。
+- 清理残留 worktree 编排协议；primary 与既有 linked checkout 统一按普通 current workspace 串行处理，不自动创建新 worktree。
+- 核心候选已通过 388 项 Python 测试（1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Skill/Plugin manifest 与差异校验。实际宿主仍需按本页定义完成原生 child 冒烟，并停在 `RECORD_USER_CONFIRMATION`。
+
 ## 0.39.11 发布候选矩阵
 
 0.39.11 保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`，收紧项目声明的 Python 3.10+ 运行边界，并补齐现有受信任 `zcode` Adapter 的内部映射一致性。

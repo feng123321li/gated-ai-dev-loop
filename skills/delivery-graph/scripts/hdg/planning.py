@@ -64,6 +64,32 @@ def workspace_status(
         workspace_root=workspace_root,
     )
     if result["status"] == "DELIVERY_SELECTION_REQUIRED":
+        for candidate in result.get("candidateDeliveries", []):
+            candidate_root_id = candidate.get("rootId")
+            if not isinstance(candidate_root_id, str):
+                continue
+            selection = repository.execution_selection(candidate_root_id)
+            if selection is None:
+                continue
+            try:
+                workspace_turn = repository.serial_workspace_turn_state(
+                    candidate_root_id
+                )
+            except GatedLoopError as error:
+                if error.code == "SCHEDULER_DELIVERY_WORKSPACE_MISSING":
+                    continue
+                raise
+            if workspace_turn["state"] != "ACQUIRED":
+                serial_gate = {
+                    "state": workspace_turn["state"],
+                    "workspaceTurn": workspace_turn,
+                }
+                candidate["deliveryStatus"] = candidate["status"]
+                candidate["status"] = "QUEUED"
+                candidate["deliveryQueue"] = _delivery_queue_marker(
+                    serial_gate,
+                    candidate_root_id,
+                )
         return result
     selected_root_id = result.get("rootId")
     if isinstance(selected_root_id, str):
@@ -112,14 +138,13 @@ def workspace_status(
             if serial_gate["state"] != "ACQUIRED":
                 previous_status = result["status"]
                 result["deliveryStatus"] = previous_status
-                result["status"] = serial_gate["state"]
-                result["automaticDispatchRequested"] = False
-                result["nextAction"] = (
-                    "WAIT_FOR_WORKSPACE_COMMIT"
-                    if serial_gate["state"]
-                    == "WAITING_FOR_WORKSPACE_COMMIT"
-                    else "WAIT_FOR_WORKSPACE_TURN"
+                result["status"] = "QUEUED"
+                result["deliveryQueue"] = _delivery_queue_marker(
+                    serial_gate,
+                    selected_root_id,
                 )
+                result["automaticDispatchRequested"] = False
+                result["nextAction"] = "WAIT_FOR_AUTOMATIC_QUEUE_TURN"
                 if git_binding is not None:
                     result["gitBinding"] = git_binding
                 result["projectScopes"] = project_scopes or []
@@ -505,6 +530,15 @@ def _current_workspace_serial_preparation(
             else {}
         )
         dirty = working_tree.get("clean") is False
+        next_action = (
+            (
+                "RESOLVE_UNMERGED_CHANGES_OR_KEEP_CHANGES_AND_WAIT"
+                if working_tree.get("hasUnmergedChanges") is True
+                else "HOST_STASH_PREPARE_BRANCH_THEN_RESUME_EXECUTION"
+            )
+            if dirty
+            else "CREATE_OR_SWITCH_CURRENT_WORKSPACE_BRANCH"
+        )
         project_preparations.append(
             {
                 "projectId": request["projectId"],
@@ -519,30 +553,167 @@ def _current_workspace_serial_preparation(
                     if dirty
                     else "CURRENT_WORKSPACE_BRANCH_REQUIRED"
                 ),
-                "nextAction": (
-                    "REVIEW_CURRENT_WORKSPACE_CHANGES"
-                    if dirty
-                    else "CREATE_OR_SWITCH_CURRENT_WORKSPACE_BRANCH"
-                ),
+                "nextAction": next_action,
                 "workingTree": working_tree,
             }
         )
-    dirty = any(
-        item["state"] == "CURRENT_WORKSPACE_DIRTY"
+    dirty_projects = [
+        item
         for item in project_preparations
+        if item["state"] == "CURRENT_WORKSPACE_DIRTY"
+    ]
+    dirty = bool(dirty_projects)
+    stash_available = dirty and not any(
+        item["workingTree"].get("hasUnmergedChanges") is True
+        for item in dirty_projects
     )
-    return {
+    next_action = (
+        (
+            "HOST_STASH_PREPARE_BRANCH_THEN_RESUME_EXECUTION"
+            if stash_available
+            else "RESOLVE_CONFLICTS_OR_KEEP_CHANGES_AND_WAIT"
+        )
+        if dirty
+        else "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION"
+    )
+    result = {
         "state": "CURRENT_WORKSPACE_PREPARATION_REQUIRED",
         "owner": "HOST",
         "strategy": "CURRENT_WORKSPACE_SERIAL",
-        "nextAction": (
-            "REVIEW_CURRENT_WORKSPACE_CHANGES"
-            if dirty
-            else "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION"
-        ),
+        "nextAction": next_action,
         "controllerCreatesBranch": False,
         "projectPreparations": project_preparations,
     }
+    if dirty:
+        expected_projects = [
+            {
+                "projectId": item["projectId"],
+                "workspaceRoot": item["workspaceRoot"],
+                "workingTreeStateFingerprint": item["workingTree"][
+                    "stateFingerprint"
+                ],
+            }
+            for item in dirty_projects
+        ]
+        if stash_available:
+            result["workspaceChangeHandling"] = {
+                "kind": "AUTOMATIC_DIRTY_WORKSPACE_PREPARATION",
+                "action": "STASH_AND_RUN",
+                "confirmationRequired": False,
+                "authorizationSource": "AUTOMATIC_EXECUTION_SELECTION",
+                "fallbackAction": "KEEP_CHANGES_AND_WAIT",
+                "hostAction": {
+                    "label": "暂存现有改动后运行",
+                    "description": (
+                        "AUTOMATIC 选择已授权宿主机械准备 workspace；宿主"
+                        "精确复核工作树指纹，stash 已跟踪、暂存和未跟踪"
+                        "业务改动；工作树变干净后创建或切换 Delivery 分支，"
+                        "再调用 resume_execution_mode。"
+                    ),
+                    "owner": "HOST",
+                    "controllerExecutesGit": False,
+                    "expectedProjects": expected_projects,
+                    "stashPolicy": {
+                        "includeTracked": True,
+                        "includeStaged": True,
+                        "includeUntracked": True,
+                        "includeIgnored": False,
+                        "pathspec": [
+                            ".",
+                            ":(exclude).layered-delivery",
+                            ":(exclude).layered-delivery/**",
+                        ],
+                        "verifyFingerprintImmediatelyBeforeWrite": True,
+                        "requireCleanWorkspaceAfterWrite": True,
+                    },
+                    "restorePolicy": {
+                        "automatic": False,
+                        "restoreAfterDeliveryBranchUse": True,
+                        "restoreOnOriginalBranch": True,
+                        "restoreIndex": True,
+                        "retainStashUntilSuccessfulRestore": True,
+                    },
+                    "nextAction": (
+                        "HOST_STASH_PREPARE_BRANCH_THEN_RESUME_EXECUTION"
+                    ),
+                },
+                "preservedUnrelatedChanges": {
+                    "supported": False,
+                    "reason": "DELIVERY_TURN_MUST_START_CLEAN",
+                    "explanation": (
+                        "每个 Delivery 使用独立分支，且 turn-start、提交归属与"
+                        "验收快照都要求干净边界；脏改动不能跨分支原地保留。"
+                    ),
+                },
+            }
+        else:
+            result["workspaceChangeHandling"] = {
+                "kind": "AUTOMATIC_DIRTY_WORKSPACE_PREPARATION",
+                "action": "KEEP_CHANGES_AND_WAIT",
+                "confirmationRequired": False,
+                "authorizationSource": "AUTOMATIC_EXECUTION_SELECTION",
+                "blockedAutomaticAction": "STASH_AND_RUN",
+                "blockedReason": "UNMERGED_CHANGES",
+                "expectedProjects": expected_projects,
+                "nextAction": "RESOLVE_CONFLICTS_OR_WAIT_FOR_CLEAN_WORKSPACE",
+                "preservedUnrelatedChanges": {
+                    "supported": False,
+                    "reason": "DELIVERY_TURN_MUST_START_CLEAN",
+                },
+            }
+    if not dirty or stash_available:
+        actions: list[dict[str, Any]] = []
+        if dirty:
+            actions.append(
+                {
+                    "action": "STASH_BUSINESS_CHANGES",
+                    "projects": expected_projects,
+                    "pathspec": [
+                        ".",
+                        ":(exclude).layered-delivery",
+                        ":(exclude).layered-delivery/**",
+                    ],
+                    "includeUntracked": True,
+                    "restoreIndex": True,
+                }
+            )
+        actions.extend(
+            [
+                {
+                    "action": "CREATE_OR_SWITCH_DELIVERY_BRANCH",
+                    "projects": [
+                        {
+                            "projectId": item["projectId"],
+                            "workspaceRoot": item["workspaceRoot"],
+                            "branchRef": item["branchRef"],
+                            "gitBinding": item["gitBinding"],
+                        }
+                        for item in project_preparations
+                    ],
+                },
+                {
+                    "action": "RESUME_EXECUTION_MODE",
+                    "tool": "resume_execution_mode",
+                },
+            ]
+        )
+        result["automaticHostPreparation"] = {
+            "state": "READY",
+            "authorizationSource": "AUTOMATIC_EXECUTION_SELECTION",
+            "confirmationRequired": False,
+            "controllerExecutesGit": False,
+            "actions": actions,
+        }
+    else:
+        result["automaticHostPreparation"] = {
+            "state": "BLOCKED",
+            "authorizationSource": "AUTOMATIC_EXECUTION_SELECTION",
+            "confirmationRequired": False,
+            "controllerExecutesGit": False,
+            "reason": "UNMERGED_CHANGES",
+            "nextAction": "RESOLVE_CONFLICTS_OR_WAIT_FOR_CLEAN_WORKSPACE",
+        }
+    return result
 
 
 def _automatic_serial_workspace_preparation(
@@ -902,6 +1073,29 @@ def _workspace_turn_waiting(
     }
 
 
+def _delivery_queue_marker(
+    serial_gate: dict[str, Any],
+    root_id: str,
+) -> dict[str, Any]:
+    """Project a persisted serial turn as an automatic Delivery queue."""
+
+    workspace_turn = serial_gate["workspaceTurn"]
+    return {
+        "state": "QUEUED",
+        "position": workspace_turn["position"],
+        "queueLength": workspace_turn["queueLength"],
+        "ownerRootId": workspace_turn["ownerRootId"],
+        "ownerStatus": workspace_turn["ownerStatus"],
+        "continuation": {
+            "automatic": True,
+            "tool": "resume_execution_mode",
+            "rootId": root_id,
+            "confirmationRequired": False,
+            "trigger": "OWNER_TERMINAL_COMMIT_CLEAN_AND_RELEASED",
+        },
+    }
+
+
 
 def _verify_frozen_delivery_workspace(
     stored: dict[str, Any],
@@ -1154,12 +1348,9 @@ def _frozen_automatic_result(
         workspace_root=workspace_root,
     )
     if serial_gate["state"] != "ACQUIRED":
-        waiting_for_commit = (
-            serial_gate["state"] == "WAITING_FOR_WORKSPACE_COMMIT"
-        )
         return {
             "rootId": stored["rootId"],
-            "status": serial_gate["state"],
+            "status": "QUEUED",
             "deliveryStatus": stored["status"],
             "hierarchyFingerprint": stored["hierarchyFingerprint"],
             "graphFingerprint": stored["graphFingerprint"],
@@ -1170,16 +1361,16 @@ def _frozen_automatic_result(
             "automaticDispatchRequested": False,
             "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
             "workspaceTurn": serial_gate["workspaceTurn"],
+            "deliveryQueue": _delivery_queue_marker(
+                serial_gate,
+                stored["rootId"],
+            ),
             "selectionContinuation": {
                 "tool": "resume_execution_mode",
                 "confirmationRequired": False,
                 "selectionPreserved": True,
             },
-            "nextAction": (
-                "WAIT_FOR_WORKSPACE_COMMIT"
-                if waiting_for_commit
-                else "WAIT_FOR_WORKSPACE_TURN"
-            ),
+            "nextAction": "WAIT_FOR_AUTOMATIC_QUEUE_TURN",
         }
     _verify_frozen_delivery_workspace(stored, workspace_root)
     terminal = run["status"] in _SERIAL_TERMINAL_STATUSES
@@ -1631,13 +1822,25 @@ def confirm_development_baseline(
             ],
         )
     working_tree = context["discovery"].get("workingTree", {})
-    if not working_tree.get("clean", False):
+    current_branch = context["discovery"].get("gitWorkspace", {}).get(
+        "branchRef"
+    )
+    dirty_current_branch_adoption = (
+        manual_reconfirmation
+        or selection.strip() == current_branch
+        or selection == "NEW_FROM_CURRENT_BRANCH"
+    )
+    if (
+        not working_tree.get("clean", False)
+        and dirty_current_branch_adoption
+    ):
         actual_dirty = working_tree.get("stateFingerprint")
         if confirmed_dirty_state_fingerprint != actual_dirty:
             fail(
                 "SCHEDULER_GIT_DIRTY_CONFIRMATION_REQUIRED",
-                "All current workspace changes must be explicitly attributed "
-                "to this Delivery using the presented state fingerprint",
+                "Adopting the current dirty branch requires all current "
+                "workspace changes to be explicitly attributed to this "
+                "Delivery using the presented state fingerprint",
                 dirtyStateFingerprint=actual_dirty,
             )
     if selection in {"NEW_FROM_MAINLINE", "NEW_FROM_CURRENT_BRANCH"}:
@@ -2174,12 +2377,9 @@ def freeze_hierarchy(
         repository.serial_workspace_turn_state(root_id),
     )
     if serial_gate["state"] != "ACQUIRED":
-        waiting_for_commit = (
-            serial_gate["state"] == "WAITING_FOR_WORKSPACE_COMMIT"
-        )
         return {
             "rootId": root_id,
-            "status": serial_gate["state"],
+            "status": "QUEUED",
             "deliveryStatus": stored["status"],
             "deliveryRevision": expected_delivery_revision,
             "hierarchyFingerprint": expected_hierarchy_fingerprint,
@@ -2188,11 +2388,11 @@ def freeze_hierarchy(
             "automaticDispatchRequested": False,
             "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
             "workspaceTurn": serial_gate["workspaceTurn"],
-            "nextAction": (
-                "WAIT_FOR_WORKSPACE_COMMIT"
-                if waiting_for_commit
-                else "WAIT_FOR_WORKSPACE_TURN"
+            "deliveryQueue": _delivery_queue_marker(
+                serial_gate,
+                root_id,
             ),
+            "nextAction": "WAIT_FOR_AUTOMATIC_QUEUE_TURN",
         }
     revision_hierarchy = repository.revision_hierarchy(
         root_id,
@@ -2609,12 +2809,9 @@ def resume_execution_mode(
         ),
     )
     if serial_gate["state"] != "ACQUIRED":
-        waiting_for_commit = (
-            serial_gate["state"] == "WAITING_FOR_WORKSPACE_COMMIT"
-        )
         return {
             "rootId": root_id,
-            "status": serial_gate["state"],
+            "status": "QUEUED",
             "deliveryStatus": stored["status"],
             "hierarchyFingerprint": stored["hierarchyFingerprint"],
             "graphFingerprint": stored["graphFingerprint"],
@@ -2625,16 +2822,16 @@ def resume_execution_mode(
             "automaticDispatchRequested": False,
             "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
             "workspaceTurn": serial_gate["workspaceTurn"],
+            "deliveryQueue": _delivery_queue_marker(
+                serial_gate,
+                root_id,
+            ),
             "selectionContinuation": {
                 "tool": "resume_execution_mode",
                 "confirmationRequired": False,
                 "selectionPreserved": True,
             },
-            "nextAction": (
-                "WAIT_FOR_WORKSPACE_COMMIT"
-                if waiting_for_commit
-                else "WAIT_FOR_WORKSPACE_TURN"
-            ),
+            "nextAction": "WAIT_FOR_AUTOMATIC_QUEUE_TURN",
         }
     preparation = _automatic_serial_workspace_preparation(
         control_root=root,
@@ -2717,9 +2914,14 @@ def resume_execution_mode(
     except GatedLoopError as error:
         if error.code != "SCHEDULER_WORKSPACE_TURN_NOT_OWNED":
             raise
+        workspace_turn = _workspace_turn_waiting(error)
+        serial_gate = {
+            "state": "WAITING_FOR_WORKSPACE_TURN",
+            "workspaceTurn": workspace_turn,
+        }
         return {
             "rootId": root_id,
-            "status": "WAITING_FOR_WORKSPACE_TURN",
+            "status": "QUEUED",
             "deliveryStatus": "PREPARED",
             "hierarchyFingerprint": prepared[
                 "hierarchyFingerprint"
@@ -2731,13 +2933,17 @@ def resume_execution_mode(
             "confirmationRequired": False,
             "automaticDispatchRequested": False,
             "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
-            "workspaceTurn": _workspace_turn_waiting(error),
+            "workspaceTurn": workspace_turn,
+            "deliveryQueue": _delivery_queue_marker(
+                serial_gate,
+                root_id,
+            ),
             "selectionContinuation": {
                 "tool": "resume_execution_mode",
                 "confirmationRequired": False,
                 "selectionPreserved": True,
             },
-            "nextAction": "WAIT_FOR_WORKSPACE_TURN",
+            "nextAction": "WAIT_FOR_AUTOMATIC_QUEUE_TURN",
         }
     return {
         **frozen,
@@ -2745,6 +2951,7 @@ def resume_execution_mode(
         "selectionAlreadyApplied": False,
         "confirmationRequired": False,
         "automaticDispatchRequested": True,
+        "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
         **(
             {"verifiedProjectScopes": prepared["verifiedProjectScopes"]}
             if "verifiedProjectScopes" in prepared
@@ -2888,12 +3095,9 @@ def select_execution_mode(
         recorded["workspaceTurn"],
     )
     if serial_gate["state"] != "ACQUIRED":
-        waiting_for_commit = (
-            serial_gate["state"] == "WAITING_FOR_WORKSPACE_COMMIT"
-        )
         return {
             "rootId": root_id,
-            "status": serial_gate["state"],
+            "status": "QUEUED",
             "deliveryStatus": stored["status"],
             "selection": "AUTOMATIC",
             "workspaceStrategy": selected_strategy,
@@ -2905,11 +3109,11 @@ def select_execution_mode(
             "hierarchyFingerprint": stored["hierarchyFingerprint"],
             "graphFingerprint": stored["graphFingerprint"],
             "workspaceTurn": serial_gate["workspaceTurn"],
-            "nextAction": (
-                "WAIT_FOR_WORKSPACE_COMMIT"
-                if waiting_for_commit
-                else "WAIT_FOR_WORKSPACE_TURN"
+            "deliveryQueue": _delivery_queue_marker(
+                serial_gate,
+                root_id,
             ),
+            "nextAction": "WAIT_FOR_AUTOMATIC_QUEUE_TURN",
         }
 
     pending_requests = [

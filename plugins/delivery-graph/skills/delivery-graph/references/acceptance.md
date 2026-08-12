@@ -119,9 +119,12 @@ Loop outcome 与事件链。快照包含 committed、staged、unstaged 和 untra
 时的物理 workspace 快照，不是 TASK、Loop 或 Delivery 的独占归属证明。默认
 `CURRENT_WORKSPACE_SERIAL` 要求每个 Delivery 使用独立分支，并只在 working tree、
 index clean、已有可验证 commit、HEAD 与冻结 binding 一致且在途 receiver 安全释放后
-切换。发现其他 Delivery 改动、资源冲突、dirty 或 HEAD 漂移时，后启动/后发现者必须
-等待并停止切换，不能继续共享 checkout。现有 linked checkout 也只按普通 current
-workspace 处理，不自动创建新 worktree。验收仍需结合需求、Review、提交边界和结果摘要判断。
+推进自动队首。已有 owner 时，只有已选择 `AUTOMATIC` 的后续 Delivery 标记为 `QUEUED`；
+手动交接冻结仍持久化为 `HANDOFF_READY`，不进入自动队列。发现资源冲突、owner dirty、
+未合并或 HEAD 漂移时保持等待，不能继续共享 checkout。队首的非 owner 既存业务改动
+只能按已授权的精确 stash 准备处理，不能 stash 正在运行 owner 的未完成改动。现有 linked
+checkout 也只按普通 current workspace 处理，不自动创建新 worktree。验收仍需结合需求、
+Review、提交边界和结果摘要判断。
 
 只要 TASK 或其 TASK Review 已保存该快照，Controller 还会在主控制根的
 `.layered-delivery/<rootId>/work-items/<taskId>/workspace-changes.patch` 生成稳定附件，

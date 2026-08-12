@@ -113,10 +113,21 @@ class DeliveryProjectionStore:
                     definition["graph"],
                     observed_at=self.timestamp_fn(self.now),
                 )
+            selection = self.execution_selection(root_id)
+            projection_definition = definition
+            if (
+                run is None
+                and selection is not None
+                and selection.get("state") == "QUEUED"
+            ):
+                projection_definition = {
+                    **definition,
+                    "status": "QUEUED",
+                }
             projection_root = safe_path(self.control_root, root_id)
             revision_history = self.revision_history(root_id)
             documents = render_projection_documents(
-                definition,
+                projection_definition,
                 run,
                 revision_history,
             )
@@ -278,6 +289,12 @@ class DeliveryProjectionStore:
                         "run": run,
                     }
                 )
+        for source in sources:
+            if source.get("run") is not None or "stateError" in source:
+                continue
+            selection = self.execution_selection(source["rootId"])
+            if selection is not None and selection.get("state") == "QUEUED":
+                source["queueState"] = "QUEUED"
         return sources
 
 __all__ = (

@@ -173,7 +173,8 @@ class SerialWorkspaceOwnerGateTests(unittest.TestCase):
                 workspace_root=str(workspace),
             )
 
-            self.assertEqual(result["status"], "WAITING_FOR_WORKSPACE_TURN")
+            self.assertEqual(result["status"], "QUEUED")
+            self.assertEqual(result["deliveryQueue"]["state"], "QUEUED")
             self.assertEqual(result["deliveryStatus"], "PREPARED")
             self.assertFalse(result["automaticDispatchRequested"])
             self.assertEqual(

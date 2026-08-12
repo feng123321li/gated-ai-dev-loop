@@ -2318,7 +2318,11 @@ class McpSurfaceTests(unittest.TestCase):
             for waiting in (selected, resumed):
                 self.assertEqual(
                     waiting["status"],
-                    "WAITING_FOR_WORKSPACE_TURN",
+                    "QUEUED",
+                )
+                self.assertEqual(
+                    waiting["deliveryQueue"]["state"],
+                    "QUEUED",
                 )
                 self.assertFalse(waiting["automaticDispatchRequested"])
                 self.assertEqual(
@@ -2367,7 +2371,11 @@ class McpSurfaceTests(unittest.TestCase):
             self.assertEqual(first_status["status"], "ACTIVE")
             self.assertEqual(
                 second_status["status"],
-                "WAITING_FOR_WORKSPACE_TURN",
+                "QUEUED",
+            )
+            self.assertEqual(
+                second_status["deliveryQueue"]["state"],
+                "QUEUED",
             )
             self.assertEqual(second_status["deliveryStatus"], "PREPARED")
             self.assertEqual(

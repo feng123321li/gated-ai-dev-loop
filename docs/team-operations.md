@@ -58,11 +58,12 @@ Claude 命令从当前 0.39.11 源码发布包的 `--plugin-dir` 加载 Plugin�
 0.39.11 真实冒烟还必须覆盖以下交互和失败关闭边界：
 
 - `preview_hierarchy`、`workspace_status` 和手动接管只返回一个当前 `pendingInteraction`。缺少 `gitBinding` 时先处理 `DEVELOPMENT_BASELINE`，确认后才出现 `EXECUTION_MODE`；同一 Delivery 的后续 Revision 可复用已记忆基线。
-- 干净和脏工作树都进入这条基线流程。脏树确认必须回传原响应的 `dirtyStateFingerprint`；变化路径内容、暂存区或 porcelain 状态任一改变，旧指纹都失效。
+- 干净和脏工作树都进入这条基线流程。直接 adoption 当前脏分支时必须回传原响应的 `dirtyStateFingerprint`，且变化路径内容、暂存区或 porcelain 状态任一改变都会使旧指纹失效；选择另一个 Delivery 分支时不把当前改动归属给新 Delivery，待其成为队首后由 `automaticHostPreparation` stash。
 - `start_manual_handoff` 的单仓 Git 漂移先阻断且零写入。确认原 binding 时保持当前 Revision，确认新 binding 时生成下一不可变 Revision；多仓漂移 fail closed，要求用完整 project bindings 创建新的手动 Revision。
 - Controller 只读计算并冻结 binding；当前 checkout 的分支创建或切换仍由宿主完成。Plugin 不公开 worktree setup 工具，也不自动创建 linked worktree；已存在的 linked checkout 仅作为普通 current workspace。
 - 同一物理 workspace 可以绑定多个 Delivery，但每个会话必须保存并显式传自己的 `rootId`。无参发现多个未结束绑定时只返回 `DELIVERY_SELECTION_REQUIRED`，不能按更新时间猜选。
-- AUTOMATIC 选择在排队时立即持久化。非队首 Delivery 返回 `WAITING_FOR_WORKSPACE_TURN` 或 `WAITING_FOR_WORKSPACE_COMMIT`，不创建 Run、不派遣 receiver；宿主准备好目标分支后只调用 `resume_execution_mode`，不能重选。
+- AUTOMATIC 选择在排队时立即持久化。非队首 Delivery 对外标记为 `QUEUED`，包含队列位置、owner 和无需再次确认的 `resume_execution_mode` continuation；不创建 Run、不派遣 receiver。前序 Delivery 释放后，宿主自动消费 `automaticHostPreparation`：必要时按精确指纹 stash 业务改动（排除 `.layered-delivery/**`），创建或切换目标分支，再调用 `resume_execution_mode`，不能重选。
+- 手动交接冻结同样持久化 Delivery、不可变 Revision、完整 hierarchy、双 fingerprint 和人类投影，但状态保持 `HANDOFF_READY`。它不产生 `QUEUED`、自动 continuation、Graph Run 或 workspace binding；只有接收方显式调用 `start_manual_handoff` 才尝试取得串行 turn，等待时仍返回手动 `WAITING_FOR_WORKSPACE_*` 状态。
 - 前序 Delivery 只有在 Run 终态、被取消 receiver 的租约已结束、存在相对 turn-start 的非空业务 commit、历史未改写且工作树/index 干净时才释放。错分支、dirty、HEAD 或 scope 漂移全部失败关闭。
 - 主会话当前 checkout 与所有 `READ_WRITE` project workspace 都参与事务内 owner gate；任一 physical workspace 冲突时只允许先到 Delivery 运行。
 - TASK/TASK Review 的 Controller 可信 Git 快照必须生成 `workspace-changes.patch`，覆盖 committed、staged、unstaged 与 untracked 内容，供未打开实际 checkout 的用户审核。

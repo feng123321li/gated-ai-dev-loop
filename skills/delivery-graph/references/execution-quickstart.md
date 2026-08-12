@@ -22,7 +22,7 @@
 
 不要自行增加 TASK/Gate 节点，也不要根据 payload 内容改变 frontier 顺序。
 
-用户选择自动执行时，`select_execution_mode(AUTOMATIC)` 立即持久化一次业务确认；workspace strategy 固定为 `CURRENT_WORKSPACE_SERIAL`。同一物理 checkout 一次只运行一个 Delivery。后启动者等待前一个 Delivery 形成可验证 commit、working tree/index clean、HEAD 与冻结 binding 一致且所有 receiver 安全释放；宿主随后才创建或切换目标 Delivery 的独立分支。若选择响应返回 `PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION`，分支准备完成后以明确 `rootId` 和双 fingerprint 调用 `resume_execution_mode`，不得重试 `select_execution_mode`。资源冲突、dirty、HEAD 漂移或释放状态不明时停止切换。现有 linked checkout 只按普通 current workspace 处理，不自动创建新 worktree。状态恢复始终显式调用 `workspace_status(root_id=...)`。用户选择手动开发时仍按 handoff 协议启动 manual Run 和独立 TASK receiver。
+用户选择自动执行时，`select_execution_mode(AUTOMATIC)` 立即持久化一次业务确认；workspace strategy 固定为 `CURRENT_WORKSPACE_SERIAL`。同一物理 checkout 一次只运行一个 Delivery。只有已选择自动执行的后续 Delivery 标记为 `QUEUED` 并携带自动 continuation，等待前一个 Delivery 形成可验证 commit、working tree/index clean、HEAD 与冻结 binding 一致且所有 receiver 安全释放。轮到队首后，宿主按 `automaticHostPreparation.actions` 自动执行：必要时核对指纹并 stash 业务改动（排除 `.layered-delivery/**`），创建或切换目标 Delivery 的独立分支，再以明确 `rootId` 和双 fingerprint 调用 `resume_execution_mode`；不得重试 `select_execution_mode` 或再次询问用户。资源冲突、owner dirty、未合并状态、HEAD 漂移或释放状态不明时保持排队。现有 linked checkout 只按普通 current workspace 处理，不自动创建新 worktree。状态恢复始终显式调用 `workspace_status(root_id=...)`。手动交接冻结会持久化 `HANDOFF_READY` Delivery 和完整需求快照，但不进入自动队列；接收方必须显式调用 `start_manual_handoff`，取得串行 turn 后才创建 manual Run 和独立 TASK receiver。
 
 ### 宿主继承与内部 Worker
 
@@ -190,7 +190,7 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 
 ## 资源锁
 
-租约有效的已 claim Loop 占用其全部 `resourceClaims`。共享控制根内任何 Delivery 的另一个 Ready Loop 只要存在相同键就不能 dispatch；frontier 会用 `<rootId>/<nodeId>` 标识跨 Delivery 冲突。租约过期后不再占用跨 Delivery 资源；原 Delivery 下次推进时仍按 `WORKER_LOST` 回收旧 attempt。无 claim 交集也不能绕过 `CURRENT_WORKSPACE_SERIAL`：同一实际 workspace 的后启动或后发现 Delivery 继续等待，直到前一个 Delivery 已形成可验证 commit、working tree/index clean、HEAD 未漂移且 receiver 安全释放。冲突、dirty 或漂移在切换前发现时立即停止，不创建新 worktree 规避。不要从路径、仓库层级或模块前缀推导额外资源锁。
+租约有效的已 claim Loop 占用其全部 `resourceClaims`。共享控制根内任何 Delivery 的另一个 Ready Loop 只要存在相同键就不能 dispatch；frontier 会用 `<rootId>/<nodeId>` 标识跨 Delivery 冲突。租约过期后不再占用跨 Delivery 资源；原 Delivery 下次推进时仍按 `WORKER_LOST` 回收旧 attempt。无 claim 交集也不能绕过 `CURRENT_WORKSPACE_SERIAL`：同一实际 workspace 中只有已选择 `AUTOMATIC` 的后启动或后发现 Delivery 标记为 `QUEUED`，直到前一个 Delivery 已形成可验证 commit、working tree/index clean、HEAD 未漂移且 receiver 安全释放才自动续调；手动冻结 Delivery 保持 `HANDOFF_READY`。冲突、owner dirty、未合并状态或漂移使队列保持等待，不创建新 worktree 规避，也不 stash owner 的未完成改动。不要从路径、仓库层级或模块前缀推导额外资源锁。
 
 ## 未开始 TASK 的需求修订
 

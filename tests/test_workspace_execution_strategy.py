@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 
@@ -120,6 +121,27 @@ def _select(
     )
 
 
+def _resume(
+    repository: Path,
+    confirmed: dict,
+) -> dict:
+    return call_tool(
+        "resume_execution_mode",
+        {
+            "root_id": confirmed["rootId"],
+            "expected_hierarchy_fingerprint": confirmed[
+                "hierarchyFingerprint"
+            ],
+            "expected_graph_fingerprint": confirmed[
+                "graphFingerprint"
+            ],
+        },
+        root=str(repository),
+        workspace_root=str(repository),
+        trusted_host_adapter="codex",
+    )
+
+
 def _is_waiting_for_workspace_turn(result: dict) -> bool:
     preparation = result.get("workspacePreparation")
     turn = result.get("workspaceTurn")
@@ -225,12 +247,284 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                 selected["nextAction"],
                 "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION",
             )
+            host_preparation = selected["workspacePreparation"][
+                "automaticHostPreparation"
+            ]
+            self.assertEqual(host_preparation["state"], "READY")
+            self.assertFalse(host_preparation["confirmationRequired"])
+            self.assertEqual(
+                [item["action"] for item in host_preparation["actions"]],
+                [
+                    "CREATE_OR_SWITCH_DELIVERY_BRANCH",
+                    "RESUME_EXECUTION_MODE",
+                ],
+            )
             scheduler = SchedulerRepository(str(repository))
             self.assertEqual(
                 scheduler.execution_selection("d-serial-waiting")[
                     "selection"
                 ],
                 "AUTOMATIC",
+            )
+
+    def test_dirty_unrelated_changes_offer_stash_or_wait_before_branch_switch(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary:
+            repository, _base_commit = _repository(Path(temporary))
+            (repository / "README.md").write_text(
+                "# staged unrelated change\n",
+                encoding="utf-8",
+            )
+            git_command(repository, "add", "README.md")
+            (repository / "untracked-note.txt").write_text(
+                "untracked unrelated change\n",
+                encoding="utf-8",
+            )
+            branch_ref = "feature/d-stash-before-run"
+
+            confirmed = _confirm_new_branch(
+                repository,
+                "d-stash-before-run",
+                "t-stash-before-run",
+                branch_ref,
+            )
+            selected = _select(repository, confirmed)
+
+            self.assertEqual(selected["status"], "CHOICE_READY")
+            self.assertTrue(selected["selectionRecorded"])
+            self.assertFalse(selected["automaticDispatchRequested"])
+            self.assertEqual(
+                selected["nextAction"],
+                "HOST_STASH_PREPARE_BRANCH_THEN_RESUME_EXECUTION",
+            )
+            self.assertEqual(
+                git_command(repository, "branch", "--show-current"),
+                "main",
+            )
+            self.assertEqual(
+                len(
+                    git_command(
+                        repository,
+                        "status",
+                        "--porcelain",
+                        "--",
+                        ".",
+                        ":(exclude).layered-delivery",
+                        ":(exclude).layered-delivery/**",
+                    ).splitlines()
+                ),
+                2,
+            )
+
+            preparation = selected["workspacePreparation"]
+            project = preparation["projectPreparations"][0]
+            working_tree = project["workingTree"]
+            self.assertTrue(working_tree["hasStagedChanges"])
+            self.assertTrue(working_tree["hasUntrackedChanges"])
+            self.assertFalse(working_tree["hasUnmergedChanges"])
+            handling = preparation["workspaceChangeHandling"]
+            self.assertEqual(
+                handling["kind"],
+                "AUTOMATIC_DIRTY_WORKSPACE_PREPARATION",
+            )
+            self.assertEqual(handling["action"], "STASH_AND_RUN")
+            self.assertFalse(handling["confirmationRequired"])
+            self.assertEqual(
+                handling["authorizationSource"],
+                "AUTOMATIC_EXECUTION_SELECTION",
+            )
+            self.assertEqual(
+                handling["fallbackAction"],
+                "KEEP_CHANGES_AND_WAIT",
+            )
+            stash = handling["hostAction"]
+            self.assertEqual(stash["owner"], "HOST")
+            self.assertFalse(stash["controllerExecutesGit"])
+            self.assertEqual(
+                stash["expectedProjects"],
+                [
+                    {
+                        "projectId": "d-stash-before-run",
+                        "workspaceRoot": str(repository.resolve()),
+                        "workingTreeStateFingerprint": working_tree[
+                            "stateFingerprint"
+                        ],
+                    }
+                ],
+            )
+            self.assertTrue(stash["stashPolicy"]["includeUntracked"])
+            self.assertEqual(
+                stash["stashPolicy"]["pathspec"],
+                [
+                    ".",
+                    ":(exclude).layered-delivery",
+                    ":(exclude).layered-delivery/**",
+                ],
+            )
+            self.assertTrue(stash["restorePolicy"]["restoreIndex"])
+            self.assertFalse(
+                handling["preservedUnrelatedChanges"]["supported"]
+            )
+            self.assertEqual(
+                handling["preservedUnrelatedChanges"]["reason"],
+                "DELIVERY_TURN_MUST_START_CLEAN",
+            )
+            self.assertEqual(
+                [
+                    item["action"]
+                    for item in preparation["automaticHostPreparation"][
+                        "actions"
+                    ]
+                ],
+                [
+                    "STASH_BUSINESS_CHANGES",
+                    "CREATE_OR_SWITCH_DELIVERY_BRANCH",
+                    "RESUME_EXECUTION_MODE",
+                ],
+            )
+
+            git_command(
+                repository,
+                "stash",
+                "push",
+                "--include-untracked",
+                "--message",
+                "delivery-graph:d-stash-before-run",
+                "--",
+                ".",
+                ":(exclude).layered-delivery",
+                ":(exclude).layered-delivery/**",
+            )
+            self.assertEqual(
+                git_command(
+                    repository,
+                    "status",
+                    "--porcelain",
+                    "--",
+                    ".",
+                    ":(exclude).layered-delivery",
+                    ":(exclude).layered-delivery/**",
+                ),
+                "",
+            )
+            git_command(repository, "switch", "-c", branch_ref, "main")
+
+            resumed = _resume(repository, confirmed)
+
+            self.assertEqual(resumed["status"], "ACTIVE")
+            self.assertTrue(resumed["automaticDispatchRequested"])
+            self.assertIn(
+                "delivery-graph:d-stash-before-run",
+                git_command(repository, "stash", "list"),
+            )
+
+    def test_dirty_current_branch_adoption_still_requires_attribution(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary:
+            repository, _base_commit = _repository(Path(temporary))
+            branch_ref = "feature/d-owned-dirty"
+            git_command(repository, "switch", "-c", branch_ref)
+            (repository / "owned.txt").write_text(
+                "delivery-owned change\n",
+                encoding="utf-8",
+            )
+            preview = _preview(
+                repository,
+                "d-owned-dirty",
+                "t-owned-dirty",
+            )
+
+            with self.assertRaises(GatedLoopError) as missing:
+                call_tool(
+                    "confirm_development_baseline",
+                    {
+                        "root_id": "d-owned-dirty",
+                        "selection": branch_ref,
+                        "expected_hierarchy_fingerprint": preview[
+                            "hierarchyFingerprint"
+                        ],
+                        "confirmed_by": "human",
+                    },
+                    root=str(repository),
+                    workspace_root=str(repository),
+                    trusted_host_adapter="codex",
+                )
+            self.assertEqual(
+                missing.exception.code,
+                "SCHEDULER_GIT_DIRTY_CONFIRMATION_REQUIRED",
+            )
+
+            confirmed = call_tool(
+                "confirm_development_baseline",
+                {
+                    "root_id": "d-owned-dirty",
+                    "selection": branch_ref,
+                    "expected_hierarchy_fingerprint": preview[
+                        "hierarchyFingerprint"
+                    ],
+                    "confirmed_dirty_state_fingerprint": preview[
+                        "developmentBaseline"
+                    ][
+                        "workingTree"
+                    ]["stateFingerprint"],
+                    "confirmed_by": "human",
+                },
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="codex",
+            )
+
+            self.assertEqual(confirmed["rootId"], "d-owned-dirty")
+
+    def test_unmerged_workspace_does_not_offer_executable_stash(self) -> None:
+        with TemporaryDirectory() as temporary:
+            repository, _base_commit = _repository(Path(temporary))
+            git_command(repository, "switch", "-c", "conflict-side")
+            (repository / "README.md").write_text(
+                "side branch\n",
+                encoding="utf-8",
+            )
+            git_command(repository, "add", "README.md")
+            git_command(repository, "commit", "-m", "Side change")
+            git_command(repository, "switch", "main")
+            (repository / "README.md").write_text(
+                "main branch\n",
+                encoding="utf-8",
+            )
+            git_command(repository, "add", "README.md")
+            git_command(repository, "commit", "-m", "Main change")
+            with self.assertRaises(subprocess.CalledProcessError):
+                git_command(repository, "merge", "conflict-side")
+
+            confirmed = _confirm_new_branch(
+                repository,
+                "d-conflicted-before-run",
+                "t-conflicted-before-run",
+                "feature/d-conflicted-before-run",
+            )
+            selected = _select(repository, confirmed)
+
+            preparation = selected["workspacePreparation"]
+            self.assertEqual(
+                selected["nextAction"],
+                "RESOLVE_CONFLICTS_OR_KEEP_CHANGES_AND_WAIT",
+            )
+            self.assertTrue(
+                preparation["projectPreparations"][0]["workingTree"][
+                    "hasUnmergedChanges"
+                ]
+            )
+            handling = preparation["workspaceChangeHandling"]
+            self.assertEqual(handling["action"], "KEEP_CHANGES_AND_WAIT")
+            self.assertEqual(
+                handling["blockedAutomaticAction"],
+                "STASH_AND_RUN",
+            )
+            self.assertEqual(
+                handling["blockedReason"],
+                "UNMERGED_CHANGES",
             )
 
     def test_parallel_and_linked_worktree_inputs_are_removed(self) -> None:
@@ -318,6 +612,26 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                 second_waiting["workspaceStrategy"],
                 "CURRENT_WORKSPACE_SERIAL",
             )
+            self.assertEqual(second_waiting["status"], "QUEUED")
+            self.assertEqual(
+                second_waiting["deliveryQueue"],
+                {
+                    "state": "QUEUED",
+                    "position": 2,
+                    "queueLength": 2,
+                    "ownerRootId": "d-serial-first",
+                    "ownerStatus": "ACTIVE",
+                    "continuation": {
+                        "automatic": True,
+                        "tool": "resume_execution_mode",
+                        "rootId": "d-serial-second",
+                        "confirmationRequired": False,
+                        "trigger": (
+                            "OWNER_TERMINAL_COMMIT_CLEAN_AND_RELEASED"
+                        ),
+                    },
+                },
+            )
             self.assertFalse(
                 second_waiting["automaticDispatchRequested"]
             )
@@ -360,13 +674,40 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                 missing.exception.code,
                 "SCHEDULER_RUN_MISSING",
             )
+            queued_status = call_tool(
+                "workspace_status",
+                {"root_id": "d-serial-second"},
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="codex",
+            )
+            self.assertEqual(queued_status["status"], "QUEUED")
+            self.assertEqual(
+                queued_status["deliveryQueue"]["position"],
+                2,
+            )
+            self.assertIn(
+                "排队中（等待自动调度）",
+                (
+                    repository
+                    / ".layered-delivery"
+                    / "d-serial-second"
+                    / "overview.md"
+                ).read_text(encoding="utf-8"),
+            )
+            self.assertIn(
+                "排队中（等待自动调度）",
+                (
+                    repository / ".layered-delivery" / "overview.md"
+                ).read_text(encoding="utf-8"),
+            )
 
             implementation = repository / "serial-first.txt"
             implementation.write_text(
                 "uncommitted implementation\n",
                 encoding="utf-8",
             )
-            dirty_waiting = _select(repository, second)
+            dirty_waiting = _resume(repository, second)
 
             self.assertTrue(
                 _is_waiting_for_workspace_turn(dirty_waiting),
@@ -374,6 +715,10 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
             )
             self.assertFalse(
                 dirty_waiting["automaticDispatchRequested"]
+            )
+            self.assertNotIn(
+                "STASH_AND_RUN",
+                str(dirty_waiting),
             )
             self.assertTrue(
                 git_command(
@@ -422,7 +767,7 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                 ),
                 "uncommitted implementation",
             )
-            committed_but_active = _select(repository, second)
+            committed_but_active = _resume(repository, second)
 
             self.assertTrue(
                 _is_waiting_for_workspace_turn(committed_but_active),
@@ -451,7 +796,7 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
             )
             self.assertEqual(cancelled["status"], "CANCELLED")
 
-            branch_preparation = _select(repository, second)
+            branch_preparation = _resume(repository, second)
 
             self.assertFalse(
                 _is_waiting_for_workspace_turn(branch_preparation),
@@ -471,7 +816,7 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                 second_branch,
                 "main",
             )
-            second_active = _select(repository, second)
+            second_active = _resume(repository, second)
 
             self.assertEqual(second_active["status"], "ACTIVE")
             self.assertEqual(

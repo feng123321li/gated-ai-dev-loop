@@ -5,7 +5,7 @@ from typing import Any
 
 EXECUTION_CHOICE_MARKDOWN = """请选择开发方式（默认：自动执行）：
 
-1. 自动执行（默认）：复用当前 workspace 串行执行；前一 Delivery 有可验证提交、工作树和索引干净、HEAD 未漂移且接收方已安全释放后，才切换到下一分支并调度。
+1. 自动执行（默认）：复用当前 workspace 串行执行；选择自动执行后若已有 Delivery 调度运行，本 Delivery 标记为排队。轮到队首后，宿主按精确工作树指纹自动 stash 既有业务改动（排除 `.layered-delivery/**`），创建或切换独立 Delivery 分支并继续调度；前一 Delivery 仍须先有可验证提交、工作树和索引干净、HEAD 未漂移且接收方已安全释放。
 2. 手动开发：生成 handoff；接收 CLI 启动同一 Graph，手动完成 TASK，后续审查与自动执行一致。
 
 也可直接输入修改意见，继续需求沟通。
@@ -84,9 +84,11 @@ def execution_choice_contract(
                 "id": "AUTOMATIC",
                 "label": "自动执行（当前 workspace 串行）",
                 "description": (
-                    "复用当前 workspace 串行执行；前一 Delivery 有可验证"
-                    "提交、工作树和索引干净、HEAD 未漂移且接收方已安全"
-                    "释放后，才调度下一项。"
+                    "复用当前 workspace 串行执行；选择后若已有调度运行，"
+                    "本 Delivery 标记排队。轮到队首后由宿主自动 stash 既有"
+                    "业务改动、创建或切换独立 Delivery 分支并继续调度。"
+                    "前一 Delivery 仍须先满足可验证提交、clean、HEAD 与"
+                    "receiver 释放边界。"
                 ),
                 "recommended": True,
                 "requiresAdditionalConfirmation": False,
@@ -95,6 +97,9 @@ def execution_choice_contract(
                 ),
                 "workspaceContinuation": (
                     "RESUME_EXECUTION_MODE_WITHOUT_CONFIRMATION"
+                ),
+                "workspacePreparationAuthorization": (
+                    "STASH_CREATE_OR_SWITCH_BRANCH_WITHOUT_RECONFIRMATION"
                 ),
                 "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
             },
@@ -173,9 +178,10 @@ def development_baseline_contract(
 
     Sits before ``EXECUTION_MODE``: in a Git workspace with no remembered
     baseline the host presents this selector over local feature branches plus
-    new-from-mainline and, when eligible, new-stacked-child options. A dirty
-    dirty workspace additionally requires exact
-    state-fingerprint attribution. The host applies the choice via
+    new-from-mainline and, when eligible, new-stacked-child options. Adopting
+    the current dirty branch requires exact state-fingerprint attribution;
+    choosing a different Delivery branch defers the dirty workspace to the
+    explicit stash-or-wait execution preparation. The host applies the choice via
     ``confirm_development_baseline``. The presentation machinery mirrors
     ``execution_choice_contract`` verbatim so the same native question tool is
     used.
@@ -312,6 +318,12 @@ def development_baseline_contract(
         result["workingTree"] = working_tree
         if not working_tree.get("clean", False):
             result["dirtyStateConfirmationRequired"] = True
+            result["dirtyStateConfirmationScope"] = (
+                "CURRENT_BRANCH_ADOPTION_ONLY"
+            )
+            result["branchTransitionDirtyHandling"] = (
+                "AUTOMATIC_STASH_OR_KEEP_WAIT_AT_QUEUE_HEAD"
+            )
             result["dirtyStateFingerprint"] = working_tree.get(
                 "stateFingerprint"
             )

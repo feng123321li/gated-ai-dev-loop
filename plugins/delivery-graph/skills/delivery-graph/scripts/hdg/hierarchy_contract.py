@@ -782,10 +782,14 @@ def hierarchy_contract(
                     "reconstruct, rewrite, or add options. Selecting "
                     "AUTOMATIC is recorded once and fixes execution to "
                     "CURRENT_WORKSPACE_SERIAL. One actual workspace runs one "
-                    "Delivery turn at a time. A later Delivery waits for a "
+                    "Delivery turn at a time. A later Delivery with a "
+                    "recorded AUTOMATIC selection is marked QUEUED with an "
+                    "automatic continuation and waits for a "
                     "verifiable commit, a clean work tree and index, unchanged "
                     "frozen HEAD binding, and safe release of every receiver. "
-                    "Only then may the host prepare the exact branch and call "
+                    "Only then does the host mechanically stash pre-existing "
+                    "business changes when needed, create or switch the exact "
+                    "Delivery branch, and call "
                     "resume_execution_mode for the retained root ID, without "
                     "another user confirmation. No additional checkout or "
                     "workspace task is created."
@@ -856,6 +860,10 @@ def hierarchy_contract(
                 },
                 "taskBranchPolicy": "SHARED_DELIVERY_FEATURE_BRANCH",
                 "taskBranchBindingsSupported": False,
+                "workspacePreparationAuthorization": (
+                    "AUTOMATIC_MODE_STASH_CREATE_OR_SWITCH_WITHOUT_"
+                    "RECONFIRMATION"
+                ),
                 "taskCommitPolicy": (
                     "TASK_SCOPED_COMMITS_ON_DELIVERY_BRANCH"
                 ),

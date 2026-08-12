@@ -896,9 +896,11 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(
             [item["description"] for item in choice["options"]],
             [
-                "复用当前 workspace 串行执行；前一 Delivery 有可验证"
-                "提交、工作树和索引干净、HEAD 未漂移且接收方已安全"
-                "释放后，才调度下一项。",
+                "复用当前 workspace 串行执行；选择后若已有调度运行，"
+                "本 Delivery 标记排队。轮到队首后由宿主自动 stash 既有"
+                "业务改动、创建或切换独立 Delivery 分支并继续调度。"
+                "前一 Delivery 仍须先满足可验证提交、clean、HEAD 与"
+                "receiver 释放边界。",
                 "生成 handoff；接收 CLI 启动同一 Graph，手动完成 TASK，"
                 "后续审查与自动执行一致。",
             ],

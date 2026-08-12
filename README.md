@@ -64,9 +64,9 @@ Delivery
 | 自动执行 | `select_execution_mode` 立即持久化选择；若需准备当前分支，宿主完成动作后调用 `resume_execution_mode`，再派遣独立的宿主原生 receiver 消费 Graph frontier |
 | 手动开发 | 先生成自包含 handoff；接收宿主在选定工作区启动同一 Graph，由经 Adapter 认证的独立原生 receiver 人工完成 TASK，随后仍进入相同的自动 Review Graph |
 
-执行模式与工作区绑定是两个维度，但工作区执行策略只有 `CURRENT_WORKSPACE_SERIAL`。同一物理 checkout 可以管理多个 Delivery 的控制状态，但同一时刻只运行其中一个；每个 Delivery 使用独立分支。切换前，前一个 Delivery 必须已经形成可验证 commit，working tree 与 index 必须 clean，HEAD 必须仍匹配其冻结 binding，且所有 receiver 已安全释放。后启动或后发现的 Delivery 等待；出现资源冲突、dirty 或 HEAD 漂移时停止切换，不提供同一 checkout 内的并行文件隔离。`AUTOMATIC` 选择只提交一次；返回 `PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION` 时，分支准备完成后以明确 `rootId` 与双 fingerprint 调用 `resume_execution_mode`，不得重试选择。
+执行模式与工作区绑定是两个维度，但工作区执行策略只有 `CURRENT_WORKSPACE_SERIAL`。同一物理 checkout 可以管理多个 Delivery 的控制状态，但同一时刻只运行其中一个；每个 Delivery 使用独立分支。已有 Delivery 正在调度时，只有后来选择 `AUTOMATIC` 的 Delivery 才持久进入 `QUEUED`，并在根概览和 Delivery 概览显示“排队中（等待自动调度）”。前一个 Delivery 形成可验证 commit、working tree/index clean、HEAD 仍匹配冻结 binding 且所有 receiver 安全释放后，队首按已记录的自动选择续调，不再次询问执行模式。手动交接也会持久化 Delivery、Revision、hierarchy、双 fingerprint 和完整投影，但保持 `HANDOFF_READY`，不会进入自动队列；接收方显式调用 `start_manual_handoff` 后才创建 manual Graph Run 和 workspace binding。
 
-Controller 只读 Git，不创建 worktree，也不执行分支切换。宿主只在上述安全释放边界按冻结 `gitBinding` 创建或切换当前分支；如果当前目录本身是既有 linked checkout，也只把它视为普通 current workspace，不自动创建新的 worktree。多项目 Delivery 的全部 `READ_WRITE` Git scope 必须一起满足 commit、clean、HEAD 与释放条件后才可切换。
+Controller 只读 Git，不创建 worktree，也不执行 stash 或分支切换。`AUTOMATIC` 选择会授权宿主执行机械 workspace 准备：队首若有既存业务改动，先按 Controller 返回的精确指纹 stash 已跟踪、暂存和未跟踪内容（明确排除 `.layered-delivery/**`），再按冻结 `gitBinding` 创建或切换 Delivery 分支并调用 `resume_execution_mode`；冲突状态或 stash 后仍不干净则等待。若当前目录本身是既有 linked checkout，也只把它视为普通 current workspace，不自动创建新的 worktree。多项目 Delivery 的全部 `READ_WRITE` Git scope 必须一起满足边界后才可切换。
 
 ## 交互与 Git 基线
 
@@ -79,7 +79,7 @@ Controller 只读 Git，不创建 worktree，也不执行分支切换。宿主�
 
 - Controller 只读检查 Git；不执行 `fetch`、`switch`、`commit`、`merge`、`push` 或发布。
 - 分支选择只枚举本地分支。选择“从主线创建”时会把基线提交固定为当时的主线 HEAD；当前 workspace 位于干净 feature 时还会默认推荐 stacked 子分支，把父 feature HEAD 冻结为基线并最终合回父分支。宿主仍须等父 Delivery 达到串行安全释放边界后，才创建或切换到子分支。
-- 工作树已有业务改动时，用户必须确认这些改动属于本 Delivery，并回传精确状态指纹。
+- 只有直接 adoption 当前脏分支时，用户才必须确认全部改动属于本 Delivery 并回传精确状态指纹；选择另一个 Delivery 分支时不归属这些改动，而是在该 Delivery 成为队首后走自动 stash 准备。
 - 手动 handoff 启动前若 Git 基线漂移，启动会先被阻断；重新确认后恢复原 Revision，或在 binding 变化时生成下一不可变 Revision。
 - 一个 Delivery 可以覆盖多个本地 Git 项目，但每个 Git project scope 都必须提供完整 binding；缺失时提前 fail closed，不从顶层偏好猜测其他仓库。
 - 普通单仓 Delivery 可以只冻结顶层 `delivery.gitBinding`；运行时会从该 binding 与实际 Delivery workspace 合成并验证唯一 `primary` scope，receiver 不会取得空的 `projectScopes`。
@@ -89,7 +89,7 @@ Controller 只读 Git，不创建 worktree，也不执行分支切换。宿主�
 ## 状态与恢复
 
 `.layered-delivery/scheduler.db` 是需求和调度状态的机器权威，Markdown 文件只是人类可读投影。不要直接编辑数据库或控制面生成物。
-一个实际 workspace 可以绑定多个未结束 Delivery；每个 Graph、Revision、run 与验收仍按 `rootId` 隔离。无参 `workspace_status` 遇到多个未结束绑定时返回 `DELIVERY_SELECTION_REQUIRED`，调用方必须用当前会话保存的 `rootId` 显式重查，不能按更新时间猜选。未绑定的 `CHOICE_READY/HANDOFF_READY` 也只允许显式 `rootId` 恢复。控制状态隔离不等于文件隔离：同一物理 checkout 只能按 `CURRENT_WORKSPACE_SERIAL` 依次运行各 Delivery。
+一个实际 workspace 可以绑定多个未结束 Delivery；每个 Graph、Revision、run 与验收仍按 `rootId` 隔离。无参 `workspace_status` 遇到多个未结束绑定时返回 `DELIVERY_SELECTION_REQUIRED`，候选中的非队首自动 Delivery 标记为 `QUEUED`；调用方必须用当前会话保存的 `rootId` 显式重查，不能按更新时间猜选。未绑定的 `CHOICE_READY/HANDOFF_READY` 也只允许显式 `rootId` 恢复。控制状态隔离不等于文件隔离：同一物理 checkout 只能按 `CURRENT_WORKSPACE_SERIAL` 依次运行各 Delivery。
 
 TASK receiver 调用 `record_loop_result` 时，Controller 会从已验证的可写 Git scope 自动采集相对冻结 `baseCommit` 的当前 workspace 变更文件和有界 diff，并写入该 `rootId` 的 TASK 验收报告。它覆盖已提交、暂存、未暂存和未跟踪文本内容，因此验收可见性不依赖先 commit；该证据是提交时刻的 workspace 快照，不替代可验证 commit、clean tree 或归属判断。TASK 控制目录还会生成由 `acceptance.md` 相对链接的 `workspace-changes.patch`，用户可在主控制根直接审核；附件由 SQLite outcome 重建，不依赖原执行目录继续存在。
 

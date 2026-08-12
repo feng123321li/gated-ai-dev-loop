@@ -560,7 +560,12 @@ class DeliveryExecutionSetupStore:
         return {
             "selection": "AUTOMATIC",
             "state": (
-                workspace_turn["state"]
+                (
+                    "QUEUED"
+                    if workspace_turn["state"]
+                    == "WAITING_FOR_WORKSPACE_TURN"
+                    else workspace_turn["state"]
+                )
                 if workspace_turn is not None
                 else "RECORDED_PENDING_WORKSPACE"
             ),
@@ -588,13 +593,41 @@ class DeliveryExecutionSetupStore:
                 "AND h.revision = d.revision WHERE d.root_id = ?",
                 (root_id,),
             ).fetchone()
+            workspace_turn = None
+            if (
+                row is not None
+                and row["execution_mode"] == "automatic_pending"
+            ):
+                binding = connection.execute(
+                    "SELECT workspace_key FROM delivery_workspaces "
+                    "WHERE root_id = ?",
+                    (root_id,),
+                ).fetchone()
+                if binding is not None:
+                    workspace_turn = (
+                        self._serial_workspace_turn_state_from_connection(
+                            connection,
+                            workspace_key=binding["workspace_key"],
+                            requested_root_id=root_id,
+                        )
+                    )
         if row is None or row["execution_mode"] != "automatic_pending":
             return None
         authorized = json.loads(row["authorized_project_ids_json"] or "[]")
         return {
             "selection": "AUTOMATIC",
-            "state": "RECORDED_PENDING_WORKSPACE_TURN",
+            "state": (
+                "QUEUED"
+                if workspace_turn is not None
+                and workspace_turn["state"] == "WAITING_FOR_WORKSPACE_TURN"
+                else "RECORDED_PENDING_WORKSPACE_TURN"
+            ),
             "confirmationRequired": False,
             "confirmedBy": row["confirmed_by"],
             "authorizedProjectIds": authorized,
+            **(
+                {"workspaceTurn": workspace_turn}
+                if workspace_turn is not None
+                else {}
+            ),
         }

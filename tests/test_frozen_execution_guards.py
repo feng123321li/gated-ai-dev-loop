@@ -307,7 +307,8 @@ class FrozenExecutionGuardTests(unittest.TestCase):
                 workspace_root=str(workspace),
             )
 
-            self.assertEqual(result["status"], "WAITING_FOR_WORKSPACE_TURN")
+            self.assertEqual(result["status"], "QUEUED")
+            self.assertEqual(result["deliveryQueue"]["state"], "QUEUED")
             self.assertFalse(result["automaticDispatchRequested"])
             self.assertEqual(
                 result["workspaceTurn"]["ownerRootId"],
@@ -335,12 +336,26 @@ class FrozenExecutionGuardTests(unittest.TestCase):
                 manual_branch,
             )
             handoff = _select_manual(repository, manual)
+            self.assertEqual(handoff["status"], "HANDOFF_READY")
+            self.assertNotIn("deliveryQueue", handoff)
 
             active_wait = _start_manual(repository, handoff)
             self.assertEqual(
                 active_wait["status"],
                 "WAITING_FOR_WORKSPACE_TURN",
             )
+            self.assertNotIn("deliveryQueue", active_wait)
+            manual_overview = (
+                repository
+                / ".layered-delivery"
+                / "d-manual-successor"
+                / "overview.md"
+            ).read_text(encoding="utf-8")
+            self.assertIn(
+                "需求已冻结（手动开发，调度未启动）",
+                manual_overview,
+            )
+            self.assertNotIn("排队中（等待自动调度）", manual_overview)
             self.assertEqual(
                 active_wait["workspaceTurn"]["ownerRootId"],
                 first["rootId"],

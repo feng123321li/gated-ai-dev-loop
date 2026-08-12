@@ -282,6 +282,12 @@ def _working_tree_state(workspace: Path) -> dict[str, Any]:
         *_DELIVERY_PATHSPEC,
     ).stdout
     changes = porcelain.splitlines() if porcelain else []
+    status_pairs = {
+        line[:2]
+        for line in changes
+        if len(line) >= 2
+    }
+    unmerged_pairs = {"DD", "AU", "UD", "UA", "DU", "AA", "UU"}
     changed_paths: set[str] = set()
     for arguments in (
         (
@@ -338,7 +344,7 @@ def _working_tree_state(workspace: Path) -> dict[str, Any]:
                 "indexState": index_state,
             }
         )
-    return {
+    result = {
         "clean": not changes,
         "changeCount": len(changes),
         "stateFingerprint": fingerprint(
@@ -348,6 +354,20 @@ def _working_tree_state(workspace: Path) -> dict[str, Any]:
             }
         ),
     }
+    if changes:
+        result.update(
+            {
+                "hasStagedChanges": any(
+                    pair[0] not in {" ", "?"}
+                    for pair in status_pairs
+                ),
+                "hasUntrackedChanges": "??" in status_pairs,
+                "hasUnmergedChanges": bool(
+                    status_pairs & unmerged_pairs
+                ),
+            }
+        )
+    return result
 
 
 def _evidence_scope_paths(value: object) -> list[str] | None:

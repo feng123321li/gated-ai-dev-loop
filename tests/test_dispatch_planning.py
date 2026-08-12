@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timedelta
 from tempfile import TemporaryDirectory
 import unittest
 
 from hdg.dispatch_planning import plan_dispatch_batch
 from hdg.errors import GatedLoopError
+from hdg.graph_frontier import get_graph_frontier
 from hdg.graph_runtime import (
     dispatch_loop,
     graph_status,
@@ -69,6 +71,24 @@ class HostDispatchPlanningTests(unittest.TestCase):
             r"^[0-9a-f-]{36}$",
         )
         self.assertEqual(plan["nextAction"], "CREATE_INDEPENDENT_RECEIVERS")
+        self.assertEqual(
+            plan["postActionWait"],
+            {
+                "mode": "HOST_NATIVE_EVENT_OR_RESERVATION_DEADLINE",
+                "interruptOn": [
+                    "NATIVE_RECEIVER_CLAIMED",
+                    "NATIVE_RECEIVER_COMPLETED",
+                    "NATIVE_RECEIVER_NEEDS_ATTENTION",
+                    "NATIVE_RECEIVER_START_FAILED",
+                ],
+                "onInterrupt": "CALL_GRAPH_FRONTIER_ONCE",
+                "deadline": plan["assignments"][0][
+                    "reservationExpiresAt"
+                ],
+                "onDeadline": "CALL_GRAPH_FRONTIER_ONCE",
+                "doNotPollBackToBack": True,
+            },
+        )
         self.assertTrue(
             plan["assignments"][0]["independence"]["required"]
         )
@@ -162,6 +182,200 @@ class HostDispatchPlanningTests(unittest.TestCase):
             second["deferred"][0]["code"],
             "DISPATCH_ALREADY_RESERVED",
         )
+
+    def test_reserved_receiver_waits_for_event_or_reservation_deadline(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            assignment = self.plan(root, prepared)["assignments"][0]
+            frontier = get_graph_frontier(
+                root=root,
+                root_id=prepared["rootId"],
+            )
+
+        self.assertIn(
+            "WAIT_FOR_DISPATCH_RECEIVER",
+            {action["action"] for action in frontier["actions"]},
+        )
+        self.assertEqual(
+            frontier["nextWakeAt"],
+            assignment["reservationExpiresAt"],
+        )
+        directive = frontier["progressMonitor"]["waitDirective"]
+        self.assertEqual(
+            directive["mode"],
+            "HOST_NATIVE_EVENT_OR_DEADLINE",
+        )
+        self.assertEqual(directive["pollTool"], "graph_frontier")
+        self.assertEqual(
+            directive["pollNotBefore"],
+            assignment["reservationExpiresAt"],
+        )
+        self.assertEqual(
+            directive["onTimeout"],
+            "CALL_GRAPH_FRONTIER_ONCE",
+        )
+        self.assertEqual(
+            directive["nextWakeAt"],
+            assignment["reservationExpiresAt"],
+        )
+        self.assertFalse(directive["consumeActionsBeforeWaiting"])
+
+    def test_reservation_expires_at_the_exact_deadline(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            assignment = self.plan(root, prepared)["assignments"][0]
+            expiry = datetime.fromisoformat(
+                assignment["reservationExpiresAt"].replace("Z", "+00:00")
+            )
+            with self.assertRaises(GatedLoopError) as caught:
+                dispatch_loop(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    node_id=assignment["nodeId"],
+                    owner="receiver-at-deadline",
+                    receiver_context_id="receiver-at-deadline",
+                    operation_id="operation-at-deadline",
+                    agent_id="codex",
+                    dispatch_mode="AUTO",
+                    dispatch_transport=assignment["dispatchTransport"],
+                    dispatch_reservation_id=assignment[
+                        "dispatchReservationId"
+                    ],
+                    dispatch_decision_fingerprint=assignment[
+                        "decisionFingerprint"
+                    ],
+                    host_adapter_id="codex",
+                    host_native_agent_ids=("codex",),
+                    now=expiry,
+                )
+            frontier = get_graph_frontier(
+                root=root,
+                root_id=prepared["rootId"],
+                now=expiry,
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_DISPATCH_RESERVATION_EXPIRED",
+        )
+        self.assertNotIn(
+            "WAIT_FOR_DISPATCH_RECEIVER",
+            {action["action"] for action in frontier["actions"]},
+        )
+        self.assertIn(
+            "DISPATCH_LOOP",
+            {action["action"] for action in frontier["actions"]},
+        )
+
+    def test_claimed_reservation_expiry_does_not_remain_as_wake_deadline(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            assignment = self.plan(root, prepared)["assignments"][0]
+            reservation_expiry = datetime.fromisoformat(
+                assignment["reservationExpiresAt"].replace("Z", "+00:00")
+            )
+            claimed = dispatch_loop(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=assignment["nodeId"],
+                owner="receiver-before-deadline",
+                receiver_context_id="receiver-before-deadline",
+                operation_id="operation-before-deadline",
+                agent_id="codex",
+                dispatch_mode="AUTO",
+                dispatch_transport=assignment["dispatchTransport"],
+                dispatch_reservation_id=assignment[
+                    "dispatchReservationId"
+                ],
+                dispatch_decision_fingerprint=assignment[
+                    "decisionFingerprint"
+                ],
+                host_adapter_id="codex",
+                host_native_agent_ids=("codex",),
+                now=reservation_expiry - timedelta(seconds=1),
+            )
+            after_reservation_expiry = reservation_expiry + timedelta(
+                seconds=1
+            )
+            repository = SchedulerRepository(root)
+            with repository.read() as connection:
+                reservations = repository.active_dispatch_reservations(
+                    connection,
+                    at=after_reservation_expiry.isoformat().replace(
+                        "+00:00",
+                        "Z",
+                    ),
+                )
+            frontier = get_graph_frontier(
+                root=root,
+                root_id=prepared["rootId"],
+                now=after_reservation_expiry,
+            )
+
+        self.assertEqual(reservations[0]["reservationStatus"], "CLAIMED")
+        self.assertEqual(frontier["nextWakeAt"], claimed["leaseExpiresAt"])
+        self.assertNotEqual(
+            frontier["nextWakeAt"],
+            assignment["reservationExpiresAt"],
+        )
+        self.assertNotIn(
+            "WAIT_FOR_DISPATCH_RECEIVER",
+            {action["action"] for action in frontier["actions"]},
+        )
+        self.assertEqual(
+            frontier["progressMonitor"]["waitDirective"]["nextWakeAt"],
+            claimed["leaseExpiresAt"],
+        )
+
+    def test_reservation_queries_compare_mixed_iso_precision_by_time(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            assignment = self.plan(root, prepared)["assignments"][0]
+            repository = SchedulerRepository(root)
+            at_whole_second = "2030-01-01T00:00:00Z"
+            expires_fractionally_later = "2030-01-01T00:00:00.100000Z"
+            with repository.transaction() as connection:
+                connection.execute(
+                    "UPDATE dispatch_reservations SET expires_at = ? "
+                    "WHERE reservation_id = ?",
+                    (
+                        expires_fractionally_later,
+                        assignment["dispatchReservationId"],
+                    ),
+                )
+            with repository.transaction() as connection:
+                active = repository.active_dispatch_reservations(
+                    connection,
+                    at=at_whole_second,
+                )
+                repository.expire_dispatch_reservations(
+                    connection,
+                    at=at_whole_second,
+                )
+                status_before_expiry = connection.execute(
+                    "SELECT status FROM dispatch_reservations "
+                    "WHERE reservation_id = ?",
+                    (assignment["dispatchReservationId"],),
+                ).fetchone()["status"]
+                repository.expire_dispatch_reservations(
+                    connection,
+                    at=expires_fractionally_later,
+                )
+                status_at_expiry = connection.execute(
+                    "SELECT status FROM dispatch_reservations "
+                    "WHERE reservation_id = ?",
+                    (assignment["dispatchReservationId"],),
+                ).fetchone()["status"]
+
+        self.assertEqual(len(active), 1)
+        self.assertEqual(status_before_expiry, "RESERVED")
+        self.assertEqual(status_at_expiry, "EXPIRED")
 
     def test_global_concurrency_limit_is_reserved_atomically(self) -> None:
         with TemporaryDirectory() as root:

@@ -115,15 +115,16 @@ allowed-tools:
 
 ## 执行 Graph
 
-持续调用 `graph_frontier` 并完整消费当前批次 action；精确 claim、reservation、heartbeat、资源锁和接收协议见[执行说明](references/execution-quickstart.md)。
+首次进入、receiver 完成/需要关注、`nextWakeAt` 到达或返回 `ADVANCE_REQUIRED` 时调用一次 `graph_frontier`，并先完整消费当前批次的立即 action。存在后台 receiver 或 dispatch reservation 时，随后严格执行 `progressMonitor.waitDirective`：优先使用宿主原生 receiver 等待；无事件只在 `pollNotBefore` 调用一次只读 `graph_status`。该截止已对齐下一个有意义健康阈值，不得自行缩短为固定短周期。禁止 back-to-back 调用 `graph_frontier` 或 `graph_status`；`changeFingerprint` 未变化时不重复播报进度。精确 claim、reservation、heartbeat、资源锁和接收协议见[执行说明](references/execution-quickstart.md)。
 
 - `REFREEZE_TASK_REQUIREMENT`：停止派遣该 TASK，只修改用户授权的需求字段，重新冻结后刷新 frontier。
 - `CLAIM_MANUAL_TASK`：为手动 Graph，或已由 `handoff_ready_automatic_task` 显式恢复的单个自动 TASK，创建独立人工 receiver；只有 TASK 可 MANUAL claim，后续 Review 仍走 AUTOMATIC reservation 派遣。MANUAL 不带 AUTO reservation，但必须提交独立 receiver context 与新 `operation_id`，并通过 Adapter、workspace、Graph 和项目 scope 校验。
-- `DISPATCH_LOOP`：对每个 READY TASK 或 Review 调用一次 `plan_dispatch_batch`，完整消费 `concurrentDispatchGroups`，并立即创建独立 receiver；不要在 reservation 后继续分析。receiver 用 assignment 的 reservation、decision fingerprint、自己的 context 和新 `operation_id` 调用 `dispatch_loop(AUTO)`。同一 reservation 与 operation 的响应丢失重试必须返回已提交 assignment，不能重复领取。
+- `DISPATCH_LOOP`：对每个 READY TASK 或 Review 调用一次 `plan_dispatch_batch`，完整消费 `concurrentDispatchGroups`，并立即创建独立 receiver；不要在 reservation 后继续分析。receiver 用 assignment 的 reservation、decision fingerprint、自己的 context 和新 `operation_id` 调用 `dispatch_loop(AUTO)`。全部 assignment 消费后严格执行返回的 `postActionWait`：优先等待 receiver 原生事件，最迟到最早 reservation 截止时间再调用一次 `graph_frontier`；禁止忙轮询。同一 reservation 与 operation 的响应丢失重试必须返回已提交 assignment，不能重复领取。
 - AUTO receiver 启动或 claim 失败时不得由总协调器直接领取。刷新 frontier；仍有效的 reservation 只按原参数重试，已过期的 reservation 重新规划。仍需人工接管时，确认 TASK 从未领取、无有效 reservation、Delivery workspace 干净且无代码改动，再取得用户明确授权调用 `handoff_ready_automatic_task`；它只把当前 READY TASK 改为人工接收，Review 不降级。
 - claim 成功后，独立 receiver 读取一次 `loop_context`，确认至少一个已验证的 `projectScopes`，并在任何代码工作前用精确 `operation_id` 提交首次 `heartbeat_loop`。后续 heartbeat、progress、pause 与 result 都显式携带同一 operation。
 - 只让外层 receiver 持有 reservation 和 `operation_id` 并调用 claim、heartbeat、progress、pause、resume 和 `record_loop_result`。内部 Worker 不得持有控制面凭据。
 - 让 receiver 使用已验证的 `projectScopes`，按租约 heartbeat，并在关键阶段报告 progress；progress 不续租。
+- TASK 先从实际改动、依赖和契约界定 `result.affectedScopes`；其中 `paths` 使用字面量仓库相对路径并覆盖相关依赖/契约锚点。只运行覆盖该范围的测试、构建或契约检查，并在 `result.verificationEvidence` 记录命令摘要、scope 和结果；Controller 在终态记录可信 `evidenceWorkspaceSnapshots` 与逐相关路径的 `evidenceScopeSnapshots`。Review 的独立性是独立判断，不是机械重跑全量：只自动复用 `validationEvidenceIndex` 中 `PASSED + EXACT_MATCH` 的证据；无关文件变化不使有界 scope 失效，再对缺口、相关路径 `CHANGED/UNBOUND`、findings 和高风险边界定向复跑。影响范围无法界定等明确风险才升级全量。
 - 跨 Delivery 出现相同 `resourceClaims` 或物理工作区冲突时，让后启动或后发现者等待。只有前一个 Delivery 已形成可验证 commit、工作树 clean、HEAD 未漂移且 receiver 安全释放后才能切换；任一条件不满足就停止切换。资源无交集也不能绕过 `CURRENT_WORKSPACE_SERIAL` 的单 checkout 串行边界。
 - 数据库 TASK 只应用和验证冻结 `databaseChanges[*].after`，不得在 Loop 内另行设计字段、索引、约束或迁移策略；任何必要偏离都提交 `REPLAN_REQUIRED`。
 - 只提交真实业务终态。实际范围或风险超出冻结契约时提交 `REPLAN_REQUIRED`，不要硬完成。

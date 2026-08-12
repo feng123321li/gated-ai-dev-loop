@@ -4,12 +4,12 @@
 
 ## Frontier
 
-调用 `graph_frontier` 并执行全部 action：
+首次进入、原生 receiver 完成/需要关注、`nextWakeAt` 到达或返回 `ADVANCE_REQUIRED` 时调用一次 `graph_frontier`，并执行全部 action：
 
-- 每次响应同时读取 `progressMonitor`。后台 Agent 运行期间严格按 `recommendedPollSeconds`（当前为 10 秒）继续刷新，不得把 90 秒首次心跳告警阈值当作 sleep 或轮询间隔；宿主收到原生 child 完成通知时立即中断等待并刷新 frontier。仅在进度表或预警变化时，把 `markdownTable` 原样作为中文表格展示到主 Agent 窗口。`graph_events` 是诊断接口，不把原始事件、operation 或 reservation 日志直接展示给普通用户。
+- 每次响应同时读取 `progressMonitor.waitDirective`。先完整消费 `immediateActions`，再使用宿主原生 receiver 等待能力（Codex 等价 `wait_agent`/`wait_threads`，Claude 等价 Agent completion wait）等待完成或需要关注事件；事件发生立即调用一次 `graph_frontier`。无事件时最早到 `pollNotBefore` 才调用一次只读 `graph_status`；该截止由 Controller 对齐首次心跳、进度陈旧、失联或租约等下一个有意义健康阈值，宿主不得自行改成 10 秒等固定短周期。只有 `nextWakeAt` 或 `ADVANCE_REQUIRED` 才再次调用 `graph_frontier`。禁止 back-to-back 调用这两个工具。仅在 `changeFingerprint` 变化或新告警需要关注时，把 `markdownTable` 原样作为中文表格展示到主 Agent 窗口。`graph_events` 是诊断接口，不把原始事件、operation 或 reservation 日志直接展示给普通用户。
 
 - `CLAIM_MANUAL_TASK`：只对应 `TASK_LOOP`，来源是 `start_manual_handoff` 已启动的 manual Graph，或指定自动 TASK 的显式人工接管。总协调上下文不得实现或 claim；宿主创建独立原生 child，child 以新的显式 `operation_id` 和 receiving context 调用 `dispatch_loop(MANUAL)`，不带 AUTO reservation/decision。claim 后立即独立 heartbeat，再进入完整 TASK Loop。
-- `DISPATCH_LOOP`：所有 READY `TASK_LOOP` 与 Review 都由当前宿主调用一次 `plan_dispatch_batch`；Controller 按当前 frontier、容量和资源锁创建绑定 decision fingerprint 的短租约 reservation。宿主按 `concurrentDispatchGroups` 立即创建独立 child，每个 child 以 `dispatch_transport=HOST_NATIVE`、assignment 和新的显式 `operation_id` 调用 `dispatch_loop(AUTO)`，固定 `modelPolicy=CURRENT_HOST_INHERIT`。
+- `DISPATCH_LOOP`：所有 READY `TASK_LOOP` 与 Review 都由当前宿主调用一次 `plan_dispatch_batch`；Controller 按当前 frontier、容量和资源锁创建绑定 decision fingerprint 的短租约 reservation。宿主按 `concurrentDispatchGroups` 立即创建独立 child，每个 child 以 `dispatch_transport=HOST_NATIVE`、assignment 和新的显式 `operation_id` 调用 `dispatch_loop(AUTO)`，固定 `modelPolicy=CURRENT_HOST_INHERIT`。完整消费所有 assignment 后执行响应的 `postActionWait`：receiver 完成、需要关注或启动失败时立即刷新一次 frontier；无事件则等到最早 reservation 截止时间只刷新一次，禁止连续轮询。
 - `WAIT_FOR_DISPATCH_RECEIVER`：另一个调度器已为该 Ready Loop 取得短租约派遣预留；不得重复创建 Agent，等待接收方 claim 或预留过期。
 - `CONTINUE_OR_HEARTBEAT_LOOP`：继续当前 Loop，并在租约到期前 heartbeat。
 - `RESUME_LOOP_IN_INDEPENDENT_CONTEXT`：把暂停节点路由给新的接收上下文；接收方 resume 后重新读取 frontier 并 dispatch。
@@ -59,15 +59,16 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。`STANDARD` 不得
    - 每个独立 Delivery 都从已确认开发基线取得自己的 feature 分支。默认主线按 `origin/HEAD → main → master` 发现，但用户也可显式选择合法的本地进行中分支；不得未经确认从当前 Delivery feature HEAD 分叉。`CURRENT_WORKSPACE_SERIAL` 依次在当前 checkout 运行这些分支，不创建新 worktree。基线在创建后继续前进不改变已冻结 `baseCommit`；最终集成前由 Delivery 自己解决与集成目标最新状态的差异。
    - 同一 Delivery 可以在 `projectScopes` 中覆盖多个本地仓库，例如主需求位于 `project-api`，同时修改 `project-provider` 与 `project-consumer`。所有 `READ_WRITE` Git 项目使用相同的 `branchRef`，但各自保留独立 `baseCommit`；Loop 只能访问当前 Revision 已授权的项目范围。所有 TASK 共享该 Delivery 在各仓库中的同名分支；TASK Agent 不创建、绑定或切换内部 Git 分支。获得相应 Git 写入授权后，TASK 可按各自 scope 单独执行 `git add` 和 `git commit`，在 Delivery 分支上形成独立 TASK commit；必须使用显式 pathspec 只暂存本 TASK 变更，且同一 workspace 的 Git index/commit 写入不可并发。同一 Delivery 内互不冲突的 TASK 可按 frontier 并行，但同一实际 workspace 的不同 Delivery 不并行；后启动或后发现者等待完整串行释放边界。
 7. 内部 Loop 先识别当前任务与宿主可用 Skill，再优先原生触发适用的 Skill Hint；不要因为 hierarchy 提供了提示，就假定每条提示都适用于当前 Loop。
-8. 让内部 Loop 自己选择其他必要 Skill。payload 是目标、明确约束和已知验收点的输入，不是完整实现规约；Loop 要结合真实代码、契约和数据链路推导当前 scope 的必要条件。冻结 Graph 不冻结内部实现计划。TASK Loop 自主管理实现、文件、测试、Gate 和修正；Review Loop 自主管理独立发现、修正协调、Gate 和复审。
-9. 当前目标内可修复的实现缺陷、测试失败、数据完整性或边界问题都留在当前 Loop：receiver 调整内部计划，按需创建成本合适的 Codex、Claude、Grok、DeepSeek 等 Worker，完成修正后重新验证。内部 Worker 只能向 receiver 返回结果；只有 receiver 能上报进度或终态。Review 必须保留独立复核，不要把“Review 未通过”提交成 `BLOCKED`。
-10. `STANDARD` Loop 在领取、代码检查完成、确认根因、完成修改、测试开始与结束、发现问题、修复、复审和最终验证等有意义的阶段立即调用 `report_loop_progress`。长时间测试或构建必须由 receiver 以非阻塞进程/宿主异步命令启动，或交给独立监控 Worker，使外层 receiver 不被单次 shell/tool call 占满；开始前 progress + heartbeat，运行期间至少每 `heartbeatSeconds` heartbeat，结束后立即 heartbeat + progress。`LIGHT` 只在发现问题和最终验证时上报，执行时间很短且没有问题时可只报最终验证。`summary_zh`、`completed_zh` 与 `next_step_zh` 使用用户当前语言，测试结果使用结构化计数；字段名为现有 schema v3 契约，不代表内容必须包含中文字符。禁止提交原始终端日志或内部推理。进度事件是可观测事实，不是 Graph 状态迁移，也不续租。
-11. 首次独立 heartbeat 之后，长任务继续按租约调用 `heartbeat_loop`。宿主未发出 child 完成通知只表示没有终态通知，既不是 heartbeat，也不能证明 receiver 仍存活；`SUSPECT_LOST` 也只证明控制面心跳和进度都静默，不能自行归因为 Maven 阻塞、上下文错配或进程退出。AUTO 与 MANUAL receiver 对 heartbeat、progress、pause 和 result 都必须显式提交当前 claim 的 `operation_id`；错误或旧 operation 一律拒绝。检测到上下文容量压力且工作仍可继续时，不提交失败结果；在租约有效期内调用普通 `pause_loop`。
-12. 宿主明确报告剩余额度不高于 5% 且提供真实未来 `resetAt` 时，停止启动新 Loop，并在额度耗尽前保存当前工作。已 claim 的执行 Agent 在租约有效期内调用 `pause_loop(resume_at=resetAt, capacity_scope=EXECUTOR)`；总调度宿主受限时使用 `capacity_scope=HOST` 暂停其正在承载的 claimed Loop。两者都释放租约和资源占用、保留同一 attempt；不得估算剩余额度或猜测 `resetAt`。
-13. 软阈值 pause 成功后，使用当前宿主的原生计划能力创建一次性恢复提示。为避免恢复窗口边界抖动，计划时间应晚于 `resetAt` 一小段安全余量。提示只要求原宿主调用 `workspace_status → graph_frontier → loop_context` 并重新 dispatch；额度策略固定 `PAUSE_AND_RESUME`，不自动换 Adapter、模型或 Worker。
-14. 硬 429 不由 Plugin 自动记录。宿主负责保留结构化 `resetAt`、执行自身审批/重试策略并停止继续调用供应商；receiver 仍能调用 MCP 时按第 12 步显式 pause，否则等待 lease 到期后由 `graph_frontier` 回收 attempt。需要恢复提示时由宿主按真实 `resetAt` 创建一次性唤醒，不从渲染文本或模型输出猜测时间。
-15. 普通 `pause_loop` 返回固定 handoff 数据。优先自动派遣新的接收 Agent；没有容量时输出人工交接。接收方使用同一 `rootId/nodeId` 调用 `resume_loop`，重新读取 frontier 和 `loop_context`，再以新 owner/operation dispatch；不重新 prepare/freeze。
-16. 只有真实业务终态才用 `record_loop_result` 提交标准结果。
+8. 让内部 Loop 自己选择其他必要 Skill。payload 是目标、明确约束和已知验收点的输入，不是完整实现规约；Loop 要结合真实代码、契约和数据链路推导当前 scope 的必要条件。冻结 Graph 不冻结内部实现计划。TASK Loop 自主管理实现、文件、测试、Gate 和修正，并从实际 changed files、依赖与契约界定最小充分验证范围；不因进入 TASK 就默认运行全仓测试。`affectedScopes.paths` 使用字面量仓库相对文件或目录，并纳入相关依赖与契约锚点。结果在 `verificationEvidence` 记录有界的 check、kind、命令摘要、scope、状态、测试计数、完成时间和测试时 `testedWorkspaceSnapshots`。
+9. Review Loop 自主管理独立发现、修正协调、Gate 和复审，但独立判断不等于自动全量复测。先审查真实实现和覆盖矩阵；只自动复用 `validationEvidenceIndex` 中已通过、命令可审计、scope 覆盖当前风险且 `freshness=EXACT_MATCH` 的证据。Controller 比较 `evidenceScopeSnapshots` 的声明相关路径，无关文件变化不使该证据失效。TASK Review 默认只补 TASK 缺口，GROUP Review 默认检查直接子项 seam/integration，Delivery Review 默认确保覆盖矩阵与最新 smoke/E2E 证据存在；已有匹配证据不再执行。证据缺失、失败、相关路径 `CHANGED/UNBOUND`、Review 修正只使受影响范围及其依赖证据失效；只有影响范围无法界定、关键跨边界风险没有隔离检查，或冻结 payload 明确要求时才全量复跑。
+10. 当前目标内可修复的实现缺陷、测试失败、数据完整性或边界问题都留在当前 Loop：receiver 调整内部计划，按需创建成本合适的 Codex、Claude、Grok、DeepSeek 等 Worker，完成修正后重新验证。内部 Worker 只能向 receiver 返回结果；只有 receiver 能上报进度或终态。Review 必须保留独立复核，不要把“Review 未通过”提交成 `BLOCKED`。
+11. `STANDARD` Loop 在领取、代码检查完成、确认根因、完成修改、实际执行测试时的开始与结束、发现问题、修复、复审和最终验证等有意义的阶段立即调用 `report_loop_progress`。长时间测试或构建必须由 receiver 以非阻塞进程/宿主异步命令启动，或交给独立监控 Worker，使外层 receiver 不被单次 shell/tool call 占满；开始前 progress + heartbeat，运行期间至少每 `heartbeatSeconds` heartbeat，结束后立即 heartbeat + progress。`LIGHT` 只在发现问题和最终验证时上报，执行时间很短且没有问题时可只报最终验证。`summary_zh`、`completed_zh` 与 `next_step_zh` 使用用户当前语言，测试结果使用结构化计数；字段名为现有 schema v3 契约，不代表内容必须包含中文字符。禁止提交原始终端日志或内部推理。进度事件是可观测事实，不是 Graph 状态迁移，也不续租。
+12. 首次独立 heartbeat 之后，长任务继续按租约调用 `heartbeat_loop`。宿主未发出 child 完成通知只表示没有终态通知，既不是 heartbeat，也不能证明 receiver 仍存活；`SUSPECT_LOST` 也只证明控制面心跳和进度都静默，不能自行归因为 Maven 阻塞、上下文错配或进程退出。AUTO 与 MANUAL receiver 对 heartbeat、progress、pause 和 result 都必须显式提交当前 claim 的 `operation_id`；错误或旧 operation 一律拒绝。检测到上下文容量压力且工作仍可继续时，不提交失败结果；在租约有效期内调用普通 `pause_loop`。
+13. 宿主明确报告剩余额度不高于 5% 且提供真实未来 `resetAt` 时，停止启动新 Loop，并在额度耗尽前保存当前工作。已 claim 的执行 Agent 在租约有效期内调用 `pause_loop(resume_at=resetAt, capacity_scope=EXECUTOR)`；总调度宿主受限时使用 `capacity_scope=HOST` 暂停其正在承载的 claimed Loop。两者都释放租约和资源占用、保留同一 attempt；不得估算剩余额度或猜测 `resetAt`。
+14. 软阈值 pause 成功后，使用当前宿主的原生计划能力创建一次性恢复提示。为避免恢复窗口边界抖动，计划时间应晚于 `resetAt` 一小段安全余量。提示只要求原宿主调用 `workspace_status → graph_frontier → loop_context` 并重新 dispatch；额度策略固定 `PAUSE_AND_RESUME`，不自动换 Adapter、模型或 Worker。
+15. 硬 429 不由 Plugin 自动记录。宿主负责保留结构化 `resetAt`、执行自身审批/重试策略并停止继续调用供应商；receiver 仍能调用 MCP 时按第 13 步显式 pause，否则等待 lease 到期后由 `graph_frontier` 回收 attempt。需要恢复提示时由宿主按真实 `resetAt` 创建一次性唤醒，不从渲染文本或模型输出猜测时间。
+16. 普通 `pause_loop` 返回固定 handoff 数据。优先自动派遣新的接收 Agent；没有容量时输出人工交接。接收方使用同一 `rootId/nodeId` 调用 `resume_loop`，重新读取 frontier 和 `loop_context`，再以新 owner/operation dispatch；不重新 prepare/freeze。
+17. 只有真实业务终态才用 `record_loop_result` 提交标准结果。
     - 接收方不构造或声称 `result.workspaceChanges` 的归属。Controller 会从本次
       Adapter workspace 的已验证 `READ_WRITE` Git scopes 只读采集相对冻结
       `baseCommit` 的工作区快照，并覆盖任何调用方自报的同名字段。
@@ -113,6 +114,38 @@ claim 超过 `leaseExpiresAt` 后，旧 operation 不能 heartbeat、pause 或�
   "summary": "内部开发、测试和 Gate 已完成",
   "result": {
     "evidence": "由该 Loop 自己定义",
+    "affectedScopes": [
+      {
+        "scopeId": "task-change",
+        "projectId": "primary",
+        "paths": ["src/example.py", "tests/test_example.py"],
+        "modules": ["example"],
+        "contracts": [],
+        "dependencyBasis": "实现与直接单元测试",
+        "exclusions": ["未改变公开接口"]
+      }
+    ],
+    "verificationEvidence": [
+      {
+        "evidenceId": "task-module-tests",
+        "kind": "TEST",
+        "check": "受影响模块单元测试",
+        "command": "构建工具的模块级 test 命令",
+        "scope": "本 TASK 改动及直接依赖",
+        "scopeRefs": ["task-change"],
+        "status": "PASSED",
+        "tests": {"total": 12, "passed": 12, "failed": 0, "skipped": 0},
+        "completedAt": "2026-08-12T08:00:00Z",
+        "testedWorkspaceSnapshots": [
+          {
+            "projectId": "primary",
+            "bindingState": "BOUND",
+            "headCommit": "测试完成时 loop_context 返回的 HEAD",
+            "workingTreeStateFingerprint": "测试完成时 loop_context 返回的 64 位指纹"
+          }
+        ]
+      }
+    ],
     "workerTelemetry": [
       {
         "phase": "implementation",
@@ -131,7 +164,7 @@ claim 超过 `leaseExpiresAt` 后，旧 operation 不能 heartbeat、pause 或�
 }
 ```
 
-`result` 对外层调度器不透明。`workerTelemetry` 由外层 receiver 按 phase 报告内部 Worker 的 agent/model/effort；宿主无法权威观察的值写 `unreported`。它只用于展示、成本分析和后续 Review，不参与授权、路由、重试、指纹或独立性判断。Loop 也可在 result 中报告实际使用或跳过的 Skill；不要要求 delivery-graph 校验这些字段。
+`result` 的业务内容仍由 Loop 定义，外层调度器不解释测试覆盖或 Review 判断。`affectedScopes`、`verificationEvidence` 与 Review 的 `validationDecision` 只是有界、可审计的验收元数据，不创建 Gate 状态或调度节点。Controller 在结果记录时覆盖 `evidenceWorkspaceSnapshots` 和 `evidenceScopeSnapshots`，并在 Review context 输出紧凑 `validationEvidenceIndex`；只有 `PASSED + EXACT_MATCH` 可自动复用。带 `scopeRefs` 的 evidence 按声明相关路径判断新鲜度，无关 workspace 变化不触发复测；没有可绑定路径的旧 evidence 保守回退到整个 workspace。`upstreamLoopResults` 保留结果和快照元数据，但省略重复的大段 `workspaceChanges.diff`；完整内容继续从对应 acceptance 和 `workspace-changes.patch` 审核。`workerTelemetry` 由外层 receiver 按 phase 报告内部 Worker 的 agent/model/effort；宿主无法权威观察的值写 `unreported`。它只用于展示、成本分析和后续 Review，不参与授权、路由、重试、指纹或独立性判断。Loop 也可在 result 中报告实际使用或跳过的 Skill；不要要求 delivery-graph 校验这些字段。
 
 `workspaceChanges` 是上述不透明 result 中唯一由 Controller 在 MCP
 `record_loop_result` 路径自动替换的验收证据字段。它随 outcome 和事件链持久化，

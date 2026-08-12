@@ -14,7 +14,9 @@ from .dispatch_contracts import (
 )
 from .errors import fail
 from .git_binding import (
+    capture_verified_evidence_scope_state,
     capture_verified_workspace_changes,
+    capture_verified_workspace_state,
     inspect_frozen_git_workspace_provenance,
     verify_runtime_delivery_project_scopes,
 )
@@ -25,6 +27,7 @@ from .graph_model import (
     graph_assurance_profile,
     graph_fingerprint,
 )
+from .jsonio import fingerprint
 from .loop_contracts import (
     loop_completion_policy,
     loop_execution_policy,
@@ -298,7 +301,7 @@ def _active_claim(
         state["status"] == "CLAIMED"
         and state["operationId"] == operation_id
         and isinstance(lease_expires_at, str)
-        and _parse_timestamp(lease_expires_at) >= _parse_timestamp(at)
+        and _parse_timestamp(lease_expires_at) > _parse_timestamp(at)
     )
 
 
@@ -330,6 +333,26 @@ def _upstream_loop_results(
         if definition["kind"] not in LOOP_NODE_KINDS:
             continue
         state = states[predecessor]
+        outcome = deepcopy(state["outcome"])
+        outcome_result = (
+            outcome.get("result") if isinstance(outcome, dict) else None
+        )
+        workspace_changes = (
+            outcome_result.get("workspaceChanges")
+            if isinstance(outcome_result, dict)
+            else None
+        )
+        if isinstance(workspace_changes, list):
+            compact_snapshots: list[dict[str, Any]] = []
+            for snapshot in workspace_changes:
+                if not isinstance(snapshot, dict):
+                    continue
+                compact = deepcopy(snapshot)
+                if "diff" in compact:
+                    compact.pop("diff")
+                    compact["diffOmittedFromLoopContext"] = True
+                compact_snapshots.append(compact)
+            outcome_result["workspaceChanges"] = compact_snapshots
         results.append(
             {
                 "nodeId": predecessor,
@@ -337,10 +360,305 @@ def _upstream_loop_results(
                 "workItemId": definition["workItemId"],
                 "attempt": state["attempt"],
                 "status": state["status"],
-                "outcome": state["outcome"],
+                "outcome": outcome,
             }
         )
     return sorted(results, key=lambda item: item["nodeId"])
+
+
+def _validation_evidence_index(
+    upstream_results: list[dict[str, Any]],
+    current_workspace_snapshots: list[dict[str, Any]],
+    current_scope_snapshots: list[dict[str, Any]],
+) -> dict[str, Any]:
+    def binding_key(items: object) -> tuple[tuple[str, str, str], ...] | None:
+        if not isinstance(items, list) or not items:
+            return None
+        normalized: list[tuple[str, str, str]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                return None
+            if item.get("bindingState", "BOUND") != "BOUND":
+                return None
+            project_id = item.get("projectId")
+            head_commit = item.get("headCommit")
+            tree_fingerprint = item.get("workingTreeStateFingerprint")
+            if not all(
+                isinstance(value, str) and value
+                for value in (
+                    project_id,
+                    head_commit,
+                    tree_fingerprint,
+                )
+            ):
+                return None
+            normalized.append(
+                (project_id, head_commit, tree_fingerprint)
+            )
+        return tuple(sorted(normalized))
+
+    current_key = binding_key(current_workspace_snapshots)
+    current_scope_by_ref = {
+        (
+            item.get("nodeId"),
+            item.get("attempt"),
+            item.get("scopeId"),
+        ): item
+        for item in current_scope_snapshots
+        if isinstance(item, dict)
+    }
+    evidence_items: list[dict[str, Any]] = []
+    for source in upstream_results:
+        outcome = source.get("outcome")
+        result = outcome.get("result") if isinstance(outcome, dict) else None
+        if not isinstance(result, dict):
+            continue
+        evidence = result.get("verificationEvidence")
+        if not isinstance(evidence, list):
+            continue
+        result_binding = result.get("evidenceWorkspaceSnapshots")
+        result_key = binding_key(result_binding)
+        result_scope_by_id = {
+            item.get("scopeId"): item
+            for item in result.get("evidenceScopeSnapshots", [])
+            if isinstance(item, dict)
+            and isinstance(item.get("scopeId"), str)
+        }
+        for item in evidence:
+            if not isinstance(item, dict):
+                continue
+            tested_key = binding_key(item.get("testedWorkspaceSnapshots"))
+            item_freshness = "UNBOUND"
+            reason = None
+            if tested_key is None:
+                item_freshness = "UNBOUND"
+                reason = "TESTED_STATE_NOT_BOUND"
+            elif result_key is None:
+                item_freshness = "UNBOUND"
+                reason = "RESULT_STATE_NOT_BOUND"
+            elif tested_key != result_key:
+                item_freshness = "UNBOUND"
+                reason = "TESTED_STATE_DIFFERS_FROM_RECORDED_RESULT"
+            else:
+                scope_refs = item.get("scopeRefs")
+                if isinstance(scope_refs, list) and scope_refs:
+                    result_scopes = [
+                        result_scope_by_id.get(scope_id)
+                        for scope_id in scope_refs
+                    ]
+                    current_scopes = [
+                        current_scope_by_ref.get(
+                            (
+                                source["nodeId"],
+                                source["attempt"],
+                                scope_id,
+                            )
+                        )
+                        for scope_id in scope_refs
+                    ]
+                    if any(
+                        not isinstance(scope, dict)
+                        or scope.get("bindingState") != "BOUND"
+                        or not isinstance(scope.get("stateFingerprint"), str)
+                        for scope in [*result_scopes, *current_scopes]
+                    ):
+                        item_freshness = "UNBOUND"
+                        reason = "RELEVANT_SCOPE_STATE_NOT_BOUND"
+                    elif any(
+                        recorded["stateFingerprint"]
+                        != current["stateFingerprint"]
+                        for recorded, current in zip(
+                            result_scopes,
+                            current_scopes,
+                        )
+                    ):
+                        item_freshness = "CHANGED"
+                        reason = "RELEVANT_SCOPE_CHANGED"
+                    else:
+                        item_freshness = "EXACT_MATCH"
+                elif current_key is None:
+                    item_freshness = "UNBOUND"
+                    reason = "CURRENT_STATE_NOT_BOUND"
+                elif result_key == current_key:
+                    item_freshness = "EXACT_MATCH"
+                else:
+                    item_freshness = "CHANGED"
+                    reason = "WORKSPACE_CHANGED_WITHOUT_RELEVANT_SCOPE_BINDING"
+            record = {
+                "evidenceRef": {
+                    "nodeId": source["nodeId"],
+                    "attempt": source["attempt"],
+                    "evidenceId": item.get("evidenceId"),
+                },
+                "kind": item.get("kind"),
+                "check": item.get("check"),
+                "scope": item.get("scope"),
+                "scopeRefs": item.get("scopeRefs", []),
+                "status": item.get("status"),
+                "freshness": item_freshness,
+            }
+            if reason is not None:
+                record["freshnessReason"] = reason
+            evidence_items.append(record)
+    return {
+        "automaticReuse": "PASSED_AND_EXACT_MATCH_ONLY",
+        "currentWorkspaceSnapshots": current_workspace_snapshots,
+        "currentScopeSnapshots": current_scope_snapshots,
+        "evidence": evidence_items,
+    }
+
+
+def _current_upstream_scope_snapshots(
+    upstream_results: list[dict[str, Any]],
+    verified_project_scopes: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    if verified_project_scopes is None:
+        return []
+    snapshots: list[dict[str, Any]] = []
+    pending: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    unique_scopes: dict[
+        tuple[str, tuple[str, ...]],
+        dict[str, Any],
+    ] = {}
+    for source in upstream_results:
+        outcome = source.get("outcome")
+        result = outcome.get("result") if isinstance(outcome, dict) else None
+        if not isinstance(result, dict):
+            continue
+        affected_scopes = result.get("affectedScopes")
+        if not isinstance(affected_scopes, list):
+            continue
+        for affected_scope in affected_scopes:
+            if not isinstance(affected_scope, dict):
+                continue
+            project_id = affected_scope.get("projectId")
+            paths = affected_scope.get("paths")
+            cache_key = (
+                str(project_id),
+                tuple(sorted(paths))
+                if isinstance(paths, list)
+                and all(isinstance(path, str) for path in paths)
+                else (),
+            )
+            unique_scopes.setdefault(
+                cache_key,
+                {
+                    "scopeId": fingerprint(
+                        {
+                            "projectId": cache_key[0],
+                            "paths": cache_key[1],
+                        }
+                    ),
+                    "projectId": project_id,
+                    "paths": paths if isinstance(paths, list) else [],
+                },
+            )
+            pending.append((source, {**affected_scope, "cacheKey": cache_key}))
+    captured = capture_verified_evidence_scope_state(
+        verified_project_scopes,
+        list(unique_scopes.values()),
+    )
+    captured_by_scope_id = {
+        item.get("scopeId"): item
+        for item in captured
+        if isinstance(item, dict)
+    }
+    for source, affected_scope in pending:
+        cache_key = affected_scope["cacheKey"]
+        unique_scope = unique_scopes[cache_key]
+        cached = captured_by_scope_id.get(unique_scope["scopeId"])
+        if cached is None:
+            cached = {
+                "paths": unique_scope["paths"],
+                "bindingState": "UNBOUND",
+            }
+        snapshot = {
+            **cached,
+            "scopeId": affected_scope.get("scopeId"),
+            "projectId": affected_scope.get("projectId"),
+        }
+        snapshots.append(
+            {
+                "nodeId": source["nodeId"],
+                "attempt": source["attempt"],
+                **snapshot,
+            }
+        )
+    return snapshots
+
+
+def _validate_reused_evidence_refs(
+    *,
+    graph: dict[str, Any],
+    nodes: list[dict[str, Any]],
+    node_id: str,
+    result_payload: dict[str, Any],
+    verified_project_scopes: list[dict[str, Any]],
+) -> None:
+    decision = result_payload.get("validationDecision")
+    if not isinstance(decision, dict):
+        return
+    reused_refs = decision.get("reusedEvidenceRefs")
+    if not isinstance(reused_refs, list) or not reused_refs:
+        return
+    definitions = {item["id"]: item for item in graph["nodes"]}
+    current_definition = definitions.get(node_id)
+    if (
+        not isinstance(current_definition, dict)
+        or not str(current_definition.get("kind", "")).endswith("_REVIEW_LOOP")
+    ):
+        fail(
+            "LOOP_OUTCOME_INVALID",
+            "Only Review Loops may reuse upstream verification evidence",
+        )
+    states = {item["nodeId"]: item for item in nodes}
+    upstream_results = _upstream_loop_results(graph, states, node_id)
+    current_workspace_snapshots = capture_verified_workspace_state(
+        verified_project_scopes
+    )
+    current_scope_snapshots = _current_upstream_scope_snapshots(
+        upstream_results,
+        verified_project_scopes,
+    )
+    evidence_index = _validation_evidence_index(
+        upstream_results,
+        current_workspace_snapshots,
+        current_scope_snapshots,
+    )
+    reusable = {
+        (
+            item.get("evidenceRef", {}).get("nodeId"),
+            item.get("evidenceRef", {}).get("attempt"),
+            item.get("evidenceRef", {}).get("evidenceId"),
+        )
+        for item in evidence_index["evidence"]
+        if item.get("status") == "PASSED"
+        and item.get("freshness") == "EXACT_MATCH"
+    }
+    requested = {
+        (
+            item.get("nodeId"),
+            item.get("attempt"),
+            item.get("evidenceId"),
+        )
+        for item in reused_refs
+        if isinstance(item, dict)
+    }
+    stale = sorted(requested - reusable, key=lambda item: tuple(map(str, item)))
+    if stale:
+        fail(
+            "LOOP_EVIDENCE_STALE",
+            "Reused verification evidence is no longer passing and "
+            "EXACT_MATCH at Review completion",
+            staleEvidenceRefs=[
+                {
+                    "nodeId": item[0],
+                    "attempt": item[1],
+                    "evidenceId": item[2],
+                }
+                for item in stale
+            ],
+        )
 
 
 def _retry_if_allowed(
@@ -412,6 +730,7 @@ def advance_graph(
 
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
+    materialized_changed = False
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
         at = _locked_timestamp(now, run["updated_at"])
@@ -503,6 +822,7 @@ def advance_graph(
                 },
                 at=at,
             )
+            materialized_changed = True
         for node in nodes:
             resume_at = node.get("resumeAt")
             if (
@@ -535,12 +855,13 @@ def advance_graph(
                 payload={"resumeAt": resume_at},
                 at=at,
             )
+            materialized_changed = True
         for node in nodes:
             if (
                 node["status"] != "CLAIMED"
                 or node["leaseExpiresAt"] is None
                 or _parse_timestamp(node["leaseExpiresAt"])
-                >= _parse_timestamp(at)
+                > _parse_timestamp(at)
             ):
                 continue
             connection.execute(
@@ -574,13 +895,16 @@ def advance_graph(
                 failure_class="WORKER_LOST",
                 at=at,
             )
-        repository.refresh_ready(
+            materialized_changed = True
+        materialized_changed = repository.refresh_ready(
             connection,
             graph,
             run["run_id"],
             at=at,
-        )
-    repository.write_projections(root_id)
+            touch_run=materialized_changed,
+        ) or materialized_changed
+    if materialized_changed:
+        repository.write_projections(root_id)
     return repository.run(root_id)
 
 
@@ -612,12 +936,58 @@ def graph_status(
             for state in run["nodes"]
         ],
     }
-    observation_at = max(timestamp(now), result["updatedAt"])
-    return attach_progress_monitor(
+    observed_now = timestamp(now)
+    observation_at = (
+        observed_now
+        if _parse_timestamp(observed_now)
+        >= _parse_timestamp(result["updatedAt"])
+        else result["updatedAt"]
+    )
+    result = attach_progress_monitor(
         result,
         definition["graph"],
         observed_at=observation_at,
     )
+    with repository.read() as connection:
+        external_reservations = repository.claimed_resource_reservations(
+            connection,
+            at=observation_at,
+            exclude_root_id=root_id,
+        )
+        dispatch_reservations = repository.active_dispatch_reservations(
+            connection,
+            at=observation_at,
+        )
+    # Import lazily because graph_frontier owns action rendering and imports
+    # this module's transition functions. Reusing its pure builder gives a
+    # read-only status call the exact action/deadline view without advancing
+    # the scheduler or duplicating resource-conflict logic.
+    from .graph_frontier import build_graph_frontier
+
+    frontier_view = build_graph_frontier(
+        definition["graph"],
+        result,
+        external_reservations=external_reservations,
+        dispatch_reservations=dispatch_reservations,
+    )
+    result["nextWakeAt"] = frontier_view["nextWakeAt"]
+    frontier_monitor = frontier_view.get("progressMonitor")
+    if isinstance(frontier_monitor, dict):
+        result["progressMonitor"] = frontier_monitor
+        directive = deepcopy(frontier_monitor.get("waitDirective") or {})
+        if directive.get("consumeActionsBeforeWaiting") is True:
+            directive.update(
+                {
+                    "mode": "FRONTIER_ACTIONS_AVAILABLE",
+                    "pollNotBefore": observation_at,
+                    "pollTool": "graph_frontier",
+                    "onTimeout": "CALL_GRAPH_FRONTIER_ONCE",
+                    "consumeActionsBeforeWaiting": False,
+                }
+            )
+            result["progressMonitor"] = deepcopy(frontier_monitor)
+            result["progressMonitor"]["waitDirective"] = directive
+    return result
 
 
 def loop_context(
@@ -741,6 +1111,20 @@ def loop_context(
         if verified_project_scopes is None
         else deepcopy(verified_project_scopes)
     )
+    upstream_results = _upstream_loop_results(
+        stored["graph"],
+        states,
+        node_id,
+    )
+    current_workspace_snapshots = (
+        capture_verified_workspace_state(verified_project_scopes)
+        if verified_project_scopes is not None
+        else []
+    )
+    current_scope_snapshots = _current_upstream_scope_snapshots(
+        upstream_results,
+        verified_project_scopes,
+    )
     workspace_isolation = deepcopy(run["workspaceIsolation"])
     if workspace_root is not None:
         workspace_isolation["workspaceRoot"] = str(
@@ -765,17 +1149,17 @@ def loop_context(
             }
             for predecessor in predecessors
         ],
-        "upstreamLoopResults": _upstream_loop_results(
-            stored["graph"],
-            states,
-            node_id,
-        ),
+        "upstreamLoopResults": upstream_results,
         "humanArtifacts": human_artifacts,
         "workspaceIsolation": workspace_isolation,
         "projectScopes": project_scopes,
         "projectScopeAnchors": project_scope_anchors,
+        "currentWorkspaceSnapshots": current_workspace_snapshots,
         "executionPolicy": loop_execution_policy(assurance_profile),
-        "completionPolicy": loop_completion_policy(assurance_profile),
+        "completionPolicy": loop_completion_policy(
+            assurance_profile,
+            loop_kind=definition["kind"],
+        ),
         "rules": {
             "payloadIsOpaqueToScheduler": True,
             "internalGateAndSkillPolicyOwnedByLoop": True,
@@ -795,6 +1179,18 @@ def loop_context(
             "loopsMustNotCreateSwitchOrCheckoutGitBranches": True,
         },
     }
+    if definition["kind"].endswith("_REVIEW_LOOP"):
+        context["rules"].update(
+            {
+                "reuseValidUpstreamVerificationEvidence": True,
+                "reviewIndependenceDoesNotRequireFullSuiteRerun": True,
+            }
+        )
+        context["validationEvidenceIndex"] = _validation_evidence_index(
+            upstream_results,
+            current_workspace_snapshots,
+            current_scope_snapshots,
+        )
     git_binding = stored["hierarchy"]["delivery"].get("gitBinding")
     if git_binding is not None:
         context["gitBinding"] = git_binding
@@ -1489,7 +1885,7 @@ def handoff_ready_automatic_task(
             live_reservation = connection.execute(
                 "SELECT reservation_id, expires_at FROM dispatch_reservations "
                 "WHERE run_id = ? AND node_id = ? AND attempt = ? "
-                "AND status = 'RESERVED' AND expires_at >= ? LIMIT 1",
+                "AND status = 'RESERVED' AND expires_at > ? LIMIT 1",
                 (run["run_id"], node_id, state["attempt"], at),
             ).fetchone()
             if live_reservation is not None:
@@ -2591,10 +2987,66 @@ def record_loop_result(
         # This key is controller-owned on the MCP path. Overwrite any
         # self-reported value so acceptance evidence always comes from the
         # Adapter workspace and the Controller-verified Git scopes.
-        result_payload["workspaceChanges"] = (
-            capture_verified_workspace_changes(
-                verified_project_scopes,
+        workspace_changes = capture_verified_workspace_changes(
+            verified_project_scopes,
+        )
+        result_payload["workspaceChanges"] = workspace_changes
+        if isinstance(result_payload.get("verificationEvidence"), list):
+            result_payload["evidenceWorkspaceSnapshots"] = [
+                {
+                    "projectId": item["projectId"],
+                    "bindingState": "BOUND",
+                    "headCommit": item["headCommit"],
+                    "workingTreeStateFingerprint": item[
+                        "workingTreeStateFingerprint"
+                    ],
+                }
+                for item in workspace_changes
+            ]
+            evidence_scope_snapshots = (
+                capture_verified_evidence_scope_state(
+                    verified_project_scopes,
+                    result_payload.get("affectedScopes"),
+                )
             )
+            confirmed_workspace_state = capture_verified_workspace_state(
+                verified_project_scopes
+            )
+            recorded_binding = sorted(
+                (
+                    item["projectId"],
+                    item["headCommit"],
+                    item["workingTreeStateFingerprint"],
+                )
+                for item in workspace_changes
+            )
+            confirmed_binding = sorted(
+                (
+                    item["projectId"],
+                    item["headCommit"],
+                    item["workingTreeStateFingerprint"],
+                )
+                for item in confirmed_workspace_state
+                if item.get("bindingState") == "BOUND"
+            )
+            if recorded_binding != confirmed_binding:
+                fail(
+                    "SCHEDULER_GIT_DIFF_CHANGED",
+                    "The Delivery workspace changed while verification "
+                    "scope evidence was captured",
+                )
+            result_payload["evidenceScopeSnapshots"] = (
+                evidence_scope_snapshots
+            )
+        else:
+            result_payload.pop("evidenceWorkspaceSnapshots", None)
+            result_payload.pop("evidenceScopeSnapshots", None)
+        _validate_reused_evidence_refs(
+            graph=graph,
+            nodes=nodes,
+            node_id=node_id,
+            result_payload=result_payload,
+            verified_project_scopes=verified_project_scopes,
         )
         normalized["result"] = result_payload
     event_by_status = {

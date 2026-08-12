@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 import re
 from typing import Any
 
@@ -162,7 +163,13 @@ def plan_dispatch_batch(
             "Automatic dispatch is paused by the host capacity breaker",
             **run["hostCapacity"],
         )
-    observation_at = max(timestamp(now), run["updatedAt"])
+    observed_now = timestamp(now)
+    observation_at = (
+        observed_now
+        if datetime.fromisoformat(observed_now.replace("Z", "+00:00"))
+        >= datetime.fromisoformat(run["updatedAt"].replace("Z", "+00:00"))
+        else run["updatedAt"]
+    )
     with repository.read() as connection:
         shared_breaker = repository.open_host_capacity_breaker(
             connection,
@@ -272,6 +279,33 @@ def plan_dispatch_batch(
             "quotaExhaustionPolicy": QUOTA_EXHAUSTION_POLICY,
         },
     }
+    reservation_deadlines = [
+        item["reservationExpiresAt"]
+        for item in reserved_assignments
+        if isinstance(item.get("reservationExpiresAt"), str)
+    ]
+    post_action_wait = (
+        {
+            "mode": "HOST_NATIVE_EVENT_OR_RESERVATION_DEADLINE",
+            "interruptOn": [
+                "NATIVE_RECEIVER_CLAIMED",
+                "NATIVE_RECEIVER_COMPLETED",
+                "NATIVE_RECEIVER_NEEDS_ATTENTION",
+                "NATIVE_RECEIVER_START_FAILED",
+            ],
+            "onInterrupt": "CALL_GRAPH_FRONTIER_ONCE",
+            "deadline": min(
+                reservation_deadlines,
+                key=lambda value: datetime.fromisoformat(
+                    value.replace("Z", "+00:00")
+                ),
+            ),
+            "onDeadline": "CALL_GRAPH_FRONTIER_ONCE",
+            "doNotPollBackToBack": True,
+        }
+        if reservation_deadlines
+        else None
+    )
     return {
         "rootId": root_id,
         "graphFingerprint": stored["graphFingerprint"],
@@ -281,6 +315,11 @@ def plan_dispatch_batch(
         "assignments": reserved_assignments,
         "deferred": deferred,
         "nextAction": "CREATE_INDEPENDENT_RECEIVERS",
+        **(
+            {"postActionWait": post_action_wait}
+            if post_action_wait is not None
+            else {}
+        ),
         "concurrentDispatchGroups": (
             [[item["nodeId"] for item in reserved_assignments]]
             if reserved_assignments

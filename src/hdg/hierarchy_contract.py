@@ -824,7 +824,9 @@ def hierarchy_contract(
                 "standard": {
                     "shape": "RECURSIVE_GROUP_TASK",
                     "reviewLoops": "TASK_GROUP_AND_DELIVERY",
-                    "verification": "FULL_DECLARED_ACCEPTANCE",
+                    "verification": (
+                        "AFFECTED_SCOPE_WITH_EVIDENCE_FIRST_REVIEWS"
+                    ),
                 },
                 "standardWhenAny": [
                     "MULTI_TASK_OR_MULTI_PROJECT",

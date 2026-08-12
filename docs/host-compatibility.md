@@ -7,6 +7,16 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.39.10 发布候选矩阵
+
+0.39.10 保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`，将 Graph 协调改为宿主事件优先，并让分层 Review 在独立判断不变的前提下复用与相关代码状态精确绑定的上游验证证据。
+
+- 活跃 receiver 优先使用宿主原生 completion wait；超时只读 `graph_status`，并按首次心跳、heartbeat/progress stale、lease、reservation 与资源容量恢复中的最早有效时刻唤醒。稳定 `changeFingerprint` 排除纯时间倒计时，避免无变化重复播报。
+- `graph_frontier` 的 no-op 不再修改 run 时间或重写投影；reservation/lease 精确到点即失效。CLAIMED reservation 的旧短 TTL 不参与后续唤醒，跨 Delivery 的真实资源冲突按 blocker deadline 恢复。
+- TASK 验证绑定 affected scope 与 workspace snapshot；TASK/GROUP/Delivery Review 只复用 `PASSED + EXACT_MATCH` 证据，相关代码、环境或高风险边界变化时定向或完整复跑。Review 结果提交前重新计算 freshness，P0/P1 继续要求闭环。
+- scope 状态按项目批量捕获、跨证据去重；Review context 使用紧凑 evidence index 与 workspace diff 引用，避免逐文件 Git 子进程和重复大 payload。
+- 核心候选已通过 381 项 Python 测试（1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Claude Plugin manifest 与差异校验。实际 Codex/Claude 会话仍需按本页定义完成宿主原生 child 冒烟，并停在 `RECORD_USER_CONFIRMATION`。
+
 ## 0.39.9 发布候选矩阵
 
 0.39.9 保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`，完成旧 worktree setup 协议的物理清理并修复调度优化中的存量状态与重试边界。Controller 不创建 linked worktree；当前目录即使是既有 linked checkout，也只作为普通 current workspace 使用。

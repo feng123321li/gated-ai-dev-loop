@@ -3004,6 +3004,37 @@ class SchedulerRuntimeTests(unittest.TestCase):
             context["loop"]["ref"],
             "task/independent-review-loop@1",
         )
+        verification_strategy = context["completionPolicy"][
+            "verificationStrategy"
+        ]
+        self.assertEqual(
+            verification_strategy["mode"],
+            "EVIDENCE_FIRST_TARGETED_RERUN",
+        )
+        self.assertEqual(
+            verification_strategy["independence"],
+            "INDEPENDENT_JUDGMENT_NOT_AUTOMATIC_FULL_RERUN",
+        )
+        self.assertEqual(
+            verification_strategy["rerunDefault"],
+            "TARGET_GAPS_FINDINGS_AND_HIGH_RISK_BOUNDARIES",
+        )
+        self.assertIn(
+            "RELEVANT_WORKSPACE_CHANGED_AFTER_EVIDENCE",
+            verification_strategy["evidenceInvalidationTriggers"],
+        )
+        self.assertIn(
+            "AFFECTED_SCOPE_CANNOT_BE_BOUNDED",
+            verification_strategy["fullRerunTriggers"],
+        )
+        self.assertTrue(
+            context["rules"]["reuseValidUpstreamVerificationEvidence"]
+        )
+        self.assertTrue(
+            context["rules"][
+                "reviewIndependenceDoesNotRequireFullSuiteRerun"
+            ]
+        )
 
         dispatch_loop(
             root=self.root,
@@ -3367,7 +3398,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "reportAt": [
                         "LOOP_START",
                         "CODE_INSPECTION_COMPLETE",
-                        "TEST_RUN",
+                        "TEST_RUN_IF_EXECUTED",
                         "ISSUE_FOUND",
                         "FIX_APPLIED",
                         "REREVIEW",
@@ -3450,6 +3481,18 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(
             context["completionPolicy"],
             loop_completion_policy(),
+        )
+        self.assertEqual(
+            context["completionPolicy"]["verificationScope"],
+            "AFFECTED_SCOPE_SUFFICIENT_FOR_DECLARED_ACCEPTANCE",
+        )
+        self.assertEqual(
+            context["completionPolicy"]["verificationStrategy"]["mode"],
+            "AFFECTED_SCOPE_FIRST",
+        )
+        self.assertEqual(
+            context["completionPolicy"]["verificationStrategy"]["default"],
+            "RUN_MINIMUM_SUFFICIENT_CHECKS",
         )
         self.assertEqual(
             context["completionPolicy"]["actionableFinding"],
@@ -3730,6 +3773,9 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "RECORD_USER_CONFIRMATION",
             [action["action"] for action in frontier["actions"]],
         )
+        confirmation_fingerprint = frontier["progressMonitor"][
+            "changeFingerprint"
+        ]
         completed = record_user_confirmation(
             root=self.root,
             root_id=root_id,
@@ -3739,6 +3785,15 @@ class SchedulerRuntimeTests(unittest.TestCase):
             now=at(6),
         )
         self.assertEqual(completed["status"], "COMPLETED")
+        completed_fingerprint = graph_status(
+            root=self.root,
+            root_id=root_id,
+            now=at(6),
+        )["progressMonitor"]["changeFingerprint"]
+        self.assertNotEqual(
+            completed_fingerprint,
+            confirmation_fingerprint,
+        )
         event_types = [
             event["eventType"]
             for event in graph_events(
@@ -3854,6 +3909,22 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "executionPolicy": loop_execution_policy(),
                 }
             ],
+        )
+        wait_directive = waiting["progressMonitor"]["waitDirective"]
+        self.assertEqual(wait_directive["mode"], "CONSUME_ACTIONS_FIRST")
+        self.assertEqual(
+            wait_directive["immediateActions"],
+            ["WAIT_FOR_EXECUTOR_CAPACITY"],
+        )
+        self.assertEqual(
+            wait_directive["nativeWakeDirective"],
+            {
+                "mode": "HOST_NATIVE_ONE_SHOT",
+                "scheduleAfter": reset_at,
+                "applySafetyMargin": True,
+                "cancelRecurringMonitors": False,
+                "capacityActions": ["WAIT_FOR_EXECUTOR_CAPACITY"],
+            },
         )
 
         ready = get_graph_frontier(
@@ -4025,6 +4096,17 @@ class SchedulerRuntimeTests(unittest.TestCase):
             waiting["pausedLoops"][0]["capacityScope"],
             "HOST",
         )
+        wait_directive = waiting["progressMonitor"]["waitDirective"]
+        self.assertEqual(wait_directive["mode"], "CONSUME_ACTIONS_FIRST")
+        self.assertEqual(
+            wait_directive["immediateActions"],
+            ["WAIT_FOR_HOST_CAPACITY"],
+        )
+        self.assertFalse(
+            wait_directive["nativeWakeDirective"][
+                "cancelRecurringMonitors"
+            ]
+        )
         ready = get_graph_frontier(
             root=self.root,
             root_id=root_id,
@@ -4087,6 +4169,14 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "wakeMode": "HOST_NATIVE_ONE_SHOT",
                 }
             ],
+        )
+        hard_wait = waiting["progressMonitor"]["waitDirective"]
+        self.assertEqual(
+            hard_wait["nativeWakeDirective"]["scheduleAfter"],
+            reset_at,
+        )
+        self.assertTrue(
+            hard_wait["nativeWakeDirective"]["cancelRecurringMonitors"]
         )
         current = graph_status(root=self.root, root_id=root_id)
         current_node = next(
@@ -4926,7 +5016,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             root_id="d-first",
             node_id=loop_node_id("t-first"),
         )
-        call_tool(
+        first_claim = call_tool(
             "dispatch_loop",
             {
                 "root_id": "d-first",
@@ -4971,6 +5061,18 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 for action in frontier["actions"]
             )
         )
+        self.assertEqual(
+            frontier["nextWakeAt"],
+            first_claim["leaseExpiresAt"],
+        )
+        self.assertEqual(
+            frontier["progressMonitor"]["waitDirective"]["mode"],
+            "DEADLINE_ONLY",
+        )
+        self.assertEqual(
+            frontier["progressMonitor"]["waitDirective"]["onNextWakeAt"],
+            "CALL_GRAPH_FRONTIER_ONCE",
+        )
 
         second_reservation = reserve_loop(
             root=self.root,
@@ -5009,6 +5111,83 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(
             caught.exception.details["conflictingRootId"],
             "d-first",
+        )
+
+    def test_cross_delivery_dispatch_reservation_sets_conflict_deadline(
+        self,
+    ) -> None:
+        claim = ["project:erp/environment:dispatch-reserved"]
+        prepared_by_id: dict[str, dict] = {}
+        first_workspace = Path(self.root, "worktree-reserved-first")
+        second_workspace = Path(self.root, "worktree-reserved-second")
+        first_workspace.mkdir()
+        second_workspace.mkdir()
+        for delivery_id, task_id, workspace in (
+            (
+                "d-reserved-first",
+                "t-reserved-first",
+                first_workspace,
+            ),
+            (
+                "d-reserved-second",
+                "t-reserved-second",
+                second_workspace,
+            ),
+        ):
+            prepared = prepare_hierarchy(
+                root=self.root,
+                hierarchy=delivery_task_hierarchy(
+                    delivery_id,
+                    task_id,
+                    claims=claim,
+                ),
+                workspace_root=str(workspace),
+                now=at(0),
+            )
+            freeze_hierarchy(
+                root=self.root,
+                root_id=prepared["rootId"],
+                workspace_root=str(workspace),
+                expected_hierarchy_fingerprint=prepared[
+                    "hierarchyFingerprint"
+                ],
+                confirmed=True,
+                confirmed_by="human",
+                now=at(1),
+            )
+            prepared_by_id[delivery_id] = prepared
+
+        first = prepared_by_id["d-reserved-first"]
+        assignment = plan_dispatch_batch(
+            root=self.root,
+            root_id=first["rootId"],
+            expected_graph_fingerprint=first["graphFingerprint"],
+            host_adapter_id="codex",
+            host_native_agent_ids=("codex",),
+            now=at(2),
+        )["assignments"][0]
+        frontier = get_graph_frontier(
+            root=self.root,
+            root_id="d-reserved-second",
+            now=at(3),
+        )
+
+        ready = next(
+            item
+            for item in frontier["readyLoops"]
+            if item["nodeId"] == loop_node_id("t-reserved-second")
+        )
+        self.assertEqual(
+            ready["resourceConflicts"],
+            [f"d-reserved-first/{loop_node_id('t-reserved-first')}"],
+        )
+        self.assertEqual(
+            frontier["nextWakeAt"],
+            assignment["reservationExpiresAt"],
+        )
+        self.assertEqual(
+            frontier["progressMonitor"]["waitDirective"]["mode"],
+            "DEADLINE_ONLY",
         )
 
     def test_expired_cross_delivery_claim_does_not_block_dispatch(
@@ -7463,12 +7642,30 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertIn("疑似失联", suspect_lost["markdownTable"])
 
+        expired_status = graph_status(
+            root=self.root,
+            root_id=root_id,
+            now=claimed_at + timedelta(minutes=33),
+        )["progressMonitor"]
+        self.assertEqual(
+            expired_status["alerts"][0]["code"],
+            "LEASE_EXPIRED_PENDING_RECOVERY",
+        )
+        self.assertEqual(
+            expired_status["waitDirective"]["mode"],
+            "ADVANCE_REQUIRED",
+        )
+        self.assertEqual(
+            expired_status["waitDirective"]["pollTool"],
+            "graph_frontier",
+        )
+
         frontier = get_graph_frontier(
             root=self.root,
             root_id=root_id,
             now=claimed_at + timedelta(minutes=33),
         )
-        self.assertEqual(frontier["progressMonitor"]["recommendedPollSeconds"], 10)
+        self.assertEqual(frontier["progressMonitor"]["recommendedPollSeconds"], 90)
         events = graph_events(root=self.root, root_id=root_id)["events"]
         expired = next(
             event
@@ -7476,6 +7673,273 @@ class SchedulerRuntimeTests(unittest.TestCase):
             if event["eventType"] == "CLAIM_LEASE_EXPIRED"
         )
         self.assertEqual(expired["payload"]["failureClass"], "WORKER_LOST")
+
+    def test_frontier_recovers_a_lease_at_the_exact_expiry_in_one_call(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        claimed = dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="background-agent",
+            operation_id="op-expiry-equality",
+            now=at(2),
+        )
+        expiry = datetime.fromisoformat(
+            claimed["leaseExpiresAt"].replace("Z", "+00:00")
+        )
+
+        with self.assertRaises(GatedLoopError) as heartbeat_caught:
+            heartbeat_loop(
+                root=self.root,
+                root_id=root_id,
+                node_id=node_id,
+                operation_id="op-expiry-equality",
+                now=expiry,
+            )
+
+        recovered = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=expiry,
+        )
+
+        self.assertEqual(
+            heartbeat_caught.exception.code,
+            "SCHEDULER_OPERATION_INVALID",
+        )
+
+        self.assertNotEqual(
+            recovered["progressMonitor"]["waitDirective"]["mode"],
+            "ADVANCE_REQUIRED",
+        )
+        self.assertIn(
+            "DISPATCH_LOOP",
+            {action["action"] for action in recovered["actions"]},
+        )
+
+    def test_progress_monitor_waits_for_native_receiver_or_poll_deadline(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="background-agent",
+            operation_id="op-native-wait",
+            now=at(2),
+        )
+
+        first = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(3),
+        )["progressMonitor"]
+        second = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(3) + timedelta(seconds=5),
+        )["progressMonitor"]
+
+        self.assertEqual(first["recommendedPollSeconds"], 30)
+        self.assertRegex(first["changeFingerprint"], r"^[0-9a-f]{64}$")
+        self.assertEqual(
+            first["waitDirective"],
+            {
+                "mode": "HOST_NATIVE_EVENT_OR_DEADLINE",
+                "pollNotBefore": "2026-07-29T08:03:30Z",
+                "pollTool": "graph_status",
+                "advanceTool": "graph_frontier",
+                "interruptOn": [
+                    "NATIVE_RECEIVER_COMPLETED",
+                    "NATIVE_RECEIVER_NEEDS_ATTENTION",
+                ],
+                "onInterrupt": "CALL_GRAPH_FRONTIER_ONCE",
+                "onTimeout": "CALL_GRAPH_STATUS_ONCE",
+                "consumeActionsBeforeWaiting": False,
+                "immediateActions": [],
+                "nextWakeAt": "2026-07-29T08:32:00Z",
+                "onNextWakeAt": "CALL_GRAPH_FRONTIER_ONCE",
+                "suppressUnchangedCommentary": True,
+            },
+        )
+        self.assertEqual(
+            second["waitDirective"]["pollNotBefore"],
+            "2026-07-29T08:03:30Z",
+        )
+        self.assertEqual(second["recommendedPollSeconds"], 25)
+        self.assertEqual(
+            first["changeFingerprint"],
+            second["changeFingerprint"],
+        )
+        report_loop_progress(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id="op-native-wait",
+            phase="TESTING",
+            summary_zh="正在运行受影响范围测试。",
+            completed_zh=["代码修改完成"],
+            next_step_zh="记录测试证据。",
+            now=at(3) + timedelta(seconds=6),
+        )
+        heartbeat_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id="op-native-wait",
+            now=at(3) + timedelta(seconds=6),
+        )
+        changed = graph_status(
+            root=self.root,
+            root_id=root_id,
+            now=at(3) + timedelta(seconds=6),
+        )["progressMonitor"]
+        self.assertNotEqual(
+            first["changeFingerprint"],
+            changed["changeFingerprint"],
+        )
+        self.assertEqual(
+            changed["waitDirective"]["pollNotBefore"],
+            "2026-07-29T08:08:06Z",
+        )
+        self.assertEqual(changed["recommendedPollSeconds"], 300)
+
+    def test_frontier_consumes_ready_actions_before_waiting_on_receiver(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(disjoint_parallel_hierarchy())
+        root_id = prepared["rootId"]
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=loop_node_id("t-api"),
+            owner="background-agent",
+            operation_id="op-active-with-ready-peer",
+            now=at(2),
+        )
+
+        status_directive = graph_status(
+            root=self.root,
+            root_id=root_id,
+            now=at(3),
+        )["progressMonitor"]["waitDirective"]
+        self.assertEqual(
+            status_directive["mode"],
+            "FRONTIER_ACTIONS_AVAILABLE",
+        )
+        self.assertEqual(status_directive["pollTool"], "graph_frontier")
+
+        frontier = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(3),
+        )
+
+        self.assertIn(
+            "DISPATCH_LOOP",
+            {action["action"] for action in frontier["actions"]},
+        )
+        directive = frontier["progressMonitor"]["waitDirective"]
+        self.assertEqual(
+            directive["mode"],
+            "CONSUME_ACTIONS_THEN_HOST_NATIVE_EVENT_OR_DEADLINE",
+        )
+        self.assertTrue(directive["consumeActionsBeforeWaiting"])
+        self.assertEqual(directive["immediateActions"], ["DISPATCH_LOOP"])
+
+    def test_status_retains_receiver_reservation_deadline_while_peer_runs(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(disjoint_parallel_hierarchy())
+        root_id = prepared["rootId"]
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=loop_node_id("t-api"),
+            owner="background-agent",
+            operation_id="op-active-peer",
+            now=at(2),
+        )
+        assignment = plan_dispatch_batch(
+            root=self.root,
+            root_id=root_id,
+            expected_graph_fingerprint=prepared["graphFingerprint"],
+            host_adapter_id="codex",
+            host_native_agent_ids=("codex",),
+            now=at(3),
+        )["assignments"][0]
+
+        first = graph_status(
+            root=self.root,
+            root_id=root_id,
+            now=at(3) + timedelta(seconds=5),
+        )["progressMonitor"]["waitDirective"]
+        second = graph_status(
+            root=self.root,
+            root_id=root_id,
+            now=at(3) + timedelta(seconds=15),
+        )["progressMonitor"]["waitDirective"]
+
+        self.assertEqual(first["mode"], "HOST_NATIVE_EVENT_OR_DEADLINE")
+        self.assertEqual(first["pollTool"], "graph_status")
+        self.assertEqual(
+            first["nextWakeAt"],
+            assignment["reservationExpiresAt"],
+        )
+        self.assertEqual(
+            second["nextWakeAt"],
+            assignment["reservationExpiresAt"],
+        )
+
+    def test_repeated_noop_frontier_does_not_touch_run_or_projections(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=loop_node_id("t-service"),
+            owner="background-agent",
+            operation_id="op-noop-frontier",
+            now=at(2),
+        )
+        get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(3),
+        )
+        before = graph_status(root=self.root, root_id=root_id, now=at(3))
+        progress_path = (
+            Path(self.root)
+            / ".layered-delivery"
+            / root_id
+            / "progress.md"
+        )
+        before_bytes = progress_path.read_bytes()
+        before_mtime = progress_path.stat().st_mtime_ns
+
+        get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(3) + timedelta(seconds=1),
+        )
+        after = graph_status(
+            root=self.root,
+            root_id=root_id,
+            now=at(3) + timedelta(seconds=1),
+        )
+
+        self.assertEqual(after["updatedAt"], before["updatedAt"])
+        self.assertEqual(progress_path.read_bytes(), before_bytes)
+        self.assertEqual(progress_path.stat().st_mtime_ns, before_mtime)
 
     def test_long_running_commands_keep_heartbeat_outside_blocking_call(
         self,

@@ -349,11 +349,13 @@ class DeliveryEventStore:
         run_id: str,
         *,
         at: str,
-    ) -> None:
-        """Advance dependency-ready nodes and deterministic joins."""
+        touch_run: bool = True,
+    ) -> bool:
+        """Advance readiness and return whether materialized state changed."""
 
         run_state = connection.execute(
-            "SELECT status FROM runs WHERE run_id = ?",
+            "SELECT status, updated_at, completed_at FROM runs "
+            "WHERE run_id = ?",
             (run_id,),
         ).fetchone()
         if run_state is None:
@@ -366,7 +368,9 @@ class DeliveryEventStore:
             "CANCELLED",
             "SUPERSEDED",
         }:
-            return
+            return False
+
+        materialized_changed = False
 
         incoming: dict[str, list[str]] = {
             node["id"]: []
@@ -450,6 +454,7 @@ class DeliveryEventStore:
                 # mutated so subsequent iterations see the new status without
                 # re-querying every node.
                 node["status"] = status
+                materialized_changed = True
                 changed = True
             if not changed:
                 break
@@ -464,20 +469,19 @@ class DeliveryEventStore:
         )
         confirmation_state = current[confirmation["id"]]["status"]
         if confirmation_state == "COMPLETED":
-            connection.execute(
-                "UPDATE runs SET status = 'COMPLETED', updated_at = ?, "
-                "completed_at = ? WHERE run_id = ?",
-                (at, at, run_id),
-            )
+            if run_state["status"] != "COMPLETED":
+                connection.execute(
+                    "UPDATE runs SET status = 'COMPLETED', updated_at = ?, "
+                    "completed_at = COALESCE(completed_at, ?) "
+                    "WHERE run_id = ?",
+                    (at, at, run_id),
+                )
+                materialized_changed = True
         elif any(
             node["status"] in {"BLOCKED", "CANCELLED"}
             for node in current.values()
         ):
-            connection.execute(
-                "UPDATE runs SET status = 'BLOCKED', updated_at = ? "
-                "WHERE run_id = ?",
-                (at, run_id),
-            )
+            desired_status = "BLOCKED"
         elif any(
             node["status"] == "PAUSED"
             for node in current.values()
@@ -485,14 +489,23 @@ class DeliveryEventStore:
             node["status"] in {"READY", "CLAIMED"}
             for node in current.values()
         ):
-            connection.execute(
-                "UPDATE runs SET status = 'PAUSED', updated_at = ? "
-                "WHERE run_id = ?",
-                (at, run_id),
-            )
+            desired_status = "PAUSED"
         else:
-            connection.execute(
-                "UPDATE runs SET status = 'ACTIVE', updated_at = ? "
-                "WHERE run_id = ? AND status != 'CANCELLED'",
-                (at, run_id),
-            )
+            desired_status = "ACTIVE"
+
+        if confirmation_state != "COMPLETED":
+            if run_state["status"] != desired_status:
+                connection.execute(
+                    "UPDATE runs SET status = ?, updated_at = ? "
+                    "WHERE run_id = ? AND status != 'CANCELLED'",
+                    (desired_status, at, run_id),
+                )
+                materialized_changed = True
+            elif touch_run or materialized_changed:
+                connection.execute(
+                    "UPDATE runs SET updated_at = ? WHERE run_id = ? "
+                    "AND status != 'CANCELLED'",
+                    (at, run_id),
+                )
+                materialized_changed = True
+        return materialized_changed

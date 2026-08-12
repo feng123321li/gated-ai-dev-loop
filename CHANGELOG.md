@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.10 — 2026-08-12
+
+发布提交：以 tag `v0.39.10` 指向的提交为准
+
+- **事件优先等待**：Graph 监控改为优先等待宿主原生 receiver 事件，并按首次心跳、心跳/进度陈旧阈值、租约和资源恢复时间设置稳定 deadline；无变化时不再每 10 秒滑动轮询，也不重复输出完整进度。
+- **空转与截止修复**：只读状态刷新不推进 Graph；无状态变化的 frontier 不再更新时间或重写投影。统一租约与 reservation 的截止边界，并修复已 CLAIMED reservation 的旧短 TTL 长期落在过去、诱发 `graph_frontier` 自旋的问题。
+- **按影响范围验证**：TASK 声明受影响路径并产出绑定 workspace 状态的结构化验证证据；TASK、GROUP 与 Delivery Review 可独立审查并复用仍为 `PASSED + EXACT_MATCH` 的证据，只对缺口、相关变更或高风险边界定向复跑。
+- **证据安全与性能**：Review 提交时重新校验证据新鲜度，相关代码变化会使复用失败关闭；scope 快照按项目批量捕获和去重，上游大 diff 使用紧凑引用，避免验证优化反而产生大量 Git 子进程和上下文膨胀。
+- **验证**：本地 Python 全量 381 项测试通过（1 项按环境条件跳过）；`compileall`、canonical/Plugin 生成镜像、release candidate、Claude Plugin manifest 与 `git diff --check` 均通过。
+
 ## 0.39.9 — 2026-08-12
 
 发布提交：以 tag `v0.39.9` 指向的提交为准

@@ -38,6 +38,18 @@ TASK Review、GROUP Review 和 Delivery Review 使用相同规则：
 
 `BLOCKED` 不是 Review 失败状态，只能在当前 scope 和权限内已经没有继续路径时使用并显式分类；`REPLAN_REQUIRED` 只用于必须改变冻结依赖、资源声明、项目范围或拓扑的情况。任一级真实 `BLOCKED` 都停止向上收敛；`REPLAN_REQUIRED` 由 frontier 进入 `REPLAN_HIERARCHY`，按执行说明等待用户决定，并在同一 Delivery 下评审下一 Revision。
 
+## 证据优先验证
+
+“完成完整声明验收”表示覆盖全部验收风险，不表示每个 Loop 都重复运行同一套全量测试：
+
+1. TASK 根据 changed files、依赖方向、公开契约和失败影响界定最小充分范围，在 `result.affectedScopes` 记录 project/path/module/contract、依赖依据与排除项；`paths` 必须是字面量仓库相对文件或目录，并覆盖相关依赖与契约锚点。优先执行对应测试类、受影响模块、构建或契约检查。测试完成后重新读取 `loop_context.currentWorkspaceSnapshots`，把其中全部 `BOUND` 状态写入该项 `testedWorkspaceSnapshots`；随后不要再修改相关代码再提交旧证据。每项结果写入 `result.verificationEvidence`，至少包含稳定 `evidenceId`、类型、检查名、命令摘要、scope、状态、完成时间，并用 `scopeRefs` 关联覆盖范围。
+2. Controller 在记录终态时用可信 Git 状态附加 `result.evidenceWorkspaceSnapshots` 与逐声明相关路径的 `result.evidenceScopeSnapshots`；Review 的 `validationEvidenceIndex` 将每项上游 evidence 标为 `EXACT_MATCH | CHANGED | UNBOUND`。带 `scopeRefs` 的证据只在相关路径内容变化时变为 `CHANGED`，后续 TASK 的无关文件修改不使它失效；没有安全有界路径的旧证据保守回退到整个 workspace。只有证据为通过、命令与结果可审计、scope 覆盖当前风险且状态为 `EXACT_MATCH` 时才可自动复用；非 Git、捕获不稳定或缺少绑定的旧结果为 `UNBOUND`，不得仅凭“测试通过”复用。`CHANGED` 先做影响分析，能界定时只补受影响范围。
+3. TASK Review 默认只补 TASK 未覆盖或高风险行为；GROUP Review 默认验证直接子项之间的 seam/integration；Delivery Review 默认确保覆盖矩阵和最新的最终 smoke/E2E 证据存在，已有充分且 `EXACT_MATCH` 的结果不再执行。各级 Review receiver 必须独立作出决定，但不机械重复同一全量命令。
+4. 证据缺失/失败、相关 workspace 局部变化或 Review 修正，只使受影响范围及其依赖证据失效并触发定向复跑。只有影响范围无法可靠界定、关键跨边界风险没有隔离检查，或冻结 Review payload 明确要求全量时，才运行全量套件。
+5. Review 在 `result.validationDecision` 记录 `REUSED | TARGETED_RERUN | FULL_RERUN`、复用与新执行的 evidence refs、risk triggers 和理由。上游 ref 使用 `{nodeId, attempt, evidenceId}`，避免不同 Loop 的同名 evidence 混淆。Review 修改代码、测试或配置后必须重新比较最终 workspace 状态；不得沿用修改前已失效的判断。
+
+Maven 等构建工具中的“模块全量单测”仍只是一个 evidence scope；除非冻结验收明确包含集成 profile，否则不能把默认 `test` 生命周期误报为已经覆盖独立的集成、兼容或 E2E 检查。
+
 ## Delivery Review
 
 根终态成功后，frontier 使 `DELIVERY_REVIEW_LOOP` Ready：
@@ -50,12 +62,25 @@ TASK Review、GROUP Review 和 Delivery Review 使用相同规则：
 
 Delivery Review 对普通实现缺陷、测试失败或未显式列入需求的工程正确性问题不得返回 `BLOCKED`。真实 `BLOCKED` 时外层只记录阻断，不解释 findings；返回 `REPLAN_REQUIRED` 时由 frontier 进入 `REPLAN_HIERARCHY`；只有 `SUCCEEDED` 才解锁最终用户确认。
 
-TASK Review、GROUP Review 和 Delivery Review 都自主管理内部 Gate、修正闭环、复审与 Skill 生命周期。独立性要求 Review 独立发现和重新验证，不禁止它推动或执行当前授权范围内的修正。`result.reviewFindings` 是确定性验收投影约定，不是新的调度状态；调度器不解释问题、不把问题转换成外层节点，也不创建 Graph 环。
+TASK Review、GROUP Review 和 Delivery Review 都自主管理内部 Gate、修正闭环、复审与 Skill 生命周期。独立性要求 Review 独立发现和重新验证，并作出自己的验证决策；这里的重新验证可以审查并复用充分、可审计且状态匹配的上游证据，不要求无条件重跑同一全量测试。它也不禁止 Review 推动或执行当前授权范围内的修正。`result.reviewFindings`、`result.verificationEvidence` 与 `result.validationDecision` 是有界验收投影约定，不是新的调度状态；调度器不解释问题、不把问题转换成外层节点，也不创建 Graph 环。
 
 Review 成功时使用以下结果约定；没有问题也提交空数组：
 
 ```json
 {
+  "validationDecision": {
+    "decision": "REUSED | TARGETED_RERUN | FULL_RERUN",
+    "reusedEvidenceRefs": [
+      {
+        "nodeId": "loop:t-example",
+        "attempt": 1,
+        "evidenceId": "task-targeted-tests"
+      }
+    ],
+    "executedEvidenceRefs": [],
+    "riskTriggers": [],
+    "rationale": "证据状态匹配且覆盖当前风险。"
+  },
   "reviewFindings": [
     {
       "severity": "P0 | P1 | P2",

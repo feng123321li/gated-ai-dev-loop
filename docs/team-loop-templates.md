@@ -53,3 +53,5 @@
 STANDARD 模板中的 TASK Review 通常复用 TASK 的资源键，因为 Review 可能在授权范围内推动修正；前驱关系本身也保证同一 TASK 的实现和 Review 不并发。纯只读 Review 可以不声明写资源，但不能据此获得未授权项目访问。
 
 GROUP Review 和 Delivery Review 只声明其真正需要独占的共享环境，不机械合并全部子 TASK claim。资源锁用于运行时冲突，依赖和 Review 顺序仍由 Graph edge 表达。
+
+模板不要把“独立 Review”写成“重复运行全量测试”。TASK payload 应允许 receiver 从真实 changed files、依赖和契约界定最小充分测试范围，并在 `verificationEvidence` 中记录 scope 与测试时 workspace 指纹。TASK Review 优先复用状态匹配的 TASK 证据并补缺口；GROUP Review 聚焦直接子项 seam；Delivery Review 聚焦覆盖矩阵与最终 smoke/E2E。只有影响范围无法界定或冻结验收明确要求时，模板才指定全量复跑。

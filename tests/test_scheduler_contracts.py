@@ -1173,6 +1173,17 @@ class McpSurfaceTests(unittest.TestCase):
                             "|---|---|\n"
                             "| provider review | 运行测试 |"
                         ),
+                        "changeFingerprint": "progress-fingerprint",
+                        "waitDirective": {
+                            "mode": "HOST_NATIVE_EVENT_OR_DEADLINE",
+                            "pollNotBefore": "2026-08-12T08:00:10Z",
+                            "interruptOn": [
+                                "NATIVE_RECEIVER_COMPLETED",
+                                "NATIVE_RECEIVER_NEEDS_ATTENTION",
+                            ],
+                            "onTimeout": "CALL_GRAPH_FRONTIER_ONCE",
+                            "suppressUnchangedCommentary": True,
+                        },
                     }
                 },
             },
@@ -1185,6 +1196,9 @@ class McpSurfaceTests(unittest.TestCase):
         self.assertIn("领取后仍没有首次独立心跳", rendered)
         self.assertIn("| provider review | 运行测试 |", rendered)
         self.assertNotIn("SUSPECT_NOT_STARTED", rendered)
+        self.assertIn("不要立即再次调用 `graph_frontier`", rendered)
+        self.assertIn("2026-08-12T08:00:10Z", rendered)
+        self.assertIn("原生 receiver 完成或需要关注", rendered)
         self.assertIn("progressMonitor", result["structuredContent"]["result"])
 
     def test_shared_controller_executes_without_mcp_context(self) -> None:
@@ -1214,6 +1228,39 @@ class McpSurfaceTests(unittest.TestCase):
         self.assertTrue(tools)
         self.assertEqual(len(tools), 32)
         self.assertNotIn("claim_current_task", {tool["name"] for tool in tools})
+        descriptions = {tool["name"]: tool["description"] for tool in tools}
+        self.assertIn(
+            "Never call it back-to-back",
+            descriptions["graph_frontier"],
+        )
+        self.assertIn(
+            "read-only periodic observation",
+            descriptions["graph_status"],
+        )
+        self.assertIn(
+            "obey postActionWait",
+            descriptions["plan_dispatch_batch"],
+        )
+        record_schema = next(
+            tool["inputSchema"]
+            for tool in tools
+            if tool["name"] == "record_loop_result"
+        )
+        result_properties = record_schema["properties"]["outcome"][
+            "properties"
+        ]["result"]["properties"]
+        self.assertIn("affectedScopes", result_properties)
+        self.assertIn("verificationEvidence", result_properties)
+        self.assertIn("evidenceWorkspaceSnapshots", result_properties)
+        self.assertIn("evidenceScopeSnapshots", result_properties)
+        self.assertIn("validationDecision", result_properties)
+        reused_ref = result_properties["validationDecision"]["properties"][
+            "reusedEvidenceRefs"
+        ]["items"]
+        self.assertEqual(
+            set(reused_ref["required"]),
+            {"nodeId", "attempt", "evidenceId"},
+        )
         self.assertTrue(
             all(
                 tool["inputSchema"]["additionalProperties"] is False
@@ -3699,6 +3746,16 @@ class McpSurfaceTests(unittest.TestCase):
                 "secondary uncommitted evidence\n",
                 encoding="utf-8",
             )
+            tested_snapshots = call_tool(
+                "loop_context",
+                {
+                    "root_id": "d-multi-evidence",
+                    "node_id": "loop:t-multi-evidence",
+                },
+                root=str(repository),
+                workspace_root=str(worktree),
+                trusted_host_adapter="codex",
+            )["currentWorkspaceSnapshots"]
             completed = call_tool(
                 "record_loop_result",
                 {
@@ -3708,7 +3765,42 @@ class McpSurfaceTests(unittest.TestCase):
                     "outcome": {
                         "status": "SUCCEEDED",
                         "summary": "Captured all project scopes",
-                        "result": {},
+                        "result": {
+                            "affectedScopes": [
+                                {
+                                    "scopeId": "secondary-change",
+                                    "projectId": "project-uncommitted",
+                                    "paths": ["secondary-uncommitted.txt"],
+                                    "modules": [],
+                                    "contracts": [],
+                                    "dependencyBasis": (
+                                        "Only the changed secondary file is in scope."
+                                    ),
+                                    "exclusions": [],
+                                }
+                            ],
+                            "verificationEvidence": [
+                                {
+                                    "evidenceId": "secondary-file-check",
+                                    "kind": "TEST",
+                                    "check": "Secondary project targeted check",
+                                    "command": "targeted secondary test",
+                                    "scope": "secondary-uncommitted.txt",
+                                    "scopeRefs": ["secondary-change"],
+                                    "status": "PASSED",
+                                    "tests": {
+                                        "total": 1,
+                                        "passed": 1,
+                                        "failed": 0,
+                                        "skipped": 0,
+                                    },
+                                    "completedAt": "2026-08-12T08:00:00Z",
+                                    "testedWorkspaceSnapshots": (
+                                        tested_snapshots
+                                    ),
+                                }
+                            ],
+                        },
                     },
                 },
                 root=str(repository),
@@ -3717,6 +3809,9 @@ class McpSurfaceTests(unittest.TestCase):
             )
             snapshots = completed["outcome"]["result"][
                 "workspaceChanges"
+            ]
+            evidence_binding = completed["outcome"]["result"][
+                "evidenceWorkspaceSnapshots"
             ]
             self.assertEqual(
                 [item["projectId"] for item in snapshots],
@@ -3728,6 +3823,173 @@ class McpSurfaceTests(unittest.TestCase):
                 "+secondary uncommitted evidence",
                 snapshots[1]["diff"],
             )
+            self.assertEqual(
+                [item["bindingState"] for item in evidence_binding],
+                ["BOUND", "BOUND"],
+            )
+            review_context = call_tool(
+                "loop_context",
+                {
+                    "root_id": "d-multi-evidence",
+                    "node_id": "review:task:t-multi-evidence",
+                },
+                root=str(repository),
+                workspace_root=str(worktree),
+                trusted_host_adapter="codex",
+            )
+            evidence_index = review_context["validationEvidenceIndex"]
+            self.assertEqual(
+                evidence_index["evidence"][0]["freshness"],
+                "EXACT_MATCH",
+            )
+            scope_binding = completed["outcome"]["result"][
+                "evidenceScopeSnapshots"
+            ][0]
+            self.assertEqual(scope_binding["bindingState"], "BOUND")
+            self.assertEqual(
+                scope_binding["paths"],
+                ["secondary-uncommitted.txt"],
+            )
+            self.assertEqual(
+                evidence_index["evidence"][0]["evidenceRef"],
+                {
+                    "nodeId": "loop:t-multi-evidence",
+                    "attempt": 1,
+                    "evidenceId": "secondary-file-check",
+                },
+            )
+            compact_upstream = review_context["upstreamLoopResults"][0][
+                "outcome"
+            ]["result"]["workspaceChanges"]
+            self.assertNotIn("diff", compact_upstream[1])
+            self.assertTrue(
+                compact_upstream[1]["diffOmittedFromLoopContext"]
+            )
+            Path(worktree, "unrelated-later-task.txt").write_text(
+                "unrelated workspace change\n",
+                encoding="utf-8",
+            )
+            unrelated_context = call_tool(
+                "loop_context",
+                {
+                    "root_id": "d-multi-evidence",
+                    "node_id": "review:task:t-multi-evidence",
+                },
+                root=str(repository),
+                workspace_root=str(worktree),
+                trusted_host_adapter="codex",
+            )
+            self.assertEqual(
+                unrelated_context["validationEvidenceIndex"]["evidence"][0][
+                    "freshness"
+                ],
+                "EXACT_MATCH",
+            )
+            Path(
+                secondary_worktree,
+                "secondary-uncommitted.txt",
+            ).write_text(
+                "secondary uncommitted evidence\nchanged after evidence\n",
+                encoding="utf-8",
+            )
+            changed_context = call_tool(
+                "loop_context",
+                {
+                    "root_id": "d-multi-evidence",
+                    "node_id": "review:task:t-multi-evidence",
+                },
+                root=str(repository),
+                workspace_root=str(worktree),
+                trusted_host_adapter="codex",
+            )
+            self.assertEqual(
+                changed_context["validationEvidenceIndex"]["evidence"][0][
+                    "freshness"
+                ],
+                "CHANGED",
+            )
+            review_node_id = "review:task:t-multi-evidence"
+            review_reservation = reserve_loop(
+                root=str(repository),
+                root_id="d-multi-evidence",
+                node_id=review_node_id,
+            )
+            call_tool(
+                "dispatch_loop",
+                {
+                    "root_id": "d-multi-evidence",
+                    "node_id": review_node_id,
+                    "owner": "reviewer-multi-evidence",
+                    "agent_id": review_reservation["agentId"],
+                    "dispatch_mode": review_reservation["dispatchMode"],
+                    "dispatch_transport": review_reservation[
+                        "dispatchTransport"
+                    ],
+                    "dispatch_reservation_id": review_reservation[
+                        "dispatchReservationId"
+                    ],
+                    "dispatch_decision_fingerprint": review_reservation[
+                        "dispatchDecisionFingerprint"
+                    ],
+                    "receiver_context_id": "review-context-multi-evidence",
+                    "operation_id": "review-op-multi-evidence",
+                },
+                root=str(repository),
+                workspace_root=str(worktree),
+                trusted_host_adapter="codex",
+            )
+            review_result_arguments = {
+                "root_id": "d-multi-evidence",
+                "node_id": review_node_id,
+                "operation_id": "review-op-multi-evidence",
+                "outcome": {
+                    "status": "SUCCEEDED",
+                    "summary": "Independently reviewed targeted evidence",
+                    "result": {
+                        "reviewFindings": [],
+                        "validationDecision": {
+                            "decision": "REUSED",
+                            "reusedEvidenceRefs": [
+                                {
+                                    "nodeId": "loop:t-multi-evidence",
+                                    "attempt": 1,
+                                    "evidenceId": "secondary-file-check",
+                                }
+                            ],
+                            "executedEvidenceRefs": [],
+                            "riskTriggers": [],
+                            "rationale": "Relevant paths were unchanged.",
+                        },
+                    },
+                },
+            }
+            with self.assertRaises(GatedLoopError) as stale_caught:
+                call_tool(
+                    "record_loop_result",
+                    review_result_arguments,
+                    root=str(repository),
+                    workspace_root=str(worktree),
+                    trusted_host_adapter="codex",
+                )
+            self.assertEqual(
+                stale_caught.exception.code,
+                "LOOP_EVIDENCE_STALE",
+            )
+            Path(
+                secondary_worktree,
+                "secondary-uncommitted.txt",
+            ).write_text(
+                "secondary uncommitted evidence\n",
+                encoding="utf-8",
+            )
+            reviewed = call_tool(
+                "record_loop_result",
+                review_result_arguments,
+                root=str(repository),
+                workspace_root=str(worktree),
+                trusted_host_adapter="codex",
+            )
+            self.assertEqual(reviewed["schedulerStatus"], "SUCCEEDED")
             task_directory = (
                 repository
                 / ".layered-delivery"
@@ -4592,19 +4854,25 @@ class McpSurfaceTests(unittest.TestCase):
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "must never use the 90-second first-heartbeat warning as a "
-                "sleep or polling interval",
+                "must never call graph_frontier or graph_status back-to-back",
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "A native child completion notification interrupts any wait "
-                "and triggers graph_frontier immediately",
+                "consume every immediate action in the current frontier before "
+                "waiting",
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "code inspection, root-cause confirmation, edit completion, "
-                "test start and completion, rework, Review, and final "
-                "verification",
+                "Review independence means independent judgment, not an "
+                "automatic full-suite rerun",
+                initialized["result"]["instructions"],
+            )
+            self.assertIn(
+                "test start and completion when tests are actually executed",
+                initialized["result"]["instructions"],
+            )
+            self.assertIn(
+                "obey its postActionWait",
                 initialized["result"]["instructions"],
             )
             self.assertIn(

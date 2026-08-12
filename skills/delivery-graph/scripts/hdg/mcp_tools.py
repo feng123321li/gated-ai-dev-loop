@@ -39,6 +39,16 @@ def _string(description: str) -> dict[str, Any]:
     }
 
 
+def _bounded_string(
+    description: str,
+    *,
+    maximum: int,
+) -> dict[str, Any]:
+    value = _string(description)
+    value["maxLength"] = maximum
+    return value
+
+
 ROOT_ID = _string("Frozen Delivery and Graph run ID.")
 BASE_REF = {
     "type": "string",
@@ -116,6 +126,314 @@ OUTCOME = _object(
                 "TASK or Delivery ownership."
             ),
             "properties": {
+                "affectedScopes": {
+                    "type": "array",
+                    "maxItems": 64,
+                    "description": (
+                        "Loop-declared bounded change and risk scopes used to "
+                        "explain targeted verification coverage."
+                    ),
+                    "items": _object(
+                        {
+                            "scopeId": _bounded_string(
+                                "Stable scope ID within this Loop result.",
+                                maximum=192,
+                            ),
+                            "projectId": _bounded_string(
+                                "Verified project scope ID.",
+                                maximum=192,
+                            ),
+                            "paths": {
+                                "type": "array",
+                                "maxItems": 256,
+                                "items": _bounded_string(
+                                    "Repository-relative affected path.",
+                                    maximum=1024,
+                                ),
+                            },
+                            "modules": {
+                                "type": "array",
+                                "maxItems": 128,
+                                "items": _bounded_string(
+                                    "Affected build or runtime module.",
+                                    maximum=512,
+                                ),
+                            },
+                            "contracts": {
+                                "type": "array",
+                                "maxItems": 128,
+                                "items": _bounded_string(
+                                    "Affected public or internal contract.",
+                                    maximum=1024,
+                                ),
+                            },
+                            "dependencyBasis": _bounded_string(
+                                "Why these dependents and boundaries are in scope.",
+                                maximum=2048,
+                            ),
+                            "exclusions": {
+                                "type": "array",
+                                "maxItems": 128,
+                                "items": _bounded_string(
+                                    "Checked exclusion with a concise reason.",
+                                    maximum=1024,
+                                ),
+                            },
+                        },
+                        required=[
+                            "scopeId",
+                            "projectId",
+                            "paths",
+                            "modules",
+                            "contracts",
+                            "dependencyBasis",
+                            "exclusions",
+                        ],
+                    ),
+                },
+                "verificationEvidence": {
+                    "type": "array",
+                    "maxItems": 128,
+                    "description": (
+                        "Bounded Loop-reported checks. Reviewers may reuse only "
+                        "passing evidence whose scope and tested workspace "
+                        "snapshots still match the relevant code state."
+                    ),
+                    "items": _object(
+                        {
+                            "evidenceId": _bounded_string(
+                                "Stable reference unique within this Loop result.",
+                                maximum=192,
+                            ),
+                            "kind": {
+                                "type": "string",
+                                "enum": [
+                                    "TEST",
+                                    "BUILD",
+                                    "STATIC",
+                                    "CONTRACT",
+                                    "INSPECTION",
+                                    "SMOKE",
+                                    "E2E",
+                                ],
+                            },
+                            "check": _bounded_string(
+                                "Auditable check or suite name.",
+                                maximum=512,
+                            ),
+                            "command": _bounded_string(
+                                "Sanitized command or invocation summary.",
+                                maximum=2048,
+                            ),
+                            "scope": _bounded_string(
+                                "Files, module, contract, or behavior covered.",
+                                maximum=2048,
+                            ),
+                            "scopeRefs": {
+                                "type": "array",
+                                "maxItems": 64,
+                                "items": _bounded_string(
+                                    "scopeId covered by this evidence.",
+                                    maximum=192,
+                                ),
+                            },
+                            "status": {
+                                "type": "string",
+                                "enum": ["PASSED", "FAILED", "SKIPPED"],
+                            },
+                            "tests": _object(
+                                {
+                                    "total": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                    },
+                                    "passed": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                    },
+                                    "failed": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                    },
+                                    "skipped": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                    },
+                                },
+                                required=[
+                                    "total",
+                                    "passed",
+                                    "failed",
+                                    "skipped",
+                                ],
+                            ),
+                            "completedAt": _bounded_string(
+                                "ISO 8601 completion timestamp.",
+                                maximum=64,
+                            ),
+                            "testedWorkspaceSnapshots": {
+                                "type": "array",
+                                "maxItems": 32,
+                                "items": _object(
+                                    {
+                                        "projectId": _bounded_string(
+                                            "Verified project scope ID.",
+                                            maximum=192,
+                                        ),
+                                        "bindingState": {"const": "BOUND"},
+                                        "headCommit": _bounded_string(
+                                            "Git HEAD tested by this check.",
+                                            maximum=128,
+                                        ),
+                                        "workingTreeStateFingerprint": FINGERPRINT,
+                                    },
+                                    required=[
+                                        "projectId",
+                                        "bindingState",
+                                        "headCommit",
+                                        "workingTreeStateFingerprint",
+                                    ],
+                                ),
+                            },
+                        },
+                        required=[
+                            "evidenceId",
+                            "kind",
+                            "check",
+                            "command",
+                            "scope",
+                            "status",
+                            "completedAt",
+                        ],
+                    ),
+                },
+                "evidenceWorkspaceSnapshots": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "description": (
+                        "Controller-owned lightweight workspace state captured "
+                        "with the terminal result. Caller input is overwritten."
+                    ),
+                    "items": _object(
+                        {
+                            "projectId": _bounded_string(
+                                "Verified project scope ID.",
+                                maximum=192,
+                            ),
+                            "bindingState": {
+                                "type": "string",
+                                "enum": ["BOUND", "UNBOUND", "UNSTABLE"],
+                            },
+                            "headCommit": _bounded_string(
+                                "Git HEAD captured with the result.",
+                                maximum=128,
+                            ),
+                            "workingTreeStateFingerprint": FINGERPRINT,
+                        },
+                        required=["projectId", "bindingState"],
+                    ),
+                },
+                "evidenceScopeSnapshots": {
+                    "type": "array",
+                    "maxItems": 64,
+                    "description": (
+                        "Controller-owned state of the affected scope's "
+                        "declared relevant paths. Unrelated workspace edits "
+                        "do not invalidate a BOUND scope fingerprint."
+                    ),
+                    "items": _object(
+                        {
+                            "scopeId": _bounded_string(
+                                "affectedScopes scope ID.",
+                                maximum=192,
+                            ),
+                            "projectId": _bounded_string(
+                                "Verified project scope ID.",
+                                maximum=192,
+                            ),
+                            "paths": {
+                                "type": "array",
+                                "maxItems": 256,
+                                "items": _bounded_string(
+                                    "Literal repository-relative relevant path.",
+                                    maximum=1024,
+                                ),
+                            },
+                            "bindingState": {
+                                "type": "string",
+                                "enum": ["BOUND", "UNBOUND", "UNSTABLE"],
+                            },
+                            "stateFingerprint": FINGERPRINT,
+                            "fileCount": {
+                                "type": "integer",
+                                "minimum": 0,
+                            },
+                        },
+                        required=[
+                            "scopeId",
+                            "projectId",
+                            "paths",
+                            "bindingState",
+                        ],
+                    ),
+                },
+                "validationDecision": _object(
+                    {
+                        "decision": {
+                            "type": "string",
+                            "enum": [
+                                "REUSED",
+                                "TARGETED_RERUN",
+                                "FULL_RERUN",
+                            ],
+                        },
+                        "reusedEvidenceRefs": {
+                            "type": "array",
+                            "maxItems": 128,
+                            "items": _object(
+                                {
+                                    "nodeId": NODE_ID,
+                                    "attempt": {
+                                        "type": "integer",
+                                        "minimum": 1,
+                                    },
+                                    "evidenceId": _bounded_string(
+                                        "Evidence ID within the source Loop result.",
+                                        maximum=192,
+                                    ),
+                                },
+                                required=["nodeId", "attempt", "evidenceId"],
+                            ),
+                        },
+                        "executedEvidenceRefs": {
+                            "type": "array",
+                            "maxItems": 128,
+                            "items": _bounded_string(
+                                "evidenceId from this Review result.",
+                                maximum=192,
+                            ),
+                        },
+                        "riskTriggers": {
+                            "type": "array",
+                            "maxItems": 64,
+                            "items": _bounded_string(
+                                "Risk or evidence gap that caused rerun scope.",
+                                maximum=1024,
+                            ),
+                        },
+                        "rationale": _bounded_string(
+                            "Concise independent Review rationale.",
+                            maximum=4096,
+                        ),
+                    },
+                    required=[
+                        "decision",
+                        "reusedEvidenceRefs",
+                        "executedEvidenceRefs",
+                        "riskTriggers",
+                        "rationale",
+                    ],
+                ),
                 "workerTelemetry": {
                     "type": "array",
                     "maxItems": 128,
@@ -696,7 +1014,10 @@ TOOLS = (
             "receiver inherits the current host model; Delivery Graph "
             "does not inspect model inventory, recommend a model, or "
             "control Loop-internal workers. Returns receiver identities "
-            "and decision fingerprints; never starts Agents or claims Loops."
+            "and decision fingerprints; never starts Agents or claims Loops. "
+            "After consuming every assignment, obey postActionWait: wait for "
+            "a receiver event or the earliest reservation deadline, then call "
+            "graph_frontier once; never busy-poll."
         ),
         _object(
             {
@@ -754,7 +1075,12 @@ TOOLS = (
     ),
     _tool(
         "graph_frontier",
-        "Advance scheduler bookkeeping and return the next Graph actions.",
+        (
+            "Advance scheduler bookkeeping and return the next Graph actions. "
+            "Consume every returned immediate action, then follow "
+            "progressMonitor.waitDirective. Never call it back-to-back; use "
+            "graph_status for any permitted periodic observation."
+        ),
         _object(
             {"root_id": ROOT_ID},
             required=["root_id"],
@@ -828,7 +1154,13 @@ TOOLS = (
     ),
     _tool(
         "graph_status",
-        "Read the current materialized Graph and Loop states.",
+        (
+            "Read the current materialized Graph and Loop states. Use it only "
+            "for read-only periodic observation at or after "
+            "progressMonitor.waitDirective.pollNotBefore, never back-to-back. "
+            "Call graph_frontier only for returned actions, receiver events, "
+            "nextWakeAt, or ADVANCE_REQUIRED."
+        ),
         _object(
             {"root_id": ROOT_ID},
             required=["root_id"],

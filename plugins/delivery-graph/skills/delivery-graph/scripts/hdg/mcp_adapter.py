@@ -157,15 +157,20 @@ SERVER_INSTRUCTIONS = (
     "create_manual_handoff with the current revision, "
     "USER_EXPLICIT_SAME_DELIVERY, and a revision reason; it creates the next "
     "immutable manual revision in the same directory. While native "
-    "child Agents run in the background, the main orchestrator polls "
-    "graph_frontier after exactly the returned progress monitor interval; it "
-    "must never use the 90-second first-heartbeat warning as a sleep or "
-    "polling interval. A native child completion notification interrupts any "
-    "wait and triggers graph_frontier immediately. Show "
-    "progressMonitor.markdownTable in user commentary whenever progress or "
-    "alerts change. Each claimed STANDARD Loop calls report_loop_progress at "
+    "child Agents run in the background, consume every immediate action in "
+    "the current frontier before waiting. Then use the host's native receiver "
+    "wait until a completion or needs-attention event, or until the returned "
+    "waitDirective deadline. A receiver event triggers graph_frontier once; a "
+    "poll deadline triggers one read-only graph_status call; nextWakeAt or "
+    "ADVANCE_REQUIRED triggers graph_frontier once. The host must never call "
+    "graph_frontier or graph_status back-to-back, and the 90-second first-"
+    "heartbeat warning is not a polling interval. Show "
+    "progressMonitor.markdownTable in user commentary only when "
+    "changeFingerprint changes or a new alert requires attention. Each "
+    "claimed STANDARD Loop calls report_loop_progress at "
     "meaningful milestones including code inspection, root-cause "
-    "confirmation, edit completion, test start and completion, rework, "
+    "confirmation, edit completion, test start and completion when tests are "
+    "actually executed, rework, "
     "Review, and final verification, using concise summaries in the user's "
     "current language. A long-running test or build must use a non-blocking "
     "process or separate monitor so the receiver can heartbeat while it "
@@ -174,9 +179,24 @@ SERVER_INSTRUCTIONS = (
     "and final verification; a "
     "short problem-free LIGHT Loop may report only final verification. "
     "Heartbeat remains lease-only and raw graph events remain diagnostic-only. "
+    "After plan_dispatch_batch creates reservations, consume all assignments "
+    "and obey its postActionWait: wait for a receiver event or the earliest "
+    "reservation deadline, then call graph_frontier once. "
     "Each TASK or Review Loop owns its internal "
-    "plan, tests, "
-    "gates, rework, and Skill usage. A payload carries goals, explicit "
+    "plan, tests, gates, rework, and Skill usage. A TASK runs the smallest "
+    "affected verification scope that covers its change and reports auditable "
+    "verificationEvidence. Review independence means independent judgment, "
+    "not an automatic full-suite rerun. A Review reuses passing upstream "
+    "evidence when its scope still covers the risk and the relevant workspace "
+    "path snapshot is unchanged; unrelated workspace edits do not invalidate "
+    "a bound scope. It then reruns only gaps, findings, and risky seams. "
+    "TASK Review defaults to task gaps, GROUP Review to child seams, and "
+    "Delivery Review ensures the coverage matrix plus fresh final smoke or "
+    "E2E evidence, reusing an exact state match. A full "
+    "rerun is reserved for an unbounded impact scope, critical cross-boundary "
+    "risk without isolated checks, or an explicit frozen requirement. A "
+    "relevant edit invalidates only the affected evidence and dependents. A "
+    "payload carries goals, explicit "
     "constraints, and known acceptance input rather than a complete "
     "implementation specification. The reserved databaseChanges payload is "
     "the exception: table before/after structure and migration policy are "
@@ -440,12 +460,111 @@ def _tool_result(
     )
     if not is_error and isinstance(markdown_table, str) and markdown_table:
         alerts = progress_monitor.get("alerts", [])
+        wait_directive = progress_monitor.get("waitDirective")
+        wait_mode = (
+            wait_directive.get("mode")
+            if isinstance(wait_directive, dict)
+            else None
+        )
+        poll_not_before = (
+            wait_directive.get("pollNotBefore")
+            if isinstance(wait_directive, dict)
+            else None
+        )
+        poll_tool = (
+            wait_directive.get("pollTool")
+            if isinstance(wait_directive, dict)
+            else None
+        )
+        consume_actions = (
+            wait_directive.get("consumeActionsBeforeWaiting") is True
+            if isinstance(wait_directive, dict)
+            else False
+        )
+        immediate_actions = (
+            wait_directive.get("immediateActions", [])
+            if isinstance(wait_directive, dict)
+            else []
+        )
+        native_wake = (
+            wait_directive.get("nativeWakeDirective")
+            if isinstance(wait_directive, dict)
+            else None
+        )
+        native_wake_instruction = ""
+        if isinstance(native_wake, dict):
+            schedule_after = native_wake.get("scheduleAfter")
+            cancel_instruction = (
+                "先取消旧的重复监控，"
+                if native_wake.get("cancelRecurringMonitors") is True
+                else ""
+            )
+            if isinstance(schedule_after, str):
+                native_wake_instruction = (
+                    cancel_instruction
+                    + "在容量截止时间后留少量安全余量，创建一次宿主原生 "
+                    f"one-shot 唤醒（截止 {schedule_after}）；到时调用一次 "
+                    "`graph_frontier`。"
+                )
         alert_lines = [
             f"- ⚠️ {item['messageZh']}"
             for item in alerts
             if isinstance(item, dict)
             and isinstance(item.get("messageZh"), str)
         ]
+        if wait_mode in {
+            "ADVANCE_REQUIRED",
+            "FRONTIER_ACTIONS_AVAILABLE",
+        }:
+            refresh_instruction = (
+                "检测到需要推进或消费的 Graph 动作；立即调用一次 "
+                "`graph_frontier`，不要继续轮询 `graph_status`。"
+            )
+        elif wait_mode in {
+            "HOST_NATIVE_EVENT_OR_DEADLINE",
+            "CONSUME_ACTIONS_THEN_HOST_NATIVE_EVENT_OR_DEADLINE",
+        } and isinstance(poll_not_before, str):
+            action_instruction = (
+                "先完整消费本响应的立即动作："
+                + "、".join(str(item) for item in immediate_actions)
+                + "。"
+                if consume_actions and immediate_actions
+                else ""
+            )
+            action_instruction += native_wake_instruction
+            timeout_instruction = (
+                f"无事件时最早在 {poll_not_before} 调用一次只读 "
+                "`graph_status`。"
+                if poll_tool == "graph_status"
+                else f"无事件时等到 {poll_not_before} 再调用一次 "
+                "`graph_frontier`。"
+            )
+            refresh_instruction = (
+                action_instruction
+                + "随后不要立即再次调用 `graph_frontier`。先使用宿主原生等待"
+                "能力，直到原生 receiver 完成或需要关注；"
+                + timeout_instruction
+                + "仅在 receiver 事件或 `nextWakeAt` 到达时调用一次 "
+                "`graph_frontier`。`changeFingerprint` 未变化时不要重复播报进度。"
+            )
+        elif wait_mode == "CONSUME_ACTIONS_FIRST":
+            refresh_instruction = (
+                "先完整消费本响应的立即动作："
+                + "、".join(str(item) for item in immediate_actions)
+                + "。"
+                + native_wake_instruction
+                + "不要用连续 `graph_frontier` 调用代替动作处理。"
+            )
+        elif wait_mode == "DEADLINE_ONLY":
+            refresh_instruction = (
+                "使用宿主原生等待能力等到 `nextWakeAt`，届时调用一次 "
+                "`graph_frontier`；不要忙轮询。"
+            )
+        else:
+            refresh_instruction = (
+                "当前没有自动等待要求；按返回状态继续，不要连续调用 "
+                "`graph_frontier`。"
+            )
         text = "\n".join(
             [
                 "## 后台执行进度",
@@ -454,10 +573,8 @@ def _tool_result(
                 *([""] if alert_lines else []),
                 markdown_table,
                 "",
-                (
-                    "主 Agent 应按建议间隔继续刷新；原始事件仅用于"
-                    "展开诊断。"
-                ),
+                refresh_instruction,
+                "原始事件仅用于展开诊断。",
             ]
         )
     else:

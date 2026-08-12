@@ -4,7 +4,7 @@
 
 `delivery-graph` 把已经确认的软件需求冻结为可执行、可审查、可恢复的 Delivery Graph，再协调宿主原生 Agent 完成实现、分层 Review 和最终验收。
 
-当前版本：**0.39.9** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
+当前版本：**0.39.10** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
 
 ## 它做什么
 
@@ -97,6 +97,10 @@ TASK receiver 调用 `record_loop_result` 时，Controller 会从已验证的可
 新会话用保存的 `rootId` 显式调用 `workspace_status(root_id=...)` 恢复目标 Delivery，再读取 Graph frontier；无参调用出现多个候选时只做选择，不推进任何候选。活动 receiver 通过 Graph `progressMonitor` 显示 TASK 与 Review，并由 heartbeat 与 lease 治理；失联、租约过期或可重试失败只在各自安全边界恢复。需求发生变化时创建同一 Delivery 的下一 Revision，不覆写已经冻结的版本。
 
 AUTOMATIC 的每个 READY TASK 与 Review 都先由 `plan_dispatch_batch` 生成一次性 reservation，再由独立宿主原生 receiver 用匹配的 decision fingerprint、自己的 context 和显式 `operation_id` 调用 `dispatch_loop`。后续 mutation 继续受 workspace、Graph、项目 scope、lease 与 operation 校验。
+
+后台 receiver 运行时不忙轮询：当前 frontier 的立即 action 全部消费后，宿主按 `progressMonitor.waitDirective` 使用原生完成事件等待；无事件只在 `pollNotBefore` 做一次只读 `graph_status`，该截止直接对齐首次心跳、进度陈旧、失联或租约等下一个有意义健康阈值，不再固定每 10 秒刷新。receiver 事件、`nextWakeAt` 或 `ADVANCE_REQUIRED` 才调用一次 `graph_frontier`。`changeFingerprint` 未变化时不重复播报相同进度。
+
+验证采用证据优先策略。TASK 只运行覆盖 `affectedScopes` 的测试/构建/契约检查；Controller 把 `verificationEvidence` 与终态 workspace 及声明的相关路径绑定。后续无关文件变化不会使该证据失效，相关路径变化才标为 `CHANGED`。TASK/GROUP/Delivery Review 保持独立判断，但只自动复用 `validationEvidenceIndex` 中 `PASSED + EXACT_MATCH` 的上游证据，再定向补齐缺口、`CHANGED/UNBOUND` 和高风险边界。只有影响范围无法界定、关键跨边界风险缺少隔离检查或冻结要求明确指定时才升级全量复跑。
 
 Plugin 不注册生命周期 Hook，也没有 Hook trust 步骤。代价是 Controller 不再密码学证明真实宿主 session、parent-child 或 Review receiver 独立性；独立 child 由宿主编排协议保证，控制面只验证 Adapter/workspace、reservation/fingerprint 和 operation capability。
 

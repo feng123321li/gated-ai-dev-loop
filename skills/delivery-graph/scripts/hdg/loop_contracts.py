@@ -15,6 +15,13 @@ LOOP_TERMINAL_STATUSES = (
     "CANCELLED",
 )
 LOOP_ASSURANCE_PROFILES = ("LIGHT", "STANDARD")
+LOOP_KINDS = (
+    "TASK_LOOP",
+    "TASK_REVIEW_LOOP",
+    "GROUP_REVIEW_LOOP",
+    "DELIVERY_REVIEW_LOOP",
+)
+REVIEW_LOOP_KINDS = frozenset(LOOP_KINDS[1:])
 
 LOOP_REFERENCE = re.compile(r"^[a-z0-9][a-z0-9._:/@-]{0,191}$")
 RESOURCE_CLAIM = re.compile(r"^[a-z0-9][a-z0-9._:/@-]{0,255}$")
@@ -51,7 +58,7 @@ _LOOP_EXECUTION_POLICY = {
         "reportAt": [
             "LOOP_START",
             "CODE_INSPECTION_COMPLETE",
-            "TEST_RUN",
+            "TEST_RUN_IF_EXECUTED",
             "ISSUE_FOUND",
             "FIX_APPLIED",
             "REREVIEW",
@@ -113,6 +120,28 @@ _LOOP_COMPLETION_POLICY = {
         "severities": ["P0", "P1", "P2"],
         "p0p1": "RESOLVE_AND_REREVIEW_BEFORE_SUCCEEDED",
         "p2": "ALWAYS_LIST_IN_ACCEPTANCE_REPORT",
+    },
+    "verificationEvidence": {
+        "resultField": "verificationEvidence",
+        "source": "LOOP_REPORTED_OPAQUE_TO_SCHEDULER",
+        "recommendedFields": [
+            "evidenceId",
+            "kind",
+            "check",
+            "command",
+            "scope",
+            "status",
+            "tests",
+            "completedAt",
+            "testedWorkspaceSnapshots",
+        ],
+        "stateBindingRequiredForReuse": True,
+        "missingStateBinding": "NOT_REUSABLE",
+        "controllerBindingField": "evidenceWorkspaceSnapshots",
+        "controllerRelevantScopeBindingField": "evidenceScopeSnapshots",
+        "unrelatedWorkspaceChanges": "DO_NOT_INVALIDATE_BOUND_SCOPE_PATHS",
+        "freshnessValues": ["EXACT_MATCH", "CHANGED", "UNBOUND"],
+        "reviewDecisionResultField": "validationDecision",
     },
     "workspaceChanges": {
         "resultField": "workspaceChanges",
@@ -275,13 +304,88 @@ def loop_execution_policy(
 
 def loop_completion_policy(
     assurance_profile: str = "STANDARD",
+    *,
+    loop_kind: str = "TASK_LOOP",
 ) -> dict[str, Any]:
     """Return the boundary between internal rework and terminal outcomes."""
 
     profile = validate_loop_assurance_profile(assurance_profile)
+    if loop_kind not in LOOP_KINDS:
+        fail(
+            "LOOP_POLICY_INVALID",
+            "Loop kind is invalid for completion policy",
+            allowed=list(LOOP_KINDS),
+        )
     policy = deepcopy(_LOOP_COMPLETION_POLICY)
     policy["assuranceProfile"] = profile
-    policy["verificationScope"] = "FULL_DECLARED_ACCEPTANCE"
+    policy["verificationScope"] = (
+        "AFFECTED_SCOPE_SUFFICIENT_FOR_DECLARED_ACCEPTANCE"
+    )
+    policy["verificationStrategy"] = {
+        "mode": "AFFECTED_SCOPE_FIRST",
+        "scopeBasis": [
+            "CHANGED_FILES",
+            "DIRECT_DEPENDENCIES",
+            "PUBLIC_CONTRACTS",
+            "FAILURE_IMPACT",
+        ],
+        "default": "RUN_MINIMUM_SUFFICIENT_CHECKS",
+        "fullRerunTriggers": [
+            "AFFECTED_SCOPE_CANNOT_BE_BOUNDED",
+            "CRITICAL_CROSS_BOUNDARY_RISK_LACKS_ISOLATED_CHECKS",
+            "FROZEN_TASK_PAYLOAD_EXPLICITLY_REQUIRES_FULL_RERUN",
+        ],
+        "recordResultField": "verificationEvidence",
+        "recordAffectedScopesField": "affectedScopes",
+    }
+    if loop_kind in REVIEW_LOOP_KINDS:
+        policy["verificationScope"] = (
+            "FULL_DECLARED_ACCEPTANCE_WITH_EVIDENCE_REUSE"
+        )
+        policy["verificationStrategy"] = {
+            "mode": "EVIDENCE_FIRST_TARGETED_RERUN",
+            "independence": (
+                "INDEPENDENT_JUDGMENT_NOT_AUTOMATIC_FULL_RERUN"
+            ),
+            "reuseSources": [
+                "validationEvidenceIndex",
+                "upstreamLoopResults.outcome.result.verificationEvidence",
+                "upstreamLoopResults.outcome.result.workspaceChanges",
+            ],
+            "reuseRequires": [
+                "UPSTREAM_CHECK_PASSED",
+                "CHECK_SCOPE_COVERS_CURRENT_RISK",
+                "WORKSPACE_SNAPSHOT_UNCHANGED_FOR_RELEVANT_FILES",
+                "COMMAND_AND_RESULT_ARE_AUDITABLE",
+            ],
+            "rerunDefault": (
+                "TARGET_GAPS_FINDINGS_AND_HIGH_RISK_BOUNDARIES"
+            ),
+            "evidenceInvalidationTriggers": [
+                "UPSTREAM_EVIDENCE_MISSING_OR_FAILED",
+                "RELEVANT_WORKSPACE_CHANGED_AFTER_EVIDENCE",
+                "REVIEW_FIX_APPLIED",
+            ],
+            "onEvidenceInvalidation": (
+                "RERUN_AFFECTED_SCOPE_AND_DEPENDENTS"
+            ),
+            "fullRerunTriggers": [
+                "AFFECTED_SCOPE_CANNOT_BE_BOUNDED",
+                "CRITICAL_CROSS_BOUNDARY_RISK_LACKS_ISOLATED_CHECKS",
+                "FROZEN_REVIEW_PAYLOAD_EXPLICITLY_REQUIRES_FULL_RERUN",
+            ],
+        }
+        policy["verificationStrategy"]["layerDefault"] = {
+            "TASK_REVIEW_LOOP": (
+                "INSPECT_TASK_AND_TARGET_UNCOVERED_OR_RISKY_BEHAVIOR"
+            ),
+            "GROUP_REVIEW_LOOP": (
+                "VERIFY_DIRECT_CHILD_SEAMS_AND_GROUP_INTEGRATION"
+            ),
+            "DELIVERY_REVIEW_LOOP": (
+                "ENSURE_COVERAGE_MATRIX_AND_FRESH_FINAL_SMOKE_OR_E2E_EVIDENCE"
+            ),
+        }[loop_kind]
     if profile == "LIGHT":
         policy["verificationScope"] = "TARGETED_FOR_DECLARED_CHANGE"
         policy["reviewCycle"] = (
@@ -293,7 +397,9 @@ def loop_completion_policy(
 
 __all__ = (
     "LOOP_ASSURANCE_PROFILES",
+    "LOOP_KINDS",
     "LOOP_TERMINAL_STATUSES",
+    "REVIEW_LOOP_KINDS",
     "loop_completion_policy",
     "loop_execution_policy",
     "resource_claims_overlap",

@@ -1168,12 +1168,14 @@ class SchedulerRepository:
         run_id: str,
         *,
         at: str,
-    ) -> None:
+        touch_run: bool = True,
+    ) -> bool:
         return self._delivery_event_store().refresh_ready(
             connection,
             graph,
             run_id,
             at=at,
+            touch_run=touch_run,
         )
 
     def write_projections(

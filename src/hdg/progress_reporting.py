@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from math import ceil
 from types import MappingProxyType
 from typing import Any
 
 from .errors import GatedLoopError, fail
+from .jsonio import fingerprint
 
 
 PROGRESS_PHASES = (
@@ -64,7 +66,14 @@ STATE_HEALTH_TEXT = MappingProxyType(
 
 FIRST_HEARTBEAT_WARNING_SECONDS = 90
 PROGRESS_WARNING_SECONDS = 5 * 60
-RECOMMENDED_POLL_SECONDS = 10
+RECOMMENDED_POLL_SECONDS = FIRST_HEARTBEAT_WARNING_SECONDS
+
+
+def _timestamp(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat().replace(
+        "+00:00",
+        "Z",
+    )
 
 
 def _human_text(
@@ -334,7 +343,7 @@ def _claimed_health(
         )
     if (
         first_heartbeat is None
-        and (claim_age or 0) > FIRST_HEARTBEAT_WARNING_SECONDS
+        and (claim_age or 0) >= FIRST_HEARTBEAT_WARNING_SECONDS
     ):
         if isinstance(progress, dict):
             return (
@@ -347,8 +356,8 @@ def _claimed_health(
             "疑似未启动",
             "领取后超过 90 秒仍没有首次独立心跳。",
         )
-    if (heartbeat_age or 0) > heartbeat_stale_seconds:
-        if (progress_age or 0) > heartbeat_stale_seconds:
+    if (heartbeat_age or 0) >= heartbeat_stale_seconds:
+        if (progress_age or 0) >= heartbeat_stale_seconds:
             return (
                 "SUSPECT_LOST",
                 "疑似失联",
@@ -359,13 +368,57 @@ def _claimed_health(
             "进度有更新但心跳异常",
             "仍有业务进度，但心跳已超过预期窗口。",
         )
-    if (progress_age or 0) > PROGRESS_WARNING_SECONDS:
+    if (progress_age or 0) >= PROGRESS_WARNING_SECONDS:
         return (
             "ALIVE_WITHOUT_PROGRESS",
             "存活但无可见进展",
             "心跳仍正常，但超过 5 分钟没有业务进度。",
         )
     return ("HEALTHY", "运行正常", None)
+
+
+def _next_health_deadline(
+    state: dict[str, Any],
+    *,
+    health: str,
+    observed: datetime,
+    heartbeat_stale_seconds: int,
+) -> datetime | None:
+    candidates: list[datetime] = []
+    lease = _parse_timestamp(state.get("leaseExpiresAt"))
+    if lease is not None and lease > observed:
+        candidates.append(lease)
+    claimed = _parse_timestamp(state.get("claimedAt"))
+    heartbeat = _parse_timestamp(state.get("lastHeartbeatAt"))
+    progress = state.get("progress")
+    progress_at = _parse_timestamp(
+        progress.get("reportedAt") if isinstance(progress, dict) else None
+    )
+    progress_base = progress_at or claimed
+    if health == "HEALTHY":
+        if state.get("firstHeartbeatAt") is None and claimed is not None:
+            candidates.append(
+                claimed + timedelta(seconds=FIRST_HEARTBEAT_WARNING_SECONDS)
+            )
+        else:
+            if heartbeat is not None:
+                candidates.append(
+                    heartbeat + timedelta(seconds=heartbeat_stale_seconds)
+                )
+            if progress_base is not None:
+                candidates.append(
+                    progress_base + timedelta(seconds=PROGRESS_WARNING_SECONDS)
+                )
+    elif health == "HEARTBEAT_STALE" and progress_base is not None:
+        candidates.append(
+            progress_base + timedelta(seconds=heartbeat_stale_seconds)
+        )
+    elif health == "ALIVE_WITHOUT_PROGRESS" and heartbeat is not None:
+        candidates.append(
+            heartbeat + timedelta(seconds=heartbeat_stale_seconds)
+        )
+    future = [candidate for candidate in candidates if candidate > observed]
+    return min(future, default=None)
 
 
 def build_progress_monitor(
@@ -384,6 +437,7 @@ def build_progress_monitor(
     )
     rows: list[dict[str, Any]] = []
     alerts: list[dict[str, Any]] = []
+    health_deadlines: list[datetime] = []
     for state in run["nodes"]:
         definition = definitions[state["nodeId"]]
         kind_text = LOOP_KIND_TEXT.get(definition["kind"])
@@ -398,6 +452,14 @@ def build_progress_monitor(
                 observed=observed,
                 heartbeat_stale_seconds=heartbeat_stale_seconds,
             )
+            health_deadline = _next_health_deadline(
+                state,
+                health=health,
+                observed=observed,
+                heartbeat_stale_seconds=heartbeat_stale_seconds,
+            )
+            if health_deadline is not None:
+                health_deadlines.append(health_deadline)
             if state.get("firstHeartbeatAt") is None:
                 heartbeat_zh = (
                     "尚无独立心跳；领取 "
@@ -482,9 +544,111 @@ def build_progress_monitor(
         + " |"
         for row in rows
     ]
+    meaningful_rows = [
+        {
+            key: row.get(key)
+            for key in (
+                "nodeId",
+                "attempt",
+                "agentId",
+                "actualModelId",
+                "phaseZh",
+                "summaryZh",
+                "completedZh",
+                "nextStepZh",
+                "testsZh",
+                "health",
+            )
+        }
+        for row in rows
+    ]
+    meaningful_node_states = [
+        {
+            "nodeId": state["nodeId"],
+            "attempt": state["attempt"],
+            "status": state["status"],
+        }
+        for state in run["nodes"]
+    ]
+    active_receiver = any(
+        state["status"] == "CLAIMED"
+        and definitions[state["nodeId"]]["kind"] in LOOP_KIND_TEXT
+        for state in run["nodes"]
+    )
+    advance_required = any(
+        alert.get("code") == "LEASE_EXPIRED_PENDING_RECOVERY"
+        for alert in alerts
+    )
+    next_health_deadline = min(health_deadlines, default=None)
+    poll_not_before = (
+        observed_at
+        if advance_required
+        else _timestamp(next_health_deadline)
+        if active_receiver and next_health_deadline is not None
+        else None
+    )
+    recommended_poll_seconds = (
+        0
+        if advance_required
+        else max(
+            1,
+            ceil((next_health_deadline - observed).total_seconds()),
+        )
+        if active_receiver and next_health_deadline is not None
+        else RECOMMENDED_POLL_SECONDS
+    )
     return {
         "observedAt": observed_at,
-        "recommendedPollSeconds": RECOMMENDED_POLL_SECONDS,
+        "recommendedPollSeconds": recommended_poll_seconds,
+        "changeFingerprint": fingerprint(
+            {
+                "alerts": alerts,
+                "runStatus": run["status"],
+                "nodeStates": meaningful_node_states,
+                "rows": meaningful_rows,
+            }
+        ),
+        "waitDirective": {
+            "mode": (
+                "ADVANCE_REQUIRED"
+                if advance_required
+                else "HOST_NATIVE_EVENT_OR_DEADLINE"
+                if active_receiver
+                else "NO_ACTIVE_RECEIVER"
+            ),
+            "pollNotBefore": poll_not_before,
+            "pollTool": (
+                "graph_frontier"
+                if advance_required
+                else "graph_status"
+                if active_receiver
+                else None
+            ),
+            "advanceTool": "graph_frontier",
+            "interruptOn": (
+                [
+                    "NATIVE_RECEIVER_COMPLETED",
+                    "NATIVE_RECEIVER_NEEDS_ATTENTION",
+                ]
+                if active_receiver
+                else []
+            ),
+            "onInterrupt": (
+                "CALL_GRAPH_FRONTIER_ONCE" if active_receiver else "NONE"
+            ),
+            "onTimeout": (
+                "CALL_GRAPH_FRONTIER_ONCE"
+                if advance_required
+                else "CALL_GRAPH_STATUS_ONCE"
+                if active_receiver
+                else "NONE"
+            ),
+            "consumeActionsBeforeWaiting": False,
+            "immediateActions": [],
+            "nextWakeAt": None,
+            "onNextWakeAt": "CALL_GRAPH_FRONTIER_ONCE",
+            "suppressUnchangedCommentary": True,
+        },
         "alerts": alerts,
         "rows": rows,
         "markdownTable": "\n".join([header, separator, *rendered_rows]),

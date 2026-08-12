@@ -1,12 +1,30 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import sqlite3
 from typing import Any, Callable
 import uuid
 
 from .errors import fail
 from .loop_contracts import resource_claims_overlap
+
+
+def _timestamp_value(value: object) -> datetime:
+    if not isinstance(value, str):
+        fail(
+            "SCHEDULER_STATE_INVALID",
+            "Stored dispatch timestamp is invalid",
+        )
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        fail(
+            "SCHEDULER_STATE_INVALID",
+            "Stored dispatch timestamp is invalid",
+        )
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 class DeliveryDispatchStore:
@@ -44,7 +62,8 @@ class DeliveryDispatchStore:
             parameters = (exclude_root_id,)
         rows = connection.execute(
             "SELECT h.*, r.root_id AS reservation_root_id, "
-            "n.node_id AS reservation_node_id "
+            "n.node_id AS reservation_node_id, "
+            "n.lease_expires_at AS reservation_lease_expires_at "
             "FROM node_runs n "
             "JOIN runs r ON r.run_id = n.run_id "
             "JOIN delivery_revisions h ON h.root_id = r.root_id "
@@ -53,7 +72,7 @@ class DeliveryDispatchStore:
             "AND r.status NOT IN "
             "('COMPLETED', 'CANCELLED', 'SUPERSEDED') "
             "AND n.lease_expires_at IS NOT NULL "
-            "AND n.lease_expires_at >= ? "
+            "AND julianday(n.lease_expires_at) > julianday(?) "
             + exclusion
             + "ORDER BY r.root_id, n.node_id",
             (at, *parameters),
@@ -84,6 +103,10 @@ class DeliveryDispatchStore:
                 {
                     "rootId": root_id,
                     "nodeId": node_id,
+                    "reservationStatus": "CLAIMED",
+                    "leaseExpiresAt": row[
+                        "reservation_lease_expires_at"
+                    ],
                     "resourceClaims": definition["loop"][
                         "resourceClaims"
                     ],
@@ -99,7 +122,8 @@ class DeliveryDispatchStore:
     ) -> None:
         connection.execute(
             "UPDATE dispatch_reservations SET status = 'EXPIRED' "
-            "WHERE status = 'RESERVED' AND expires_at < ?",
+            "WHERE status = 'RESERVED' "
+            "AND julianday(expires_at) <= julianday(?)",
             (at,),
         )
 
@@ -113,13 +137,22 @@ class DeliveryDispatchStore:
             """
             SELECT d.*, h.hierarchy_json, h.graph_json,
                    h.hierarchy_fingerprint,
-                   h.graph_fingerprint AS stored_graph_fingerprint
+                   h.graph_fingerprint AS stored_graph_fingerprint,
+                   (
+                       SELECT n.lease_expires_at FROM node_runs n
+                       WHERE n.run_id = d.run_id
+                         AND n.node_id = d.node_id
+                         AND n.attempt = d.attempt
+                         AND n.status = 'CLAIMED'
+                       LIMIT 1
+                   ) AS claim_lease_expires_at
             FROM dispatch_reservations d
             JOIN runs r ON r.run_id = d.run_id
             JOIN delivery_revisions h ON h.root_id = r.root_id
                 AND h.revision = r.revision
             WHERE (
-                    (d.status = 'RESERVED' AND d.expires_at >= ?)
+                    (d.status = 'RESERVED'
+                     AND julianday(d.expires_at) > julianday(?))
                     OR (
                         d.status = 'CLAIMED'
                         AND EXISTS (
@@ -129,7 +162,7 @@ class DeliveryDispatchStore:
                               AND n.attempt = d.attempt
                               AND n.status = 'CLAIMED'
                               AND n.lease_expires_at IS NOT NULL
-                              AND n.lease_expires_at >= ?
+                              AND julianday(n.lease_expires_at) > julianday(?)
                         )
                     )
                 )
@@ -163,6 +196,7 @@ class DeliveryDispatchStore:
             result.append(
                 {
                     "dispatchReservationId": row["reservation_id"],
+                    "reservationStatus": row["status"],
                     "runId": row["run_id"],
                     "rootId": row["root_id"],
                     "nodeId": row["node_id"],
@@ -174,6 +208,11 @@ class DeliveryDispatchStore:
                     ],
                     "reservedAt": row["reserved_at"],
                     "reservationExpiresAt": row["expires_at"],
+                    **(
+                        {"leaseExpiresAt": row["claim_lease_expires_at"]}
+                        if row["status"] == "CLAIMED"
+                        else {}
+                    ),
                     "resourceClaims": definition["loop"][
                         "resourceClaims"
                     ],
@@ -191,7 +230,8 @@ class DeliveryDispatchStore:
         row = connection.execute(
             "SELECT * FROM host_capacity_breakers "
             "WHERE agent_id = ? AND status = 'OPEN' "
-            "AND reset_at > ? ORDER BY reset_at LIMIT 1",
+            "AND julianday(reset_at) > julianday(?) "
+            "ORDER BY julianday(reset_at) LIMIT 1",
             (agent_id, at),
         ).fetchone()
         if row is None:
@@ -448,7 +488,10 @@ class DeliveryDispatchStore:
                 "SCHEDULER_DISPATCH_RESERVATION_MISSING",
                 "The automatic dispatch reservation does not exist",
             )
-        if row["status"] != "RESERVED" or row["expires_at"] < at:
+        if (
+            row["status"] != "RESERVED"
+            or _timestamp_value(row["expires_at"]) <= _timestamp_value(at)
+        ):
             fail(
                 "SCHEDULER_DISPATCH_RESERVATION_EXPIRED",
                 "The automatic dispatch reservation is no longer active",

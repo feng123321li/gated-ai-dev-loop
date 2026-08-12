@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import difflib
+import hashlib
 import os
 from pathlib import Path, PurePosixPath
 import stat
@@ -15,6 +16,8 @@ from .model_core import validate_git_binding
 
 GIT_TIMEOUT_SECONDS = 10
 MAX_WORKSPACE_DIFF_BYTES = 2 * 1024 * 1024
+MAX_EVIDENCE_SCOPE_FILES = 10_000
+MAX_EVIDENCE_SCOPE_TOTAL_FILES = 20_000
 _DELIVERY_PATHSPEC = (
     ".",
     ":(exclude).layered-delivery",
@@ -345,6 +348,181 @@ def _working_tree_state(workspace: Path) -> dict[str, Any]:
             }
         ),
     }
+
+
+def _evidence_scope_paths(value: object) -> list[str] | None:
+    if not isinstance(value, list) or not value:
+        return None
+    normalized: list[str] = []
+    for raw in value:
+        if (
+            not isinstance(raw, str)
+            or not raw
+            or "\\" in raw
+            or any(character in raw for character in ("\0", "\r", "\n"))
+        ):
+            return None
+        path = PurePosixPath(raw)
+        if (
+            path.is_absolute()
+            or not path.parts
+            or any(part in {"", ".", ".."} for part in path.parts)
+            or path.parts[0] == ".layered-delivery"
+        ):
+            return None
+        normalized.append(path.as_posix())
+    return sorted(set(normalized))
+
+
+def _file_state(candidate: Path) -> dict[str, Any] | None:
+    try:
+        before = os.lstat(candidate)
+    except FileNotFoundError:
+        return {"kind": "MISSING"}
+    if stat.S_ISLNK(before.st_mode):
+        target = os.readlink(candidate)
+        after = os.lstat(candidate)
+        if (
+            before.st_mode,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (
+            after.st_mode,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            return None
+        return {
+            "kind": "SYMLINK",
+            "mode": stat.S_IMODE(before.st_mode),
+            "targetFingerprint": fingerprint(target),
+        }
+    if not stat.S_ISREG(before.st_mode):
+        return None
+    digest = hashlib.sha256()
+    with candidate.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    after = os.lstat(candidate)
+    if (
+        before.st_mode,
+        before.st_size,
+        before.st_mtime_ns,
+    ) != (
+        after.st_mode,
+        after.st_size,
+        after.st_mtime_ns,
+    ):
+        return None
+    return {
+        "kind": "FILE",
+        "mode": stat.S_IMODE(before.st_mode),
+        "size": before.st_size,
+        "contentSha256": digest.hexdigest(),
+    }
+
+
+def _path_covers_file(declared_path: str, relative_path: str) -> bool:
+    return relative_path == declared_path or relative_path.startswith(
+        f"{declared_path}/"
+    )
+
+
+def _evidence_scope_states(
+    workspace: Path,
+    scopes: list[tuple[str, list[str]]],
+) -> dict[str, dict[str, Any] | None]:
+    all_paths = sorted(
+        {
+            path
+            for _, declared_paths in scopes
+            for path in declared_paths
+        }
+    )
+    pathspecs = [f":(literal){path}" for path in all_paths]
+    raw_index_state = _git(
+        workspace,
+        "ls-files",
+        "--stage",
+        "-z",
+        "--",
+        *pathspecs,
+    ).stdout
+    index_by_file: dict[str, list[str]] = {}
+    files: set[str] = set()
+    for entry in raw_index_state.split("\0"):
+        if not entry:
+            continue
+        _metadata, separator, relative_path = entry.partition("\t")
+        if not separator:
+            return {scope_id: None for scope_id, _ in scopes}
+        files.add(relative_path)
+        index_by_file.setdefault(relative_path, []).append(entry)
+    files.update(
+        path
+        for path in _git(
+            workspace,
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+            "--",
+            *pathspecs,
+        ).stdout.split("\0")
+        if path
+    )
+    files = {
+        path
+        for path in files
+        if path != ".layered-delivery"
+        and not path.startswith(".layered-delivery/")
+    }
+    if len(files) > MAX_EVIDENCE_SCOPE_TOTAL_FILES:
+        return {scope_id: None for scope_id, _ in scopes}
+    content_by_file: dict[str, dict[str, Any]] = {}
+    for relative_path in sorted(files):
+        candidate = _safe_untracked_candidate(workspace, relative_path)
+        file_state = _file_state(candidate)
+        if file_state is None:
+            return {scope_id: None for scope_id, _ in scopes}
+        content_by_file[relative_path] = {
+            "path": relative_path,
+            "worktreeState": file_state,
+        }
+    results: dict[str, dict[str, Any] | None] = {}
+    for scope_id, declared_paths in scopes:
+        scope_files = sorted(
+            relative_path
+            for relative_path in files
+            if any(
+                _path_covers_file(declared_path, relative_path)
+                for declared_path in declared_paths
+            )
+        )
+        if len(scope_files) > MAX_EVIDENCE_SCOPE_FILES:
+            results[scope_id] = None
+            continue
+        content_state = [
+            content_by_file[relative_path]
+            for relative_path in scope_files
+        ]
+        index_entries = sorted(
+            entry
+            for relative_path in scope_files
+            for entry in index_by_file.get(relative_path, [])
+        )
+        results[scope_id] = {
+            "fileCount": len(content_state),
+            "stateFingerprint": fingerprint(
+                {
+                    "kind": "EVIDENCE_RELEVANT_PATHS_V1",
+                    "declaredPaths": declared_paths,
+                    "indexEntries": index_entries,
+                    "contentState": content_state,
+                }
+            ),
+        }
+    return results
 
 
 def _branch_worktree_count(workspace: Path, branch_ref: str) -> int:
@@ -1261,6 +1439,168 @@ def capture_verified_workspace_changes(
     return snapshots
 
 
+def capture_verified_workspace_state(
+    verified_project_scopes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Capture a lightweight, conservative state binding for evidence reuse."""
+
+    snapshots: list[dict[str, Any]] = []
+    for scope in sorted(
+        verified_project_scopes,
+        key=lambda item: str(item.get("id", "")),
+    ):
+        if scope.get("access") != "READ_WRITE":
+            continue
+        project_id = str(scope.get("id", ""))
+        binding = scope.get("gitBinding")
+        if binding is None:
+            snapshots.append(
+                {
+                    "projectId": project_id,
+                    "bindingState": "UNBOUND",
+                }
+            )
+            continue
+        workspace = Path(scope["workspaceRoot"]).absolute().resolve(
+            strict=True
+        )
+        normalized_binding = validate_git_binding(binding)
+        initial_git = verify_delivery_git_binding(
+            str(workspace),
+            normalized_binding,
+            preparing=False,
+        )
+        initial_tree = _working_tree_state(workspace)
+        final_git = verify_delivery_git_binding(
+            str(workspace),
+            normalized_binding,
+            preparing=False,
+        )
+        final_tree = _working_tree_state(workspace)
+        if (
+            initial_git is None
+            or final_git is None
+            or initial_git["headCommit"] != final_git["headCommit"]
+            or initial_tree["stateFingerprint"]
+            != final_tree["stateFingerprint"]
+        ):
+            snapshots.append(
+                {
+                    "projectId": project_id,
+                    "bindingState": "UNSTABLE",
+                }
+            )
+            continue
+        snapshots.append(
+            {
+                "projectId": project_id,
+                "bindingState": "BOUND",
+                "headCommit": initial_git["headCommit"],
+                "workingTreeStateFingerprint": initial_tree[
+                    "stateFingerprint"
+                ],
+            }
+        )
+    return snapshots
+
+
+def capture_verified_evidence_scope_state(
+    verified_project_scopes: list[dict[str, Any]],
+    affected_scopes: object,
+) -> list[dict[str, Any]]:
+    """Bind declared relevant paths without invalidating on unrelated edits."""
+
+    if not isinstance(affected_scopes, list):
+        return []
+    projects = {
+        str(scope.get("id", "")): scope
+        for scope in verified_project_scopes
+        if scope.get("access") == "READ_WRITE"
+    }
+    snapshots: list[dict[str, Any]] = []
+    valid_by_project: dict[
+        str,
+        list[tuple[dict[str, Any], list[str]]],
+    ] = {}
+    for affected in affected_scopes:
+        if not isinstance(affected, dict):
+            continue
+        scope_id = affected.get("scopeId")
+        project_id = affected.get("projectId")
+        declared_paths = _evidence_scope_paths(affected.get("paths"))
+        snapshot: dict[str, Any] = {
+            "scopeId": scope_id,
+            "projectId": project_id,
+            "paths": declared_paths or [],
+        }
+        project = projects.get(project_id) if isinstance(project_id, str) else None
+        if (
+            not isinstance(scope_id, str)
+            or not scope_id
+            or project is None
+            or project.get("gitBinding") is None
+            or declared_paths is None
+        ):
+            snapshot["bindingState"] = "UNBOUND"
+            snapshots.append(snapshot)
+            continue
+        valid_by_project.setdefault(project_id, []).append(
+            (snapshot, declared_paths)
+        )
+    for project_id, project_scopes in sorted(valid_by_project.items()):
+        project = projects[project_id]
+        workspace = Path(project["workspaceRoot"]).absolute().resolve(strict=True)
+        binding = validate_git_binding(project["gitBinding"])
+        initial_git = verify_delivery_git_binding(
+            str(workspace),
+            binding,
+            preparing=False,
+        )
+        scope_paths = [
+            (str(snapshot["scopeId"]), declared_paths)
+            for snapshot, declared_paths in project_scopes
+        ]
+        initial_states = _evidence_scope_states(workspace, scope_paths)
+        final_git = verify_delivery_git_binding(
+            str(workspace),
+            binding,
+            preparing=False,
+        )
+        final_states = _evidence_scope_states(workspace, scope_paths)
+        git_stable = (
+            initial_git is not None
+            and final_git is not None
+            and initial_git["headCommit"] == final_git["headCommit"]
+        )
+        for snapshot, _declared_paths in project_scopes:
+            scope_id = str(snapshot["scopeId"])
+            initial_state = initial_states.get(scope_id)
+            final_state = final_states.get(scope_id)
+            if initial_state is None or final_state is None:
+                snapshot["bindingState"] = "UNBOUND"
+            elif (
+                not git_stable
+                or initial_state["stateFingerprint"]
+                != final_state["stateFingerprint"]
+            ):
+                snapshot["bindingState"] = "UNSTABLE"
+            else:
+                snapshot.update(
+                    {
+                        "bindingState": "BOUND",
+                        "stateFingerprint": initial_state[
+                            "stateFingerprint"
+                        ],
+                        "fileCount": initial_state["fileCount"],
+                    }
+                )
+            snapshots.append(snapshot)
+    return sorted(
+        snapshots,
+        key=lambda item: (str(item.get("projectId")), str(item.get("scopeId"))),
+    )
+
+
 def _git_common_directory(workspace: Path) -> Path | None:
     if not (workspace / ".git").exists():
         return None
@@ -1611,6 +1951,8 @@ def verify_runtime_delivery_project_scopes(
 
 
 __all__ = (
+    "capture_verified_evidence_scope_state",
+    "capture_verified_workspace_state",
     "capture_verified_workspace_changes",
     "enumerate_local_feature_branches",
     "find_delivery_linked_worktree",

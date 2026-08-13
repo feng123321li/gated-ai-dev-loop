@@ -1239,7 +1239,7 @@ class McpSurfaceTests(unittest.TestCase):
     ) -> None:
         tools = tool_definitions()
         self.assertTrue(tools)
-        self.assertEqual(len(tools), 32)
+        self.assertEqual(len(tools), 33)
         self.assertNotIn("claim_current_task", {tool["name"] for tool in tools})
         descriptions = {tool["name"]: tool["description"] for tool in tools}
         self.assertIn(
@@ -4255,7 +4255,7 @@ class McpSurfaceTests(unittest.TestCase):
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "LIGHT Loops report findings and final verification",
+                "short problem-free LIGHT Loop may omit heartbeat and progress",
                 initialized["result"]["instructions"],
             )
             handle_message(
@@ -4497,7 +4497,7 @@ class McpSurfaceTests(unittest.TestCase):
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 32)
+            self.assertEqual(len(listed["result"]["tools"]), 33)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

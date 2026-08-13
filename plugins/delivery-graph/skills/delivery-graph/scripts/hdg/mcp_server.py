@@ -6,6 +6,7 @@ import os
 import sys
 from typing import Any, BinaryIO, TextIO
 
+from . import __version__
 from .errors import GatedLoopError
 from .host_policy import ProjectRootBinding
 from .jsonio import (
@@ -14,13 +15,66 @@ from .jsonio import (
     strict_json_loads,
 )
 from .mcp_adapter import (
+    MODERN_PROTOCOL_VERSION,
     McpConnection,
+    SUPPORTED_PROTOCOL_VERSIONS,
     handle_message,
     report_internal_error,
 )
 
 
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
+
+
+def _write_lifecycle_event(
+    stream: TextIO | None,
+    stage: str,
+    **details: object,
+) -> None:
+    """Write a bounded lifecycle event without request payloads or paths."""
+
+    if stream is None:
+        return
+    event = {
+        "event": "delivery_graph_mcp_lifecycle",
+        "server": "delivery-graph",
+        "serverVersion": __version__,
+        "stage": stage,
+        "transport": "stdio",
+        **details,
+    }
+    try:
+        stream.write(
+            json.dumps(
+                event,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            + "\n"
+        )
+        stream.flush()
+    except Exception:
+        pass
+
+
+def _protocol_mode(connection: McpConnection) -> str:
+    if connection.protocol_version == MODERN_PROTOCOL_VERSION:
+        return "STATELESS_2026_07_28"
+    if connection.protocol_version:
+        return f"LEGACY_{connection.protocol_version.replace('-', '_')}"
+    return "UNKNOWN"
+
+
+def _tool_count(response: object) -> int | None:
+    if not isinstance(response, dict):
+        return None
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return None
+    tools = result.get("tools")
+    return len(tools) if isinstance(tools, list) else None
 
 
 def _transport_error(
@@ -113,6 +167,7 @@ def serve(
     root: str | os.PathLike[str] | None = None,
     project_root_from_meta: bool = False,
     explicit_dogfood: bool = False,
+    diagnostic_stream: TextIO | None = None,
 ) -> None:
     """Serve the MCP adapter over newline-delimited stdio JSON-RPC."""
 
@@ -122,6 +177,22 @@ def serve(
             from_sandbox_meta=project_root_from_meta,
         ),
         trusted_host_adapter=os.environ.get("HDG_HOST_ADAPTER"),
+    )
+    request_count = 0
+    tool_catalog_delivered = False
+    _write_lifecycle_event(
+        diagnostic_stream,
+        "SERVER_STARTED",
+        hostAdapter=connection.trusted_host_adapter or "unconfigured",
+        projectRootSource=(
+            "REQUEST_META" if project_root_from_meta else "STARTUP_CONFIGURATION"
+        ),
+        supportedProtocolVersions=list(SUPPORTED_PROTOCOL_VERSIONS),
+        diagnosticHint=(
+            "The host spawned delivery-graph over stdio. The next expected "
+            "step is server/discover or direct tools/list for MCP 2026-07-28, "
+            "or initialize for a legacy client."
+        ),
     )
     while True:
         try:
@@ -133,6 +204,33 @@ def serve(
             )
             continue
         if line is None:
+            if request_count == 0:
+                hint = (
+                    "The host closed stdin before any MCP request. Check the "
+                    "resolved command, cwd, environment expansion, spawn timeout, "
+                    "and host-side stderr capture."
+                )
+            elif tool_catalog_delivered:
+                hint = (
+                    "The server delivered its tool catalog before the host closed "
+                    "the transport. If tools are absent from the Agent, inspect "
+                    "host-side schema validation, cache refresh, and Agent schema "
+                    "injection."
+                )
+            else:
+                hint = (
+                    "The host closed the transport before a tools/list catalog was "
+                    "delivered. Inspect protocol selection and the host discovery "
+                    "request."
+                )
+            _write_lifecycle_event(
+                diagnostic_stream,
+                "TRANSPORT_EOF",
+                protocolMode=_protocol_mode(connection),
+                requestCount=request_count,
+                toolCatalogDelivered=tool_catalog_delivered,
+                diagnosticHint=hint,
+            )
             break
         if invalid_encoding:
             _write_response(
@@ -181,13 +279,72 @@ def serve(
                 _transport_error(-32700, "Parse error"),
             )
             continue
+        request_count += 1
+        method = message.get("method") if isinstance(message, dict) else None
+        safe_method = method if isinstance(method, str) else "invalid"
         response = handle_message(
             message,
             connection=connection,
             explicit_dogfood=explicit_dogfood,
         )
         if response is not None:
-            _write_response(stdout, response)
+            try:
+                _write_response(stdout, response)
+            except (BrokenPipeError, ConnectionResetError):
+                _write_lifecycle_event(
+                    diagnostic_stream,
+                    "RESPONSE_DELIVERY_FAILED",
+                    protocolMode=_protocol_mode(connection),
+                    method=safe_method,
+                    requestCount=request_count,
+                    diagnosticHint=(
+                        "The host closed the stdio response channel. Inspect the "
+                        "host lifecycle log for schema validation, timeout, reload, "
+                        "or process cancellation details."
+                    ),
+                )
+                raise
+        if safe_method == "server/discover" and response is not None:
+            _write_lifecycle_event(
+                diagnostic_stream,
+                "DISCOVERY_RESPONDED",
+                protocolMode=_protocol_mode(connection),
+                supportedProtocolVersions=list(SUPPORTED_PROTOCOL_VERSIONS),
+                diagnosticHint=(
+                    "Capability discovery completed. The host may now request "
+                    "tools/list."
+                ),
+            )
+        elif safe_method == "initialize" and response is not None:
+            _write_lifecycle_event(
+                diagnostic_stream,
+                "LEGACY_INITIALIZE_RESPONDED",
+                protocolMode=_protocol_mode(connection),
+                diagnosticHint=(
+                    "Legacy initialization completed. This does not prove the "
+                    "tool catalog was requested or injected into the Agent."
+                ),
+            )
+        elif safe_method == "notifications/initialized":
+            _write_lifecycle_event(
+                diagnostic_stream,
+                "LEGACY_INITIALIZED",
+                protocolMode=_protocol_mode(connection),
+                diagnosticHint="The legacy client marked initialization complete.",
+            )
+        elif safe_method == "tools/list" and response is not None:
+            count = _tool_count(response)
+            tool_catalog_delivered = count is not None
+            _write_lifecycle_event(
+                diagnostic_stream,
+                "TOOLS_LIST_RESPONDED",
+                protocolMode=_protocol_mode(connection),
+                toolCount=count,
+                diagnosticHint=(
+                    "The server returned the tool catalog. The host must validate "
+                    "and inject it into the current Agent schema."
+                ),
+            )
 
 
 def _configure_utf8_stdio() -> None:
@@ -226,12 +383,19 @@ def main(argv: list[str] | None = None) -> int:
             root=args.project_root,
             project_root_from_meta=args.project_root_from_meta,
             explicit_dogfood=args.dogfood,
+            diagnostic_stream=sys.stderr,
         )
         return 0
     except (BrokenPipeError, ConnectionResetError):
-        sys.stderr.write(
-            "ERROR PLUGIN_MCP_DISCONNECTED: "
-            "MCP transport closed before response delivery\n"
+        _write_lifecycle_event(
+            sys.stderr,
+            "TRANSPORT_DISCONNECTED",
+            errorCode="PLUGIN_MCP_DISCONNECTED",
+            diagnosticHint=(
+                "The host closed the MCP transport before response delivery. "
+                "Check the preceding lifecycle event and the host-side spawn, "
+                "timeout, schema validation, and Agent injection logs."
+            ),
         )
         return 1
     except GatedLoopError as error:

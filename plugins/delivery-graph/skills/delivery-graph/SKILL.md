@@ -3,6 +3,7 @@ name: delivery-graph
 description: "把已确认的软件需求建模为分层 Delivery Graph，并驱动 Git 基线确认、冻结、自动 Agent 派遣或手动 CLI 交接、TASK 验收、可选 GROUP seam 验收、Delivery Acceptance/Readiness、最终用户确认、归档与恢复。用于规划或修订多项目、多模块交付，选择自动/手动执行，接续既有 Delivery，或处理暂停、失联、容量等待、Git 漂移和 REPLAN_REQUIRED。"
 allowed-tools:
   - mcp__plugin_delivery-graph_delivery-graph__workspace_status
+  - mcp__plugin_delivery-graph_delivery-graph__recommend_assurance_profile
   - mcp__plugin_delivery-graph_delivery-graph__hierarchy_contract
   - mcp__plugin_delivery-graph_delivery-graph__preview_hierarchy
   - mcp__plugin_delivery-graph_delivery-graph__confirm_development_baseline
@@ -76,7 +77,7 @@ allowed-tools:
 完整规划规则见[规划说明](references/planning-quickstart.md)。按以下顺序执行：
 
 1. 检查真实代码和工作区；与用户确认目标、边界、验收点、项目范围、依赖和排他资源。
-2. 选择保障档。不确定时用 `STANDARD`；仅当单一根 TASK、局部低风险且定向验证充分时用 `LIGHT`，并写明 `assuranceRationale`。
+2. 调用只读 `recommend_assurance_profile`，按真实任务事实明确填写根 TASK 数、项目数、结构影响范围、高影响风险项、验证计划和风险级别；使用其确定性 `recommendedProfile`，并把 `reasons` 写入 `assuranceRationale`。事实不明确时填 `UNKNOWN`，结果会保守返回 `STANDARD`；不得从自由文本自行猜档。
 3. 只为真实分层、依赖或并行汇合创建 `GROUP`。GROUP 的 `reviewLoop` 仅在直接子项之间存在必须独立验证的 seam 时配置；纯协调/汇合 GROUP 使用 `null`。不要为单 TASK 制造形式层级。
 4. 需求涉及建表、改表或删表时，在 preview 前读取真实当前结构、完成字段级 before/after 设计，并按 `projectionGuidance.databaseChanges` 写入负责 TASK 的 `loop.payload.databaseChanges`；不得把数据库设计留给执行 Loop。
 5. 把其他实现目标和约束放入 `loop.payload`；用 `resourceClaims` 表达跨 Delivery 排他资源；每项数据库变更的 `resourceClaim` 必须同时存在于该 TASK 的资源声明中；把用户指定 Skill 记录为共享 `root.skillHints`。
@@ -123,7 +124,7 @@ allowed-tools:
 - `CLAIM_MANUAL_TASK`：为手动 Graph，或已由 `handoff_ready_automatic_task` 显式恢复的单个自动 TASK，创建独立人工 receiver；只有 TASK 可 MANUAL claim，后续 Review 仍走 AUTOMATIC reservation 派遣。MANUAL 不带 AUTO reservation，但必须提交独立 receiver context 与新 `operation_id`，并通过 Adapter、workspace、Graph 和项目 scope 校验。
 - `DISPATCH_LOOP`：对每个 READY TASK 或 Review 调用一次 `plan_dispatch_batch`，完整消费 `concurrentDispatchGroups`，并立即创建独立 receiver；不要在 reservation 后继续分析。receiver 用 assignment 的 reservation、decision fingerprint、自己的 context 和新 `operation_id` 调用 `dispatch_loop(AUTO)`。全部 assignment 消费后严格执行返回的 `postActionWait`：优先等待 receiver 原生事件，最迟到最早 reservation 截止时间再调用一次 `graph_frontier`；禁止忙轮询。同一 reservation 与 operation 的响应丢失重试必须返回已提交 assignment，不能重复领取。
 - AUTO receiver 启动或 claim 失败时不得由总协调器直接领取。刷新 frontier；仍有效的 reservation 只按原参数重试，已过期的 reservation 重新规划。仍需人工接管时，确认 TASK 从未领取、无有效 reservation、Delivery workspace 干净且无代码改动，再取得用户明确授权调用 `handoff_ready_automatic_task`；它只把当前 READY TASK 改为人工接收，Review 不降级。
-- claim 成功后，独立 receiver 读取一次 `loop_context`，确认至少一个已验证的 `projectScopes`，并在任何代码工作前用精确 `operation_id` 提交首次 `heartbeat_loop`。后续 heartbeat、progress、pause 与 result 都显式携带同一 operation。
+- claim 成功后，独立 receiver 读取一次 `loop_context`，确认至少一个已验证的 `projectScopes`。`STANDARD` 在任何代码工作前用精确 `operation_id` 提交首次 `heartbeat_loop`；短时 `LIGHT` 的 claim 已建立初始租约，可在租约窗口内不发 heartbeat/progress，直接完成定向验证并提交真实终态，超出窗口则按期 heartbeat。后续 heartbeat、progress、pause 与 result 都显式携带同一 operation。
 - 只让外层 receiver 持有 reservation 和 `operation_id` 并调用 claim、heartbeat、progress、pause、resume 和 `record_loop_result`。内部 Worker 不得持有控制面凭据。
 - 让 receiver 使用已验证的 `projectScopes`，按租约 heartbeat，并在关键阶段报告 progress；progress 不续租。
 - TASK 先从实际改动、依赖和契约界定 `result.affectedScopes`；其中 `paths` 使用字面量仓库相对路径并覆盖相关依赖/契约锚点。只运行覆盖该范围的测试、构建或契约检查，并在 `result.verificationEvidence` 记录命令摘要、scope 和结果；Controller 在终态记录可信 `evidenceWorkspaceSnapshots` 与逐相关路径的 `evidenceScopeSnapshots`。Review 的独立性是独立判断，不是机械重跑全量：只自动复用 `validationEvidenceIndex` 中 `PASSED + EXACT_MATCH` 的证据；无关文件变化不使有界 scope 失效，再对缺口、相关路径 `CHANGED/UNBOUND`、findings 和高风险边界定向复跑。影响范围无法界定等明确风险才升级全量。

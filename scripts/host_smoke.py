@@ -159,12 +159,45 @@ def _prompt(scenario: str, host: str) -> str:
         )
     )
     receiver_start_requirement = (
-        "Each child must call dispatch_loop first with the exact "
-        "reservation_id and decision_fingerprint, its own "
-        "receiver_context_id, and a fresh operation_id; then call "
-        "loop_context once and heartbeat_loop with that operation_id "
-        "immediately before any shell, file read/write, implementation "
-        "analysis, or extra discovery."
+        "The child must call dispatch_loop first with the exact reservation_id "
+        "and decision_fingerprint, its own receiver_context_id, and a fresh "
+        "operation_id, then read loop_context once. A short LIGHT receiver may "
+        "finish without an explicit heartbeat; if it keeps working beyond the "
+        "initial lease window, it must call heartbeat_loop before that window "
+        "expires."
+        if profile == "LIGHT"
+        else (
+            "Each child must call dispatch_loop first with the exact "
+            "reservation_id and decision_fingerprint, its own "
+            "receiver_context_id, and a fresh operation_id; then call "
+            "loop_context once and heartbeat_loop with that operation_id "
+            "immediately before any shell, file read/write, implementation "
+            "analysis, or extra discovery."
+        )
+    )
+    frozen_progress_requirement = (
+        "The frozen TASK payload must explicitly allow a short LIGHT receiver "
+        "to finish without heartbeat_loop. The claim establishes its initial "
+        "lease; heartbeat only if work continues beyond that lease window."
+        if profile == "LIGHT"
+        else (
+            "The frozen TASK payload and every child assignment must explicitly "
+            "make this host check an acceptance condition: immediately after a "
+            "successful claim, the child calls heartbeat_loop once before "
+            "editing any file. The smoke is failed if LOOP_HEARTBEAT is absent "
+            "even when the task is short."
+        )
+    )
+    completion_progress_requirement = (
+        "The TASK receiver may report its truthful final result directly when "
+        "the short LIGHT task completes inside the initial lease; structured "
+        "progress and heartbeat remain optional in that case."
+        if profile == "LIGHT"
+        else (
+            "Every TASK or Review receiver must send at least one heartbeat "
+            "immediately after claim before reporting structured progress and "
+            "recording a truthful Loop result."
+        )
     )
     return textwrap.dedent(
         f"""
@@ -199,20 +232,16 @@ def _prompt(scenario: str, host: str) -> str:
         additional verification command. Classify from this exact local change.
         {review_requirement}
 
-        The frozen TASK payload and every child assignment must explicitly make
-        this host check an acceptance condition: immediately after a successful
-        claim, the child calls heartbeat_loop once before editing any file. The
-        smoke is failed if LOOP_HEARTBEAT is absent even when the task is short.
+        {frozen_progress_requirement}
 
         When HOST_NATIVE_DISPATCH_PLAN returns any assignment, start the
         current-host child immediately; do not read more documentation or
         inspect Plugin source.
         {receiver_start_requirement}
 
-        {execution_requirement} Every TASK or Review receiver must send at
-        least one heartbeat immediately after claim before reporting structured
-        progress and recording a truthful Loop result. Continue until the frontier reaches
-        RECORD_USER_CONFIRMATION. Stop there: final acceptance must remain a
+        {execution_requirement} {completion_progress_requirement} Continue
+        until the frontier reaches RECORD_USER_CONFIRMATION. Stop there: final
+        acceptance must remain a
         real user action and must not be fabricated. Do not commit, push,
         access the network, or modify anything outside this disposable
         repository.
@@ -263,6 +292,22 @@ def _codex_resume_prompt(scenario: str) -> str:
             "a distinct host-native child with its own operation_id."
         )
     )
+    receiver_progress_requirement = (
+        "A short LIGHT receiver may finish without an explicit heartbeat. Its "
+        "dispatch_loop claim establishes the initial lease; call heartbeat_loop "
+        "only if work continues beyond that lease window."
+        if scenario == "light"
+        else (
+            "The child must call heartbeat_loop with that operation_id before "
+            "any implementation inspection or edit."
+        )
+    )
+    result_progress_requirement = (
+        "It may report the truthful final result directly when it finishes "
+        "inside the initial lease."
+        if scenario == "light"
+        else "Report structured progress before recording the truthful result."
+    )
     return textwrap.dedent(
         f"""
         Resume the already ACTIVE delivery-graph Codex host smoke. Do not
@@ -271,14 +316,13 @@ def _codex_resume_prompt(scenario: str) -> str:
         READY `t-smoke-artifact` TASK. Start its distinct current-host child
         immediately. The child must call dispatch_loop with the exact
         reservation_id and decision_fingerprint, its own receiver_context_id,
-        and a fresh operation_id; read loop_context once and call
-        heartbeat_loop with that operation_id before any implementation
-        inspection or edit. The coordinator must not inspect or edit
-        implementation files.
+        and a fresh operation_id, then read loop_context once.
+        {receiver_progress_requirement} The coordinator must not inspect or
+        edit implementation files.
 
         Create only `smoke.txt` with exactly `delivery-graph smoke\\n`, then
-        use one Python command to assert that exact content. Report structured
-        progress and a truthful result. {review_requirement} Every Review
+        use one Python command to assert that exact content.
+        {result_progress_requirement} {review_requirement} Every Review
         receiver must heartbeat immediately after its dispatch_loop claim and
         before inspecting the repository. Never dispatch to another Agent,
         fabricate final acceptance, commit, push, access the network, or
@@ -580,12 +624,10 @@ def _validate_smoke(
             "real-host smoke must claim only the current Agent; "
             f"expected {host!r}, found {sorted(claimed_agents)!r}"
         )
-    for event_type in (
-        "LOOP_CLAIMED",
-        "LOOP_HEARTBEAT",
-        "LOOP_PROGRESS_REPORTED",
-        "LOOP_SUCCEEDED",
-    ):
+    required_event_types = ["LOOP_CLAIMED", "LOOP_SUCCEEDED"]
+    if scenario != "light":
+        required_event_types.extend(["LOOP_HEARTBEAT", "LOOP_PROGRESS_REPORTED"])
+    for event_type in required_event_types:
         if events.get(event_type, 0) < minimum_successes:
             raise RuntimeError(
                 f"expected at least {minimum_successes} {event_type} events; "

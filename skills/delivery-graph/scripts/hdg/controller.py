@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+from .assurance_recommendation import recommend_assurance_profile
 from .dispatch_planning import plan_dispatch_batch
 from .dashboard import open_delivery_dashboard
 from .errors import GatedLoopError, fail
@@ -61,6 +62,7 @@ CONTROL_ROOT_MONITOR_TOOLS = frozenset(
 
 CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "workspace_status": workspace_status,
+    "recommend_assurance_profile": recommend_assurance_profile,
     "hierarchy_contract": hierarchy_contract,
     "preview_hierarchy": preview_hierarchy,
     "confirm_development_baseline": confirm_development_baseline,

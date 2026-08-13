@@ -3710,6 +3710,16 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 "shortLoopMayReportOnlyFinal"
             ]
         )
+        self.assertFalse(
+            execution_policy["progressReporting"][
+                "initialHeartbeatRequiredBeforeWork"
+            ]
+        )
+        self.assertTrue(
+            execution_policy["progressReporting"][
+                "shortLoopMayCompleteWithoutExplicitHeartbeat"
+            ]
+        )
         self.assertEqual(
             execution_policy["contextIsolation"],
             "REQUIRED",
@@ -7543,6 +7553,58 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(
             rebuilt_state["progress"]["summaryZh"],
             "正在运行测试，准备检查接口兼容性。",
+        )
+
+    def test_light_short_loop_has_no_first_heartbeat_ceremony(self) -> None:
+        hierarchy = task_hierarchy()
+        hierarchy["delivery"].update(
+            {
+                "assuranceProfile": "LIGHT",
+                "assuranceRationale": (
+                    "One local helper changes with bounded targeted verification."
+                ),
+                "reviewLoop": None,
+            }
+        )
+        hierarchy["root"]["reviewLoop"] = None
+        prepared = self.prepare_and_freeze(hierarchy)
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        claimed_at = at(2)
+        dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="light-agent",
+            agent_id="claude-code",
+            operation_id="op-light-no-heartbeat",
+            now=claimed_at,
+        )
+
+        within_short_window = graph_status(
+            root=self.root,
+            root_id=root_id,
+            now=claimed_at + timedelta(seconds=91),
+        )["progressMonitor"]
+
+        self.assertEqual(within_short_window["alerts"], [])
+        self.assertIn(
+            "LIGHT 短任务可免显式心跳",
+            within_short_window["markdownTable"],
+        )
+        events = graph_events(root=self.root, root_id=root_id)["events"]
+        self.assertFalse(
+            any(event["eventType"] == "LOOP_HEARTBEAT" for event in events)
+        )
+
+        after_short_window = graph_status(
+            root=self.root,
+            root_id=root_id,
+            now=claimed_at + timedelta(minutes=5, seconds=1),
+        )["progressMonitor"]
+        self.assertEqual(
+            after_short_window["alerts"][0]["code"],
+            "ALIVE_WITHOUT_PROGRESS",
         )
 
     def test_loop_progress_accepts_user_language_and_requires_live_claim(

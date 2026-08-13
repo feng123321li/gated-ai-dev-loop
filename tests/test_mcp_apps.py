@@ -27,6 +27,7 @@ DASHBOARD_MIME_TYPE = "text/html;profile=mcp-app"
 
 EXISTING_TOOL_NAMES = (
     "workspace_status",
+    "recommend_assurance_profile",
     "hierarchy_contract",
     "preview_hierarchy",
     "confirm_development_baseline",

@@ -19,7 +19,16 @@ def _resolve_project_root(
 ) -> str:
     configured = root
     if configured is None:
-        configured = os.environ.get("HDG_PROJECT_ROOT") or os.getcwd()
+        env_root = os.environ.get("HDG_PROJECT_ROOT")
+        if env_root and "${" not in env_root:
+            configured = env_root
+        else:
+            # A host such as ZCode may surface HDG_PROJECT_ROOT with the
+            # manifest placeholder (e.g. ${CLAUDE_PROJECT_DIR}) still unexpanded.
+            # Treat an unexpanded placeholder (or an empty value) as "not
+            # configured" and fall back to the process cwd, instead of failing
+            # MCP server startup on a literal non-existent path.
+            configured = os.getcwd()
     candidate = Path(configured).expanduser()
     if candidate.is_symlink():
         raise GatedLoopError(

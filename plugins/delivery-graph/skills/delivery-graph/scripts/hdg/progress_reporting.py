@@ -7,6 +7,7 @@ from types import MappingProxyType
 from typing import Any
 
 from .errors import GatedLoopError, fail
+from .graph_model import graph_assurance_profile
 from .jsonio import fingerprint
 
 
@@ -322,6 +323,7 @@ def _claimed_health(
     *,
     observed: datetime,
     heartbeat_stale_seconds: int,
+    first_heartbeat_required: bool,
 ) -> tuple[str, str, str | None]:
     claim_age = _seconds_between(observed, state.get("claimedAt"))
     heartbeat_age = _seconds_between(observed, state.get("lastHeartbeatAt"))
@@ -342,6 +344,8 @@ def _claimed_health(
             "租约已过期，应由 graph_frontier 自动进入失联恢复流程。",
         )
     if (
+        first_heartbeat_required
+        and
         first_heartbeat is None
         and (claim_age or 0) >= FIRST_HEARTBEAT_WARNING_SECONDS
     ):
@@ -383,6 +387,7 @@ def _next_health_deadline(
     health: str,
     observed: datetime,
     heartbeat_stale_seconds: int,
+    first_heartbeat_required: bool,
 ) -> datetime | None:
     candidates: list[datetime] = []
     lease = _parse_timestamp(state.get("leaseExpiresAt"))
@@ -396,7 +401,11 @@ def _next_health_deadline(
     )
     progress_base = progress_at or claimed
     if health == "HEALTHY":
-        if state.get("firstHeartbeatAt") is None and claimed is not None:
+        if (
+            first_heartbeat_required
+            and state.get("firstHeartbeatAt") is None
+            and claimed is not None
+        ):
             candidates.append(
                 claimed + timedelta(seconds=FIRST_HEARTBEAT_WARNING_SECONDS)
             )
@@ -435,6 +444,7 @@ def build_progress_monitor(
     heartbeat_stale_seconds = int(claim_policy["heartbeatSeconds"]) + int(
         claim_policy["graceSeconds"]
     )
+    first_heartbeat_required = graph_assurance_profile(graph) != "LIGHT"
     rows: list[dict[str, Any]] = []
     alerts: list[dict[str, Any]] = []
     health_deadlines: list[datetime] = []
@@ -451,21 +461,30 @@ def build_progress_monitor(
                 state,
                 observed=observed,
                 heartbeat_stale_seconds=heartbeat_stale_seconds,
+                first_heartbeat_required=first_heartbeat_required,
             )
             health_deadline = _next_health_deadline(
                 state,
                 health=health,
                 observed=observed,
                 heartbeat_stale_seconds=heartbeat_stale_seconds,
+                first_heartbeat_required=first_heartbeat_required,
             )
             if health_deadline is not None:
                 health_deadlines.append(health_deadline)
             if state.get("firstHeartbeatAt") is None:
-                heartbeat_zh = (
-                    "尚无独立心跳；领取 "
-                    f"{_duration_zh(_seconds_between(observed, state.get('claimedAt')))}"
-                    "前"
-                )
+                if first_heartbeat_required:
+                    heartbeat_zh = (
+                        "尚无独立心跳；领取 "
+                        f"{_duration_zh(_seconds_between(observed, state.get('claimedAt')))}"
+                        "前"
+                    )
+                else:
+                    heartbeat_zh = (
+                        "LIGHT 短任务可免显式心跳；领取 "
+                        f"{_duration_zh(_seconds_between(observed, state.get('claimedAt')))}"
+                        "前"
+                    )
             else:
                 heartbeat_zh = (
                     "最后心跳 "

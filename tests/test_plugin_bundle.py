@@ -538,6 +538,22 @@ class PluginBundleTests(unittest.TestCase):
             zcode_server["env"]["HDG_HOST_ADAPTER"],
             "zcode",
         )
+        self.assertEqual(zcode_server["cwd"], "${ZCODE_PLUGIN_ROOT}")
+        self.assertEqual(
+            zcode_server["args"],
+            [
+                "-X",
+                "utf8",
+                (
+                    "${ZCODE_PLUGIN_ROOT}/skills/delivery-graph/scripts/"
+                    "hdg_mcp.py"
+                ),
+            ],
+        )
+        self.assertEqual(
+            zcode_server["env"]["HDG_PROJECT_ROOT"],
+            "${ZCODE_PROJECT_DIR}",
+        )
         self.assertEqual(
             server["default_tools_approval_mode"],
             "approve",
@@ -565,7 +581,7 @@ class PluginBundleTests(unittest.TestCase):
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
         tool_count = len(tool_definitions())
-        self.assertEqual(tool_count, 32)
+        self.assertEqual(tool_count, 33)
         self.assertIn(
             "start_manual_handoff",
             {tool["name"] for tool in tool_definitions()},
@@ -716,7 +732,7 @@ class PluginBundleTests(unittest.TestCase):
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            32,
+            33,
         )
         preview_result = responses[2]["result"]["structuredContent"][
             "result"
@@ -890,7 +906,7 @@ class PluginBundleTests(unittest.TestCase):
         ]
         self.assertEqual(len(responses), 2)
         tools = responses[1]["result"]["tools"]
-        self.assertEqual(len(tools), 32)
+        self.assertEqual(len(tools), 33)
         self.assertNotIn(
             "open_orchestrator_settings",
             {tool["name"] for tool in tools},
@@ -968,7 +984,7 @@ class PluginBundleTests(unittest.TestCase):
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            32,
+            33,
         )
 
 

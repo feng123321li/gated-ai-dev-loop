@@ -55,6 +55,8 @@ _LOOP_EXECUTION_POLICY = {
         "language": "USER_PREFERRED",
         "heartbeatRenewsLease": True,
         "progressRenewsLease": False,
+        "initialHeartbeatRequiredBeforeWork": True,
+        "shortLoopMayCompleteWithoutExplicitHeartbeat": False,
         "reportAt": [
             "LOOP_START",
             "CODE_INSPECTION_COMPLETE",
@@ -336,6 +338,12 @@ def loop_execution_policy(
             "FINAL_VERIFICATION",
         ]
         policy["progressReporting"]["shortLoopMayReportOnlyFinal"] = True
+        policy["progressReporting"][
+            "initialHeartbeatRequiredBeforeWork"
+        ] = False
+        policy["progressReporting"][
+            "shortLoopMayCompleteWithoutExplicitHeartbeat"
+        ] = True
     return policy
 
 

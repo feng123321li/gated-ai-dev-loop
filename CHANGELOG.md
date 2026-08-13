@@ -4,6 +4,17 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.20 — 2026-08-13
+
+发布提交：以 tag `v0.39.20` 指向的提交为准
+
+- **ZCode MCP 启动路径与容错**：ZCode 启动 Plugin MCP 时 cwd 不保证是 Plugin 根，旧相对脚本路径会在协议请求前直接失败为 `Connection closed / 0 tools`；manifest 现以 `${ZCODE_PLUGIN_ROOT}` 同时锚定 `cwd` 和 `hdg_mcp.py` 绝对路径，以 ZCode 原生 `${ZCODE_PROJECT_DIR}` 独立提供业务工作区，不再使用 Claude 兼容别名。`_resolve_project_root` 在该项目根模板未展开或为空时仍提供启动期回退，避免 `PROJECT_ROOT_INVALID` 早退。
+- **MCP 生命周期可观测性**：stdio server 以结构化 stderr 发布启动、modern discovery/list、legacy initialize、EOF 与响应投递失败阶段，并给出不含业务 payload/路径的可读诊断。新增只读注册矩阵探针，按 workspace/session/Agent role 区分完整、缺失、部分和不可观察目录，且不调用模型、MCP 或 `scheduler.db`。
+- **会话外动态目录参考**：新增 `EXTERNAL_SUPERVISOR_PER_TURN` Demo，演示宿主 registry 在 Agent 之外重连，完整目录原子发布到下一模型 turn，活动 turn 快照不漂移，新 child 获取最新目录，部分注册 fail closed；宿主内置健康诊断与真正热重连仍是平台 P0，不由未挂载 Plugin 自证。
+- **确定性保障档与 LIGHT 减负**：新增只读 `recommend_assurance_profile`，从显式范围、风险和验证事实按 `assurance-v1` 返回 LIGHT/STANDARD，工具总数增至 33。短时 LIGHT 可在 claim 建立的初始租约内省略 heartbeat/progress，仍保留基线冻结、定向验证、`workspace-changes.patch` 和用户最终确认，并增加 5 分钟 Quickstart。
+- **协议边界**：继续优先使用最新正式 MCP `2026-07-28` 无状态 `server/discover` 路径并保留 legacy initialize 回退。动态重连采用每-turn typed catalog，不引入削弱逐工具 schema、审批与 allowlist 的通用 `mcp_call` 代理。
+- **验证**：新增根解析、生命周期、注册矩阵、动态目录、保障档和 LIGHT 租约回归；本地 Python 全量 396 项完成（395 通过、1 项按环境跳过），重新构建 canonical/Plugin 生成镜像，并完成 `compileall`、release、Skill/Plugin 与差异校验。
+
 ## 0.39.19 — 2026-08-13
 
 发布提交：以 tag `v0.39.19` 指向的提交为准

@@ -94,6 +94,40 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         self.assertIn("LIGHT", templates)
         self.assertIn("STANDARD", templates)
 
+    def test_mcp_registration_and_five_minute_runbooks_are_actionable(self) -> None:
+        lifecycle = (
+            ROOT / "docs" / "mcp-host-lifecycle-contract.md"
+        ).read_text(encoding="utf-8")
+        quickstart = (
+            ROOT / "docs" / "five-minute-quickstart.md"
+        ).read_text(encoding="utf-8")
+        for required in (
+            "2026-07-28",
+            "server/discover",
+            "initialize",
+            "SPAWN_STARTED",
+            "CONNECTED",
+            "FAILED",
+            "stderr",
+            "timeoutMs",
+            "热重连",
+            "mcp_registration_probe.py",
+            "mcp_dynamic_catalog_demo.py",
+            "EXTERNAL_SUPERVISOR_PER_TURN",
+            "PLUGIN_MCP_UNAVAILABLE",
+        ):
+            self.assertIn(required, lifecycle)
+        for required in (
+            "5 分钟",
+            "recommend_assurance_profile",
+            "LIGHT",
+            "基线",
+            "workspace-changes.patch",
+            "短任务不要求 heartbeat_loop",
+            "PLUGIN_MCP_UNAVAILABLE",
+        ):
+            self.assertIn(required, quickstart)
+
     def test_gitlab_ci_has_contract_matrix_and_opt_in_host_jobs(self) -> None:
         ci = (ROOT / ".gitlab-ci.yml").read_text(encoding="utf-8")
         for version in ("3.10", "3.12", "3.14"):
@@ -130,7 +164,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         self.assertEqual(set(result["hosts"]), {"codex", "claude-code"})
         self.assertFalse(result["modelInvocationStarted"])
         self.assertEqual(result["pluginVersion"], __version__)
-        self.assertEqual(result["toolCount"], 32)
+        self.assertEqual(result["toolCount"], 33)
 
     def test_codex_probe_finds_candidate_alongside_installed_old_version(
         self,
@@ -311,6 +345,8 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         self.assertNotIn("background coordinator", prompt)
         self.assertNotIn("linked worktree", prompt)
         self.assertNotIn("git worktree add", prompt)
+        self.assertIn("short LIGHT receiver may finish without", prompt)
+        self.assertNotIn("smoke is failed if LOOP_HEARTBEAT is absent", prompt)
 
     def test_codex_host_smoke_uses_reserved_independent_receivers(self) -> None:
         bootstrap = _codex_bootstrap_prompt("light")
@@ -324,6 +360,9 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         self.assertIn("distinct host-native child", _codex_resume_prompt("standard"))
         self.assertNotIn("SessionStart", resumed)
         self.assertNotIn("claim_current_task", resumed)
+        self.assertIn("short LIGHT receiver may finish without", resumed)
+        standard = _codex_resume_prompt("standard")
+        self.assertIn("heartbeat_loop", standard)
 
     def test_codex_host_smoke_resumes_exact_bootstrap_thread(self) -> None:
         with TemporaryDirectory() as temporary:
@@ -385,7 +424,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
             f"当前版本：**{expected_version}**",
             (ROOT / "README.md").read_text(encoding="utf-8"),
         )
-        self.assertEqual(len(tool_definitions()), 32)
+        self.assertEqual(len(tool_definitions()), 33)
         self.assertNotIn("execution_mode", inspect.signature(freeze_hierarchy).parameters)
         tools = {tool["name"]: tool for tool in tool_definitions()}
         self.assertNotIn(

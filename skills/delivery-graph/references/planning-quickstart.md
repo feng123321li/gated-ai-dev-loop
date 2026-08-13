@@ -16,7 +16,7 @@
 
 ## 先按真实改动判断保障档
 
-保障档由规划 Agent 根据真实仓库、预计或已经存在的 diff、接口与数据边界、运行环境和验证路径判断，不由 Python Controller 解释业务语义，也不要求用户额外选择：
+先由规划 Agent 根据真实仓库、预计或已经存在的 diff、接口与数据边界、运行环境和验证路径形成明确分类事实，再调用只读 `recommend_assurance_profile`。该工具不解析自由文本、不创建 Graph，只按 `assurance-v1` 规则确定性返回 `LIGHT` 或 `STANDARD`；任何事实未知都应填 `UNKNOWN` 并保守得到 `STANDARD`，不要求用户额外选择：
 
 | 保障档 | 适用条件 | Graph |
 |---|---|---|
@@ -30,7 +30,7 @@
 - `delivery.reviewLoop=null` 且根 TASK 的 `reviewLoop=null`。
 - TASK payload 明确定向验证；执行中发现范围扩大时返回 `REPLAN_REQUIRED`，用同一 `delivery.id` 准备 `STANDARD` Revision。
 
-省略 `assuranceProfile` 时安全回退为 `STANDARD`。`STANDARD` 不得因为代码行数少就降级；修改认证判断、数据库字段、公共接口或生产配置，即使只有一行也不是 LIGHT。
+把响应的 `recommendedProfile` 写入 `assuranceProfile`，把 `reasons` 写入 `assuranceRationale`；分类事实改变时必须重新调用。省略 `assuranceProfile` 时安全回退为 `STANDARD`。`STANDARD` 不得因为代码行数少就降级；修改认证判断、数据库字段、公共接口或生产配置，即使只有一行也不是 LIGHT。
 
 ## 选择根节点
 

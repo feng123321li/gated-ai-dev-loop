@@ -714,6 +714,7 @@ TOOL_OUTPUT_SCHEMA = _object(
 READ_ONLY_TOOLS = frozenset(
     {
         "workspace_status",
+        "recommend_assurance_profile",
         "hierarchy_contract",
         "delivery_revision_history",
         "graph_frontier",
@@ -1030,6 +1031,79 @@ TOOLS = (
                 ),
             }
         ),
+    ),
+    _tool(
+        "recommend_assurance_profile",
+        (
+            "Deterministically recommend LIGHT or STANDARD from explicit task "
+            "classification facts. This read-only advisor does not parse the "
+            "task summary heuristically and does not create or mutate a Graph."
+        ),
+        _object(
+            {
+                "task_summary": _string(
+                    "Short human-readable task summary retained for audit context."
+                ),
+                "root_task_count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "description": "Expected number of root implementation TASKs.",
+                },
+                "project_count": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "description": "Number of project workspaces affected.",
+                },
+                "change_scope": {
+                    "type": "string",
+                    "enum": ["LOCAL", "MULTI_MODULE", "MULTI_PROJECT"],
+                    "description": "Smallest truthful structural impact scope.",
+                },
+                "risk_factors": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "DATABASE_SCHEMA",
+                            "PUBLIC_CONTRACT",
+                            "AUTHORIZATION",
+                            "SENSITIVE_DATA",
+                            "DEPLOYMENT_INFRASTRUCTURE",
+                            "DATA_MIGRATION",
+                            "UNKNOWN_IMPACT",
+                        ],
+                    },
+                    "uniqueItems": True,
+                    "maxItems": 7,
+                    "description": (
+                        "High-impact facts present in the task; use an empty "
+                        "array only when none apply."
+                    ),
+                },
+                "verification_plan": {
+                    "type": "string",
+                    "enum": ["TARGETED", "BROAD", "UNKNOWN"],
+                    "description": "How specifically the result can be verified.",
+                },
+                "risk_level": {
+                    "type": "string",
+                    "enum": ["LOW", "MEDIUM", "HIGH", "UNKNOWN"],
+                    "description": "Truthful overall risk classification.",
+                },
+            },
+            required=[
+                "task_summary",
+                "root_task_count",
+                "project_count",
+                "change_scope",
+                "risk_factors",
+                "verification_plan",
+                "risk_level",
+            ],
+        ),
+        annotations={"idempotentHint": True},
     ),
     _tool(
         "hierarchy_contract",

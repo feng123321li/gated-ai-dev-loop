@@ -4,7 +4,7 @@
 
 `delivery-graph` 把已经确认的软件需求冻结为可执行、可审查、可恢复的 Delivery Graph，再协调宿主原生 Agent 完成实现、分层 Review 和最终验收。
 
-当前版本：**0.39.19** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
+当前版本：**0.39.20** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
 
 ## 它做什么
 
@@ -24,7 +24,7 @@ Delivery Graph 是交付控制面，不是代码生成模型。它负责：
 
 ```text
 确认需求
-  → 检查真实代码和影响范围，选择 LIGHT / STANDARD
+  → 检查真实代码和影响范围，取得确定性 LIGHT / STANDARD 建议
   → 冻结 Delivery Graph 与 Git 开发基线
   → 选择自动执行 / 手动开发
   → TASK 实现
@@ -55,7 +55,7 @@ Delivery
 | `LIGHT` | 单一根 TASK、局部内部改动，且不触及接口、数据、权限、安全、生产部署或不可逆副作用 | TASK 定向验证 → 用户验收 |
 | `STANDARD` | 默认选择；跨模块、并行、依赖复杂或影响无法可靠排除 | TASK Review → 可选 GROUP seam Review → Delivery Acceptance/Readiness → 用户确认 |
 
-`LIGHT` 必须附带基于真实代码和 diff 的理由。执行中发现影响扩大时，同一 Delivery 创建新的 `STANDARD` Revision，不降低既有 Review 要求。
+`LIGHT` 必须先由 Agent 从真实代码和 diff 形成显式分类事实，再由只读 `recommend_assurance_profile` 确定性建议，并保存响应理由。执行中发现影响扩大时，同一 Delivery 创建新的 `STANDARD` Revision，不降低既有 Review 要求。首次体验可直接使用[5 分钟 LIGHT Quickstart](docs/five-minute-quickstart.md)。
 
 ## 两种执行模式
 
@@ -104,7 +104,7 @@ AUTOMATIC 的每个 READY TASK 与 Review 都先由 `plan_dispatch_batch` 生成
 
 职责严格分离：Controller 只根据 Graph 前驱终态做解锁/阻断，机械校验 receiver 提交的结果结构与声明终态一致性，并保存事件、SQLite outcome 和投影；它不判断需求是否覆盖、证据是否充分或是否具备运行准备度。独立 Review receiver 才负责当前层技术验收；Delivery receiver 每个 `STANDARD` Delivery 只执行一次顶层 Acceptance/Readiness，不逐个重验所有 Loop。真实用户只负责最终业务确认。`LIGHT` 没有独立 Review receiver，由唯一 TASK 的定向验证直接进入用户确认。
 
-Plugin 不注册生命周期 Hook，也没有 Hook trust 步骤。代价是 Controller 不再密码学证明真实宿主 session、parent-child 或 Review receiver 独立性；独立 child 由宿主编排协议保证，控制面只验证 Adapter/workspace、reservation/fingerprint 和 operation capability。
+Plugin 不注册生命周期 Hook，也没有 Hook trust 步骤。代价是 Controller 不再密码学证明真实宿主 session、parent-child 或 Review receiver 独立性；独立 child 由宿主编排协议保证，控制面只验证 Adapter/workspace、reservation/fingerprint 和 operation capability。工具未进入 Agent schema 时按[宿主生命周期、健康与注册矩阵契约](docs/mcp-host-lifecycle-contract.md)诊断，不能用 Graph 自身模拟健康状态。
 
 ## 安装
 
@@ -168,6 +168,8 @@ claude plugin install delivery-graph@majorbio-skills --scope user
 | `examples/team-loops/` | 可校验的 LIGHT / STANDARD hierarchy 模板 |
 | `scripts/build_skill.py` | 从源码同步 Skill 与 Plugin 运行包 |
 | `scripts/validate_release.py` | 离线发布候选一致性校验 |
+| `scripts/mcp_registration_probe.py` | 从宿主日志生成跨 workspace/Agent 注册矩阵 |
+| `scripts/mcp_dynamic_catalog_demo.py` | 会话外 supervisor 与每-turn 动态工具目录参考 Demo |
 
 ## 开发验证
 
@@ -189,4 +191,6 @@ git diff --check
 - [分层 Review 与验收](skills/delivery-graph/references/acceptance.md)
 - [项目实现结构](docs/project-engineering.md)
 - [宿主兼容矩阵](docs/host-compatibility.md)
+- [MCP 生命周期、健康与动态注册](docs/mcp-host-lifecycle-contract.md)
+- [5 分钟 LIGHT Quickstart](docs/five-minute-quickstart.md)
 - [版本记录](CHANGELOG.md)

@@ -32,9 +32,10 @@ PLUGIN = ROOT / "plugins" / "delivery-graph"
 PLUGIN_SKILL = PLUGIN / "skills" / "delivery-graph"
 CODEX_MANIFEST = PLUGIN / ".codex-plugin" / "plugin.json"
 CLAUDE_MANIFEST = PLUGIN / ".claude-plugin" / "plugin.json"
+ZCODE_MANIFEST = PLUGIN / ".zcode-plugin" / "plugin.json"
 REPO_MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 TEMPLATES = ROOT / "examples" / "team-loops"
-EXPECTED_TOOL_COUNT = 32
+EXPECTED_TOOL_COUNT = 33
 
 
 def _version_from_pyproject() -> str:
@@ -124,7 +125,7 @@ def validate_release() -> list[str]:
             f"src/hdg version {__version__!r} does not match {version!r}"
         )
 
-    manifests = (CODEX_MANIFEST, CLAUDE_MANIFEST)
+    manifests = (CODEX_MANIFEST, CLAUDE_MANIFEST, ZCODE_MANIFEST)
     for manifest in manifests:
         try:
             manifest_version = json.loads(
@@ -160,6 +161,8 @@ def validate_release() -> list[str]:
     required_files = (
         ROOT / ".gitlab-ci.yml",
         ROOT / "scripts" / "host_smoke.py",
+        ROOT / "scripts" / "mcp_registration_probe.py",
+        ROOT / "scripts" / "mcp_dynamic_catalog_demo.py",
         TEMPLATES / "light-change.json",
         TEMPLATES / "single-task-standard.json",
         TEMPLATES / "parallel-group-standard.json",
@@ -260,6 +263,38 @@ def validate_release() -> list[str]:
             raise ValueError("Claude manifest must not declare lifecycle hooks")
     except (OSError, ValueError, json.JSONDecodeError) as error:
         problems.append(f"invalid Claude manifest {CLAUDE_MANIFEST}: {error}")
+
+    try:
+        zcode_manifest = _json_object(ZCODE_MANIFEST)
+        zcode_servers = zcode_manifest.get("mcpServers")
+        if not isinstance(zcode_servers, dict):
+            raise ValueError("mcpServers must be an object")
+        zcode_server = zcode_servers.get("delivery-graph")
+        if not isinstance(zcode_server, dict):
+            raise ValueError("delivery-graph MCP server is required")
+        if zcode_server.get("cwd") != "${ZCODE_PLUGIN_ROOT}":
+            raise ValueError("MCP cwd must use ${ZCODE_PLUGIN_ROOT}")
+        expected_zcode_args = [
+            "-X",
+            "utf8",
+            (
+                "${ZCODE_PLUGIN_ROOT}/skills/delivery-graph/scripts/"
+                "hdg_mcp.py"
+            ),
+        ]
+        if zcode_server.get("args") != expected_zcode_args:
+            raise ValueError("MCP script path must use ${ZCODE_PLUGIN_ROOT}")
+        zcode_env = zcode_server.get("env")
+        if not isinstance(zcode_env, dict):
+            raise ValueError("MCP env must be an object")
+        if zcode_env.get("HDG_HOST_ADAPTER") != "zcode":
+            raise ValueError("HDG_HOST_ADAPTER must be zcode")
+        if zcode_env.get("HDG_PROJECT_ROOT") != "${ZCODE_PROJECT_DIR}":
+            raise ValueError(
+                "HDG_PROJECT_ROOT must use ${ZCODE_PROJECT_DIR}"
+            )
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        problems.append(f"invalid ZCode manifest {ZCODE_MANIFEST}: {error}")
 
     try:
         marketplace = _json_object(REPO_MARKETPLACE)

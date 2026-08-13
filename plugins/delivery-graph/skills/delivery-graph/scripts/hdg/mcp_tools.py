@@ -1299,7 +1299,11 @@ TOOLS = (
             "receiver inherits the current host model; Delivery Graph "
             "does not inspect model inventory, recommend a model, or "
             "control Loop-internal workers. Returns receiver identities "
-            "and decision fingerprints; never starts Agents or claims Loops. "
+            "and decision fingerprints; when shared Skill hints exist, each "
+            "assignment also carries their exact advisory receiverPrompt for "
+            "host-native invocation when applicable and available. The prompt "
+            "may be skipped and never gates success. The Controller never "
+            "starts Agents or claims Loops. "
             "After consuming every assignment, obey postActionWait: wait for "
             "a receiver event or the earliest reservation deadline, then call "
             "graph_frontier once; never busy-poll."
@@ -1376,7 +1380,9 @@ TOOLS = (
         (
             "Unfreeze one not-yet-started TASK requirement so it can be "
             "revised without changing Delivery topology, dependencies, or "
-            "resource locks."
+            "resource locks. The entire current Graph Run must have no "
+            "pending dispatch reservation because every assignment is bound "
+            "to the current Graph fingerprint."
         ),
         _object(
             {
@@ -1404,7 +1410,8 @@ TOOLS = (
         (
             "Replace and refreeze one previously unfrozen, unstarted TASK "
             "requirement. The replacement may change only title, summary, "
-            "and opaque Loop payload."
+            "and opaque Loop payload. The entire current Graph Run must have "
+            "no pending dispatch reservation."
         ),
         _object(
             {

@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from .dispatch_contracts import advisory_skill_hint_prompt
 from .graph_model import LOOP_NODE_KINDS, graph_assurance_profile
 from .graph_runtime import advance_graph
 from .loop_contracts import (
@@ -195,6 +196,7 @@ def build_graph_frontier(
     *,
     external_reservations: list[dict[str, Any]] | None = None,
     dispatch_reservations: list[dict[str, Any]] | None = None,
+    skill_hints: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     if run["status"] in {"COMPLETED", "CANCELLED", "SUPERSEDED"}:
         result = {
@@ -396,6 +398,22 @@ def build_graph_frontier(
                         or state.get("manualHandoffEnabled") is True
                     )
                 )
+                manual_fields: dict[str, Any] = {}
+                if manual_task:
+                    manual_fields["dispatchMode"] = "MANUAL"
+                    receiver_prompt = advisory_skill_hint_prompt(
+                        skill_hints or []
+                    )
+                    if receiver_prompt is not None:
+                        manual_fields.update(
+                            {
+                                "skillHints": [
+                                    dict(item)
+                                    for item in (skill_hints or [])
+                                ],
+                                "receiverPrompt": receiver_prompt,
+                            }
+                        )
                 actions.append(
                     {
                         "action": (
@@ -406,11 +424,7 @@ def build_graph_frontier(
                         "nodeId": state["nodeId"],
                         "loopRef": definition["loop"]["ref"],
                         "executionPolicy": execution_policy,
-                        **(
-                            {"dispatchMode": "MANUAL"}
-                            if manual_task
-                            else {}
-                        ),
+                        **manual_fields,
                     }
                 )
         elif state["status"] == "CLAIMED":
@@ -607,7 +621,8 @@ def get_graph_frontier(
         now=now,
     )
     repository = SchedulerRepository(root, now=now)
-    graph = repository.hierarchy(root_id)["graph"]
+    stored = repository.hierarchy(root_id)
+    graph = stored["graph"]
     observed_now = timestamp(now)
     observation_at = (
         observed_now
@@ -639,6 +654,7 @@ def get_graph_frontier(
         run,
         external_reservations=external_reservations,
         dispatch_reservations=dispatch_reservations,
+        skill_hints=stored["hierarchy"]["root"]["skillHints"],
     )
 
 

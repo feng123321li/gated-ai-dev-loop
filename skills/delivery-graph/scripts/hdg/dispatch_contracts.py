@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 from .jsonio import fingerprint
 
 
-DISPATCH_POLICY_VERSION = "HOST_NATIVE_RESERVATION_ROUTING_V7"
+DISPATCH_POLICY_VERSION = "HOST_NATIVE_RESERVATION_ROUTING_V8"
 HOST_NATIVE_DISPATCH_TRANSPORT = "HOST_NATIVE"
 
 # Receiver Agent IDs select host-native receiver families, not development
@@ -14,6 +16,51 @@ HOST_ADAPTER_RECEIVER_AGENTS = {
     "codex": "codex",
     "zcode": "zcode",
 }
+
+
+def advisory_skill_hint_prompt(
+    skill_hints: list[dict[str, str]],
+    *,
+    host_adapter_id: str | None = None,
+) -> str | None:
+    """Render a concrete, non-blocking native Skill hint for a receiver."""
+
+    if not skill_hints:
+        return None
+    hints = deepcopy(skill_hints)
+    rendered_hints = "；".join(
+        f"`{item['name']}`（{item['purpose']}）" for item in hints
+    )
+    if host_adapter_id == "codex":
+        native_invocation = "、".join(
+            f"`${item['name']}`" for item in hints
+        )
+        host_instruction = (
+            f"当前宿主是 Codex，优先用 {native_invocation} 原生触发对应 Skill。"
+        )
+    elif host_adapter_id == "claude-code":
+        native_invocation = "、".join(
+            f"`{item['name']}`" for item in hints
+        )
+        host_instruction = (
+            "当前宿主是 Claude Code，优先通过原生 Skill tool 按 catalog 名 "
+            f"{native_invocation} 调用对应 Skill。"
+        )
+    else:
+        codex_invocation = "、".join(
+            f"`${item['name']}`" for item in hints
+        )
+        catalog_names = "、".join(f"`{item['name']}`" for item in hints)
+        host_instruction = (
+            f"Codex 使用 {codex_invocation}；其他宿主通过原生 Skill tool/命令"
+            f"按 catalog 名 {catalog_names} 调用。"
+        )
+    return (
+        "共享 Skill Hint（建议性、非门禁）："
+        f"{rendered_hints}。先结合真实 Loop 判断每项是否适用且当前宿主可用；"
+        f"满足时尽量优先原生触发。{host_instruction}"
+        "不适用或不可用时可跳过，不阻塞 Loop、不要求用户再次确认，也不伪造已使用。"
+    )
 
 
 def automatic_dispatch_decision_fingerprint(
@@ -44,5 +91,6 @@ __all__ = (
     "DISPATCH_POLICY_VERSION",
     "HOST_ADAPTER_RECEIVER_AGENTS",
     "HOST_NATIVE_DISPATCH_TRANSPORT",
+    "advisory_skill_hint_prompt",
     "automatic_dispatch_decision_fingerprint",
 )

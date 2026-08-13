@@ -27,6 +27,7 @@ commit、working tree/index clean、HEAD 与冻结 binding 一致且所有 recei
 
 AUTOMATIC assignment 还具有以下派遣约束：
 
+- assignment 带有非空 `skillHints/receiverPrompt` 时，宿主把提示词原样放入新 child 的初始输入。receiver 只在 Hint 对当前 Loop 适用且 catalog 在当前宿主可用时尽量使用原生 Skill 入口；不适用或不可用可跳过，不形成 claim 或成功门禁。
 - assignment 绑定 `hostAdapterId`、`receiverAgentId`、reservation、节点、attempt、
   decision fingerprint 和 `modelPolicy=CURRENT_HOST_INHERIT`。
 - receiver 继承创建它的当前宿主模型与默认推理设置。`plan_dispatch_batch` 不接收

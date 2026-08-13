@@ -7,6 +7,10 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.39.21 发布候选矩阵
+
+0.39.21 保持 33 个 MCP 工具、schema v3、无 Hook 模式与 `CURRENT_WORKSPACE_SERIAL`。自动 assignment、手动 TASK action、manual handoff 与 `loop_context` 会向 receiver 传递具体 Skill catalog 名及宿主原生软触发提示：Codex 使用 `$skill-name`，Claude Code 使用 Skill tool，其他宿主使用自己的原生入口；receiver 仅在提示适用且 Skill 可用时尽量触发，不适用或不可用可跳过，Controller 不查询 catalog、不要求激活回执，也不把未使用提示判为失败。规划层同时新增阻断式 TASK 切分完整性预检，并在删除、改名、移动或公共签名变更时执行授权范围内的定向符号引用分析；局部 requirement 解冻/再冻结会等待全部未领取 reservation 到期，防止旧 assignment 与新 Graph 指纹竞态。本候选已完成 402 项 Python 测试（401 通过、1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Skill/Plugin 与差异校验；真实宿主的 Skill catalog 可用性仍由各宿主负责。
+
 ## 0.39.20 发布候选矩阵
 
 0.39.20 修复 ZCode 宿主下 stdio MCP server 的启动路径：ZCode 启动 Plugin MCP 时的进程 cwd 不保证是 Plugin 根，旧的相对 `skills/.../hdg_mcp.py` 会在请求前直接找不到脚本并表现为 `Connection closed / 0 tools`。`.zcode-plugin/plugin.json` 现在以 `${ZCODE_PLUGIN_ROOT}` 同时锚定绝对脚本参数和 `cwd`，业务工作区由 ZCode 原生 `${ZCODE_PROJECT_DIR}` 独立传给 `HDG_PROJECT_ROOT`；二者不得混用，也不使用未定义的通用 `${PROJECT_DIR}`。Controller/Adapter 内部继续统一为 `project_root/workspace_root`，宿主模板差异不泄漏到 Graph 业务层。当项目根模板未展开或为空时，`_resolve_project_root` 仍提供启动期容错。版本同时加入 Plugin 外只读注册矩阵 Demo、分阶段 stderr 生命周期诊断、确定性的 `recommend_assurance_profile`，工具总数为 33；`LIGHT` 短任务在 claim 建立的初始租约内不要求首次 heartbeat/progress，仍保留基线冻结、定向终态验证、patch 快照和用户最终确认。MCP 使用最新正式 `2026-07-28` 无状态路径并保留 legacy initialize 回退。宿主原生 spawn 日志、内置健康探针和热重连属于宿主 P0 契约，详见[生命周期与注册矩阵](mcp-host-lifecycle-contract.md)；Plugin 自身不能在未挂载时充当健康工具。

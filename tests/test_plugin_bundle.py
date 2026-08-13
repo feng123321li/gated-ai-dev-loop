@@ -391,6 +391,8 @@ class PluginBundleTests(unittest.TestCase):
             "delivery.gitBinding",
             "unfreeze_task_requirement",
             "refreeze_task_requirement",
+            "taskSplitIntegrityPreflight",
+            "SCHEDULER_TASK_REQUIREMENT_RESERVATION_ACTIVE",
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, main + planning + execution)

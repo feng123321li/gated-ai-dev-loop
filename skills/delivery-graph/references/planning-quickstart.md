@@ -41,6 +41,16 @@
 
 按调度关系拆分，不按文件数量拆分。一个 TASK Loop 可以覆盖一个模块、多个模块或多个项目，只要它能作为整体返回标准终态。GROUP 是动态、可选的协调边界，可以多层、平行，也可以完全不存在；它的 Review 边界另行按直接子项 seam 判断。不要为表现项目/模块目录，或只包裹一个 TASK，而强制增加 GROUP。
 
+## TASK 切分完整性预检
+
+候选 hierarchy 形成后、`preview_hierarchy` 之前执行一次阻断式预检；局部需求修订则在 `refreeze_task_requirement` 之前对受影响 TASK 重跑。精确策略来自 `hierarchy_contract.projectionGuidance.taskSplitIntegrityPreflight`，预检属于规划宿主，不把自然语言 payload 交给 Controller 猜测。
+
+L0 对每个 TASK 做确定性边界检查：它的实现结束态只能依赖冻结 baseline 和已成功的传递前驱；TASK Review 的验收命令必须能在任何后继 TASK 开始前运行；不得写出“当前 TASK 先破坏编译，等后续 TASK 恢复”或把本层验收推迟给后继的计划。任一条件不满足，先移动、合并或延后变更，再生成可确认 baseline。
+
+L1 只在删除、改名、移动类符号，或修改公共字段、方法、签名时触发规划层的可插拔语言 analyzer。分析范围限制在本 Revision 授权的项目：定位当前声明，扫描主代码和测试中的剩余引用，把引用映射到负责 TASK，并确保破坏性变更与最后一个引用更新位于同一 TASK。Java 优先使用宿主提供的符号引用分析，能力不可用时回退到定向文本搜索；这里不要求全量 Maven/Gradle 构建。结果不明或仍有未归属引用时按失败处理，保守调整 TASK 边界。
+
+预检必须在 `plan_dispatch_batch` 之前完成。reservation 创建后不继续做规划分析；发现必须修订时等待现有 reservation 到期并重新读取 frontier，再进行需求修订。
+
 ## Delivery 与 root wrapper
 
 完整 hierarchy 的最外层字段只有 `delivery` 和 `root`。`schemaVersion` 与整张 Graph 共享的 `skillHints` 位于 root wrapper：
@@ -364,7 +374,8 @@ Torna 必须保持相同的方法、路径或签名、字段层级、类型、�
 
 - 提示是共享、建议性的运行时偏好，不是 `requiredSkills`。
 - 不在需求阶段把提示分配到 TASK、TASK Review、GROUP seam Review、Delivery Acceptance/Readiness、开发阶段或 Gate 阶段，也不因提示新增额外 Graph 节点。
-- 每个 TASK、TASK Review、已配置的 GROUP seam Review 或 Delivery Acceptance/Readiness Loop 启动后读取全部提示，结合真实任务和宿主可用 Skill 独立选择；可以跳过不适用提示，也可以使用其他 Skill。
+- 自动 assignment、手动 TASK action、manual handoff 与 `loop_context` 会把具体 catalog 名和建议性原生触发提示传给 receiver；Codex 使用 `$skill-name`，Claude Code 使用原生 Skill tool，其他宿主使用自己的原生 Skill 入口。
+- 每个 TASK、TASK Review、已配置的 GROUP seam Review 或 Delivery Acceptance/Readiness Loop 结合真实任务和宿主可用 Skill 独立选择；适用且可用时尽量优先触发，不适用或不可用时可以跳过，也可以使用其他 Skill。
 - 调度器不查询 Skill catalog、不校验激活证据，也不因某条提示未使用而判定失败。
 
 无合适提示时使用空数组，不要猜测 Skill。业务硬条件由对应 Loop 的 payload/验收协议表达，不要伪装成 Skill Hint。

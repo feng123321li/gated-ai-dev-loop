@@ -862,6 +862,55 @@ def hierarchy_contract(
                     "UNKNOWN_OR_EXPANDING_IMPACT",
                 ],
             },
+            "taskSplitIntegrityPreflight": {
+                "owner": "HOST_PLANNING_LAYER",
+                "stage": (
+                    "AFTER_CANDIDATE_HIERARCHY_BEFORE_PREVIEW_OR_REFREEZE"
+                ),
+                "blocking": True,
+                "controllerAnalyzesLoopPayload": False,
+                "levels": {
+                    "L0": {
+                        "mode": "DETERMINISTIC_CONTRACT_CHECK",
+                        "checks": [
+                            "TASK_END_STATE_USES_ONLY_BASELINE_AND_PREDECESSORS",
+                            "TASK_REVIEW_IS_RUNNABLE_BEFORE_ANY_SUCCESSOR",
+                            "NO_ACCEPTANCE_OR_BUILD_DEFERRED_TO_SUCCESSOR",
+                        ],
+                    },
+                    "L1": {
+                        "mode": "PLUGGABLE_TARGETED_CODE_ANALYSIS",
+                        "triggers": [
+                            "DELETE_SYMBOL",
+                            "RENAME_OR_MOVE_SYMBOL",
+                            "CHANGE_PUBLIC_FIELD_METHOD_OR_SIGNATURE",
+                        ],
+                        "scope": "AUTHORIZED_PROJECT_SCOPES",
+                        "minimumChecks": [
+                            "LOCATE_CURRENT_DECLARATIONS",
+                            "LOCATE_REMAINING_MAIN_AND_TEST_REFERENCES",
+                            "MAP_REFERENCES_TO_OWNING_TASK",
+                            "PLACE_DESTRUCTIVE_CHANGE_WITH_LAST_REFERENCE_UPDATE",
+                        ],
+                        "fullBuildRequired": False,
+                        "languageAnalyzers": {
+                            "selection": "BY_DETECTED_PROJECT_LANGUAGE",
+                            "java": (
+                                "SYMBOL_REFERENCE_SCAN_WITH_TEXT_SEARCH_FALLBACK"
+                            ),
+                        },
+                    },
+                },
+                "passCriteria": [
+                    "EVERY_TASK_HAS_AN_INDEPENDENTLY_VERIFIABLE_END_STATE",
+                    "NO_TASK_REQUIRES_A_SUCCESSOR_TO_RESTORE_BUILDABILITY",
+                    "TRIGGERED_DESTRUCTIVE_CHANGES_HAVE_NO_UNOWNED_REFERENCES",
+                ],
+                "failureAction": "REVISE_CANDIDATE_TASK_BOUNDARIES",
+                "dispatchBoundary": (
+                    "COMPLETE_BEFORE_PLAN_DISPATCH_BATCH_RESERVATION"
+                ),
+            },
             "gitBinding": {
                 "requiredForGitWorkspace": True,
                 "branchRole": "DELIVERY_FEATURE",

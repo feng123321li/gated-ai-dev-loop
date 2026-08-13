@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .dispatch_contracts import advisory_skill_hint_prompt
+
 
 EXECUTION_CHOICE_MARKDOWN = """请选择开发方式（默认：自动执行）：
 
@@ -330,10 +332,13 @@ def development_baseline_contract(
     return result
 
 
-def manual_receiver_prompt(relative_handoff_path: str) -> str:
+def manual_receiver_prompt(
+    relative_handoff_path: str,
+    skill_hints: list[dict[str, str]] | None = None,
+) -> str:
     """Return the exact prompt shown to and embedded for a manual receiver."""
 
-    return (
+    base_prompt = (
         f"请完整读取 `{relative_handoff_path}` 以及同目录的 baseline、"
         "progress、acceptance、revisions 和 work-items，校验其中的双指纹；"
         "在任何代码检查、分析、修改或测试前，必须在实际开发工作区调用 "
@@ -348,6 +353,12 @@ def manual_receiver_prompt(relative_handoff_path: str) -> str:
         "闭环和最终用户确认。不要重新规划，不要直接修改任何"
         "控制器投影，不要跳过或手工替代 Review；Plugin MCP 不可用时停止并报告 "
         "PLUGIN_MCP_UNAVAILABLE。"
+    )
+    skill_prompt = advisory_skill_hint_prompt(skill_hints or [])
+    return (
+        f"{base_prompt}{skill_prompt}"
+        if skill_prompt is not None
+        else base_prompt
     )
 
 

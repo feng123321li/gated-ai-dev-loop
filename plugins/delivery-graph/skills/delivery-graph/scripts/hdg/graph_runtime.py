@@ -10,6 +10,7 @@ from typing import Any
 from .dispatch_contracts import (
     HOST_ADAPTER_RECEIVER_AGENTS,
     HOST_NATIVE_DISPATCH_TRANSPORT,
+    advisory_skill_hint_prompt,
     automatic_dispatch_decision_fingerprint,
 )
 from .errors import fail
@@ -1181,6 +1182,9 @@ def loop_context(
             "loopsMustNotCreateSwitchOrCheckoutGitBranches": True,
         },
     }
+    skill_hint_prompt = advisory_skill_hint_prompt(context["skillHints"])
+    if skill_hint_prompt is not None:
+        context["skillHintPrompt"] = skill_hint_prompt
     if definition["kind"].endswith("_REVIEW_LOOP"):
         context["rules"].update(
             {
@@ -1941,6 +1945,12 @@ def handoff_ready_automatic_task(
                 f"再对 {root_id}/{node_id} 调用 dispatch_loop，明确提交 "
                 "dispatch_mode=MANUAL；完成 TASK 后照常上报结果，后续 Review "
                 "仍由 AUTOMATIC 独立 receiver 执行。"
+            )
+            + (
+                advisory_skill_hint_prompt(
+                    stored["hierarchy"]["root"]["skillHints"]
+                )
+                or ""
             ),
         },
     }
@@ -2036,6 +2046,43 @@ def _assert_task_requirement_unstarted(
         )
 
 
+def _assert_no_pending_dispatch_reservations(
+    repository: SchedulerRepository,
+    connection: Any,
+    *,
+    run_id: str,
+    at: str,
+) -> None:
+    """Keep requirement edits from invalidating unclaimed assignments."""
+
+    repository.expire_dispatch_reservations(connection, at=at)
+    rows = connection.execute(
+        "SELECT reservation_id, node_id, expires_at "
+        "FROM dispatch_reservations "
+        "WHERE run_id = ? AND status = 'RESERVED' "
+        "AND julianday(expires_at) > julianday(?) "
+        "ORDER BY expires_at, node_id, reservation_id",
+        (run_id, at),
+    ).fetchall()
+    if not rows:
+        return
+    reservations = [
+        {
+            "dispatchReservationId": row["reservation_id"],
+            "nodeId": row["node_id"],
+            "reservationExpiresAt": row["expires_at"],
+        }
+        for row in rows
+    ]
+    fail(
+        "SCHEDULER_TASK_REQUIREMENT_RESERVATION_ACTIVE",
+        "Wait for every pending dispatch reservation in this Graph Run to "
+        "expire before changing a TASK requirement",
+        retryAfter=reservations[0]["reservationExpiresAt"],
+        dispatchReservations=reservations,
+    )
+
+
 def unfreeze_task_requirement(
     *,
     root: str,
@@ -2097,6 +2144,12 @@ def unfreeze_task_requirement(
                 "TASK requirement is already unfrozen",
                 taskId=task_id,
             )
+        _assert_no_pending_dispatch_reservations(
+            repository,
+            connection,
+            run_id=run["run_id"],
+            at=at,
+        )
         connection.execute(
             "UPDATE task_requirement_states "
             "SET status = 'UNFROZEN', updated_at = ? "
@@ -2211,6 +2264,12 @@ def refreeze_task_requirement(
                 "TASK requirement must be unfrozen before replacement",
                 taskId=task_id,
             )
+        _assert_no_pending_dispatch_reservations(
+            repository,
+            connection,
+            run_id=run["run_id"],
+            at=at,
+        )
         hierarchy_row = connection.execute(
             "SELECT * FROM hierarchies WHERE root_id = ?",
             (root_id,),

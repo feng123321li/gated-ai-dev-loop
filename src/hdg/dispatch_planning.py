@@ -8,6 +8,7 @@ from .dispatch_contracts import (
     DISPATCH_POLICY_VERSION,
     HOST_ADAPTER_RECEIVER_AGENTS,
     HOST_NATIVE_DISPATCH_TRANSPORT,
+    advisory_skill_hint_prompt,
     automatic_dispatch_decision_fingerprint,
 )
 from .errors import fail
@@ -75,8 +76,9 @@ def _assignment(
     graph_fingerprint: str,
     host_adapter_id: str,
     receiver_agent_id: str,
+    skill_hints: list[dict[str, str]],
 ) -> dict[str, Any]:
-    return {
+    assignment = {
         "nodeId": node["id"],
         "kind": node["kind"],
         "workItemId": node["workItemId"],
@@ -115,6 +117,14 @@ def _assignment(
             "boundary": "INDEPENDENT_RECEIVER_CONTEXT",
         },
     }
+    receiver_prompt = advisory_skill_hint_prompt(
+        skill_hints,
+        host_adapter_id=host_adapter_id,
+    )
+    if receiver_prompt is not None:
+        assignment["skillHints"] = [dict(item) for item in skill_hints]
+        assignment["receiverPrompt"] = receiver_prompt
+    return assignment
 
 
 def plan_dispatch_batch(
@@ -184,6 +194,7 @@ def plan_dispatch_batch(
         )
 
     graph = stored["graph"]
+    skill_hints = stored["hierarchy"]["root"]["skillHints"]
     definitions = {node["id"]: node for node in graph["nodes"]}
     states = {node["nodeId"]: node for node in run["nodes"]}
     frontier_dispatch_node_ids = sorted(
@@ -204,6 +215,7 @@ def plan_dispatch_batch(
             graph_fingerprint=stored["graphFingerprint"],
             host_adapter_id=actual_host_adapter_id,
             receiver_agent_id=receiver_agent_id,
+            skill_hints=skill_hints,
         )
         for node_id in dispatch_node_ids
     ]

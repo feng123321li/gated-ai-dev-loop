@@ -81,8 +81,9 @@ allowed-tools:
 3. 只为真实分层、依赖或并行汇合创建 `GROUP`。GROUP 的 `reviewLoop` 仅在直接子项之间存在必须独立验证的 seam 时配置；纯协调/汇合 GROUP 使用 `null`。不要为单 TASK 制造形式层级。
 4. 需求涉及建表、改表或删表时，在 preview 前读取真实当前结构、完成字段级 before/after 设计，并按 `projectionGuidance.databaseChanges` 写入负责 TASK 的 `loop.payload.databaseChanges`；不得把数据库设计留给执行 Loop。
 5. 把其他实现目标和约束放入 `loop.payload`；用 `resourceClaims` 表达跨 Delivery 排他资源；每项数据库变更的 `resourceClaim` 必须同时存在于该 TASK 的资源声明中；把用户指定 Skill 记录为共享 `root.skillHints`。
-6. 调用 `hierarchy_contract` 后构造 schema v3。较大层级先写 JSON 文件并校验，再通过 `hierarchy_file` 传给 `preview_hierarchy`。
-7. 仅在返回 `CHOICE_READY` 且 `artifactsReady=true` 后处理 `pendingInteraction`。
+6. 调用 `hierarchy_contract` 后构造 schema v3。候选层级形成后、调用 `preview_hierarchy` 或局部 `refreeze_task_requirement` 前，必须执行其 `projectionGuidance.taskSplitIntegrityPreflight`：先做每个 TASK 可独立实现和验收的 L0 检查；删除、改名、移动或公共字段/方法/签名变化再由规划宿主按项目语言触发 L1 定向引用分析。任何 TASK 的构建或验收依赖后继 TASK 恢复时，先调整切分；不要 preview、refreeze 或取得 dispatch reservation。Controller 不分析自然语言 payload，也不替代该规划预检。
+7. 较大层级先写 JSON 文件并校验，再通过 `hierarchy_file` 传给 `preview_hierarchy`。
+8. 仅在返回 `CHOICE_READY` 且 `artifactsReady=true` 后处理 `pendingInteraction`。
 
 ## 处理待确认交互
 
@@ -120,9 +121,9 @@ allowed-tools:
 
 首次进入、receiver 完成/需要关注、`nextWakeAt` 到达或返回 `ADVANCE_REQUIRED` 时调用一次 `graph_frontier`，并先完整消费当前批次的立即 action。存在后台 receiver 或 dispatch reservation 时，随后严格执行 `progressMonitor.waitDirective`：优先使用宿主原生 receiver 等待；无事件只在 `pollNotBefore` 调用一次只读 `graph_status`。该截止已对齐下一个有意义健康阈值，不得自行缩短为固定短周期。禁止 back-to-back 调用 `graph_frontier` 或 `graph_status`；`changeFingerprint` 未变化时不重复播报进度。精确 claim、reservation、heartbeat、资源锁和接收协议见[执行说明](references/execution-quickstart.md)。
 
-- `REFREEZE_TASK_REQUIREMENT`：停止派遣该 TASK，只修改用户授权的需求字段，重新冻结后刷新 frontier。
-- `CLAIM_MANUAL_TASK`：为手动 Graph，或已由 `handoff_ready_automatic_task` 显式恢复的单个自动 TASK，创建独立人工 receiver；只有 TASK 可 MANUAL claim，后续 Review 仍走 AUTOMATIC reservation 派遣。MANUAL 不带 AUTO reservation，但必须提交独立 receiver context 与新 `operation_id`，并通过 Adapter、workspace、Graph 和项目 scope 校验。
-- `DISPATCH_LOOP`：对每个 READY TASK 或 Review 调用一次 `plan_dispatch_batch`，完整消费 `concurrentDispatchGroups`，并立即创建独立 receiver；不要在 reservation 后继续分析。receiver 用 assignment 的 reservation、decision fingerprint、自己的 context 和新 `operation_id` 调用 `dispatch_loop(AUTO)`。全部 assignment 消费后严格执行返回的 `postActionWait`：优先等待 receiver 原生事件，最迟到最早 reservation 截止时间再调用一次 `graph_frontier`；禁止忙轮询。同一 reservation 与 operation 的响应丢失重试必须返回已提交 assignment，不能重复领取。
+- `REFREEZE_TASK_REQUIREMENT`：停止派遣该 TASK，先对受影响 TASK 重新执行切分完整性预检，再只修改用户授权的需求字段并重新冻结。任一当前 Run 的未领取 dispatch reservation 都绑定旧 Graph 指纹；`unfreeze_task_requirement` / `refreeze_task_requirement` 返回 `SCHEDULER_TASK_REQUIREMENT_RESERVATION_ACTIVE` 时，等到其 `retryAfter` 后再续接，期间不得强改需求或复用旧 assignment。
+- `CLAIM_MANUAL_TASK`：为手动 Graph，或已由 `handoff_ready_automatic_task` 显式恢复的单个自动 TASK，创建独立人工 receiver；只有 TASK 可 MANUAL claim，后续 Review 仍走 AUTOMATIC reservation 派遣。action 带有非空 `skillHints/receiverPrompt` 时，把提示词原样交给 child：仅当 Hint 对当前 Loop 适用且宿主可用时尽量原生触发，不适用或不可用可跳过。MANUAL 不带 AUTO reservation，但必须提交独立 receiver context 与新 `operation_id`，并通过 Adapter、workspace、Graph 和项目 scope 校验。
+- `DISPATCH_LOOP`：对每个 READY TASK 或 Review 调用一次 `plan_dispatch_batch`，完整消费 `concurrentDispatchGroups`，并立即创建独立 receiver；不要在 reservation 后继续分析。assignment 带有非空 `skillHints/receiverPrompt` 时，把提示词原样交给 child；Codex 使用其中的 `$skill-name`，Claude Code 使用原生 Skill tool，其他宿主使用自己的原生 Skill 入口。它仍是建议性 Hint，不适用或不可用可跳过，也不形成成功门禁。receiver 用 assignment 的 reservation、decision fingerprint、自己的 context 和新 `operation_id` 调用 `dispatch_loop(AUTO)`。全部 assignment 消费后严格执行返回的 `postActionWait`：优先等待 receiver 原生事件，最迟到最早 reservation 截止时间再调用一次 `graph_frontier`；禁止忙轮询。同一 reservation 与 operation 的响应丢失重试必须返回已提交 assignment，不能重复领取。
 - AUTO receiver 启动或 claim 失败时不得由总协调器直接领取。刷新 frontier；仍有效的 reservation 只按原参数重试，已过期的 reservation 重新规划。仍需人工接管时，确认 TASK 从未领取、无有效 reservation、Delivery workspace 干净且无代码改动，再取得用户明确授权调用 `handoff_ready_automatic_task`；它只把当前 READY TASK 改为人工接收，Review 不降级。
 - claim 成功后，独立 receiver 读取一次 `loop_context`，确认至少一个已验证的 `projectScopes`。`STANDARD` 在任何代码工作前用精确 `operation_id` 提交首次 `heartbeat_loop`；短时 `LIGHT` 的 claim 已建立初始租约，可在租约窗口内不发 heartbeat/progress，直接完成定向验证并提交真实终态，超出窗口则按期 heartbeat。后续 heartbeat、progress、pause 与 result 都显式携带同一 operation。
 - 只让外层 receiver 持有 reservation 和 `operation_id` 并调用 claim、heartbeat、progress、pause、resume 和 `record_loop_result`。内部 Worker 不得持有控制面凭据。

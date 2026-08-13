@@ -2113,7 +2113,10 @@ def create_manual_handoff(
         f"{GOVERNANCE_DIRECTORY}/{root_id}/"
         f"handoff-{hierarchy_value[:12]}.md"
     )
-    receiver_prompt = manual_receiver_prompt(relative_path)
+    receiver_prompt = manual_receiver_prompt(
+        relative_path,
+        normalized["root"]["skillHints"],
+    )
     registration = repository.record_manual_handoff(
         normalized,
         graph,

@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.21 — 2026-08-13
+
+发布提交：以 tag `v0.39.21` 指向的提交为准
+
+- **Skill Hint 软触发增强**：保持 `root.skillHints` 建议性、可跳过且不形成成功门禁；自动 assignment、手动 TASK action、manual handoff 与 `loop_context` 现在传递具体 catalog 名和原生触发提示。Codex receiver 获得 `$skill-name`，Claude Code receiver 获得 Skill tool 文案，其他宿主使用自己的原生 Skill 入口；仅在当前 Loop 适用且宿主可用时尽量触发。
+- **TASK 切分完整性预检**：规划层在候选 hierarchy preview 或局部 refreeze 前执行阻断式 L0 独立可验证性检查；删除、改名、移动及公共签名变更进一步触发授权项目范围内的 L1 定向符号引用分析，要求破坏性变更与最后一个引用更新归入同一 TASK，分析不明时保守调整边界。
+- **需求修订 reservation 门禁**：`unfreeze_task_requirement` 与 `refreeze_task_requirement` 先清理到期 reservation，再拒绝任何仍有未领取 assignment 的 Graph Run，并返回完整冲突列表和最早 `retryAfter`，避免旧 assignment 与新 requirement 指纹并存。
+- **兼容性**：保持 schema v3、33 个 MCP 工具、无 Hook 模式与 `CURRENT_WORKSPACE_SERIAL`；Skill Hint 不查询 catalog、不保存激活凭据，也不因提示未使用而使 Loop 失败。
+- **验证**：新增 receiver 提示传播、软触发非门禁、TASK 切分预检与需求修订 reservation 竞态回归；本地 Python 全量 402 项完成（401 通过、1 项按环境跳过），重新构建 canonical/Plugin 生成镜像，并完成 `compileall`、release、Skill/Plugin 与差异校验。
+
 ## 0.39.20 — 2026-08-13
 
 发布提交：以 tag `v0.39.20` 指向的提交为准

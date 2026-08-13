@@ -15,7 +15,11 @@ from hdg.graph_runtime import (
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.repository import SchedulerRepository
 
-from .test_loop_architecture import group_hierarchy, task_hierarchy
+from .test_loop_architecture import (
+    group_hierarchy,
+    skill_hint,
+    task_hierarchy,
+)
 
 
 def parallel_group_hierarchy() -> dict:
@@ -92,6 +96,8 @@ class HostDispatchPlanningTests(unittest.TestCase):
         self.assertTrue(
             plan["assignments"][0]["independence"]["required"]
         )
+        self.assertNotIn("skillHints", plan["assignments"][0])
+        self.assertNotIn("receiverPrompt", plan["assignments"][0])
         self.assertNotIn("currentSessionTaskNodeIds", plan)
         self.assertNotIn("currentSessionTasks", plan["summary"])
 
@@ -137,6 +143,50 @@ class HostDispatchPlanningTests(unittest.TestCase):
             "routeReview",
         ):
             self.assertNotIn(removed, assignment)
+
+    def test_receiver_assignment_carries_advisory_native_skill_prompt(
+        self,
+    ) -> None:
+        hierarchy = task_hierarchy()
+        hierarchy["root"]["skillHints"] = [
+            skill_hint(
+                "springboot-tdd",
+                "Prefer TDD for an applicable Spring Boot Loop.",
+            )
+        ]
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, hierarchy)
+            assignment = self.plan(root, prepared)["assignments"][0]
+
+        self.assertEqual(
+            assignment["skillHints"],
+            hierarchy["root"]["skillHints"],
+        )
+        self.assertIn("`$springboot-tdd`", assignment["receiverPrompt"])
+        self.assertIn("适用且当前宿主可用", assignment["receiverPrompt"])
+        self.assertIn("可跳过", assignment["receiverPrompt"])
+        self.assertNotIn("必须执行", assignment["receiverPrompt"])
+
+    def test_claude_receiver_uses_native_skill_tool_wording(self) -> None:
+        hierarchy = task_hierarchy()
+        hierarchy["root"]["skillHints"] = [
+            skill_hint(
+                "springboot-tdd",
+                "Prefer TDD for an applicable Spring Boot Loop.",
+            )
+        ]
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, hierarchy)
+            assignment = self.plan(
+                root,
+                prepared,
+                adapter_id="claude-code",
+                receiver_agent_id="claude-code",
+            )["assignments"][0]
+
+        self.assertIn("Skill tool", assignment["receiverPrompt"])
+        self.assertIn("`springboot-tdd`", assignment["receiverPrompt"])
+        self.assertNotIn("`$springboot-tdd`", assignment["receiverPrompt"])
 
     def test_registered_adapter_is_the_only_extension_boundary(self) -> None:
         with TemporaryDirectory() as root:

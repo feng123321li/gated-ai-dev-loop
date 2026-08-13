@@ -538,6 +538,34 @@ class DevelopmentBaselineTests(unittest.TestCase):
 
 
 class HierarchyContractTests(unittest.TestCase):
+    def test_task_split_preflight_is_blocking_and_planning_owned(self) -> None:
+        preflight = hierarchy_contract(root_kind="GROUP")[
+            "projectionGuidance"
+        ]["taskSplitIntegrityPreflight"]
+
+        self.assertEqual(preflight["owner"], "HOST_PLANNING_LAYER")
+        self.assertEqual(
+            preflight["stage"],
+            "AFTER_CANDIDATE_HIERARCHY_BEFORE_PREVIEW_OR_REFREEZE",
+        )
+        self.assertTrue(preflight["blocking"])
+        self.assertFalse(preflight["controllerAnalyzesLoopPayload"])
+        self.assertEqual(
+            preflight["levels"]["L1"]["mode"],
+            "PLUGGABLE_TARGETED_CODE_ANALYSIS",
+        )
+        self.assertIn(
+            "DELETE_SYMBOL",
+            preflight["levels"]["L1"]["triggers"],
+        )
+        self.assertFalse(
+            preflight["levels"]["L1"]["fullBuildRequired"]
+        )
+        self.assertEqual(
+            preflight["dispatchBoundary"],
+            "COMPLETE_BEFORE_PLAN_DISPATCH_BATCH_RESERVATION",
+        )
+
     def test_database_changes_are_frozen_before_execution(self) -> None:
         hierarchy = database_hierarchy()
         normalized = validate_hierarchy_definition(hierarchy)

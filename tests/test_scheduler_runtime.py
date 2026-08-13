@@ -1261,6 +1261,12 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self,
     ) -> None:
         hierarchy = delivery_task_hierarchy("d-select-manual", "t-choice")
+        hierarchy["root"]["skillHints"] = [
+            skill_hint(
+                "springboot-tdd",
+                "Prefer TDD when the receiving Loop is Spring Boot work.",
+            )
+        ]
         preview = preview_hierarchy(
             root=self.root,
             hierarchy=hierarchy,
@@ -1293,6 +1299,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
             prompt,
             handoff_path.read_text(encoding="utf-8"),
         )
+        self.assertIn("`$springboot-tdd`", prompt)
+        self.assertIn("可跳过", prompt)
         repeated_preview = preview_hierarchy(
             root=self.root,
             hierarchy=hierarchy,
@@ -1538,6 +1546,12 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self,
     ) -> None:
         hierarchy = group_hierarchy()
+        hierarchy["root"]["skillHints"] = [
+            skill_hint(
+                "springboot-tdd",
+                "Prefer TDD when the current manual TASK is Spring Boot work.",
+            )
+        ]
         preview = preview_hierarchy(
             root=self.root,
             hierarchy=hierarchy,
@@ -1614,6 +1628,14 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 operation_id = f"op-manual-graph-{index}"
                 receiver_context_id = f"context-manual-graph-{index}"
                 if action_name == "CLAIM_MANUAL_TASK":
+                    self.assertEqual(
+                        frontier["actions"][0]["skillHints"],
+                        hierarchy["root"]["skillHints"],
+                    )
+                    self.assertIn(
+                        "`$springboot-tdd`",
+                        frontier["actions"][0]["receiverPrompt"],
+                    )
                     runtime_dispatch_loop(
                         root=self.root,
                         root_id=handoff["rootId"],
@@ -3303,6 +3325,41 @@ class SchedulerRuntimeTests(unittest.TestCase):
                         "prioritizeApplicableSkillHints"
                     ]
                 )
+                self.assertIn(
+                    "`$springboot-tdd`",
+                    context["skillHintPrompt"],
+                )
+                self.assertIn("可跳过", context["skillHintPrompt"])
+
+    def test_advisory_skill_hint_does_not_gate_loop_success(self) -> None:
+        hierarchy = task_hierarchy()
+        hierarchy["root"]["skillHints"] = [
+            skill_hint(
+                "springboot-tdd",
+                "Prefer TDD when the active Loop is Spring Boot work.",
+            )
+        ]
+        prepared = self.prepare_and_freeze(hierarchy)
+        node_id = loop_node_id("t-service")
+        dispatch_loop(
+            root=self.root,
+            root_id=prepared["rootId"],
+            node_id=node_id,
+            owner="agent-advisory-skill-success",
+            operation_id="op-advisory-skill-success",
+            now=at(2),
+        )
+
+        recorded = record_loop_result(
+            root=self.root,
+            root_id=prepared["rootId"],
+            node_id=node_id,
+            operation_id="op-advisory-skill-success",
+            outcome=success("Loop completed without a Skill receipt gate."),
+            now=at(3),
+        )
+
+        self.assertEqual(recorded["outcome"]["status"], "SUCCEEDED")
 
     def test_recursive_review_context_contains_all_upstream_loop_results(
         self,
@@ -5436,6 +5493,126 @@ class SchedulerRuntimeTests(unittest.TestCase):
             rebuilt["taskRequirements"][0]["status"],
             "FROZEN",
         )
+
+    def test_pending_dispatch_reservation_blocks_requirement_unfreeze(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        assignment = plan_dispatch_batch(
+            root=self.root,
+            root_id=root_id,
+            expected_graph_fingerprint=prepared["graphFingerprint"],
+            host_adapter_id="codex",
+            host_native_agent_ids=("codex",),
+            now=at(2),
+        )["assignments"][0]
+
+        with self.assertRaises(GatedLoopError) as caught:
+            graph_runtime.unfreeze_task_requirement(
+                root=self.root,
+                root_id=root_id,
+                task_id="t-service",
+                expected_revision=1,
+                authorized_by="human",
+                reason="Clarify the acceptance boundary.",
+                now=at(3),
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_TASK_REQUIREMENT_RESERVATION_ACTIVE",
+        )
+        self.assertEqual(
+            caught.exception.details["retryAfter"],
+            assignment["reservationExpiresAt"],
+        )
+        self.assertEqual(
+            caught.exception.details["dispatchReservations"],
+            [
+                {
+                    "dispatchReservationId": assignment[
+                        "dispatchReservationId"
+                    ],
+                    "nodeId": loop_node_id("t-service"),
+                    "reservationExpiresAt": assignment[
+                        "reservationExpiresAt"
+                    ],
+                }
+            ],
+        )
+
+        unfrozen = graph_runtime.unfreeze_task_requirement(
+            root=self.root,
+            root_id=root_id,
+            task_id="t-service",
+            expected_revision=1,
+            authorized_by="human",
+            reason="Clarify the acceptance boundary.",
+            now=at(8),
+        )
+        self.assertEqual(
+            unfrozen["taskRequirement"]["status"],
+            "UNFROZEN",
+        )
+
+    def test_sibling_dispatch_reservation_blocks_requirement_refreeze(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(disjoint_parallel_hierarchy())
+        root_id = prepared["rootId"]
+        unfrozen = graph_runtime.unfreeze_task_requirement(
+            root=self.root,
+            root_id=root_id,
+            task_id="t-api",
+            expected_revision=1,
+            authorized_by="human",
+            reason="Clarify the API acceptance boundary.",
+            now=at(2),
+        )
+        assignment = plan_dispatch_batch(
+            root=self.root,
+            root_id=root_id,
+            expected_graph_fingerprint=prepared["graphFingerprint"],
+            host_adapter_id="codex",
+            host_native_agent_ids=("codex",),
+            now=at(3),
+        )["assignments"][0]
+        self.assertEqual(assignment["nodeId"], loop_node_id("t-core"))
+        requirement = unfrozen["taskRequirement"]["requirement"]
+        requirement["summary"] = "Implement the clarified API requirement."
+
+        with self.assertRaises(GatedLoopError) as caught:
+            graph_runtime.refreeze_task_requirement(
+                root=self.root,
+                root_id=root_id,
+                task_id="t-api",
+                expected_revision=1,
+                requirement=requirement,
+                confirmed_by="human",
+                now=at(4),
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_TASK_REQUIREMENT_RESERVATION_ACTIVE",
+        )
+        self.assertEqual(
+            caught.exception.details["retryAfter"],
+            assignment["reservationExpiresAt"],
+        )
+
+        refrozen = graph_runtime.refreeze_task_requirement(
+            root=self.root,
+            root_id=root_id,
+            task_id="t-api",
+            expected_revision=1,
+            requirement=requirement,
+            confirmed_by="human",
+            now=at(9),
+        )
+        self.assertEqual(refrozen["taskRequirement"]["revision"], 2)
+        self.assertEqual(refrozen["taskRequirement"]["status"], "FROZEN")
 
     def test_started_task_requirement_cannot_be_unfrozen(self) -> None:
         prepared = self.prepare_and_freeze(task_hierarchy())

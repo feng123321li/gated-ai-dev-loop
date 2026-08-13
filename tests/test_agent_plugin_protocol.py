@@ -175,6 +175,18 @@ class AgentPluginProtocolTests(unittest.TestCase):
                 field=f"interface.screenshots[{index}]",
             )
 
+    def test_plugin_icon_is_marketplace_sized_png(self) -> None:
+        icon = PLUGIN / "assets" / "delivery-graph-icon.png"
+        content = icon.read_bytes()
+        self.assertLessEqual(len(content), 128 * 1024)
+        self.assertEqual(content[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(content[12:16], b"IHDR")
+        dimensions = (
+            int.from_bytes(content[16:20], "big"),
+            int.from_bytes(content[20:24], "big"),
+        )
+        self.assertEqual(dimensions, (256, 256))
+
     def test_claude_manifest_is_hookless(self) -> None:
         manifest = _read_json(PLUGIN / ".claude-plugin" / "plugin.json")
         self.assertNotIn("hooks", manifest)

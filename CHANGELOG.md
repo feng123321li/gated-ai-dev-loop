@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.17 — 2026-08-13
+
+发布提交：以 tag `v0.39.17` 指向的提交为准
+
+- **Marketplace 图标瘦身**：将 Delivery Graph 品牌图标从 1254×1254、1.3 MB 的生成原图缩放为 256×256、约 76 KB 的发布资源，视觉内容和 manifest 路径保持不变，显著降低 Marketplace 清单与 Plugin 安装包负担。
+- **资源回归门禁**：新增 PNG 头、尺寸和文件大小断言，要求发布图标固定为 256×256 且不超过 128 KB，防止后续误把高分辨率生成稿重新打入 Plugin。
+- **运行契约不变**：本版本仅优化静态展示资源并增加测试，不改变 32 个 MCP 工具、schema v3、无 Hook 模式与 `CURRENT_WORKSPACE_SERIAL`。
+- **验证**：本地 Python 全量 389 项测试通过（1 项按环境条件跳过）；`compileall`、canonical/Plugin 生成镜像、release candidate、Skill/Plugin manifest 与 `git diff --check` 均通过。
+
 ## 0.39.16 — 2026-08-13
 
 发布提交：以 tag `v0.39.16` 指向的提交为准

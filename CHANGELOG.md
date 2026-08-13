@@ -4,6 +4,14 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.16 — 2026-08-13
+
+发布提交：以 tag `v0.39.16` 指向的提交为准
+
+- **ZCode Plugin 图标**：`.zcode-plugin/plugin.json` 的 `interface` 同步声明 `composerIcon` 与 `logo`，指向 0.39.15 引入的浅色 Delivery Graph 品牌图标；ZCode 宿主现在与 Codex 一致地渲染 Plugin 图标。
+- **运行契约不变**：本版本仅补齐 ZCode manifest 的展示资源字段，未改变 32 个 MCP 工具、schema v3、无 Hook 模式与 `CURRENT_WORKSPACE_SERIAL`，Graph、运行数据库或宿主审批语义均不变。
+- **验证**：本地 Python 全量测试、`compileall`、canonical/Plugin 生成镜像、release candidate、Skill/Plugin manifest 与 `git diff --check` 均通过。
+
 ## 0.39.15 — 2026-08-13
 
 发布提交：以 tag `v0.39.15` 指向的提交为准

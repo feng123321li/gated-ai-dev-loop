@@ -7,6 +7,10 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.39.15 发布候选矩阵
+
+0.39.15 仅新增浅色 Plugin 图标并更新展示元数据，继续保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`；Graph、运行数据库、宿主审批和 receiver 调度契约均不变。核心候选需通过全量 Python 测试、编译、Skill/Plugin 镜像、release candidate、manifest 与差异校验；真实宿主能力沿用 0.39.14 的边界，不把图标渲染以外的行为表述为新增宿主验证。
+
 ## 0.39.14 发布候选矩阵
 
 0.39.14 保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`，把后续自动 Delivery 建模为持久队列，并允许宿主在队首按一次 `AUTOMATIC` 选择机械完成 stash 与分支准备。

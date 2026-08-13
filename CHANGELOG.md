@@ -4,6 +4,14 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.15 — 2026-08-13
+
+发布提交：以 tag `v0.39.15` 指向的提交为准
+
+- **Plugin 自定义图标**：新增浅色 Delivery Graph 品牌图标，并通过 Codex manifest 的 `composerIcon` 与 `logo` 字段发布；浅天蓝背景、分层 Graph、门禁检查点与审批节点在紧凑视图中保持可辨识。
+- **运行契约不变**：本版本仅调整 Plugin 展示资源与发布元数据，继续保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`，不改变 Graph、数据库或宿主审批语义。
+- **验证**：本地 Python 全量 388 项测试通过（1 项按环境条件跳过）；`compileall`、canonical/Plugin 生成镜像、release candidate、Skill/Plugin manifest 与 `git diff --check` 均通过。
+
 ## 0.39.14 — 2026-08-12
 
 发布提交：以 tag `v0.39.14` 指向的提交为准

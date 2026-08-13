@@ -159,11 +159,14 @@ class AgentPluginProtocolTests(unittest.TestCase):
             )
         )
         for field in ("composerIcon", "logo"):
-            if field in interface:
-                self.assert_plugin_relative_path(
-                    interface[field],
-                    field=f"interface.{field}",
-                )
+            self.assertEqual(
+                interface.get(field),
+                "./assets/delivery-graph-icon.png",
+            )
+            self.assert_plugin_relative_path(
+                interface[field],
+                field=f"interface.{field}",
+            )
         screenshots = interface.get("screenshots", [])
         self.assertIsInstance(screenshots, list)
         for index, path in enumerate(screenshots):

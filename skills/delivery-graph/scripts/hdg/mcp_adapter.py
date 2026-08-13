@@ -295,6 +295,21 @@ SERVER_INSTRUCTIONS = (
     "actions remain outside this server."
 )
 
+CODEX_SERVER_INSTRUCTIONS = (
+    "Use the installed delivery-graph Skill as the complete workflow "
+    "contract. Start with workspace_status; retain rootId and pass root_id "
+    "on every continuation. Use schema v3 and call hierarchy_contract "
+    "before constructing a hierarchy. Treat scheduler state and its event "
+    "chain as MCP-owned; never read or write scheduler.db directly. The "
+    "primary context plans, routes, and monitors only. AUTOMATIC uses "
+    "CURRENT_WORKSPACE_SERIAL, and the Controller never performs Git writes. "
+    "Reserve READY Loops with plan_dispatch_batch and let distinct "
+    "host-native receivers call dispatch_loop; never claim inline or expose "
+    "operation IDs. Follow controller pendingInteraction and wait directives "
+    "exactly. Commit, merge, push, publish, migrations, permission changes, "
+    "final user confirmation, and archive retain their own explicit authority."
+)
+
 _USER_INTERACTION_TOOLS = frozenset(
     tool["name"]
     for tool in tool_definitions()
@@ -376,6 +391,12 @@ class ModernRequestContext:
     client_capabilities: Mapping[str, object]
     client_info: Mapping[str, object] | None
     meta: Mapping[str, object]
+
+
+def _server_instructions(connection: McpConnection) -> str:
+    if connection.trusted_host_adapter == "codex":
+        return CODEX_SERVER_INSTRUCTIONS
+    return SERVER_INSTRUCTIONS
 
 
 def _server_info() -> dict[str, str]:
@@ -1095,7 +1116,7 @@ def _handle_modern_request(
             {
                 "supportedVersions": list(SUPPORTED_PROTOCOL_VERSIONS),
                 "capabilities": _server_capabilities(),
-                "instructions": SERVER_INSTRUCTIONS,
+                "instructions": _server_instructions(connection),
                 "ttlMs": DISCOVERY_TTL_MS,
                 "cacheScope": CACHE_SCOPE,
             },
@@ -1157,7 +1178,7 @@ def _handle_legacy_request(
                 "protocolVersion": negotiated,
                 "capabilities": _server_capabilities(),
                 "serverInfo": _server_info(),
-                "instructions": SERVER_INSTRUCTIONS,
+                "instructions": _server_instructions(connection),
             },
             modern=False,
         )

@@ -19,10 +19,13 @@ from hdg.mcp_adapter import (
     CLIENT_CAPABILITIES_META_KEY,
     CLIENT_INFO_META_KEY,
     LEGACY_PREFERRED_PROTOCOL_VERSION,
+    McpConnection,
     MODERN_PROTOCOL_VERSION,
     PROTOCOL_VERSION_META_KEY,
+    handle_message,
 )
 from hdg.mcp_apps import DASHBOARD_RESOURCE_URI, MCP_APP_MIME_TYPE
+from hdg.host_policy import ProjectRootBinding
 from hdg.model_core import validate_hierarchy_definition
 from hdg.planning import preview_hierarchy
 
@@ -35,7 +38,81 @@ PLUGIN = ROOT / "plugins" / "delivery-graph"
 PLUGIN_SKILL = PLUGIN / "skills" / "delivery-graph"
 
 
+def _allowed_tools(path: Path) -> list[str]:
+    document = path.read_text(encoding="utf-8")
+    frontmatter = document.split("---", 2)[1]
+    return [
+        line.removeprefix("  - ")
+        for line in frontmatter.splitlines()
+        if line.startswith("  - ")
+    ]
+
+
 class PluginBundleTests(unittest.TestCase):
+    def test_codex_mcp_catalog_and_server_instructions_stay_bounded(
+        self,
+    ) -> None:
+        catalog = json.dumps(
+            {"tools": tool_definitions()},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        self.assertLessEqual(len(catalog), 144 * 1024)
+
+        with TemporaryDirectory() as root:
+            legacy = handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": (
+                            LEGACY_PREFERRED_PROTOCOL_VERSION
+                        ),
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "codex-size-test",
+                            "version": "1.0.0",
+                        },
+                    },
+                },
+                connection=McpConnection(
+                    project_root=ProjectRootBinding.from_startup(root),
+                    trusted_host_adapter="codex",
+                ),
+            )
+            modern = handle_message(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "server/discover",
+                    "params": {
+                        "_meta": {
+                            PROTOCOL_VERSION_META_KEY: (
+                                MODERN_PROTOCOL_VERSION
+                            ),
+                            CLIENT_CAPABILITIES_META_KEY: {},
+                            CLIENT_INFO_META_KEY: {
+                                "name": "codex-size-test",
+                                "version": "1.0.0",
+                            },
+                        }
+                    },
+                },
+                connection=McpConnection(
+                    project_root=ProjectRootBinding.from_startup(root),
+                    trusted_host_adapter="codex",
+                ),
+            )
+
+        for response in (legacy, modern):
+            instructions = response["result"]["instructions"]
+            self.assertLessEqual(
+                len(instructions.encode("utf-8")),
+                1024,
+            )
+            self.assertIn("delivery-graph Skill", instructions)
+
     def test_plugin_omits_legacy_coordinator_and_lifecycle_hooks(
         self,
     ) -> None:
@@ -175,11 +252,34 @@ class PluginBundleTests(unittest.TestCase):
         recommendations = (
             SKILL / "references" / "agent-execution-boundary.md"
         ).read_text(encoding="utf-8")
-        for document in (main, plugin_main):
+        protected_tools = {
+            "archive_delivery",
+            "cancel_graph_run",
+            "handoff_ready_automatic_task",
+            "rebuild_graph_run",
+            "record_user_confirmation",
+            "refreeze_task_requirement",
+            "unfreeze_task_requirement",
+        }
+        safe_tools = {
+            str(tool["name"])
+            for tool in tool_definitions()
+            if tool["name"] not in protected_tools
+        }
+        expected_allowed_tools = {
+            *(
+                "mcp__plugin_delivery-graph_delivery-graph__" + name
+                for name in safe_tools
+            ),
+        }
+        for document, path in (
+            (main, SKILL / "SKILL.md"),
+            (plugin_main, PLUGIN_SKILL / "SKILL.md"),
+        ):
             self.assertIn("allowed-tools:", document)
-            self.assertIn(
-                "mcp__plugin_delivery-graph_delivery-graph__plan_dispatch_batch",
-                document,
+            self.assertEqual(
+                set(_allowed_tools(path)),
+                expected_allowed_tools,
             )
             self.assertNotIn("delivery-graph__*", document)
         self.assertNotIn("`recommend_executors`", main + recommendations)

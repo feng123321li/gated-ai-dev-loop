@@ -178,7 +178,6 @@ def git_delivery_checkout(
     mainline: str = "main",
 ) -> tuple[Path, Path, str, str]:
     repository = Path(root, "repository")
-    worktree = Path(root, "worktrees", delivery_id)
     repository.mkdir()
     git_command(
         repository,
@@ -200,16 +199,8 @@ def git_delivery_checkout(
     git_command(repository, "commit", "-m", "Initial main baseline")
     base_commit = git_command(repository, "rev-parse", "HEAD")
     branch_ref = f"feature/{delivery_id}"
-    git_command(
-        repository,
-        "worktree",
-        "add",
-        "-b",
-        branch_ref,
-        str(worktree),
-        mainline,
-    )
-    return repository, worktree, base_commit, branch_ref
+    git_command(repository, "switch", "-c", branch_ref, mainline)
+    return repository, repository, base_commit, branch_ref
 
 
 def bind_delivery_to_git(
@@ -377,51 +368,6 @@ class DevelopmentBaselineTests(unittest.TestCase):
                 "",
             )
 
-    def test_clean_linked_checkout_uses_the_same_stacked_baseline_rule(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as root:
-            repository, workspace, _base_commit, parent_branch = (
-                git_delivery_checkout(root, delivery_id="d-linked-stacked")
-            )
-            Path(workspace, "parent.txt").write_text(
-                "linked parent feature content\n",
-                encoding="utf-8",
-            )
-            git_command(workspace, "add", "parent.txt")
-            git_command(workspace, "commit", "-m", "Linked parent feature")
-            parent_head = git_command(workspace, "rev-parse", "HEAD")
-
-            preview = call_tool(
-                "preview_hierarchy",
-                {
-                    "hierarchy": isolated_task_hierarchy(
-                        "d-linked-stacked",
-                        "t-linked-stacked",
-                    )
-                },
-                root=str(repository),
-                workspace_root=str(workspace),
-                trusted_host_adapter="codex",
-            )
-
-            interaction = preview["pendingInteraction"]
-            stacked = next(
-                option
-                for option in interaction["options"]
-                if option["id"] == "NEW_FROM_CURRENT_BRANCH"
-            )
-            self.assertEqual(
-                interaction["defaultOptionId"],
-                "NEW_FROM_CURRENT_BRANCH",
-            )
-            self.assertEqual(stacked["baseRef"], parent_branch)
-            self.assertEqual(stacked["baseCommit"], parent_head)
-            self.assertEqual(
-                stacked["integrationTarget"],
-                parent_branch,
-            )
-
     def test_dirty_primary_feature_does_not_offer_stacked_child(self) -> None:
         with TemporaryDirectory() as root:
             repository = Path(root, "repository")
@@ -460,7 +406,7 @@ class DevelopmentBaselineTests(unittest.TestCase):
                 },
             )
 
-    def test_clean_worktree_without_binding_prompts_then_confirms_and_remembers(
+    def test_clean_working_tree_without_binding_prompts_then_confirms_and_remembers(
         self,
     ) -> None:
         with TemporaryDirectory() as root:
@@ -529,7 +475,7 @@ class DevelopmentBaselineTests(unittest.TestCase):
             self.assertIn("executionChoice", remembered)
             self.assertNotIn("developmentBaseline", remembered)
 
-    def test_dirty_worktree_requires_attributed_baseline(self) -> None:
+    def test_dirty_working_tree_requires_attributed_baseline(self) -> None:
         with TemporaryDirectory() as root:
             _repository, worktree, _base_commit, _branch_ref = (
                 git_delivery_checkout(root, delivery_id="d-dirty")
@@ -2426,123 +2372,6 @@ class McpSurfaceTests(unittest.TestCase):
                 (Path(root) / ".layered-delivery" / "d-second").exists()
             )
 
-    def test_linked_git_worktrees_share_control_root_but_keep_identity(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as root:
-            repository_root = Path(root, "repository")
-            linked_root = Path(root, "linked")
-            common_git = repository_root / ".git"
-            worktree_git = common_git / "worktrees" / "linked"
-            worktree_git.mkdir(parents=True)
-            linked_root.mkdir()
-            (linked_root / ".git").write_text(
-                f"gitdir: {worktree_git}\n",
-                encoding="utf-8",
-            )
-            (worktree_git / "commondir").write_text(
-                "../..\n",
-                encoding="utf-8",
-            )
-            binding = ProjectRootBinding.from_startup(
-                None,
-                from_sandbox_meta=True,
-            )
-            resolved = binding.resolve_request(
-                {
-                    "codex/sandbox-state-meta": {
-                        "sandboxCwd": linked_root.as_uri(),
-                    }
-                },
-                stateless=True,
-            )
-        self.assertEqual(
-            resolved.project_root,
-            str(repository_root.resolve()),
-        )
-        self.assertEqual(
-            resolved.workspace_root,
-            str(linked_root.resolve()),
-        )
-
-    def test_detached_worktree_requests_host_feature_branch_setup(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as root:
-            repository, _worktree, base_commit, _branch_ref = (
-                git_delivery_checkout(root)
-            )
-            detached = Path(root, "worktrees", "codex-detached")
-            git_command(
-                repository,
-                "worktree",
-                "add",
-                "--detach",
-                str(detached),
-                "main",
-            )
-
-            discovered = call_tool(
-                "workspace_status",
-                {},
-                root=str(repository),
-                workspace_root=str(detached),
-                trusted_host_adapter="codex",
-            )
-
-            self.assertEqual(discovered["status"], "ABSENT")
-            self.assertEqual(
-                discovered["gitWorkspace"],
-                {
-                    "role": "DETACHED_WORKSPACE",
-                    "headCommit": base_commit,
-                },
-            )
-            self.assertEqual(
-                discovered["workspacePreparation"],
-                {
-                    "state": "FEATURE_BRANCH_REQUIRED",
-                    "owner": "HOST",
-                    "nextAction": "CREATE_DELIVERY_FEATURE_BRANCH",
-                    "baseRef": "main",
-                    "baseCommit": base_commit,
-                    "integrationTarget": "main",
-                },
-            )
-            self.assertEqual(
-                discovered["workspaceProvenance"],
-                {
-                    "strategy": "CURRENT_WORKSPACE_SERIAL",
-                    "hostAdapterId": "codex",
-                    "workspaceRoot": str(detached.resolve()),
-                    "topology": "LINKED_CHECKOUT",
-                    "selectionSource": "LOCAL_MAIN_FALLBACK",
-                    "baseRef": "main",
-                    "baseCommit": base_commit,
-                    "baseHeadCommit": base_commit,
-                    "integrationTarget": "main",
-                },
-            )
-
-            branch_ref = "feature/d-codex-worktree"
-            git_command(detached, "switch", "-c", branch_ref)
-            ready = call_tool(
-                "workspace_status",
-                {},
-                root=str(repository),
-                workspace_root=str(detached),
-                trusted_host_adapter="codex",
-            )
-            self.assertEqual(
-                ready["suggestedGitBinding"],
-                {
-                    "branchRef": branch_ref,
-                    "baseRef": "main",
-                    "baseCommit": base_commit,
-                    "integrationTarget": "main",
-                },
-            )
-
     def test_detached_primary_checkout_requires_current_feature_branch(
         self,
     ) -> None:
@@ -2585,6 +2414,7 @@ class McpSurfaceTests(unittest.TestCase):
                     delivery_id="d-claude-cli",
                 )
             )
+            git_command(repository, "switch", "main")
             mainline = call_tool(
                 "workspace_status",
                 {},
@@ -2672,18 +2502,6 @@ class McpSurfaceTests(unittest.TestCase):
                 scheduler.execution_selection("d-claude-cli")["selection"],
                 "AUTOMATIC",
             )
-            with self.assertRaises(GatedLoopError) as wrong_workspace:
-                call_tool(
-                    "workspace_status",
-                    {"root_id": "d-claude-cli"},
-                    root=str(repository),
-                    workspace_root=str(worktree),
-                    trusted_host_adapter="claude-code",
-                )
-            self.assertEqual(
-                wrong_workspace.exception.code,
-                "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH",
-            )
             with self.assertRaises(GatedLoopError) as missing_run:
                 scheduler.run("d-claude-cli")
             self.assertEqual(
@@ -2731,58 +2549,6 @@ class McpSurfaceTests(unittest.TestCase):
                 )
                 self.assertEqual(validated["operation_id"], "op-explicit")
 
-    def test_claude_cli_linked_worktree_requires_exact_dirty_confirmation(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as root:
-            repository, worktree, _base_commit, branch_ref = (
-                git_delivery_checkout(
-                    root,
-                    delivery_id="d-claude-dirty",
-                )
-            )
-            Path(worktree, "change.txt").write_text(
-                "belongs to this Delivery\n",
-                encoding="utf-8",
-            )
-
-            discovered = call_tool(
-                "workspace_status",
-                {},
-                root=str(repository),
-                workspace_root=str(worktree),
-                trusted_host_adapter="claude-code",
-            )
-            dirty_fingerprint = discovered["branchAdoption"][
-                "dirtyStateFingerprint"
-            ]
-
-            self.assertEqual(
-                discovered["branchAdoption"]["state"],
-                "DIRTY_CONFIRMATION_REQUIRED",
-            )
-            self.assertEqual(discovered["workingTree"]["changeCount"], 1)
-            self.assertNotIn("suggestedGitBinding", discovered)
-
-            confirmed = call_tool(
-                "workspace_status",
-                {
-                    "confirmed_dirty_state_fingerprint": dirty_fingerprint,
-                },
-                root=str(repository),
-                workspace_root=str(worktree),
-                trusted_host_adapter="claude-code",
-            )
-
-            self.assertEqual(
-                confirmed["branchAdoption"]["state"],
-                "READY_WITH_CONFIRMED_CHANGES",
-            )
-            self.assertEqual(
-                confirmed["suggestedGitBinding"]["branchRef"],
-                branch_ref,
-            )
-
     def test_codex_automatic_choice_prepares_current_project_workspaces(
         self,
     ) -> None:
@@ -2805,6 +2571,8 @@ class McpSurfaceTests(unittest.TestCase):
                 delivery_id="d-auto-transition",
             )
             self.assertEqual(secondary_branch_ref, branch_ref)
+            git_command(repository, "switch", "main")
+            git_command(secondary_repository, "switch", "main")
             hierarchy = bind_delivery_to_git(
                 task_hierarchy(),
                 branch_ref=branch_ref,
@@ -2913,12 +2681,6 @@ class McpSurfaceTests(unittest.TestCase):
                     item["nextAction"],
                     "CREATE_OR_SWITCH_CURRENT_WORKSPACE_BRANCH",
                 )
-            serialized = json.dumps(selected)
-            self.assertNotIn(str(worktree.resolve()), serialized)
-            self.assertNotIn(
-                str(secondary_worktree.resolve()),
-                serialized,
-            )
             scheduler = SchedulerRepository(str(repository))
             self.assertEqual(
                 scheduler.execution_selection("d-auto-transition")[
@@ -2944,6 +2706,7 @@ class McpSurfaceTests(unittest.TestCase):
                     mainline="master",
                 )
             )
+            git_command(repository, "switch", "master")
             hierarchy = bind_delivery_to_git(
                 task_hierarchy(),
                 branch_ref=branch_ref,
@@ -3004,122 +2767,9 @@ class McpSurfaceTests(unittest.TestCase):
                 project_preparation["gitBinding"]["integrationTarget"],
                 "master",
             )
-            self.assertNotIn(
-                str(worktree.resolve()),
-                json.dumps(selected),
-            )
             self.assertEqual(
                 git_command(repository, "branch", "--show-current"),
                 "master",
-            )
-
-    def test_loop_context_keeps_parallel_deliveries_in_their_own_worktrees(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as root:
-            repository, first, base_commit, first_branch = (
-                git_delivery_checkout(
-                    root,
-                    delivery_id="d-first",
-                )
-            )
-            second = Path(root, "worktrees", "d-second")
-            second_branch = "feature/d-second"
-            git_command(
-                repository,
-                "worktree",
-                "add",
-                "-b",
-                second_branch,
-                str(second),
-                "main",
-            )
-
-            deliveries = (
-                ("d-first", "t-first", first_branch, first),
-                ("d-second", "t-second", second_branch, second),
-            )
-            for delivery_id, task_id, branch_ref, worktree in deliveries:
-                hierarchy = bind_delivery_to_git(
-                    isolated_task_hierarchy(delivery_id, task_id),
-                    branch_ref=branch_ref,
-                    base_commit=base_commit,
-                )
-                hierarchy["delivery"]["projectScopes"] = [
-                    {
-                        "id": "erp-protein",
-                        "workspaceRoot": str(repository.resolve()),
-                        "access": "READ_WRITE",
-                        "gitBinding": deepcopy(
-                            hierarchy["delivery"]["gitBinding"]
-                        ),
-                    }
-                ]
-                prepared = call_tool(
-                    "prepare_hierarchy",
-                    {"hierarchy": hierarchy},
-                    root=str(repository),
-                    workspace_root=str(worktree),
-                )
-                call_tool(
-                    "freeze_hierarchy",
-                    {
-                        "root_id": delivery_id,
-                        "expected_delivery_revision": 1,
-                        "expected_hierarchy_fingerprint": prepared[
-                            "hierarchyFingerprint"
-                        ],
-                        "authorized_project_ids": ["erp-protein"],
-                        "confirmed_by": "human",
-                    },
-                    root=str(repository),
-                    workspace_root=str(worktree),
-                )
-
-            context = call_tool(
-                "loop_context",
-                {
-                    "root_id": "d-second",
-                    "node_id": "loop:t-second",
-                },
-                root=str(repository),
-                workspace_root=str(second),
-                trusted_host_adapter="claude-code",
-            )
-
-            self.assertEqual(
-                context["workspaceIsolation"]["workspaceRoot"],
-                str(second.resolve()),
-            )
-            self.assertEqual(
-                context["projectScopes"][0]["workspaceRoot"],
-                str(second.resolve()),
-            )
-            self.assertEqual(
-                context["projectScopes"][0]["declaredWorkspaceRoot"],
-                str(repository.resolve()),
-            )
-            self.assertEqual(
-                context["projectScopeAnchors"][0]["workspaceRoot"],
-                str(repository.resolve()),
-            )
-            self.assertTrue(
-                context["rules"][
-                    "projectScopeWorkspaceRootsAreRuntimeVerified"
-                ]
-            )
-            self.assertTrue(
-                context["rules"][
-                    "loopsMustNotCreateSwitchOrCheckoutGitBranches"
-                ]
-            )
-            self.assertEqual(
-                git_command(first, "branch", "--show-current"),
-                first_branch,
-            )
-            self.assertEqual(
-                git_command(second, "branch", "--show-current"),
-                second_branch,
             )
 
     def test_single_project_loop_context_synthesizes_verified_scope(
@@ -3184,346 +2834,6 @@ class McpSurfaceTests(unittest.TestCase):
             ]
         )
 
-    def test_clean_host_native_worktree_is_ready_for_branch_adoption(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as root:
-            repository, worktree, base_commit, branch_ref = (
-                git_delivery_checkout(root)
-            )
-
-            discovered = call_tool(
-                "workspace_status",
-                {},
-                root=str(repository),
-                workspace_root=str(worktree),
-                trusted_host_adapter="codex",
-            )
-
-            self.assertEqual(
-                discovered["workspaceProvenance"],
-                {
-                    "strategy": "CURRENT_WORKSPACE_SERIAL",
-                    "hostAdapterId": "codex",
-                    "workspaceRoot": str(worktree.resolve()),
-                    "topology": "LINKED_CHECKOUT",
-                    "selectionSource": "LOCAL_MAIN_FALLBACK",
-                    "baseRef": "main",
-                    "baseCommit": base_commit,
-                    "baseHeadCommit": base_commit,
-                    "integrationTarget": "main",
-                },
-            )
-            self.assertEqual(
-                discovered["gitWorkspace"]["role"],
-                "UNBOUND_BRANCH",
-            )
-            self.assertEqual(
-                discovered["workingTree"],
-                {
-                    "clean": True,
-                    "changeCount": 0,
-                    "stateFingerprint": discovered["workingTree"][
-                        "stateFingerprint"
-                    ],
-                },
-            )
-            self.assertEqual(
-                len(discovered["workingTree"]["stateFingerprint"]),
-                64,
-            )
-            self.assertEqual(
-                discovered["branchAdoption"],
-                {
-                    "state": "READY",
-                    "nextAction": "USE_SUGGESTED_GIT_BINDING",
-                    "workingTreeClean": True,
-                },
-            )
-            self.assertEqual(
-                discovered["suggestedGitBinding"]["branchRef"],
-                branch_ref,
-            )
-
-    def test_dirty_host_native_worktree_requires_exact_confirmation(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as root:
-            repository, worktree, base_commit, branch_ref = (
-                git_delivery_checkout(root)
-            )
-            Path(worktree, "dirty.txt").write_text(
-                "belongs to the proposed delivery\n",
-                encoding="utf-8",
-            )
-
-            discovered = call_tool(
-                "workspace_status",
-                {},
-                root=str(repository),
-                workspace_root=str(worktree),
-                trusted_host_adapter="codex",
-            )
-
-            dirty_fingerprint = discovered["workingTree"][
-                "stateFingerprint"
-            ]
-            self.assertFalse(discovered["workingTree"]["clean"])
-            self.assertEqual(discovered["workingTree"]["changeCount"], 1)
-            self.assertNotIn("suggestedGitBinding", discovered)
-            self.assertEqual(
-                discovered["candidateGitBinding"],
-                {
-                    "branchRef": branch_ref,
-                    "baseRef": "main",
-                    "baseCommit": base_commit,
-                    "integrationTarget": "main",
-                },
-            )
-            self.assertEqual(
-                discovered["branchAdoption"],
-                {
-                    "state": "DIRTY_CONFIRMATION_REQUIRED",
-                    "nextAction": (
-                        "CONFIRM_CURRENT_DIFF_BELONGS_TO_DELIVERY"
-                    ),
-                    "workingTreeClean": False,
-                    "dirtyStateFingerprint": dirty_fingerprint,
-                },
-            )
-
-            with self.assertRaises(GatedLoopError) as caught:
-                call_tool(
-                    "workspace_status",
-                    {"confirmed_dirty_state_fingerprint": "a" * 64},
-                    root=str(repository),
-                    workspace_root=str(worktree),
-                    trusted_host_adapter="codex",
-                )
-            self.assertEqual(
-                caught.exception.code,
-                "SCHEDULER_GIT_DIRTY_STATE_CHANGED",
-            )
-
-            confirmed = call_tool(
-                "workspace_status",
-                {
-                    "confirmed_dirty_state_fingerprint": (
-                        dirty_fingerprint
-                    )
-                },
-                root=str(repository),
-                workspace_root=str(worktree),
-                trusted_host_adapter="codex",
-            )
-
-            self.assertEqual(
-                confirmed["branchAdoption"]["state"],
-                "READY_WITH_CONFIRMED_CHANGES",
-            )
-            self.assertEqual(
-                confirmed["suggestedGitBinding"],
-                discovered["candidateGitBinding"],
-            )
-
-    def test_branch_checked_out_in_another_worktree_is_not_adopted(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as root:
-            repository, _first, _base_commit, branch_ref = (
-                git_delivery_checkout(root)
-            )
-            second = Path(root, "worktrees", "forced-duplicate")
-            git_command(
-                repository,
-                "worktree",
-                "add",
-                "--detach",
-                str(second),
-                "main",
-            )
-            git_command(
-                second,
-                "switch",
-                "--ignore-other-worktrees",
-                branch_ref,
-            )
-
-            discovered = call_tool(
-                "workspace_status",
-                {},
-                root=str(repository),
-                workspace_root=str(second),
-                trusted_host_adapter="codex",
-            )
-
-            self.assertNotIn("suggestedGitBinding", discovered)
-            self.assertEqual(
-                discovered["branchAdoption"],
-                {
-                    "state": "BRANCH_IN_USE_BY_OTHER_CHECKOUT",
-                    "nextAction": "CREATE_DELIVERY_FEATURE_BRANCH",
-                    "workingTreeClean": True,
-                    "conflictingCheckoutCount": 2,
-                },
-            )
-
-    def test_recreated_checkout_does_not_rebind_active_delivery_by_branch(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as root:
-            repository, first, base_commit, branch_ref = (
-                git_delivery_checkout(root)
-            )
-            hierarchy = bind_delivery_to_git(
-                isolated_task_hierarchy("d-existing", "t-existing"),
-                branch_ref=branch_ref,
-                base_commit=base_commit,
-            )
-            prepared = call_tool(
-                "prepare_hierarchy",
-                {"hierarchy": hierarchy},
-                root=str(repository),
-                workspace_root=str(first),
-            )
-            call_tool(
-                "freeze_hierarchy",
-                {
-                    "root_id": prepared["rootId"],
-                    "expected_delivery_revision": 1,
-                    "expected_hierarchy_fingerprint": prepared[
-                        "hierarchyFingerprint"
-                    ],
-                    "authorized_project_ids": [],
-                    "confirmed_by": "human",
-                },
-                root=str(repository),
-                workspace_root=str(first),
-            )
-            existing = call_tool(
-                "workspace_status",
-                {"root_id": "d-existing"},
-                root=str(repository),
-                workspace_root=str(first),
-                trusted_host_adapter="codex",
-            )
-            self.assertEqual(existing["status"], "ACTIVE")
-            original_workspace_key = existing["workspaceIsolation"][
-                "workspaceKey"
-            ]
-
-            git_command(repository, "worktree", "remove", str(first))
-            replacement = Path(root, "worktrees", "replacement")
-            git_command(
-                repository,
-                "worktree",
-                "add",
-                str(replacement),
-                branch_ref,
-            )
-
-            rootless = call_tool(
-                "workspace_status",
-                {},
-                root=str(repository),
-                workspace_root=str(replacement),
-                trusted_host_adapter="codex",
-            )
-            self.assertEqual(rootless["status"], "ABSENT")
-            self.assertNotIn("rootId", rootless)
-            self.assertNotEqual(
-                rootless["workspaceIsolation"]["workspaceKey"],
-                original_workspace_key,
-            )
-            with self.assertRaises(GatedLoopError) as mismatched:
-                call_tool(
-                    "workspace_status",
-                    {"root_id": "d-existing"},
-                    root=str(repository),
-                    workspace_root=str(replacement),
-                    trusted_host_adapter="codex",
-                )
-            self.assertEqual(
-                mismatched.exception.code,
-                "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH",
-            )
-
-    def test_recreated_checkout_does_not_rebind_terminal_delivery_by_branch(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as root:
-            repository, first, base_commit, branch_ref = (
-                git_delivery_checkout(root)
-            )
-            hierarchy = bind_delivery_to_git(
-                isolated_task_hierarchy("d-historical", "t-historical"),
-                branch_ref=branch_ref,
-                base_commit=base_commit,
-            )
-            prepared = call_tool(
-                "prepare_hierarchy",
-                {"hierarchy": hierarchy},
-                root=str(repository),
-                workspace_root=str(first),
-            )
-            call_tool(
-                "freeze_hierarchy",
-                {
-                    "root_id": prepared["rootId"],
-                    "expected_delivery_revision": 1,
-                    "expected_hierarchy_fingerprint": prepared[
-                        "hierarchyFingerprint"
-                    ],
-                    "authorized_project_ids": [],
-                    "confirmed_by": "human",
-                },
-                root=str(repository),
-                workspace_root=str(first),
-            )
-            cancelled = call_tool(
-                "cancel_graph_run",
-                {
-                    "root_id": "d-historical",
-                    "cancelled_by": "human",
-                    "reason": "This Delivery is no longer active.",
-                },
-                root=str(repository),
-                workspace_root=str(first),
-            )
-            self.assertEqual(cancelled["status"], "CANCELLED")
-
-            git_command(repository, "worktree", "remove", str(first))
-            replacement = Path(root, "worktrees", "historical-replacement")
-            git_command(
-                repository,
-                "worktree",
-                "add",
-                str(replacement),
-                branch_ref,
-            )
-
-            rootless = call_tool(
-                "workspace_status",
-                {},
-                root=str(repository),
-                workspace_root=str(replacement),
-                trusted_host_adapter="codex",
-            )
-            self.assertEqual(rootless["status"], "ABSENT")
-            self.assertNotIn("rootId", rootless)
-            with self.assertRaises(GatedLoopError) as mismatched:
-                call_tool(
-                    "workspace_status",
-                    {"root_id": "d-historical"},
-                    root=str(repository),
-                    workspace_root=str(replacement),
-                    trusted_host_adapter="codex",
-                )
-            self.assertEqual(
-                mismatched.exception.code,
-                "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH",
-            )
-
     def test_git_delivery_binding_is_frozen_and_checked_at_runtime(
         self,
     ) -> None:
@@ -3536,16 +2846,21 @@ class McpSurfaceTests(unittest.TestCase):
                 branch_ref=branch_ref,
                 base_commit=base_commit,
             )
-            Path(repository, "MAINLINE.md").write_text(
-                "Mainline advanced after the feature branch was created.\n",
-                encoding="utf-8",
-            )
-            git_command(repository, "add", "MAINLINE.md")
-            git_command(
+            advanced_main = git_command(
                 repository,
-                "commit",
+                "commit-tree",
+                f"{base_commit}^{{tree}}",
+                "-p",
+                base_commit,
                 "-m",
                 "Advance main after feature fork",
+            )
+            git_command(
+                repository,
+                "update-ref",
+                "refs/heads/main",
+                advanced_main,
+                base_commit,
             )
             discovered = call_tool(
                 "workspace_status",
@@ -3929,21 +3244,6 @@ class McpSurfaceTests(unittest.TestCase):
                 [item["bindingState"] for item in evidence_binding],
                 ["BOUND", "BOUND"],
             )
-            review_context = call_tool(
-                "loop_context",
-                {
-                    "root_id": "d-multi-evidence",
-                    "node_id": "review:task:t-multi-evidence",
-                },
-                root=str(repository),
-                workspace_root=str(worktree),
-                trusted_host_adapter="codex",
-            )
-            evidence_index = review_context["validationEvidenceIndex"]
-            self.assertEqual(
-                evidence_index["evidence"][0]["freshness"],
-                "EXACT_MATCH",
-            )
             scope_binding = completed["outcome"]["result"][
                 "evidenceScopeSnapshots"
             ][0]
@@ -3951,21 +3251,6 @@ class McpSurfaceTests(unittest.TestCase):
             self.assertEqual(
                 scope_binding["paths"],
                 ["secondary-uncommitted.txt"],
-            )
-            self.assertEqual(
-                evidence_index["evidence"][0]["evidenceRef"],
-                {
-                    "nodeId": "loop:t-multi-evidence",
-                    "attempt": 1,
-                    "evidenceId": "secondary-file-check",
-                },
-            )
-            compact_upstream = review_context["upstreamLoopResults"][0][
-                "outcome"
-            ]["result"]["workspaceChanges"]
-            self.assertNotIn("diff", compact_upstream[1])
-            self.assertTrue(
-                compact_upstream[1]["diffOmittedFromLoopContext"]
             )
             Path(worktree, "unrelated-later-task.txt").write_text(
                 "unrelated workspace change\n",
@@ -3981,11 +3266,25 @@ class McpSurfaceTests(unittest.TestCase):
                 workspace_root=str(worktree),
                 trusted_host_adapter="codex",
             )
+            evidence_index = unrelated_context["validationEvidenceIndex"]
             self.assertEqual(
-                unrelated_context["validationEvidenceIndex"]["evidence"][0][
-                    "freshness"
-                ],
+                evidence_index["evidence"][0]["freshness"],
                 "EXACT_MATCH",
+            )
+            self.assertEqual(
+                evidence_index["evidence"][0]["evidenceRef"],
+                {
+                    "nodeId": "loop:t-multi-evidence",
+                    "attempt": 1,
+                    "evidenceId": "secondary-file-check",
+                },
+            )
+            compact_upstream = unrelated_context["upstreamLoopResults"][0][
+                "outcome"
+            ]["result"]["workspaceChanges"]
+            self.assertNotIn("diff", compact_upstream[1])
+            self.assertTrue(
+                compact_upstream[1]["diffOmittedFromLoopContext"]
             )
             Path(
                 secondary_worktree,
@@ -3993,22 +3292,6 @@ class McpSurfaceTests(unittest.TestCase):
             ).write_text(
                 "secondary uncommitted evidence\nchanged after evidence\n",
                 encoding="utf-8",
-            )
-            changed_context = call_tool(
-                "loop_context",
-                {
-                    "root_id": "d-multi-evidence",
-                    "node_id": "review:task:t-multi-evidence",
-                },
-                root=str(repository),
-                workspace_root=str(worktree),
-                trusted_host_adapter="codex",
-            )
-            self.assertEqual(
-                changed_context["validationEvidenceIndex"]["evidence"][0][
-                    "freshness"
-                ],
-                "CHANGED",
             )
             review_node_id = "review:task:t-multi-evidence"
             review_reservation = reserve_loop(
@@ -4149,7 +3432,7 @@ class McpSurfaceTests(unittest.TestCase):
                 workspace_patch,
             )
 
-    def test_workspace_change_capture_fails_if_worktree_changes_during_snapshot(
+    def test_workspace_change_capture_fails_if_working_tree_changes_during_snapshot(
         self,
     ) -> None:
         with TemporaryDirectory() as root:
@@ -4346,6 +3629,7 @@ class McpSurfaceTests(unittest.TestCase):
     def test_host_selected_base_prefers_origin_tracking_ref(self) -> None:
         with TemporaryDirectory() as root:
             repository, _, base_commit, _ = git_delivery_checkout(root)
+            git_command(repository, "switch", "main")
             git_command(repository, "branch", "release", base_commit)
             tree = git_command(repository, "rev-parse", "HEAD^{tree}")
             remote_commit = git_command(
@@ -4382,6 +3666,7 @@ class McpSurfaceTests(unittest.TestCase):
     ) -> None:
         with TemporaryDirectory() as root:
             repository, _, base_commit, _ = git_delivery_checkout(root)
+            git_command(repository, "switch", "main")
             git_command(
                 repository,
                 "update-ref",
@@ -4410,34 +3695,6 @@ class McpSurfaceTests(unittest.TestCase):
                 discovered["workspacePreparation"]["baseRef"],
                 "release",
             )
-
-    def test_git_file_without_worktree_metadata_keeps_its_own_root(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as root:
-            workspace = Path(root, "submodule")
-            git_dir = Path(root, "parent", ".git", "modules", "submodule")
-            workspace.mkdir()
-            git_dir.mkdir(parents=True)
-            (workspace / ".git").write_text(
-                f"gitdir: {git_dir}\n",
-                encoding="utf-8",
-            )
-            binding = ProjectRootBinding.from_startup(
-                str(workspace),
-            )
-            resolved = binding.resolve_request(
-                None,
-                stateless=True,
-            )
-        self.assertEqual(
-            resolved.project_root,
-            str(workspace.resolve()),
-        )
-        self.assertEqual(
-            resolved.workspace_root,
-            str(workspace.resolve()),
-        )
 
     def test_workspace_status_tool_starts_absent(self) -> None:
         with TemporaryDirectory() as root:

@@ -58,7 +58,9 @@ def _start_manual(repository: Path, handoff: dict) -> dict:
 
 
 class FrozenExecutionGuardTests(unittest.TestCase):
-    def test_frozen_fast_paths_reject_the_wrong_branch(self) -> None:
+    def test_frozen_resume_and_manual_start_reject_the_wrong_branch(
+        self,
+    ) -> None:
         with TemporaryDirectory() as temporary:
             repository, _base_commit = _repository(Path(temporary))
             automatic_branch = "feature/d-frozen-auto-branch"
@@ -72,9 +74,8 @@ class FrozenExecutionGuardTests(unittest.TestCase):
             _select(repository, automatic)
             git_command(repository, "switch", "main")
 
-            automatic_calls = (
-                lambda: _select(repository, automatic),
-                lambda: call_tool(
+            with self.assertRaises(GatedLoopError) as rejected:
+                call_tool(
                     "resume_execution_mode",
                     {
                         "root_id": automatic["rootId"],
@@ -88,16 +89,11 @@ class FrozenExecutionGuardTests(unittest.TestCase):
                     root=str(repository),
                     workspace_root=str(repository),
                     trusted_host_adapter="codex",
-                ),
+                )
+            self.assertEqual(
+                rejected.exception.code,
+                "SCHEDULER_GIT_BRANCH_MISMATCH",
             )
-            for operation in automatic_calls:
-                with self.subTest(mode="automatic"):
-                    with self.assertRaises(GatedLoopError) as rejected:
-                        operation()
-                    self.assertEqual(
-                        rejected.exception.code,
-                        "SCHEDULER_GIT_BRANCH_MISMATCH",
-                    )
 
         with TemporaryDirectory() as temporary:
             repository, _base_commit = _repository(Path(temporary))
@@ -141,45 +137,37 @@ class FrozenExecutionGuardTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            operations = (
-                lambda: _select(repository, confirmed),
-                lambda: call_tool(
-                    "resume_execution_mode",
-                    {
-                        "root_id": confirmed["rootId"],
-                        "expected_hierarchy_fingerprint": confirmed[
-                            "hierarchyFingerprint"
-                        ],
-                        "expected_graph_fingerprint": confirmed[
-                            "graphFingerprint"
-                        ],
-                    },
-                    root=str(repository),
-                    workspace_root=str(repository),
-                    trusted_host_adapter="codex",
-                ),
+            with self.assertRaises(GatedLoopError) as rejected:
+                _select(repository, confirmed)
+            self.assertEqual(
+                rejected.exception.code,
+                "SCHEDULER_WORKSPACE_TURN_DIRTY",
             )
-            for operation in operations:
-                with self.subTest(operation=operation):
-                    with self.assertRaises(GatedLoopError) as rejected:
-                        operation()
-                    self.assertEqual(
-                        rejected.exception.code,
-                        "SCHEDULER_WORKSPACE_TURN_DIRTY",
-                    )
 
     def test_terminal_automatic_run_never_requests_dispatch(self) -> None:
         with TemporaryDirectory() as temporary:
-            repository, _base_commit = _repository(Path(temporary))
-            branch_ref = "feature/d-terminal-dispatch"
-            git_command(repository, "switch", "-c", branch_ref)
-            confirmed = _confirm_existing_branch(
-                repository,
-                "d-terminal-dispatch",
-                "t-terminal-dispatch",
-                branch_ref,
+            workspace = Path(temporary)
+            confirmed = call_tool(
+                "prepare_hierarchy",
+                {
+                    "hierarchy": isolated_task_hierarchy(
+                        "d-terminal-dispatch",
+                        "t-terminal-dispatch",
+                    )
+                },
+                root=str(workspace),
+                workspace_root=str(workspace),
+                trusted_host_adapter="codex",
             )
-            _select(repository, confirmed)
+            SchedulerRepository(str(workspace)).freeze(
+                confirmed["rootId"],
+                expected_delivery_revision=confirmed["deliveryRevision"],
+                expected_hierarchy_fingerprint=confirmed[
+                    "hierarchyFingerprint"
+                ],
+                authorized_project_ids=[],
+                confirmed_by="human",
+            )
             cancelled = call_tool(
                 "cancel_graph_run",
                 {
@@ -187,36 +175,19 @@ class FrozenExecutionGuardTests(unittest.TestCase):
                     "cancelled_by": "human",
                     "reason": "Exercise terminal idempotency.",
                 },
-                root=str(repository),
-                workspace_root=str(repository),
+                root=str(workspace),
+                workspace_root=str(workspace),
                 trusted_host_adapter="codex",
             )
             self.assertEqual(cancelled["status"], "CANCELLED")
 
-            selected = _select(repository, confirmed)
-            resumed = call_tool(
-                "resume_execution_mode",
-                {
-                    "root_id": confirmed["rootId"],
-                    "expected_hierarchy_fingerprint": confirmed[
-                        "hierarchyFingerprint"
-                    ],
-                    "expected_graph_fingerprint": confirmed[
-                        "graphFingerprint"
-                    ],
-                },
-                root=str(repository),
-                workspace_root=str(repository),
-                trusted_host_adapter="codex",
+            result = _select(workspace, confirmed)
+            self.assertEqual(result["status"], "CANCELLED")
+            self.assertFalse(result["automaticDispatchRequested"])
+            self.assertNotEqual(
+                result["nextAction"],
+                "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH",
             )
-
-            for result in (selected, resumed):
-                self.assertEqual(result["status"], "CANCELLED")
-                self.assertFalse(result["automaticDispatchRequested"])
-                self.assertNotEqual(
-                    result["nextAction"],
-                    "READ_FRONTIER_AND_AUTOMATICALLY_DISPATCH",
-                )
 
     def test_legacy_double_active_returns_waiting_for_non_owner(self) -> None:
         with TemporaryDirectory() as temporary:

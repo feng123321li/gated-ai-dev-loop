@@ -257,47 +257,6 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         )
         self.assertEqual(git_dir, common_dir)
 
-    def test_codex_smoke_starts_in_a_linked_feature_worktree(self) -> None:
-        with TemporaryDirectory() as temporary:
-            repository = Path(temporary, "repository")
-            development = _prepare_workspace(repository, "codex")
-            primary_branch = subprocess.run(
-                ["git", "branch", "--show-current"],
-                cwd=repository,
-                text=True,
-                encoding="utf-8",
-                capture_output=True,
-                check=True,
-            ).stdout.strip()
-            feature_branch = subprocess.run(
-                ["git", "branch", "--show-current"],
-                cwd=development,
-                text=True,
-                encoding="utf-8",
-                capture_output=True,
-                check=True,
-            ).stdout.strip()
-            git_dir = subprocess.run(
-                ["git", "rev-parse", "--absolute-git-dir"],
-                cwd=development,
-                text=True,
-                encoding="utf-8",
-                capture_output=True,
-                check=True,
-            ).stdout.strip()
-            common_dir = subprocess.run(
-                ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                cwd=development,
-                text=True,
-                encoding="utf-8",
-                capture_output=True,
-                check=True,
-            ).stdout.strip()
-        self.assertNotEqual(development, repository)
-        self.assertEqual(primary_branch, "main")
-        self.assertEqual(feature_branch, "feature/m_lf_host_smoke")
-        self.assertNotEqual(git_dir, common_dir)
-
     def test_host_smoke_accepts_content_evidence_not_a_fixed_filename(
         self,
     ) -> None:

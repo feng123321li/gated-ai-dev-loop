@@ -523,6 +523,32 @@ class LoopContractTests(unittest.TestCase):
                     "STRUCTURE_AND_DECLARED_TERMINAL_CONSISTENCY_ONLY",
                 )
 
+    def test_loop_completion_policy_keeps_verification_with_receiver(
+        self,
+    ) -> None:
+        policy = loop_completion_policy()
+
+        self.assertEqual(
+            policy["verificationScope"],
+            "AFFECTED_SCOPE_SUFFICIENT_FOR_DECLARED_ACCEPTANCE",
+        )
+        self.assertEqual(
+            policy["verificationStrategy"]["mode"],
+            "AFFECTED_SCOPE_FIRST",
+        )
+        self.assertEqual(
+            policy["verificationStrategy"]["default"],
+            "RUN_MINIMUM_SUFFICIENT_CHECKS",
+        )
+        self.assertEqual(
+            policy["actionableFinding"],
+            "RESOLVE_AND_REEVALUATE_IN_CURRENT_LOOP",
+        )
+        self.assertEqual(
+            policy["workspaceChanges"]["source"],
+            "CONTROLLER_CAPTURED_AT_RESULT",
+        )
+
 class SchedulerGraphTests(unittest.TestCase):
     @staticmethod
     def compile(source: dict) -> dict:

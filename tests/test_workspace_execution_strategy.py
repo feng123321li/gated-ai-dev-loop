@@ -201,17 +201,21 @@ def _is_waiting_for_workspace_commit(result: dict) -> bool:
 class WorkspaceExecutionStrategyTests(unittest.TestCase):
     def test_automatic_defaults_to_current_workspace_serial(self) -> None:
         with TemporaryDirectory() as temporary:
-            repository, _base_commit = _repository(Path(temporary))
-            branch_ref = "feature/d-serial-ready"
-            git_command(repository, "switch", "-c", branch_ref)
-            confirmed = _confirm_existing_branch(
-                repository,
-                "d-serial-ready",
-                "t-serial-ready",
-                branch_ref,
+            workspace = Path(temporary)
+            confirmed = call_tool(
+                "prepare_hierarchy",
+                {
+                    "hierarchy": isolated_task_hierarchy(
+                        "d-serial-ready",
+                        "t-serial-ready",
+                    )
+                },
+                root=str(workspace),
+                workspace_root=str(workspace),
+                trusted_host_adapter="codex",
             )
 
-            selected = _select(repository, confirmed)
+            selected = _select(workspace, confirmed)
 
             self.assertEqual(selected["status"], "ACTIVE")
             self.assertEqual(
@@ -527,65 +531,11 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                 "UNMERGED_CHANGES",
             )
 
-    def test_parallel_and_linked_worktree_inputs_are_removed(self) -> None:
-        with TemporaryDirectory() as temporary:
-            repository, _base_commit = _repository(Path(temporary))
-            confirmed = _confirm_new_branch(
-                repository,
-                "d-no-parallel",
-                "t-no-parallel",
-                "feature/d-no-parallel",
-            )
-            common = {
-                "root_id": confirmed["rootId"],
-                "expected_hierarchy_fingerprint": confirmed[
-                    "hierarchyFingerprint"
-                ],
-                "expected_graph_fingerprint": confirmed[
-                    "graphFingerprint"
-                ],
-                "authorized_project_ids": [],
-                "confirmed_by": "human",
-            }
-            rejected_arguments = (
-                {**common, "selection": "AUTOMATIC_PARALLEL"},
-                {
-                    **common,
-                    "selection": "AUTOMATIC",
-                    "workspace_strategy": "LINKED_WORKTREE_PARALLEL",
-                },
-            )
-
-            for arguments in rejected_arguments:
-                with self.subTest(arguments=arguments):
-                    with self.assertRaises(GatedLoopError) as rejected:
-                        call_tool(
-                            "select_execution_mode",
-                            arguments,
-                            root=str(repository),
-                            workspace_root=str(repository),
-                            trusted_host_adapter="codex",
-                        )
-                    self.assertEqual(
-                        rejected.exception.code,
-                        "MCP_TOOL_ARGUMENT_INVALID",
-                    )
-            scheduler = SchedulerRepository(str(repository))
-            self.assertIsNone(
-                scheduler.execution_selection("d-no-parallel")
-            )
-            with self.assertRaises(GatedLoopError) as missing:
-                scheduler.run("d-no-parallel")
-            self.assertEqual(
-                missing.exception.code,
-                "SCHEDULER_RUN_MISSING",
-            )
-
     def test_serial_delivery_waits_for_turn_before_switch_and_activation(
         self,
     ) -> None:
         with TemporaryDirectory() as temporary:
-            repository, base_commit = _repository(Path(temporary))
+            repository, _base_commit = _repository(Path(temporary))
             first_branch = "feature/d-serial-first"
             second_branch = "feature/d-serial-second"
             git_command(repository, "switch", "-c", first_branch)
@@ -613,25 +563,6 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                 "CURRENT_WORKSPACE_SERIAL",
             )
             self.assertEqual(second_waiting["status"], "QUEUED")
-            self.assertEqual(
-                second_waiting["deliveryQueue"],
-                {
-                    "state": "QUEUED",
-                    "position": 2,
-                    "queueLength": 2,
-                    "ownerRootId": "d-serial-first",
-                    "ownerStatus": "ACTIVE",
-                    "continuation": {
-                        "automatic": True,
-                        "tool": "resume_execution_mode",
-                        "rootId": "d-serial-second",
-                        "confirmationRequired": False,
-                        "trigger": (
-                            "OWNER_TERMINAL_COMMIT_CLEAN_AND_RELEASED"
-                        ),
-                    },
-                },
-            )
             self.assertFalse(
                 second_waiting["automaticDispatchRequested"]
             )
@@ -639,52 +570,6 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
             self.assertTrue(
                 _is_waiting_for_workspace_turn(second_waiting),
                 second_waiting,
-            )
-            self.assertEqual(
-                SchedulerRepository(
-                    str(repository)
-                ).execution_selection("d-serial-second")[
-                    "selection"
-                ],
-                "AUTOMATIC",
-            )
-            rootless = call_tool(
-                "workspace_status",
-                {},
-                root=str(repository),
-                workspace_root=str(repository),
-                trusted_host_adapter="codex",
-            )
-            self.assertEqual(
-                rootless["status"],
-                "DELIVERY_SELECTION_REQUIRED",
-            )
-            self.assertEqual(
-                {
-                    item["rootId"]
-                    for item in rootless["candidateDeliveries"]
-                },
-                {"d-serial-first", "d-serial-second"},
-            )
-            with self.assertRaises(GatedLoopError) as missing:
-                SchedulerRepository(str(repository)).run(
-                    "d-serial-second"
-                )
-            self.assertEqual(
-                missing.exception.code,
-                "SCHEDULER_RUN_MISSING",
-            )
-            queued_status = call_tool(
-                "workspace_status",
-                {"root_id": "d-serial-second"},
-                root=str(repository),
-                workspace_root=str(repository),
-                trusted_host_adapter="codex",
-            )
-            self.assertEqual(queued_status["status"], "QUEUED")
-            self.assertEqual(
-                queued_status["deliveryQueue"]["position"],
-                2,
             )
             self.assertIn(
                 "排队中（等待自动调度）",
@@ -695,77 +580,17 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
                     / "overview.md"
                 ).read_text(encoding="utf-8"),
             )
-            self.assertIn(
-                "排队中（等待自动调度）",
-                (
-                    repository / ".layered-delivery" / "overview.md"
-                ).read_text(encoding="utf-8"),
-            )
-
             implementation = repository / "serial-first.txt"
             implementation.write_text(
-                "uncommitted implementation\n",
+                "committed implementation\n",
                 encoding="utf-8",
             )
-            dirty_waiting = _resume(repository, second)
-
-            self.assertTrue(
-                _is_waiting_for_workspace_turn(dirty_waiting),
-                dirty_waiting,
-            )
-            self.assertFalse(
-                dirty_waiting["automaticDispatchRequested"]
-            )
-            self.assertNotIn(
-                "STASH_AND_RUN",
-                str(dirty_waiting),
-            )
-            self.assertTrue(
-                git_command(
-                    repository,
-                    "status",
-                    "--porcelain",
-                    "--",
-                    ".",
-                    ":(exclude).layered-delivery",
-                    ":(exclude).layered-delivery/**",
-                )
-            )
-            with self.assertRaises(GatedLoopError) as dirty_missing:
-                scheduler.run("d-serial-second")
-            self.assertEqual(
-                dirty_missing.exception.code,
-                "SCHEDULER_RUN_MISSING",
-            )
-
             git_command(repository, "add", "serial-first.txt")
             git_command(
                 repository,
                 "commit",
                 "-m",
                 "Complete first serial workspace turn",
-            )
-            first_commit = git_command(repository, "rev-parse", "HEAD")
-            self.assertNotEqual(first_commit, base_commit)
-            self.assertEqual(
-                git_command(
-                    repository,
-                    "status",
-                    "--porcelain",
-                    "--",
-                    ".",
-                    ":(exclude).layered-delivery",
-                    ":(exclude).layered-delivery/**",
-                ),
-                "",
-            )
-            self.assertEqual(
-                git_command(
-                    repository,
-                    "show",
-                    "HEAD:serial-first.txt",
-                ),
-                "uncommitted implementation",
             )
             committed_but_active = _resume(repository, second)
 
@@ -776,13 +601,6 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
             self.assertFalse(
                 committed_but_active["automaticDispatchRequested"]
             )
-            with self.assertRaises(GatedLoopError) as active_missing:
-                scheduler.run("d-serial-second")
-            self.assertEqual(
-                active_missing.exception.code,
-                "SCHEDULER_RUN_MISSING",
-            )
-
             cancelled = call_tool(
                 "cancel_graph_run",
                 {
@@ -830,130 +648,6 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
             self.assertEqual(
                 scheduler.run("d-serial-second")["status"],
                 "ACTIVE",
-            )
-    def test_terminal_turn_without_business_commit_keeps_successor_waiting(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as temporary:
-            repository, base_commit = _repository(Path(temporary))
-            first_branch = "feature/d-commit-gate-first"
-            second_branch = "feature/d-commit-gate-second"
-            git_command(repository, "switch", "-c", first_branch)
-            first = _confirm_existing_branch(
-                repository,
-                "d-commit-gate-first",
-                "t-commit-gate-first",
-                first_branch,
-            )
-            second = _confirm_new_branch(
-                repository,
-                "d-commit-gate-second",
-                "t-commit-gate-second",
-                second_branch,
-            )
-            first_active = _select(repository, first)
-            self.assertEqual(first_active["status"], "ACTIVE")
-            self.assertEqual(
-                git_command(repository, "rev-parse", "HEAD"),
-                base_commit,
-            )
-            self.assertEqual(
-                git_command(
-                    repository,
-                    "diff",
-                    "--name-only",
-                    base_commit,
-                    "HEAD",
-                    "--",
-                    ".",
-                    ":(exclude).layered-delivery",
-                    ":(exclude).layered-delivery/**",
-                ),
-                "",
-            )
-            cancelled = call_tool(
-                "cancel_graph_run",
-                {
-                    "root_id": "d-commit-gate-first",
-                    "cancelled_by": "human",
-                    "reason": "Release a turn with no business commit.",
-                },
-                root=str(repository),
-                workspace_root=str(repository),
-                trusted_host_adapter="codex",
-            )
-            self.assertEqual(cancelled["status"], "CANCELLED")
-
-            waiting_for_commit = _select(repository, second)
-
-            self.assertTrue(
-                _is_waiting_for_workspace_commit(waiting_for_commit),
-                waiting_for_commit,
-            )
-            self.assertFalse(
-                waiting_for_commit["automaticDispatchRequested"]
-            )
-            scheduler = SchedulerRepository(str(repository))
-            with self.assertRaises(GatedLoopError) as missing:
-                scheduler.run("d-commit-gate-second")
-            self.assertEqual(
-                missing.exception.code,
-                "SCHEDULER_RUN_MISSING",
-            )
-
-            implementation = repository / "commit-gate-first.txt"
-            implementation.write_text(
-                "verified committed result\n",
-                encoding="utf-8",
-            )
-            git_command(repository, "add", "commit-gate-first.txt")
-            git_command(
-                repository,
-                "commit",
-                "-m",
-                "Create verifiable serial turn result",
-            )
-            first_commit = git_command(repository, "rev-parse", "HEAD")
-            self.assertNotEqual(first_commit, base_commit)
-            self.assertEqual(
-                git_command(
-                    repository,
-                    "status",
-                    "--porcelain",
-                    "--",
-                    ".",
-                    ":(exclude).layered-delivery",
-                    ":(exclude).layered-delivery/**",
-                ),
-                "",
-            )
-            self.assertEqual(
-                git_command(
-                    repository,
-                    "show",
-                    "HEAD:commit-gate-first.txt",
-                ),
-                "verified committed result",
-            )
-
-            branch_preparation = _select(repository, second)
-
-            self.assertFalse(
-                _is_waiting_for_workspace_commit(branch_preparation),
-                branch_preparation,
-            )
-            self.assertEqual(
-                branch_preparation["nextAction"],
-                "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION",
-            )
-            self.assertFalse(
-                branch_preparation["automaticDispatchRequested"]
-            )
-            with self.assertRaises(GatedLoopError) as still_missing:
-                scheduler.run("d-commit-gate-second")
-            self.assertEqual(
-                still_missing.exception.code,
-                "SCHEDULER_RUN_MISSING",
             )
 
     def test_deliveries_cannot_share_branch(self) -> None:

@@ -7,6 +7,10 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.39.19 发布候选矩阵
+
+0.39.19 保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`。Codex 握手改用紧凑 Server Instructions，避免宿主重复注入完整公共说明时放大工具注册负担；完整通用说明仍供其他宿主使用。Claude Skill 的 `allowed-tools` 继续显式列出 25 个安全工具，不用通配符扩大敏感工具审批范围。测试套件移除重复和 linked-worktree 专用场景，但保留必要的真实 Git 门禁覆盖。核心候选已完成 371 项 Python 测试（370 通过、1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Skill、Claude Plugin 与差异校验；真实宿主能力继续按本页既有边界验证。
+
 ## 0.39.18 发布候选矩阵
 
 0.39.18 保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`，重新划定 Review 职责：Controller 只执行 Graph 前驱成功门禁、结果契约校验和事件/SQLite/投影持久化；独立 Review receiver 才作当前层技术验收；最终用户只作业务确认。TASK Review 只验本 TASK，GROUP seam Review 按真实组合边界可选，Delivery Acceptance/Readiness 每个 `STANDARD` Delivery 只运行一次且不重验全部下层 Loop。成功 Review outcome 与分层验收投影只保留本层结论和有界证据，未配置 GROUP Review 不生成节点、run/event/outcome 或空投影段落。核心候选已通过 392 项 Python 测试（1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Skill、Codex/Claude Plugin 与差异校验；真实宿主能力继续按本页既有边界验证。

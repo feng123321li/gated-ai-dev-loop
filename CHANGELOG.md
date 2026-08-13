@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.19 — 2026-08-13
+
+发布提交：以 tag `v0.39.19` 指向的提交为准
+
+- **Codex MCP 握手瘦身**：Codex 宿主改用 821 字节的紧凑 Server Instructions，完整通用说明继续供其他宿主使用；32 个工具及 schema v3 保持不变，工具目录为 138,761 字节并增加 144 KiB 上限门禁，避免宿主把约 16 KiB 公共说明重复注入每个工具后放大注册负担。
+- **工具审批边界锁定**：Skill 继续只显式列出 Claude Plugin 命名空间下的 25 个安全工具，不增加 Codex aliases，也不使用会自动放行归档、取消、重建和需求解冻等敏感工具的 MCP 通配符；新增回归测试锁定该边界。
+- **测试套件精简**：移除 21 个重复或 linked-worktree 专用场景，删除已退出产品面的 manual baseline reconfirmation worktree 测试组，并把非 Git 策略与终态断言下沉为快速控制器测试；必要的分支绑定、dirty/unmerged 状态、提交门禁、历史改写和证据快照仍使用真实 Git 验证。
+- **验证**：本地 Python 全量 371 项测试完成（370 通过、1 项按环境条件跳过）；`compileall`、canonical/Plugin 生成镜像、release candidate、Skill、Claude Plugin 与 `git diff --check` 均通过。
+
 ## 0.39.18 — 2026-08-13
 
 发布提交：以 tag `v0.39.18` 指向的提交为准

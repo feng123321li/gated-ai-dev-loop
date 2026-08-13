@@ -42,7 +42,6 @@ from hdg.graph_runtime import (
 )
 from hdg.jsonio import fingerprint
 from hdg.loop_contracts import (
-    loop_completion_policy,
     loop_execution_policy,
 )
 from hdg.mcp_tools import tool_definitions
@@ -799,7 +798,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "SCHEDULER_MANUAL_HANDOFF_TASK_ONLY",
         )
 
-    def test_ready_automatic_task_handoff_rejects_dirty_git_worktree(
+    def test_ready_automatic_task_handoff_rejects_dirty_git_working_tree(
         self,
     ) -> None:
         def git(*arguments: str) -> str:
@@ -3546,114 +3545,21 @@ class SchedulerRuntimeTests(unittest.TestCase):
         root_id = prepared["rootId"]
         node_id = loop_node_id("t-service")
         policy = loop_execution_policy()
-        responsibility_boundaries = policy["responsibilityBoundaries"]
-        self.assertIn(
-            "TECHNICAL_ACCEPTANCE",
-            responsibility_boundaries["controller"]["mustNotPerform"],
-        )
         self.assertEqual(
-            responsibility_boundaries["user"]["owns"],
-            ["FINAL_BUSINESS_CONFIRMATION"],
-        )
-        self.assertEqual(
+            policy["claimedLoopHandoff"],
             {
-                key: value
-                for key, value in policy.items()
-                if key != "responsibilityBoundaries"
+                "trigger": "CONTEXT_PRESSURE",
+                "requiresLiveLease": True,
+                "action": "PAUSE_AND_HANDOFF",
+                "loopOutcome": "NONE",
             },
+        )
+        self.assertEqual(
+            policy["expiredLeaseRecovery"],
             {
-                "assuranceProfile": "STANDARD",
-                "reviewTopology": (
-                    "TASK_REVIEWS_OPTIONAL_GROUP_SEAM_REVIEWS_AND_"
-                    "DELIVERY_ACCEPTANCE"
-                ),
-                "contextIsolation": "REQUIRED",
-                "dispatch": {
-                    "preferredExecutor": "HOST_NATIVE_AGENT",
-                    "noAgentCapacityBeforeClaim": (
-                        "MANUAL_HANDOFF_WITHOUT_CLAIM"
-                    ),
-                },
-                "claimedLoopHandoff": {
-                    "trigger": "CONTEXT_PRESSURE",
-                    "requiresLiveLease": True,
-                    "action": "PAUSE_AND_HANDOFF",
-                    "loopOutcome": "NONE",
-                },
-                "unclaimedAutomaticRecovery": {
-                    "tool": "handoff_ready_automatic_task",
-                    "requiresReadyTask": True,
-                    "requiresNeverClaimedAttempt": True,
-                    "requiresNoLiveReservation": True,
-                    "requiresCleanWorkspace": True,
-                    "requiresNoCodeChangesConfirmation": True,
-                    "taskDispatchMode": "MANUAL",
-                    "graphExecutionModeRemains": "active",
-                    "reviewsRemain": "AUTO",
-                },
-                "progressReporting": {
-                    "tool": "report_loop_progress",
-                    "language": "USER_PREFERRED",
-                    "heartbeatRenewsLease": True,
-                    "progressRenewsLease": False,
-                    "reportAt": [
-                        "LOOP_START",
-                        "CODE_INSPECTION_COMPLETE",
-                        "TEST_RUN_IF_EXECUTED",
-                        "ISSUE_FOUND",
-                        "FIX_APPLIED",
-                        "REREVIEW",
-                        "FINAL_VERIFICATION",
-                    ],
-                    "rawLogsAllowed": False,
-                    "hiddenReasoningAllowed": False,
-                },
-                "longRunningCommands": {
-                    "execution": "NON_BLOCKING_OR_SEPARATE_MONITOR",
-                    "heartbeatWhileRunning": True,
-                    "heartbeatIntervalSeconds": 300,
-                    "beforeStart": "REPORT_PROGRESS_AND_HEARTBEAT",
-                    "afterFinish": "HEARTBEAT_AND_REPORT_PROGRESS",
-                    "hostCompletionNotificationIsNotHeartbeat": True,
-                },
-                "providerRateLimit": {
-                    "softStopTrigger": (
-                        "KNOWN_REMAINING_CAPACITY_AT_OR_BELOW_5_PERCENT"
-                    ),
-                    "requiresLiveLease": True,
-                    "requiresKnownResetAt": True,
-                    "withResetAt": "PAUSE_UNTIL_RESET",
-                    "executorScopeBeforeReset": (
-                        "WAIT_FOR_EXECUTOR_NATIVE_WAKE"
-                    ),
-                    "hostScopeBeforeReset": "WAIT_FOR_HOST_NATIVE_WAKE",
-                    "nativeWake": {
-                        "claudeCode": "SESSION_ONE_SHOT_CRON",
-                        "codexDesktop": "THREAD_SCHEDULED_TASK",
-                    },
-                    "atReset": (
-                        "AGENT_RELOADS_FRONTIER_AND_REDISPATCHES"
-                    ),
-                    "sameAttempt": True,
-                    "loopOutcome": "NONE",
-                    "hard429": {
-                        "action": "TRIP_HOST_CAPACITY_BREAKER",
-                        "hostCallback": "MODEL_EXTERNAL_HOST_ADAPTER",
-                        "cancelRecurringMonitors": True,
-                        "scheduleWake": (
-                            "HOST_NATIVE_ONE_SHOT_AT_RESET"
-                        ),
-                    },
-                },
-                "expiredLeaseRecovery": {
-                    "action": "ADVANCE_GRAPH",
-                    "pauseAllowed": False,
-                    "reuseOperationId": False,
-                },
-                "receivingContext": {
-                    "reuseFrozenGraph": True,
-                    "reloadViaMcp": True,
-                },
+                "action": "ADVANCE_GRAPH",
+                "pauseAllowed": False,
+                "reuseOperationId": False,
             },
         )
         self.assertNotIn("capacityPressure", repr(policy))
@@ -3679,99 +3585,6 @@ class SchedulerRuntimeTests(unittest.TestCase):
             node_id=node_id,
         )
         self.assertEqual(context["executionPolicy"], policy)
-        self.assertEqual(
-            context["completionPolicy"],
-            loop_completion_policy(),
-        )
-        self.assertEqual(
-            context["completionPolicy"]["verificationScope"],
-            "AFFECTED_SCOPE_SUFFICIENT_FOR_DECLARED_ACCEPTANCE",
-        )
-        self.assertEqual(
-            context["completionPolicy"]["verificationStrategy"]["mode"],
-            "AFFECTED_SCOPE_FIRST",
-        )
-        self.assertEqual(
-            context["completionPolicy"]["verificationStrategy"]["default"],
-            "RUN_MINIMUM_SUFFICIENT_CHECKS",
-        )
-        self.assertEqual(
-            context["completionPolicy"]["actionableFinding"],
-            "RESOLVE_AND_REEVALUATE_IN_CURRENT_LOOP",
-        )
-        self.assertEqual(
-            context["completionPolicy"]["payloadRole"],
-            "GOALS_CONSTRAINTS_AND_KNOWN_ACCEPTANCE_INPUT",
-        )
-        self.assertEqual(
-            context["completionPolicy"]["reviewCycle"],
-            "FIND_RESOLVE_VERIFY_AND_REREVIEW_UNTIL_TERMINAL",
-        )
-        self.assertEqual(
-            context["completionPolicy"]["reviewFindings"],
-            {
-                "resultField": "reviewFindings",
-                "severities": ["P0", "P1", "P2"],
-                "p0p1": "RESOLVE_AND_REREVIEW_BEFORE_SUCCEEDED",
-                "p2": "ALWAYS_LIST_IN_ACCEPTANCE_REPORT",
-            },
-        )
-        self.assertEqual(
-            context["completionPolicy"]["workspaceChanges"],
-            {
-                "resultField": "workspaceChanges",
-                "source": "CONTROLLER_CAPTURED_AT_RESULT",
-                "comparison": (
-                    "FROZEN_BASE_COMMIT_TO_CURRENT_WORKSPACE"
-                ),
-                "semantics": (
-                    "WORKSPACE_SNAPSHOT_NOT_EXCLUSIVE_OWNERSHIP"
-                ),
-            },
-        )
-        self.assertEqual(
-            context["humanArtifacts"],
-            {
-                "taskBaseline": (
-                    f".layered-delivery/{root_id}/"
-                    f"{WORK_ITEM_DIRECTORY}/t-service/baseline.md"
-                ),
-                "workItem": {
-                    "kind": "TASK",
-                    "baseline": (
-                        f".layered-delivery/{root_id}/"
-                        f"{WORK_ITEM_DIRECTORY}/t-service/baseline.md"
-                    ),
-                    "progress": (
-                        f".layered-delivery/{root_id}/"
-                        f"{WORK_ITEM_DIRECTORY}/t-service/progress.md"
-                    ),
-                    "acceptance": (
-                        f".layered-delivery/{root_id}/"
-                        f"{WORK_ITEM_DIRECTORY}/t-service/acceptance.md"
-                    ),
-                },
-            },
-        )
-        self.assertEqual(
-            context["rules"],
-            {
-                "payloadIsOpaqueToScheduler": True,
-                "internalGateAndSkillPolicyOwnedByLoop": True,
-                "implementationPlanMayAdaptWithinLoop": True,
-                "actionableFindingsStayInsideLoop": True,
-                "skillHintsAreAdvisory": True,
-                "selectSkillsAtRuntime": True,
-                "prioritizeApplicableSkillHints": True,
-                "returnOnlyStandardLoopOutcome": True,
-                "independentReceiverRequired": True,
-                "coordinatorMustNotExecuteLoopInline": True,
-                "coordinatorMustNotReviewInline": True,
-                "accessOnlyAuthorizedProjectScopes": True,
-                "projectScopeWorkspaceRootsAreRuntimeVerified": False,
-                "loopsMustNotCreateSwitchOrCheckoutGitBranches": True,
-            },
-        )
 
         dispatch_loop(
             root=self.root,

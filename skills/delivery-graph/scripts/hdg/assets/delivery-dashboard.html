@@ -464,9 +464,9 @@
         FROZEN: "已冻结", ARCHIVED: "已归档", SUPERSEDED: "已替代",
       };
       const kindLabels = {
-        TASK_LOOP: "任务实现", TASK_REVIEW_LOOP: "任务审查",
-        GROUP_JOIN: "分组汇合", GROUP_REVIEW_LOOP: "分组审查",
-        DELIVERY_REVIEW_LOOP: "交付审查", USER_CONFIRMATION: "用户确认",
+        TASK_LOOP: "任务实现", TASK_REVIEW_LOOP: "任务验收",
+        GROUP_JOIN: "分组汇合", GROUP_REVIEW_LOOP: "分组 seam 验收",
+        DELIVERY_REVIEW_LOOP: "最终技术验收与准备度", USER_CONFIRMATION: "用户确认",
       };
       const toneFor = (status) => {
         if (["SUCCEEDED", "COMPLETED"].includes(status)) return "success";

@@ -58,9 +58,9 @@ Delivery: d-commerce
 - GROUP 终态是该节点的 `GROUP_REVIEW_LOOP` 终态；
 - 依赖 GROUP 时，只有该 GROUP 的全部后代完成、Join 成功且 Review 通过后，依赖方入口才可运行。
 
-`GROUP_JOIN(g)` 是调度器生成的确定性屏障，不是工作项或 Loop；人类文档称为“GROUP 完成点”。对 GROUP `g` 的每个直接子级 `c`，编译 `terminal(c) --ALL_OF--> GROUP_JOIN(g)`；完成点自动成功后再以 `REQUIRES_SUCCESS` 解锁 `GROUP_REVIEW_LOOP(g)`。它没有 payload、资源锁或业务 result。
+`GROUP_JOIN(g)` 是调度器生成的确定性屏障，不是工作项或 Loop；人类文档称为“GROUP 完成点”。对 GROUP `g` 的每个直接子级 `c`，编译 `terminal(c) --ALL_OF--> GROUP_JOIN(g)`。它没有 payload、资源锁或业务 result。只有 GROUP 声明了真实直接子项 seam Review 时，完成点才以 `REQUIRES_SUCCESS` 解锁 `GROUP_REVIEW_LOOP(g)`；否则完成点就是 GROUP 终态。
 
-因此父 GROUP 不越级检查孙节点，也不会在子 GROUP 尚未审查时提前完成。
+因此父 GROUP 不越级检查孙节点；子 GROUP 配置了 seam Review 时等待该 Review，未配置时只等待完成点。
 
 ## Skill Hint 晚绑定
 
@@ -71,7 +71,7 @@ Delivery: d-commerce
        │
        ├────────────┬────────────────┬──────────────────┐
        ▼            ▼                ▼                  ▼
- TASK Loop A   TASK Review   GROUP Review Loop   Delivery Review Loop
+ TASK Loop A   TASK Review   GROUP seam Review   Delivery Acceptance/Readiness
  运行时选择     运行时选择       运行时选择            运行时选择
 ```
 
@@ -124,22 +124,24 @@ resume 和提交 result。内部 Worker 不获得 operation 或 reservation，�
 
 ## Review 递归收敛
 
-Review 沿层级逐层向上收敛，但不会把同一个 Review 节点重复传播：
+验收沿实际边界逐层向上收敛，但不会把同一个 Review 节点重复传播：
 
 ```text
 直接子节点终态
 → GROUP_JOIN
-→ GROUP_REVIEW_LOOP
+→ [可选 GROUP_REVIEW_LOOP：仅直接子项 seam]
 → 父 GROUP 将其视为一个子节点终态
 → 父 GROUP_JOIN
-→ 父 GROUP_REVIEW_LOOP
+→ [可选父 GROUP_REVIEW_LOOP]
 → …
 → 根工作项终态
 → DELIVERY_REVIEW_LOOP
 → USER_CONFIRMATION
 ```
 
-若根本身是 TASK，则其 TASK Review 成功后直接进入 Delivery Review。若根是 GROUP，则根 GROUP Review 成功后才进入 Delivery Review。最终用户确认只发生一次。
+若根本身是 TASK，则其 TASK Review 成功后直接进入 Delivery Acceptance/Readiness。若根是 GROUP，则其实际终态（可选 seam Review，否则 GROUP_JOIN）成功后进入 Delivery Acceptance/Readiness。最终用户确认只发生一次。
+
+三段职责不能合并：Controller 只沿 Graph 检查前驱是否已进入合法成功终态、机械校验结果契约并持久化；它不做技术验收。对应的独立 Review receiver 才判断本层结论，其中 Delivery receiver 只消费根终态与报告链，检查顶层覆盖、整体证据、运行准备度和全局风险，不重新证明每个下层 Loop 已执行。真实用户最后只作业务确认。
 
 ## Loop 边界
 
@@ -240,7 +242,7 @@ GROUP/TASK 的递归存在于冻结 hierarchy 和编译 Graph 中，并镜像到
 
 外部工单号通过 `delivery.requirementKey` 与一个稳定 `delivery.id` 一对一绑定；未显式声明时，Controller 仍从 Delivery ID/标题识别常见 `PROJECT-123` 引用。不同 ID 命中同一 key 时，preview 与最终事务写入都返回连续性冲突，要求复用已有 ID。`HANDOFF_READY` 内容变化使用 `create_manual_handoff` 的显式当前 Revision、`USER_EXPLICIT_SAME_DELIVERY` 和修订原因，在原目录追加不可变手动 Revision；旧 Revision 标记为 `SUPERSEDED`，不再通过改名生成重复目录。
 
-人类投影集合必须足以完成冻结前评审、运行中跟踪和最终验收：工作区 `overview.md` 只列 Delivery 入口，Delivery `overview.md` 展示本交付状态与内部统计；Delivery 投影负责聚合与串联；节点投影覆盖双指纹、summary、`dependsOn`、Loop 引用、资源锁、不透明 payload、运行状态、Loop 结果和证据。验收内容按层归属：TASK 只完整展开本 TASK 与 TASK Review，GROUP 只完整展开本层完成点与 GROUP Review，Delivery 只完整展开 Delivery Review 和用户确认；向上一层只提供直接下层或根工作项的状态、简要结果和报告链接，不复制下层输入、证据或 findings。进度表展示外层 receiver、认领身份和执行轮次；内部 Worker 的 agent/model/effort 仅从最终 `workerTelemetry` 非权威展示，未知值为 `unreported`。验收摘要、子节点结果和 P0/P1/P2 问题使用表格。P0/P1 只在修复、验证和独立复审后关闭，P2 非阻断但必须列示。新增、调整或删除接口的 TASK 通过 `payload.interfaces` 显式提供 `changeType`、协议、名称、简介以及完整 before/after 快照；控制器生成 `interfaces.md` 索引，并在 `interfaces/` 下为每个接口生成一份详情。HTTP 按 Path、Query、请求头、请求体和响应参数展示，Dubbo 按接口、方法、调用参数和返回结果展示；字段表覆盖类型、必填、最大长度、说明和示例值。冻结 baseline 的 after 是开发接口与后续 Torna 发布的唯一事实来源，方法、路径或签名以及字段层级和属性必须一致。数据库变更由规划上下文在 preview 前通过 `payload.databaseChanges` 提供完整表级 before/after、字段、主键、约束、索引、外键和迁移/回滚/回填/兼容/验证方案；控制器拒绝不完整契约与 LIGHT 保障档，生成 `database-changes.md` 及每表详情，TASK Loop 只允许应用和验证冻结 after，偏离时必须重新规划为同一 Delivery 的新 Revision。删除值使用 Markdown 删除线，新增或删除字段只显示存在的一侧。代码可辅助准备和验证契约，但不成为动态投影源，接口和数据库内容也不参与 Graph 调度决策。固定展示使用中文，标明 UTC+8 的时间使用 `YYYY-MM-DD HH:mm:ss`；SQLite 继续保持机器 UTC。
+人类投影集合必须足以完成冻结前评审、运行中跟踪和最终验收：工作区 `overview.md` 只列 Delivery 入口，Delivery `overview.md` 展示本交付状态与内部统计；Delivery 投影负责聚合与串联；节点投影覆盖双指纹、summary、`dependsOn`、Loop 引用、资源锁、不透明 payload、运行状态、Loop 结果和证据。验收内容按层归属：TASK 只完整展开本 TASK 与 `taskAcceptance`，GROUP 展开完成点并仅在配置时展开 `groupIntegration`，Delivery 只展开 `deliveryReadiness` 和用户确认；向上一层只提供直接下层或根工作项的状态、简要结果、证据引用和报告链接，不复制下层输入、result body、证据、workspace snapshot 或 findings。未配置的 GROUP Review 不生成 Graph 节点、SQLite run/event/outcome 或空投影段落。进度表展示外层 receiver、认领身份和执行轮次；内部 Worker 的 agent/model/effort 仅从最终 `workerTelemetry` 非权威展示，未知值为 `unreported`。验收摘要、子节点结果和 P0/P1/P2 问题使用表格。P0/P1 只在修复、验证和独立复审后关闭，P2 非阻断但必须列示。新增、调整或删除接口的 TASK 通过 `payload.interfaces` 显式提供 `changeType`、协议、名称、简介以及完整 before/after 快照；控制器生成 `interfaces.md` 索引，并在 `interfaces/` 下为每个接口生成一份详情。HTTP 按 Path、Query、请求头、请求体和响应参数展示，Dubbo 按接口、方法、调用参数和返回结果展示；字段表覆盖类型、必填、最大长度、说明和示例值。冻结 baseline 的 after 是开发接口与后续 Torna 发布的唯一事实来源，方法、路径或签名以及字段层级和属性必须一致。数据库变更由规划上下文在 preview 前通过 `payload.databaseChanges` 提供完整表级 before/after、字段、主键、约束、索引、外键和迁移/回滚/回填/兼容/验证方案；控制器拒绝不完整契约与 LIGHT 保障档，生成 `database-changes.md` 及每表详情，TASK Loop 只允许应用和验证冻结 after，偏离时必须重新规划为同一 Delivery 的新 Revision。删除值使用 Markdown 删除线，新增或删除字段只显示存在的一侧。代码可辅助准备和验证契约，但不成为动态投影源，接口和数据库内容也不参与 Graph 调度决策。固定展示使用中文，标明 UTC+8 的时间使用 `YYYY-MM-DD HH:mm:ss`；SQLite 继续保持机器 UTC。
 
 ## 可恢复性
 

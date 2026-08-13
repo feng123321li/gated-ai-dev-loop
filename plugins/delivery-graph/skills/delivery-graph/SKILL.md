@@ -1,6 +1,6 @@
 ---
 name: delivery-graph
-description: "把已确认的软件需求建模为分层 Delivery Graph，并驱动 Git 基线确认、冻结、自动 Agent 派遣或手动 CLI 交接、TASK/GROUP/Delivery Review、最终验收、归档与恢复。用于规划或修订多项目、多模块交付，选择自动/手动执行，接续既有 Delivery，或处理暂停、失联、容量等待、Git 漂移和 REPLAN_REQUIRED。"
+description: "把已确认的软件需求建模为分层 Delivery Graph，并驱动 Git 基线确认、冻结、自动 Agent 派遣或手动 CLI 交接、TASK 验收、可选 GROUP seam 验收、Delivery Acceptance/Readiness、最终用户确认、归档与恢复。用于规划或修订多项目、多模块交付，选择自动/手动执行，接续既有 Delivery，或处理暂停、失联、容量等待、Git 漂移和 REPLAN_REQUIRED。"
 allowed-tools:
   - mcp__plugin_delivery-graph_delivery-graph__workspace_status
   - mcp__plugin_delivery-graph_delivery-graph__hierarchy_contract
@@ -35,7 +35,8 @@ allowed-tools:
 
 ```text
 确认需求 → 确认开发基线 → 冻结 Delivery Graph → 自动派遣 / 手动交接
-         → TASK 实现 → TASK / GROUP / Delivery Review → 用户最终验收
+         → TASK 实现与验收 → 可选 GROUP seam 验收
+         → Delivery Acceptance/Readiness → 用户最终确认
 ```
 
 ## 不可破边界
@@ -76,7 +77,7 @@ allowed-tools:
 
 1. 检查真实代码和工作区；与用户确认目标、边界、验收点、项目范围、依赖和排他资源。
 2. 选择保障档。不确定时用 `STANDARD`；仅当单一根 TASK、局部低风险且定向验证充分时用 `LIGHT`，并写明 `assuranceRationale`。
-3. 只为真实分层、并行汇合或 Review 边界创建 `GROUP`。不要为单 TASK 制造形式层级。
+3. 只为真实分层、依赖或并行汇合创建 `GROUP`。GROUP 的 `reviewLoop` 仅在直接子项之间存在必须独立验证的 seam 时配置；纯协调/汇合 GROUP 使用 `null`。不要为单 TASK 制造形式层级。
 4. 需求涉及建表、改表或删表时，在 preview 前读取真实当前结构、完成字段级 before/after 设计，并按 `projectionGuidance.databaseChanges` 写入负责 TASK 的 `loop.payload.databaseChanges`；不得把数据库设计留给执行 Loop。
 5. 把其他实现目标和约束放入 `loop.payload`；用 `resourceClaims` 表达跨 Delivery 排他资源；每项数据库变更的 `resourceClaim` 必须同时存在于该 TASK 的资源声明中；把用户指定 Skill 记录为共享 `root.skillHints`。
 6. 调用 `hierarchy_contract` 后构造 schema v3。较大层级先写 JSON 文件并校验，再通过 `hierarchy_file` 传给 `preview_hierarchy`。
@@ -126,6 +127,9 @@ allowed-tools:
 - 只让外层 receiver 持有 reservation 和 `operation_id` 并调用 claim、heartbeat、progress、pause、resume 和 `record_loop_result`。内部 Worker 不得持有控制面凭据。
 - 让 receiver 使用已验证的 `projectScopes`，按租约 heartbeat，并在关键阶段报告 progress；progress 不续租。
 - TASK 先从实际改动、依赖和契约界定 `result.affectedScopes`；其中 `paths` 使用字面量仓库相对路径并覆盖相关依赖/契约锚点。只运行覆盖该范围的测试、构建或契约检查，并在 `result.verificationEvidence` 记录命令摘要、scope 和结果；Controller 在终态记录可信 `evidenceWorkspaceSnapshots` 与逐相关路径的 `evidenceScopeSnapshots`。Review 的独立性是独立判断，不是机械重跑全量：只自动复用 `validationEvidenceIndex` 中 `PASSED + EXACT_MATCH` 的证据；无关文件变化不使有界 scope 失效，再对缺口、相关路径 `CHANGED/UNBOUND`、findings 和高风险边界定向复跑。影响范围无法界定等明确风险才升级全量。
+- Review 各守一层：TASK Review 只验冻结 TASK 验收点、局部行为、公共契约与定向回归；GROUP Review 可选，只验直接子项 seam；Delivery Acceptance/Readiness 只验顶层需求覆盖、整体集成/E2E 证据、运行准备度和全局风险。不得复查已由下层关闭的实现细节或单测。
+- 严格分离 Controller、Review receiver 和用户：Controller 只依据 Graph 前驱终态解锁节点、机械校验结果结构/声明终态一致性，并持久化事件、SQLite outcome 与投影；它不判断技术验收、证据充分性或运行准备度。独立 Review receiver 才作当前层验收决定；Delivery receiver 每个 `STANDARD` Delivery 只执行一次顶层 Acceptance/Readiness，不逐个重验全部 Loop。用户只作最终业务确认。`LIGHT` 不创建独立 Review。
+- `SUCCEEDED` Review 的 `result` 只保存 `validationDecision`、`reviewFindings`、本层唯一结论字段（`taskAcceptance` / `groupIntegration` / `deliveryReadiness`）、有界验证证据和 Controller 快照；`upstreamLoopResults` 只存在于运行 context，禁止复制进 outcome。未配置的 GROUP Review 不生成 Graph 节点、SQLite run/event/outcome 或投影段落。
 - 跨 Delivery 出现相同 `resourceClaims` 或物理工作区冲突时，只把已选择 `AUTOMATIC` 的后启动或后发现 Delivery 标记为 `QUEUED`；手动冻结保持 `HANDOFF_READY`。只有前一个 Delivery 已形成可验证 commit、工作树 clean、HEAD 未漂移且 receiver 安全释放后才能自动续调队首；任一条件不满足就保持排队。资源无交集也不能绕过 `CURRENT_WORKSPACE_SERIAL` 的单 checkout 串行边界，且绝不能 stash 正在运行 owner 的未完成改动。
 - 数据库 TASK 只应用和验证冻结 `databaseChanges[*].after`，不得在 Loop 内另行设计字段、索引、约束或迁移策略；任何必要偏离都提交 `REPLAN_REQUIRED`。
 - 只提交真实业务终态。实际范围或风险超出冻结契约时提交 `REPLAN_REQUIRED`，不要硬完成。
@@ -144,5 +148,5 @@ allowed-tools:
 - 新建/修订 Graph、Git baseline、project scopes、schema 与冻结：[planning-quickstart.md](references/planning-quickstart.md)
 - Frontier、自动派遣、手动 claim、租约、资源锁与恢复：[execution-quickstart.md](references/execution-quickstart.md)
 - 外层 receiver、Loop 内 Worker、身份边界与遥测：[agent-execution-boundary.md](references/agent-execution-boundary.md)
-- TASK/GROUP/Delivery Review 与最终确认：[acceptance.md](references/acceptance.md)
+- TASK、可选 GROUP seam 与 Delivery Acceptance/Readiness：[acceptance.md](references/acceptance.md)
 - MCP 断连、重放安全、SQLite 权威、工作区绑定与投影：[mcp-transport.md](references/mcp-transport.md)

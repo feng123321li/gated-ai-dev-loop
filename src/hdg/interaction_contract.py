@@ -343,8 +343,9 @@ def manual_receiver_prompt(relative_handoff_path: str) -> str:
         "receiver_context_id 与新 operation_id，并按标准 Loop 协议显式携带 "
         "operation_id heartbeat、上报进度和提交结果。"
         "随后持续消费 frontier，"
-        "对 TASK/GROUP/Delivery Review 完整执行与自动模式相同的宿主原生路由、"
-        "独立审查、findings 闭环和最终用户确认。不要重新规划，不要直接修改任何"
+        "对 TASK Review、已配置的 GROUP seam Review 和 Delivery Acceptance/"
+        "Readiness 完整执行与自动模式相同的宿主原生路由、独立判断、findings "
+        "闭环和最终用户确认。不要重新规划，不要直接修改任何"
         "控制器投影，不要跳过或手工替代 Review；Plugin MCP 不可用时停止并报告 "
         "PLUGIN_MCP_UNAVAILABLE。"
     )

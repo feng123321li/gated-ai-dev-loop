@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.18 — 2026-08-13
+
+发布提交：以 tag `v0.39.18` 指向的提交为准
+
+- **Review 职责单一化**：严格分离 Controller、独立 Review receiver 与最终用户确认。Controller 只负责 Graph 前驱成功门禁、Review result 契约校验和事件/SQLite/投影持久化；技术验收、证据充分性与 finding 闭环由对应 receiver 独立负责。
+- **分层验收收敛**：TASK Review 只验本 TASK，GROUP Review 改为按真实直接子项 seam 可选，Delivery Acceptance/Readiness 每个 `STANDARD` Delivery 只执行一次并聚焦顶层需求覆盖、整体集成/E2E 证据、运行准备度和全局风险；`LIGHT` 继续由唯一 TASK 直接进入用户确认。
+- **结果与投影精简**：成功 Review 只持久化共同字段、本层唯一结论和有界证据，不复制 `upstreamLoopResults` 或下层 result body；未配置 GROUP Review 时不生成 Graph 节点、SQLite run/event/outcome 或空投影段落。验收投影明确展示 Controller、Delivery receiver 与用户的职责边界。
+- **内部模块边界**：新增独立 `review_contracts.py`，把 Review 结果结构与声明终态一致性校验从通用 Loop 合约中拆出，并以机器可读执行策略公开责任归属。
+- **验证**：本地 Python 全量 392 项测试通过（1 项按环境条件跳过）；`compileall`、canonical/Plugin 生成镜像、release candidate、Skill、Codex/Claude Plugin 与 `git diff --check` 均通过。
+
 ## 0.39.17 — 2026-08-13
 
 发布提交：以 tag `v0.39.17` 指向的提交为准

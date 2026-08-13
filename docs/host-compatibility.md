@@ -7,6 +7,10 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.39.18 发布候选矩阵
+
+0.39.18 保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`，重新划定 Review 职责：Controller 只执行 Graph 前驱成功门禁、结果契约校验和事件/SQLite/投影持久化；独立 Review receiver 才作当前层技术验收；最终用户只作业务确认。TASK Review 只验本 TASK，GROUP seam Review 按真实组合边界可选，Delivery Acceptance/Readiness 每个 `STANDARD` Delivery 只运行一次且不重验全部下层 Loop。成功 Review outcome 与分层验收投影只保留本层结论和有界证据，未配置 GROUP Review 不生成节点、run/event/outcome 或空投影段落。核心候选已通过 392 项 Python 测试（1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Skill、Codex/Claude Plugin 与差异校验；真实宿主能力继续按本页既有边界验证。
+
 ## 0.39.17 发布候选矩阵
 
 0.39.17 仅将三个宿主 manifest 共用的 Delivery Graph PNG 从 1254×1254、1.3 MB 优化为 256×256、约 76 KB，并增加 128 KB 发布上限回归门禁；继续保持 32 个 MCP 工具、schema v3、无 Hook 模式和 `CURRENT_WORKSPACE_SERIAL`。Graph、运行数据库、宿主审批和 receiver 调度契约均不变，真实宿主能力沿用 0.39.16 的边界。
@@ -62,7 +66,7 @@
 
 - 活跃 receiver 优先使用宿主原生 completion wait；超时只读 `graph_status`，并按首次心跳、heartbeat/progress stale、lease、reservation 与资源容量恢复中的最早有效时刻唤醒。稳定 `changeFingerprint` 排除纯时间倒计时，避免无变化重复播报。
 - `graph_frontier` 的 no-op 不再修改 run 时间或重写投影；reservation/lease 精确到点即失效。CLAIMED reservation 的旧短 TTL 不参与后续唤醒，跨 Delivery 的真实资源冲突按 blocker deadline 恢复。
-- TASK 验证绑定 affected scope 与 workspace snapshot；TASK/GROUP/Delivery Review 只复用 `PASSED + EXACT_MATCH` 证据，相关代码、环境或高风险边界变化时定向或完整复跑。Review 结果提交前重新计算 freshness，P0/P1 继续要求闭环。
+- TASK 验证绑定 affected scope 与 workspace snapshot；TASK Review、已配置的 GROUP seam Review 和 Delivery Acceptance/Readiness 只复用 `PASSED + EXACT_MATCH` 证据，相关代码、环境或高风险边界变化时定向或完整复跑。Review 结果提交前重新计算 freshness，P0/P1 继续要求闭环。
 - scope 状态按项目批量捕获、跨证据去重；Review context 使用紧凑 evidence index 与 workspace diff 引用，避免逐文件 Git 子进程和重复大 payload。
 - 核心候选已通过 381 项 Python 测试（1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Claude Plugin manifest 与差异校验。实际 Codex/Claude 会话仍需按本页定义完成宿主原生 child 冒烟，并停在 `RECORD_USER_CONFIRMATION`。
 

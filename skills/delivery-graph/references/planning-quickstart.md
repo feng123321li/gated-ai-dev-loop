@@ -20,8 +20,8 @@
 
 | 保障档 | 适用条件 | Graph |
 |---|---|---|
-| `LIGHT` | 单一局部内部改动；影响边界明确；定向测试可覆盖；不触及公共/跨模块接口、数据库或迁移、权限/安全/隐私、资金、并发、生产部署或不可逆副作用 | 一个根 `TASK_LOOP → USER_CONFIRMATION`，不创建 TASK/Delivery Review |
-| `STANDARD` | 多 TASK/多项目、任何关键边界、影响扩大或无法可靠判断 | 完整 TASK/GROUP/Delivery Review |
+| `LIGHT` | 单一局部内部改动；影响边界明确；定向测试可覆盖；不触及公共/跨模块接口、数据库或迁移、权限/安全/隐私、资金、并发、生产部署或不可逆副作用 | 一个根 `TASK_LOOP → USER_CONFIRMATION`，不创建独立验收 Loop |
+| `STANDARD` | 多 TASK/多项目、任何关键边界、影响扩大或无法可靠判断 | TASK Review + 可选 GROUP seam Review + Delivery Acceptance/Readiness |
 
 `LIGHT` 必须同时满足：
 
@@ -35,11 +35,11 @@
 ## 选择根节点
 
 - 一个可独立调度结果：使用根 `TASK`。
-- 多个结果需要依赖、并行、汇合或分组审查：使用根 `GROUP`。
+- 多个结果需要依赖、并行或汇合：使用根 `GROUP`；只有存在真实直接子项 seam 时才为该 GROUP 配置 Review。
 
-工作项类型只有 `GROUP` 和 `TASK`。Delivery 不作为工作项层级，而是整个 Graph、最终 Review 和用户验收的顶层边界。GROUP 可递归混合包含 GROUP/TASK；TASK 是唯一执行叶子。
+工作项类型只有 `GROUP` 和 `TASK`。Delivery 不作为工作项层级，而是整个 Graph、最终 Acceptance/Readiness 和用户确认的顶层边界。GROUP 可递归混合包含 GROUP/TASK；TASK 是唯一执行叶子。
 
-按调度关系拆分，不按文件数量拆分。一个 TASK Loop 可以覆盖一个模块、多个模块或多个项目，只要它能作为整体返回标准终态。GROUP 是动态、可选的协调与 Review 边界，可以多层、平行，也可以完全不存在；不要为表现项目/模块目录，或只包裹一个 TASK，而强制增加 GROUP。
+按调度关系拆分，不按文件数量拆分。一个 TASK Loop 可以覆盖一个模块、多个模块或多个项目，只要它能作为整体返回标准终态。GROUP 是动态、可选的协调边界，可以多层、平行，也可以完全不存在；它的 Review 边界另行按直接子项 seam 判断。不要为表现项目/模块目录，或只包裹一个 TASK，而强制增加 GROUP。
 
 ## Delivery 与 root wrapper
 
@@ -53,8 +53,8 @@
     "title": "交付订单能力",
     "summary": "完成订单能力并取得最终验收",
     "reviewLoop": {
-      "ref": "delivery/independent-review-loop@1",
-      "payload": {"goal": "独立审查完整 Delivery"},
+      "ref": "delivery/acceptance-readiness-loop@1",
+      "payload": {"goal": "确认顶层需求覆盖、整体证据、运行准备度和全局风险"},
       "resourceClaims": []
     }
   },
@@ -109,8 +109,8 @@ GROUP：
 - `definition.kind` 为 `GROUP`，并在 `definition.children` 中列出直接子节点的 `id`、`kind`、`title` 摘要。
 - `definition.decomposition.dependsOn` 只引用直接同级 GROUP/TASK。
 - 节点 `children` 递归包含与摘要一一对应的完整 GROUP/TASK 节点，且至少一个。
-- 节点 `reviewLoop` 必填。直接子节点终态全部成功后，调度器到达 `GROUP_JOIN`（人类文档称“GROUP 完成点”），再派发该层 `GROUP_REVIEW_LOOP`；Review 成功才是 GROUP 的终态。
-- 只有存在真实的同级协调、汇合或独立分层审查边界时才创建；单个可独立结果直接使用 TASK。
+- 节点 `reviewLoop` 为可空字段。直接子节点终态全部成功后，调度器到达 `GROUP_JOIN`（人类文档称“GROUP 完成点”）。没有直接子项 seam 时设为 `null`，完成点就是 GROUP 终态；存在真实接口兼容、数据/控制流、事务或错误传播 seam 时才配置 `GROUP_REVIEW_LOOP`，Review 成功后才是 GROUP 终态。
+- 只有存在真实的同级协调、依赖或汇合边界时才创建 GROUP；单个可独立结果直接使用 TASK。不要为了“每层都 Review”而创建 GROUP 或伪造 seam。
 
 递归示例：
 
@@ -121,8 +121,8 @@ GROUP：
     "title": "交付订单能力",
     "summary": "完成服务实现、文档和最终验收",
     "reviewLoop": {
-      "ref": "delivery/independent-review-loop@1",
-      "payload": {"goal": "独立审查完整订单 Delivery"},
+      "ref": "delivery/acceptance-readiness-loop@1",
+      "payload": {"goal": "确认订单需求覆盖、整体证据和交付准备度"},
       "resourceClaims": []
     }
   },
@@ -147,11 +147,7 @@ GROUP：
         {"id": "t-docs", "kind": "TASK", "title": "更新文档"}
       ]
     },
-    "reviewLoop": {
-      "ref": "group/independent-review-loop@1",
-      "payload": {"goal": "审查根 GROUP"},
-      "resourceClaims": []
-    },
+    "reviewLoop": null,
     "children": [
       {
         "definition": {
@@ -168,8 +164,8 @@ GROUP：
           ]
         },
         "reviewLoop": {
-          "ref": "group/service-review-loop@1",
-          "payload": {"goal": "独立审查服务 GROUP"},
+          "ref": "group/direct-child-seam-review-loop@1",
+          "payload": {"goal": "验证 API 与核心逻辑之间的接口和数据流 seam"},
           "resourceClaims": []
         },
         "children": [
@@ -297,7 +293,7 @@ Delivery baseline 和 TASK baseline 只串联这些投影。
 `dependsOn` 是直接同级之间的启动屏障，允许 TASK→TASK、TASK→GROUP、GROUP→TASK 和 GROUP→GROUP：
 
 - 来源 TASK 在自己的 TASK Review 成功后满足屏障。
-- 来源 GROUP 在自己的 GROUP Review 成功后满足屏障。
+- 来源 GROUP 在自己的实际终态满足屏障：配置了 seam Review 时是该 Review 成功，否则是 GROUP 完成点成功。
 - 目标 TASK 的 TASK Loop 等待屏障。
 - 目标 GROUP 的子树入口 TASK Loops 等待屏障。
 
@@ -305,7 +301,7 @@ Delivery baseline 和 TASK baseline 只串联这些投影。
 
 ## Loop 描述
 
-TASK、TASK Review、GROUP Review 和 Delivery Review 使用相同 Loop 描述协议：
+TASK、TASK Review、已配置的 GROUP seam Review 和 Delivery Acceptance/Readiness 使用相同 Loop 描述协议：
 
 - `loop.ref`：执行适配器或 Loop Skill 的稳定引用。
 - `loop.payload`：原样交给 Loop 的不透明 JSON。
@@ -367,8 +363,8 @@ Torna 必须保持相同的方法、路径或签名、字段层级、类型、�
 需求阶段若用户给出 Skill，只在 `root.skillHints` 登记一次：
 
 - 提示是共享、建议性的运行时偏好，不是 `requiredSkills`。
-- 不在需求阶段把提示分配到 TASK、TASK Review、GROUP Review、Delivery Review、开发阶段或 Gate 阶段，也不因提示新增额外 Graph 节点。
-- 每个 TASK/TASK Review/GROUP Review/Delivery Review Loop 启动后读取全部提示，结合真实任务和宿主可用 Skill 独立选择；可以跳过不适用提示，也可以使用其他 Skill。
+- 不在需求阶段把提示分配到 TASK、TASK Review、GROUP seam Review、Delivery Acceptance/Readiness、开发阶段或 Gate 阶段，也不因提示新增额外 Graph 节点。
+- 每个 TASK、TASK Review、已配置的 GROUP seam Review 或 Delivery Acceptance/Readiness Loop 启动后读取全部提示，结合真实任务和宿主可用 Skill 独立选择；可以跳过不适用提示，也可以使用其他 Skill。
 - 调度器不查询 Skill catalog、不校验激活证据，也不因某条提示未使用而判定失败。
 
 无合适提示时使用空数组，不要猜测 Skill。业务硬条件由对应 Loop 的 payload/验收协议表达，不要伪装成 Skill Hint。

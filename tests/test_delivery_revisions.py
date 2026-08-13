@@ -30,7 +30,7 @@ from .test_loop_architecture import (
     task_definition,
     task_hierarchy,
 )
-from .test_scheduler_runtime import at, success
+from .test_scheduler_runtime import at, review_success, success
 
 
 class DeliveryRevisionTests(unittest.TestCase):
@@ -98,7 +98,10 @@ class DeliveryRevisionTests(unittest.TestCase):
             root_id=root_id,
             node_id=review_id,
             operation_id=f"op-{task_id}-review",
-            outcome=success(f"{task_id} independently reviewed."),
+            outcome=review_success(
+                "TASK_REVIEW_LOOP",
+                f"{task_id} independently reviewed.",
+            ),
             now=at(5),
         )
 

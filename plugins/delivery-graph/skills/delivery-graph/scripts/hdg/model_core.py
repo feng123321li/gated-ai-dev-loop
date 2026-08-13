@@ -452,7 +452,7 @@ def _delivery_definition(value: object) -> dict[str, Any]:
         if review_loop is not None:
             fail(
                 "DELIVERY_ASSURANCE_INVALID",
-                "LIGHT assurance does not create a Delivery Review Loop",
+                "LIGHT assurance does not create Delivery Acceptance/Readiness",
                 field="hierarchy.delivery.reviewLoop",
             )
         normalized_review_loop = None
@@ -460,7 +460,7 @@ def _delivery_definition(value: object) -> dict[str, Any]:
         if review_loop is None:
             fail(
                 "DELIVERY_REVIEW_REQUIRED",
-                "STANDARD assurance requires a Delivery Review Loop",
+                "STANDARD assurance requires Delivery Acceptance/Readiness",
                 field="hierarchy.delivery.reviewLoop",
             )
         normalized_review_loop = validate_loop_descriptor(
@@ -848,13 +848,6 @@ def validate_hierarchy_definition(
                 "reviewLoop": review_loop,
                 "children": [],
             }
-
-        if review_loop is None:
-            fail(
-                "WORK_ITEM_GROUP_REVIEW_REQUIRED",
-                "Every GROUP hierarchy node requires a Review Loop",
-                field=f"{field}.reviewLoop",
-            )
 
         expected_children = {
             (child["id"], child["kind"], child["title"])

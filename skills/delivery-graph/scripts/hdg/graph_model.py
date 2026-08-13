@@ -372,8 +372,16 @@ def _walk_hierarchy(hierarchy: dict[str, Any]) -> list[dict[str, Any]]:
 def _terminal_node_id(hierarchy_node: dict[str, Any]) -> str:
     definition = hierarchy_node["definition"]
     if definition["kind"] == "TASK":
-        return task_review_node_id(definition["id"])
-    return group_review_node_id(definition["id"])
+        return (
+            task_review_node_id(definition["id"])
+            if hierarchy_node["reviewLoop"] is not None
+            else loop_node_id(definition["id"])
+        )
+    return (
+        group_review_node_id(definition["id"])
+        if hierarchy_node["reviewLoop"] is not None
+        else join_node_id(definition["id"])
+    )
 
 
 def _entry_node_ids(hierarchy_node: dict[str, Any]) -> list[str]:
@@ -484,14 +492,6 @@ def compile_delivery_graph(
                 item_id,
             )
         )
-        nodes.append(
-            _node(
-                group_review_node_id(item_id),
-                "GROUP_REVIEW_LOOP",
-                item_id,
-                loop=hierarchy_node["reviewLoop"],
-            )
-        )
         join_group = f"join:{item_id}:children"
         for child in hierarchy_node["children"]:
             edges.append(
@@ -503,14 +503,23 @@ def compile_delivery_graph(
                     join_group=join_group,
                 )
             )
-        edges.append(
-            _edge(
-                join_node_id(item_id),
-                group_review_node_id(item_id),
-                "REQUIRES_SUCCESS",
-                plane="GOVERNANCE",
+        if hierarchy_node["reviewLoop"] is not None:
+            nodes.append(
+                _node(
+                    group_review_node_id(item_id),
+                    "GROUP_REVIEW_LOOP",
+                    item_id,
+                    loop=hierarchy_node["reviewLoop"],
+                )
             )
-        )
+            edges.append(
+                _edge(
+                    join_node_id(item_id),
+                    group_review_node_id(item_id),
+                    "REQUIRES_SUCCESS",
+                    plane="GOVERNANCE",
+                )
+            )
 
     for hierarchy_node in hierarchy_nodes:
         definition = hierarchy_node["definition"]

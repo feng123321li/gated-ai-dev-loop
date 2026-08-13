@@ -911,7 +911,16 @@ class HierarchyContractTests(unittest.TestCase):
             contract["inputSchema"]["$defs"]["groupRootNode"]["properties"][
                 "reviewLoop"
             ],
-            {"$ref": "#/$defs/loop"},
+            {
+                "oneOf": [
+                    {"$ref": "#/$defs/loop"},
+                    {"type": "null"},
+                ],
+                "description": (
+                    "Optional direct-child seam Review. Use null when the "
+                    "GROUP is only a coordination or join boundary."
+                ),
+            },
         )
         acceptance_guidance = contract["projectionGuidance"][
             "acceptanceReports"
@@ -919,6 +928,16 @@ class HierarchyContractTests(unittest.TestCase):
         self.assertEqual(
             acceptance_guidance["scope"],
             "CURRENT_LAYER",
+        )
+        self.assertEqual(
+            acceptance_guidance["responsibilities"],
+            {
+                "controller": (
+                    "GRAPH_GATING_RESULT_CONTRACT_VALIDATION_AND_PERSISTENCE"
+                ),
+                "reviewReceiver": "CURRENT_LAYER_TECHNICAL_ACCEPTANCE",
+                "user": "FINAL_BUSINESS_CONFIRMATION",
+            },
         )
         self.assertEqual(
             acceptance_guidance["groupReport"]["childReferences"],
@@ -932,6 +951,7 @@ class HierarchyContractTests(unittest.TestCase):
             acceptance_guidance["nonDuplicatedFromLowerLayers"],
             [
                 "payload",
+                "resultBodies",
                 "evidence",
                 "reviewFindings",
                 "workspaceChanges",
@@ -1301,6 +1321,10 @@ class McpSurfaceTests(unittest.TestCase):
         self.assertIn("evidenceWorkspaceSnapshots", result_properties)
         self.assertIn("evidenceScopeSnapshots", result_properties)
         self.assertIn("validationDecision", result_properties)
+        self.assertIn("reviewFindings", result_properties)
+        self.assertIn("taskAcceptance", result_properties)
+        self.assertIn("groupIntegration", result_properties)
+        self.assertIn("deliveryReadiness", result_properties)
         reused_ref = result_properties["validationDecision"]["properties"][
             "reusedEvidenceRefs"
         ]["items"]
@@ -1332,6 +1356,18 @@ class McpSurfaceTests(unittest.TestCase):
             },
         )
         by_name = {tool["name"]: tool for tool in tools}
+        result_tool = by_name["record_loop_result"]
+        result_description = result_tool["inputSchema"]["properties"][
+            "outcome"
+        ]["properties"]["result"]["description"]
+        self.assertIn(
+            "receiver owns the technical acceptance judgment",
+            result_description,
+        )
+        self.assertIn(
+            "Controller validates only structure and declared terminal consistency",
+            result_description,
+        )
         archive_tool = by_name["archive_delivery"]
         self.assertEqual(
             archive_tool["inputSchema"]["required"],
@@ -1448,7 +1484,7 @@ class McpSurfaceTests(unittest.TestCase):
             ],
         )
         self.assertIn(
-            "never weakens or skips STANDARD Review nodes",
+            "never weakens or skips configured STANDARD Review nodes",
             by_name["start_manual_handoff"]["description"],
         )
         self.assertNotIn(
@@ -4025,6 +4061,26 @@ class McpSurfaceTests(unittest.TestCase):
                             "executedEvidenceRefs": [],
                             "riskTriggers": [],
                             "rationale": "Relevant paths were unchanged.",
+                        },
+                        "taskAcceptance": {
+                            "acceptanceChecks": [
+                                {
+                                    "acceptancePoint": (
+                                        "The frozen TASK contract is met."
+                                    ),
+                                    "status": "SATISFIED",
+                                    "evidenceRefs": [
+                                        "secondary-file-check"
+                                    ],
+                                }
+                            ],
+                            "localBehavior": "VERIFIED",
+                            "publicContract": "NOT_APPLICABLE",
+                            "targetedRegression": "VERIFIED",
+                            "decision": "ACCEPTED",
+                            "rationale": (
+                                "Only the TASK-owned boundary was reviewed."
+                            ),
                         },
                     },
                 },

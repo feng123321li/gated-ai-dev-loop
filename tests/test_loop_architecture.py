@@ -17,9 +17,12 @@ from hdg.graph_model import (
     validate_delivery_graph,
 )
 from hdg.loop_contracts import (
+    loop_completion_policy,
+    loop_execution_policy,
     validate_loop_descriptor,
     validate_loop_outcome,
 )
+from hdg.review_contracts import validate_review_result_contract
 from hdg.model import (
     hierarchy_fingerprint,
     validate_hierarchy_definition,
@@ -298,6 +301,227 @@ class LoopContractTests(unittest.TestCase):
         with self.assertRaises(GatedLoopError):
             validate_loop_outcome(invalid)
 
+    def test_review_success_result_has_layer_specific_acceptance(self) -> None:
+        common = {
+            "validationDecision": {
+                "decision": "REUSED",
+                "reusedEvidenceRefs": [],
+                "executedEvidenceRefs": [],
+                "riskTriggers": [],
+                "rationale": "The accepted evidence is current and sufficient.",
+            },
+            "reviewFindings": [],
+        }
+        task_result = {
+            **common,
+            "taskAcceptance": {
+                "acceptanceChecks": [
+                    {
+                        "acceptancePoint": "The frozen TASK contract is met.",
+                        "status": "SATISFIED",
+                        "evidenceRefs": ["task-targeted-tests"],
+                    }
+                ],
+                "localBehavior": "VERIFIED",
+                "publicContract": "NOT_APPLICABLE",
+                "targetedRegression": "VERIFIED",
+                "decision": "ACCEPTED",
+                "rationale": "Only the TASK-owned boundary was reviewed.",
+            },
+        }
+        group_result = {
+            **common,
+            "groupIntegration": {
+                "seams": [
+                    {
+                        "seam": "API to core handoff",
+                        "participants": ["t-api", "t-core"],
+                        "status": "VERIFIED",
+                        "evidenceRefs": ["group-contract-check"],
+                    }
+                ],
+                "decision": "INTEGRATED",
+                "rationale": "Only direct-child composition was reviewed.",
+            },
+        }
+        delivery_result = {
+            **common,
+            "deliveryReadiness": {
+                "requirementCoverage": [
+                    {
+                        "acceptancePoint": "The complete user flow is delivered.",
+                        "ownerRefs": ["g-service"],
+                        "status": "COVERED",
+                        "evidenceRefs": ["delivery-smoke"],
+                    }
+                ],
+                "integrationEvidence": "SUFFICIENT",
+                "operationalReadiness": "NOT_APPLICABLE",
+                "openBlockingRisks": [],
+                "acceptedRisks": [],
+                "decision": "READY_FOR_USER_CONFIRMATION",
+                "rationale": "Coverage and final evidence are complete.",
+            },
+        }
+
+        self.assertEqual(
+            validate_review_result_contract("TASK_REVIEW_LOOP", task_result),
+            task_result,
+        )
+        self.assertEqual(
+            validate_review_result_contract("GROUP_REVIEW_LOOP", group_result),
+            group_result,
+        )
+        self.assertEqual(
+            validate_review_result_contract(
+                "DELIVERY_REVIEW_LOOP",
+                delivery_result,
+            ),
+            delivery_result,
+        )
+        duplicated = dict(task_result)
+        duplicated["upstreamLoopResults"] = [
+            {"nodeId": "task:t-api", "outcome": {"result": {}}}
+        ]
+        with self.assertRaises(GatedLoopError) as caught:
+            validate_review_result_contract("TASK_REVIEW_LOOP", duplicated)
+        self.assertEqual(caught.exception.code, "LOOP_REVIEW_RESULT_INVALID")
+
+    def test_review_success_result_rejects_cross_layer_or_open_blockers(
+        self,
+    ) -> None:
+        invalid = {
+            "validationDecision": {
+                "decision": "TARGETED_RERUN",
+                "reusedEvidenceRefs": [],
+                "executedEvidenceRefs": ["review-check"],
+                "riskTriggers": ["A gap was found."],
+                "rationale": "A targeted check was executed.",
+            },
+            "reviewFindings": [
+                {
+                    "severity": "P1",
+                    "summary": "A blocking defect remains.",
+                    "status": "OPEN",
+                    "resolution": "Not resolved.",
+                    "evidence": "The failing check is still reproducible.",
+                }
+            ],
+            "deliveryReadiness": {
+                "requirementCoverage": [],
+                "integrationEvidence": "SUFFICIENT",
+                "operationalReadiness": "READY",
+                "openBlockingRisks": ["The P1 defect remains."],
+                "acceptedRisks": [],
+                "decision": "READY_FOR_USER_CONFIRMATION",
+                "rationale": "This result must not be accepted.",
+            },
+        }
+
+        with self.assertRaises(GatedLoopError) as caught:
+            validate_review_result_contract("DELIVERY_REVIEW_LOOP", invalid)
+        self.assertEqual(caught.exception.code, "LOOP_REVIEW_RESULT_INVALID")
+
+        with self.assertRaises(GatedLoopError) as caught:
+            validate_review_result_contract(
+                "GROUP_REVIEW_LOOP",
+                {
+                    "validationDecision": invalid["validationDecision"],
+                    "reviewFindings": [],
+                    "deliveryReadiness": invalid["deliveryReadiness"],
+                },
+            )
+        self.assertEqual(caught.exception.code, "LOOP_REVIEW_RESULT_INVALID")
+
+    def test_review_policies_assign_one_non_overlapping_boundary_per_layer(
+        self,
+    ) -> None:
+        execution_policy = loop_execution_policy()
+        self.assertEqual(
+            execution_policy["reviewTopology"],
+            "TASK_REVIEWS_OPTIONAL_GROUP_SEAM_REVIEWS_AND_DELIVERY_ACCEPTANCE",
+        )
+        self.assertEqual(
+            execution_policy["responsibilityBoundaries"],
+            {
+                "controller": {
+                    "owns": [
+                        "GRAPH_STATE_TRANSITIONS",
+                        "PREDECESSOR_SUCCESS_GATING",
+                        "RESULT_CONTRACT_VALIDATION",
+                        "EVENT_AND_PROJECTION_PERSISTENCE",
+                    ],
+                    "mustNotPerform": [
+                        "TECHNICAL_ACCEPTANCE",
+                        "EVIDENCE_SUFFICIENCY_JUDGMENT",
+                        "OPERATIONAL_READINESS_JUDGMENT",
+                    ],
+                },
+                "loopReceiver": {
+                    "owns": [
+                        "LOOP_EXECUTION",
+                        "LOOP_OWNED_JUDGMENT",
+                        "EVIDENCE_SELECTION_AND_VERIFICATION",
+                        "FINDING_CLOSURE",
+                    ],
+                    "mustNotPerform": [
+                        "GRAPH_READINESS_TRANSITION",
+                        "UPSTREAM_COMPLETION_GATING",
+                        "USER_CONFIRMATION",
+                    ],
+                },
+                "user": {
+                    "owns": ["FINAL_BUSINESS_CONFIRMATION"],
+                    "mustNotReplace": [
+                        "GRAPH_PRECONDITION_GATING",
+                        "DELIVERY_TECHNICAL_ACCEPTANCE",
+                    ],
+                },
+            },
+        )
+        expected = {
+            "TASK_REVIEW_LOOP": (
+                "TASK",
+                "taskAcceptance",
+                "GROUP_INTEGRATION",
+            ),
+            "GROUP_REVIEW_LOOP": (
+                "GROUP",
+                "groupIntegration",
+                "TASK_INTERNAL_IMPLEMENTATION",
+            ),
+            "DELIVERY_REVIEW_LOOP": (
+                "DELIVERY",
+                "deliveryReadiness",
+                "LOWER_LAYER_CODE_REREVIEW",
+            ),
+        }
+        for loop_kind, (layer, result_field, excluded) in expected.items():
+            with self.subTest(loop_kind=loop_kind):
+                boundary = loop_completion_policy(
+                    loop_kind=loop_kind,
+                )["reviewBoundary"]
+                self.assertEqual(boundary["layer"], layer)
+                self.assertEqual(
+                    boundary["requiredResultField"],
+                    result_field,
+                )
+                self.assertIn(excluded, boundary["mustNotRepeat"])
+                persistence = loop_completion_policy(
+                    loop_kind=loop_kind,
+                )["reviewResultPersistence"]
+                self.assertEqual(
+                    persistence["contractValidator"],
+                    "CONTROLLER",
+                )
+                self.assertEqual(
+                    persistence["acceptanceDecisionOwner"],
+                    "INDEPENDENT_LOOP_RECEIVER",
+                )
+                self.assertEqual(
+                    persistence["controllerValidationScope"],
+                    "STRUCTURE_AND_DECLARED_TERMINAL_CONSISTENCY_ONLY",
+                )
 
 class SchedulerGraphTests(unittest.TestCase):
     @staticmethod
@@ -424,16 +648,29 @@ class SchedulerGraphTests(unittest.TestCase):
             edges,
         )
 
-    def test_group_review_is_required(self) -> None:
+    def test_group_without_seam_review_uses_join_as_its_terminal(self) -> None:
         source = group_hierarchy()
         source["root"]["reviewLoop"] = None
 
-        with self.assertRaises(GatedLoopError) as caught:
-            self.compile(source)
-        self.assertEqual(
-            caught.exception.code,
-            "WORK_ITEM_GROUP_REVIEW_REQUIRED",
+        graph = self.compile(source)
+        edges = {
+            (item["source"], item["target"], item["kind"])
+            for item in graph["edges"]
+        }
+
+        self.assertNotIn(
+            group_review_node_id("g-service"),
+            {item["id"] for item in graph["nodes"]},
         )
+        self.assertIn(
+            (
+                join_node_id("g-service"),
+                review_node_id("d-service"),
+                "REQUIRES_SUCCESS",
+            ),
+            edges,
+        )
+        self.assertEqual(graph_summary(graph)["reviewLoops"], 3)
 
     def test_task_dependency_waits_for_configured_task_review(self) -> None:
         source = group_hierarchy()

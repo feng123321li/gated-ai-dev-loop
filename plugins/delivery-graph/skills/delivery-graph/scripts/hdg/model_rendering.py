@@ -181,7 +181,7 @@ PAYLOAD_FIELD_ORDER = MappingProxyType(
     }
 )
 UTC_PLUS_8 = timezone(timedelta(hours=8))
-PROJECTION_TEMPLATE_VERSION = 17
+PROJECTION_TEMPLATE_VERSION = 19
 WORK_ITEM_DIRECTORY = "work-items"
 WORKSPACE_OVERVIEW_PROJECTION_TEMPLATE = Template(
     """# 未归档交付调度与进度总览
@@ -212,8 +212,8 @@ ${delivery_status}
 | 投影 | 用途 |
 |---|---|
 | [需求基线](baseline.md) | 需求、层级、依赖、Loop 输入与 TASK baseline |
-| [执行进展](progress.md) | TASK、TASK Review、递归 GROUP Review 与 Delivery Review 的运行状态 |
-| [验收记录](acceptance.md) | 已知验收输入、执行结果、审查结果与用户确认 |
+| [执行进展](progress.md) | TASK、TASK Review、可选 GROUP seam Review 与 Delivery Acceptance/Readiness 的运行状态 |
+| [验收记录](acceptance.md) | 各层有界验收结论、证据引用与用户确认 |
 | [修订历史](revisions.md) | 同一 Delivery 的历次冻结范围、授权与运行状态 |
 
 实现规范、测试、门禁与 Skill 激活由各 Loop 内部负责。SQLite 是需求与
@@ -257,7 +257,7 @@ ${checklist_rows}
 Delivery 本文件只串联基线树，
 不重复聚合节点级输入。
 
-## Delivery 审查输入
+## Delivery Acceptance/Readiness 输入
 
 ${delivery_review_baseline}
 """
@@ -276,10 +276,10 @@ ${progress_monitor}
 ## TASK 执行进展
 
 ${task_progress}
-## GROUP 协调与审查进展
+## GROUP 协调与 seam 验收进展
 
 ${group_progress}
-## Delivery 审查进展
+## Delivery Acceptance/Readiness 进展
 
 ${delivery_review_progress}
 """
@@ -291,10 +291,16 @@ ACCEPTANCE_PROJECTION_TEMPLATE = Template(
 
 ${acceptance_status}
 
+## 职责边界
+
+- Controller：Graph 门禁、结果契约校验与持久化；不做技术验收。
+- Delivery receiver：顶层技术验收与运行准备度判断；不重验每个下层 Loop。
+- 用户：最终业务确认。
+
 ## 根工作项验收
 
 ${root_acceptance}
-## Delivery 审查验收
+## Delivery 最终技术验收与交付准备度
 
 ${delivery_acceptance}
 ## 最终用户确认
@@ -1567,9 +1573,12 @@ def render_group_baseline(
         ),
         child_rows="\n".join(child_rows),
         review_section=_render_loop_baseline(
-            "GROUP Review Loop",
+            "GROUP seam Review Loop",
             loop,
             heading_level=2,
+            absent_message=(
+                "未配置独立 GROUP seam Review；GROUP 完成点是本节点终态。"
+            ),
         ),
         skill_hints=rendered_hints,
     )
@@ -1667,7 +1676,11 @@ def _work_item_terminal_node_id(node: dict[str, Any]) -> str:
             if node["reviewLoop"] is not None
             else loop_node_id(definition["id"])
         )
-    return group_review_node_id(definition["id"])
+    return (
+        group_review_node_id(definition["id"])
+        if node["reviewLoop"] is not None
+        else join_node_id(definition["id"])
+    )
 
 
 def _projection_state_values(
@@ -1798,6 +1811,7 @@ def _render_loop_baseline(
     loop: dict[str, Any] | None,
     *,
     heading_level: int,
+    absent_message: str = "LIGHT 保障档不创建此独立 Review Loop。",
 ) -> str:
     heading = "#" * max(1, min(heading_level, 6))
     if loop is None:
@@ -1805,7 +1819,7 @@ def _render_loop_baseline(
             [
                 f"{heading} {label}",
                 "",
-                "- LIGHT 保障档不创建此独立 Review Loop。",
+                f"- {absent_message}",
             ]
         )
     payload_level = max(1, min(heading_level + 2, 6))
@@ -2051,7 +2065,7 @@ def render_delivery_baseline(
             + " |"
         )
     delivery_review = _render_loop_baseline(
-        "交付审查 Loop",
+        "Delivery Acceptance/Readiness Loop",
         hierarchy["delivery"]["reviewLoop"],
         heading_level=3,
     )
@@ -2183,9 +2197,13 @@ def render_manual_handoff(
                     ),
                     "",
                     _render_loop_baseline(
-                        "GROUP Review Loop",
+                        "GROUP seam Review Loop",
                         node["reviewLoop"],
                         heading_level=4,
+                        absent_message=(
+                            "未配置独立 GROUP seam Review；"
+                            "GROUP 完成点是本节点终态。"
+                        ),
                     ),
                     "",
                 ]
@@ -2259,10 +2277,10 @@ def render_manual_handoff(
             "## GROUP/TASK 开发输入",
             "",
             *item_details,
-            "## Delivery Review 输入",
+            "## Delivery Acceptance/Readiness 输入",
             "",
             _render_loop_baseline(
-                "Delivery Review Loop",
+                "Delivery Acceptance/Readiness Loop",
                 delivery["reviewLoop"],
                 heading_level=3,
             ),
@@ -2287,9 +2305,10 @@ def render_manual_handoff(
             "6. 总协调上下文只消费 frontier。每个 CLAIM_MANUAL_TASK 在独立接收"
             "上下文中以 dispatch_mode=MANUAL claim，随后 heartbeat、上报进度、"
             "完成实现与验证并提交标准结果。",
-            "7. TASK 成功后继续消费 frontier；TASK Review、各层 GROUP Review 和"
-            "Delivery Review 必须使用与自动执行相同的宿主原生自动派遣、独立上下文、"
-            "问题分级闭环和验证协议，全部成功后等待真实用户确认。",
+            "7. TASK 成功后继续消费 frontier；TASK Review、已配置的 GROUP seam "
+            "Review 和 Delivery Acceptance/Readiness 必须使用与自动执行相同的宿主"
+            "原生自动派遣、独立上下文、问题分级闭环和验证协议，全部成功后等待"
+            "真实用户确认。",
             "8. progress、acceptance 和 work-items 均由控制器事件投影刷新；不得"
             "直接编辑，不得用手动记录替代任何 Review Loop。",
             "9. 若需求范围发生变化，停止使用旧快照并回到需求会话重新生成；"
@@ -2377,14 +2396,15 @@ def render_delivery_progress(
                 suffix=[progress_link],
             )
         )
-        group_rows.append(
-            _progress_state_row(
-                states,
-                group_review_node_id(definition["id"]),
-                prefix=[path, "GROUP Review"],
-                suffix=[progress_link],
+        if node["reviewLoop"] is not None:
+            group_rows.append(
+                _progress_state_row(
+                    states,
+                    group_review_node_id(definition["id"]),
+                    prefix=[path, "GROUP seam Review"],
+                    suffix=[progress_link],
+                )
             )
-        )
     table_header = (
         "| 层级路径 | 阶段 | 当前进度 | 执行代理 | 宿主观测模型 | "
         "认领身份 | 执行轮次 | "
@@ -2400,7 +2420,7 @@ def render_delivery_progress(
             + " | ".join(
                 [
                     _markdown_text(hierarchy["delivery"]["id"]),
-                    "LIGHT：不创建独立 Delivery Review",
+                    "LIGHT：不创建 Delivery Acceptance/Readiness",
                     "不适用",
                     "不适用",
                     "不适用",
@@ -2420,7 +2440,7 @@ def render_delivery_progress(
                 review_node_id(hierarchy["delivery"]["id"]),
                 prefix=[
                     hierarchy["delivery"]["id"],
-                    "Delivery Review",
+                    "Delivery Acceptance/Readiness",
                 ],
                 suffix=["[查看验收](acceptance.md)"],
             )
@@ -2675,6 +2695,158 @@ def _render_task_workspace_changes_patch(
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _review_boundary_result_lines(result: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    task = result.pop("taskAcceptance", None)
+    if isinstance(task, dict):
+        lines.extend(
+            [
+                "#### TASK 验收结论",
+                "",
+                "| 验收点 | 状态 | 证据引用 |",
+                "|---|---|---|",
+            ]
+        )
+        for item in task.get("acceptanceChecks", []):
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                _table_row(
+                    [
+                        item.get("acceptancePoint", "未声明"),
+                        item.get("status", "未声明"),
+                        "、".join(item.get("evidenceRefs", [])) or "无",
+                    ]
+                )
+            )
+        lines.extend(
+            [
+                "",
+                f"- 局部行为：{_markdown_text(task.get('localBehavior', '未声明'))}",
+                f"- 公共契约：{_markdown_text(task.get('publicContract', '未声明'))}",
+                f"- 定向回归：{_markdown_text(task.get('targetedRegression', '未声明'))}",
+                f"- 结论：{_markdown_text(task.get('decision', '未声明'))}",
+                f"- 理由：{_markdown_text(task.get('rationale', '未声明'))}",
+            ]
+        )
+    group = result.pop("groupIntegration", None)
+    if isinstance(group, dict):
+        lines.extend(
+            [
+                "#### GROUP seam 验收结论",
+                "",
+                "| seam | 直接参与方 | 状态 | 证据引用 |",
+                "|---|---|---|---|",
+            ]
+        )
+        for item in group.get("seams", []):
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                _table_row(
+                    [
+                        item.get("seam", "未声明"),
+                        "、".join(item.get("participants", [])) or "无",
+                        item.get("status", "未声明"),
+                        "、".join(item.get("evidenceRefs", [])) or "无",
+                    ]
+                )
+            )
+        lines.extend(
+            [
+                "",
+                f"- 结论：{_markdown_text(group.get('decision', '未声明'))}",
+                f"- 理由：{_markdown_text(group.get('rationale', '未声明'))}",
+            ]
+        )
+    readiness = result.pop("deliveryReadiness", None)
+    if isinstance(readiness, dict):
+        lines.extend(
+            [
+                "#### Delivery Acceptance/Readiness 结论",
+                "",
+                "| 顶层验收点 | 责任节点 | 状态 | 证据引用 |",
+                "|---|---|---|---|",
+            ]
+        )
+        for item in readiness.get("requirementCoverage", []):
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                _table_row(
+                    [
+                        item.get("acceptancePoint", "未声明"),
+                        "、".join(item.get("ownerRefs", [])) or "无",
+                        item.get("status", "未声明"),
+                        "、".join(item.get("evidenceRefs", [])) or "无",
+                    ]
+                )
+            )
+        accepted_risks = readiness.get("acceptedRisks", [])
+        lines.extend(
+            [
+                "",
+                "- 整体集成证据："
+                + _markdown_text(
+                    readiness.get("integrationEvidence", "未声明")
+                ),
+                "- 运行准备度："
+                + _markdown_text(
+                    readiness.get("operationalReadiness", "未声明")
+                ),
+                "- 阻断风险：无",
+                "- 已接受风险："
+                + (
+                    "、".join(_markdown_text(item) for item in accepted_risks)
+                    if isinstance(accepted_risks, list) and accepted_risks
+                    else "无"
+                ),
+                f"- 结论：{_markdown_text(readiness.get('decision', '未声明'))}",
+                f"- 理由：{_markdown_text(readiness.get('rationale', '未声明'))}",
+            ]
+        )
+    validation = result.pop("validationDecision", None)
+    if isinstance(validation, dict):
+        reused = validation.get("reusedEvidenceRefs", [])
+        reused_labels = [
+            (
+                f"{item.get('nodeId', '?')}@{item.get('attempt', '?')}:"
+                f"{item.get('evidenceId', '?')}"
+            )
+            for item in reused
+            if isinstance(item, dict)
+        ]
+        executed = validation.get("executedEvidenceRefs", [])
+        triggers = validation.get("riskTriggers", [])
+        lines.extend(
+            [
+                "",
+                "#### 验证决策",
+                "",
+                f"- 决策：{_markdown_text(validation.get('decision', '未声明'))}",
+                "- 复用证据："
+                + (
+                    "、".join(_markdown_text(item) for item in reused_labels)
+                    or "无"
+                ),
+                "- 新执行证据："
+                + (
+                    "、".join(_markdown_text(item) for item in executed)
+                    if isinstance(executed, list) and executed
+                    else "无"
+                ),
+                "- 风险触发："
+                + (
+                    "、".join(_markdown_text(item) for item in triggers)
+                    if isinstance(triggers, list) and triggers
+                    else "无"
+                ),
+                f"- 理由：{_markdown_text(validation.get('rationale', '未声明'))}",
+            ]
+        )
+    return lines
+
+
 def _acceptance_result_lines(
     states: dict[str, dict[str, Any]],
     node_id: str,
@@ -2694,6 +2866,9 @@ def _acceptance_result_lines(
             ]
         )
         result_payload.pop("reviewFindings", None)
+    boundary_lines = _review_boundary_result_lines(result_payload)
+    if boundary_lines:
+        lines.extend(["", *boundary_lines])
     workspace_change_lines = _workspace_change_lines(result_payload)
     result_payload.pop("workspaceChanges", None)
     if workspace_change_lines:
@@ -2825,23 +3000,23 @@ def render_delivery_acceptance(
     delivery = hierarchy["delivery"]
     if delivery["reviewLoop"] is None:
         delivery_lines = [
-            "### Delivery Review",
+            "### Delivery Acceptance/Readiness",
             "",
-            "- LIGHT 保障档不创建 Delivery Review Loop；TASK 定向验证"
+            "- LIGHT 保障档不创建 Delivery Acceptance/Readiness；TASK 定向验证"
             "完成后直接进入用户确认。",
         ]
     else:
         delivery_lines = [
-            "### Delivery Review",
+            "### Delivery Acceptance/Readiness",
             "",
-            "#### 审查输入",
+            "#### 验收与准备度输入",
             "",
             _render_payload_markdown(
                 delivery["reviewLoop"]["payload"],
                 heading_level=5,
             ),
             "",
-            "#### 审查结果",
+            "#### 验收与准备度结果",
             "",
             *_acceptance_result_lines(
                 states,
@@ -2953,6 +3128,21 @@ def render_work_item_progress(
                     raw_indices={5},
                 )
             )
+        group_stage_rows = [
+            _progress_state_row(
+                states,
+                join_node_id(definition["id"]),
+                prefix=["GROUP 完成点"],
+            )
+        ]
+        if node["reviewLoop"] is not None:
+            group_stage_rows.append(
+                _progress_state_row(
+                    states,
+                    group_review_node_id(definition["id"]),
+                    prefix=["GROUP seam Review"],
+                )
+            )
         sections = "\n".join(
             [
                 "## 直接子节点进展",
@@ -2968,16 +3158,7 @@ def render_work_item_progress(
                 "",
                 progress_header,
                 progress_separator,
-                _progress_state_row(
-                    states,
-                    join_node_id(definition["id"]),
-                    prefix=["GROUP 完成点"],
-                ),
-                _progress_state_row(
-                    states,
-                    group_review_node_id(definition["id"]),
-                    prefix=["GROUP Review"],
-                ),
+                *group_stage_rows,
             ]
         )
     return WORK_ITEM_PROGRESS_PROJECTION_TEMPLATE.substitute(
@@ -3116,24 +3297,31 @@ def render_work_item_acceptance(
             ),
             "",
         ]
-        group_sections.extend(
-            [
-                "## GROUP Review 输入",
-                "",
-                _render_payload_markdown(
-                    node["reviewLoop"]["payload"],
-                    heading_level=3,
-                ),
-                "",
-                "## GROUP Review 结果与证据",
-                "",
-                *_acceptance_result_lines(
-                    states,
-                    group_review_node_id(definition["id"]),
-                    include_review_findings=True,
-                ),
-            ]
-        )
+        if node["reviewLoop"] is None:
+            group_sections.extend(
+                [
+                    "- 本层没有独立 seam 验收边界；GROUP 完成点即本 GROUP 终态。",
+                ]
+            )
+        else:
+            group_sections.extend(
+                [
+                    "## GROUP seam Review 输入",
+                    "",
+                    _render_payload_markdown(
+                        node["reviewLoop"]["payload"],
+                        heading_level=3,
+                    ),
+                    "",
+                    "## GROUP seam Review 结果与证据",
+                    "",
+                    *_acceptance_result_lines(
+                        states,
+                        group_review_node_id(definition["id"]),
+                        include_review_findings=True,
+                    ),
+                ]
+            )
         sections = "\n".join(group_sections)
     return WORK_ITEM_ACCEPTANCE_PROJECTION_TEMPLATE.substitute(
         kind_text=KIND_TEXT[definition["kind"]],

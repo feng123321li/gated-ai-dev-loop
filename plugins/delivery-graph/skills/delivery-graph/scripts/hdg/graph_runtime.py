@@ -50,6 +50,7 @@ from .repository import (
     _validated_stored_definition,
     timestamp,
 )
+from .review_contracts import validate_review_result_contract
 from .progress_reporting import (
     PROGRESS_PHASE_TEXT,
     attach_progress_monitor,
@@ -3077,6 +3078,16 @@ def record_loop_result(
             fail(
                 "SCHEDULER_OPERATION_INVALID",
                 "Loop does not have the supplied active operation",
+            )
+        if (
+            normalized["status"] == "SUCCEEDED"
+            and definition["kind"].endswith("_REVIEW_LOOP")
+        ):
+            # The Controller checks only the receiver-declared result contract;
+            # the independent receiver owns the technical acceptance judgment.
+            normalized["result"] = validate_review_result_contract(
+                definition["kind"],
+                normalized["result"],
             )
         scheduler_status = state_by_status[normalized["status"]]
         effective_failure = (

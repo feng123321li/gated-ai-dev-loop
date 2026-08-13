@@ -19,6 +19,7 @@ from hdg.errors import GatedLoopError
 from hdg.graph_frontier import get_graph_frontier
 from hdg.graph_model import (
     group_review_node_id,
+    join_node_id,
     loop_node_id,
     review_node_id,
     task_review_node_id,
@@ -108,6 +109,82 @@ def success(summary: str = "Loop completed.") -> dict:
         "summary": summary,
         "result": {"evidence": "opaque-to-scheduler"},
     }
+
+
+def review_success(
+    loop_kind: str,
+    summary: str = "Review completed.",
+    *,
+    findings: list[dict] | None = None,
+) -> dict:
+    result = {
+        "validationDecision": {
+            "decision": "TARGETED_RERUN",
+            "reusedEvidenceRefs": [],
+            "executedEvidenceRefs": ["review-boundary-check"],
+            "riskTriggers": ["Independent review boundary."],
+            "rationale": "The layer-owned acceptance boundary was checked.",
+        },
+        "reviewFindings": findings or [],
+    }
+    if loop_kind == "TASK_REVIEW_LOOP":
+        result["taskAcceptance"] = {
+            "acceptanceChecks": [
+                {
+                    "acceptancePoint": "The frozen TASK contract is met.",
+                    "status": "SATISFIED",
+                    "evidenceRefs": ["review-boundary-check"],
+                }
+            ],
+            "localBehavior": "VERIFIED",
+            "publicContract": "NOT_APPLICABLE",
+            "targetedRegression": "VERIFIED",
+            "decision": "ACCEPTED",
+            "rationale": "The TASK-owned behavior is accepted.",
+        }
+    elif loop_kind == "GROUP_REVIEW_LOOP":
+        result["groupIntegration"] = {
+            "seams": [
+                {
+                    "seam": "Direct-child integration boundary",
+                    "participants": ["child-a", "child-b"],
+                    "status": "VERIFIED",
+                    "evidenceRefs": ["review-boundary-check"],
+                }
+            ],
+            "decision": "INTEGRATED",
+            "rationale": "Only direct-child composition was reviewed.",
+        }
+    elif loop_kind == "DELIVERY_REVIEW_LOOP":
+        result["deliveryReadiness"] = {
+            "requirementCoverage": [
+                {
+                    "acceptancePoint": "The Delivery acceptance is complete.",
+                    "ownerRefs": ["root-work-item"],
+                    "status": "COVERED",
+                    "evidenceRefs": ["review-boundary-check"],
+                }
+            ],
+            "integrationEvidence": "SUFFICIENT",
+            "operationalReadiness": "NOT_APPLICABLE",
+            "openBlockingRisks": [],
+            "acceptedRisks": [],
+            "decision": "READY_FOR_USER_CONFIRMATION",
+            "rationale": "The Delivery is ready for final user confirmation.",
+        }
+    else:
+        raise ValueError(f"Unsupported Review Loop kind: {loop_kind}")
+    return {"status": "SUCCEEDED", "summary": summary, "result": result}
+
+
+def success_for_node(node_id: str, summary: str) -> dict:
+    if node_id.startswith("review:task:"):
+        return review_success("TASK_REVIEW_LOOP", summary)
+    if node_id.startswith("review:group:"):
+        return review_success("GROUP_REVIEW_LOOP", summary)
+    if node_id.startswith("review:delivery:"):
+        return review_success("DELIVERY_REVIEW_LOOP", summary)
+    return success(summary)
 
 
 def parallel_hierarchy() -> dict:
@@ -812,7 +889,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 root_id=root_id,
                 node_id=node_id,
                 operation_id=operation_id,
-                outcome=success(f"{node_id} completed."),
+                outcome=success_for_node(node_id, f"{node_id} completed."),
                 now=at(index * 2 + 1),
             )
         return record_user_confirmation(
@@ -1297,7 +1374,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertIn(handoff["manualHandoff"]["path"], receiver_prompt)
         self.assertIn("完整读取", receiver_prompt)
         self.assertIn("start_manual_handoff", receiver_prompt)
-        self.assertIn("TASK/GROUP/Delivery Review", receiver_prompt)
+        self.assertIn(
+            "GROUP seam Review 和 Delivery Acceptance/Readiness",
+            receiver_prompt,
+        )
         self.assertIn("不要重新规划", receiver_prompt)
 
         handoff_root = Path(
@@ -1381,7 +1461,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
             "需求内容快照已冻结",
             "切换到任意 CLI",
             "start_manual_handoff",
-            "TASK Review、各层 GROUP Review",
+            "TASK Review、已配置的 GROUP seam Review",
             '"id": "d-second"',
         ):
             with self.subTest(expected=expected):
@@ -1557,11 +1637,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
                         operation_id=operation_id,
                         now=at(index),
                     )
-                    outcome = {
-                        "status": "SUCCEEDED",
-                        "summary": "Independent Review completed.",
-                        "result": {"reviewFindings": []},
-                    }
+                    outcome = success_for_node(
+                        node_id,
+                        "Independent Review completed.",
+                    )
                 record_loop_result(
                     root=self.root,
                     root_id=handoff["rootId"],
@@ -2513,7 +2592,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
             root_id=root_id,
             node_id="review:task:t-service",
             operation_id="op-task-review-1",
-            outcome=success("Task review completed."),
+            outcome=review_success(
+                "TASK_REVIEW_LOOP",
+                "Task review completed.",
+            ),
             now=at(7),
         )
 
@@ -2539,7 +2621,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
             root_id=root_id,
             node_id=review_node_id(root_id),
             operation_id="op-review-1",
-            outcome=success("Independent review completed."),
+            outcome=review_success(
+                "DELIVERY_REVIEW_LOOP",
+                "Independent review completed.",
+            ),
             now=at(10),
         )
 
@@ -2605,8 +2690,29 @@ class SchedulerRuntimeTests(unittest.TestCase):
         )
         self.assertNotIn("agent-1", completed_overview)
         self.assertIn("| 已成功 | reviewer-1 | 1 |", completed_overview)
-        self.assertIn("opaque-to-scheduler", completed_overview)
+        self.assertIn(
+            "#### Delivery Acceptance/Readiness 结论",
+            completed_overview,
+        )
+        self.assertIn("READY\\_FOR\\_USER\\_CONFIRMATION", completed_overview)
+        self.assertNotIn("deliveryReadiness", completed_overview)
+        self.assertNotIn("taskAcceptance", completed_overview)
+        self.assertNotIn("upstreamLoopResults", completed_overview)
         self.assertNotIn("SUCCEEDED", completed_overview)
+        with sqlite3.connect(
+            Path(self.root) / ".layered-delivery" / "scheduler.db"
+        ) as connection:
+            row = connection.execute(
+                "SELECT outcome_json FROM node_runs "
+                "WHERE run_id = ? AND node_id = ?",
+                (terminal_after["runId"], review_node_id(root_id)),
+            ).fetchone()
+        self.assertIsNotNone(row)
+        stored_delivery_result = json.loads(row[0])["result"]
+        self.assertIn("deliveryReadiness", stored_delivery_result)
+        self.assertNotIn("upstreamLoopResults", stored_delivery_result)
+        self.assertNotIn("taskAcceptance", stored_delivery_result)
+        self.assertNotIn("groupIntegration", stored_delivery_result)
         task_acceptance = (
             Path(self.root)
             / ".layered-delivery"
@@ -3047,12 +3153,28 @@ class SchedulerRuntimeTests(unittest.TestCase):
             operation_id="op-task-review",
             now=at(5),
         )
+        with self.assertRaises(GatedLoopError) as caught:
+            record_loop_result(
+                root=self.root,
+                root_id=root_id,
+                node_id=task_review_id,
+                operation_id="op-task-review",
+                outcome=success("Unscoped review result."),
+                now=at(6),
+            )
+        self.assertEqual(
+            caught.exception.code,
+            "LOOP_REVIEW_RESULT_INVALID",
+        )
         record_loop_result(
             root=self.root,
             root_id=root_id,
             node_id=task_review_id,
             operation_id="op-task-review",
-            outcome=success("Task review completed."),
+            outcome=review_success(
+                "TASK_REVIEW_LOOP",
+                "Task review completed.",
+            ),
             now=at(6),
         )
 
@@ -3076,19 +3198,73 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertIn("TASK Review", progress)
         self.assertIn("Task review completed.", acceptance)
 
-    def test_group_without_review_is_rejected_before_prepare(self) -> None:
+    def test_group_without_seam_review_prepares_join_as_terminal(self) -> None:
         hierarchy = group_hierarchy()
         hierarchy["root"]["reviewLoop"] = None
-        with self.assertRaises(GatedLoopError) as caught:
-            prepare_hierarchy(
-                root=self.root,
-                hierarchy=hierarchy,
-                now=at(0),
-            )
-        self.assertEqual(
-            caught.exception.code,
-            "WORK_ITEM_GROUP_REVIEW_REQUIRED",
+        prepared = self.prepare_and_freeze(hierarchy)
+
+        graph = SchedulerRepository(self.root).hierarchy(
+            prepared["rootId"]
+        )["graph"]
+        self.assertNotIn(
+            group_review_node_id("g-service"),
+            {item["id"] for item in graph["nodes"]},
         )
+        self.assertIn(
+            (
+                join_node_id("g-service"),
+                review_node_id(prepared["rootId"]),
+            ),
+            {
+                (edge["source"], edge["target"])
+                for edge in graph["edges"]
+            },
+        )
+        get_graph_frontier(
+            root=self.root,
+            root_id=prepared["rootId"],
+            now=at(2),
+        )
+        run = SchedulerRepository(self.root).run(prepared["rootId"])
+        self.assertNotIn(
+            group_review_node_id("g-service"),
+            {item["nodeId"] for item in run["nodes"]},
+        )
+        with sqlite3.connect(
+            Path(self.root, ".layered-delivery", "scheduler.db")
+        ) as connection:
+            stored_review_rows = connection.execute(
+                "SELECT COUNT(*) FROM node_runs "
+                "WHERE run_id = ? AND node_id = ?",
+                (run["runId"], group_review_node_id("g-service")),
+            ).fetchone()[0]
+        self.assertEqual(stored_review_rows, 0)
+        self.assertFalse(
+            any(
+                event["nodeId"] == group_review_node_id("g-service")
+                for event in graph_events(
+                    root=self.root,
+                    root_id=prepared["rootId"],
+                )["events"]
+            )
+        )
+        group_root = (
+            Path(self.root)
+            / ".layered-delivery"
+            / prepared["rootId"]
+            / WORK_ITEM_DIRECTORY
+            / "g-service"
+        )
+        baseline = (group_root / "baseline.md").read_text(encoding="utf-8")
+        progress = (group_root / "progress.md").read_text(encoding="utf-8")
+        acceptance = (group_root / "acceptance.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("GROUP 完成点是本节点终态", baseline)
+        self.assertNotIn("| GROUP seam Review |", progress)
+        self.assertIn("GROUP 完成点即本 GROUP 终态", acceptance)
+        self.assertNotIn("GROUP seam Review 输入", acceptance)
+        self.assertNotIn("GROUP seam Review 结果", acceptance)
 
     def test_task_and_review_select_shared_skill_hints_at_runtime(
         self,
@@ -3170,7 +3346,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 root_id=root_id,
                 node_id=review_id,
                 operation_id=review_operation,
-                outcome=success(f"{item_id} review completed."),
+                outcome=review_success(
+                    "TASK_REVIEW_LOOP",
+                    f"{item_id} review completed.",
+                ),
                 now=at(minute + 3),
             )
 
@@ -3189,7 +3368,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
             root_id=root_id,
             node_id=group_review_id,
             operation_id="op-group-review",
-            outcome=success("g-service review completed."),
+            outcome=review_success(
+                "GROUP_REVIEW_LOOP",
+                "g-service review completed.",
+            ),
             now=at(11),
         )
 
@@ -3259,7 +3441,7 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 root_id=root_id,
                 node_id=node_id,
                 operation_id=operation_id,
-                outcome=success(f"{node_id} completed."),
+                outcome=success_for_node(node_id, f"{node_id} completed."),
                 now=at(minute + 1),
             )
             minute += 2
@@ -3364,11 +3546,27 @@ class SchedulerRuntimeTests(unittest.TestCase):
         root_id = prepared["rootId"]
         node_id = loop_node_id("t-service")
         policy = loop_execution_policy()
+        responsibility_boundaries = policy["responsibilityBoundaries"]
+        self.assertIn(
+            "TECHNICAL_ACCEPTANCE",
+            responsibility_boundaries["controller"]["mustNotPerform"],
+        )
         self.assertEqual(
-            policy,
+            responsibility_boundaries["user"]["owns"],
+            ["FINAL_BUSINESS_CONFIRMATION"],
+        )
+        self.assertEqual(
+            {
+                key: value
+                for key, value in policy.items()
+                if key != "responsibilityBoundaries"
+            },
             {
                 "assuranceProfile": "STANDARD",
-                "reviewTopology": "TASK_GROUP_AND_DELIVERY_REVIEWS",
+                "reviewTopology": (
+                    "TASK_REVIEWS_OPTIONAL_GROUP_SEAM_REVIEWS_AND_"
+                    "DELIVERY_ACCEPTANCE"
+                ),
                 "contextIsolation": "REQUIRED",
                 "dispatch": {
                     "preferredExecutor": "HOST_NATIVE_AGENT",
@@ -3812,7 +4010,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
             / root_id
             / "acceptance.md"
         ).read_text(encoding="utf-8")
-        self.assertIn("LIGHT 保障档不创建 Delivery Review Loop", acceptance)
+        self.assertIn(
+            "LIGHT 保障档不创建 Delivery Acceptance/Readiness",
+            acceptance,
+        )
 
     def test_rate_limited_loop_waits_until_reset_then_redispatches(
         self,
@@ -4649,7 +4850,10 @@ class SchedulerRuntimeTests(unittest.TestCase):
                 root_id=root_id,
                 node_id=task_review_id,
                 operation_id=task_review_operation,
-                outcome=success(f"{item_id} task review completed."),
+                outcome=review_success(
+                    "TASK_REVIEW_LOOP",
+                    f"{item_id} task review completed.",
+                ),
                 now=at(minute + 3),
             )
 
@@ -4668,36 +4872,33 @@ class SchedulerRuntimeTests(unittest.TestCase):
             root_id=root_id,
             node_id=review_id,
             operation_id="op-review-severity",
-            outcome={
-                "status": "SUCCEEDED",
-                "summary": "P0/P1 已修复，P2 已记录。",
-                "result": {
-                    "reviewFindings": [
-                        {
-                            "severity": "P0",
-                            "summary": "关键数据可能丢失",
-                            "status": "RESOLVED",
-                            "resolution": "修复字段映射并完成回归。",
-                            "evidence": "数据链路测试通过",
-                        },
-                        {
-                            "severity": "P1",
-                            "summary": "异常分支缺少覆盖",
-                            "status": "RESOLVED",
-                            "resolution": "补充异常测试并复审。",
-                            "evidence": "新增测试通过",
-                        },
-                        {
-                            "severity": "P2",
-                            "summary": "导出任务日志不足",
-                            "status": "ACCEPTED",
-                            "resolution": "作为非阻断改进项保留。",
-                            "evidence": "不影响本次验收",
-                        },
-                    ],
-                    "verification": {"tests": "passed"},
-                },
-            },
+            outcome=review_success(
+                "GROUP_REVIEW_LOOP",
+                "P0/P1 已修复，P2 已记录。",
+                findings=[
+                    {
+                        "severity": "P0",
+                        "summary": "关键数据可能丢失",
+                        "status": "RESOLVED",
+                        "resolution": "修复字段映射并完成回归。",
+                        "evidence": "数据链路测试通过",
+                    },
+                    {
+                        "severity": "P1",
+                        "summary": "异常分支缺少覆盖",
+                        "status": "RESOLVED",
+                        "resolution": "补充异常测试并复审。",
+                        "evidence": "新增测试通过",
+                    },
+                    {
+                        "severity": "P2",
+                        "summary": "导出任务日志不足",
+                        "status": "ACCEPTED",
+                        "resolution": "作为非阻断改进项保留。",
+                        "evidence": "不影响本次验收",
+                    },
+                ],
+            ),
             now=at(11),
         )
 
@@ -6069,6 +6270,16 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertNotIn("Deliver one observable result.", progress)
 
         self.assertIn("# 交付验收记录", acceptance)
+        self.assertIn("## 职责边界", acceptance)
+        self.assertIn(
+            "Controller：Graph 门禁、结果契约校验与持久化",
+            acceptance,
+        )
+        self.assertIn(
+            "Delivery receiver：顶层技术验收与运行准备度判断",
+            acceptance,
+        )
+        self.assertIn("用户：最终业务确认", acceptance)
         self.assertIn(
             (
                 "| 当前进度 | 认领身份 | 执行轮次 | "
@@ -7318,13 +7529,13 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     ).replace("/children/", "/")
                 elif node_id.startswith("review:group:"):
                     item_id = node_id.removeprefix("review:group:")
-                    stage = "GROUP Review"
+                    stage = "GROUP seam Review"
                     path = item_paths[item_id].removeprefix(
                         f"{WORK_ITEM_DIRECTORY}/"
                     ).replace("/children/", "/")
                 else:
                     path = hierarchy["delivery"]["id"]
-                    stage = "Delivery Review"
+                    stage = "Delivery Acceptance/Readiness"
                 self.assertIn(
                     (
                         f"| {path} | {stage} | {status} | "

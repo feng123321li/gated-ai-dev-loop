@@ -4,7 +4,7 @@
 
 `delivery-graph` 把已经确认的软件需求冻结为可执行、可审查、可恢复的 Delivery Graph，再协调宿主原生 Agent 完成实现、分层 Review 和最终验收。
 
-当前版本：**0.39.17** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
+当前版本：**0.39.18** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
 
 ## 它做什么
 
@@ -44,7 +44,7 @@ Delivery
 ```
 
 - `TASK` 是唯一执行叶子。
-- `GROUP` 只在存在真实的并行汇合、依赖边界或分层 Review 时使用。
+- `GROUP` 只在存在真实的并行汇合或依赖边界时使用；仅当直接子项存在真实 seam 才配置 GROUP Review。
 - 无依赖且 `resourceClaims` 不冲突的节点可以并发。
 - Frozen Graph 固定目标、依赖、资源、项目范围和验收边界，不固定 Loop 内部实现计划。
 
@@ -53,7 +53,7 @@ Delivery
 | 保障档 | 适用范围 | 验证路径 |
 |---|---|---|
 | `LIGHT` | 单一根 TASK、局部内部改动，且不触及接口、数据、权限、安全、生产部署或不可逆副作用 | TASK 定向验证 → 用户验收 |
-| `STANDARD` | 默认选择；跨模块、并行、依赖复杂或影响无法可靠排除 | TASK Review → 逐层 GROUP Review → Delivery Review → 用户验收 |
+| `STANDARD` | 默认选择；跨模块、并行、依赖复杂或影响无法可靠排除 | TASK Review → 可选 GROUP seam Review → Delivery Acceptance/Readiness → 用户确认 |
 
 `LIGHT` 必须附带基于真实代码和 diff 的理由。执行中发现影响扩大时，同一 Delivery 创建新的 `STANDARD` Revision，不降低既有 Review 要求。
 
@@ -100,7 +100,9 @@ AUTOMATIC 的每个 READY TASK 与 Review 都先由 `plan_dispatch_batch` 生成
 
 后台 receiver 运行时不忙轮询：当前 frontier 的立即 action 全部消费后，宿主按 `progressMonitor.waitDirective` 使用原生完成事件等待；无事件只在 `pollNotBefore` 做一次只读 `graph_status`，该截止直接对齐首次心跳、进度陈旧、失联或租约等下一个有意义健康阈值，不再固定每 10 秒刷新。receiver 事件、`nextWakeAt` 或 `ADVANCE_REQUIRED` 才调用一次 `graph_frontier`。`changeFingerprint` 未变化时不重复播报相同进度。
 
-验证采用证据优先策略。TASK 只运行覆盖 `affectedScopes` 的测试/构建/契约检查；Controller 把 `verificationEvidence` 与终态 workspace 及声明的相关路径绑定。后续无关文件变化不会使该证据失效，相关路径变化才标为 `CHANGED`。TASK/GROUP/Delivery Review 保持独立判断，但只自动复用 `validationEvidenceIndex` 中 `PASSED + EXACT_MATCH` 的上游证据，再定向补齐缺口、`CHANGED/UNBOUND` 和高风险边界。只有影响范围无法界定、关键跨边界风险缺少隔离检查或冻结要求明确指定时才升级全量复跑。
+验证采用证据优先策略。TASK 只运行覆盖 `affectedScopes` 的测试/构建/契约检查；Controller 把 `verificationEvidence` 与终态 workspace 及声明的相关路径绑定。后续无关文件变化不会使该证据失效，相关路径变化才标为 `CHANGED`。TASK Review 只验本 TASK，已配置的 GROUP Review 只验直接子项 seam，Delivery Acceptance/Readiness 只验顶层覆盖、整体证据、运行准备度和全局风险；三层都只复用 `PASSED + EXACT_MATCH` 的上游证据，再定向补齐本层缺口。成功 Review outcome 不复制 `upstreamLoopResults` 或下层 result body；未配置的 GROUP Review 不生成 Graph 节点、SQLite run/event/outcome 或空投影段落。只有影响范围无法界定、关键跨边界风险缺少隔离检查或冻结要求明确指定时才升级全量复跑。
+
+职责严格分离：Controller 只根据 Graph 前驱终态做解锁/阻断，机械校验 receiver 提交的结果结构与声明终态一致性，并保存事件、SQLite outcome 和投影；它不判断需求是否覆盖、证据是否充分或是否具备运行准备度。独立 Review receiver 才负责当前层技术验收；Delivery receiver 每个 `STANDARD` Delivery 只执行一次顶层 Acceptance/Readiness，不逐个重验所有 Loop。真实用户只负责最终业务确认。`LIGHT` 没有独立 Review receiver，由唯一 TASK 的定向验证直接进入用户确认。
 
 Plugin 不注册生命周期 Hook，也没有 Hook trust 步骤。代价是 Controller 不再密码学证明真实宿主 session、parent-child 或 Review receiver 独立性；独立 child 由宿主编排协议保证，控制面只验证 Adapter/workspace、reservation/fingerprint 和 operation capability。
 

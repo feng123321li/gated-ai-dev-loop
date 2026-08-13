@@ -118,9 +118,9 @@ def _skill_hints_schema() -> dict[str, Any]:
         "items": _ref("skillHint"),
         "uniqueItems": True,
         "description": (
-            "Root-shared advisory Skill preferences. Every TASK, GROUP "
-            "Review, and Delivery Review Loop receives them at runtime and "
-            "selects only applicable hints."
+            "Root-shared advisory Skill preferences. Every TASK, configured "
+            "GROUP seam Review, and Delivery Acceptance/Readiness Loop "
+            "receives them at runtime and selects only applicable hints."
         ),
     }
 
@@ -502,7 +502,13 @@ def _group_node(*, root: bool) -> dict[str, Any]:
         "definition": _ref(
             "groupRootDefinition" if root else "groupChildDefinition"
         ),
-        "reviewLoop": _ref("loop"),
+        "reviewLoop": {
+            "oneOf": [_ref("loop"), {"type": "null"}],
+            "description": (
+                "Optional direct-child seam Review. Use null when the "
+                "GROUP is only a coordination or join boundary."
+            ),
+        },
         "children": {
             "type": "array",
             "items": {
@@ -600,6 +606,7 @@ def _group(
     children: list[dict[str, Any]],
     *,
     depends_on: list[str] | None = None,
+    review_boundary: bool = True,
 ) -> dict[str, Any]:
     return {
         "definition": {
@@ -619,9 +626,13 @@ def _group(
                 for child in children
             ],
         },
-        "reviewLoop": _loop(
-            "group/independent-review-loop@1",
-            f"Review the completed {item_id} GROUP boundary.",
+        "reviewLoop": (
+            _loop(
+                "group/direct-child-seam-review-loop@1",
+                f"Verify only the direct-child seams of {item_id}.",
+            )
+            if review_boundary
+            else None
         ),
         "children": children,
     }
@@ -648,15 +659,20 @@ def _example(root_kind: str) -> dict[str, Any]:
             "g-root",
             depends_on=["g-service"],
         )
-        root = _group("g-root", None, [service, docs])
+        root = _group(
+            "g-root",
+            None,
+            [service, docs],
+            review_boundary=False,
+        )
     return {
         "delivery": {
             "id": "d-example",
             "title": "Example delivery",
             "summary": "Complete the recursive GROUP/TASK Graph.",
             "reviewLoop": _loop(
-                "delivery/independent-review-loop@1",
-                "Independently review the complete Delivery.",
+                "delivery/acceptance-readiness-loop@1",
+                "Verify complete Delivery acceptance and readiness.",
             ),
         },
         "root": {
@@ -734,8 +750,10 @@ def hierarchy_input_schema(
                     "reviewLoop": {
                         "oneOf": [_ref("loop"), {"type": "null"}],
                         "description": (
-                            "Independent Delivery Review Loop. It may be null "
-                            "only for a LIGHT Delivery."
+                            "Final technical Acceptance/Readiness Loop for "
+                            "top-level requirement coverage, system evidence, "
+                            "operational readiness, and global risk. It may be "
+                            "null only for a LIGHT Delivery."
                         ),
                     },
                 },
@@ -827,7 +845,9 @@ def hierarchy_contract(
                 },
                 "standard": {
                     "shape": "RECURSIVE_GROUP_TASK",
-                    "reviewLoops": "TASK_GROUP_AND_DELIVERY",
+                    "reviewLoops": (
+                        "TASK_OPTIONAL_GROUP_SEAM_AND_DELIVERY_ACCEPTANCE"
+                    ),
                     "verification": (
                         "AFFECTED_SCOPE_WITH_EVIDENCE_FIRST_REVIEWS"
                     ),
@@ -914,6 +934,13 @@ def hierarchy_contract(
             },
             "acceptanceReports": {
                 "scope": "CURRENT_LAYER",
+                "responsibilities": {
+                    "controller": (
+                        "GRAPH_GATING_RESULT_CONTRACT_VALIDATION_AND_PERSISTENCE"
+                    ),
+                    "reviewReceiver": "CURRENT_LAYER_TECHNICAL_ACCEPTANCE",
+                    "user": "FINAL_BUSINESS_CONFIRMATION",
+                },
                 "taskReport": {
                     "fullDetails": [
                         "TASK_LOOP",
@@ -923,8 +950,8 @@ def hierarchy_contract(
                 "groupReport": {
                     "fullDetails": [
                         "GROUP_JOIN",
-                        "GROUP_REVIEW_LOOP",
                     ],
+                    "optionalFullDetails": ["GROUP_REVIEW_LOOP"],
                     "childReferences": [
                         "status",
                         "summary",
@@ -944,10 +971,31 @@ def hierarchy_contract(
                 },
                 "nonDuplicatedFromLowerLayers": [
                     "payload",
+                    "resultBodies",
                     "evidence",
                     "reviewFindings",
                     "workspaceChanges",
                 ],
+                "reviewBoundaries": {
+                    "task": (
+                        "FROZEN_TASK_ACCEPTANCE_LOCAL_BEHAVIOR_"
+                        "PUBLIC_CONTRACT_TARGETED_REGRESSION"
+                    ),
+                    "group": "OPTIONAL_DIRECT_CHILD_SEAMS_ONLY",
+                    "delivery": (
+                        "TOP_LEVEL_REQUIREMENT_COVERAGE_SYSTEM_EVIDENCE_"
+                        "OPERATIONAL_READINESS_GLOBAL_RISK"
+                    ),
+                },
+                "persistence": {
+                    "absentGroupReview": (
+                        "NO_GRAPH_NODE_RUN_EVENT_OR_OUTCOME"
+                    ),
+                    "reviewOutcome": (
+                        "LAYER_OWNED_CONCLUSION_FINDINGS_AND_EVIDENCE_REFS"
+                    ),
+                    "upstreamResults": "CONTEXT_ONLY_NEVER_COPIED",
+                },
                 "workspaceChangeEvidence": {
                     "source": "CONTROLLER_CAPTURED_AT_RESULT",
                     "scope": "VERIFIED_READ_WRITE_GIT_PROJECT_SCOPES",
@@ -962,9 +1010,11 @@ def hierarchy_contract(
                     "Each acceptance report fully renders only its current "
                     "layer. GROUP reports summarize and link direct child "
                     "reports; the Delivery report summarizes and links the "
-                    "root work-item report. Lower-layer payloads, evidence, "
-                    "review findings, and workspace snapshots are not copied "
-                    "upward."
+                    "root work-item report. Lower-layer payloads, result "
+                    "bodies, evidence, review findings, and workspace snapshots "
+                    "are not copied upward. A GROUP without a concrete "
+                    "direct-child seam has no Review node, run state, outcome, "
+                    "or projection section."
                 ),
             },
             "databaseChanges": {
@@ -1234,17 +1284,19 @@ def hierarchy_contract(
                 "LIGHT Delivery contains one root TASK_LOOP and omits it."
             ),
             (
-                "Every GROUP compiles to GROUP_JOIN followed by its required "
-                "independent GROUP_REVIEW_LOOP."
+                "Every GROUP compiles to GROUP_JOIN; it compiles an independent "
+                "GROUP_REVIEW_LOOP only when a concrete direct-child seam "
+                "requires verification."
             ),
             (
                 "Sibling dependsOn references direct GROUP/TASK siblings; a "
                 "GROUP dependency gates the dependent subtree entries."
             ),
             (
-                "Under STANDARD assurance the root terminal flows through "
-                "DELIVERY_REVIEW_LOOP and final USER_CONFIRMATION; under "
-                "LIGHT it flows directly from the root TASK_LOOP to final "
+                "Under STANDARD assurance the root terminal flows through the "
+                "Delivery Acceptance/Readiness boundary represented by "
+                "DELIVERY_REVIEW_LOOP and final USER_CONFIRMATION; under LIGHT "
+                "it flows directly from the root TASK_LOOP to final "
                 "USER_CONFIRMATION."
             ),
             (

@@ -291,7 +291,44 @@ def loop_execution_policy(
     profile = validate_loop_assurance_profile(assurance_profile)
     policy = deepcopy(_LOOP_EXECUTION_POLICY)
     policy["assuranceProfile"] = profile
-    policy["reviewTopology"] = "TASK_GROUP_AND_DELIVERY_REVIEWS"
+    policy["reviewTopology"] = (
+        "TASK_REVIEWS_OPTIONAL_GROUP_SEAM_REVIEWS_AND_DELIVERY_ACCEPTANCE"
+    )
+    policy["responsibilityBoundaries"] = {
+        "controller": {
+            "owns": [
+                "GRAPH_STATE_TRANSITIONS",
+                "PREDECESSOR_SUCCESS_GATING",
+                "RESULT_CONTRACT_VALIDATION",
+                "EVENT_AND_PROJECTION_PERSISTENCE",
+            ],
+            "mustNotPerform": [
+                "TECHNICAL_ACCEPTANCE",
+                "EVIDENCE_SUFFICIENCY_JUDGMENT",
+                "OPERATIONAL_READINESS_JUDGMENT",
+            ],
+        },
+        "loopReceiver": {
+            "owns": [
+                "LOOP_EXECUTION",
+                "LOOP_OWNED_JUDGMENT",
+                "EVIDENCE_SELECTION_AND_VERIFICATION",
+                "FINDING_CLOSURE",
+            ],
+            "mustNotPerform": [
+                "GRAPH_READINESS_TRANSITION",
+                "UPSTREAM_COMPLETION_GATING",
+                "USER_CONFIRMATION",
+            ],
+        },
+        "user": {
+            "owns": ["FINAL_BUSINESS_CONFIRMATION"],
+            "mustNotReplace": [
+                "GRAPH_PRECONDITION_GATING",
+                "DELIVERY_TECHNICAL_ACCEPTANCE",
+            ],
+        },
+    }
     if profile == "LIGHT":
         policy["reviewTopology"] = "NO_INDEPENDENT_REVIEW_LOOPS"
         policy["progressReporting"]["reportAt"] = [
@@ -383,8 +420,70 @@ def loop_completion_policy(
                 "VERIFY_DIRECT_CHILD_SEAMS_AND_GROUP_INTEGRATION"
             ),
             "DELIVERY_REVIEW_LOOP": (
-                "ENSURE_COVERAGE_MATRIX_AND_FRESH_FINAL_SMOKE_OR_E2E_EVIDENCE"
+                "VERIFY_TOP_LEVEL_REQUIREMENT_COVERAGE_SYSTEM_EVIDENCE_"
+                "OPERATIONAL_READINESS_AND_GLOBAL_RISK"
             ),
+        }[loop_kind]
+        policy["reviewResultPersistence"] = {
+            "scope": "CURRENT_LAYER_ONLY",
+            "contractValidator": "CONTROLLER",
+            "controllerValidationScope": (
+                "STRUCTURE_AND_DECLARED_TERMINAL_CONSISTENCY_ONLY"
+            ),
+            "acceptanceDecisionOwner": "INDEPENDENT_LOOP_RECEIVER",
+            "requiredCommonFields": [
+                "validationDecision",
+                "reviewFindings",
+            ],
+            "upstreamLoopResults": "CONTEXT_ONLY_NEVER_PERSIST",
+            "lowerLayerResultBodies": "NEVER_COPY",
+        }
+        policy["reviewBoundary"] = {
+            "TASK_REVIEW_LOOP": {
+                "layer": "TASK",
+                "owns": [
+                    "FROZEN_TASK_ACCEPTANCE",
+                    "LOCAL_BEHAVIOR",
+                    "PUBLIC_CONTRACT",
+                    "TARGETED_REGRESSION",
+                ],
+                "mustNotRepeat": [
+                    "SIBLING_TASK_INTERNALS",
+                    "GROUP_INTEGRATION",
+                    "DELIVERY_READINESS",
+                ],
+                "requiredResultField": "taskAcceptance",
+            },
+            "GROUP_REVIEW_LOOP": {
+                "layer": "GROUP",
+                "owns": [
+                    "DIRECT_CHILD_SEAMS",
+                    "INTERFACE_COMPATIBILITY",
+                    "DATA_AND_CONTROL_FLOW",
+                    "TRANSACTION_AND_ERROR_PROPAGATION",
+                ],
+                "mustNotRepeat": [
+                    "TASK_INTERNAL_IMPLEMENTATION",
+                    "CHILD_UNIT_TEST_SUITES",
+                    "DELIVERY_READINESS",
+                ],
+                "requiredResultField": "groupIntegration",
+            },
+            "DELIVERY_REVIEW_LOOP": {
+                "layer": "DELIVERY",
+                "owns": [
+                    "TOP_LEVEL_REQUIREMENT_COVERAGE",
+                    "CROSS_GROUP_OR_SYSTEM_EVIDENCE",
+                    "OPERATIONAL_READINESS",
+                    "EVIDENCE_FRESHNESS_AND_GLOBAL_RISK",
+                ],
+                "mustNotRepeat": [
+                    "LOWER_LAYER_CODE_REREVIEW",
+                    "CHILD_UNIT_TEST_SUITES",
+                    "CLOSED_LOWER_LAYER_FINDINGS",
+                ],
+                "requiredResultField": "deliveryReadiness",
+            },
         }[loop_kind]
     if profile == "LIGHT":
         policy["verificationScope"] = "TARGETED_FOR_DECLARED_CHANGE"

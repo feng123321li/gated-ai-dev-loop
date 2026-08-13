@@ -97,6 +97,195 @@ FINGERPRINT = {
     "description": "Exact SHA-256 fingerprint returned by the controller.",
 }
 
+def _text_array(
+    description: str,
+    *,
+    maximum: int = 128,
+    minimum: int = 0,
+) -> dict[str, Any]:
+    return {
+        "type": "array",
+        "minItems": minimum,
+        "maxItems": maximum,
+        "items": _bounded_string(description, maximum=1024),
+    }
+
+
+def _review_findings_schema() -> dict[str, Any]:
+    return {
+        "type": "array",
+        "maxItems": 128,
+        "items": _object(
+            {
+                "severity": {
+                    "type": "string",
+                    "enum": ["P0", "P1", "P2"],
+                },
+                "summary": _bounded_string(
+                    "Finding summary.", maximum=1024
+                ),
+                "status": {
+                    "type": "string",
+                    "enum": ["RESOLVED", "ACCEPTED", "OPEN"],
+                },
+                "resolution": _bounded_string(
+                    "Resolution or acceptance rationale.", maximum=2048
+                ),
+                "evidence": _bounded_string(
+                    "Evidence supporting the final status.", maximum=2048
+                ),
+            },
+            required=[
+                "severity",
+                "summary",
+                "status",
+                "resolution",
+                "evidence",
+            ],
+        ),
+    }
+
+
+def _task_acceptance_schema() -> dict[str, Any]:
+    return _object(
+        {
+            "acceptanceChecks": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 128,
+                "items": _object(
+                    {
+                        "acceptancePoint": _bounded_string(
+                            "Frozen TASK acceptance point.", maximum=2048
+                        ),
+                        "status": {"const": "SATISFIED"},
+                        "evidenceRefs": _text_array(
+                            "TASK evidence reference.", minimum=1
+                        ),
+                    },
+                    required=[
+                        "acceptancePoint",
+                        "status",
+                        "evidenceRefs",
+                    ],
+                ),
+            },
+            "localBehavior": {"const": "VERIFIED"},
+            "publicContract": {
+                "type": "string",
+                "enum": ["VERIFIED", "NOT_APPLICABLE"],
+            },
+            "targetedRegression": {"const": "VERIFIED"},
+            "decision": {"const": "ACCEPTED"},
+            "rationale": _bounded_string(
+                "Why the TASK-owned boundary is accepted.", maximum=4096
+            ),
+        },
+        required=[
+            "acceptanceChecks",
+            "localBehavior",
+            "publicContract",
+            "targetedRegression",
+            "decision",
+            "rationale",
+        ],
+    )
+
+
+def _group_integration_schema() -> dict[str, Any]:
+    return _object(
+        {
+            "seams": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 128,
+                "items": _object(
+                    {
+                        "seam": _bounded_string(
+                            "Direct-child seam being verified.", maximum=2048
+                        ),
+                        "participants": _text_array(
+                            "Direct child participating in the seam.",
+                            minimum=2,
+                        ),
+                        "status": {"const": "VERIFIED"},
+                        "evidenceRefs": _text_array(
+                            "GROUP seam evidence reference.", minimum=1
+                        ),
+                    },
+                    required=[
+                        "seam",
+                        "participants",
+                        "status",
+                        "evidenceRefs",
+                    ],
+                ),
+            },
+            "decision": {"const": "INTEGRATED"},
+            "rationale": _bounded_string(
+                "Why the direct children compose correctly.", maximum=4096
+            ),
+        },
+        required=["seams", "decision", "rationale"],
+    )
+
+
+def _delivery_readiness_schema() -> dict[str, Any]:
+    return _object(
+        {
+            "requirementCoverage": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 256,
+                "items": _object(
+                    {
+                        "acceptancePoint": _bounded_string(
+                            "Top-level Delivery acceptance point.", maximum=2048
+                        ),
+                        "ownerRefs": _text_array(
+                            "TASK or GROUP acceptance owner reference.",
+                            minimum=1,
+                        ),
+                        "status": {"const": "COVERED"},
+                        "evidenceRefs": _text_array(
+                            "Final evidence reference.", minimum=1
+                        ),
+                    },
+                    required=[
+                        "acceptancePoint",
+                        "ownerRefs",
+                        "status",
+                        "evidenceRefs",
+                    ],
+                ),
+            },
+            "integrationEvidence": {"const": "SUFFICIENT"},
+            "operationalReadiness": {
+                "type": "string",
+                "enum": ["READY", "NOT_APPLICABLE"],
+            },
+            "openBlockingRisks": {"type": "array", "maxItems": 0},
+            "acceptedRisks": _text_array(
+                "Explicitly accepted non-blocking Delivery risk."
+            ),
+            "decision": {"const": "READY_FOR_USER_CONFIRMATION"},
+            "rationale": _bounded_string(
+                "Why the Delivery is ready for final user confirmation.",
+                maximum=4096,
+            ),
+        },
+        required=[
+            "requirementCoverage",
+            "integrationEvidence",
+            "operationalReadiness",
+            "openBlockingRisks",
+            "acceptedRisks",
+            "decision",
+            "rationale",
+        ],
+    )
+
+
 OUTCOME = _object(
     {
         "status": {
@@ -124,7 +313,14 @@ OUTCOME = _object(
                 "the Controller replaces result.workspaceChanges with "
                 "read-only snapshots captured from verified writable Git "
                 "scopes; callers must not treat that snapshot as exclusive "
-                "TASK or Delivery ownership."
+                "TASK or Delivery ownership. A successful Review is narrower: "
+                "the independent receiver owns the technical acceptance "
+                "judgment; the Controller validates only structure and "
+                "declared terminal consistency. Therefore persist only "
+                "validationDecision, reviewFindings, the one "
+                "layer-owned acceptance field, bounded evidence metadata, and "
+                "Controller-owned snapshots. Never copy upstreamLoopResults "
+                "or lower-layer result bodies into a Review outcome."
             ),
             "properties": {
                 "affectedScopes": {
@@ -435,6 +631,10 @@ OUTCOME = _object(
                         "rationale",
                     ],
                 ),
+                "reviewFindings": _review_findings_schema(),
+                "taskAcceptance": _task_acceptance_schema(),
+                "groupIntegration": _group_integration_schema(),
+                "deliveryReadiness": _delivery_readiness_schema(),
                 "workerTelemetry": {
                     "type": "array",
                     "maxItems": 128,
@@ -970,10 +1170,10 @@ TOOLS = (
             "run; the receiver confirms it and retries with the returned "
             "fingerprints. Otherwise this binds the workspace and creates one "
             "governed manual Graph run. TASK implementation Loops must be "
-            "claimed with MANUAL "
-            "provenance; every TASK/GROUP/Delivery Review remains an "
-            "independent host-native automatic Loop, followed by final user "
-            "confirmation. It never weakens or skips STANDARD Review nodes."
+            "claimed with MANUAL provenance; TASK Reviews, configured GROUP "
+            "seam Reviews, and Delivery Acceptance/Readiness remain independent "
+            "host-native automatic Loops, followed by final user confirmation. "
+            "It never weakens or skips configured STANDARD Review nodes."
         ),
         _manual_start_tool_schema(),
     ),
@@ -1256,8 +1456,9 @@ TOOLS = (
     _tool(
         "dispatch_loop",
         (
-            "Claim one ready TASK, TASK Review, GROUP Review, or Delivery "
-            "Review Loop for its orchestrated outer receiver. The claim binds "
+            "Claim one ready TASK, TASK Review, configured GROUP seam Review, "
+            "or Delivery Acceptance/Readiness Loop for its orchestrated outer "
+            "receiver. The claim binds "
             "the configured trusted Adapter and request workspace to a "
             "caller-declared receiving context; it does not authenticate a "
             "real host session or development model. The caller must guard "

@@ -35,9 +35,9 @@ PROGRESS_PHASE_TEXT = MappingProxyType(
 LOOP_KIND_TEXT = MappingProxyType(
     {
         "TASK_LOOP": "任务执行",
-        "TASK_REVIEW_LOOP": "任务复审",
-        "GROUP_REVIEW_LOOP": "分组复审",
-        "DELIVERY_REVIEW_LOOP": "交付复审",
+        "TASK_REVIEW_LOOP": "任务验收",
+        "GROUP_REVIEW_LOOP": "分组 seam 验收",
+        "DELIVERY_REVIEW_LOOP": "最终技术验收与准备度",
     }
 )
 STATE_PHASE_TEXT = MappingProxyType(

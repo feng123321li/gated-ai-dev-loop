@@ -1107,7 +1107,11 @@ TOOLS = (
     ),
     _tool(
         "hierarchy_contract",
-        "Return the exact schema-v3 outer Graph contract and one example.",
+        (
+            "Return the exact schema-v3 outer Graph contract, one example, "
+            "advisory planning-stage Skill pre-trigger guidance, and the "
+            "boundary between frozen requirements and Loop-owned implementation."
+        ),
         _object(
             {
                 "root_kind": {
@@ -1300,9 +1304,12 @@ TOOLS = (
             "does not inspect model inventory, recommend a model, or "
             "control Loop-internal workers. Returns receiver identities "
             "and decision fingerprints; when shared Skill hints exist, each "
-            "assignment also carries their exact advisory receiverPrompt for "
-            "host-native invocation when applicable and available. The prompt "
-            "may be skipped and never gates success. The Controller never "
+            "assignment also carries their exact advisory receiverPrompt. A "
+            "user-explicit Skill should be invoked host-natively at each "
+            "applicable and available stage, usually TASK for implementation "
+            "Skills; it may be skipped only when the stage is inapplicable or "
+            "the host cannot provide it, and never gates Controller success. "
+            "The Controller never "
             "starts Agents or claims Loops. "
             "After consuming every assignment, obey postActionWait: wait for "
             "a receiver event or the earliest reservation deadline, then call "
@@ -1520,7 +1527,8 @@ TOOLS = (
     _tool(
         "loop_context",
         (
-            "Read one opaque Loop descriptor, shared late-bound Skill hints, "
+            "Read one opaque Loop descriptor, shared advisory Skill hints for "
+            "runtime reevaluation, "
             "direct predecessors, transitive upstream results, TASK baseline "
             "path, runtime-verified project workspace roots, frozen project "
             "scope anchors, completion policy for internal adaptation and "

@@ -100,4 +100,4 @@ TASK 显式声明 `databaseChanges` 时，同目录生成 `database-changes.md` 
 
 ## 大 payload
 
-保持外层 payload 简洁，只传内部 Loop 启动所需输入。若某个 Loop 需要大型设计、`developmentPlan`、文件 scope 或数据集，让该 Loop 使用自己的存储/传输协议并在 payload 中传引用；不要扩展 delivery-graph 的调度 schema 来承载实现内容。
+保持外层 payload 简洁，只传内部 Loop 启动所需的需求方向、目标、明确约束、已确认外部契约和已知验收。大型设计、`developmentPlan`、文件 scope、实现类/方法选择和详细测试组织由 Loop 在运行时使用自己的存储/传输协议生成和维护，不在规划阶段先写引用再冻结；不要扩展 delivery-graph 的调度 schema 来承载实现内容。只有需求明确指定或用户确认的外部兼容契约固定了精确标识时，才把该事实放入 payload。

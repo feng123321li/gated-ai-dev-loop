@@ -56,10 +56,10 @@ def advisory_skill_hint_prompt(
             f"按 catalog 名 {catalog_names} 调用。"
         )
     return (
-        "共享 Skill Hint（建议性、非门禁）："
+        "用户明确指定的共享 Skill Hint（强偏好、非 Controller 成功门禁）："
         f"{rendered_hints}。先结合真实 Loop 判断每项是否适用且当前宿主可用；"
-        f"满足时尽量优先原生触发。{host_instruction}"
-        "不适用或不可用时可跳过，不阻塞 Loop、不要求用户再次确认，也不伪造已使用。"
+        f"适用且可用时应在当前相应阶段优先原生触发；实现、生成器、测试和编码规范类 Skill 多数在 TASK 阶段使用。{host_instruction}"
+        "只有当前阶段不适用或宿主不可用时才跳过；不阻塞 Loop、不要求用户再次确认，也不伪造已使用。"
     )
 
 

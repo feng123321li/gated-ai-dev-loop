@@ -32,6 +32,14 @@
 
 把响应的 `recommendedProfile` 写入 `assuranceProfile`，把 `reasons` 写入 `assuranceRationale`；分类事实改变时必须重新调用。省略 `assuranceProfile` 时安全回退为 `STANDARD`。`STANDARD` 不得因为代码行数少就降级；修改认证判断、数据库字段、公共接口或生产配置，即使只有一行也不是 LIGHT。
 
+## 规划阶段 Skill 预触发
+
+用户明确指定 Skill 时，将其记录到共享 `root.skillHints`。检查真实代码和初始范围后、形成 TASK 边界与 payload 前，判断该 Skill 是否能帮助把握需求方向、关键约束、已知验收、主要风险或合理切分；适用且当前宿主可用时按原生入口预触发。Codex 使用 `$skill-name`，Claude Code 使用 Skill tool，其他宿主按 catalog 名使用自己的原生入口。不适用于规划或不可用时不阻塞、不要求用户再次确认，继续把它留给后续相应 Loop；实现、生成器、测试和编码规范类 Skill 多数在 TASK 阶段才有足够上下文。
+
+预触发只校准大方向，不要求规划 Agent 把 Skill 的完整做法提前展开。只提取需求目标、用户明确约束、已确认外部契约、验收、TASK 边界和材料风险；不要把 Skill 示例、默认目录、推荐文件名、实现类、内部方法、代码结构或详细测试组织写成冻结事实。只有需求原文明确指定，或用户确认必须兼容的外部契约明确指定某个精确标识时，才随需求冻结。
+
+规划达到“方向、边界和验收足够清楚”即可，不追求面面俱到。实现所需但尚未明确的普通细节由 TASK Loop 读取真实代码后自主发现、选择、验证和调整。
+
 ## 选择根节点
 
 - 一个可独立调度结果：使用根 `TASK`。
@@ -47,7 +55,7 @@
 
 L0 对每个 TASK 做确定性边界检查：它的实现结束态只能依赖冻结 baseline 和已成功的传递前驱；TASK Review 的验收命令必须能在任何后继 TASK 开始前运行；不得写出“当前 TASK 先破坏编译，等后续 TASK 恢复”或把本层验收推迟给后继的计划。任一条件不满足，先移动、合并或延后变更，再生成可确认 baseline。
 
-L1 只在删除、改名、移动类符号，或修改公共字段、方法、签名时触发规划层的可插拔语言 analyzer。分析范围限制在本 Revision 授权的项目：定位当前声明，扫描主代码和测试中的剩余引用，把引用映射到负责 TASK，并确保破坏性变更与最后一个引用更新位于同一 TASK。Java 优先使用宿主提供的符号引用分析，能力不可用时回退到定向文本搜索；这里不要求全量 Maven/Gradle 构建。结果不明或仍有未归属引用时按失败处理，保守调整 TASK 边界。
+L1 只在需求明确要求删除、改名、移动类符号或修改公共字段/方法/签名，或者真实代码检查已确认该影响不可避免时，触发规划层的可插拔语言 analyzer；不要为满足预检而发明文件、类或方法变更。分析范围限制在本 Revision 授权的项目：定位当前声明，扫描主代码和测试中的剩余引用，把引用映射到负责 TASK，并确保破坏性变更与最后一个引用更新位于同一 TASK。Java 优先使用宿主提供的符号引用分析，能力不可用时回退到定向文本搜索；这里不要求全量 Maven/Gradle 构建。结果不明或仍有未归属引用时按失败处理，保守调整 TASK 边界。
 
 预检必须在 `plan_dispatch_batch` 之前完成。reservation 创建后不继续做规划分析；发现必须修订时等待现有 reservation 到期并重新读取 frontier，再进行需求修订。
 
@@ -314,10 +322,10 @@ Delivery baseline 和 TASK baseline 只串联这些投影。
 TASK、TASK Review、已配置的 GROUP seam Review 和 Delivery Acceptance/Readiness 使用相同 Loop 描述协议：
 
 - `loop.ref`：执行适配器或 Loop Skill 的稳定引用。
-- `loop.payload`：原样交给 Loop 的不透明 JSON。
+- `loop.payload`：规划层按需生成并原样交给对应 Loop 的不透明输入，包含方向、目标、明确约束、已确认契约和已知验收；Graph 把工作项整理为 hierarchy/DAG，维护依赖、资源、全局进度和结果汇总并完成调度，但不创作业务需求或实现方案。
 - `resourceClaims`：需要排他占用的精确资源锁。
 
-不要把 `scope`、`developmentPlan`、`testCommands`、`gateLevel` 或 `requiredSkills` 放进外层 definition。Loop 需要这些内容时，由自己的 payload 规范定义和解释。资源声明是精确键；相同键互斥，不做 glob、目录包含或文件写授权判断。
+不要把 `scope`、`developmentPlan`、`testCommands`、`gateLevel` 或 `requiredSkills` 放进外层 definition，也不要为了让规划显得完整而把普通文件名、实现类、内部方法、代码结构或详细测试方案塞进 payload。Loop 在运行时自行形成这些内容。仅当需求明确指定或用户确认的外部兼容契约固定了精确标识时，payload 才保留该需求事实。资源声明是精确键；相同键互斥，不做 glob、目录包含或文件写授权判断。
 
 ### 通用接口投影约定
 
@@ -368,14 +376,15 @@ before 候选，并根据需求形成 after；确认 TASK 时必须把两者作�
 Torna 必须保持相同的方法、路径或签名、字段层级、类型、必填、最大长度、说明
 和示例值；不得在开发完成后从另一套输入生成内容不同的接口文档。
 
-## Skill Hint 晚绑定
+## Skill Hint 分阶段使用
 
-需求阶段若用户给出 Skill，只在 `root.skillHints` 登记一次：
+需求阶段若用户明确指定 Skill，在 `root.skillHints` 登记一次：
 
-- 提示是共享、建议性的运行时偏好，不是 `requiredSkills`。
-- 不在需求阶段把提示分配到 TASK、TASK Review、GROUP seam Review、Delivery Acceptance/Readiness、开发阶段或 Gate 阶段，也不因提示新增额外 Graph 节点。
+- 明确指定表示适用且可用时应在相应阶段原生调用，但仍不是 Controller 的硬成功门禁；只有当前阶段不适用或宿主不可用时才跳过，并且不得伪造已使用。
+- 规划阶段只在它能帮助方向、约束、验收、风险或 TASK 边界时预触发；实现类 Skill 多数留给 TASK。不要让规划 Agent 为 Skill 强制定义文件、方法或完整实现。
+- 不把提示静态分配到 TASK、TASK Review、GROUP seam Review、Delivery Acceptance/Readiness 或 Gate，也不因提示新增 Graph 节点；各 Loop 按实际任务判断适用阶段。
 - 自动 assignment、手动 TASK action、manual handoff 与 `loop_context` 会把具体 catalog 名和建议性原生触发提示传给 receiver；Codex 使用 `$skill-name`，Claude Code 使用原生 Skill tool，其他宿主使用自己的原生 Skill 入口。
-- 每个 TASK、TASK Review、已配置的 GROUP seam Review 或 Delivery Acceptance/Readiness Loop 结合真实任务和宿主可用 Skill 独立选择；适用且可用时尽量优先触发，不适用或不可用时可以跳过，也可以使用其他 Skill。
+- 每个 TASK、TASK Review、已配置的 GROUP seam Review 或 Delivery Acceptance/Readiness Loop 结合真实任务和宿主可用 Skill 独立判断阶段；用户明确指定的 Hint 适用且可用时应优先触发，也可以使用其他必要 Skill。
 - 调度器不查询 Skill catalog、不校验激活证据，也不因某条提示未使用而判定失败。
 
 无合适提示时使用空数组，不要猜测 Skill。业务硬条件由对应 Loop 的 payload/验收协议表达，不要伪装成 Skill Hint。

@@ -538,6 +538,72 @@ class DevelopmentBaselineTests(unittest.TestCase):
 
 
 class HierarchyContractTests(unittest.TestCase):
+    def test_planning_skill_pretrigger_preserves_loop_implementation_ownership(
+        self,
+    ) -> None:
+        guidance = hierarchy_contract(root_kind="TASK")[
+            "projectionGuidance"
+        ]
+        pretrigger = guidance["planningSkillPreTrigger"]
+        boundary = guidance["planningContentRouting"]
+
+        self.assertEqual(pretrigger["owner"], "HOST_PLANNING_LAYER")
+        self.assertEqual(
+            pretrigger["stage"],
+            "AFTER_INITIAL_SCOPE_INSPECTION_BEFORE_TASK_BOUNDARIES_AND_PAYLOAD",
+        )
+        self.assertFalse(pretrigger["blocking"])
+        self.assertEqual(
+            pretrigger["planningDepth"],
+            "DIRECTIONALLY_SUFFICIENT_NOT_EXHAUSTIVE",
+        )
+        self.assertEqual(
+            pretrigger["explicitUserSkillUsage"],
+            "ATTEMPT_AT_EACH_APPLICABLE_AND_AVAILABLE_STAGE",
+        )
+        self.assertEqual(
+            pretrigger["defaultImplementationSkillStage"],
+            "TASK_LOOP",
+        )
+        self.assertIn(
+            "IMPLEMENTATION_CLASS_OR_TYPE_NAME",
+            pretrigger["doNotPromoteSkillSuggestionsToFrozenFacts"],
+        )
+        self.assertFalse(pretrigger["controllerEnforcesInvocation"])
+        self.assertTrue(pretrigger["runtimeReevaluationRequired"])
+        self.assertEqual(
+            boundary["planningCompleteness"],
+            "CLEAR_DIRECTION_CONSTRAINTS_AND_ACCEPTANCE_NOT_EXHAUSTIVE_DESIGN",
+        )
+        self.assertIn(
+            "IMPLEMENTATION_CLASS_AND_INTERNAL_METHOD_NAMES",
+            boundary["loopOwnsAndExpands"],
+        )
+        self.assertEqual(
+            boundary["exactImplementationIdentifierMayFreezeOnlyWhen"],
+            "EXPLICITLY_STATED_BY_REQUIREMENT_OR_CONFIRMED_EXTERNAL_CONTRACT",
+        )
+        self.assertEqual(boundary["owner"], "HOST_PLANNING_LAYER")
+        self.assertEqual(
+            boundary["graphRole"],
+            "STRUCTURE_WORK_ITEMS_MATERIALIZE_DAG_FINGERPRINT_CONTROL_DEPENDENCIES_AND_RESOURCES_DISPATCH_AGGREGATE_PROGRESS_RESULTS_AND_GLOBAL_STATE",
+        )
+        self.assertIn(
+            "AUTHOR_OR_INVENT_BUSINESS_REQUIREMENTS",
+            boundary["graphDoesNot"],
+        )
+        self.assertIn("FRONTIER_AND_GLOBAL_PROGRESS", boundary["aggregation"])
+        self.assertEqual(
+            boundary["nodePayloadRouting"],
+            "DELIVER_EXACT_NODE_PAYLOAD_TO_CORRESPONDING_LOOP",
+        )
+        self.assertEqual(
+            boundary["explicitSkillHintRouting"],
+            "COPY_TO_ASSIGNMENT_MANUAL_ACTION_HANDOFF_AND_LOOP_CONTEXT",
+        )
+        self.assertTrue(boundary["skillDefaultsAndExamplesAreNotRequirementFacts"])
+        self.assertFalse(boundary["controllerAnalyzesPlanningContent"])
+
     def test_task_split_preflight_is_blocking_and_planning_owned(self) -> None:
         preflight = hierarchy_contract(root_kind="GROUP")[
             "projectionGuidance"
@@ -557,6 +623,10 @@ class HierarchyContractTests(unittest.TestCase):
         self.assertIn(
             "DELETE_SYMBOL",
             preflight["levels"]["L1"]["triggers"],
+        )
+        self.assertEqual(
+            preflight["levels"]["L1"]["triggerSource"],
+            "EXPLICIT_REQUIREMENT_OR_CONFIRMED_CURRENT_CODE_IMPACT_NOT_PLANNER_INVENTION",
         )
         self.assertFalse(
             preflight["levels"]["L1"]["fullBuildRequired"]
@@ -4156,7 +4226,7 @@ class McpSurfaceTests(unittest.TestCase):
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "skillHints are advisory runtime preferences",
+                "planning host should pre-trigger a hint natively",
                 initialized["result"]["instructions"],
             )
             self.assertIn(

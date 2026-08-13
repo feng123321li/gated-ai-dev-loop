@@ -164,7 +164,9 @@ class HostDispatchPlanningTests(unittest.TestCase):
         )
         self.assertIn("`$springboot-tdd`", assignment["receiverPrompt"])
         self.assertIn("适用且当前宿主可用", assignment["receiverPrompt"])
-        self.assertIn("可跳过", assignment["receiverPrompt"])
+        self.assertIn("应在当前相应阶段优先原生触发", assignment["receiverPrompt"])
+        self.assertIn("多数在 TASK 阶段使用", assignment["receiverPrompt"])
+        self.assertIn("才跳过", assignment["receiverPrompt"])
         self.assertNotIn("必须执行", assignment["receiverPrompt"])
 
     def test_claude_receiver_uses_native_skill_tool_wording(self) -> None:

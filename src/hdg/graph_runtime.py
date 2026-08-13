@@ -1169,6 +1169,8 @@ def loop_context(
             "implementationPlanMayAdaptWithinLoop": True,
             "actionableFindingsStayInsideLoop": True,
             "skillHintsAreAdvisory": True,
+            "explicitSkillHintsShouldRunWhenApplicableAndAvailable": True,
+            "skipSkillHintOnlyWhenStageInapplicableOrHostUnavailable": True,
             "selectSkillsAtRuntime": True,
             "prioritizeApplicableSkillHints": True,
             "returnOnlyStandardLoopOutcome": True,

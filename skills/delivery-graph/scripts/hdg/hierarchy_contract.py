@@ -63,8 +63,20 @@ def _loop_schema() -> dict[str, Any]:
             "payload": {
                 "type": "object",
                 "description": (
-                    "Opaque Loop-owned input. It may contain implementation "
-                    "plans, acceptance rules, tests, gates, and Skills. "
+                    "Opaque Loop-owned input prepared by the host planning "
+                    "layer. Supply requirement direction, explicit constraints, "
+                    "confirmed external contracts, and known acceptance "
+                    "outcomes; ordinary files, implementation classes, internal "
+                    "methods, code structure, tests, gates, and detailed "
+                    "implementation plans remain Loop-owned. The Graph "
+                    "structures work items into a hierarchy/DAG, preserves "
+                    "their opaque input, controls dependencies and resources, "
+                    "routes execution, and aggregates global progress and "
+                    "results; it does not author or complete business "
+                    "requirements. "
+                    "An exact implementation identifier is frozen only when "
+                    "the requirement explicitly mandates it or the user "
+                    "confirms an external compatibility contract that fixes it. "
                     "The controller validates and projects the reserved "
                     "databaseChanges contract when it is declared."
                 ),
@@ -862,6 +874,106 @@ def hierarchy_contract(
                     "UNKNOWN_OR_EXPANDING_IMPACT",
                 ],
             },
+            "planningSkillPreTrigger": {
+                "owner": "HOST_PLANNING_LAYER",
+                "stage": (
+                    "AFTER_INITIAL_SCOPE_INSPECTION_BEFORE_TASK_BOUNDARIES_AND_PAYLOAD"
+                ),
+                "mode": "ADVISORY_HOST_NATIVE_SKILL_PRETRIGGER",
+                "blocking": False,
+                "applicability": (
+                    "LIKELY_TO_CLARIFY_REQUIREMENT_DIRECTION_CONSTRAINTS_"
+                    "ACCEPTANCE_OR_TASK_BOUNDARIES"
+                ),
+                "nativeInvocation": {
+                    "codex": "$skill-name",
+                    "claudeCode": "Skill tool with catalog name",
+                    "other": "host-native Skill entry with catalog name",
+                },
+                "whenApplicableAndAvailable": (
+                    "TRIGGER_BEFORE_FINALIZING_CANDIDATE_HIERARCHY"
+                ),
+                "whenNotApplicableOrUnavailable": (
+                    "CONTINUE_WITHOUT_BLOCKING_OR_USER_RECONFIRMATION"
+                ),
+                "explicitUserSkillUsage": (
+                    "ATTEMPT_AT_EACH_APPLICABLE_AND_AVAILABLE_STAGE"
+                ),
+                "defaultImplementationSkillStage": "TASK_LOOP",
+                "planningDepth": "DIRECTIONALLY_SUFFICIENT_NOT_EXHAUSTIVE",
+                "useOutputFor": [
+                    "REQUIREMENT_DIRECTION",
+                    "EXPLICIT_BUSINESS_AND_EXTERNAL_CONSTRAINTS",
+                    "KNOWN_ACCEPTANCE_OUTCOMES",
+                    "TASK_BOUNDARIES_AND_DEPENDENCIES",
+                    "MATERIAL_RISKS_AND_UNKNOWNS",
+                ],
+                "doNotPromoteSkillSuggestionsToFrozenFacts": [
+                    "FILE_PATH_OR_FILE_NAME",
+                    "IMPLEMENTATION_CLASS_OR_TYPE_NAME",
+                    "INTERNAL_METHOD_NAME",
+                    "CODE_STRUCTURE_OR_DETAILED_IMPLEMENTATION_PLAN",
+                    "TEST_FILE_OR_TEST_ORGANIZATION",
+                ],
+                "exactIdentifierException": (
+                    "EXPLICIT_REQUIREMENT_OR_CONFIRMED_EXTERNAL_COMPATIBILITY_CONTRACT"
+                ),
+                "controllerEnforcesInvocation": False,
+                "runtimeReevaluationRequired": True,
+            },
+            "planningContentRouting": {
+                "owner": "HOST_PLANNING_LAYER",
+                "planningCompleteness": (
+                    "CLEAR_DIRECTION_CONSTRAINTS_AND_ACCEPTANCE_NOT_EXHAUSTIVE_DESIGN"
+                ),
+                "planningLayerSupplies": [
+                    "REQUIREMENT_DIRECTION_AND_TARGET_OUTCOMES",
+                    "EXPLICIT_USER_CONSTRAINTS",
+                    "CONFIRMED_PUBLIC_OR_EXTERNAL_CONTRACTS",
+                    "KNOWN_ACCEPTANCE_CRITERIA",
+                    "TASK_BOUNDARIES_DEPENDENCIES_AND_RESOURCE_LOCKS",
+                    "RESERVED_DATABASE_CHANGE_CONTRACTS",
+                ],
+                "loopOwnsAndExpands": [
+                    "FILE_LAYOUT_AND_FILE_NAMES",
+                    "IMPLEMENTATION_CLASS_AND_INTERNAL_METHOD_NAMES",
+                    "CODE_STRUCTURE_AND_ALGORITHMS",
+                    "DETAILED_IMPLEMENTATION_AND_TEST_PLAN",
+                    "IN_SCOPE_NECESSARY_CONDITIONS_DISCOVERED_FROM_REAL_CODE",
+                ],
+                "graphRole": (
+                    "STRUCTURE_WORK_ITEMS_MATERIALIZE_DAG_FINGERPRINT_CONTROL_"
+                    "DEPENDENCIES_AND_RESOURCES_DISPATCH_AGGREGATE_PROGRESS_"
+                    "RESULTS_AND_GLOBAL_STATE"
+                ),
+                "graphDoesNot": [
+                    "AUTHOR_OR_INVENT_BUSINESS_REQUIREMENTS",
+                    "COMPLETE_DETAILED_IMPLEMENTATION_PLANNING",
+                    "SELECT_IMPLEMENTATION",
+                    "ENFORCE_SKILL_INVOCATION",
+                ],
+                "aggregation": [
+                    "HIERARCHY_AND_DAG_SUMMARY",
+                    "FRONTIER_AND_GLOBAL_PROGRESS",
+                    "LOOP_RESULTS_AND_REVIEW_STATUS",
+                    "DELIVERY_ACCEPTANCE_AND_READINESS_ROUTE",
+                ],
+                "nodePayloadRouting": (
+                    "DELIVER_EXACT_NODE_PAYLOAD_TO_CORRESPONDING_LOOP"
+                ),
+                "explicitSkillHintRouting": (
+                    "COPY_TO_ASSIGNMENT_MANUAL_ACTION_HANDOFF_AND_LOOP_CONTEXT"
+                ),
+                "progression": (
+                    "ADVANCE_FROM_DEPENDENCIES_RESERVATIONS_CLAIMS_LEASES_"
+                    "PROGRESS_AND_TERMINAL_OUTCOMES"
+                ),
+                "exactImplementationIdentifierMayFreezeOnlyWhen": (
+                    "EXPLICITLY_STATED_BY_REQUIREMENT_OR_CONFIRMED_EXTERNAL_CONTRACT"
+                ),
+                "skillDefaultsAndExamplesAreNotRequirementFacts": True,
+                "controllerAnalyzesPlanningContent": False,
+            },
             "taskSplitIntegrityPreflight": {
                 "owner": "HOST_PLANNING_LAYER",
                 "stage": (
@@ -880,6 +992,10 @@ def hierarchy_contract(
                     },
                     "L1": {
                         "mode": "PLUGGABLE_TARGETED_CODE_ANALYSIS",
+                        "triggerSource": (
+                            "EXPLICIT_REQUIREMENT_OR_CONFIRMED_CURRENT_CODE_IMPACT_"
+                            "NOT_PLANNER_INVENTION"
+                        ),
                         "triggers": [
                             "DELETE_SYMBOL",
                             "RENAME_OR_MOVE_SYMBOL",
@@ -1353,10 +1469,17 @@ def hierarchy_contract(
                 "requires an audit rationale, and must replan to STANDARD "
                 "when the observed impact expands or remains uncertain."
             ),
-            "Loop payloads own implementation, tests, gates, and Skills.",
             (
-                "skillHints are advisory, shared, and late-bound; they are "
-                "never assigned during requirement planning."
+                "The host planning layer prepares direction, constraints, "
+                "confirmed contracts, and acceptance as opaque per-Loop input. "
+                "The Graph structures those work items, controls and summarizes "
+                "global delivery state, and schedules them without authoring "
+                "business requirements; Loops own ordinary implementation."
+            ),
+            (
+                "skillHints may be pre-triggered by the planning host to "
+                "clarify direction, remain advisory and unassigned to nodes, "
+                "and are reevaluated by each receiving Loop at runtime."
             ),
             "resourceClaims are exact scheduler locks, not file scopes.",
             "Only standard Loop outcomes cross a Loop boundary.",

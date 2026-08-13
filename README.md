@@ -2,32 +2,28 @@
 
 **分层交付 Graph 控制面**
 
-`delivery-graph` 把已经确认的软件需求冻结为可执行、可审查、可恢复的 Delivery Graph，再协调宿主原生 Agent 完成实现、分层 Review 和最终验收。
+`delivery-graph` 接收宿主规划层形成的工作项，把它们组织为可执行、可审查、可恢复的 Delivery Graph，再协调宿主原生 Agent 完成实现、分层 Review 和最终验收。它不创作业务需求或决定具体实现，核心职责是全局总览、稳定绑定、持久记忆、调度推进和结果汇总。
 
-当前版本：**0.39.21** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
+当前版本：**0.39.22** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
 
-## 它做什么
+## 职责边界
 
-Delivery Graph 是交付控制面，不是代码生成模型。它负责：
+| 层级 | 负责 | 不负责 |
+|---|---|---|
+| 宿主规划层 | 把握需求方向，形成各 Loop 所需的目标、明确约束、已确认外部契约、验收、依赖、资源和 Skill Hint | 提前穷举实现细节；把 Skill 示例或默认命名升级为需求事实 |
+| Delivery Graph | 整理 hierarchy/DAG 与全局总览；绑定 Revision、Git、workspace、项目范围和 fingerprint；持久记忆、调度、恢复并汇总进度/结果 | 创作或补全业务需求；选择文件、实现类、内部方法、算法；判断 Skill 是否实际执行 |
+| 内部 Loop | 读取真实代码和节点上下文，按适用阶段使用 Skill，自主实现、测试、修正或完成本层 Review | 修改 Graph 拓扑、依赖、资源和授权范围；调度其他外层 Loop |
 
-- 把需求组织为递归 `Delivery → GROUP → TASK` Graph。
-- 按依赖与资源冲突计算可并行的工作批次。
-- 在自动执行和手动开发之间保持同一份冻结需求与 Review Graph。
-- 用 reservation、claim、heartbeat、lease 和重试管理长时间运行的 Agent。
-- 对 `TASK`、`GROUP`、`Delivery` 执行与风险匹配的质量门禁。
-- 用 SQLite 保存权威状态，用不可变 Revision 记录需求变化。
-- 在支持 MCP Apps 的宿主中以内嵌只读看板展示 Graph、活动 Loop、告警和 Revision 历史。
-
-具体如何分析、编码、测试和修正，由每个 WorkLoop 自主决定；提交、合并、推送、发布和外部系统授权仍由宿主或用户负责。
+Graph 通过 `rootId`、不可变 Revision、双 fingerprint、SQLite 状态和事件链保存每个节点的不透明输入、绑定、attempt、progress 与 outcome；新会话、上下文压缩或 receiver 更换后，Agent 可用 `workspace_status → graph_frontier → loop_context` 恢复目标、前驱结果、项目范围、Skill Hint 和下一动作，而不依赖聊天记忆。Graph 用 reservation、claim、resource lock、heartbeat、lease 和重试推进 DAG，并在总览中汇总全局进度、Review 与验收状态。具体如何分析代码、实现、测试和修正由对应 Loop 自主决定；提交、合并、推送、发布和外部系统授权仍由宿主或用户负责。
 
 ## 核心流程
 
 ```text
 确认需求
-  → 检查真实代码和影响范围，取得确定性 LIGHT / STANDARD 建议
-  → 冻结 Delivery Graph 与 Git 开发基线
+  → 规划层形成足够推进各 Loop 的输入，按需预触发适用 Skill
+  → Graph 整理 hierarchy/DAG，绑定快照、指纹与 Git 开发基线
   → 选择自动执行 / 手动开发
-  → TASK 实现
+  → Graph 按节点传递输入与 Skill Hint，TASK 自主实现
   → 分层 Review（STANDARD）
   → 用户最终验收
 ```
@@ -46,7 +42,7 @@ Delivery
 - `TASK` 是唯一执行叶子。
 - `GROUP` 只在存在真实的并行汇合或依赖边界时使用；仅当直接子项存在真实 seam 才配置 GROUP Review。
 - 无依赖且 `resourceClaims` 不冲突的节点可以并发。
-- Frozen Graph 固定目标、依赖、资源、项目范围和验收边界，不固定 Loop 内部实现计划。
+- Graph 快照固定用于调度的节点目标、依赖、资源、项目范围和验收边界，不固定 Loop 内部实现计划。
 
 ## 两种保障档
 
@@ -88,7 +84,7 @@ Controller 只读 Git，不创建 worktree，也不执行 stash 或分支切换�
 
 ## 状态与恢复
 
-`.layered-delivery/scheduler.db` 是需求和调度状态的机器权威，Markdown 文件只是人类可读投影。不要直接编辑数据库或控制面生成物。
+`.layered-delivery/scheduler.db` 是 Graph 绑定、不透明 Loop 输入快照和调度状态的机器权威，Markdown 文件只是人类可读投影。不要直接编辑数据库或控制面生成物。
 一个实际 workspace 可以绑定多个未结束 Delivery；每个 Graph、Revision、run 与验收仍按 `rootId` 隔离。无参 `workspace_status` 遇到多个未结束绑定时返回 `DELIVERY_SELECTION_REQUIRED`，候选中的非队首自动 Delivery 标记为 `QUEUED`；调用方必须用当前会话保存的 `rootId` 显式重查，不能按更新时间猜选。未绑定的 `CHOICE_READY/HANDOFF_READY` 也只允许显式 `rootId` 恢复。控制状态隔离不等于文件隔离：同一物理 checkout 只能按 `CURRENT_WORKSPACE_SERIAL` 依次运行各 Delivery。
 
 TASK receiver 调用 `record_loop_result` 时，Controller 会从已验证的可写 Git scope 自动采集相对冻结 `baseCommit` 的当前 workspace 变更文件和有界 diff，并写入该 `rootId` 的 TASK 验收报告。它覆盖已提交、暂存、未暂存和未跟踪文本内容，因此验收可见性不依赖先 commit；该证据是提交时刻的 workspace 快照，不替代可验证 commit、clean tree 或归属判断。TASK 控制目录还会生成由 `acceptance.md` 相对链接的 `workspace-changes.patch`，用户可在主控制根直接审核；附件由 SQLite outcome 重建，不依赖原执行目录继续存在。
@@ -96,7 +92,9 @@ TASK receiver 调用 `record_loop_result` 时，Controller 会从已验证的可
 
 新会话用保存的 `rootId` 显式调用 `workspace_status(root_id=...)` 恢复目标 Delivery，再读取 Graph frontier；无参调用出现多个候选时只做选择，不推进任何候选。活动 receiver 通过 Graph `progressMonitor` 显示 TASK 与 Review，并由 heartbeat 与 lease 治理；失联、租约过期或可重试失败只在各自安全边界恢复。需求发生变化时创建同一 Delivery 的下一 Revision，不覆写已经冻结的版本。
 
-AUTOMATIC 的每个 READY TASK 与 Review 都先由 `plan_dispatch_batch` 生成一次性 reservation，再由独立宿主原生 receiver 用匹配的 decision fingerprint、自己的 context 和显式 `operation_id` 调用 `dispatch_loop`。存在共享 Skill Hint 时，assignment 同时携带具体 catalog 名与建议性 `receiverPrompt`：Codex 使用 `$skill-name`，Claude Code 使用原生 Skill tool；适用且可用时尽量触发，不适用或不可用可跳过，不形成成功门禁。后续 mutation 继续受 workspace、Graph、项目 scope、lease 与 operation 校验。
+宿主规划层只形成足够推进 Loop 的输入，不要求面面俱到。Graph 不改写其业务语义，而是通过自动 assignment、手动 TASK action、manual handoff 和 `loop_context`，把对应节点的 payload、前驱状态、项目范围以及用户明确指定的 Skill Hint 传给 receiver。普通文件名、实现类、内部方法、代码结构和详细测试方案由 TASK Loop 根据真实代码展开；只有需求本身明确指定，或用户确认的外部兼容契约固定了精确标识时才作为输入传递。
+
+AUTOMATIC 的每个 READY TASK 与 Review 都先由 `plan_dispatch_batch` 生成一次性 reservation，再由独立宿主原生 receiver 用匹配的 decision fingerprint、自己的 context 和显式 `operation_id` 调用 `dispatch_loop`。用户明确指定的 Skill 会以具体 catalog 名和原生 `receiverPrompt` 随节点上下文传递：Codex 使用 `$skill-name`，Claude Code 使用 Skill tool；在当前阶段适用且宿主可用时应优先触发，实现类 Skill 多数在 TASK 阶段使用，只有阶段不适用或宿主不可用才跳过。Graph 保证 Hint 被传到相应 Loop，但不设置 Skill 使用回执或成功硬门禁；后续推进继续由依赖、reservation、claim、progress、lease 与真实终态保障。
 
 后台 receiver 运行时不忙轮询：当前 frontier 的立即 action 全部消费后，宿主按 `progressMonitor.waitDirective` 使用原生完成事件等待；无事件只在 `pollNotBefore` 做一次只读 `graph_status`，该截止直接对齐首次心跳、进度陈旧、失联或租约等下一个有意义健康阈值，不再固定每 10 秒刷新。receiver 事件、`nextWakeAt` 或 `ADVANCE_REQUIRED` 才调用一次 `graph_frontier`。`changeFingerprint` 未变化时不重复播报相同进度。
 

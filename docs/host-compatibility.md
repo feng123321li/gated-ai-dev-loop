@@ -7,6 +7,10 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.39.22 发布候选矩阵
+
+0.39.22 保持 33 个 MCP 工具、schema v3、无 Hook 模式与 `CURRENT_WORKSPACE_SERIAL`。宿主规划层生成足以推进各 Loop 的方向、约束、外部契约和验收；Graph 将工作项整理为 hierarchy/DAG，以 `rootId`、不可变 Revision、双 fingerprint、SQLite/事件链和 `loop_context` 统一承担总览、绑定、持久记忆、依赖/资源控制、调度、恢复及进度/结果汇总，但不创作业务需求或决定实现。用户明确指定的 Skill 在规划相关时可预触发，并始终随自动 assignment、手动 TASK action/handoff 与 Loop context 传给相应 receiver；适用且宿主可用时应在相应阶段原生触发，实现类 Skill 通常位于 TASK，阶段不适用或宿主不可用可跳过。Controller 不查询 catalog、不要求使用回执，也不以未使用提示阻断成功。本候选已完成 403 项 Python 测试（402 通过、1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Plugin 与差异校验。
+
 ## 0.39.21 发布候选矩阵
 
 0.39.21 保持 33 个 MCP 工具、schema v3、无 Hook 模式与 `CURRENT_WORKSPACE_SERIAL`。自动 assignment、手动 TASK action、manual handoff 与 `loop_context` 会向 receiver 传递具体 Skill catalog 名及宿主原生软触发提示：Codex 使用 `$skill-name`，Claude Code 使用 Skill tool，其他宿主使用自己的原生入口；receiver 仅在提示适用且 Skill 可用时尽量触发，不适用或不可用可跳过，Controller 不查询 catalog、不要求激活回执，也不把未使用提示判为失败。规划层同时新增阻断式 TASK 切分完整性预检，并在删除、改名、移动或公共签名变更时执行授权范围内的定向符号引用分析；局部 requirement 解冻/再冻结会等待全部未领取 reservation 到期，防止旧 assignment 与新 Graph 指纹竞态。本候选已完成 402 项 Python 测试（401 通过、1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Skill/Plugin 与差异校验；真实宿主的 Skill catalog 可用性仍由各宿主负责。

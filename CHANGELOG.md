@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.22 — 2026-08-13
+
+发布提交：以 tag `v0.39.22` 指向的提交为准
+
+- **规划阶段 Skill 预触发**：用户明确指定 Skill 时，规划宿主在其能帮助需求方向、约束、验收、风险或 TASK 边界且当前可用时先原生触发；实现类 Skill 默认留给相应 TASK receiver。阶段不适用或宿主不可用可跳过，不形成 Controller 硬门禁。
+- **规划输入与 Graph 职责分离**：宿主规划层只生成足以推进各 Loop 的方向、目标、明确约束、已确认外部契约和已知验收，并按节点 payload 传递；Graph 把工作项整理为 hierarchy/DAG，统一维护依赖、资源、frontier、指纹、全局进度、结果汇总和验收路由，但不创作业务需求或决定实现。普通文件名、实现类、内部方法、代码结构与详细测试方案由 Loop 根据真实代码展开；只有需求明确指定或用户确认的外部兼容契约固定了精确标识时才写入，Skill 默认值和示例不得升级为需求事实。
+- **持久记忆与 Skill 路由**：README、Skill、MCP 握手和机器契约统一说明 Graph 通过 `rootId`、不可变 Revision、双 fingerprint、SQLite/事件链及 `loop_context` 让新 receiver 恢复工作；用户明确指定的 Skill Hint 会复制到自动 assignment、手动 action/handoff 和 Loop context。Graph 保证传递和调度，不要求 Skill 使用回执，也不把未使用提示作为成功门禁。
+- **验证**：新增规划 Skill 预触发、规划内容路由、Graph/Loop 职责和指定 Skill 阶段提示回归；本地 Python 全量 403 项完成（402 通过、1 项按环境跳过），重新构建 canonical/Plugin 生成镜像，并完成 `compileall`、release、Plugin 与差异校验。
+
 ## 0.39.21 — 2026-08-13
 
 发布提交：以 tag `v0.39.21` 指向的提交为准

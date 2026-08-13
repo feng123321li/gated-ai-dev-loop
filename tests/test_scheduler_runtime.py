@@ -1300,7 +1300,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
             handoff_path.read_text(encoding="utf-8"),
         )
         self.assertIn("`$springboot-tdd`", prompt)
-        self.assertIn("可跳过", prompt)
+        self.assertIn("应在当前相应阶段优先原生触发", prompt)
+        self.assertIn("才跳过", prompt)
         repeated_preview = preview_hierarchy(
             root=self.root,
             hierarchy=hierarchy,
@@ -3318,6 +3319,16 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     context["rules"]["skillHintsAreAdvisory"]
                 )
                 self.assertTrue(
+                    context["rules"][
+                        "explicitSkillHintsShouldRunWhenApplicableAndAvailable"
+                    ]
+                )
+                self.assertTrue(
+                    context["rules"][
+                        "skipSkillHintOnlyWhenStageInapplicableOrHostUnavailable"
+                    ]
+                )
+                self.assertTrue(
                     context["rules"]["selectSkillsAtRuntime"]
                 )
                 self.assertTrue(
@@ -3329,7 +3340,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
                     "`$springboot-tdd`",
                     context["skillHintPrompt"],
                 )
-                self.assertIn("可跳过", context["skillHintPrompt"])
+                self.assertIn("多数在 TASK 阶段使用", context["skillHintPrompt"])
+                self.assertIn("才跳过", context["skillHintPrompt"])
 
     def test_advisory_skill_hint_does_not_gate_loop_success(self) -> None:
         hierarchy = task_hierarchy()

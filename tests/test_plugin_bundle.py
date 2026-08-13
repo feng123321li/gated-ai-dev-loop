@@ -231,6 +231,13 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("`controlStateCreated=true`", planning)
         self.assertIn("共享 `.layered-delivery/scheduler.db`", planning)
         self.assertIn("`HANDOFF_READY`", main + planning + transport)
+        self.assertIn("规划阶段 Skill 预触发", planning)
+        self.assertIn("方向、边界和验收足够清楚", planning)
+        self.assertIn("实现类 Skill 多数应由 TASK receiver", main)
+        self.assertIn("普通文件/目录、实现类、内部方法", main)
+        self.assertIn("仅当需求本身明确指定", main)
+        self.assertIn("不要把 Skill 的默认命名", main)
+        self.assertIn("只有阶段不适用或宿主不可用才跳过", main)
         self.assertIn("work-items/", transport)
         self.assertIn("<root-id>/", transport)
         self.assertIn(

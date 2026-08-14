@@ -134,8 +134,10 @@ Loop outcome 与事件链。快照包含 committed、staged、unstaged 和 untra
 当前层 `acceptance.md` 在对应 Loop 结果下显示“工作区变更证据”。这是结果提交
 时的物理 workspace 快照，不是 TASK、Loop 或 Delivery 的独占归属证明。默认
 `CURRENT_WORKSPACE_SERIAL` 要求每个 Delivery 使用独立分支，并只在 working tree、
-index clean、已有可验证 commit、HEAD 与冻结 binding 一致且在途 receiver 安全释放后
-推进自动队首。已有 owner 时，只有已选择 `AUTOMATIC` 的后续 Delivery 标记为 `QUEUED`；
+index clean、已有可验证业务 commit、HEAD 与冻结 binding 一致且在途 receiver/reservation
+安全释放后推进自动队首。前一个 Run 已终态，或已到 `RECORD_USER_CONFIRMATION`，均可在
+满足该 Git 安全边界后释放物理 turn；后一种情况只释放 workspace，不把 Delivery 标记为
+`COMPLETED`。已有 owner 时，只有已选择 `AUTOMATIC` 的后续 Delivery 标记为 `QUEUED`；
 手动交接冻结仍持久化为 `HANDOFF_READY`，不进入自动队列。发现资源冲突、owner dirty、
 未合并或 HEAD 漂移时保持等待，不能继续共享 checkout。队首的非 owner 既存业务改动
 只能按已授权的精确 stash 准备处理，不能 stash 正在运行 owner 的未完成改动。现有 linked
@@ -154,9 +156,10 @@ Review、提交边界和结果摘要判断。
 frontier 返回 `RECORD_USER_CONFIRMATION` 后：
 
 1. `STANDARD` 向用户展示根工作项摘要和报告链接、实际存在的分层验收报告链、Delivery Acceptance/Readiness 摘要以及重要阻断/风险；`LIGHT` 展示保障判断依据、实际 diff 范围、定向测试和唯一 TASK 结果。不要重复展开无关内容。
-2. 等待用户明确接受。用户此时提出需求修改，说明当前 Delivery 尚未结束；不要确认完成，也不要直接修改已冻结 Revision。保持同一 `delivery.id` 进入 `prepare_delivery_revision`。
-3. 用户明确接受本身就是写入最终验收的授权；用 `root_id`、`confirmed=true`、控制器接受的可移植 ASCII `confirmed_by` 和简短 `summary` 调用 `record_user_confirmation`，不要再请求通用 Yes/No，也不要触发宿主权限弹窗。
-4. Graph 进入 `COMPLETED` 后只返回简短终态摘要；不要自行写入宿主记忆、触发持续学习、维护旧 schema 笔记或更新任何项目文件。
-5. 归档不是完成的自动副作用。只有用户再次明确要求归档时才调用 `archive_delivery`；它只接受当前 `COMPLETED` Delivery，从默认 `workspace_status` 与工作区总览隐藏该 Delivery，但保留 SQLite、Revision/Run 历史、事件链、详情投影及 `requirementKey` 身份映射。显式传 `root_id` 仍返回 `ARCHIVED`。
+2. 等待用户明确接受。到达此边界后，若业务改动已有可验证 commit、working tree/index clean、HEAD 未漂移且 receiver/reservation 全部释放，Controller 可以先释放物理 workspace turn；人工或自动宿主都可在已有 Git 授权范围内切换并开发下一 Delivery。此释放不等于用户验收，旧 Delivery 继续显示为待确认。
+3. 用户此时提出需求修改，说明当前 Delivery 尚未结束；不要确认完成，也不要直接修改已冻结 Revision。保持同一 `delivery.id` 进入 `prepare_delivery_revision`。若旧 turn 已释放，下一 Revision 重新进入串行队列，轮到后切回冻结分支并捕获新的 clean turn start；不能抢占当前 Delivery。
+4. 用户明确接受本身就是写入最终验收的授权；用 `root_id`、`confirmed=true`、控制器接受的可移植 ASCII `confirmed_by` 和简短 `summary` 调用 `record_user_confirmation`，不要再请求通用 Yes/No，也不要触发宿主权限弹窗。该确认只写控制面，可在 workspace 已切到另一 Delivery 分支后按旧 `root_id` 补录，不得要求恢复旧 checkout。
+5. Graph 进入 `COMPLETED` 后只返回简短终态摘要；不要自行写入宿主记忆、触发持续学习、维护旧 schema 笔记或更新任何项目文件。
+6. 归档不是完成的自动副作用。只有用户再次明确要求归档时才调用 `archive_delivery`；它只接受当前 `COMPLETED` Delivery，从默认 `workspace_status` 与工作区总览隐藏该 Delivery，但保留 SQLite、Revision/Run 历史、事件链、详情投影及 `requirementKey` 身份映射。显式传 `root_id` 仍返回 `ARCHIVED`。`CANCELLED` 的 workspace turn 在安全边界独立释放，不靠归档清理 owner。
 
 不要用冻结确认、测试通过、内部 Gate PASS 或 Review Loop 自述替代用户确认。完成 Graph 不自动授权提交、推送、合并、迁移或发布。

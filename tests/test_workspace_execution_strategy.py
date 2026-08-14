@@ -7,11 +7,18 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from hdg.errors import GatedLoopError
+from hdg.graph_model import (
+    loop_node_id,
+    review_node_id,
+    task_review_node_id,
+)
 from hdg.mcp_tools import call_tool
 from hdg.planning import freeze_hierarchy, prepare_delivery_revision
 from hdg.repository import SchedulerRepository
 
+from .automatic_dispatch import reserve_loop
 from .test_scheduler_contracts import git_command, isolated_task_hierarchy
+from .test_scheduler_runtime import success_for_node
 
 
 def _repository(root: Path) -> tuple[Path, str]:
@@ -138,6 +145,83 @@ def _resume(
                 "graphFingerprint"
             ],
         },
+        root=str(repository),
+        workspace_root=str(repository),
+        trusted_host_adapter="codex",
+    )
+
+
+def _complete_to_user_confirmation(
+    repository: Path,
+    *,
+    delivery_id: str,
+    task_id: str,
+    manual_task: bool = False,
+) -> dict:
+    for index, node_id in enumerate(
+        (
+            loop_node_id(task_id),
+            task_review_node_id(task_id),
+            review_node_id(delivery_id),
+        ),
+        start=1,
+    ):
+        operation_id = f"op-{delivery_id}-{index}"
+        arguments = {
+            "root_id": delivery_id,
+            "node_id": node_id,
+            "owner": f"receiver-{delivery_id}-{index}",
+            "agent_id": "codex",
+            "receiver_context_id": f"context-{delivery_id}-{index}",
+            "operation_id": operation_id,
+        }
+        if manual_task and node_id == loop_node_id(task_id):
+            arguments["dispatch_mode"] = "MANUAL"
+        else:
+            reservation = reserve_loop(
+                root=str(repository),
+                root_id=delivery_id,
+                node_id=node_id,
+            )
+            arguments.update(
+                {
+                    "dispatch_mode": reservation["dispatchMode"],
+                    "dispatch_transport": reservation[
+                        "dispatchTransport"
+                    ],
+                    "dispatch_reservation_id": reservation[
+                        "dispatchReservationId"
+                    ],
+                    "dispatch_decision_fingerprint": reservation[
+                        "dispatchDecisionFingerprint"
+                    ],
+                }
+            )
+        call_tool(
+            "dispatch_loop",
+            arguments,
+            root=str(repository),
+            workspace_root=str(repository),
+            trusted_host_adapter="codex",
+        )
+        call_tool(
+            "record_loop_result",
+            {
+                "root_id": delivery_id,
+                "node_id": node_id,
+                "operation_id": operation_id,
+                "outcome": success_for_node(
+                    node_id,
+                    f"{node_id} completed.",
+                ),
+            },
+            root=str(repository),
+            workspace_root=str(repository),
+            trusted_host_adapter="codex",
+        )
+    return call_tool(
+        "graph_frontier",
+        {"root_id": delivery_id},
         root=str(repository),
         workspace_root=str(repository),
         trusted_host_adapter="codex",
@@ -938,6 +1022,435 @@ class WorkspaceExecutionStrategyTests(unittest.TestCase):
             self.assertEqual(
                 scheduler.run("d-serial-second")["status"],
                 "ACTIVE",
+            )
+
+    def test_user_confirmation_ready_releases_committed_clean_turn(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary:
+            repository, _base_commit = _repository(Path(temporary))
+            first_id = "d-confirmation-ready-first"
+            first_task_id = "t-confirmation-ready-first"
+            first_branch = f"feature/{first_id}"
+            second_id = "d-confirmation-ready-second"
+            second_branch = f"feature/{second_id}"
+            git_command(repository, "switch", "-c", first_branch)
+            first = _confirm_existing_branch(
+                repository,
+                first_id,
+                first_task_id,
+                first_branch,
+            )
+            second = _confirm_new_branch(
+                repository,
+                second_id,
+                "t-confirmation-ready-second",
+                second_branch,
+            )
+            self.assertEqual(_select(repository, first)["status"], "ACTIVE")
+            self.assertEqual(_select(repository, second)["status"], "QUEUED")
+
+            implementation = repository / "confirmation-ready-first.txt"
+            implementation.write_text(
+                "implementation awaiting user confirmation\n",
+                encoding="utf-8",
+            )
+            frontier = _complete_to_user_confirmation(
+                repository,
+                delivery_id=first_id,
+                task_id=first_task_id,
+            )
+            self.assertIn(
+                "RECORD_USER_CONFIRMATION",
+                [action["action"] for action in frontier["actions"]],
+            )
+            git_command(repository, "add", implementation.name)
+            git_command(
+                repository,
+                "commit",
+                "-m",
+                "Complete implementation before user confirmation",
+            )
+
+            branch_preparation = _resume(repository, second)
+
+            scheduler = SchedulerRepository(str(repository))
+            self.assertEqual(scheduler.run(first_id)["status"], "ACTIVE")
+            self.assertIsNotNone(scheduler.workspace_turn_release(first_id))
+            self.assertFalse(
+                _is_waiting_for_workspace_turn(branch_preparation),
+                branch_preparation,
+            )
+            self.assertEqual(
+                branch_preparation["nextAction"],
+                "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION",
+            )
+            git_command(repository, "switch", "-c", second_branch, "main")
+            self.assertEqual(_resume(repository, second)["status"], "ACTIVE")
+            completed = call_tool(
+                "record_user_confirmation",
+                {
+                    "root_id": first_id,
+                    "confirmed": True,
+                    "confirmed_by": "human",
+                    "summary": "Accepted after the workspace turn moved on.",
+                },
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="codex",
+            )
+            self.assertEqual(completed["status"], "COMPLETED")
+            self.assertEqual(
+                scheduler.serial_workspace_turn_state(second_id)["state"],
+                "ACQUIRED",
+            )
+
+    def test_user_confirmation_ready_keeps_dirty_turn_blocked(self) -> None:
+        with TemporaryDirectory() as temporary:
+            repository, _base_commit = _repository(Path(temporary))
+            first_id = "d-confirmation-dirty-first"
+            first_task_id = "t-confirmation-dirty-first"
+            first_branch = f"feature/{first_id}"
+            second_id = "d-confirmation-dirty-second"
+            second_branch = f"feature/{second_id}"
+            git_command(repository, "switch", "-c", first_branch)
+            first = _confirm_existing_branch(
+                repository,
+                first_id,
+                first_task_id,
+                first_branch,
+            )
+            second = _confirm_new_branch(
+                repository,
+                second_id,
+                "t-confirmation-dirty-second",
+                second_branch,
+            )
+            _select(repository, first)
+            _select(repository, second)
+            (repository / "confirmation-dirty-first.txt").write_text(
+                "uncommitted implementation\n",
+                encoding="utf-8",
+            )
+            _complete_to_user_confirmation(
+                repository,
+                delivery_id=first_id,
+                task_id=first_task_id,
+            )
+
+            waiting = _resume(repository, second)
+
+            scheduler = SchedulerRepository(str(repository))
+            self.assertTrue(
+                _is_waiting_for_workspace_commit(waiting),
+                waiting,
+            )
+            self.assertIsNone(scheduler.workspace_turn_release(first_id))
+
+    def test_revised_unaccepted_delivery_reenters_workspace_queue(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary:
+            repository, _base_commit = _repository(Path(temporary))
+            first_id = "d-unaccepted-revision-first"
+            first_task_id = "t-unaccepted-revision-first"
+            first_branch = f"feature/{first_id}"
+            second_id = "d-unaccepted-revision-second"
+            second_branch = f"feature/{second_id}"
+            git_command(repository, "switch", "-c", first_branch)
+            first = _confirm_existing_branch(
+                repository,
+                first_id,
+                first_task_id,
+                first_branch,
+            )
+            second = _confirm_new_branch(
+                repository,
+                second_id,
+                "t-unaccepted-revision-second",
+                second_branch,
+            )
+            _select(repository, first)
+            _select(repository, second)
+            implementation = repository / "unaccepted-revision-first.txt"
+            implementation.write_text(
+                "first revision implementation\n",
+                encoding="utf-8",
+            )
+            _complete_to_user_confirmation(
+                repository,
+                delivery_id=first_id,
+                task_id=first_task_id,
+            )
+            git_command(repository, "add", implementation.name)
+            git_command(
+                repository,
+                "commit",
+                "-m",
+                "Commit first revision before confirmation",
+            )
+            branch_preparation = _resume(repository, second)
+            self.assertEqual(
+                branch_preparation["nextAction"],
+                "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION",
+            )
+            scheduler = SchedulerRepository(str(repository))
+            revised = deepcopy(scheduler.hierarchy(first_id)["hierarchy"])
+            revised["root"]["definition"]["summary"] = (
+                "Revise the unaccepted Delivery after user feedback."
+            )
+            prepared = prepare_delivery_revision(
+                root=str(repository),
+                root_id=first_id,
+                expected_current_revision=1,
+                hierarchy=revised,
+                reason="The user requested changes before final acceptance.",
+                continuity_basis="USER_EXPLICIT_SAME_DELIVERY",
+                requested_by="human",
+                workspace_root=str(repository),
+            )
+
+            queued = freeze_hierarchy(
+                root=str(repository),
+                root_id=first_id,
+                expected_delivery_revision=2,
+                expected_hierarchy_fingerprint=prepared[
+                    "hierarchyFingerprint"
+                ],
+                authorized_project_ids=[],
+                confirmed=True,
+                confirmed_by="human",
+                workspace_root=str(repository),
+            )
+
+            self.assertEqual(queued["status"], "QUEUED")
+            self.assertEqual(
+                queued["workspaceTurn"]["state"],
+                "WAITING_FOR_WORKSPACE_TURN",
+            )
+            self.assertEqual(queued["workspaceTurn"]["ownerRootId"], second_id)
+            self.assertEqual(
+                scheduler.serial_workspace_turn_state(first_id)["state"],
+                "WAITING_FOR_WORKSPACE_TURN",
+            )
+            git_command(repository, "switch", "-c", second_branch, "main")
+            self.assertEqual(_resume(repository, second)["status"], "ACTIVE")
+            (repository / "unaccepted-revision-second.txt").write_text(
+                "second Delivery checkpoint\n",
+                encoding="utf-8",
+            )
+            git_command(repository, "add", "unaccepted-revision-second.txt")
+            git_command(
+                repository,
+                "commit",
+                "-m",
+                "Checkpoint second Delivery before cancellation",
+            )
+            call_tool(
+                "cancel_graph_run",
+                {
+                    "root_id": second_id,
+                    "cancelled_by": "human",
+                    "reason": "Release the workspace for the revised Delivery.",
+                },
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="codex",
+            )
+
+            preparation = freeze_hierarchy(
+                root=str(repository),
+                root_id=first_id,
+                expected_delivery_revision=2,
+                expected_hierarchy_fingerprint=prepared[
+                    "hierarchyFingerprint"
+                ],
+                authorized_project_ids=[],
+                confirmed=True,
+                confirmed_by="human",
+                workspace_root=str(repository),
+            )
+
+            self.assertEqual(
+                preparation["nextAction"],
+                "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION",
+            )
+            self.assertEqual(
+                preparation["workspacePreparation"][
+                    "automaticHostPreparation"
+                ]["state"],
+                "READY",
+            )
+            git_command(repository, "switch", first_branch)
+            resumed = freeze_hierarchy(
+                root=str(repository),
+                root_id=first_id,
+                expected_delivery_revision=2,
+                expected_hierarchy_fingerprint=prepared[
+                    "hierarchyFingerprint"
+                ],
+                authorized_project_ids=[],
+                confirmed=True,
+                confirmed_by="human",
+                workspace_root=str(repository),
+            )
+            self.assertEqual(resumed["status"], "ACTIVE")
+            self.assertEqual(resumed["deliveryRevision"], 2)
+
+    def test_manual_delivery_confirmation_ready_releases_clean_turn(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary:
+            repository, _base_commit = _repository(Path(temporary))
+            first_id = "d-manual-confirmation-first"
+            first_task_id = "t-manual-confirmation-first"
+            first_branch = f"feature/{first_id}"
+            second_id = "d-after-manual-confirmation"
+            second_branch = f"feature/{second_id}"
+            git_command(repository, "switch", "-c", first_branch)
+            first = _confirm_existing_branch(
+                repository,
+                first_id,
+                first_task_id,
+                first_branch,
+            )
+            second = _confirm_new_branch(
+                repository,
+                second_id,
+                "t-after-manual-confirmation",
+                second_branch,
+            )
+            handoff = call_tool(
+                "select_execution_mode",
+                {
+                    "root_id": first_id,
+                    "selection": "MANUAL",
+                    "expected_hierarchy_fingerprint": first[
+                        "hierarchyFingerprint"
+                    ],
+                    "expected_graph_fingerprint": first[
+                        "graphFingerprint"
+                    ],
+                    "authorized_project_ids": [],
+                    "confirmed_by": "human",
+                },
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="codex",
+            )
+            call_tool(
+                "start_manual_handoff",
+                {
+                    "root_id": first_id,
+                    "expected_hierarchy_fingerprint": handoff[
+                        "hierarchyFingerprint"
+                    ],
+                    "expected_graph_fingerprint": handoff[
+                        "graphFingerprint"
+                    ],
+                    "started_by": "manual-developer",
+                },
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="codex",
+            )
+            self.assertEqual(_select(repository, second)["status"], "QUEUED")
+            implementation = repository / "manual-confirmation-first.txt"
+            implementation.write_text(
+                "manual implementation awaiting confirmation\n",
+                encoding="utf-8",
+            )
+            frontier = _complete_to_user_confirmation(
+                repository,
+                delivery_id=first_id,
+                task_id=first_task_id,
+                manual_task=True,
+            )
+            self.assertIn(
+                "RECORD_USER_CONFIRMATION",
+                [action["action"] for action in frontier["actions"]],
+            )
+            git_command(repository, "add", implementation.name)
+            git_command(
+                repository,
+                "commit",
+                "-m",
+                "Commit manual implementation before confirmation",
+            )
+
+            branch_preparation = _resume(repository, second)
+
+            self.assertFalse(
+                _is_waiting_for_workspace_turn(branch_preparation),
+                branch_preparation,
+            )
+            self.assertEqual(
+                branch_preparation["nextAction"],
+                "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION",
+            )
+
+    def test_cancelled_clean_turn_ignores_stale_rebase_and_releases(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary:
+            repository, _base_commit = _repository(Path(temporary))
+            first_id = "d-cancelled-stale-rebase"
+            first_branch = f"feature/{first_id}"
+            git_command(repository, "switch", "-c", first_branch)
+            first = _confirm_existing_branch(
+                repository,
+                first_id,
+                "t-cancelled-stale-rebase",
+                first_branch,
+            )
+            self.assertEqual(_select(repository, first)["status"], "ACTIVE")
+            (repository / "cancelled-work.txt").write_text(
+                "committed before cancellation\n",
+                encoding="utf-8",
+            )
+            git_command(repository, "add", "cancelled-work.txt")
+            git_command(
+                repository,
+                "commit",
+                "-m",
+                "Checkpoint work before cancellation",
+            )
+            git_command(repository, "switch", "main")
+            (repository / "mainline-advance.txt").write_text(
+                "advance integration target\n",
+                encoding="utf-8",
+            )
+            git_command(repository, "add", "mainline-advance.txt")
+            git_command(repository, "commit", "-m", "Advance mainline")
+            git_command(repository, "switch", first_branch)
+            cancelled = call_tool(
+                "cancel_graph_run",
+                {
+                    "root_id": first_id,
+                    "cancelled_by": "human",
+                    "reason": "The business goal was abandoned.",
+                },
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="codex",
+            )
+            self.assertEqual(cancelled["status"], "CANCELLED")
+
+            status = call_tool(
+                "workspace_status",
+                {"root_id": first_id},
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="codex",
+            )
+
+            self.assertEqual(status["status"], "CANCELLED")
+            self.assertEqual(status["workspaceTurn"]["state"], "RELEASED")
+            self.assertNotIn("workspaceRebase", status)
+            self.assertIsNotNone(
+                SchedulerRepository(
+                    str(repository)
+                ).workspace_turn_release(first_id)
             )
 
     def test_deliveries_cannot_share_branch(self) -> None:

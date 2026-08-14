@@ -57,6 +57,7 @@ CONTROL_ROOT_MONITOR_TOOLS = frozenset(
         "graph_status",
         "graph_events",
         "open_delivery_dashboard",
+        "record_user_confirmation",
     }
 )
 
@@ -207,6 +208,7 @@ class LayeredDeliveryController:
                     monitoring_from_control_root = True
             if name not in {
                 "archive_delivery",
+                "record_user_confirmation",
                 "workspace_status",
                 "confirm_development_baseline",
                 "prepare_delivery_revision",

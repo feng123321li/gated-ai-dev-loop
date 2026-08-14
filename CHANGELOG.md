@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.24 — 2026-08-14
+
+发布提交：以 tag `v0.39.24` 指向的提交为准
+
+- **TASK 重冻结锚定不可变 Revision**：`refreeze_task_requirement` 不再原地改写当前 hierarchy 后留下旧 Revision 指纹，而是以同一 Delivery 的下一不可变 Revision 原子准备并冻结；Graph、Revision 历史、TASK requirement revision、claim 与事件重放使用同一新指纹，连续重冻结和 MANUAL 模式均保持一致，无实质变化的重冻结不会创建 Revision。
+- **调度完成即可释放物理 turn**：AUTOMATIC 与 MANUAL Run 到达 `RECORD_USER_CONFIRMATION` 后，只要已有可验证业务 commit、working tree/index clean、HEAD 未漂移且没有 receiver/reservation，就提前释放 `CURRENT_WORKSPACE_SERIAL` turn；Delivery 仍等待显式用户确认，确认可在宿主已切换到其他 Delivery 分支后按旧 `rootId` 补录。
+- **多 Delivery 恢复与取消清理**：待验收 Delivery 收到修改时，下一 Revision 重新进入串行队列，轮到后切回冻结分支并捕获新的 clean turn start；`CANCELLED` owner 在同一安全边界直接释放，不依赖归档，终态状态查询不再被过期 `workspaceRebase` 阻塞。
+- **验证**：新增 Revision 指纹/事件重放、自动与手动待确认释放、dirty 阻断、Revision 重入队列及取消后 stale rebase 回归；本地 Python 全量 415 项完成（414 通过、1 项按环境跳过），重新构建 canonical/Plugin 生成镜像，并完成 `compileall`、Skill、Claude Plugin、release candidate 与差异校验。
+
 ## 0.39.23 — 2026-08-14
 
 发布提交：以 tag `v0.39.23` 指向的提交为准

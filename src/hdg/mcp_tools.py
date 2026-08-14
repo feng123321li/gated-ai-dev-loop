@@ -1014,10 +1014,13 @@ TOOLS = (
             "behavior. CURRENT_WORKSPACE_SERIAL permits one Delivery turn at "
             "a time. A later Delivery is returned as QUEUED only after its "
             "AUTOMATIC selection is recorded, and carries an automatic resume "
-            "continuation until the previous turn has a "
-            "verifiable commit, the work tree and index are clean, HEAD still "
-            "matches its frozen binding, and all receivers are safely "
-            "released. Resource conflicts, dirty state, HEAD drift, or "
+            "continuation until the previous run is terminal or ready for "
+            "final user confirmation, has a verifiable business commit, the "
+            "work tree and index are clean, HEAD still matches its frozen "
+            "binding, and all receivers and reservations are safely released. "
+            "A cancelled Delivery releases independently of archive, and "
+            "terminal status suppresses stale workspace-rebase advice. "
+            "Resource conflicts, dirty state, HEAD drift, or "
             "uncertain release return a stop or wait state instead of "
             "switching. With explicit root ID, CHOICE_READY restores "
             "pendingInteraction before frozen-binding runtime verification."
@@ -1171,8 +1174,10 @@ TOOLS = (
             "the human choice immediately and fixes execution to "
             "CURRENT_WORKSPACE_SERIAL: the actual workspace runs one Delivery "
             "turn at a time. A later AUTOMATIC Delivery waits for a verifiable "
-            "commit, a clean work tree and index, unchanged frozen HEAD "
-            "binding, and safe release of every receiver before any branch "
+            "business commit after the previous run is terminal or ready for "
+            "final user confirmation, a clean work tree and index, unchanged "
+            "frozen HEAD binding, and safe release of every receiver and "
+            "reservation before any branch "
             "transition. A frozen MANUAL handoff remains HANDOFF_READY and is "
             "not part of this automatic queue. "
             "At the queue head, the recorded AUTOMATIC choice authorizes the "
@@ -1423,8 +1428,11 @@ TOOLS = (
         (
             "Replace and refreeze one previously unfrozen, unstarted TASK "
             "requirement. The replacement may change only title, summary, "
-            "and opaque Loop payload. The entire current Graph Run must have "
-            "no pending dispatch reservation."
+            "and opaque Loop payload. The Controller anchors the confirmed "
+            "replacement as the next immutable Delivery revision, preserves "
+            "the prior revision fingerprints, and starts the replacement "
+            "Run in the existing execution mode. The entire current Graph "
+            "Run must have no pending dispatch reservation."
         ),
         _object(
             {
@@ -1896,7 +1904,13 @@ TOOLS = (
     ),
     _tool(
         "record_user_confirmation",
-        "Complete the graph after its Review Loop succeeds and the user accepts.",
+        (
+            "Complete the graph after its Review Loop succeeds and the user "
+            "accepts. If the clean committed workspace turn was already "
+            "released at the confirmation boundary, record this control-plane "
+            "decision by root ID without requiring the old Delivery branch to "
+            "be checked out."
+        ),
         _object(
             {
                 "root_id": ROOT_ID,

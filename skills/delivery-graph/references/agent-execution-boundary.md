@@ -18,8 +18,9 @@ Delivery Graph 是 SOP 与 Graph 控制面。它决定哪个 TASK/Review Loop �
 workspace strategy 不改变 receiver 身份协议，并且固定为
 `CURRENT_WORKSPACE_SERIAL`：同一实际 checkout 可绑定多个 Delivery 的控制状态，
 但一次只承载一个 Delivery 的 receiver，每个 Delivery 使用独立分支。已有 owner 时，
-只有已选择 `AUTOMATIC` 的后续 Delivery 标记为 `QUEUED`；前一个 Delivery 形成可验证
-commit、working tree/index clean、HEAD 与冻结 binding 一致且所有 receiver 安全释放后，
+只有已选择 `AUTOMATIC` 的后续 Delivery 标记为 `QUEUED`；前一个 Delivery 进入 Run 终态
+或最终用户确认边界，并形成可验证业务 commit、working tree/index clean、HEAD 与冻结
+binding 一致且所有 receiver/reservation 安全释放后，
 宿主才消费已授权的 stash/create-or-switch/resume 准备。手动冻结 Delivery 持久化为
 `HANDOFF_READY`，不加入自动队列；接收方显式启动时才尝试取得 turn。workspace、
 `resourceClaims` 冲突、owner dirty、未合并或 HEAD 漂移都保持等待。现有 linked checkout

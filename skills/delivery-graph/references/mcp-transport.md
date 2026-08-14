@@ -7,7 +7,7 @@
 - Plugin 未安装、工具未注册或 MCP 未连接：报告 `PLUGIN_MCP_UNAVAILABLE` 并停止治理写入。
 - 运行中断连：报告 `PLUGIN_MCP_DISCONNECTED`，保留最后已知 root、node、operation 与双 fingerprint。恢复时用显式 `workspace_status(root_id=...)` 读取同一 Delivery，继续 `CURRENT_WORKSPACE_SERIAL` 的当前分支状态；不得创建新顶层会话、猜选另一个 Delivery、创建新 worktree 或再次展示选择器。
 - 响应未返回的写操作状态视为未知；重连后先调用 `workspace_status`。调用发生在当前对话工作区，已知 Delivery 时必须显式传 `root_id`。一个 `workspaceKey` 可以绑定多个 Delivery；无参查询返回 `DELIVERY_SELECTION_REQUIRED` 时只展示候选并用本会话保存的 `rootId` 重查，不按更新时间选择。当前目录即使是既有 linked checkout，也只作为普通 current workspace。仅当显式查询返回 `ACTIVE`、`BLOCKED`、`PAUSED`、`COMPLETED` 或 `CANCELLED` 且存在 `rootId` 时，再调用 `graph_status` 和 `graph_frontier`。
-- Git Delivery 重连时同时核对 `gitBinding` 与 `gitWorkspace`。当前 checkout 若位于另一 Delivery 分支，必须先证明前一个 Delivery 已形成可验证 commit、working tree/index clean、HEAD 与冻结 binding 一致且没有在途 receiver。已持久化的 `AUTOMATIC` 选择按 `deliveryQueue.continuation` 等待，轮到队首后由宿主消费 `automaticHostPreparation`：必要时核对精确指纹并 stash 业务改动（排除 `.layered-delivery/**`），创建或切换目标分支，再调用 `resume_execution_mode`；Controller 自身不执行 Git 写操作，也不得重试 `select_execution_mode`。未冻结的新工作区按宿主显式 `base_ref`、有效 `origin/HEAD`、本地 `main`、本地 `master` 的顺序发现基线。资源冲突、owner dirty、未合并、HEAD 漂移或无法证明安全释放时保持等待。
+- Git Delivery 重连时同时核对 `gitBinding` 与 `gitWorkspace`。当前 checkout 若位于另一 Delivery 分支，必须先证明前一个 Delivery 已进入 Run 终态或最终用户确认边界，并形成可验证业务 commit、working tree/index clean、HEAD 与冻结 binding 一致且没有在途 receiver/reservation。已持久化的 `AUTOMATIC` 选择按 `deliveryQueue.continuation` 等待，轮到队首后由宿主消费 `automaticHostPreparation`：必要时核对精确指纹并 stash 业务改动（排除 `.layered-delivery/**`），创建或切换目标分支，再调用 `resume_execution_mode`；Controller 自身不执行 Git 写操作，也不得重试 `select_execution_mode`。待用户确认的 Delivery 可在释放后从另一分支按旧 `rootId` 调用 `record_user_confirmation`，该控制面写入不要求恢复旧 checkout。未冻结的新工作区按宿主显式 `base_ref`、有效 `origin/HEAD`、本地 `main`、本地 `master` 的顺序发现基线。资源冲突、owner dirty、未合并、HEAD 漂移或无法证明安全释放时保持等待。
 
 ## 协议与项目根
 
@@ -17,7 +17,7 @@ Plugin 优先使用 MCP `2026-07-28`。现代客户端可先调用 `server/disco
 
 所有等待用户选择的响应统一发布 `pendingInteraction`；当前 `kind` 为 `DEVELOPMENT_BASELINE` 或 `EXECUTION_MODE`。`activeHostMapping` 指向当前 Adapter 的原生问题工具；该工具在当前上下文可调用时必须直接消费 `options`，不得先输出文本问题。只有工具未暴露或当前模式不可调用时，才按 `presentationPolicy.fallback` 逐字显示 `markdown`，不得追加“回复自动”等 Agent 文案。`developmentBaseline` / `executionChoice` 暂时指向同一对象作为兼容别名，不是第二套状态机。
 
-Claude Plugin 通过启动环境 `${CLAUDE_PROJECT_DIR}` 固定共享控制根，Codex 与 ZCode 的现代请求从每次请求 `_meta` 解析项目根；Adapter 为每次请求提供实际执行 workspace，模型输入路径不能替代它。工作区执行固定为 `CURRENT_WORKSPACE_SERIAL`：已有 owner 时，后来选择 `AUTOMATIC` 的 Delivery 标记为 `QUEUED`；前一个 Delivery 达到 commit、clean、HEAD 与 receiver 释放边界后，宿主才执行已授权的 stash/create-or-switch/resume 准备。同一时刻只运行一个显式 `rootId`。既有 primary 或 linked checkout 都作为当前实际 workspace，不自动创建另一个 worktree。主会话从共享控制根读取状态时只有 `MONITOR_ONLY` 权限。
+Claude Plugin 通过启动环境 `${CLAUDE_PROJECT_DIR}` 固定共享控制根，Codex 与 ZCode 的现代请求从每次请求 `_meta` 解析项目根；Adapter 为每次请求提供实际执行 workspace，模型输入路径不能替代它。工作区执行固定为 `CURRENT_WORKSPACE_SERIAL`：已有 owner 时，后来选择 `AUTOMATIC` 的 Delivery 标记为 `QUEUED`；前一个 Delivery 进入 Run 终态或最终用户确认边界，并达到业务 commit、clean、HEAD 与 receiver/reservation 释放边界后，宿主才执行已授权的 stash/create-or-switch/resume 准备。同一时刻只运行一个显式 `rootId`。既有 primary 或 linked checkout 都作为当前实际 workspace，不自动创建另一个 worktree。主会话从共享控制根读取状态以及补录已释放 Delivery 的最终用户确认时只有 `MONITOR_ONLY` 权限。
 
 Plugin 通过 Skill、Agent 描述、MCP 和宿主元数据工作，不需要额外的生命周期信任步骤。`plan_dispatch_batch` 对所有 Ready TASK 和 Review 使用同一条 AUTO 路径：在容量、资源锁、Graph attempt 和双 fingerprint 校验后创建绑定 decision fingerprint 的短租约 reservation；宿主立即为每项 assignment 创建独立 child，child 以 `dispatch_transport=HOST_NATIVE`、reservation、decision fingerprint 和新的显式 `operation_id` 调用 `dispatch_loop(AUTO)`。未知响应只按同一 reservation/operation 恢复，不生成第二个 claim。
 
@@ -25,7 +25,7 @@ MANUAL TASK 不进入 AUTO planning。启动 manual run 后，独立 receiver �
 
 未显式声明 `delivery.projectScopes` 的单仓 Delivery 在运行时从顶层 `delivery.gitBinding` 与 Adapter 提供的 Delivery workspace 合成唯一 `primary` scope；多仓仍逐项验证显式 scope。workspace 或 scope 无法匹配时，`dispatch_loop` 在 claim 前 fail closed，reservation 只能按既有租约/恢复规则处理。Controller 只看到 Adapter 提供的 workspace、receiver 类型和 assignment 数据，不能以密码学方式证明真实 parent-child 关系、receiver 身份延续或 reviewer 独立性；宿主必须按 assignment 创建独立 child，Controller 则继续强制校验 reservation、decision fingerprint、attempt、workspace、scope、operation、lease 和资源锁。`operation_id` 严禁出现在用户输出、日志、进度、result 或 Worker 输入。
 
-同一实际 workspace 的多个 Delivery 只共享控制面绑定，不共享文件隔离。只有已选择 `AUTOMATIC` 的后续 Delivery 进入自动队列；手动冻结 Delivery 已持久化为 `HANDOFF_READY`，但不产生 `QUEUED` 或自动 continuation，接收方必须显式调用 `start_manual_handoff`。自动队首只有在前一个 Delivery 已形成可验证 commit、工作树 clean、HEAD 未漂移且 receiver 已安全释放后才可准备。`resourceClaims`、端口、数据库或 workspace 冲突、owner dirty、未合并和 HEAD 漂移都保持等待；不得跨 Delivery 并行运行同一 checkout/branch。
+同一实际 workspace 的多个 Delivery 只共享控制面绑定，不共享文件隔离。只有已选择 `AUTOMATIC` 的后续 Delivery 进入自动队列；手动冻结 Delivery 已持久化为 `HANDOFF_READY`，但不产生 `QUEUED` 或自动 continuation，接收方必须显式调用 `start_manual_handoff`。自动队首只有在前一个 Delivery 进入 Run 终态或最终用户确认边界，并形成可验证业务 commit、工作树 clean、HEAD 未漂移且 receiver/reservation 已安全释放后才可准备；人工 Run 到达同一边界也可让出物理 checkout。`CANCELLED` 的安全释放与归档分离，终态查询忽略其过期 rebase advisory。`resourceClaims`、端口、数据库或 workspace 冲突、owner dirty、未合并和 HEAD 漂移都保持等待；不得跨 Delivery 并行运行同一 checkout/branch。
 
 控制面根使用共享 `.layered-delivery/scheduler.db`。每个 `delivery.id` 是稳定的需求目录 namespace，其可读投影固定为：
 

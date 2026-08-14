@@ -346,6 +346,11 @@ class DeliveryExecutionSetupStore:
             "CASE WHEN EXISTS("
             "SELECT 1 FROM graph_events e WHERE e.run_id = r.run_id "
             "AND e.event_type = 'WORKSPACE_TURN_RELEASED'"
+            ") AND NOT EXISTS("
+            "SELECT 1 FROM delivery_revisions pending "
+            "WHERE pending.root_id = h.root_id "
+            "AND pending.revision > h.revision "
+            "AND pending.status = 'PREPARED'"
             ") THEN 1 ELSE 0 END AS turn_released "
             "FROM delivery_workspaces w "
             "JOIN hierarchies h ON h.root_id = w.root_id "
@@ -356,7 +361,10 @@ class DeliveryExecutionSetupStore:
             (workspace_key,),
         ).fetchall()
         queue = []
+        requested_row = None
         for row in rows:
+            if row["root_id"] == requested_root_id:
+                requested_row = row
             if bool(row["turn_released"]):
                 continue
             queue.append(
@@ -371,6 +379,33 @@ class DeliveryExecutionSetupStore:
                     "createdAt": row["created_at"],
                 }
             )
+        if requested_row is None:
+            fail(
+                "SCHEDULER_WORKSPACE_TURN_STATE_INVALID",
+                "The selected Delivery is missing from its serial workspace "
+                "bindings",
+                rootId=requested_root_id,
+                workspaceKey=workspace_key,
+            )
+        if bool(requested_row["turn_released"]):
+            owner = queue[0] if queue else None
+            return {
+                "state": "RELEASED",
+                "strategy": "CURRENT_WORKSPACE_SERIAL",
+                "workspaceKey": workspace_key,
+                "ownerRootId": (
+                    owner["rootId"] if owner is not None else None
+                ),
+                "ownerStatus": (
+                    owner["status"] if owner is not None else None
+                ),
+                "requestedRootId": requested_root_id,
+                "position": None,
+                "queueLength": len(queue),
+                "releasePolicy": (
+                    "OWNER_COMMIT_CLEAN_AND_SAFE_BOUNDARY_THEN_RELEASE"
+                ),
+            }
         requested_position = next(
             (
                 index
@@ -403,7 +438,7 @@ class DeliveryExecutionSetupStore:
             "position": requested_position,
             "queueLength": len(queue),
             "releasePolicy": (
-                "OWNER_COMMIT_CLEAN_AND_TERMINAL_THEN_RELEASE"
+                "OWNER_COMMIT_CLEAN_AND_SAFE_BOUNDARY_THEN_RELEASE"
             ),
         }
 
@@ -617,9 +652,13 @@ class DeliveryExecutionSetupStore:
         return {
             "selection": "AUTOMATIC",
             "state": (
-                "QUEUED"
+                (
+                    "QUEUED"
+                    if workspace_turn["state"]
+                    == "WAITING_FOR_WORKSPACE_TURN"
+                    else workspace_turn["state"]
+                )
                 if workspace_turn is not None
-                and workspace_turn["state"] == "WAITING_FOR_WORKSPACE_TURN"
                 else "RECORDED_PENDING_WORKSPACE_TURN"
             ),
             "confirmationRequired": False,

@@ -7,6 +7,10 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.39.24 发布候选矩阵
+
+0.39.24 保持 33 个 MCP 工具、schema v3、无 Hook 模式与 `CURRENT_WORKSPACE_SERIAL`。TASK requirement 重冻结现在创建同一 Delivery 的下一不可变 Revision，使新 Graph 指纹同时锚定 Revision 历史、claim、投影与事件重放。AUTOMATIC/MANUAL Run 到达最终用户确认边界后，只要业务 commit、clean、HEAD 和 receiver/reservation 门禁满足，就释放物理 workspace turn 而不提前完成 Delivery；用户可在其他 Delivery 已取得 turn 后按旧 `rootId` 补录确认，验收前修改则以新 Revision 重新排队。`CANCELLED` owner 在同一安全边界释放且不依赖归档，终态查询忽略过期 `workspaceRebase`。核心候选已完成 415 项 Python 测试（414 通过、1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Skill、Claude Plugin 与差异校验。
+
 ## 0.39.23 发布候选矩阵
 
 0.39.23 保持 33 个 MCP 工具、schema v3、无 Hook 模式与 `CURRENT_WORKSPACE_SERIAL`。同一 Delivery 从任意 Revision `N` 冻结到 `N+1` 时，项目集合、checkout、分支和完整 Git binding 未变即可复用最初的 clean `workspaceTurnStart`；tracked、staged 与 untracked 业务改动继续属于同一次物理 workspace turn，不要求删除生成物、stash 或检查点提交，且冻结不授权 commit。原始 turn 历史改写、未解决冲突，或项目、checkout、分支、`baseRef`、`baseCommit`、`integrationTarget` 变化时继续 fail closed。核心候选已完成 407 项 Python 测试（406 通过、1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Skill、Plugin 与差异校验。
@@ -106,7 +110,7 @@
 - 看板可见时每 15 秒串行自动刷新，隐藏时暂停；手动刷新仍立即读取 `open_delivery_dashboard`，任何路径都不得调用 `graph_frontier` 推进状态。
 - Dashboard Resource 使用 `ui://delivery-graph/dashboard-v2.html`，避免升级后命中旧缓存；无 UI 宿主仍返回相同的文字和 `structuredContent`。
 - Graph 宽屏按 rank 横向绘制依赖边；面板空间不足时纵向换行并在节点内显示前置项，不产生水平滚动或节点裁切。
-- 同一 checkout 的后续 Delivery 必须等待队首 Run 终态、取消 receiver 租约失效、产生可验证业务 commit、工作树与 index 干净且历史未改写；任何分支、HEAD、scope 或 dirty 漂移都失败关闭。
+- 同一 checkout 的后续 Delivery 必须等待队首 Run 终态或最终用户确认边界、取消 receiver 租约失效且无 reservation、产生可验证业务 commit、工作树与 index 干净且历史未改写；待用户确认仅释放物理 turn，任何分支、HEAD、scope 或 dirty 漂移都失败关闭。
 - TASK/TASK Review 的 Controller 可信 Git 快照会投影为主控制目录下的 `workspace-changes.patch`，供编辑器未打开实际 checkout 时审核 committed、staged、unstaged 与 untracked 变化。
 - 核心候选已通过 369 项 Python 测试（1 项按环境跳过）、编译、Skill/Plugin 镜像、发布与差异校验；真实 Edge 已覆盖 1280/900/600/360 四档宽度。实际 Codex/Claude 会话仍需按本页定义验证面板自动/手动刷新与文本降级。
 ## 0.39.7 发布候选矩阵

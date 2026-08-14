@@ -17,12 +17,12 @@
 - `WAIT_FOR_HOST_CAPACITY`：总调度 Agent 在软阈值暂停后等待宿主原生的一次性恢复提示；到时重新消费 frontier。两种等待都固定 `PAUSE_AND_RESUME`，不自动换 Adapter、模型或 Worker。
 - `RESOLVE_LOOP_BLOCK`：展示 Loop 返回的摘要和不透明 result，等待外部条件或人工决定。
 - `REPLAN_HIERARCHY`：展示外层契约变化及当前 Revision 无法继续的原因，等待用户决定。用户明确要求修改且尚未最终验收时，保持同一 `delivery.id` 调用 `prepare_delivery_revision`；重新评审、授权项目并冻结后，旧 run 自动成为 `SUPERSEDED`。
-- `REFREEZE_TASK_REQUIREMENT`：该未开始 TASK 的需求处于解冻编辑态，当前不可派遣。按用户已经明确提出的修改重跑 TASK 切分完整性预检，再完成 `unfreeze_task_requirement → refreeze_task_requirement` 并重新读取 frontier。任一未领取 reservation 都绑定当前 Graph 指纹；需求修订入口因此会阻断并返回 `SCHEDULER_TASK_REQUIREMENT_RESERVATION_ACTIVE` 与 `retryAfter`，不得让旧 assignment 与新需求并存。
-- `RECORD_USER_CONFIRMATION`：Controller 已按 Graph 确认 `STANDARD` 的 Delivery Acceptance/Readiness 节点进入合法成功终态，或 `LIGHT` 的唯一 TASK 已进入合法成功终态；读取 [acceptance.md](acceptance.md)，等待用户最终接受。这里是状态门禁，不是 Controller 再做一次技术验收。
+- `REFREEZE_TASK_REQUIREMENT`：该未开始 TASK 的需求处于解冻编辑态，当前不可派遣。按用户已经明确提出的修改重跑 TASK 切分完整性预检，再完成 `unfreeze_task_requirement → refreeze_task_requirement`；后者从 SQLite 当前不可变 hierarchy 生成并冻结同一 Delivery 的下一 Revision，沿用执行模式并返回新 Run/双指纹。任一未领取 reservation 都绑定旧 Graph 指纹；需求修订入口因此会阻断并返回 `SCHEDULER_TASK_REQUIREMENT_RESERVATION_ACTIVE` 与 `retryAfter`，不得让旧 assignment 与新需求并存。
+- `RECORD_USER_CONFIRMATION`：Controller 已按 Graph 确认 `STANDARD` 的 Delivery Acceptance/Readiness 节点进入合法成功终态，或 `LIGHT` 的唯一 TASK 已进入合法成功终态；读取 [acceptance.md](acceptance.md)，等待用户最终接受。这里是状态门禁，不是 Controller 再做一次技术验收。若业务变更已 commit、工作区干净且 receiver/reservation 全部释放，可先释放物理 workspace turn；Delivery 仍保持待用户确认。
 
 不要自行增加 TASK/Gate 节点，也不要根据 payload 内容改变 frontier 顺序。
 
-用户选择自动执行时，`select_execution_mode(AUTOMATIC)` 立即持久化一次业务确认；workspace strategy 固定为 `CURRENT_WORKSPACE_SERIAL`。同一物理 checkout 一次只运行一个 Delivery。只有已选择自动执行的后续 Delivery 标记为 `QUEUED` 并携带自动 continuation，等待前一个 Delivery 形成可验证 commit、working tree/index clean、HEAD 与冻结 binding 一致且所有 receiver 安全释放。轮到队首后，宿主按 `automaticHostPreparation.actions` 自动执行：必要时核对指纹并 stash 业务改动（排除 `.layered-delivery/**`），创建或切换目标 Delivery 的独立分支，再以明确 `rootId` 和双 fingerprint 调用 `resume_execution_mode`；不得重试 `select_execution_mode` 或再次询问用户。资源冲突、owner dirty、未合并状态、HEAD 漂移或释放状态不明时保持排队。现有 linked checkout 只按普通 current workspace 处理，不自动创建新 worktree。状态恢复始终显式调用 `workspace_status(root_id=...)`。手动交接冻结会持久化 `HANDOFF_READY` Delivery 和完整需求快照，但不进入自动队列；接收方必须显式调用 `start_manual_handoff`，取得串行 turn 后才创建 manual Run 和独立 TASK receiver。
+用户选择自动执行时，`select_execution_mode(AUTOMATIC)` 立即持久化一次业务确认；workspace strategy 固定为 `CURRENT_WORKSPACE_SERIAL`。同一物理 checkout 一次只运行一个 Delivery。只有已选择自动执行的后续 Delivery 标记为 `QUEUED` 并携带自动 continuation，等待前一个 Delivery 进入 Run 终态，或到达 `RECORD_USER_CONFIRMATION`，且形成可验证业务 commit、working tree/index clean、HEAD 与冻结 binding 一致、所有 receiver/reservation 安全释放。轮到队首后，宿主按 `automaticHostPreparation.actions` 自动执行：必要时核对指纹并 stash 业务改动（排除 `.layered-delivery/**`），创建或切换目标 Delivery 的独立分支，再以明确 `rootId` 和双 fingerprint 调用 `resume_execution_mode`；不得重试 `select_execution_mode` 或再次询问用户。人工 Graph 达到同一安全边界时也可先 commit 并切换新 Delivery 分支，最终用户确认稍后按原 `rootId` 补录。资源冲突、owner dirty、未合并状态、HEAD 漂移或释放状态不明时保持排队。现有 linked checkout 只按普通 current workspace 处理，不自动创建新 worktree。状态恢复始终显式调用 `workspace_status(root_id=...)`。手动交接冻结会持久化 `HANDOFF_READY` Delivery 和完整需求快照，但不进入自动队列；接收方必须显式调用 `start_manual_handoff`，取得串行 turn 后才创建 manual Run 和独立 TASK receiver。
 
 ### 宿主继承与内部 Worker
 
@@ -192,7 +192,7 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 
 ## 资源锁
 
-租约有效的已 claim Loop 占用其全部 `resourceClaims`。共享控制根内任何 Delivery 的另一个 Ready Loop 只要存在相同键就不能 dispatch；frontier 会用 `<rootId>/<nodeId>` 标识跨 Delivery 冲突。租约过期后不再占用跨 Delivery 资源；原 Delivery 下次推进时仍按 `WORKER_LOST` 回收旧 attempt。无 claim 交集也不能绕过 `CURRENT_WORKSPACE_SERIAL`：同一实际 workspace 中只有已选择 `AUTOMATIC` 的后启动或后发现 Delivery 标记为 `QUEUED`，直到前一个 Delivery 已形成可验证 commit、working tree/index clean、HEAD 未漂移且 receiver 安全释放才自动续调；手动冻结 Delivery 保持 `HANDOFF_READY`。冲突、owner dirty、未合并状态或漂移使队列保持等待，不创建新 worktree 规避，也不 stash owner 的未完成改动。不要从路径、仓库层级或模块前缀推导额外资源锁。
+租约有效的已 claim Loop 占用其全部 `resourceClaims`。共享控制根内任何 Delivery 的另一个 Ready Loop 只要存在相同键就不能 dispatch；frontier 会用 `<rootId>/<nodeId>` 标识跨 Delivery 冲突。租约过期后不再占用跨 Delivery 资源；原 Delivery 下次推进时仍按 `WORKER_LOST` 回收旧 attempt。无 claim 交集也不能绕过 `CURRENT_WORKSPACE_SERIAL`：同一实际 workspace 中只有已选择 `AUTOMATIC` 的后启动或后发现 Delivery 标记为 `QUEUED`，直到前一个 Delivery 已进入 Run 终态或到达最终用户确认边界，并形成可验证业务 commit、working tree/index clean、HEAD 未漂移且 receiver/reservation 安全释放才自动续调；手动冻结 Delivery 保持 `HANDOFF_READY`。`CANCELLED` 在该安全边界释放 owner，不需要归档；终态查询忽略过期 `workspaceRebase`。冲突、owner dirty、未合并状态或漂移使队列保持等待，不创建新 worktree 规避，也不 stash owner 的未完成改动。不要从路径、仓库层级或模块前缀推导额外资源锁。
 
 ## 未开始 TASK 的需求修订
 
@@ -201,8 +201,8 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 3. 读取当前 requirement revision，调用 `unfreeze_task_requirement`，提供真实授权人和原因。曾经 claim（包括进入自动重试）、暂停、成功、阻断或取消的 TASK 必须拒绝解冻。
 4. `unfreeze_task_requirement` 与 `refreeze_task_requirement` 都会先让已到期 reservation 失效，再检查当前 Run 是否仍有未领取的有效 reservation。存在时返回 `SCHEDULER_TASK_REQUIREMENT_RESERVATION_ACTIVE`、全部冲突 reservation 和最早 `retryAfter`；等待该时刻后重新读取一次 frontier 再重试，不复用旧 assignment，不轮询，也不绕过控制面修改需求。
 5. 解冻返回完整 `requirement`。只修改 `title`、`summary` 与不透明 `payload`；不得修改依赖、`resourceClaims`、Loop ref、TASK Review、父子层级或 Graph 拓扑。
-6. 以解冻时相同的 `expected_revision`、完整替代 requirement 和真实确认人调用 `refreeze_task_requirement`。成功后 revision 递增、双指纹和 TASK baseline 更新，事件链保留解冻与再冻结审计记录。
-7. `UNFROZEN` 期间 `graph_frontier` 只返回 `REFREEZE_TASK_REQUIREMENT`，`dispatch_loop` 必须拒绝该 TASK；重新冻结并再次读取 frontier 后才可开发。
+6. 以解冻时相同的 TASK `expected_revision`、完整替代 requirement 和真实确认人调用 `refreeze_task_requirement`。Controller 不改写当前 Revision，而是从 SQLite 权威定义创建并冻结下一不可变 Delivery Revision；旧 Revision 双指纹保持不变，新 Run、Graph 指纹、TASK requirement revision 和 baseline 一致更新，并沿用原 AUTOMATIC/MANUAL 模式。
+7. `UNFROZEN` 期间 `graph_frontier` 只返回 `REFREEZE_TASK_REQUIREMENT`，`dispatch_loop` 必须拒绝该 TASK；成功响应后只使用返回的新 Revision/Graph 指纹重新读取 frontier 和规划 assignment，不复用旧指纹、旧 reservation，也不从 Markdown 重建调度状态。
 8. 需求修改若必须改变依赖、资源声明、项目范围或拓扑，不使用局部解冻，继续走 Delivery Revision。
 
 ## Delivery Revision
@@ -214,7 +214,7 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 3. 检查响应中的 `carryForwardTaskIds`。只有 TASK definition、依赖、Loop、资源声明与 TASK Review 完全未变，而且旧 Revision 的实现及 Review 都成功，才会成为携带候选；GROUP 与 Delivery Acceptance/Readiness 不携带。
 4. 展示完整新范围、Revision 编号、携带候选和 `requiredProjectAuthorizations`。跨项目 scope 必须包含当前工作区，所有可写 Git 项目使用同名 feature 分支。
 5. 后续 Revision 没有 Controller `executionChoice`：宿主用自己的原生对话询问自动或手动（这是本 Revision 唯一一次业务确认），随后直接调用对应工具，不要再调用 `select_execution_mode`。自动执行调用 `freeze_hierarchy`，同时提交精确 `expected_delivery_revision`、新 fingerprint、与准备结果完全一致的 `authorized_project_ids` 和真实 `confirmed_by`。手动开发调用 `create_manual_handoff` 输出修订后的完整冻结内容包，但不替换当前 run；接收方真正开始开发前需再次确认如何承接该活动 Delivery。
-6. 自动冻结同一 Delivery 的任意后续 Revision（`N → N+1`）不建立新的物理 workspace turn。项目集合、checkout、分支与冻结基线完全一致时，Controller 复用最初的 clean `workspaceTurnStart`；当前 tracked、staged 与 untracked 业务改动继续属于同一次 Delivery turn，不要求删除、stash 或检查点提交，且本次 Revision 确认不扩大为 commit 授权。存在未解决冲突、原始 turn 历史改写，或项目/绑定变化时仍按 Controller 返回 fail closed。
+6. 自动冻结同一 Delivery 的任意后续 Revision（`N → N+1`）时，若原物理 turn 尚未释放，项目集合、checkout、分支与冻结基线完全一致，Controller 复用最初的 clean `workspaceTurnStart`；当前 tracked、staged 与 untracked 业务改动继续属于同一次 Delivery turn，不要求删除、stash 或检查点提交，且本次 Revision 确认不扩大为 commit 授权。若旧 Revision 已在最终用户确认边界释放 turn，用户提出修改时下一 Revision 重新排到当前 owner 之后；轮到后宿主按返回的 workspace preparation 切回冻结分支并捕获新的 clean `workspaceTurnStart`。存在未解决冲突、turn 历史改写，或项目/绑定变化时仍按 Controller 返回 fail closed。
 7. 只有自动冻结成功后，旧 run 才标记为 `SUPERSEDED`，新 run 继续同一 Delivery 的验收；`revisions.md` 与 `delivery_revision_history` 保留审计链。
 
 ## 恢复

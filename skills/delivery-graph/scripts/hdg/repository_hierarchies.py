@@ -619,6 +619,43 @@ class DeliveryHierarchyStore:
             result.append(task_id)
         return sorted(result)
 
+    @staticmethod
+    def _task_requirement_material(
+        hierarchy: dict[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        return {
+            item["definition"]["id"]: {
+                "title": item["definition"]["title"],
+                "summary": item["definition"]["summary"],
+                "payload": item["definition"]["execution"]["loop"][
+                    "payload"
+                ],
+            }
+            for item in iter_hierarchy_nodes(hierarchy)
+            if item["definition"]["kind"] == "TASK"
+        }
+
+    @classmethod
+    def _next_task_requirement_revisions(
+        cls,
+        previous_hierarchy: dict[str, Any] | None,
+        revised_hierarchy: dict[str, Any],
+        previous_revisions: dict[str, int],
+    ) -> dict[str, int]:
+        revised = cls._task_requirement_material(revised_hierarchy)
+        if previous_hierarchy is None:
+            return {task_id: 1 for task_id in revised}
+        previous = cls._task_requirement_material(previous_hierarchy)
+        return {
+            task_id: (
+                1
+                if task_id not in previous
+                else previous_revisions.get(task_id, 1)
+                + (previous[task_id] != material)
+            )
+            for task_id, material in revised.items()
+        }
+
     def prepare_revision(
         self,
         hierarchy: dict[str, Any],
@@ -801,6 +838,20 @@ class DeliveryHierarchyStore:
                     at,
                 ),
             )
+            if not is_reprepare:
+                released_turn = connection.execute(
+                    "SELECT 1 FROM graph_events "
+                    "WHERE run_id = ? "
+                    "AND event_type = 'WORKSPACE_TURN_RELEASED' "
+                    "LIMIT 1",
+                    (previous_run["run_id"],),
+                ).fetchone()
+                if released_turn is not None:
+                    connection.execute(
+                        "UPDATE delivery_workspaces SET created_at = ?, "
+                        "updated_at = ? WHERE root_id = ?",
+                        (at, at, root_id),
+                    )
         self.write_projections(root_id)
         return {
             "rootId": root_id,
@@ -1166,6 +1217,7 @@ class DeliveryHierarchyStore:
                 max(row["updated_at"], revision_row["updated_at"]),
             )
             previous_run = None
+            previous_hierarchy: dict[str, Any] | None = None
             previous_nodes: dict[str, dict[str, Any]] = {}
             previous_requirement_revisions: dict[str, int] = {}
             if expected_delivery_revision > 1:
@@ -1264,6 +1316,13 @@ class DeliveryHierarchyStore:
                     "WHERE root_id = ? AND revision = ?",
                     (at, at, root_id, previous_revision),
                 )
+            requirement_revisions = (
+                self._next_task_requirement_revisions(
+                    previous_hierarchy,
+                    hierarchy,
+                    previous_requirement_revisions,
+                )
+            )
             run_id = f"run-{uuid.uuid4().hex}"
             connection.execute(
                 "UPDATE hierarchies SET revision = ?, "
@@ -1347,10 +1406,7 @@ class DeliveryHierarchyStore:
                         (
                             run_id,
                             node["workItemId"],
-                            previous_requirement_revisions.get(
-                                node["workItemId"],
-                                1,
-                            ),
+                            requirement_revisions[node["workItemId"]],
                             at,
                         ),
                     )
@@ -1371,6 +1427,7 @@ class DeliveryHierarchyStore:
                     ),
                     "authorizedProjectIds": required_project_ids,
                     "executionMode": execution_mode,
+                    "taskRequirementRevisions": requirement_revisions,
                     **(
                         {"startedBy": graph_started_by}
                         if graph_started_by is not None
@@ -1409,10 +1466,7 @@ class DeliveryHierarchyStore:
                                 "failureClass"
                             ],
                             "requirementRevision": (
-                                previous_requirement_revisions.get(
-                                    task_id,
-                                    1,
-                                )
+                                requirement_revisions[task_id]
                             ),
                         },
                         at=at,

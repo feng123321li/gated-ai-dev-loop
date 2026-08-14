@@ -816,6 +816,8 @@ class SchedulerRepository:
             row = connection.execute(
                 "SELECT e.payload_json FROM graph_events e "
                 "JOIN runs r ON r.run_id = e.run_id "
+                "JOIN hierarchies h ON h.root_id = r.root_id "
+                "AND h.revision = r.revision "
                 "WHERE r.root_id = ? "
                 "AND e.event_type = 'WORKSPACE_TURN_RELEASED' "
                 "ORDER BY e.event_id DESC LIMIT 1",
@@ -944,13 +946,17 @@ class SchedulerRepository:
         *,
         evidence: dict[str, Any],
     ) -> dict[str, Any]:
-        """Persist one idempotent terminal commit/clean release decision."""
+        """Persist one idempotent commit/clean release decision."""
 
         with self.transaction() as connection:
             run = connection.execute(
-                "SELECT r.* FROM runs r "
+                "SELECT r.*, d.hierarchy_json, d.graph_json, "
+                "d.hierarchy_fingerprint, d.graph_fingerprint "
+                "FROM runs r "
                 "JOIN hierarchies h ON h.root_id = r.root_id "
                 "AND h.revision = r.revision "
+                "JOIN delivery_revisions d ON d.root_id = r.root_id "
+                "AND d.revision = r.revision "
                 "WHERE r.root_id = ?",
                 (root_id,),
             ).fetchone()
@@ -969,17 +975,68 @@ class SchedulerRepository:
             if existing is not None:
                 payload = json.loads(existing["payload_json"])
                 return payload
-            if run["status"] not in {
+            terminal = run["status"] in {
                 "COMPLETED",
                 "CANCELLED",
                 "SUPERSEDED",
-            }:
+            }
+            release_reason = "RUN_TERMINAL" if terminal else None
+            if not terminal:
+                _, graph = _validated_stored_definition(run)
+                confirmation = next(
+                    node
+                    for node in graph["nodes"]
+                    if node["kind"] == "USER_CONFIRMATION"
+                )
+                confirmation_state = connection.execute(
+                    "SELECT status FROM node_runs WHERE run_id = ? "
+                    "AND node_id = ? ORDER BY attempt DESC LIMIT 1",
+                    (run["run_id"], confirmation["id"]),
+                ).fetchone()
+                if (
+                    run["status"] == "ACTIVE"
+                    and confirmation_state is not None
+                    and confirmation_state["status"] == "READY"
+                ):
+                    release_reason = "USER_CONFIRMATION_READY"
+            if release_reason is None:
                 fail(
-                    "SCHEDULER_WORKSPACE_TURN_NOT_TERMINAL",
+                    "SCHEDULER_WORKSPACE_TURN_NOT_RELEASABLE",
                     "A workspace turn can release only after its Run is "
-                    "terminal",
+                    "terminal or ready for final user confirmation",
                     rootId=root_id,
                     status=run["status"],
+                )
+            live_claim = connection.execute(
+                "SELECT node_id, attempt, owner, lease_expires_at "
+                "FROM node_runs WHERE run_id = ? AND status = 'CLAIMED' "
+                "ORDER BY node_id LIMIT 1",
+                (run["run_id"],),
+            ).fetchone()
+            if live_claim is not None:
+                fail(
+                    "SCHEDULER_WORKSPACE_TURN_RECEIVER_ACTIVE",
+                    "A workspace turn cannot release while a receiver is active",
+                    rootId=root_id,
+                    nodeId=live_claim["node_id"],
+                    attempt=live_claim["attempt"],
+                    owner=live_claim["owner"],
+                    leaseExpiresAt=live_claim["lease_expires_at"],
+                )
+            active_reservations = [
+                reservation
+                for reservation in self.active_dispatch_reservations(
+                    connection,
+                    at=timestamp(self.now),
+                )
+                if reservation["rootId"] == root_id
+            ]
+            if active_reservations:
+                fail(
+                    "SCHEDULER_WORKSPACE_TURN_RESERVATION_ACTIVE",
+                    "A workspace turn cannot release while dispatch is reserved",
+                    rootId=root_id,
+                    reservations=active_reservations,
                 )
             at = _commit_timestamp(self.now, run["updated_at"])
             payload = {
@@ -987,6 +1044,7 @@ class SchedulerRepository:
                 "strategy": "CURRENT_WORKSPACE_SERIAL",
                 "releasedAt": at,
                 **evidence,
+                "releaseReason": release_reason,
             }
             self.append_event(
                 connection,

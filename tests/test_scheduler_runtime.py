@@ -5448,6 +5448,8 @@ class SchedulerRuntimeTests(unittest.TestCase):
             },
             root=self.root,
         )
+        self.assertEqual(refrozen["deliveryRevision"], 2)
+        self.assertEqual(refrozen["previousRevision"], 1)
         self.assertEqual(
             refrozen["taskRequirement"]["revision"],
             2,
@@ -5455,6 +5457,24 @@ class SchedulerRuntimeTests(unittest.TestCase):
         self.assertEqual(
             refrozen["taskRequirement"]["status"],
             "FROZEN",
+        )
+        history = SchedulerRepository(self.root).revision_history(root_id)
+        self.assertEqual(history["currentRevision"], 2)
+        self.assertEqual(
+            [item["revision"] for item in history["revisions"]],
+            [1, 2],
+        )
+        self.assertEqual(
+            history["revisions"][0]["graphFingerprint"],
+            prepared["graphFingerprint"],
+        )
+        self.assertEqual(
+            history["revisions"][1]["graphFingerprint"],
+            refrozen["graphFingerprint"],
+        )
+        self.assertNotEqual(
+            history["revisions"][0]["graphFingerprint"],
+            history["revisions"][1]["graphFingerprint"],
         )
         context = loop_context(
             root=self.root,
@@ -5469,18 +5489,24 @@ class SchedulerRuntimeTests(unittest.TestCase):
             context["taskRequirement"]["revision"],
             2,
         )
+        claimed = dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=loop_node_id(task_id),
+            owner="agent-refrozen-revision",
+            operation_id="op-refrozen-revision",
+            now=at(3),
+        )
+        self.assertEqual(claimed["status"], "CLAIMED")
+        self.assertEqual(claimed["deliveryRevision"], 2)
         resumed = get_graph_frontier(
             root=self.root,
             root_id=root_id,
-            now=at(3),
+            now=at(4),
         )
-        self.assertIn(
+        self.assertNotIn(
             loop_node_id(task_id),
-            [
-                action.get("nodeId")
-                for action in resumed["actions"]
-                if action["action"] == "DISPATCH_LOOP"
-            ],
+            [item["nodeId"] for item in resumed["readyLoops"]],
         )
         baseline = (
             Path(self.root)
@@ -5567,6 +5593,173 @@ class SchedulerRuntimeTests(unittest.TestCase):
             unfrozen["taskRequirement"]["status"],
             "UNFROZEN",
         )
+
+    def test_repeated_task_refreezes_create_consecutive_delivery_revisions(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        graph_fingerprints = [prepared["graphFingerprint"]]
+
+        for requirement_revision, minute in ((1, 2), (2, 4)):
+            unfrozen = graph_runtime.unfreeze_task_requirement(
+                root=self.root,
+                root_id=root_id,
+                task_id="t-service",
+                expected_revision=requirement_revision,
+                authorized_by="human",
+                reason=f"Clarify requirement revision {requirement_revision + 1}.",
+                now=at(minute),
+            )
+            requirement = unfrozen["taskRequirement"]["requirement"]
+            requirement["summary"] = (
+                f"Implement requirement revision {requirement_revision + 1}."
+            )
+            refrozen = graph_runtime.refreeze_task_requirement(
+                root=self.root,
+                root_id=root_id,
+                task_id="t-service",
+                expected_revision=requirement_revision,
+                requirement=requirement,
+                confirmed_by="human",
+                now=at(minute + 1),
+            )
+            self.assertEqual(
+                refrozen["deliveryRevision"],
+                requirement_revision + 1,
+            )
+            self.assertEqual(
+                refrozen["taskRequirement"]["revision"],
+                requirement_revision + 1,
+            )
+            graph_fingerprints.append(refrozen["graphFingerprint"])
+
+        history = SchedulerRepository(self.root).revision_history(root_id)
+        self.assertEqual(history["currentRevision"], 3)
+        self.assertEqual(
+            [item["revision"] for item in history["revisions"]],
+            [1, 2, 3],
+        )
+        self.assertEqual(
+            [item["graphFingerprint"] for item in history["revisions"]],
+            graph_fingerprints,
+        )
+        claimed = dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=loop_node_id("t-service"),
+            owner="agent-third-delivery-revision",
+            operation_id="op-third-delivery-revision",
+            now=at(6),
+        )
+        self.assertEqual(claimed["status"], "CLAIMED")
+        self.assertEqual(claimed["deliveryRevision"], 3)
+        self.assertEqual(claimed["taskRequirement"]["revision"], 3)
+
+    def test_unchanged_task_refreeze_does_not_create_a_revision(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        unfrozen = graph_runtime.unfreeze_task_requirement(
+            root=self.root,
+            root_id=root_id,
+            task_id="t-service",
+            expected_revision=1,
+            authorized_by="human",
+            reason="Review the requirement without changing it.",
+            now=at(2),
+        )
+
+        with self.assertRaises(GatedLoopError) as caught:
+            graph_runtime.refreeze_task_requirement(
+                root=self.root,
+                root_id=root_id,
+                task_id="t-service",
+                expected_revision=1,
+                requirement=unfrozen["taskRequirement"]["requirement"],
+                confirmed_by="human",
+                now=at(3),
+            )
+
+        self.assertEqual(
+            caught.exception.code,
+            "SCHEDULER_TASK_REQUIREMENT_CHANGE_INVALID",
+        )
+        history = SchedulerRepository(self.root).revision_history(root_id)
+        self.assertEqual(history["currentRevision"], 1)
+        self.assertEqual(len(history["revisions"]), 1)
+
+    def test_manual_task_refreeze_preserves_manual_execution_mode(
+        self,
+    ) -> None:
+        hierarchy = task_hierarchy()
+        preview = preview_hierarchy(
+            root=self.root,
+            hierarchy=hierarchy,
+            now=at(0),
+        )
+        handoff = create_manual_handoff(
+            root=self.root,
+            hierarchy=hierarchy,
+            expected_hierarchy_fingerprint=preview[
+                "hierarchyFingerprint"
+            ],
+            expected_graph_fingerprint=preview["graphFingerprint"],
+            authorized_project_ids=[],
+            confirmed=True,
+            confirmed_by="human",
+            now=at(1),
+        )
+        start_manual_handoff(
+            root=self.root,
+            root_id=handoff["rootId"],
+            expected_hierarchy_fingerprint=handoff[
+                "hierarchyFingerprint"
+            ],
+            expected_graph_fingerprint=handoff["graphFingerprint"],
+            started_by="manual-orchestrator",
+            workspace_root=self.root,
+            now=at(2),
+        )
+        unfrozen = graph_runtime.unfreeze_task_requirement(
+            root=self.root,
+            root_id=handoff["rootId"],
+            task_id="t-service",
+            expected_revision=1,
+            authorized_by="human",
+            reason="Clarify the manual TASK requirement.",
+            now=at(3),
+        )
+        requirement = unfrozen["taskRequirement"]["requirement"]
+        requirement["summary"] = "Implement the clarified manual TASK."
+
+        refrozen = graph_runtime.refreeze_task_requirement(
+            root=self.root,
+            root_id=handoff["rootId"],
+            task_id="t-service",
+            expected_revision=1,
+            requirement=requirement,
+            confirmed_by="human",
+            now=at(4),
+        )
+
+        self.assertEqual(refrozen["deliveryRevision"], 2)
+        self.assertEqual(refrozen["executionMode"], "manual")
+        claimed = runtime_dispatch_loop(
+            root=self.root,
+            root_id=handoff["rootId"],
+            node_id=loop_node_id("t-service"),
+            owner="manual-task-receiver",
+            operation_id="op-manual-refrozen-revision",
+            agent_id="codex",
+            receiver_context_id="manual-task-receiver",
+            dispatch_mode="MANUAL",
+            now=at(5),
+        )
+        self.assertEqual(claimed["status"], "CLAIMED")
+        self.assertEqual(claimed["dispatchMode"], "MANUAL")
+        self.assertEqual(claimed["taskRequirement"]["revision"], 2)
 
     def test_sibling_dispatch_reservation_blocks_requirement_refreeze(
         self,

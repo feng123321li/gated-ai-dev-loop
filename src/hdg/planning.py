@@ -120,6 +120,42 @@ def workspace_status(
             result["graphFingerprint"] = stored["graphFingerprint"]
             _attach_pending_interaction(result, interaction)
             return result
+        if selection is None and result["status"] in {
+            "ACTIVE",
+            "BLOCKED",
+            "PAUSED",
+            "COMPLETED",
+            "CANCELLED",
+            "SUPERSEDED",
+        }:
+            try:
+                unselected_workspace_turn = (
+                    repository.serial_workspace_turn_state(
+                        selected_root_id
+                    )
+                )
+            except GatedLoopError as error:
+                if error.code != "SCHEDULER_DELIVERY_WORKSPACE_MISSING":
+                    raise
+            else:
+                serial_gate = _resolve_serial_workspace_gate(
+                    repository,
+                    workspace_root or root,
+                    selected_root_id,
+                    unselected_workspace_turn,
+                )
+                result["workspaceStrategy"] = "CURRENT_WORKSPACE_SERIAL"
+                result["workspaceTurn"] = serial_gate["workspaceTurn"]
+                if serial_gate["state"] == "RELEASED":
+                    result["nextAction"] = (
+                        "GRAPH_RUN_ALREADY_TERMINAL"
+                        if result["status"] in _SERIAL_TERMINAL_STATUSES
+                        else "READ_GRAPH_FRONTIER"
+                    )
+                    return result
+                if serial_gate["state"] == "WAITING_FOR_WORKSPACE_COMMIT":
+                    result["nextAction"] = "WAIT_FOR_WORKSPACE_COMMIT"
+                    return result
         if selection is not None:
             serial_gate = _resolve_serial_workspace_gate(
                 repository,
@@ -135,6 +171,13 @@ def workspace_status(
             )
             result["workspaceStrategy"] = "CURRENT_WORKSPACE_SERIAL"
             result["workspaceTurn"] = serial_gate["workspaceTurn"]
+            if serial_gate["state"] == "RELEASED":
+                result["nextAction"] = (
+                    "GRAPH_RUN_ALREADY_TERMINAL"
+                    if result["status"] in _SERIAL_TERMINAL_STATUSES
+                    else "READ_GRAPH_FRONTIER"
+                )
+                return result
             if serial_gate["state"] != "ACQUIRED":
                 previous_status = result["status"]
                 result["deliveryStatus"] = previous_status
@@ -743,6 +786,56 @@ def _automatic_serial_workspace_preparation(
     )
 
 
+_SERIAL_TERMINAL_STATUSES = frozenset(
+    {"ARCHIVED", "COMPLETED", "CANCELLED", "SUPERSEDED"}
+)
+
+
+def _serial_workspace_release_eligibility(
+    repository: SchedulerRepository,
+    root_id: str,
+) -> dict[str, str] | None:
+    """Return the Controller-owned safe boundary for one workspace owner."""
+
+    try:
+        run = repository.run(root_id)
+    except GatedLoopError as error:
+        if error.code == "SCHEDULER_RUN_MISSING":
+            return None
+        raise
+    history = repository.revision_history(root_id)
+    if any(
+        revision["revision"] > run["deliveryRevision"]
+        and revision["status"] == "PREPARED"
+        for revision in history["revisions"]
+    ):
+        return None
+    if run["status"] in _SERIAL_TERMINAL_STATUSES:
+        return {
+            "ownerStatus": run["status"],
+            "releaseReason": "RUN_TERMINAL",
+        }
+    if run["status"] != "ACTIVE":
+        return None
+    stored = repository.hierarchy(root_id)
+    confirmation = next(
+        node
+        for node in stored["graph"]["nodes"]
+        if node["kind"] == "USER_CONFIRMATION"
+    )
+    confirmation_state = next(
+        node
+        for node in run["nodes"]
+        if node["nodeId"] == confirmation["id"]
+    )
+    if confirmation_state["status"] != "READY":
+        return None
+    return {
+        "ownerStatus": run["status"],
+        "releaseReason": "USER_CONFIRMATION_READY",
+    }
+
+
 def _serial_commit_barrier(
     repository: SchedulerRepository,
     workspace_root: str,
@@ -762,7 +855,7 @@ def _serial_commit_barrier(
             "ownerStatus": previous_turn["status"],
             "reason": "CANCELLED_RECEIVER_LEASE_ACTIVE",
             "releasePolicy": (
-                "OWNER_RECEIVER_RELEASE_COMMIT_CLEAN_AND_TERMINAL"
+                "OWNER_RECEIVER_RELEASE_COMMIT_CLEAN_AND_SAFE_BOUNDARY"
             ),
             "receiverLeases": receiver_leases,
         }
@@ -911,14 +1004,9 @@ def _serial_commit_barrier(
         "state": "WAITING_FOR_WORKSPACE_COMMIT",
         "ownerRootId": previous_turn["rootId"],
         "ownerStatus": previous_turn["status"],
-        "releasePolicy": "OWNER_COMMIT_CLEAN_AND_TERMINAL_THEN_RELEASE",
+        "releasePolicy": "OWNER_COMMIT_CLEAN_AND_SAFE_BOUNDARY_THEN_RELEASE",
         "projectBarriers": pending_projects,
     }
-
-
-_SERIAL_TERMINAL_STATUSES = frozenset(
-    {"ARCHIVED", "COMPLETED", "CANCELLED", "SUPERSEDED"}
-)
 
 
 def _resolve_serial_workspace_gate(
@@ -927,17 +1015,68 @@ def _resolve_serial_workspace_gate(
     root_id: str,
     workspace_turn: dict[str, Any],
 ) -> dict[str, Any]:
-    """Release verified terminal owners, otherwise return a stable wait gate."""
+    """Release verified safe owners, otherwise return a stable wait gate."""
 
     current = workspace_turn
+    if current["state"] == "RELEASED":
+        return {
+            "state": "RELEASED",
+            "workspaceTurn": current,
+        }
     visited: set[str] = set()
-    while current["state"] != "ACQUIRED":
+    while True:
+        if current["state"] == "ACQUIRED":
+            owner_root_id = current["ownerRootId"]
+            eligibility = _serial_workspace_release_eligibility(
+                repository,
+                owner_root_id,
+            )
+            if eligibility is None:
+                return {
+                    "state": "ACQUIRED",
+                    "workspaceTurn": current,
+                }
+            commit_barrier = _serial_commit_barrier(
+                repository,
+                workspace_root,
+                {
+                    "rootId": owner_root_id,
+                    "status": eligibility["ownerStatus"],
+                },
+            )
+            if commit_barrier is not None:
+                return {
+                    "state": "WAITING_FOR_WORKSPACE_COMMIT",
+                    "workspaceTurn": {
+                        **current,
+                        **commit_barrier,
+                    },
+                }
+            release = repository.workspace_turn_release(owner_root_id)
+            return {
+                "state": "RELEASED",
+                "workspaceTurn": {
+                    **current,
+                    "state": "RELEASED",
+                    "previousOwnerRootId": owner_root_id,
+                    "ownerRootId": None,
+                    "ownerStatus": None,
+                    "position": None,
+                    "queueLength": max(current["queueLength"] - 1, 0),
+                    "release": release,
+                },
+            }
         owner_root_id = current["ownerRootId"]
-        owner_status = current["ownerStatus"]
-        if (
-            owner_root_id in visited
-            or owner_status not in _SERIAL_TERMINAL_STATUSES
-        ):
+        if owner_root_id in visited:
+            return {
+                "state": "WAITING_FOR_WORKSPACE_TURN",
+                "workspaceTurn": current,
+            }
+        eligibility = _serial_workspace_release_eligibility(
+            repository,
+            owner_root_id,
+        )
+        if eligibility is None:
             return {
                 "state": "WAITING_FOR_WORKSPACE_TURN",
                 "workspaceTurn": current,
@@ -948,7 +1087,7 @@ def _resolve_serial_workspace_gate(
             workspace_root,
             {
                 "rootId": owner_root_id,
-                "status": owner_status,
+                "status": eligibility["ownerStatus"],
             },
         )
         if commit_barrier is not None:
@@ -960,10 +1099,6 @@ def _resolve_serial_workspace_gate(
                 },
             }
         current = repository.serial_workspace_turn_state(root_id)
-    return {
-        "state": "ACQUIRED",
-        "workspaceTurn": current,
-    }
 
 
 def _serial_turn_for_recorded_selection(
@@ -1175,7 +1310,7 @@ def _workspace_turn_waiting(
         "workspaceKey": details.get("workspaceKey"),
         "queueOrder": details.get("queueOrder"),
         "releasePolicy": (
-            "OWNER_COMMIT_CLEAN_AND_TERMINAL_THEN_RELEASE"
+            "OWNER_COMMIT_CLEAN_AND_SAFE_BOUNDARY_THEN_RELEASE"
         ),
     }
 
@@ -1198,7 +1333,7 @@ def _delivery_queue_marker(
             "tool": "resume_execution_mode",
             "rootId": root_id,
             "confirmationRequired": False,
-            "trigger": "OWNER_TERMINAL_COMMIT_CLEAN_AND_RELEASED",
+            "trigger": "OWNER_SAFE_BOUNDARY_COMMIT_CLEAN_AND_RELEASED",
         },
     }
 
@@ -1298,9 +1433,10 @@ def _unbound_manual_serial_workspace_gate(
     """Release predecessors before an unbound manual handoff switches Git.
 
     A HANDOFF_READY Delivery cannot join the persisted queue until its frozen
-    branch is current and prepare succeeds. Releasing a terminal predecessor
-    must happen before that branch switch, otherwise its commit evidence can
-    no longer be verified in the shared checkout.
+    branch is current and prepare succeeds. Releasing a predecessor at a safe
+    terminal or final-confirmation boundary must happen before that branch
+    switch, otherwise its commit evidence can no longer be verified in the
+    shared checkout.
     """
 
     while True:
@@ -1329,7 +1465,7 @@ def _unbound_manual_serial_workspace_gate(
                     "position": 1,
                     "queueLength": 1,
                     "releasePolicy": (
-                        "OWNER_COMMIT_CLEAN_AND_TERMINAL_THEN_RELEASE"
+                        "OWNER_COMMIT_CLEAN_AND_SAFE_BOUNDARY_THEN_RELEASE"
                     ),
                 },
             }
@@ -1344,10 +1480,14 @@ def _unbound_manual_serial_workspace_gate(
             "position": len(turns) + 1,
             "queueLength": len(turns) + 1,
             "releasePolicy": (
-                "OWNER_COMMIT_CLEAN_AND_TERMINAL_THEN_RELEASE"
+                "OWNER_COMMIT_CLEAN_AND_SAFE_BOUNDARY_THEN_RELEASE"
             ),
         }
-        if owner["status"] not in _SERIAL_TERMINAL_STATUSES:
+        eligibility = _serial_workspace_release_eligibility(
+            repository,
+            owner["rootId"],
+        )
+        if eligibility is None:
             return {
                 "state": "WAITING_FOR_WORKSPACE_TURN",
                 "workspaceTurn": workspace_turn,
@@ -1357,7 +1497,7 @@ def _unbound_manual_serial_workspace_gate(
             workspace_root,
             {
                 "rootId": owner["rootId"],
-                "status": owner["status"],
+                "status": eligibility["ownerStatus"],
             },
         )
         if commit_barrier is not None:
@@ -1454,6 +1594,22 @@ def _frozen_automatic_result(
         stored=stored,
         workspace_root=workspace_root,
     )
+    terminal = run["status"] in _SERIAL_TERMINAL_STATUSES
+    if serial_gate["state"] == "RELEASED":
+        return {
+            **run,
+            "selection": "AUTOMATIC",
+            "selectionAlreadyApplied": True,
+            "confirmationRequired": False,
+            "automaticDispatchRequested": False,
+            "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
+            "workspaceTurn": serial_gate["workspaceTurn"],
+            "nextAction": (
+                "GRAPH_RUN_ALREADY_TERMINAL"
+                if terminal
+                else "READ_GRAPH_FRONTIER"
+            ),
+        }
     if serial_gate["state"] != "ACQUIRED":
         return {
             "rootId": stored["rootId"],
@@ -1480,7 +1636,6 @@ def _frozen_automatic_result(
             "nextAction": "WAIT_FOR_AUTOMATIC_QUEUE_TURN",
         }
     _verify_frozen_delivery_workspace(stored, workspace_root)
-    terminal = run["status"] in _SERIAL_TERMINAL_STATUSES
     return {
         **run,
         "selection": "AUTOMATIC",
@@ -2462,6 +2617,7 @@ def freeze_hierarchy(
     workspace_turn_start: dict[str, Any] | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
+    _execution_mode: str = "active",
 ) -> dict[str, Any]:
     """Freeze the graph after explicit human confirmation and start it."""
 
@@ -2475,9 +2631,39 @@ def freeze_hierarchy(
             "SCHEDULER_USER_CONFIRMATION_REQUIRED",
             "confirmed_by must identify the confirming human",
         )
+    if _execution_mode not in {"active", "manual"}:
+        fail(
+            "SCHEDULER_EXECUTION_MODE_INVALID",
+            "Graph execution mode must be active or manual",
+            executionMode=_execution_mode,
+        )
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     stored = repository.hierarchy(root_id)
+    if stored["status"] == "ARCHIVED":
+        fail(
+            "SCHEDULER_DELIVERY_ARCHIVED",
+            "An archived Delivery cannot be frozen again",
+            rootId=root_id,
+        )
+    revision_record = next(
+        (
+            revision
+            for revision in repository.revision_history(root_id)[
+                "revisions"
+            ]
+            if revision["revision"] == expected_delivery_revision
+        ),
+        None,
+    )
+    if revision_record is None:
+        fail(
+            "SCHEDULER_REVISION_MISSING",
+            "The requested Delivery revision is missing",
+            rootId=root_id,
+            deliveryRevision=expected_delivery_revision,
+        )
+    revision_graph_fingerprint = revision_record["graphFingerprint"]
     actual_workspace = workspace_root or root
     repository.assert_delivery_workspace(root_id, actual_workspace)
     serial_gate = _resolve_serial_workspace_gate(
@@ -2487,13 +2673,41 @@ def freeze_hierarchy(
         repository.serial_workspace_turn_state(root_id),
     )
     if serial_gate["state"] != "ACQUIRED":
+        if (
+            serial_gate["state"] == "RELEASED"
+            and stored["status"] == "FROZEN"
+            and stored["deliveryRevision"]
+            == expected_delivery_revision
+        ):
+            if (
+                revision_record["hierarchyFingerprint"]
+                != expected_hierarchy_fingerprint
+            ):
+                fail(
+                    "SCHEDULER_REVISION_CONFLICT",
+                    "Hierarchy fingerprint is not current",
+                )
+            run = repository.run(root_id)
+            return {
+                **run,
+                "confirmedBy": confirmed_by.strip(),
+                "graphRunCreated": False,
+                "automaticDispatchRequested": False,
+                "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
+                "workspaceTurn": serial_gate["workspaceTurn"],
+                "nextAction": (
+                    "GRAPH_RUN_ALREADY_TERMINAL"
+                    if run["status"] in _SERIAL_TERMINAL_STATUSES
+                    else "READ_GRAPH_FRONTIER"
+                ),
+            }
         return {
             "rootId": root_id,
             "status": "QUEUED",
             "deliveryStatus": stored["status"],
             "deliveryRevision": expected_delivery_revision,
             "hierarchyFingerprint": expected_hierarchy_fingerprint,
-            "graphFingerprint": stored["graphFingerprint"],
+            "graphFingerprint": revision_graph_fingerprint,
             "graphRunCreated": False,
             "automaticDispatchRequested": False,
             "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
@@ -2508,6 +2722,30 @@ def freeze_hierarchy(
         root_id,
         expected_delivery_revision,
     )
+    previous_turn_released = (
+        repository.workspace_turn_release(root_id) is not None
+    )
+    if previous_turn_released:
+        preparation = _automatic_serial_workspace_preparation(
+            control_root=root,
+            workspace_root=actual_workspace,
+            hierarchy=revision_hierarchy,
+        )
+        if preparation is not None:
+            return {
+                "rootId": root_id,
+                "status": "PREPARED",
+                "deliveryStatus": stored["status"],
+                "deliveryRevision": expected_delivery_revision,
+                "hierarchyFingerprint": expected_hierarchy_fingerprint,
+                "graphFingerprint": revision_graph_fingerprint,
+                "graphRunCreated": False,
+                "automaticDispatchRequested": False,
+                "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
+                "workspaceTurn": serial_gate["workspaceTurn"],
+                "workspacePreparation": preparation,
+                "nextAction": preparation["nextAction"],
+            }
     workspace_requests = _automatic_workspace_requests(
         control_root=root,
         workspace_root=actual_workspace,
@@ -2518,6 +2756,7 @@ def freeze_hierarchy(
         stored["status"] == "FROZEN"
         and expected_delivery_revision
         == stored["deliveryRevision"] + 1
+        and not previous_turn_released
     ):
         captured_turn_start = _continue_workspace_turn_start(
             workspace_requests,
@@ -2543,16 +2782,26 @@ def freeze_hierarchy(
             "The current workspace changed between turn capture and freeze",
             rootId=root_id,
         )
-    result = repository.freeze(
-        root_id,
-        expected_delivery_revision=expected_delivery_revision,
-        expected_hierarchy_fingerprint=(
+    freeze_arguments = {
+        "expected_delivery_revision": expected_delivery_revision,
+        "expected_hierarchy_fingerprint": (
             expected_hierarchy_fingerprint
         ),
-        authorized_project_ids=authorized_project_ids or [],
-        confirmed_by=confirmed_by.strip(),
-        workspace_turn_start=captured_turn_start,
-    )
+        "authorized_project_ids": authorized_project_ids or [],
+        "confirmed_by": confirmed_by.strip(),
+        "workspace_turn_start": captured_turn_start,
+    }
+    if _execution_mode == "manual":
+        result = repository.freeze_manual_handoff(
+            root_id,
+            started_by=confirmed_by.strip(),
+            **freeze_arguments,
+        )
+    else:
+        result = repository.freeze(
+            root_id,
+            **freeze_arguments,
+        )
     return {
         **result,
         "confirmedBy": confirmed_by.strip(),

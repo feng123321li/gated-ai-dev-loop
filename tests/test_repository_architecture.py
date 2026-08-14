@@ -13,6 +13,42 @@ from hdg.repository_projections import DeliveryProjectionStore
 
 
 class RepositoryArchitectureTests(unittest.TestCase):
+    def test_p0_runtime_module_families_stay_below_1000_lines(self) -> None:
+        source_root = Path(__file__).parents[1] / "src" / "hdg"
+        module_patterns = (
+            "graph_runtime*.py",
+            "model_rendering*.py",
+            "planning*.py",
+            "repository_hierarch*.py",
+        )
+
+        paths = {
+            path
+            for pattern in module_patterns
+            for path in source_root.glob(pattern)
+        }
+        self.assertTrue(paths)
+        for path in sorted(paths):
+            with self.subTest(path=path.name):
+                self.assertLessEqual(
+                    len(path.read_text(encoding="utf-8").splitlines()),
+                    1000,
+                    f"{path.name} must be split by responsibility",
+                )
+
+    def test_test_modules_stay_below_1000_lines(self) -> None:
+        tests_root = Path(__file__).parent
+        paths = sorted(tests_root.rglob("*.py"))
+
+        self.assertTrue(paths)
+        for path in paths:
+            with self.subTest(path=path.relative_to(tests_root).as_posix()):
+                self.assertLessEqual(
+                    len(path.read_text(encoding="utf-8").splitlines()),
+                    1000,
+                    f"{path.name} must be split by test responsibility",
+                )
+
     def test_dispatch_persistence_is_owned_by_a_dedicated_store(self) -> None:
         expected_methods = {
             "claimed_resource_reservations",

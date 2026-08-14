@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.39.23 — 2026-08-14
+
+发布提交：以 tag `v0.39.23` 指向的提交为准
+
+- **任意 Revision 连续工作区**：同一 Delivery 从任意 Revision `N` 冻结到 `N+1` 时，只要项目集合、checkout、分支和完整 Git binding 未变，就复用最初的 clean `workspaceTurnStart`。前序 Revision 留下的 tracked、staged 与 untracked 业务改动（包括未忽略的 `__pycache__`）原地继续，不再要求删除、stash 或创建检查点提交，Revision 确认也不扩大为 commit 授权。
+- **连续性安全边界**：原始 turn 历史改写、未解决 Git 冲突，或项目、checkout、分支、`baseRef`、`baseCommit`、`integrationTarget` 任一变化时继续 fail closed；完整 binding 变化回到新的 clean turn 边界，不把旧脏改动错误归入新基线。
+- **Skill 与 MCP 宿主约束**：canonical Skill、规划/执行说明和 `freeze_hierarchy` 工具契约统一声明 `N → N+1` 语义，禁止宿主把后续 Revision 冻结误译成删除生成物或检查点提交授权。
+- **验证**：新增连续冻结 Revision 2、3、4、5，以及 tracked、staged、untracked、历史改写、完整 binding 变化和未解决冲突回归；本地 Python 全量 407 项完成（406 通过、1 项按环境跳过），重新构建 canonical/Plugin 生成镜像，并完成 `compileall`、Skill、Plugin、release candidate 与差异校验。
+
 ## 0.39.22 — 2026-08-13
 
 发布提交：以 tag `v0.39.22` 指向的提交为准

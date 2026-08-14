@@ -1331,7 +1331,13 @@ TOOLS = (
         (
             "Freeze an explicitly prepared later revision. The initial "
             "automatic button calls select_execution_mode(AUTOMATIC), not "
-            "this low-level tool. Manual revisions use "
+            "this low-level tool. Every same-Delivery N-to-N+1 freeze keeps "
+            "the original clean workspace turn when its exact project "
+            "checkouts and Git binding are unchanged, so unfinished business "
+            "changes need not be stashed, deleted, or checkpoint-committed. "
+            "Unmerged conflicts, rewritten turn history, and changed scope "
+            "or binding still fail closed. Freezing never authorizes a Git "
+            "commit. Manual revisions use "
             "create_manual_handoff; their receiving CLI later creates the "
             "governed manual run through start_manual_handoff."
         ),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
@@ -7,6 +8,7 @@ import unittest
 
 from hdg.errors import GatedLoopError
 from hdg.mcp_tools import call_tool
+from hdg.planning import freeze_hierarchy, prepare_delivery_revision
 from hdg.repository import SchedulerRepository
 
 from .test_scheduler_contracts import git_command, isolated_task_hierarchy
@@ -199,6 +201,294 @@ def _is_waiting_for_workspace_commit(result: dict) -> bool:
 
 
 class WorkspaceExecutionStrategyTests(unittest.TestCase):
+    def test_revision_continues_dirty_delivery_workspace_turn(self) -> None:
+        with TemporaryDirectory() as temporary:
+            repository, _base_commit = _repository(Path(temporary))
+            delivery_id = "d-dirty-revision-continuation"
+            branch_ref = f"feature/{delivery_id}"
+            git_command(repository, "switch", "-c", branch_ref)
+            confirmed = _confirm_existing_branch(
+                repository,
+                delivery_id,
+                "t-dirty-revision-continuation",
+                branch_ref,
+            )
+            active = _select(repository, confirmed)
+            self.assertEqual(active["status"], "ACTIVE")
+
+            scheduler = SchedulerRepository(str(repository))
+            original_turn_start = scheduler.workspace_turn_start(
+                delivery_id
+            )
+            (repository / "README.md").write_text(
+                "# unfinished Revision 1 implementation\n",
+                encoding="utf-8",
+            )
+            (repository / "staged-result.py").write_text(
+                "RESULT = 'unfinished'\n",
+                encoding="utf-8",
+            )
+            git_command(repository, "add", "staged-result.py")
+            generated = repository / "__pycache__"
+            generated.mkdir()
+            (generated / "generated.pyc").write_bytes(b"generated")
+            for revision in range(2, 6):
+                revised = deepcopy(
+                    scheduler.hierarchy(delivery_id)["hierarchy"]
+                )
+                revised["root"]["definition"]["summary"] = (
+                    "Continue the same dirty Delivery as Revision "
+                    f"{revision}."
+                )
+                candidate = prepare_delivery_revision(
+                    root=str(repository),
+                    root_id=delivery_id,
+                    expected_current_revision=revision - 1,
+                    hierarchy=revised,
+                    reason=(
+                        "Revise the same Delivery before final acceptance."
+                    ),
+                    continuity_basis="USER_EXPLICIT_SAME_DELIVERY",
+                    requested_by="human",
+                    workspace_root=str(repository),
+                )
+
+                frozen = freeze_hierarchy(
+                    root=str(repository),
+                    root_id=delivery_id,
+                    expected_delivery_revision=revision,
+                    expected_hierarchy_fingerprint=candidate[
+                        "hierarchyFingerprint"
+                    ],
+                    authorized_project_ids=[],
+                    confirmed=True,
+                    confirmed_by="human",
+                    workspace_root=str(repository),
+                )
+
+                self.assertEqual(frozen["deliveryRevision"], revision)
+                self.assertEqual(frozen["status"], "ACTIVE")
+                self.assertEqual(
+                    scheduler.workspace_turn_start(delivery_id),
+                    original_turn_start,
+                )
+            self.assertEqual(
+                git_command(repository, "status", "--short", "README.md"),
+                "M README.md",
+            )
+            self.assertEqual(
+                git_command(
+                    repository,
+                    "status",
+                    "--short",
+                    "staged-result.py",
+                ),
+                "A  staged-result.py",
+            )
+            self.assertEqual(
+                git_command(
+                    repository,
+                    "status",
+                    "--short",
+                    "__pycache__",
+                ),
+                "?? __pycache__/",
+            )
+
+    def test_revision_rejects_rewritten_workspace_turn_history(self) -> None:
+        with TemporaryDirectory() as temporary:
+            repository, base_commit = _repository(Path(temporary))
+            delivery_id = "d-rewritten-revision-turn"
+            branch_ref = f"feature/{delivery_id}"
+            git_command(repository, "switch", "-c", branch_ref)
+            (repository / "before-turn.txt").write_text(
+                "committed before the Delivery turn\n",
+                encoding="utf-8",
+            )
+            git_command(repository, "add", "before-turn.txt")
+            git_command(repository, "commit", "-m", "Prepare feature")
+            confirmed = _confirm_existing_branch(
+                repository,
+                delivery_id,
+                "t-rewritten-revision-turn",
+                branch_ref,
+            )
+            active = _select(repository, confirmed)
+            self.assertEqual(active["status"], "ACTIVE")
+            git_command(repository, "reset", "--hard", base_commit)
+
+            scheduler = SchedulerRepository(str(repository))
+            revised = deepcopy(
+                scheduler.hierarchy(delivery_id)["hierarchy"]
+            )
+            revised["root"]["definition"]["summary"] = (
+                "Attempt to continue after rewriting the turn history."
+            )
+            candidate = prepare_delivery_revision(
+                root=str(repository),
+                root_id=delivery_id,
+                expected_current_revision=1,
+                hierarchy=revised,
+                reason="Exercise rewritten turn protection.",
+                continuity_basis="USER_EXPLICIT_SAME_DELIVERY",
+                requested_by="human",
+                workspace_root=str(repository),
+            )
+
+            with self.assertRaises(GatedLoopError) as rejected:
+                freeze_hierarchy(
+                    root=str(repository),
+                    root_id=delivery_id,
+                    expected_delivery_revision=2,
+                    expected_hierarchy_fingerprint=candidate[
+                        "hierarchyFingerprint"
+                    ],
+                    authorized_project_ids=[],
+                    confirmed=True,
+                    confirmed_by="human",
+                    workspace_root=str(repository),
+                )
+
+            self.assertEqual(
+                rejected.exception.code,
+                "SCHEDULER_GIT_TURN_START_INVALID",
+            )
+
+    def test_revision_binding_change_requires_a_clean_boundary(self) -> None:
+        with TemporaryDirectory() as temporary:
+            repository, _base_commit = _repository(Path(temporary))
+            delivery_id = "d-changed-revision-binding"
+            branch_ref = f"feature/{delivery_id}"
+            git_command(repository, "branch", "release")
+            git_command(repository, "switch", "-c", branch_ref)
+            confirmed = _confirm_existing_branch(
+                repository,
+                delivery_id,
+                "t-changed-revision-binding",
+                branch_ref,
+            )
+            active = _select(repository, confirmed)
+            self.assertEqual(active["status"], "ACTIVE")
+            (repository / "README.md").write_text(
+                "# unfinished work under the original binding\n",
+                encoding="utf-8",
+            )
+
+            scheduler = SchedulerRepository(str(repository))
+            revised = deepcopy(
+                scheduler.hierarchy(delivery_id)["hierarchy"]
+            )
+            revised["delivery"]["gitBinding"]["baseRef"] = "release"
+            revised["delivery"]["gitBinding"][
+                "integrationTarget"
+            ] = "release"
+            candidate = prepare_delivery_revision(
+                root=str(repository),
+                root_id=delivery_id,
+                expected_current_revision=1,
+                hierarchy=revised,
+                reason="Change the frozen integration target.",
+                continuity_basis="USER_EXPLICIT_SAME_DELIVERY",
+                requested_by="human",
+                workspace_root=str(repository),
+            )
+
+            with self.assertRaises(GatedLoopError) as rejected:
+                freeze_hierarchy(
+                    root=str(repository),
+                    root_id=delivery_id,
+                    expected_delivery_revision=2,
+                    expected_hierarchy_fingerprint=candidate[
+                        "hierarchyFingerprint"
+                    ],
+                    authorized_project_ids=[],
+                    confirmed=True,
+                    confirmed_by="human",
+                    workspace_root=str(repository),
+                )
+
+            self.assertEqual(
+                rejected.exception.code,
+                "SCHEDULER_WORKSPACE_TURN_DIRTY",
+            )
+
+    def test_revision_rejects_unresolved_git_conflicts(self) -> None:
+        with TemporaryDirectory() as temporary:
+            repository, _base_commit = _repository(Path(temporary))
+            git_command(repository, "switch", "-c", "conflict-side")
+            (repository / "README.md").write_text(
+                "conflicting side change\n",
+                encoding="utf-8",
+            )
+            git_command(repository, "add", "README.md")
+            git_command(repository, "commit", "-m", "Create side change")
+            git_command(repository, "switch", "main")
+            delivery_id = "d-conflicted-revision-turn"
+            branch_ref = f"feature/{delivery_id}"
+            git_command(repository, "switch", "-c", branch_ref)
+            confirmed = _confirm_existing_branch(
+                repository,
+                delivery_id,
+                "t-conflicted-revision-turn",
+                branch_ref,
+            )
+            active = _select(repository, confirmed)
+            self.assertEqual(active["status"], "ACTIVE")
+            (repository / "README.md").write_text(
+                "conflicting Delivery change\n",
+                encoding="utf-8",
+            )
+            git_command(repository, "add", "README.md")
+            git_command(
+                repository,
+                "commit",
+                "-m",
+                "Create Delivery-side change",
+            )
+            with self.assertRaises(subprocess.CalledProcessError):
+                git_command(repository, "merge", "conflict-side")
+
+            scheduler = SchedulerRepository(str(repository))
+            revised = deepcopy(
+                scheduler.hierarchy(delivery_id)["hierarchy"]
+            )
+            revised["root"]["definition"]["summary"] = (
+                "Attempt to continue with unresolved conflicts."
+            )
+            candidate = prepare_delivery_revision(
+                root=str(repository),
+                root_id=delivery_id,
+                expected_current_revision=1,
+                hierarchy=revised,
+                reason="Exercise unresolved conflict protection.",
+                continuity_basis="USER_EXPLICIT_SAME_DELIVERY",
+                requested_by="human",
+                workspace_root=str(repository),
+            )
+
+            with self.assertRaises(GatedLoopError) as rejected:
+                freeze_hierarchy(
+                    root=str(repository),
+                    root_id=delivery_id,
+                    expected_delivery_revision=2,
+                    expected_hierarchy_fingerprint=candidate[
+                        "hierarchyFingerprint"
+                    ],
+                    authorized_project_ids=[],
+                    confirmed=True,
+                    confirmed_by="human",
+                    workspace_root=str(repository),
+                )
+
+            self.assertEqual(
+                rejected.exception.code,
+                "SCHEDULER_WORKSPACE_TURN_DIRTY",
+            )
+            self.assertEqual(
+                rejected.exception.details["nextAction"],
+                "RESOLVE_CONFLICTS_BEFORE_FREEZING_REVISION",
+            )
+
     def test_automatic_defaults_to_current_workspace_serial(self) -> None:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary)

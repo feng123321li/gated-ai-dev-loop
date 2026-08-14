@@ -106,6 +106,7 @@ allowed-tools:
 
 - 用户只确认一次执行模式；`select_execution_mode` 立即持久化该选择。若 Controller 返回 `PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION`，宿主完成串行释放检查和当前分支动作后调用 `resume_execution_mode`，不重试选择、不重新提问。用户输入需求修改意见时不要调用选择工具；继续规划并使旧选择失效。
 - 选择 `AUTOMATIC` 时只使用 `CURRENT_WORKSPACE_SERIAL`，不创建或预留新 worktree。已有 owner 时，响应与投影把后启动 Delivery 标记为 `QUEUED`；保存其 `deliveryQueue.continuation`，前一个 Delivery 产生可验证 commit、working tree/index clean、HEAD 与冻结 binding 一致且 receiver 全部安全释放后自动续接，不重选模式。
+- 同一 Delivery 冻结任意后续 Revision（`N → N+1`）时不开始新的物理 workspace turn。项目集合、checkout、分支与冻结基线未变时，Controller 复用最初的 clean `workspaceTurnStart`，允许前序 Revision 已产生的 tracked、staged 或 untracked 业务改动原地进入下一 Revision；不得要求用户删除生成物、stash 或创建检查点提交，且 Revision 确认仍不授权 commit。未解决冲突、原始 turn 历史被改写，或项目/绑定变化时继续 fail closed，并按返回的清洁边界处理。
 - 队首读取 `workspacePreparation.automaticHostPreparation` 并按顺序机械执行。dirty 且无冲突时，先核对每个 `workingTreeStateFingerprint`，用返回的 pathspec stash tracked/staged/untracked 业务改动且排除 `.layered-delivery/**`；再创建或切换冻结分支，最后以明确 `rootId` 与双 fingerprint 调用 `resume_execution_mode`。保留 stash 直到回到原分支用 index 语义成功恢复，不自动 pop。clean 时直接创建或切换分支并 resume；未合并或 stash 后仍 dirty 时保持排队/等待。
 - 多项目 Delivery 的全部 `READ_WRITE` Git scope 必须同时满足上述切换条件并一起完成自动准备；任一 scope 存在资源冲突、owner dirty、未合并状态、HEAD 漂移或无法证明安全释放时停止切换。现有 primary 或 linked checkout 都按当前实际 workspace 处理，不自动创建第二个 worktree。同一 checkout 一次只推进一个显式 `rootId`。
 - `FROZEN_DELIVERY_BRANCH_REQUIRED` 只允许在可验证 commit、clean tree、HEAD 未漂移且 receiver 安全释放后恢复冻结分支；`FROZEN_DELIVERY_BRANCH_DIRTY` 必须停止切换。全部 project workspace 验证通过后才按响应继续 `resume_execution_mode` 或 frontier。

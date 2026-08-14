@@ -214,7 +214,8 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 3. 检查响应中的 `carryForwardTaskIds`。只有 TASK definition、依赖、Loop、资源声明与 TASK Review 完全未变，而且旧 Revision 的实现及 Review 都成功，才会成为携带候选；GROUP 与 Delivery Acceptance/Readiness 不携带。
 4. 展示完整新范围、Revision 编号、携带候选和 `requiredProjectAuthorizations`。跨项目 scope 必须包含当前工作区，所有可写 Git 项目使用同名 feature 分支。
 5. 后续 Revision 没有 Controller `executionChoice`：宿主用自己的原生对话询问自动或手动（这是本 Revision 唯一一次业务确认），随后直接调用对应工具，不要再调用 `select_execution_mode`。自动执行调用 `freeze_hierarchy`，同时提交精确 `expected_delivery_revision`、新 fingerprint、与准备结果完全一致的 `authorized_project_ids` 和真实 `confirmed_by`。手动开发调用 `create_manual_handoff` 输出修订后的完整冻结内容包，但不替换当前 run；接收方真正开始开发前需再次确认如何承接该活动 Delivery。
-6. 只有自动冻结成功后，旧 run 才标记为 `SUPERSEDED`，新 run 继续同一 Delivery 的验收；`revisions.md` 与 `delivery_revision_history` 保留审计链。
+6. 自动冻结同一 Delivery 的任意后续 Revision（`N → N+1`）不建立新的物理 workspace turn。项目集合、checkout、分支与冻结基线完全一致时，Controller 复用最初的 clean `workspaceTurnStart`；当前 tracked、staged 与 untracked 业务改动继续属于同一次 Delivery turn，不要求删除、stash 或检查点提交，且本次 Revision 确认不扩大为 commit 授权。存在未解决冲突、原始 turn 历史改写，或项目/绑定变化时仍按 Controller 返回 fail closed。
+7. 只有自动冻结成功后，旧 run 才标记为 `SUPERSEDED`，新 run 继续同一 Delivery 的验收；`revisions.md` 与 `delivery_revision_history` 保留审计链。
 
 ## 恢复
 

@@ -1056,6 +1056,113 @@ def _capture_workspace_turn_start(
     }
 
 
+def _continue_workspace_turn_start(
+    requests: list[dict[str, Any]],
+    previous_requests: list[dict[str, Any]],
+    workspace_root: str,
+    previous_turn_start: object,
+) -> dict[str, Any] | None:
+    """Reuse one Delivery's original turn boundary across a Revision.
+
+    A later Revision supersedes the current Graph run, not the Delivery's
+    physical workspace turn. Requiring a new clean boundary here would force
+    the user to commit unfinished work from the previous Revision even though
+    commits remain separately authorized. Reuse is deliberately exact: a
+    project, checkout, branch, or frozen base change falls back to the normal
+    clean turn-start capture.
+    """
+
+    if not isinstance(previous_turn_start, dict):
+        return None
+    previous_projects = previous_turn_start.get("projects")
+    if not isinstance(previous_projects, list):
+        return None
+    previous_by_project = {
+        item.get("projectId"): item
+        for item in previous_projects
+        if isinstance(item, dict)
+        and isinstance(item.get("projectId"), str)
+    }
+    previous_request_by_project = {
+        request["projectId"]: request
+        for request in previous_requests
+    }
+    project_ids = {request["projectId"] for request in requests}
+    if (
+        len(previous_by_project) != len(previous_projects)
+        or set(previous_by_project) != project_ids
+        or set(previous_request_by_project) != project_ids
+    ):
+        return None
+
+    for request in requests:
+        target_root = _request_workspace_root(request, workspace_root)
+        resolved_root = str(
+            Path(target_root).absolute().resolve(strict=True)
+        )
+        previous = previous_by_project[request["projectId"]]
+        previous_request = previous_request_by_project[
+            request["projectId"]
+        ]
+        if (
+            previous_request["gitBinding"] != request["gitBinding"]
+            or previous_request["repositoryKey"]
+            != request["repositoryKey"]
+            or previous_request["coordinatorWorkspace"]
+            != request["coordinatorWorkspace"]
+            or previous.get("workspaceRoot") != resolved_root
+            or previous.get("workspaceKey")
+            != SchedulerRepository.workspace_key(target_root)
+            or previous.get("branchRef") != request["branchRef"]
+            or previous.get("baseCommit")
+            != request["gitBinding"]["baseCommit"]
+        ):
+            return None
+        verified = verify_delivery_git_binding(
+            target_root,
+            request["gitBinding"],
+            preparing=False,
+        )
+        if verified is None:
+            fail(
+                "SCHEDULER_GIT_CHECKOUT_REQUIRED",
+                "A Git-bound serial workspace turn requires a Git checkout",
+                projectId=request["projectId"],
+            )
+        commit_range = inspect_business_commit_range(
+            target_root,
+            str(previous.get("turnStartCommit", "")),
+            verified["headCommit"],
+        )
+        if not commit_range["turnStartCommitIsAncestor"]:
+            fail(
+                "SCHEDULER_GIT_TURN_START_INVALID",
+                "A Delivery Revision cannot continue after its original "
+                "workspace turn history was rewritten",
+                projectId=request["projectId"],
+                workspaceRoot=resolved_root,
+                turnStartCommit=previous.get("turnStartCommit"),
+                headCommit=verified["headCommit"],
+            )
+        discovery = inspect_delivery_git_workspace(target_root)
+        working_tree = (
+            discovery.get("workingTree", {})
+            if isinstance(discovery, dict)
+            else {}
+        )
+        if working_tree.get("hasUnmergedChanges") is True:
+            fail(
+                "SCHEDULER_WORKSPACE_TURN_DIRTY",
+                "A Delivery Revision cannot continue with unresolved Git "
+                "conflicts",
+                projectId=request["projectId"],
+                workspaceRoot=resolved_root,
+                workingTree=working_tree,
+                nextAction="RESOLVE_CONFLICTS_BEFORE_FREEZING_REVISION",
+            )
+    return deepcopy(previous_turn_start)
+
+
 def _workspace_turn_waiting(
     error: GatedLoopError,
 ) -> dict[str, Any]:
@@ -2401,14 +2508,32 @@ def freeze_hierarchy(
         root_id,
         expected_delivery_revision,
     )
-    captured_turn_start = _capture_workspace_turn_start(
-        _automatic_workspace_requests(
-            control_root=root,
-            workspace_root=actual_workspace,
-            hierarchy=revision_hierarchy,
-        ),
-        actual_workspace,
+    workspace_requests = _automatic_workspace_requests(
+        control_root=root,
+        workspace_root=actual_workspace,
+        hierarchy=revision_hierarchy,
     )
+    captured_turn_start = None
+    if (
+        stored["status"] == "FROZEN"
+        and expected_delivery_revision
+        == stored["deliveryRevision"] + 1
+    ):
+        captured_turn_start = _continue_workspace_turn_start(
+            workspace_requests,
+            _automatic_workspace_requests(
+                control_root=root,
+                workspace_root=actual_workspace,
+                hierarchy=stored["hierarchy"],
+            ),
+            actual_workspace,
+            repository.workspace_turn_start(root_id),
+        )
+    if captured_turn_start is None:
+        captured_turn_start = _capture_workspace_turn_start(
+            workspace_requests,
+            actual_workspace,
+        )
     if (
         workspace_turn_start is not None
         and workspace_turn_start != captured_turn_start

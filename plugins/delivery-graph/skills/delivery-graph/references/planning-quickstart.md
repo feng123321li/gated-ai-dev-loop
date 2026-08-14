@@ -12,6 +12,7 @@
 - 用户给出工单号、需求号等稳定外部标识时，将其规范化写入 `delivery.requirementKey`。同一 key 只能映射一个稳定 `delivery.id`；Controller 还会从 Delivery ID/标题识别常见 `PROJECT-123` 工单号，在 preview 与最终写入两处拒绝换 ID 后重复冻结。
 - `HANDOFF_READY` 手动需求变化时不创建新 Delivery，也不调用只适用于自动 Graph 的 `prepare_delivery_revision`。保持相同 `delivery.id` 重新 preview 后，再调用 `create_manual_handoff`，同时提交 `expected_current_revision`、`continuity_basis=USER_EXPLICIT_SAME_DELIVERY` 和非空 `revision_reason`；旧手动 Revision 标记为 `SUPERSEDED`，新 handoff 与当前投影继续位于原目录。
 - `prepare_delivery_revision` 只生成待确认候选，不替换当前 hierarchy 或旧 run，不应触发宿主通用确认弹窗；用户在完整范围和授权清单上选择自动执行或手动开发，才是该 Revision 唯一一次业务确认。
+- 自动冻结同一 Delivery 的任意后续 Revision（`N → N+1`）继续原有物理 workspace turn，而不是要求新的 clean run。项目集合、checkout、分支与冻结基线未变时，Controller 复用最初的 clean `workspaceTurnStart`，前序 Revision 的 tracked、staged 和 untracked 业务改动无需删除、stash 或检查点提交；冻结确认不授权 commit。未解决冲突、turn 历史改写或项目/绑定变化仍 fail closed。
 - 当前上下文不再持有精确 fingerprint 或原始 hierarchy 时，不从旧投影反推机器输入，也不猜测旧值；重新收集需求并 preview 后再请求执行方式确认。
 
 ## 先按真实改动判断保障档

@@ -7,6 +7,10 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.39.23 发布候选矩阵
+
+0.39.23 保持 33 个 MCP 工具、schema v3、无 Hook 模式与 `CURRENT_WORKSPACE_SERIAL`。同一 Delivery 从任意 Revision `N` 冻结到 `N+1` 时，项目集合、checkout、分支和完整 Git binding 未变即可复用最初的 clean `workspaceTurnStart`；tracked、staged 与 untracked 业务改动继续属于同一次物理 workspace turn，不要求删除生成物、stash 或检查点提交，且冻结不授权 commit。原始 turn 历史改写、未解决冲突，或项目、checkout、分支、`baseRef`、`baseCommit`、`integrationTarget` 变化时继续 fail closed。核心候选已完成 407 项 Python 测试（406 通过、1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Skill、Plugin 与差异校验。
+
 ## 0.39.22 发布候选矩阵
 
 0.39.22 保持 33 个 MCP 工具、schema v3、无 Hook 模式与 `CURRENT_WORKSPACE_SERIAL`。宿主规划层生成足以推进各 Loop 的方向、约束、外部契约和验收；Graph 将工作项整理为 hierarchy/DAG，以 `rootId`、不可变 Revision、双 fingerprint、SQLite/事件链和 `loop_context` 统一承担总览、绑定、持久记忆、依赖/资源控制、调度、恢复及进度/结果汇总，但不创作业务需求或决定实现。用户明确指定的 Skill 在规划相关时可预触发，并始终随自动 assignment、手动 TASK action/handoff 与 Loop context 传给相应 receiver；适用且宿主可用时应在相应阶段原生触发，实现类 Skill 通常位于 TASK，阶段不适用或宿主不可用可跳过。Controller 不查询 catalog、不要求使用回执，也不以未使用提示阻断成功。本候选已完成 403 项 Python 测试（402 通过、1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Plugin 与差异校验。

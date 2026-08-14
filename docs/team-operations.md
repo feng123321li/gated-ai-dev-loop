@@ -1,6 +1,6 @@
 # 团队安装与运维
 
-本文面向团队管理员和普通使用者，覆盖 `delivery-graph` 0.39.22 的安装、升级、恢复、卸载与回滚。展示名为“分层交付 Graph 控制面”。Plugin 同时支持 Codex、Claude Code 与 ZCode，项目运行时仅依赖 Python 3.10+ 和标准库。
+本文面向团队管理员和普通使用者，覆盖 `delivery-graph` 0.39.23 的安装、升级、恢复、卸载与回滚。展示名为“分层交付 Graph 控制面”。Plugin 同时支持 Codex、Claude Code 与 ZCode，项目运行时仅依赖 Python 3.10+ 和标准库。
 
 ## 安装前检查
 
@@ -41,7 +41,7 @@ claude plugin list --json
 python scripts/host_smoke.py probe --json
 ```
 
-结果必须报告 Plugin 版本 0.39.22 和 33 个 MCP 工具，并如实标记本机已安装的宿主。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在目标宿主执行真实宿主冒烟任务；宿主不要求安装在同一台机器。MCP 工具是否真正注入各 workspace/Agent schema，使用[注册矩阵与生命周期契约](mcp-host-lifecycle-contract.md)中的只读 Demo 单独验证。
+结果必须报告 Plugin 版本 0.39.23 和 33 个 MCP 工具，并如实标记本机已安装的宿主。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在目标宿主执行真实宿主冒烟任务；宿主不要求安装在同一台机器。MCP 工具是否真正注入各 workspace/Agent schema，使用[注册矩阵与生命周期契约](mcp-host-lifecycle-contract.md)中的只读 Demo 单独验证。
 
 真实冒烟默认先只展示计划，必须显式增加 `--execute` 才调用模型。两个宿主分别运行，绝不从一个终端跨调另一个 Agent：
 
@@ -53,11 +53,12 @@ python scripts/host_smoke.py run --host codex --scenario light
 python scripts/host_smoke.py run --host codex --scenario light --execute
 ```
 
-Claude 命令从当前 0.39.22 源码发布包的 `--plugin-dir` 加载 Plugin；Codex 命令要求候选 Plugin 已从 Marketplace 安装。发布前可用 LIGHT 验证 `recommend_assurance_profile → select_execution_mode → 当前 checkout 分支准备 → resume_execution_mode → plan_dispatch_batch → 独立 TASK child → dispatch_loop(AUTO) → result`；短任务允许没有显式 heartbeat/progress。再用 STANDARD 覆盖首次 heartbeat、进度和独立 Review。Claude 由主会话在 `CURRENT_WORKSPACE_SERIAL` 边界内协调当前分支和独立 receiver Agent，不启动专用后台 coordinator。任何输出中的 `claimedAgents` 都只能包含命令指定的当前宿主。
+Claude 命令从当前 0.39.23 源码发布包的 `--plugin-dir` 加载 Plugin；Codex 命令要求候选 Plugin 已从 Marketplace 安装。发布前可用 LIGHT 验证 `recommend_assurance_profile → select_execution_mode → 当前 checkout 分支准备 → resume_execution_mode → plan_dispatch_batch → 独立 TASK child → dispatch_loop(AUTO) → result`；短任务允许没有显式 heartbeat/progress。再用 STANDARD 覆盖首次 heartbeat、进度和独立 Review。Claude 由主会话在 `CURRENT_WORKSPACE_SERIAL` 边界内协调当前分支和独立 receiver Agent，不启动专用后台 coordinator。任何输出中的 `claimedAgents` 都只能包含命令指定的当前宿主。
 
-0.39.22 真实冒烟还必须覆盖以下交互和失败关闭边界：
+0.39.23 真实冒烟还必须覆盖以下交互和失败关闭边界：
 
 - `preview_hierarchy`、`workspace_status` 和手动接管只返回一个当前 `pendingInteraction`。缺少 `gitBinding` 时先处理 `DEVELOPMENT_BASELINE`，确认后才出现 `EXECUTION_MODE`；同一 Delivery 的后续 Revision 可复用已记忆基线。
+- 同一 Delivery 连续冻结 Revision 2、3、4、5 时，项目集合、checkout、分支和完整 Git binding 未变应复用最初的 clean `workspaceTurnStart`；tracked、staged、untracked 与未忽略的 `__pycache__` 保持原地，不要求删除、stash 或检查点提交。改变完整 binding、改写 turn 历史或制造未解决冲突时必须 fail closed。
 - 干净和脏工作树都进入这条基线流程。直接 adoption 当前脏分支时必须回传原响应的 `dirtyStateFingerprint`，且变化路径内容、暂存区或 porcelain 状态任一改变都会使旧指纹失效；选择另一个 Delivery 分支时不把当前改动归属给新 Delivery，待其成为队首后由 `automaticHostPreparation` stash。
 - `start_manual_handoff` 的单仓 Git 漂移先阻断且零写入。确认原 binding 时保持当前 Revision，确认新 binding 时生成下一不可变 Revision；多仓漂移 fail closed，要求用完整 project bindings 创建新的手动 Revision。
 - Controller 只读计算并冻结 binding；当前 checkout 的分支创建或切换仍由宿主完成。Plugin 不公开 worktree setup 工具，也不自动创建 linked worktree；已存在的 linked checkout 仅作为普通 current workspace。

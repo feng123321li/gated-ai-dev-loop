@@ -1,0 +1,7 @@
+interface:
+  display_name: "Delivery Graph 派遣协调"
+  short_description: "派遣 frontier receiver，监控等待并安全恢复"
+  default_prompt: "使用 $delivery-graph-dispatch 协调已冻结 Graph 的派遣、等待与恢复。"
+
+policy:
+  allow_implicit_invocation: true

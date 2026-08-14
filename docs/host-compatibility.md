@@ -7,6 +7,10 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.40.0 发布候选矩阵
+
+0.40.0 将职责拆为四个 Skill：`delivery-graph` 负责规划、基线、Revision 与冻结，`delivery-graph-dispatch` 负责 frontier、派遣、等待与恢复，`delivery-graph-task` 只执行 TASK Loop，`delivery-graph-review` 只执行 Review Loop。Plugin 同时注册 planning、dispatch、receiver 三个 MCP server，分别暴露 16、12、7 个工具；Profile 联集保持原有 33 个工具，单个 Agent 不再加载完整目录，越权调用以 `MCP_TOOL_OUTSIDE_PROFILE` 失败关闭。Codex、Claude Code 与 ZCode 使用相同 Profile 边界，敏感审批、schema v3、`CURRENT_WORKSPACE_SERIAL`、Python 3.10+ 标准库运行时及已有 `.layered-delivery/` 数据均不变，无需迁移。核心候选已完成 422 项 Python 测试（421 通过、1 项按环境跳过）、编译、四 Skill/Plugin 镜像、release candidate、Skill、Claude Plugin 与差异校验。
+
 ## 0.39.24 发布候选矩阵
 
 0.39.24 保持 33 个 MCP 工具、schema v3、无 Hook 模式与 `CURRENT_WORKSPACE_SERIAL`。TASK requirement 重冻结现在创建同一 Delivery 的下一不可变 Revision，使新 Graph 指纹同时锚定 Revision 历史、claim、投影与事件重放。AUTOMATIC/MANUAL Run 到达最终用户确认边界后，只要业务 commit、clean、HEAD 和 receiver/reservation 门禁满足，就释放物理 workspace turn 而不提前完成 Delivery；用户可在其他 Delivery 已取得 turn 后按旧 `rootId` 补录确认，验收前修改则以新 Revision 重新排队。`CANCELLED` owner 在同一安全边界释放且不依赖归档，终态查询忽略过期 `workspaceRebase`。核心候选已完成 415 项 Python 测试（414 通过、1 项按环境跳过）、编译、Skill/Plugin 镜像、release candidate、Skill、Claude Plugin 与差异校验。

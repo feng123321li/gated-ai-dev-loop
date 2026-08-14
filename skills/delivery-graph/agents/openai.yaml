@@ -1,7 +1,7 @@
 interface:
   display_name: "分层交付 Graph 控制面"
-  short_description: "冻结交付基线，调度分层 Graph、审查与恢复"
-  default_prompt: "使用 $delivery-graph 确认 Git 基线，生成并冻结分层交付 Graph，处理 Controller 返回的 pendingInteraction；自动模式派遣后台执行，手动模式生成可移植 handoff。"
+  short_description: "规划需求、确认 Git 基线并冻结 Delivery Graph"
+  default_prompt: "使用 $delivery-graph 规划 schema v3 Delivery Graph、确认 Git 基线并选择执行模式。"
 
 policy:
   allow_implicit_invocation: true

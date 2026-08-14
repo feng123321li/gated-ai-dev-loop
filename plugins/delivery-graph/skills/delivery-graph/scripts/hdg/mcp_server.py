@@ -21,6 +21,7 @@ from .mcp_adapter import (
     handle_message,
     report_internal_error,
 )
+from .mcp_catalog import ALL_TOOL_PROFILE, TOOL_PROFILES
 
 
 MAX_MESSAGE_BYTES = 8 * 1024 * 1024
@@ -167,6 +168,7 @@ def serve(
     root: str | os.PathLike[str] | None = None,
     project_root_from_meta: bool = False,
     explicit_dogfood: bool = False,
+    tool_profile: str = ALL_TOOL_PROFILE,
     diagnostic_stream: TextIO | None = None,
 ) -> None:
     """Serve the MCP adapter over newline-delimited stdio JSON-RPC."""
@@ -177,6 +179,7 @@ def serve(
             from_sandbox_meta=project_root_from_meta,
         ),
         trusted_host_adapter=os.environ.get("HDG_HOST_ADAPTER"),
+        tool_profile=tool_profile,
     )
     request_count = 0
     tool_catalog_delivered = False
@@ -188,6 +191,7 @@ def serve(
             "REQUEST_META" if project_root_from_meta else "STARTUP_CONFIGURATION"
         ),
         supportedProtocolVersions=list(SUPPORTED_PROTOCOL_VERSIONS),
+        toolProfile=connection.tool_profile,
         diagnosticHint=(
             "The host spawned delivery-graph over stdio. The next expected "
             "step is server/discover or direct tools/list for MCP 2026-07-28, "
@@ -374,6 +378,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Explicitly allow writes in the delivery-graph source repository.",
     )
+    parser.add_argument(
+        "--tool-profile",
+        choices=TOOL_PROFILES,
+        default=ALL_TOOL_PROFILE,
+        help="Expose only the tools assigned to one workflow role.",
+    )
     args = parser.parse_args(argv)
     try:
         _configure_utf8_stdio()
@@ -383,6 +393,7 @@ def main(argv: list[str] | None = None) -> int:
             root=args.project_root,
             project_root_from_meta=args.project_root_from_meta,
             explicit_dogfood=args.dogfood,
+            tool_profile=args.tool_profile,
             diagnostic_stream=sys.stderr,
         )
         return 0

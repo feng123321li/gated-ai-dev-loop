@@ -1,0 +1,7 @@
+interface:
+  display_name: "Delivery Graph TASK Receiver"
+  short_description: "执行一个 TASK Loop 并提交可审计验证证据"
+  default_prompt: "使用 $delivery-graph-task 执行当前 assignment 指定的 TASK Loop。"
+
+policy:
+  allow_implicit_invocation: false

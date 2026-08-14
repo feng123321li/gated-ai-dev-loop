@@ -15,17 +15,37 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src"
 sys.path.insert(0, str(SOURCE))
 
-from hdg.mcp_tools import tool_definitions  # noqa: E402
+from hdg.mcp_catalog import (  # noqa: E402
+    DISPATCH_TOOL_PROFILE,
+    PLANNING_TOOL_PROFILE,
+    RECEIVER_TOOL_PROFILE,
+    TOOL_PROFILES,
+    tool_names_for_profile,
+)
 
 
-DEFAULT_PREFIXES = {
-    "zcode": "mcp__plugin_delivery-graph_delivery-graph__",
-    "codex": "mcp__plugin_delivery-graph_delivery-graph__",
+PROFILE_SERVER_SUFFIXES = {
+    PLANNING_TOOL_PROFILE: "delivery-graph",
+    DISPATCH_TOOL_PROFILE: "delivery-graph-dispatch",
+    RECEIVER_TOOL_PROFILE: "delivery-graph-receiver",
 }
-DEFAULT_SERVER_NAMES = {
-    "zcode": "plugin:delivery-graph:delivery-graph",
-    "codex": "plugin:delivery-graph:delivery-graph",
-}
+HOSTS = ("zcode", "codex")
+
+
+def _default_tool_prefix(profile: str) -> str:
+    return (
+        "mcp__plugin_delivery-graph_"
+        f"{PROFILE_SERVER_SUFFIXES[profile]}__"
+    )
+
+
+def _default_server_name(profile: str) -> str:
+    return (
+        "plugin:delivery-graph:"
+        f"{PROFILE_SERVER_SUFFIXES[profile]}"
+    )
+
+
 _LIFECYCLE_STAGES = {
     "mcp.server.connect.started": "SPAWN_STARTED",
     "mcp.server.connected": "CONNECTED",
@@ -327,7 +347,13 @@ def _default_paths(host: str) -> tuple[list[Path], list[Path]]:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--host", choices=tuple(DEFAULT_PREFIXES), required=True)
+    parser.add_argument("--host", choices=HOSTS, required=True)
+    parser.add_argument(
+        "--profile",
+        choices=TOOL_PROFILES,
+        default=PLANNING_TOOL_PROFILE,
+        help="Validate one profiled MCP server catalog.",
+    )
     parser.add_argument("--model-io", action="append", default=[])
     parser.add_argument("--lifecycle-log", action="append", default=[])
     parser.add_argument("--tool-prefix")
@@ -351,15 +377,16 @@ def main(argv: list[str] | None = None) -> int:
     lifecycle_paths = [Path(value) for value in args.lifecycle_log] or default_lifecycle
     lifecycle = lifecycle_index(
         _read_jsonl(lifecycle_paths),
-        server_name=args.server_name or DEFAULT_SERVER_NAMES[args.host],
+        server_name=args.server_name or _default_server_name(args.profile),
     )
-    tool_prefix = args.tool_prefix or DEFAULT_PREFIXES[args.host]
+    tool_prefix = args.tool_prefix or _default_tool_prefix(args.profile)
+    profile_names = sorted(tool_names_for_profile(args.profile))
     expected_names = (
         None
         if args.expected_count is not None
         else [
-            tool_prefix + str(tool["name"])
-            for tool in tool_definitions()
+            tool_prefix + tool_name
+            for tool_name in profile_names
         ]
     )
     matrix = build_registration_matrix(
@@ -367,7 +394,7 @@ def main(argv: list[str] | None = None) -> int:
         source=",".join(str(path) for path in model_paths),
         host=args.host,
         tool_prefix=tool_prefix,
-        expected_count=args.expected_count or len(tool_definitions()),
+        expected_count=args.expected_count or len(profile_names),
         lifecycle=lifecycle,
         expected_names=expected_names,
     )

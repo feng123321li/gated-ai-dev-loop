@@ -5,7 +5,37 @@
       "args": [
         "-X",
         "utf8",
-        "${CLAUDE_PLUGIN_ROOT}/skills/delivery-graph/scripts/hdg_mcp.py"
+        "${CLAUDE_PLUGIN_ROOT}/skills/delivery-graph/scripts/hdg_mcp.py",
+        "--tool-profile",
+        "planning"
+      ],
+      "env": {
+        "HDG_PROJECT_ROOT": "${CLAUDE_PROJECT_DIR}",
+        "HDG_HOST_ADAPTER": "claude-code"
+      }
+    },
+    "delivery-graph-dispatch": {
+      "command": "python",
+      "args": [
+        "-X",
+        "utf8",
+        "${CLAUDE_PLUGIN_ROOT}/skills/delivery-graph/scripts/hdg_mcp.py",
+        "--tool-profile",
+        "dispatch"
+      ],
+      "env": {
+        "HDG_PROJECT_ROOT": "${CLAUDE_PROJECT_DIR}",
+        "HDG_HOST_ADAPTER": "claude-code"
+      }
+    },
+    "delivery-graph-receiver": {
+      "command": "python",
+      "args": [
+        "-X",
+        "utf8",
+        "${CLAUDE_PLUGIN_ROOT}/skills/delivery-graph/scripts/hdg_mcp.py",
+        "--tool-profile",
+        "receiver"
       ],
       "env": {
         "HDG_PROJECT_ROOT": "${CLAUDE_PROJECT_DIR}",

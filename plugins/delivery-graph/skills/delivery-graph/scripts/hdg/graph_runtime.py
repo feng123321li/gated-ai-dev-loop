@@ -12,6 +12,7 @@ from .dispatch_contracts import (
     HOST_NATIVE_DISPATCH_TRANSPORT,
     advisory_skill_hint_prompt,
     automatic_dispatch_decision_fingerprint,
+    receiver_skill_prompt,
 )
 from .errors import fail
 from .git_binding import (
@@ -1949,10 +1950,10 @@ def handoff_ready_automatic_task(
                 "仍由 AUTOMATIC 独立 receiver 执行。"
             )
             + (
-                advisory_skill_hint_prompt(
-                    stored["hierarchy"]["root"]["skillHints"]
+                receiver_skill_prompt(
+                    "TASK_LOOP",
+                    stored["hierarchy"]["root"]["skillHints"],
                 )
-                or ""
             ),
         },
     }

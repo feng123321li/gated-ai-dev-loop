@@ -1,6 +1,6 @@
 # MCP 宿主生命周期、健康与注册矩阵契约
 
-本契约把“Plugin 配置正确但工具没有进入 Agent schema”定义为宿主注册故障，而不是 Delivery Graph 状态故障。诊断链必须在 `delivery-graph` MCP 不可调用时仍可工作；不得用 Graph 工具、Shell/SQLite 旁路或模拟返回修补治理状态。
+本契约把“Plugin 配置正确但工具没有进入 Agent schema”定义为宿主注册故障，而不是 Delivery Graph 状态故障。诊断链必须在 `delivery-graph`、`delivery-graph-dispatch` 或 `delivery-graph-receiver` 任一 MCP 不可调用时仍可工作；不得用 Graph 工具、Shell/SQLite 旁路或模拟返回修补治理状态。
 
 ## 协议基线
 
@@ -37,20 +37,24 @@
 ```text
 python scripts/mcp_registration_probe.py --host zcode --strict
 
+python scripts/mcp_registration_probe.py --host zcode --profile dispatch --strict
+
+python scripts/mcp_registration_probe.py --host zcode --profile receiver --strict
+
 python scripts/mcp_registration_probe.py --host codex \
   --model-io <model-io.jsonl> \
   --lifecycle-log <mcp-lifecycle.jsonl> \
   --strict
 ```
 
-Demo 只解析 model request 的工具目录与宿主生命周期 JSONL；不会调用模型、不会调用任何 MCP 工具、不会访问 `scheduler.db`、不会写治理状态。结果按 workspace、session 和 Agent role 形成矩阵：
+Demo 只解析 model request 的工具目录与宿主生命周期 JSONL；不会调用模型、不会调用任何 MCP 工具、不会访问 `scheduler.db`、不会写治理状态。结果按 workspace、session、Agent role 和指定 Profile 形成矩阵。默认验证 `planning`，`--profile dispatch|receiver` 分别验证另两个 server：
 
-- `REGISTERED`：该 Agent schema 中出现完整 33 工具目录；
+- `REGISTERED`：该 Agent schema 中出现当前 Profile 的完整工具目录；
 - `PLUGIN_MCP_UNAVAILABLE`：schema 可观察，但没有 delivery-graph 工具；
 - `PARTIAL_REGISTRATION`：只注入部分工具；
 - `NOT_OBSERVABLE`：日志没有工具目录，不能下故障结论。
 
-ZCode 默认读取 `~/.zcode/cli/rollout/model-io-*.jsonl` 与 `~/.zcode/cli/log/*.jsonl`；Codex 日志位置由宿主版本决定，因此显式传入。若宿主使用不同 namespace 或 server 名，可用 `--tool-prefix`、`--server-name` 覆盖。
+ZCode 默认读取 `~/.zcode/cli/rollout/model-io-*.jsonl` 与 `~/.zcode/cli/log/*.jsonl`；Codex 日志位置由宿主版本决定，因此显式传入。三个 Profile 的工具联集为 33，但单 server 只发布自己的静态子集。若宿主使用不同 namespace 或 server 名，可用 `--tool-prefix`、`--server-name` 覆盖。
 
 仓库还提供会话外 supervisor / 每-turn 动态目录的纯参考模拟：
 
@@ -62,7 +66,7 @@ python scripts/mcp_dynamic_catalog_demo.py
 
 ## 跨工作区 / Agent 回归门禁
 
-最小矩阵至少覆盖两个 workspace，并在每个 workspace 覆盖 primary/coordinator 与一个 child Agent。每个可观察 case 都必须为 `REGISTERED`、`matchingToolCount=33`，且最近一次 lifecycle attempt 不能以 `FAILED` 结束。`NOT_OBSERVABLE` 只能标为证据缺失，不能算通过。
+最小矩阵至少覆盖两个 workspace，并在每个 workspace 覆盖 planning primary、dispatch coordinator、TASK/Review child；三种 Profile 分别运行探针。每个可观察 case 都必须为 `REGISTERED`、`matchingToolCount` 等于该 Profile 的目录大小，且最近一次 lifecycle attempt 不能以 `FAILED` 结束。`NOT_OBSERVABLE` 只能标为证据缺失，不能算通过。
 
 当任一 case 为 `PLUGIN_MCP_UNAVAILABLE` 或 `PARTIAL_REGISTRATION` 时，测试失败并停止该会话的治理写入。Agent 不得伪造 `workspace_status`、preview、freeze 或 dispatch 状态。
 
@@ -73,6 +77,6 @@ python scripts/mcp_dynamic_catalog_demo.py
 1. 用户或健康策略对精确 server 发起 reconnect，不重启整个会话；
 2. 宿主结束旧 attempt，创建新 attempt，并完整记录 spawn、stderr、timeout 和协议阶段；
 3. modern 重新执行 discovery/list，legacy 重新 initialize/list；
-4. 只有完整目录通过名称/schema 校验后，才从下一模型 turn 起原子使用新目录；失败时保留明确不可用状态，不注入半套工具；
+4. 只有该 Profile 的完整目录通过名称/schema 校验后，才从下一模型 turn 起原子使用新目录；失败时保留明确不可用状态，不注入半套工具；
 5. 主 Agent 下一 turn 与之后新建的 child Agent 都读取 registry 最新目录，并在矩阵中产生新的可观察 case；会话级固化 schema 的旧宿主明确返回 `RECONNECT_REQUIRES_AGENT_RESTART`；
 6. 重连不自动重放任何未知结果的写操作。工具恢复后先由业务会话使用保存的 `rootId` 读取权威状态。

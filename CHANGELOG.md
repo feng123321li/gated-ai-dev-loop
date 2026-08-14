@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.40.0 — 2026-08-14
+
+发布提交：以 tag `v0.40.0` 指向的提交为准
+
+- **四个职责 Skill**：将原有单体入口拆为 `delivery-graph` 规划与冻结、`delivery-graph-dispatch` frontier/派遣与恢复、`delivery-graph-task` TASK receiver、`delivery-graph-review` Review receiver；自动 assignment、手动交接和 review prompt 都携带精确 Skill catalog 路由，减少无关上下文与职责混用。
+- **三个 MCP 工具 Profile**：同一 Controller 按 planning、dispatch、receiver 启动三个 MCP server，分别暴露 16、12、7 个工具；Profile 联集仍为原有 33 个工具。`tools/list` 只返回当前目录，越权 `tools/call` 以 `MCP_TOOL_OUTSIDE_PROFILE` 失败关闭，敏感工具审批边界保持不变。
+- **MCP Adapter 模块化**：将 server instructions、Profile 定义和工具 catalog 从过大的 `mcp_adapter.py` 抽到独立 `mcp_catalog.py`；构建、注册探针、宿主冒烟和发布校验统一验证四 Skill、三 server 与 Profile 联集，Codex、Claude Code、ZCode manifest 保持一致。
+- **兼容性与验证**：保持 schema v3、Python 3.10+ 标准库运行时与 `.layered-delivery/` 数据 namespace；已有 Graph 无需迁移。全量 Python 422 项完成（421 通过、1 项按环境跳过），并完成 `compileall`、四个 Skill、Claude Plugin、release candidate 与差异校验。
+
 ## 0.39.24 — 2026-08-14
 
 发布提交：以 tag `v0.39.24` 指向的提交为准

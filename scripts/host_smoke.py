@@ -21,7 +21,24 @@ SOURCE = ROOT / "src"
 sys.path.insert(0, str(SOURCE))
 
 from hdg import __version__  # noqa: E402
+from hdg.mcp_catalog import (  # noqa: E402
+    DISPATCH_TOOL_PROFILE,
+    PLANNING_TOOL_PROFILE,
+    RECEIVER_TOOL_PROFILE,
+    tool_names_for_profile,
+)
 from hdg.mcp_tools import tool_definitions  # noqa: E402
+
+
+PROFILE_TOOL_PREFIXES = {
+    PLANNING_TOOL_PROFILE: "mcp__plugin_delivery-graph_delivery-graph__",
+    DISPATCH_TOOL_PROFILE: (
+        "mcp__plugin_delivery-graph_delivery-graph-dispatch__"
+    ),
+    RECEIVER_TOOL_PROFILE: (
+        "mcp__plugin_delivery-graph_delivery-graph-receiver__"
+    ),
+}
 
 
 def _host_version(executable: str) -> dict[str, object]:
@@ -52,6 +69,11 @@ def probe() -> dict[str, object]:
     return {
         "pluginVersion": __version__,
         "toolCount": len(tool_definitions()),
+        "mcpServerCount": len(PROFILE_TOOL_PREFIXES),
+        "profileToolCounts": {
+            profile: len(tool_names_for_profile(profile))
+            for profile in PROFILE_TOOL_PREFIXES
+        },
         "modelInvocationStarted": False,
         "hosts": {
             "codex": _host_version("codex"),
@@ -402,10 +424,10 @@ def _host_command(
             "Bash(py *)",
             "Bash(git *)",
             *[
-                "mcp__plugin_delivery-graph_delivery-graph__"
-                f"{tool['name']}"
-                for tool in tool_definitions()
-                if tool["name"] != "record_user_confirmation"
+                prefix + tool_name
+                for profile, prefix in PROFILE_TOOL_PREFIXES.items()
+                for tool_name in sorted(tool_names_for_profile(profile))
+                if tool_name != "record_user_confirmation"
             ],
         ]
         final_confirmation_tool = (

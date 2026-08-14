@@ -17,6 +17,14 @@ HOST_ADAPTER_RECEIVER_AGENTS = {
     "zcode": "zcode",
 }
 
+RECEIVER_SKILLS = {
+    "TASK_LOOP": "delivery-graph-task",
+    "TASK_REVIEW_LOOP": "delivery-graph-review",
+    "GROUP_REVIEW_LOOP": "delivery-graph-review",
+    "DELIVERY_ACCEPTANCE_LOOP": "delivery-graph-review",
+    "DELIVERY_READINESS_LOOP": "delivery-graph-review",
+}
+
 
 def advisory_skill_hint_prompt(
     skill_hints: list[dict[str, str]],
@@ -63,6 +71,43 @@ def advisory_skill_hint_prompt(
     )
 
 
+def receiver_skill_prompt(
+    loop_kind: str,
+    skill_hints: list[dict[str, str]],
+    *,
+    host_adapter_id: str | None = None,
+) -> str:
+    """Route one isolated Loop receiver to its mandatory role Skill."""
+
+    skill_name = RECEIVER_SKILLS.get(loop_kind)
+    if skill_name is None:
+        raise ValueError(f"Unsupported receiver Loop kind: {loop_kind}")
+    if host_adapter_id == "codex":
+        invocation = f"`${skill_name}`"
+        host_instruction = f"先原生触发 {invocation}。"
+    elif host_adapter_id == "claude-code":
+        invocation = f"`{skill_name}`"
+        host_instruction = (
+            "先通过原生 Skill tool 按 catalog 名 "
+            f"{invocation} 调用角色 Skill。"
+        )
+    else:
+        host_instruction = (
+            f"Codex 先原生触发 `${skill_name}`；其他宿主先通过原生 "
+            f"Skill 入口按 catalog 名 `{skill_name}` 调用。"
+        )
+    role = "TASK 实现" if loop_kind == "TASK_LOOP" else "独立 Review"
+    required = (
+        f"这是 {role} receiver；{host_instruction}"
+        "只处理 assignment 指定的 node，不规划、派遣或接管其他 Loop。"
+    )
+    advisory = advisory_skill_hint_prompt(
+        skill_hints,
+        host_adapter_id=host_adapter_id,
+    )
+    return required + (advisory or "")
+
+
 def automatic_dispatch_decision_fingerprint(
     *,
     graph_fingerprint: str,
@@ -91,6 +136,8 @@ __all__ = (
     "DISPATCH_POLICY_VERSION",
     "HOST_ADAPTER_RECEIVER_AGENTS",
     "HOST_NATIVE_DISPATCH_TRANSPORT",
+    "RECEIVER_SKILLS",
     "advisory_skill_hint_prompt",
     "automatic_dispatch_decision_fingerprint",
+    "receiver_skill_prompt",
 )

@@ -15,6 +15,10 @@ from unittest.mock import patch
 
 import hdg
 from hdg.mcp_tools import tool_definitions
+from hdg.mcp_catalog import (
+    PLANNING_TOOL_PROFILE,
+    tool_names_for_profile,
+)
 from hdg.mcp_adapter import (
     CLIENT_CAPABILITIES_META_KEY,
     CLIENT_INFO_META_KEY,
@@ -36,6 +40,9 @@ SKILL = ROOT / "skills" / "delivery-graph"
 SKILL_RUNTIME = SKILL / "scripts" / "hdg"
 PLUGIN = ROOT / "plugins" / "delivery-graph"
 PLUGIN_SKILL = PLUGIN / "skills" / "delivery-graph"
+DISPATCH_SKILL = ROOT / "skills" / "delivery-graph-dispatch"
+TASK_SKILL = ROOT / "skills" / "delivery-graph-task"
+REVIEW_SKILL = ROOT / "skills" / "delivery-graph-review"
 
 
 def _allowed_tools(path: Path) -> list[str]:
@@ -233,11 +240,12 @@ class PluginBundleTests(unittest.TestCase):
         self.assertIn("`HANDOFF_READY`", main + planning + transport)
         self.assertIn("规划阶段 Skill 预触发", planning)
         self.assertIn("方向、边界和验收足够清楚", planning)
-        self.assertIn("实现类 Skill 多数应由 TASK receiver", main)
-        self.assertIn("普通文件/目录、实现类、内部方法", main)
-        self.assertIn("仅当需求本身明确指定", main)
-        self.assertIn("不要把 Skill 的默认命名", main)
-        self.assertIn("只有阶段不适用或宿主不可用才跳过", main)
+        task = (TASK_SKILL / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("实现类 Skill 多数应由 `$delivery-graph-task`", main)
+        self.assertIn("普通文件名、实现类、内部方法", main)
+        self.assertIn("用户明确要求", main)
+        self.assertIn("不得把 Skill 默认示例", task)
+        self.assertIn("只有阶段不适用或宿主不可用才跳过", task)
         self.assertIn("work-items/", transport)
         self.assertIn("<root-id>/", transport)
         self.assertIn(
@@ -268,11 +276,10 @@ class PluginBundleTests(unittest.TestCase):
             "refreeze_task_requirement",
             "unfreeze_task_requirement",
         }
-        safe_tools = {
-            str(tool["name"])
-            for tool in tool_definitions()
-            if tool["name"] not in protected_tools
-        }
+        safe_tools = (
+            tool_names_for_profile(PLANNING_TOOL_PROFILE)
+            - protected_tools
+        )
         expected_allowed_tools = {
             *(
                 "mcp__plugin_delivery-graph_delivery-graph__" + name
@@ -403,7 +410,7 @@ class PluginBundleTests(unittest.TestCase):
         ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, main + planning + execution)
-        self.assertIn("跨 Delivery", main)
+        self.assertIn("跨 Delivery", main + planning + execution)
         self.assertIn("REFREEZE_TASK_REQUIREMENT", execution)
         self.assertIn("requirement revision 1", planning)
         self.assertIn("不得修改依赖", execution)
@@ -440,19 +447,22 @@ class PluginBundleTests(unittest.TestCase):
     def test_entry_docs_use_progressive_disclosure(self) -> None:
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         main = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+        dispatch = (DISPATCH_SKILL / "SKILL.md").read_text(encoding="utf-8")
+        task = (TASK_SKILL / "SKILL.md").read_text(encoding="utf-8")
+        review = (REVIEW_SKILL / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertLessEqual(len(readme.splitlines()), 200)
         self.assertLessEqual(len(main.splitlines()), 160)
         self.assertNotIn("```json", readme)
-        for reference in (
-            "planning-quickstart.md",
-            "execution-quickstart.md",
-            "agent-execution-boundary.md",
-            "acceptance.md",
-            "mcp-transport.md",
+        for reference, document in (
+            ("planning-quickstart.md", main),
+            ("mcp-transport.md", main),
+            ("dispatch-and-recovery.md", dispatch),
+            ("task-execution.md", task),
+            ("acceptance.md", review),
         ):
             with self.subTest(reference=reference):
-                self.assertIn(reference, main)
+                self.assertIn(reference, document)
 
     def test_documented_hierarchy_examples_are_valid(self) -> None:
         documents = (
@@ -557,6 +567,8 @@ class PluginBundleTests(unittest.TestCase):
                     "${ZCODE_PLUGIN_ROOT}/skills/delivery-graph/scripts/"
                     "hdg_mcp.py"
                 ),
+                "--tool-profile",
+                "planning",
             ],
         )
         self.assertEqual(
@@ -568,6 +580,9 @@ class PluginBundleTests(unittest.TestCase):
             "approve",
         )
         approvals = server["tools"]
+        dispatch_approvals = manifest["mcpServers"][
+            "delivery-graph-dispatch"
+        ]["tools"]
         self.assertNotIn("freeze_hierarchy", approvals)
         self.assertNotIn("record_user_confirmation", approvals)
         self.assertEqual(
@@ -583,7 +598,9 @@ class PluginBundleTests(unittest.TestCase):
             "prompt",
         )
         self.assertEqual(
-            approvals["handoff_ready_automatic_task"]["approval_mode"],
+            dispatch_approvals[
+                "handoff_ready_automatic_task"
+            ]["approval_mode"],
             "prompt",
         )
         self.assertNotIn("update_orchestrator_settings", approvals)

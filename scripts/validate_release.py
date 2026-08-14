@@ -22,20 +22,38 @@ from hdg.graph_model import (  # noqa: E402
 )
 from hdg.jsonio import fingerprint  # noqa: E402
 from hdg.mcp_tools import tool_definitions  # noqa: E402
+from hdg.mcp_catalog import (  # noqa: E402
+    DISPATCH_TOOL_PROFILE,
+    PLANNING_TOOL_PROFILE,
+    RECEIVER_TOOL_PROFILE,
+    tool_names_for_profile,
+)
 from hdg.model_core import validate_hierarchy_definition  # noqa: E402
 from hdg.planning import freeze_hierarchy  # noqa: E402
 
 
 CANONICAL_SKILL = ROOT / "skills" / "delivery-graph"
+SKILL_NAMES = (
+    "delivery-graph",
+    "delivery-graph-dispatch",
+    "delivery-graph-task",
+    "delivery-graph-review",
+)
 SKILL_RUNTIME = CANONICAL_SKILL / "scripts" / "hdg"
 PLUGIN = ROOT / "plugins" / "delivery-graph"
 PLUGIN_SKILL = PLUGIN / "skills" / "delivery-graph"
 CODEX_MANIFEST = PLUGIN / ".codex-plugin" / "plugin.json"
 CLAUDE_MANIFEST = PLUGIN / ".claude-plugin" / "plugin.json"
+CLAUDE_MCP = PLUGIN / ".mcp.json"
 ZCODE_MANIFEST = PLUGIN / ".zcode-plugin" / "plugin.json"
 REPO_MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 TEMPLATES = ROOT / "examples" / "team-loops"
 EXPECTED_TOOL_COUNT = 33
+EXPECTED_MCP_PROFILES = {
+    "delivery-graph": PLANNING_TOOL_PROFILE,
+    "delivery-graph-dispatch": DISPATCH_TOOL_PROFILE,
+    "delivery-graph-receiver": RECEIVER_TOOL_PROFILE,
+}
 
 
 def _version_from_pyproject() -> str:
@@ -79,6 +97,30 @@ def _plugin_path(value: object, *, field: str) -> Path:
     if not candidate.exists():
         raise ValueError(f"{field} does not exist: {candidate}")
     return candidate
+
+
+def _validate_profiled_servers(
+    servers: object,
+    *,
+    script_path: str,
+) -> None:
+    if not isinstance(servers, dict):
+        raise ValueError("mcpServers must be an object")
+    if set(servers) != set(EXPECTED_MCP_PROFILES):
+        raise ValueError("mcpServers must register planning/dispatch/receiver")
+    for server_name, profile in EXPECTED_MCP_PROFILES.items():
+        server = servers.get(server_name)
+        if not isinstance(server, dict):
+            raise ValueError(f"{server_name} MCP server must be an object")
+        args = server.get("args")
+        if not isinstance(args, list) or script_path not in args:
+            raise ValueError(f"{server_name} must use the bundled MCP script")
+        try:
+            profile_index = args.index("--tool-profile")
+        except ValueError as error:
+            raise ValueError(f"{server_name} must declare --tool-profile") from error
+        if profile_index + 1 >= len(args) or args[profile_index + 1] != profile:
+            raise ValueError(f"{server_name} must use profile {profile}")
 
 
 
@@ -239,6 +281,10 @@ def validate_release() -> list[str]:
         mcp_servers = codex_manifest.get("mcpServers")
         if not isinstance(mcp_servers, dict) or not mcp_servers:
             raise ValueError("mcpServers must be a non-empty inline object")
+        _validate_profiled_servers(
+            mcp_servers,
+            script_path="skills/delivery-graph/scripts/hdg_mcp.py",
+        )
         if "hooks" in codex_manifest:
             raise ValueError("Codex manifest must not declare lifecycle hooks")
         interface = codex_manifest.get("interface")
@@ -261,38 +307,42 @@ def validate_release() -> list[str]:
         claude_manifest = _json_object(CLAUDE_MANIFEST)
         if "hooks" in claude_manifest:
             raise ValueError("Claude manifest must not declare lifecycle hooks")
+        claude_mcp = _json_object(CLAUDE_MCP)
+        _validate_profiled_servers(
+            claude_mcp.get("mcpServers"),
+            script_path=(
+                "${CLAUDE_PLUGIN_ROOT}/skills/delivery-graph/scripts/"
+                "hdg_mcp.py"
+            ),
+        )
     except (OSError, ValueError, json.JSONDecodeError) as error:
         problems.append(f"invalid Claude manifest {CLAUDE_MANIFEST}: {error}")
 
     try:
         zcode_manifest = _json_object(ZCODE_MANIFEST)
         zcode_servers = zcode_manifest.get("mcpServers")
-        if not isinstance(zcode_servers, dict):
-            raise ValueError("mcpServers must be an object")
-        zcode_server = zcode_servers.get("delivery-graph")
-        if not isinstance(zcode_server, dict):
-            raise ValueError("delivery-graph MCP server is required")
-        if zcode_server.get("cwd") != "${ZCODE_PLUGIN_ROOT}":
-            raise ValueError("MCP cwd must use ${ZCODE_PLUGIN_ROOT}")
-        expected_zcode_args = [
-            "-X",
-            "utf8",
-            (
+        zcode_script = (
                 "${ZCODE_PLUGIN_ROOT}/skills/delivery-graph/scripts/"
                 "hdg_mcp.py"
-            ),
-        ]
-        if zcode_server.get("args") != expected_zcode_args:
-            raise ValueError("MCP script path must use ${ZCODE_PLUGIN_ROOT}")
-        zcode_env = zcode_server.get("env")
-        if not isinstance(zcode_env, dict):
-            raise ValueError("MCP env must be an object")
-        if zcode_env.get("HDG_HOST_ADAPTER") != "zcode":
-            raise ValueError("HDG_HOST_ADAPTER must be zcode")
-        if zcode_env.get("HDG_PROJECT_ROOT") != "${ZCODE_PROJECT_DIR}":
-            raise ValueError(
-                "HDG_PROJECT_ROOT must use ${ZCODE_PROJECT_DIR}"
-            )
+        )
+        _validate_profiled_servers(
+            zcode_servers,
+            script_path=zcode_script,
+        )
+        assert isinstance(zcode_servers, dict)
+        for zcode_server in zcode_servers.values():
+            assert isinstance(zcode_server, dict)
+            if zcode_server.get("cwd") != "${ZCODE_PLUGIN_ROOT}":
+                raise ValueError("MCP cwd must use ${ZCODE_PLUGIN_ROOT}")
+            zcode_env = zcode_server.get("env")
+            if not isinstance(zcode_env, dict):
+                raise ValueError("MCP env must be an object")
+            if zcode_env.get("HDG_HOST_ADAPTER") != "zcode":
+                raise ValueError("HDG_HOST_ADAPTER must be zcode")
+            if zcode_env.get("HDG_PROJECT_ROOT") != "${ZCODE_PROJECT_DIR}":
+                raise ValueError(
+                    "HDG_PROJECT_ROOT must use ${ZCODE_PROJECT_DIR}"
+                )
     except (OSError, ValueError, json.JSONDecodeError) as error:
         problems.append(f"invalid ZCode manifest {ZCODE_MANIFEST}: {error}")
 
@@ -366,7 +416,21 @@ def validate_release() -> list[str]:
             excluded=("cli.py", "__main__.py"),
         )
     )
-    problems.extend(_compare_trees(CANONICAL_SKILL, PLUGIN_SKILL))
+    for skill_name in SKILL_NAMES:
+        problems.extend(
+            _compare_trees(
+                ROOT / "skills" / skill_name,
+                PLUGIN / "skills" / skill_name,
+            )
+        )
+    profile_union = set().union(
+        *(
+            tool_names_for_profile(profile)
+            for profile in EXPECTED_MCP_PROFILES.values()
+        )
+    )
+    if profile_union != {str(tool["name"]) for tool in tool_definitions()}:
+        problems.append("MCP tool profiles do not cover the full tool surface")
     for forbidden in (
         CANONICAL_SKILL / "scripts" / "hdg.py",
         SKILL_RUNTIME / "cli.py",

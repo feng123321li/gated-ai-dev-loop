@@ -4,7 +4,7 @@ from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from .dispatch_contracts import advisory_skill_hint_prompt
+from .dispatch_contracts import receiver_skill_prompt
 from .graph_model import LOOP_NODE_KINDS, graph_assurance_profile
 from .graph_runtime import advance_graph
 from .loop_contracts import (
@@ -401,19 +401,16 @@ def build_graph_frontier(
                 manual_fields: dict[str, Any] = {}
                 if manual_task:
                     manual_fields["dispatchMode"] = "MANUAL"
-                    receiver_prompt = advisory_skill_hint_prompt(
-                        skill_hints or []
+                    receiver_prompt = receiver_skill_prompt(
+                        kind,
+                        skill_hints or [],
                     )
-                    if receiver_prompt is not None:
-                        manual_fields.update(
-                            {
-                                "skillHints": [
-                                    dict(item)
-                                    for item in (skill_hints or [])
-                                ],
-                                "receiverPrompt": receiver_prompt,
-                            }
-                        )
+                    manual_fields["receiverPrompt"] = receiver_prompt
+                    if skill_hints:
+                        manual_fields["skillHints"] = [
+                            dict(item)
+                            for item in (skill_hints or [])
+                        ]
                 actions.append(
                     {
                         "action": (

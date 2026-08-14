@@ -11,11 +11,18 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_PACKAGE = REPOSITORY_ROOT / "src" / "hdg"
 CANONICAL_SKILL = REPOSITORY_ROOT / "skills" / "delivery-graph"
+SKILL_NAMES = (
+    "delivery-graph",
+    "delivery-graph-dispatch",
+    "delivery-graph-task",
+    "delivery-graph-review",
+)
 SKILL_SCRIPTS = CANONICAL_SKILL / "scripts"
 TARGET_PACKAGE = SKILL_SCRIPTS / "hdg"
 TARGET_ENTRY = SKILL_SCRIPTS / "hdg.py"
 TARGET_MCP_ENTRY = SKILL_SCRIPTS / "hdg_mcp.py"
 PLUGIN_ROOT = REPOSITORY_ROOT / "plugins" / "delivery-graph"
+PLUGIN_SKILLS = PLUGIN_ROOT / "skills"
 PLUGIN_SKILL = PLUGIN_ROOT / "skills" / "delivery-graph"
 
 MCP_ENTRY = '''#!/usr/bin/env python3
@@ -92,9 +99,11 @@ def _replace_tree(source: Path, destination: Path) -> None:
 
 
 def build_plugin_payload() -> Path:
-    if not CANONICAL_SKILL.is_dir() or CANONICAL_SKILL.is_symlink():
-        raise RuntimeError(f"Canonical Skill source is invalid: {CANONICAL_SKILL}")
-    _replace_tree(CANONICAL_SKILL, PLUGIN_SKILL)
+    for skill_name in SKILL_NAMES:
+        source = REPOSITORY_ROOT / "skills" / skill_name
+        if not source.is_dir() or source.is_symlink():
+            raise RuntimeError(f"Canonical Skill source is invalid: {source}")
+        _replace_tree(source, PLUGIN_SKILLS / skill_name)
     return PLUGIN_SKILL
 
 
@@ -143,7 +152,7 @@ def main() -> int:
         entry, package = build_skill()
         print(f"Built Plugin MCP controller: {entry}")
         print(f"Bundled Plugin runtime package: {package}")
-        print(f"Built multi-host Plugin payload: {PLUGIN_SKILL}")
+        print(f"Built multi-host Plugin payload: {PLUGIN_SKILLS}")
         return 0
     except Exception as error:
         print(f"Build failed: {error}", file=sys.stderr)

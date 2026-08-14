@@ -4,7 +4,9 @@
 
 `delivery-graph` 接收宿主规划层形成的工作项，把它们组织为可执行、可审查、可恢复的 Delivery Graph，再协调宿主原生 Agent 完成实现、分层 Review 和最终验收。它不创作业务需求或决定具体实现，核心职责是全局总览、稳定绑定、持久记忆、调度推进和结果汇总。
 
-当前版本：**0.39.24** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
+当前版本：**0.40.0** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
+
+Plugin 按职责提供 4 个 Skill：`$delivery-graph` 使用 `planning` Profile 规划、确认 baseline 并冻结；`$delivery-graph-dispatch` 使用 `dispatch` Profile 派遣、等待和恢复；`$delivery-graph-task` 与 `$delivery-graph-review` 共享 `receiver` 生命周期工具，但由 assignment 的强制 `receiverPrompt` 分别处理 TASK 和 Review。三个 MCP server 使用同一 Controller 与 `scheduler.db`；`tools/list` 返回角色子集，`tools/call` 拒绝跨 Profile 调用。
 
 ## 职责边界
 
@@ -124,7 +126,7 @@ claude plugin marketplace add git@git.i-sanger.com:ai/skill/marketplace.git
 claude plugin install delivery-graph@majorbio-skills --scope user
 ```
 
-安装或升级后新建会话，让 Skill 与 MCP Server 从同一版本加载。Claude Skill 只预批准非敏感 MCP 工具；敏感操作仍交给宿主逐次审批。团队升级、卸载和回滚步骤见[团队运维](docs/team-operations.md)。
+安装或升级后新建会话，让 4 个 Skill 与 3 个 MCP Server Profile 从同一版本加载。Claude Skill 只预批准非敏感 MCP 工具；敏感操作仍交给宿主逐次审批。团队升级、卸载和回滚步骤见[团队运维](docs/team-operations.md)。
 
 ## 使用
 
@@ -159,7 +161,8 @@ claude plugin install delivery-graph@majorbio-skills --scope user
 | 路径 | 用途 |
 |---|---|
 | `src/hdg/` | Controller、Graph Runtime、Repository 与 MCP Adapter 源码 |
-| `skills/delivery-graph/` | 规范 Skill、references 与生成的运行包 |
+| `skills/delivery-graph/` | 规划 Skill、references 与生成的共享运行包 |
+| `skills/delivery-graph-{dispatch,task,review}/` | 派遣、TASK receiver 与 Review receiver Skill |
 | `plugins/delivery-graph/` | Codex / Claude Code Plugin 产物 |
 | `.agents/plugins/marketplace.json` | 本仓库的 Agent Plugin 开发 Marketplace |
 | `tests/` | Graph、调度、Git、协议与投影测试 |
@@ -174,7 +177,7 @@ claude plugin install delivery-graph@majorbio-skills --scope user
 ```text
 python scripts/build_skill.py
 python -X utf8 -m unittest discover -s tests -t .
-python -m compileall -q src tests scripts skills/delivery-graph/scripts plugins/delivery-graph
+python -m compileall -q src tests scripts skills plugins/delivery-graph
 python scripts/validate_release.py
 git diff --check
 ```
@@ -183,10 +186,10 @@ git diff --check
 
 ## 文档
 
-- [Skill 入口](skills/delivery-graph/SKILL.md)
+- Skills：[规划](skills/delivery-graph/SKILL.md)、[派遣](skills/delivery-graph-dispatch/SKILL.md)、[TASK Receiver](skills/delivery-graph-task/SKILL.md)、[Review Receiver](skills/delivery-graph-review/SKILL.md)
 - [规划、Schema v3 与冻结](skills/delivery-graph/references/planning-quickstart.md)
-- [执行、并发与恢复](skills/delivery-graph/references/execution-quickstart.md)
-- [分层 Review 与验收](skills/delivery-graph/references/acceptance.md)
+- [执行、并发与恢复](skills/delivery-graph-dispatch/references/dispatch-and-recovery.md)
+- [分层 Review 与验收](skills/delivery-graph-review/references/acceptance.md)
 - [项目实现结构](docs/project-engineering.md)
 - [宿主兼容矩阵](docs/host-compatibility.md)
 - [MCP 生命周期、健康与动态注册](docs/mcp-host-lifecycle-contract.md)

@@ -154,7 +154,9 @@ Plugin MCP 工具不接收业务 `root` 参数。Adapter 从宿主配置或请�
 
 `loop_context.completionPolicy` 明确输入和终态边界：payload 是目标、明确约束和已知验收点的输入，Loop 在运行时从真实代码、契约和数据链路推导 scope 内必要条件；冻结 Graph 不冻结内部实现计划，可修复 finding 必须在当前 Loop 内调整方案、修正并复验。TASK 的默认验证范围是实际变更影响面的最小充分 `affectedScopes`，并以有界 `verificationEvidence` 记录检查 scope 与结果；Controller 在结果时附加轻量 `evidenceWorkspaceSnapshots` 与逐相关路径的 `evidenceScopeSnapshots`。Review 使用 `EVIDENCE_FIRST_TARGETED_RERUN`：`validationEvidenceIndex` 把证据标为 `EXACT_MATCH/CHANGED/UNBOUND`，只自动复用匹配的通过证据；无关文件变化不使有界 scope 失效，相关路径变化才触发定向补验。Review 按 TASK 缺口、GROUP seam、Delivery 最终 smoke/E2E 证据分层补验；普通局部失效只重跑受影响范围，只有无法界定影响面等明确风险才全量复跑。为控制 Review context，传递上游 outcome 时保留快照元数据并省略重复 diff，完整补丁仍在验收投影。`loop_context.projectScopes` 是按当前 Delivery workspace 与冻结 Git binding 验证后的实际 workspace 列表；单仓未声明 `projectScopes` 时包含合成的 `primary`，多仓则逐项验证显式 scope。`projectScopeAnchors` 才是 hierarchy 中不可变的 preview 路径；当前实际 workspace 的不同 Delivery receiver 严格按 turn 串行，不能同时切换分支或写文件。Loop 不拥有分支生命周期，只能在有效 scope 路径内开发。STANDARD 执行完整声明验收并保留分层 Review；LIGHT 对已声明改动做定向验证，并在实际内容或影响超出判断依据时以 `REPLAN_REQUIRED` 退出，不能继续借轻量档绕过 Review。初始 freeze 同时为所有 TASK 建立 revision 1 冻结记录；`unfreeze_task_requirement` 只接受未开始 TASK，`refreeze_task_requirement` 只替换标题、摘要和 payload，并把确认后的完整定义冻结为同一 Delivery 的下一不可变 Revision。旧 Revision hierarchy/Graph 双指纹保持不变，新 Run、TASK requirement revision、事件链与人类投影使用新指纹一致重建。`record_loop_result` 的 `BLOCKED` 要求显式 failure class，只用于当前 scope 和权限内没有继续路径的真实终态；调度器仍不解释不透明 finding，也不为返工创建 Graph 环。
 
-`controller.py` 是唯一共享应用入口；`mcp_tools.py` 把 33 个模型可调用工具映射到 Controller。每个工具发布人类可读 `title`、根对象 `inputSchema` / `outputSchema`，以及完整 `readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint` annotations；发布校验会逐工具检查。`mcp_adapter.py` 只保留 Modern discovery 与 Legacy initialize/ping 两层 wire shim；初始化后的 tools/resources 方法共享一个 dispatcher，避免为两个协议各维护一套业务分支。Controller 不扫描 PATH、不执行本机 CLI 版本探针，也不提供 Agent/模型发现或中央设置工具。敏感调用是否执行由宿主审批；Plugin 不通过生命周期回调绕过或代替该审批。
+`controller.py` 是唯一共享应用入口；`mcp_tools.py` 把 33 个模型可调用工具映射到 Controller。`mcp_catalog.py` 把它们声明为 `planning`、`dispatch`、`receiver` 三个静态 Profile，并维护 Skill→Profile 路由；Profile 联集必须覆盖全部工具，planning/dispatch 只在 workspace 发现和队列恢复上有明确重叠。Plugin 启动三个独立 stdio MCP 进程，它们使用同一运行包和 project root，因此共享同一个 `scheduler.db`，但 `tools/list` 只返回当前 Profile，`tools/call` 对目录外工具返回 `MCP_TOOL_OUTSIDE_PROFILE`。
+
+每个工具发布人类可读 `title`、根对象 `inputSchema` / `outputSchema`，以及完整 `readOnlyHint`、`destructiveHint`、`idempotentHint`、`openWorldHint` annotations；发布校验会逐工具检查。`mcp_adapter.py` 只保留 Modern discovery 与 Legacy initialize/ping 两层 wire shim、请求校验和调用分派；长工作流说明、Profile 集合、工具目录过滤与角色指令都在 `mcp_catalog.py`。初始化后的 tools/resources 方法共享一个 dispatcher，避免为两个协议各维护一套业务分支。Controller 不扫描 PATH、不执行本机 CLI 版本探针，也不提供 Agent/模型发现或中央设置工具。敏感调用是否执行由宿主审批；Plugin 不通过生命周期回调绕过或代替该审批。
 
 `mcp_apps.py` 发布固定的 `ui://delivery-graph/dashboard-v2.html` Resource，`dashboard.py` 把当前定义、`graph_status` 与 Revision 历史投影成有界只读 view model。该投影删除 Loop payload、operation ID、Revision 原因和操作者等非展示字段；HTML 只通过 MCP Apps bridge 接收 `structuredContent`，不访问 SQLite、网络、Cookie 或宿主 DOM。看板可见时每 15 秒串行自动重读，隐藏时暂停，手动按钮可立即刷新；所有路径只调用 `open_delivery_dashboard`，绝不调用会先推进状态的 `graph_frontier`。Codex legacy 内嵌请求缺少 sandbox metadata 时，只能复用同一连接上此前成功读取的精确 `root_id`/workspace grant；其他工具和未授权 root 仍失败关闭。宽面板按 rank 绘制横向依赖边，空间不足时改为纵向换行并在节点内展示前置项。无 UI 宿主继续消费同一工具的文字/结构化降级结果。
 
@@ -177,12 +179,12 @@ Codex 与 Claude Plugin 通过 Skill、Agent 描述、MCP 和宿主元数据工�
 
 `python scripts/build_skill.py`：
 
-1. 将 `src/hdg` 复制到 canonical Skill runtime；
+1. 将 `src/hdg` 复制到 planning Skill 的共享 runtime；
 2. 删除 CLI 入口；
 3. 生成 `hdg_mcp.py`；
-4. 将 canonical Skill 整体复制到双宿主 Plugin payload。
+4. 将 planning/dispatch/task/review 四个 canonical Skill 复制到多宿主 Plugin payload。
 
-canonical Skill 位于 `skills/delivery-graph/`，Plugin 位于 `plugins/delivery-graph/`。Plugin manifest 不在 canonical Skill 内，由仓库直接维护；当前 Plugin payload 由声明的 Skill、Agent 描述、MCP 和宿主元数据组成。
+四个 canonical Skill 位于 `skills/delivery-graph*/`，共享 runtime 只由 `skills/delivery-graph/` 携带；Plugin 位于 `plugins/delivery-graph/`。Plugin manifest 不在 canonical Skill 内，由仓库直接维护；当前 Plugin payload 由声明的 Skill、Agent 描述、三套 MCP Profile 和宿主元数据组成。
 
 ## 版本原则
 

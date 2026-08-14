@@ -8,8 +8,8 @@ from .dispatch_contracts import (
     DISPATCH_POLICY_VERSION,
     HOST_ADAPTER_RECEIVER_AGENTS,
     HOST_NATIVE_DISPATCH_TRANSPORT,
-    advisory_skill_hint_prompt,
     automatic_dispatch_decision_fingerprint,
+    receiver_skill_prompt,
 )
 from .errors import fail
 from .graph_frontier import get_graph_frontier
@@ -117,13 +117,14 @@ def _assignment(
             "boundary": "INDEPENDENT_RECEIVER_CONTEXT",
         },
     }
-    receiver_prompt = advisory_skill_hint_prompt(
+    receiver_prompt = receiver_skill_prompt(
+        node["kind"],
         skill_hints,
         host_adapter_id=host_adapter_id,
     )
-    if receiver_prompt is not None:
+    assignment["receiverPrompt"] = receiver_prompt
+    if skill_hints:
         assignment["skillHints"] = [dict(item) for item in skill_hints]
-        assignment["receiverPrompt"] = receiver_prompt
     return assignment
 
 

@@ -339,11 +339,15 @@ def manual_receiver_prompt(
     """Return the exact prompt shown to and embedded for a manual receiver."""
 
     base_prompt = (
+        "这是 Delivery Graph 总协调接收上下文：先通过当前宿主的原生 "
+        "Skill 入口按 catalog 名 `delivery-graph-dispatch` 调用角色 Skill。"
         f"请完整读取 `{relative_handoff_path}` 以及同目录的 baseline、"
         "progress、acceptance、revisions 和 work-items，校验其中的双指纹；"
         "在任何代码检查、分析、修改或测试前，必须在实际开发工作区调用 "
         "start_manual_handoff 显式启动同一冻结 Graph。总协调上下文不得实现 TASK；"
         "每个 frontier 的 CLAIM_MANUAL_TASK 都由宿主原生 child 独立接收；"
+        "TASK child 使用 `delivery-graph-task`，所有 Review child 使用 "
+        "`delivery-graph-review`；"
         "MANUAL claim 不携带 AUTO reservation，但 child 必须提交自己的 "
         "receiver_context_id 与新 operation_id，并按标准 Loop 协议显式携带 "
         "operation_id heartbeat、上报进度和提交结果。"

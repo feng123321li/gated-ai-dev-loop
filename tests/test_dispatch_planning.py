@@ -97,7 +97,10 @@ class HostDispatchPlanningTests(unittest.TestCase):
             plan["assignments"][0]["independence"]["required"]
         )
         self.assertNotIn("skillHints", plan["assignments"][0])
-        self.assertNotIn("receiverPrompt", plan["assignments"][0])
+        self.assertIn(
+            "`$delivery-graph-task`",
+            plan["assignments"][0]["receiverPrompt"],
+        )
         self.assertNotIn("currentSessionTaskNodeIds", plan)
         self.assertNotIn("currentSessionTasks", plan["summary"])
 

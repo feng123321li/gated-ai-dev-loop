@@ -635,7 +635,7 @@ class McpSurfaceTestsPart3:
                 },
             }
             with patch(
-                "hdg.git_binding._working_tree_state",
+                "hdg.git_binding_changes._working_tree_state",
                 side_effect=[
                     {"stateFingerprint": "before"},
                     {"stateFingerprint": "after"},

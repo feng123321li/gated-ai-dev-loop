@@ -13,22 +13,11 @@ from hdg.repository_projections import DeliveryProjectionStore
 
 
 class RepositoryArchitectureTests(unittest.TestCase):
-    def test_p0_runtime_module_families_stay_below_1000_lines(self) -> None:
+    def test_source_modules_stay_below_1000_lines(self) -> None:
         source_root = Path(__file__).parents[1] / "src" / "hdg"
-        module_patterns = (
-            "graph_runtime*.py",
-            "model_rendering*.py",
-            "planning*.py",
-            "repository_hierarch*.py",
-        )
-
-        paths = {
-            path
-            for pattern in module_patterns
-            for path in source_root.glob(pattern)
-        }
+        paths = sorted(source_root.glob("*.py"))
         self.assertTrue(paths)
-        for path in sorted(paths):
+        for path in paths:
             with self.subTest(path=path.name):
                 self.assertLessEqual(
                     len(path.read_text(encoding="utf-8").splitlines()),

@@ -7,6 +7,10 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.40.2 发布候选矩阵
+
+0.40.2 仅重写 README 信息架构，将首页压缩为项目摘要，并把内部 Marketplace 安装细节路由到团队运维文档。Controller、33 个 MCP 工具、四个 Skill、三个 MCP Profile、schema v3、无 Hook 模式、`CURRENT_WORKSPACE_SERIAL`、Codex/Claude Code/ZCode 宿主协议和 `.layered-delivery/` 数据均不变；真实宿主能力沿用 0.40.1 的验证边界。候选已完成 427 项 Python 测试（426 通过、1 项按环境跳过）、编译、Skill/Plugin、release candidate 与差异校验。
+
 ## 0.40.1 发布候选矩阵
 
 0.40.1 保持 33 个 MCP 工具、四个 Skill、三个 MCP Profile、schema v3、无 Hook 模式与 `CURRENT_WORKSPACE_SERIAL`；控制面与 Plugin 产物无行为变化，仅把 0.39.12/0.39.13 遗留的“真实 ZCode 宿主冒烟结果待回填”落成可重复执行的显式两段式流程，并把 `scripts/host_smoke.py` 拆分为按宿主独立的实现。
@@ -16,7 +20,7 @@
 - **真实会话段**：在真实 ZCode 会话打开该工作区目录，粘贴提示词全文执行：与 Claude Code 相同的主 checkout 串行边界（不建 worktree）、Controller 交互经宿主原生 `AskUserQuestion` 原样作答、`dispatch_loop` 使用 `owner=zcode`、独立宿主原生子 Agent 完成各 assignment，停在 `RECORD_USER_CONFIRMATION`，绝不调用 `record_user_confirmation`。
 - **复核段**：`python -m scripts.host_smoke run --host zcode --scenario <同值> --verify-only --workspace-dir <同一目录>` 校验 `scheduler.db`：claim 只含 `zcode`、LIGHT/STANDARD 必需事件（`LOOP_CLAIMED`/`LOOP_SUCCEEDED`，STANDARD 另有 `LOOP_HEARTBEAT`/`LOOP_PROGRESS_REPORTED`）齐备、run 停在待确认门禁且无伪造 `USER_CONFIRMED`。
 - **边界**：`--workspace-dir`/`--verify-only` 仅对 zcode 有效，误用于其他宿主 fail closed；ZCode 人工中转段不进入 CI，`host-smoke:codex`/`host-smoke:claude` 手动任务不变。
-- **冒烟执行状态**：light=待首次执行；standard=待首次执行。首次真实会话完成后在本节回填 rootId、runId 与结果。
+- **冒烟执行状态**：light=已通过（2026-08-14，真实 ZCode 3.7.7 会话加载 0.40.1；以隔离 userData 第二实例居中执行，提示词提交与 Controller 选择器作答由用户明确授权的 CDP 代操作完成，最终确认未代打）：rootId=`d-light-smoke`，runId=`run-eb59ab622d9742eaaf1b49217db176ec`，run 停在 `RECORD_USER_CONFIRMATION`（ACTIVE），claim 仅含 `zcode`，`LOOP_CLAIMED`/`LOOP_SUCCEEDED` 各 1，`--verify-only` 复核通过；standard=待首次执行。
 - **验证**：全量 Python 427 项完成（426 通过、1 项按环境跳过）、`compileall`、Skill/Plugin 镜像重建、release candidate 与差异校验；新增 zcode 提示词、主 checkout 准备、两段式参数守卫与提示词外置共 5 项测试。
 
 ## 0.40.0 发布候选矩阵

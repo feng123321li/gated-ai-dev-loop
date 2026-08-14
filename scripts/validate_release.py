@@ -202,7 +202,7 @@ def validate_release() -> list[str]:
 
     required_files = (
         ROOT / ".gitlab-ci.yml",
-        ROOT / "scripts" / "host_smoke.py",
+        ROOT / "scripts" / "host_smoke" / "__main__.py",
         ROOT / "scripts" / "mcp_registration_probe.py",
         ROOT / "scripts" / "mcp_dynamic_catalog_demo.py",
         TEMPLATES / "light-change.json",

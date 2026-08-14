@@ -3,9 +3,21 @@
 兼容性分成两层，不能混为一个“支持”：
 
 - **核心契约**：Python Controller、schema、SQLite、生成产物、调度协议测试和 stdio MCP 握手通过。
-- **真实宿主**：实际 Codex 或 Claude Code 会话加载候选 Plugin，创建原生子 Agent，并完成 claim、progress、heartbeat、result，最后到达待用户确认门禁；冒烟程序不得代替用户确认。
+- **真实宿主**：实际 Codex、Claude Code 或 ZCode 会话加载候选 Plugin，创建原生子 Agent，并完成 claim、progress、heartbeat、result，最后到达待用户确认门禁；冒烟程序不得代替用户确认。真实宿主冒烟按宿主独立实现于 `scripts/host_smoke/`（`codex.py`、`claude.py`、`zcode.py`，共享证据规则在 `common.py`，入口 `python -m scripts.host_smoke`）：Codex 与 Claude Code 由单次无头调用端到端完成；ZCode 无无头契约，采用两段式冒烟——harness 准备一次性工作区并外置提示词，真实 ZCode 会话居中执行，harness 随后复核 `scheduler.db` 证据链。
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
+
+## 0.40.1 发布候选矩阵
+
+0.40.1 保持 33 个 MCP 工具、四个 Skill、三个 MCP Profile、schema v3、无 Hook 模式与 `CURRENT_WORKSPACE_SERIAL`；控制面与 Plugin 产物无行为变化，仅把 0.39.12/0.39.13 遗留的“真实 ZCode 宿主冒烟结果待回填”落成可重复执行的显式两段式流程，并把 `scripts/host_smoke.py` 拆分为按宿主独立的实现。
+
+- **按宿主拆分**：`scripts/host_smoke/` 包内 `codex.py`、`claude.py`、`zcode.py` 各自拥有提示词、宿主命令与会话执行；`common.py` 承载宿主中立的一次性工作区准备、冒烟产物发现、`scheduler.db` 证据校验与共享提示词框架；入口统一为 `python -m scripts.host_smoke`，CI 与文档同步更新。
+- **准备段**：`python -m scripts.host_smoke run --host zcode --scenario light|standard --execute --workspace-dir <空目录>` 在持久目录准备一次性 Git 主 checkout 工作区，并把 ZCode 提示词写到工作区外的 `<name>-prompt.md`，不污染冒烟产物检测。
+- **真实会话段**：在真实 ZCode 会话打开该工作区目录，粘贴提示词全文执行：与 Claude Code 相同的主 checkout 串行边界（不建 worktree）、Controller 交互经宿主原生 `AskUserQuestion` 原样作答、`dispatch_loop` 使用 `owner=zcode`、独立宿主原生子 Agent 完成各 assignment，停在 `RECORD_USER_CONFIRMATION`，绝不调用 `record_user_confirmation`。
+- **复核段**：`python -m scripts.host_smoke run --host zcode --scenario <同值> --verify-only --workspace-dir <同一目录>` 校验 `scheduler.db`：claim 只含 `zcode`、LIGHT/STANDARD 必需事件（`LOOP_CLAIMED`/`LOOP_SUCCEEDED`，STANDARD 另有 `LOOP_HEARTBEAT`/`LOOP_PROGRESS_REPORTED`）齐备、run 停在待确认门禁且无伪造 `USER_CONFIRMED`。
+- **边界**：`--workspace-dir`/`--verify-only` 仅对 zcode 有效，误用于其他宿主 fail closed；ZCode 人工中转段不进入 CI，`host-smoke:codex`/`host-smoke:claude` 手动任务不变。
+- **冒烟执行状态**：light=待首次执行；standard=待首次执行。首次真实会话完成后在本节回填 rootId、runId 与结果。
+- **验证**：全量 Python 427 项完成（426 通过、1 项按环境跳过）、`compileall`、Skill/Plugin 镜像重建、release candidate 与差异校验；新增 zcode 提示词、主 checkout 准备、两段式参数守卫与提示词外置共 5 项测试。
 
 ## 0.40.0 发布候选矩阵
 

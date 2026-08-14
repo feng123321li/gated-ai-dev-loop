@@ -27,7 +27,7 @@ contract:
   variables:
     PYTHONUTF8: "1"
   before_script:
-    - python scripts/host_smoke.py probe --json
+    - python -m scripts.host_smoke probe --json
   when: manual
   allow_failure: false
 
@@ -35,10 +35,10 @@ host-smoke:codex:
   extends: .host-smoke
   when: manual
   script:
-    - python scripts/host_smoke.py run --host codex --scenario standard --execute
+    - python -m scripts.host_smoke run --host codex --scenario standard --execute
 
 host-smoke:claude:
   extends: .host-smoke
   when: manual
   script:
-    - python scripts/host_smoke.py run --host claude-code --scenario standard --execute
+    - python -m scripts.host_smoke run --host claude-code --scenario standard --execute

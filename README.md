@@ -4,7 +4,7 @@
 
 `delivery-graph` 接收宿主规划层形成的工作项，把它们组织为可执行、可审查、可恢复的 Delivery Graph，再协调宿主原生 Agent 完成实现、分层 Review 和最终验收。它不创作业务需求或决定具体实现，核心职责是全局总览、稳定绑定、持久记忆、调度推进和结果汇总。
 
-当前版本：**0.40.0** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
+当前版本：**0.40.1** · Schema：**v3** · 运行时：**Python 3.10+，仅标准库**
 
 Plugin 按职责提供 4 个 Skill：`$delivery-graph` 使用 `planning` Profile 规划、确认 baseline 并冻结；`$delivery-graph-dispatch` 使用 `dispatch` Profile 派遣、等待和恢复；`$delivery-graph-task` 与 `$delivery-graph-review` 共享 `receiver` 生命周期工具，但由 assignment 的强制 `receiverPrompt` 分别处理 TASK 和 Review。三个 MCP server 使用同一 Controller 与 `scheduler.db`；`tools/list` 返回角色子集，`tools/call` 拒绝跨 Profile 调用。
 

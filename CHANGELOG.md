@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.40.1 — 2026-08-14
+
+发布提交：以 tag `v0.40.1` 指向的提交为准
+
+- **ZCode 真实宿主两段式冒烟**：新增 `--host zcode`，把 0.39.12/0.39.13 遗留的“真实 ZCode 宿主冒烟结果待回填”落成可重复执行的显式流程。ZCode 无无头执行契约，冒烟拆为两段：harness 先以 `--execute --workspace-dir <空目录>` 准备一次性 Git 工作区并把提示词写到工作区外的 `<name>-prompt.md`；真实 ZCode 会话打开该目录、粘贴提示词、执行到 `RECORD_USER_CONFIRMATION` 停止；再以 `--verify-only --workspace-dir <同一目录>` 复核 `scheduler.db` 证据链（claim 仅含 `zcode`、LIGHT/STANDARD 必需事件齐备、run 停在待确认门禁且无伪造 `USER_CONFIRMED`）。
+- **冒烟 harness 按宿主拆分**：`scripts/host_smoke.py` 单文件拆为 `scripts/host_smoke/` 包——`codex.py`、`claude.py`、`zcode.py` 各自拥有提示词、宿主命令与会话执行，`common.py` 承载宿主中立的工作区准备、产物发现、证据校验与共享提示词框架，`cli.py` 统一 `python -m scripts.host_smoke` 入口；三宿主提示词与拆分前逐字节一致，CI、`validate_release` 必需文件清单与文档同步更新。
+- **探测与提示词**：`probe` 增加 `zcode` 宿主条目；zcode 提示词与 Claude Code 同用主 checkout `CURRENT_WORKSPACE_SERIAL` 边界（不建 worktree），Controller 交互经宿主原生 `AskUserQuestion` 原样作答，`dispatch_loop` 使用 `owner=zcode`。
+- **边界**：`--workspace-dir`/`--verify-only` 仅对 zcode 有效，其他宿主误用 fail closed；ZCode 的人工中转段不进入 CI，`host-smoke:codex`/`host-smoke:claude` 手动任务保持不变。首次真实 ZCode 会话执行步骤见[宿主兼容矩阵](docs/host-compatibility.md)，结果记录于该页 0.40.1 矩阵。
+- **兼容性与验证**：控制面、33 个 MCP 工具、四个 Skill 与三个 MCP Profile、schema v3 和 `.layered-delivery/` 数据 namespace 均不变，已有 Graph 无需迁移。全量 Python 427 项完成（426 通过、1 项按环境跳过），并完成 `compileall`、Skill/Plugin 镜像重建、release candidate 与差异校验。
+
 ## 0.40.0 — 2026-08-14
 
 发布提交：以 tag `v0.40.0` 指向的提交为准

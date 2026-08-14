@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import inspect
 import json
@@ -23,15 +24,19 @@ from hdg.mcp_tools import tool_definitions
 from hdg.model_core import validate_hierarchy_definition
 from hdg.planning import freeze_hierarchy
 from scripts.host_smoke import (
-    _codex_bootstrap_prompt,
-    _codex_plugin_available,
-    _codex_resume_command,
-    _codex_resume_prompt,
-    _codex_session_id,
-    _find_smoke_artifact,
-    _host_command,
-    _prepare_workspace,
-    _prompt,
+    claude_host_command,
+    claude_prompt,
+    codex_bootstrap_prompt,
+    codex_host_command,
+    codex_plan_prompt,
+    codex_plugin_available,
+    codex_resume_command,
+    codex_resume_prompt,
+    codex_session_id,
+    find_smoke_artifact,
+    prepare_workspace,
+    run_smoke,
+    zcode_prompt,
 )
 
 
@@ -143,13 +148,14 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         self.assertIn("host-smoke:claude", ci)
         self.assertGreaterEqual(ci.count("when: manual"), 2)
 
-    def test_host_smoke_probe_is_local_and_supports_both_hosts(self) -> None:
+    def test_host_smoke_probe_is_local_and_supports_all_hosts(self) -> None:
         completed = subprocess.run(
             [
                 sys.executable,
                 "-X",
                 "utf8",
-                str(ROOT / "scripts" / "host_smoke.py"),
+                "-m",
+                "scripts.host_smoke",
                 "probe",
                 "--json",
             ],
@@ -161,7 +167,9 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         result = json.loads(completed.stdout)
-        self.assertEqual(set(result["hosts"]), {"codex", "claude-code"})
+        self.assertEqual(
+            set(result["hosts"]), {"codex", "claude-code", "zcode"}
+        )
         self.assertFalse(result["modelInvocationStarted"])
         self.assertEqual(result["pluginVersion"], __version__)
         self.assertEqual(result["toolCount"], 33)
@@ -181,30 +189,31 @@ class TeamReleaseReadinessTests(unittest.TestCase):
             stdout=json.dumps(installed),
             stderr="",
         )
-        with patch("scripts.host_smoke.shutil.which", return_value="codex"):
+        with patch(
+            "scripts.host_smoke.codex.shutil.which", return_value="codex"
+        ):
             with patch(
-                "scripts.host_smoke.subprocess.run",
+                "scripts.host_smoke.codex.subprocess.run",
                 return_value=completed,
             ):
-                self.assertTrue(_codex_plugin_available())
+                self.assertTrue(codex_plugin_available())
 
     def test_codex_smoke_disables_competing_version_for_one_invocation(
         self,
     ) -> None:
         with TemporaryDirectory() as temporary:
             with patch(
-                "scripts.host_smoke._codex_plugin_state",
+                "scripts.host_smoke.codex.codex_plugin_state",
                 return_value=(
                     True,
                     ["delivery-graph@majorbio-skills"],
                 ),
             ):
                 with patch(
-                    "scripts.host_smoke.shutil.which",
+                    "scripts.host_smoke.codex.shutil.which",
                     return_value="codex",
                 ):
-                    command = _host_command(
-                        "codex",
+                    command = codex_host_command(
                         workspace=Path(temporary),
                         scenario="light",
                         model=None,
@@ -218,11 +227,10 @@ class TeamReleaseReadinessTests(unittest.TestCase):
     def test_claude_smoke_hard_denies_final_user_confirmation(self) -> None:
         with TemporaryDirectory() as temporary:
             with patch(
-                "scripts.host_smoke.shutil.which",
+                "scripts.host_smoke.claude.shutil.which",
                 return_value="claude",
             ):
-                command = _host_command(
-                    "claude-code",
+                command = claude_host_command(
                     workspace=Path(temporary),
                     scenario="light",
                     model=None,
@@ -240,11 +248,10 @@ class TeamReleaseReadinessTests(unittest.TestCase):
     ) -> None:
         with TemporaryDirectory() as temporary:
             with patch(
-                "scripts.host_smoke.shutil.which",
+                "scripts.host_smoke.claude.shutil.which",
                 return_value="claude",
             ):
-                command = _host_command(
-                    "claude-code",
+                command = claude_host_command(
                     workspace=Path(temporary),
                     scenario="light",
                     model=None,
@@ -258,7 +265,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
     ) -> None:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary)
-            development = _prepare_workspace(workspace, "claude-code")
+            development = prepare_workspace(workspace, "claude-code")
             completed = subprocess.run(
                 ["git", "branch", "--show-current"],
                 cwd=development,
@@ -291,6 +298,112 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         )
         self.assertEqual(git_dir, common_dir)
 
+    def _zcode_run_args(
+        self,
+        *,
+        execute: bool = True,
+        workspace_dir: Path | None = None,
+        verify_only: bool = False,
+    ) -> argparse.Namespace:
+        return argparse.Namespace(
+            host="zcode",
+            scenario="light",
+            model=None,
+            timeout=60,
+            execute=execute,
+            workspace_dir=workspace_dir,
+            verify_only=verify_only,
+        )
+
+    def test_zcode_prompt_uses_primary_checkout_and_native_owner(self) -> None:
+        prompt = zcode_prompt("light")
+        self.assertIn("This ZCode session owns the", prompt)
+        self.assertIn("CURRENT_WORKSPACE_SERIAL", prompt)
+        self.assertIn("AskUserQuestion", prompt)
+        self.assertIn("owner=zcode", prompt)
+        self.assertIn("NEVER call record_user_confirmation", prompt)
+        self.assertIn("do not open another checkout", prompt)
+        self.assertNotIn("Claude Code session", prompt)
+        self.assertNotIn("linked worktree", prompt)
+
+    def test_zcode_prepare_workspace_is_primary_checkout(self) -> None:
+        with TemporaryDirectory() as temporary:
+            workspace = Path(temporary)
+            development = prepare_workspace(workspace, "zcode")
+            completed = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=development,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=False,
+            )
+            git_dir = subprocess.run(
+                ["git", "rev-parse", "--absolute-git-dir"],
+                cwd=development,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
+            common_dir = subprocess.run(
+                [
+                    "git",
+                    "rev-parse",
+                    "--path-format=absolute",
+                    "--git-common-dir",
+                ],
+                cwd=development,
+                text=True,
+                encoding="utf-8",
+                capture_output=True,
+                check=True,
+            ).stdout.strip()
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(development, workspace)
+        self.assertEqual(completed.stdout.strip(), "main")
+        self.assertEqual(git_dir, common_dir)
+
+    def test_zcode_two_phase_smoke_requires_persistent_workspace(
+        self,
+    ) -> None:
+        with self.assertRaisesRegex(RuntimeError, "--workspace-dir"):
+            run_smoke(self._zcode_run_args())
+
+    def test_zcode_flags_are_rejected_for_other_hosts(self) -> None:
+        args = argparse.Namespace(
+            host="codex",
+            scenario="light",
+            model=None,
+            timeout=60,
+            execute=False,
+            workspace_dir=Path("unused"),
+            verify_only=False,
+        )
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "apply only to the zcode smoke",
+        ):
+            run_smoke(args)
+
+    def test_zcode_prepare_phase_writes_prompt_outside_workspace(self) -> None:
+        with TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            self.assertEqual(
+                run_smoke(
+                    self._zcode_run_args(workspace_dir=base / "ws")
+                ),
+                0,
+            )
+            workspace = base / "ws"
+            prompt_path = base / "ws-prompt.md"
+            self.assertTrue(prompt_path.is_file())
+            self.assertIn(
+                "ZCode",
+                prompt_path.read_text(encoding="utf-8"),
+            )
+            self.assertIsNone(find_smoke_artifact(workspace))
+
     def test_host_smoke_accepts_content_evidence_not_a_fixed_filename(
         self,
     ) -> None:
@@ -302,27 +415,27 @@ class TeamReleaseReadinessTests(unittest.TestCase):
                 "Delivery Graph real-host smoke passed.\n",
                 encoding="utf-8",
             )
-            self.assertEqual(_find_smoke_artifact(workspace), artifact)
+            self.assertEqual(find_smoke_artifact(workspace), artifact)
 
     def test_host_smoke_accepts_readme_only_after_this_run_changes_it(
         self,
     ) -> None:
         with TemporaryDirectory() as temporary:
             workspace = Path(temporary)
-            _prepare_workspace(workspace, "claude-code")
-            self.assertIsNone(_find_smoke_artifact(workspace))
+            prepare_workspace(workspace, "claude-code")
+            self.assertIsNone(find_smoke_artifact(workspace))
             readme = workspace / "README.md"
             readme.write_text(
                 "# Delivery Graph host smoke\n"
                 "- LIGHT real-host smoke: PASS\n",
                 encoding="utf-8",
             )
-            self.assertEqual(_find_smoke_artifact(workspace), readme)
+            self.assertEqual(find_smoke_artifact(workspace), readme)
 
     def test_claude_host_smoke_uses_current_workspace_serial_dispatch(
         self,
     ) -> None:
-        prompt = _prompt("light", "claude-code")
+        prompt = claude_prompt("light")
         self.assertIn("current-host dispatch only", prompt)
         self.assertIn("never dispatch to another Agent", prompt)
         self.assertIn("Do not read prior Codex/Claude", prompt)
@@ -349,19 +462,19 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         self.assertNotIn("smoke is failed if LOOP_HEARTBEAT is absent", prompt)
 
     def test_codex_host_smoke_uses_reserved_independent_receivers(self) -> None:
-        bootstrap = _codex_bootstrap_prompt("light")
-        resumed = _codex_resume_prompt("light")
+        bootstrap = codex_bootstrap_prompt("light")
+        resumed = codex_resume_prompt("light")
         self.assertIn("Do not claim any Loop", bootstrap)
         self.assertIn("second invocation will resume", bootstrap)
         self.assertIn("plan_dispatch_batch", resumed)
         self.assertIn("dispatch_loop", resumed)
         self.assertIn("operation_id", resumed)
         self.assertIn("read loop_context once", resumed)
-        self.assertIn("distinct host-native child", _codex_resume_prompt("standard"))
+        self.assertIn("distinct host-native child", codex_resume_prompt("standard"))
         self.assertNotIn("SessionStart", resumed)
         self.assertNotIn("claim_current_task", resumed)
         self.assertIn("short LIGHT receiver may finish without", resumed)
-        standard = _codex_resume_prompt("standard")
+        standard = codex_resume_prompt("standard")
         self.assertIn("heartbeat_loop", standard)
 
     def test_codex_host_smoke_resumes_exact_bootstrap_thread(self) -> None:
@@ -378,17 +491,17 @@ class TeamReleaseReadinessTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(
-                _codex_session_id(log_path),
+                codex_session_id(log_path),
                 "codex-smoke-thread",
             )
         with (
-            patch("scripts.host_smoke.shutil.which", return_value="codex"),
+            patch("scripts.host_smoke.codex.shutil.which", return_value="codex"),
             patch(
-                "scripts.host_smoke._codex_plugin_state",
+                "scripts.host_smoke.codex.codex_plugin_state",
                 return_value=(True, []),
             ),
         ):
-            command = _codex_resume_command(
+            command = codex_resume_command(
                 session_id="codex-smoke-thread",
                 prompt="continue",
                 model=None,

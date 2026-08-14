@@ -70,5 +70,6 @@ git diff --check
 - [派遣、等待与恢复](skills/delivery-graph-dispatch/references/dispatch-and-recovery.md)
 - [TASK 执行](skills/delivery-graph-task/references/task-execution.md)
 - [分层 Review 与验收](skills/delivery-graph-review/references/acceptance.md)
+- [按变更范围验证与发布](docs/release-strategy.md)
 - [Marketplace 安装、升级与回滚](docs/team-operations.md) · [宿主兼容](docs/host-compatibility.md) · [项目结构](docs/project-engineering.md)
 - [版本记录](CHANGELOG.md)

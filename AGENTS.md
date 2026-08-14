@@ -6,7 +6,11 @@
 
 只有用户明确要求 dogfood/演练运行任务包时，才可进入标准运行包流程。此时所有会写控制面的层级命令都必须显式携带 `--dogfood`，并继续满足各命令原有的批准或确认条件；“升级 Skill”“优化流程”以及 Delivery、Capability、governance 等词都不是 dogfood 授权。
 
-规范 Skill 名为 `delivery-graph`，不追加版本后缀。只维护当前完整 schema v3，不增加旧 schema 迁移或兼容入口。修改后运行相关测试、全量 `unittest`、Python 编译检查、Skill 校验、Plugin 校验和 `git diff --check`；更新控制器源码时运行 `python scripts/build_skill.py`，重新构建 `skills/delivery-graph/scripts/hdg_mcp.py` 与 `skills/delivery-graph/scripts/hdg/**`，Plugin 产物不得恢复 CLI 入口。
+规范 Skill 名为 `delivery-graph`，不追加版本后缀。只维护当前完整 schema v3，不增加旧 schema 迁移或兼容入口。
+
+修改和发布前先按 [docs/release-strategy.md](docs/release-strategy.md) 以业务源文件分类；生成镜像和纯版本号文件不单独抬高验证等级。所有改动至少运行相关测试与 `git diff --check`，正式版本还必须运行 `python scripts/validate_release.py`。只有 Controller/MCP/持久化/schema、共享生成链、共享测试基础设施发生行为变化，或影响范围无法可靠判断时才运行全量 `unittest`；纯文档、发布元数据、Skill 文案、宿主脚本和局部测试按矩阵执行定向验证。
+
+仅在以下情况运行 `python scripts/build_skill.py`：`src/hdg/**` 运行时发生变化、canonical `skills/**` 发生变化、`scripts/build_skill.py` 发生变化，或正式版本号变化需要同步 vendored `__init__.py`。纯 `README.md`、`CHANGELOG.md`、`docs/**`、测试、CI、宿主冒烟脚本和 manifest 文案变化不单独触发构建。构建后必须确认 `skills/delivery-graph/scripts/hdg_mcp.py`、`skills/delivery-graph/scripts/hdg/**` 与 Plugin Skill 镜像一致，Plugin 产物不得恢复 CLI 入口。
 
 ## Sandbox 与 Git 发布
 

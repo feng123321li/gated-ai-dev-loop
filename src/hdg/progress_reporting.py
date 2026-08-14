@@ -491,6 +491,10 @@ def build_progress_monitor(
                     f"{_duration_zh(_seconds_between(observed, state.get('lastHeartbeatAt')))}"
                     "前"
                 )
+                if state.get("lastHeartbeatLeaseRenewed") is True:
+                    heartbeat_zh += "（已续租）"
+                elif state.get("lastHeartbeatLeaseRenewed") is False:
+                    heartbeat_zh += "（保活，未到续租阈值）"
             lease = _parse_timestamp(state.get("leaseExpiresAt"))
             lease_seconds = (
                 max(0, int((lease - observed).total_seconds()))
@@ -535,6 +539,11 @@ def build_progress_monitor(
             "nextStepZh": next_step_zh,
             "testsZh": tests_zh,
             "heartbeatZh": heartbeat_zh,
+            "lastHeartbeatAt": state.get("lastHeartbeatAt"),
+            "leaseExpiresAt": state.get("leaseExpiresAt"),
+            "lastHeartbeatLeaseRenewed": state.get(
+                "lastHeartbeatLeaseRenewed"
+            ),
             "health": health,
             "healthZh": health_zh,
         }
@@ -576,6 +585,9 @@ def build_progress_monitor(
                 "completedZh",
                 "nextStepZh",
                 "testsZh",
+                "lastHeartbeatAt",
+                "leaseExpiresAt",
+                "lastHeartbeatLeaseRenewed",
                 "health",
             )
         }

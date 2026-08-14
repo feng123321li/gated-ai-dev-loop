@@ -54,6 +54,9 @@ _LOOP_EXECUTION_POLICY = {
         "tool": "report_loop_progress",
         "language": "USER_PREFERRED",
         "heartbeatRenewsLease": True,
+        "heartbeatRenewalMode": "AT_RENEWAL_THRESHOLD",
+        "heartbeatUpdatesLiveMonitor": True,
+        "heartbeatWritesProjection": False,
         "progressRenewsLease": False,
         "initialHeartbeatRequiredBeforeWork": True,
         "shortLoopMayCompleteWithoutExplicitHeartbeat": False,
@@ -72,7 +75,7 @@ _LOOP_EXECUTION_POLICY = {
     "longRunningCommands": {
         "execution": "NON_BLOCKING_OR_SEPARATE_MONITOR",
         "heartbeatWhileRunning": True,
-        "heartbeatIntervalSeconds": 300,
+        "heartbeatIntervalSeconds": 60,
         "beforeStart": "REPORT_PROGRESS_AND_HEARTBEAT",
         "afterFinish": "HEARTBEAT_AND_REPORT_PROGRESS",
         "hostCompletionNotificationIsNotHeartbeat": True,

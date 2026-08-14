@@ -41,6 +41,7 @@ class DeliveryEventStore:
     ) -> list[dict[str, Any]]:
         executor_metadata: dict[tuple[str, int], dict[str, Any]] = {}
         first_heartbeats: dict[tuple[str, int], str] = {}
+        latest_heartbeats: dict[tuple[str, int], dict[str, Any]] = {}
         latest_progress: dict[tuple[str, int], dict[str, Any]] = {}
         manual_handoffs: dict[str, dict[str, Any]] = {}
         handoff_rows = connection.execute(
@@ -85,6 +86,32 @@ class DeliveryEventStore:
             first_heartbeats[
                 (heartbeat_row["node_id"], heartbeat_row["attempt"])
             ] = heartbeat_row["first_heartbeat_at"]
+        latest_heartbeat_rows = connection.execute(
+            """
+            SELECT heartbeat.node_id, heartbeat.attempt,
+                   heartbeat.payload_json, heartbeat.recorded_at
+            FROM graph_events heartbeat
+            JOIN (
+                SELECT node_id, attempt, MAX(event_id) AS event_id
+                FROM graph_events
+                WHERE run_id = ? AND event_type = 'LOOP_HEARTBEAT'
+                GROUP BY node_id, attempt
+            ) latest ON heartbeat.event_id = latest.event_id
+            WHERE heartbeat.run_id = ?
+            """,
+            (run_id, run_id),
+        ).fetchall()
+        for heartbeat_row in latest_heartbeat_rows:
+            key = (heartbeat_row["node_id"], heartbeat_row["attempt"])
+            heartbeat_payload = json.loads(heartbeat_row["payload_json"])
+            latest_heartbeats[key] = {
+                "leaseRenewed": (
+                    heartbeat_payload.get("leaseRenewed")
+                    if isinstance(heartbeat_payload, dict)
+                    else None
+                ),
+                "recordedAt": heartbeat_row["recorded_at"],
+            }
         progress_rows = connection.execute(
             """
             SELECT event_id, node_id, attempt, payload_json, recorded_at
@@ -166,6 +193,12 @@ class DeliveryEventStore:
                 "lastHeartbeatAt": row["last_heartbeat_at"],
                 "firstHeartbeatAt": first_heartbeats.get(
                     (row["node_id"], row["attempt"])
+                ),
+                "lastHeartbeatLeaseRenewed": (
+                    latest_heartbeats.get(
+                        (row["node_id"], row["attempt"]),
+                        {},
+                    ).get("leaseRenewed")
                 ),
                 "leaseExpiresAt": (
                     row["lease_expires_at"]

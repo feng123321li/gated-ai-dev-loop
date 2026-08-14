@@ -27,7 +27,7 @@ from .graph_runtime_common import (
     receiver_skill_prompt,
     resource_claims_overlap,
 )
-from .graph_runtime_frontier import loop_context
+from .graph_runtime_frontier import graph_status, loop_context
 
 
 def dispatch_loop(
@@ -297,6 +297,12 @@ def dispatch_loop(
                         "The claimed reservation does not match this dispatch replay",
                     )
                 prior_model_id = payload.get("actualModelId")
+                status = graph_status(
+                    root=root,
+                    root_id=root_id,
+                    explicit_dogfood=explicit_dogfood,
+                    now=now,
+                )
                 return {
                     **loop_context(
                         root=root,
@@ -319,6 +325,7 @@ def dispatch_loop(
                     "operationId": operation_id,
                     "leaseExpiresAt": state["leaseExpiresAt"],
                     "dispatchReplayed": True,
+                    "progressMonitor": status["progressMonitor"],
                 }
         if actual_agent_id is not None:
             global_breaker = repository.open_host_capacity_breaker(
@@ -532,6 +539,12 @@ def dispatch_loop(
             (at, run["run_id"]),
         )
     repository.write_projections(root_id)
+    status = graph_status(
+        root=root,
+        root_id=root_id,
+        explicit_dogfood=explicit_dogfood,
+        now=now,
+    )
     return {
         **loop_context(
             root=root,
@@ -558,6 +571,7 @@ def dispatch_loop(
         "operationId": operation_id,
         "leaseExpiresAt": expires,
         "dispatchReplayed": False,
+        "progressMonitor": status["progressMonitor"],
     }
 
 def handoff_ready_automatic_task(

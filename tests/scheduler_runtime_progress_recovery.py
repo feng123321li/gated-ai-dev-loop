@@ -32,6 +32,102 @@ from .scheduler_runtime_support import (
 
 
 class SchedulerRuntimeTestsPart10:
+    def test_short_lease_renews_at_threshold_and_updates_live_monitor_only(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        operation_id = "op-threshold-renewal"
+        claimed_at = at(2)
+        claimed = dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="heartbeat-agent",
+            operation_id=operation_id,
+            now=claimed_at,
+        )
+        progress_path = (
+            Path(self.root)
+            / ".layered-delivery"
+            / root_id
+            / "progress.md"
+        )
+        projection_after_claim = progress_path.read_bytes()
+
+        self.assertEqual(
+            claimed["leaseExpiresAt"],
+            "2026-07-29T08:07:00Z",
+        )
+        self.assertIn("progressMonitor", claimed)
+        self.assertIn("心跳与租约", claimed["progressMonitor"]["markdownTable"])
+
+        early = heartbeat_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id=operation_id,
+            now=at(3),
+        )
+        early_monitor = early["progressMonitor"]
+        early_row = next(
+            row for row in early_monitor["rows"] if row["nodeId"] == node_id
+        )
+
+        self.assertFalse(early["leaseRenewed"])
+        self.assertEqual(early["leaseExpiresAt"], claimed["leaseExpiresAt"])
+        self.assertEqual(early_row["lastHeartbeatAt"], "2026-07-29T08:03:00Z")
+        self.assertFalse(early_row["lastHeartbeatLeaseRenewed"])
+        self.assertIn("保活，未到续租阈值", early_row["heartbeatZh"])
+        self.assertEqual(progress_path.read_bytes(), projection_after_claim)
+
+        renewed = heartbeat_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id=operation_id,
+            now=at(5),
+        )
+        renewed_monitor = renewed["progressMonitor"]
+        renewed_row = next(
+            row
+            for row in renewed_monitor["rows"]
+            if row["nodeId"] == node_id
+        )
+
+        self.assertTrue(renewed["leaseRenewed"])
+        self.assertEqual(renewed["leaseExpiresAt"], "2026-07-29T08:10:00Z")
+        self.assertEqual(renewed_row["lastHeartbeatAt"], "2026-07-29T08:05:00Z")
+        self.assertTrue(renewed_row["lastHeartbeatLeaseRenewed"])
+        self.assertIn("已续租", renewed_row["heartbeatZh"])
+        self.assertNotEqual(
+            early_monitor["changeFingerprint"],
+            renewed_monitor["changeFingerprint"],
+        )
+        self.assertEqual(progress_path.read_bytes(), projection_after_claim)
+
+        heartbeat_events = [
+            event
+            for event in graph_events(root=self.root, root_id=root_id)["events"]
+            if event["eventType"] == "LOOP_HEARTBEAT"
+        ]
+        self.assertEqual(
+            [event["payload"]["leaseRenewed"] for event in heartbeat_events],
+            [False, True],
+        )
+
+        report_loop_progress(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id=operation_id,
+            phase="TESTING",
+            summary_zh="关键测试阶段已开始。",
+            now=at(6),
+        )
+        self.assertNotEqual(progress_path.read_bytes(), projection_after_claim)
+
     def test_frozen_projection_contains_runtime_progress(self) -> None:
         hierarchy = auditable_recursive_hierarchy()
         prepared = prepare_hierarchy(
@@ -355,7 +451,7 @@ class SchedulerRuntimeTestsPart10:
         )["progressMonitor"]
         self.assertEqual(
             after_short_window["alerts"][0]["code"],
-            "ALIVE_WITHOUT_PROGRESS",
+            "LEASE_EXPIRED_PENDING_RECOVERY",
         )
 
     def test_loop_progress_accepts_user_language_and_requires_live_claim(
@@ -458,7 +554,7 @@ class SchedulerRuntimeTestsPart10:
             root_id=root_id,
             node_id=node_id,
             operation_id=operation_id,
-            now=claimed_at + timedelta(minutes=2),
+            now=claimed_at + timedelta(minutes=3),
         )
         alive_without_progress = graph_status(
             root=self.root,
@@ -474,7 +570,7 @@ class SchedulerRuntimeTestsPart10:
         suspect_lost = graph_status(
             root=self.root,
             root_id=root_id,
-            now=claimed_at + timedelta(minutes=10),
+            now=claimed_at + timedelta(minutes=6, seconds=1),
         )["progressMonitor"]
         self.assertEqual(suspect_lost["alerts"][0]["code"], "SUSPECT_LOST")
         self.assertEqual(
@@ -491,7 +587,7 @@ class SchedulerRuntimeTestsPart10:
         expired_status = graph_status(
             root=self.root,
             root_id=root_id,
-            now=claimed_at + timedelta(minutes=33),
+            now=claimed_at + timedelta(minutes=8, seconds=1),
         )["progressMonitor"]
         self.assertEqual(
             expired_status["alerts"][0]["code"],
@@ -509,7 +605,7 @@ class SchedulerRuntimeTestsPart10:
         frontier = get_graph_frontier(
             root=self.root,
             root_id=root_id,
-            now=claimed_at + timedelta(minutes=33),
+            now=claimed_at + timedelta(minutes=8, seconds=1),
         )
         self.assertEqual(frontier["progressMonitor"]["recommendedPollSeconds"], 90)
         events = graph_events(root=self.root, root_id=root_id)["events"]
@@ -610,7 +706,7 @@ class SchedulerRuntimeTestsPart10:
                 "onTimeout": "CALL_GRAPH_STATUS_ONCE",
                 "consumeActionsBeforeWaiting": False,
                 "immediateActions": [],
-                "nextWakeAt": "2026-07-29T08:32:00Z",
+                "nextWakeAt": "2026-07-29T08:07:00Z",
                 "onNextWakeAt": "CALL_GRAPH_FRONTIER_ONCE",
                 "suppressUnchangedCommentary": True,
             },
@@ -653,9 +749,9 @@ class SchedulerRuntimeTestsPart10:
         )
         self.assertEqual(
             changed["waitDirective"]["pollNotBefore"],
-            "2026-07-29T08:08:06Z",
+            "2026-07-29T08:06:06Z",
         )
-        self.assertEqual(changed["recommendedPollSeconds"], 300)
+        self.assertEqual(changed["recommendedPollSeconds"], 180)
 
     def test_frontier_consumes_ready_actions_before_waiting_on_receiver(
         self,
@@ -700,7 +796,7 @@ class SchedulerRuntimeTestsPart10:
         self.assertTrue(directive["consumeActionsBeforeWaiting"])
         self.assertEqual(directive["immediateActions"], ["DISPATCH_LOOP"])
 
-    def test_status_retains_receiver_reservation_deadline_while_peer_runs(
+    def test_status_uses_earliest_claim_deadline_while_peer_is_reserved(
         self,
     ) -> None:
         prepared = self.prepare_and_freeze(disjoint_parallel_hierarchy())
@@ -737,11 +833,15 @@ class SchedulerRuntimeTestsPart10:
         self.assertEqual(first["pollTool"], "graph_status")
         self.assertEqual(
             first["nextWakeAt"],
-            assignment["reservationExpiresAt"],
+            "2026-07-29T08:07:00Z",
         )
         self.assertEqual(
             second["nextWakeAt"],
+            "2026-07-29T08:07:00Z",
+        )
+        self.assertEqual(
             assignment["reservationExpiresAt"],
+            "2026-07-29T08:08:00Z",
         )
 
     def test_repeated_noop_frontier_does_not_touch_run_or_projections(
@@ -797,7 +897,7 @@ class SchedulerRuntimeTestsPart10:
             {
                 "execution": "NON_BLOCKING_OR_SEPARATE_MONITOR",
                 "heartbeatWhileRunning": True,
-                "heartbeatIntervalSeconds": 300,
+                "heartbeatIntervalSeconds": 60,
                 "beforeStart": "REPORT_PROGRESS_AND_HEARTBEAT",
                 "afterFinish": "HEARTBEAT_AND_REPORT_PROGRESS",
                 "hostCompletionNotificationIsNotHeartbeat": True,

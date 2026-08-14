@@ -25,6 +25,7 @@ from .graph_runtime_common import (
     loop_execution_policy,
     normalize_progress_payload,
 )
+from .graph_runtime_frontier import graph_status
 
 
 def heartbeat_loop(
@@ -51,22 +52,45 @@ def heartbeat_loop(
                 "SCHEDULER_OPERATION_INVALID",
                 "Loop claim is missing, mismatched, or expired",
             )
-        expires = _after(
+        claim_policy = graph["runtime"]["claimPolicy"]
+        current_expires = state["leaseExpiresAt"]
+        renewal_boundary = _after(
             at,
-            graph["runtime"]["claimPolicy"]["leaseSeconds"],
+            claim_policy["renewBeforeSeconds"],
         )
-        connection.execute(
-            "UPDATE node_runs SET last_heartbeat_at = ?, "
-            "lease_expires_at = ? WHERE run_id = ? AND node_id = ? "
-            "AND attempt = ?",
-            (
-                at,
-                expires,
-                run["run_id"],
-                node_id,
-                state["attempt"],
-            ),
+        lease_renewed = (
+            _parse_timestamp(current_expires)
+            <= _parse_timestamp(renewal_boundary)
         )
+        expires = (
+            _after(at, claim_policy["leaseSeconds"])
+            if lease_renewed
+            else current_expires
+        )
+        if lease_renewed:
+            connection.execute(
+                "UPDATE node_runs SET last_heartbeat_at = ?, "
+                "lease_expires_at = ? WHERE run_id = ? AND node_id = ? "
+                "AND attempt = ?",
+                (
+                    at,
+                    expires,
+                    run["run_id"],
+                    node_id,
+                    state["attempt"],
+                ),
+            )
+        else:
+            connection.execute(
+                "UPDATE node_runs SET last_heartbeat_at = ? "
+                "WHERE run_id = ? AND node_id = ? AND attempt = ?",
+                (
+                    at,
+                    run["run_id"],
+                    node_id,
+                    state["attempt"],
+                ),
+            )
         repository.append_event(
             connection,
             run_id=run["run_id"],
@@ -75,19 +99,30 @@ def heartbeat_loop(
             event_type="LOOP_HEARTBEAT",
             actor=state["owner"],
             operation_id=operation_id,
-            payload={"leaseExpiresAt": expires},
+            payload={
+                "leaseExpiresAt": expires,
+                "leaseRenewed": lease_renewed,
+            },
             at=at,
         )
         connection.execute(
             "UPDATE runs SET updated_at = ? WHERE run_id = ?",
             (at, run["run_id"]),
         )
-    repository.write_projections(root_id)
+    status = graph_status(
+        root=root,
+        root_id=root_id,
+        explicit_dogfood=explicit_dogfood,
+        now=now,
+    )
     return {
         "rootId": root_id,
         "nodeId": node_id,
         "status": "CLAIMED",
+        "lastHeartbeatAt": at,
         "leaseExpiresAt": expires,
+        "leaseRenewed": lease_renewed,
+        "progressMonitor": status["progressMonitor"],
     }
 
 def report_loop_progress(

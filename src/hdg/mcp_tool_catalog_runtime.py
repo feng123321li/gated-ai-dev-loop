@@ -166,7 +166,12 @@ RUNTIME_TOOLS = (
     ),
     _tool(
         "heartbeat_loop",
-        "Renew the lease of one claimed Loop.",
+        (
+            "Record a live heartbeat for one claimed Loop, refresh the "
+            "agent progress monitor, and renew its short lease only after "
+            "the renewal threshold is reached. Heartbeats do not rewrite "
+            "human projection files."
+        ),
         _object(
             {
                 "root_id": ROOT_ID,

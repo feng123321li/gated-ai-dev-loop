@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.40.3 — 2026-08-14
+
+发布提交：以 tag `v0.40.3` 指向的提交为准
+
+- **核心模块按职责拆分**：将 Graph runtime、模型渲染、规划、仓储层级、Git binding、MCP schema/catalog/adapter、层级契约和模型校验拆为显式依赖的职责模块，原入口保留兼容门面；不使用通配导入。
+- **测试结构收敛**：按调度运行时、MCP 契约、workspace 执行、Plugin 和 Graph 架构拆分超长测试，保留原测试入口与类名；新增源码和测试文件不超过 1000 行的架构守卫。
+- **兼容性**：Controller 行为、33 个 MCP 工具、四个 Skill、三个 MCP Profile、schema v3、宿主协议和 `.layered-delivery/` 数据均无变化，已有 Graph 无需迁移。
+- **验证**：全量 Python 429 项完成（428 通过、1 项按环境跳过），并完成 `compileall`、四个 Skill、Claude Plugin、release candidate 与差异校验。
+
 ## 0.40.2 — 2026-08-14
 
 发布提交：以 tag `v0.40.2` 指向的提交为准

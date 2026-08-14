@@ -7,6 +7,10 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.40.3 发布候选矩阵
+
+0.40.3 是不改变外部协议的可维护性版本：按职责拆分 Graph runtime、模型渲染、规划、仓储层级、Git binding、MCP schema/catalog/adapter、层级契约与模型校验，并同步拆分超长测试；所有 `src/hdg/*.py` 与测试 Python 文件均不超过 1000 行，兼容门面继续暴露原 API。Controller 行为、33 个 MCP 工具、四个 Skill、三个 MCP Profile、schema v3、宿主交互及 `.layered-delivery/` 数据均无变化。候选已完成 429 项 Python 测试（428 通过、1 项按环境跳过）、全树编译、四个 Skill、Claude Plugin、release candidate 与差异校验。
+
 ## 0.40.2 发布候选矩阵
 
 0.40.2 仅重写 README 信息架构，将首页压缩为项目摘要，并把内部 Marketplace 安装细节路由到团队运维文档。Controller、33 个 MCP 工具、四个 Skill、三个 MCP Profile、schema v3、无 Hook 模式、`CURRENT_WORKSPACE_SERIAL`、Codex/Claude Code/ZCode 宿主协议和 `.layered-delivery/` 数据均不变；真实宿主能力沿用 0.40.1 的验证边界。候选已完成 427 项 Python 测试（426 通过、1 项按环境跳过）、编译、Skill/Plugin、release candidate 与差异校验。

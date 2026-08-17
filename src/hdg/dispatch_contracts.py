@@ -21,8 +21,7 @@ RECEIVER_SKILLS = {
     "TASK_LOOP": "delivery-graph-task",
     "TASK_REVIEW_LOOP": "delivery-graph-review",
     "GROUP_REVIEW_LOOP": "delivery-graph-review",
-    "DELIVERY_ACCEPTANCE_LOOP": "delivery-graph-review",
-    "DELIVERY_READINESS_LOOP": "delivery-graph-review",
+    "DELIVERY_REVIEW_LOOP": "delivery-graph-review",
 }
 
 

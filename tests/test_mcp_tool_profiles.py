@@ -5,9 +5,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from hdg.dispatch_contracts import receiver_skill_prompt
+from hdg.dispatch_contracts import RECEIVER_SKILLS, receiver_skill_prompt
 from hdg.host_policy import ProjectRootBinding
 from hdg.interaction_contract import manual_receiver_prompt
+from hdg.loop_contracts import LOOP_KINDS
 from hdg.mcp_adapter import (
     CLIENT_CAPABILITIES_META_KEY,
     CLIENT_INFO_META_KEY,
@@ -193,6 +194,19 @@ class McpToolProfileTests(unittest.TestCase):
         self.assertIn("delivery-graph-dispatch", handoff_prompt)
         self.assertIn("delivery-graph-task", handoff_prompt)
         self.assertIn("delivery-graph-review", handoff_prompt)
+
+    def test_receiver_skill_routes_cover_every_loop_kind(self) -> None:
+        self.assertEqual(
+            RECEIVER_SKILLS,
+            {
+                loop_kind: (
+                    "delivery-graph-task"
+                    if loop_kind == "TASK_LOOP"
+                    else "delivery-graph-review"
+                )
+                for loop_kind in LOOP_KINDS
+            },
+        )
 
     def test_plugin_registers_three_profiled_mcp_servers(self) -> None:
         manifests = [

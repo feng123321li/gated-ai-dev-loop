@@ -19,6 +19,7 @@ from .scheduler_runtime_support import (
     preview_hierarchy,
     rebuild_graph_run,
     record_loop_result,
+    review_success,
     review_node_id,
     runtime_dispatch_loop,
     select_execution_mode,
@@ -32,7 +33,9 @@ from .scheduler_runtime_support import (
 
 
 class SchedulerRuntimeTestsPart1:
-    def test_planned_task_and_review_dispatch_without_hooks(self) -> None:
+    def test_planned_task_and_delivery_review_dispatch_without_hooks(
+        self,
+    ) -> None:
         prepared = self.prepare_and_freeze(task_hierarchy())
         root_id = prepared["rootId"]
         task_node_id = loop_node_id("t-service")
@@ -83,7 +86,7 @@ class SchedulerRuntimeTestsPart1:
             now=at(4),
         )
 
-        review_node_id = task_review_node_id("t-service")
+        task_review_id = task_review_node_id("t-service")
         review_plan = plan_dispatch_batch(
             root=self.root,
             root_id=root_id,
@@ -96,7 +99,7 @@ class SchedulerRuntimeTestsPart1:
         review_claim = runtime_dispatch_loop(
             root=self.root,
             root_id=root_id,
-            node_id=review_node_id,
+            node_id=task_review_id,
             owner="codex-review-child",
             operation_id="op-hookless-review",
             agent_id="codex",
@@ -114,6 +117,25 @@ class SchedulerRuntimeTestsPart1:
             verified_project_scopes=[],
             now=at(6),
         )
+        record_loop_result(
+            root=self.root,
+            root_id=root_id,
+            node_id=task_review_id,
+            operation_id="op-hookless-review",
+            outcome=review_success("TASK_REVIEW_LOOP"),
+            now=at(7),
+        )
+
+        delivery_review_node_id = review_node_id(root_id)
+        delivery_review_plan = plan_dispatch_batch(
+            root=self.root,
+            root_id=root_id,
+            expected_graph_fingerprint=prepared["graphFingerprint"],
+            host_adapter_id="codex",
+            host_native_agent_ids=("codex",),
+            now=at(8),
+        )
+        delivery_review_assignment = delivery_review_plan["assignments"][0]
 
         self.assertEqual(
             task_plan["nextAction"],
@@ -123,13 +145,21 @@ class SchedulerRuntimeTestsPart1:
         self.assertEqual(task_claim["operationId"], "op-hookless-task")
         self.assertEqual(heartbeat["status"], "CLAIMED")
         self.assertNotIn("receiverAttested", task_claim)
-        self.assertEqual(review_assignment["nodeId"], review_node_id)
+        self.assertEqual(review_assignment["nodeId"], task_review_id)
         self.assertTrue(review_assignment["independence"]["required"])
         self.assertEqual(
             review_claim["receiverContextId"],
             "codex-review-child",
         )
         self.assertNotIn("receiverAttested", review_claim)
+        self.assertEqual(
+            delivery_review_assignment["nodeId"],
+            delivery_review_node_id,
+        )
+        self.assertIn(
+            "$delivery-graph-review",
+            delivery_review_assignment["receiverPrompt"],
+        )
 
     def test_ready_automatic_task_can_be_explicitly_handed_to_manual_receiver(
         self,

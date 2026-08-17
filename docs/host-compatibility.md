@@ -7,6 +7,10 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.41.1 发布候选矩阵
+
+0.41.1 修复自动调度进入 `DELIVERY_REVIEW_LOOP` 时 receiver Skill 路由缺失、导致 `plan_dispatch_batch` 被包装为 `INTERNAL_ERROR` 的问题，并删除路由表与 Review Skill 描述中的两个废弃 Loop 名称。新增合法 Loop 路由全集断言，以及从 TASK、TASK Review 推进到 Delivery Review 实际派遣的回归测试。MCP 工具联集仍为 32，三个 Profile、schema v3、租约、心跳、并发和持久化协议均不变；既有处于 `READY` 的 Delivery Review 升级后可直接重新规划派遣，无需重建 Graph。候选已完成 418 项 Python 测试（417 通过、1 项按环境跳过）、全树编译、四个 Skill、Plugin、release candidate 与差异校验。
+
 ## 0.41.0 发布候选矩阵
 
 0.41.0 收敛调度与可观测边界：Loop 租约缩短为 5 分钟，receiver 每 60 秒心跳并只在剩余 2 分钟的续租窗口延长租约；派遣和心跳更新 Agent 主会话实时面板，心跳不重写 Markdown 投影。Controller 删除软额度策略、未接线的硬额度熔断子系统、Worker 模型遥测及风险分类推荐入口；MCP 工具联集为 32，planning Profile 为 15，固定并发 4、资源锁、普通显式暂停/恢复和 schema v3 namespace 保持不变。候选已完成 417 项 Python 测试（416 通过、1 项按环境跳过）、全树编译、四个 Skill、Plugin、release candidate 与差异校验。

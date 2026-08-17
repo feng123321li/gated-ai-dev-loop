@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.41.1 — 2026-08-17
+
+发布提交：以 tag `v0.41.1` 指向的提交为准
+
+- **Delivery Review 派遣修复**：为合法的 `DELIVERY_REVIEW_LOOP` 补齐 `delivery-graph-review` receiver Skill 路由，删除两个废弃的 Delivery Acceptance/Readiness Loop 路由，避免 `plan_dispatch_batch` 在最终技术验收阶段返回 `INTERNAL_ERROR`。
+- **契约防回归**：新增合法 Loop 与 receiver Skill 路由全集一致性断言，并把无 Hook 自动调度集成测试推进到实际生成 Delivery Review assignment。
+- **兼容性**：不改变 MCP 工具、Profile、schema v3、SQLite、租约或心跳协议；已停在 `READY` 的 Delivery Review 升级后可直接重新调用 `plan_dispatch_batch`，无需重建 Graph 或修改运行数据。
+- **验证**：全量 Python 418 项完成（417 通过、1 项按环境跳过），并完成全树编译、四个 Skill、Plugin、release candidate 与差异校验。
+
 ## 0.41.0 — 2026-08-17
 
 发布提交：以 tag `v0.41.0` 指向的提交为准

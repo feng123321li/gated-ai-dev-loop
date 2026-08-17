@@ -1,6 +1,6 @@
 ---
 name: delivery-graph-review
-description: "在独立 receiver 上下文中执行一个已分配的 TASK_REVIEW_LOOP、GROUP_REVIEW_LOOP、DELIVERY_ACCEPTANCE_LOOP 或 DELIVERY_READINESS_LOOP，复用仍为 EXACT_MATCH 的上游证据，对当前层缺口与风险做定向验证，闭环 findings，并提交本层唯一结论。仅在 Delivery Graph assignment/receiverPrompt 指定 Review 时使用；不实现 TASK、不调度其他节点。"
+description: "在独立 receiver 上下文中执行一个已分配的 TASK_REVIEW_LOOP、GROUP_REVIEW_LOOP 或 DELIVERY_REVIEW_LOOP，复用仍为 EXACT_MATCH 的上游证据，对当前层缺口与风险做定向验证，闭环 findings，并提交本层唯一结论。仅在 Delivery Graph assignment/receiverPrompt 指定 Review 时使用；不实现 TASK、不调度其他节点。"
 allowed-tools:
   - mcp__plugin_delivery-graph_delivery-graph-receiver__loop_context
   - mcp__plugin_delivery-graph_delivery-graph-receiver__dispatch_loop

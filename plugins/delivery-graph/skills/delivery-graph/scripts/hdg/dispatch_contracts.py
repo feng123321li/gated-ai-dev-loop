@@ -24,6 +24,13 @@ RECEIVER_SKILLS = {
     "DELIVERY_REVIEW_LOOP": "delivery-graph-review",
 }
 
+# Hosts whose receivers invoke Skills through a native Skill tool by catalog
+# name. Any other host keeps the dual-form fallback instruction.
+_HOST_NATIVE_SKILL_TOOL_LABELS = {
+    "claude-code": "Claude Code",
+    "zcode": "ZCode",
+}
+
 
 def advisory_skill_hint_prompt(
     skill_hints: list[dict[str, str]],
@@ -45,13 +52,12 @@ def advisory_skill_hint_prompt(
         host_instruction = (
             f"当前宿主是 Codex，优先用 {native_invocation} 原生触发对应 Skill。"
         )
-    elif host_adapter_id == "claude-code":
-        native_invocation = "、".join(
-            f"`{item['name']}`" for item in hints
-        )
+    elif host_adapter_id in _HOST_NATIVE_SKILL_TOOL_LABELS:
+        host_label = _HOST_NATIVE_SKILL_TOOL_LABELS[host_adapter_id]
+        catalog_names = "、".join(f"`{item['name']}`" for item in hints)
         host_instruction = (
-            "当前宿主是 Claude Code，优先通过原生 Skill tool 按 catalog 名 "
-            f"{native_invocation} 调用对应 Skill。"
+            f"当前宿主是 {host_label}，优先通过原生 Skill tool 按 catalog 名 "
+            f"{catalog_names} 调用对应 Skill。"
         )
     else:
         codex_invocation = "、".join(
@@ -84,11 +90,11 @@ def receiver_skill_prompt(
     if host_adapter_id == "codex":
         invocation = f"`${skill_name}`"
         host_instruction = f"先原生触发 {invocation}。"
-    elif host_adapter_id == "claude-code":
-        invocation = f"`{skill_name}`"
+    elif host_adapter_id in _HOST_NATIVE_SKILL_TOOL_LABELS:
+        host_label = _HOST_NATIVE_SKILL_TOOL_LABELS[host_adapter_id]
         host_instruction = (
-            "先通过原生 Skill tool 按 catalog 名 "
-            f"{invocation} 调用角色 Skill。"
+            f"当前宿主是 {host_label}，先通过原生 Skill tool 按 catalog 名 "
+            f"`{skill_name}` 调用角色 Skill。"
         )
     else:
         host_instruction = (

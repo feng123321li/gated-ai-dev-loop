@@ -892,6 +892,8 @@ class SchedulerRuntimeTestsPart10:
             policy["longRunningCommands"],
             {
                 "execution": "NON_BLOCKING_OR_SEPARATE_MONITOR",
+                "estimatedOverSecondsRequiresBackground": 60,
+                "preferNarrowCommandScope": True,
                 "heartbeatWhileRunning": True,
                 "heartbeatIntervalSeconds": 60,
                 "beforeStart": "REPORT_PROGRESS_AND_HEARTBEAT",

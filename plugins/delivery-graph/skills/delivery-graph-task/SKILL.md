@@ -17,7 +17,7 @@ allowed-tools:
 
 ## 接收顺序
 
-1. 原样读取 assignment/manual action；保留 `rootId`、`nodeId`、reservation、decision fingerprint、receiver context 和新的 `operation_id`。
+1. 原样读取 assignment/manual action；保留 `rootId`、`nodeId`、reservation、decision fingerprint、receiver context 和新的 `operation_id`。同一 receiver 收到多轮 assignment 时，只使用最新一份的完整凭据组；禁止把新 reservation 与旧 decision fingerprint 或旧 attempt 混搭。
 2. AUTO 使用 `dispatch_loop(AUTO)` 并提交一次性 reservation；MANUAL 省略 AUTO reservation，但必须使用独立 receiver context、新 operation 和可信 Adapter。
 3. claim 成功后调用一次 `loop_context`。至少存在一个运行时验证过的 `projectScopes`；只访问其中授权的路径，不创建、切换或 checkout Git 分支。
 4. `STANDARD` 在代码工作前用精确 operation 首次 heartbeat；短时 `LIGHT` 可在初始 lease 内完成定向验证并直接提交真实结果，超时则正常 heartbeat。
@@ -29,7 +29,7 @@ allowed-tools:
 
 - 先界定 `result.affectedScopes`。`paths` 使用字面量仓库相对路径，并覆盖相关依赖和契约锚点。
 - 运行覆盖该范围的测试、构建、静态检查或契约检查；在 `verificationEvidence` 记录命令摘要、scope、结果和必要说明。不要宣称未运行的验证。
-- 长测试/构建使用非阻塞进程或独立监控，以便继续 heartbeat；测试前后都报告进度。
+- 长测试/构建先估算耗时并优先缩小命令范围（单模块、指定测试类、离线依赖解析）；预计超过 60 秒的命令必须用非阻塞进程或独立监控运行，以便继续 heartbeat；测试前后都报告进度。
 - `report_loop_progress` 在代码检查、根因确认、编辑完成、测试开始/完成、rework 和最终验证等真实里程碑调用；progress 不续租。
 - 数据库 TASK 只应用和验证冻结的 `databaseChanges[*].after`，不得在 Loop 内改设计。
 - 成功后调用 `record_loop_result` 提交标准 outcome 和可审计证据。Controller 会绑定 workspace/evidence snapshots；不要直接写投影。

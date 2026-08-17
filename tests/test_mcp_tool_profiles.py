@@ -188,6 +188,17 @@ class McpToolProfileTests(unittest.TestCase):
                 host_adapter_id="codex",
             ),
         )
+        zcode_prompt = receiver_skill_prompt(
+            "GROUP_REVIEW_LOOP",
+            [],
+            host_adapter_id="zcode",
+        )
+        self.assertIn(
+            "当前宿主是 ZCode，先通过原生 Skill tool 按 catalog 名 "
+            "`delivery-graph-review` 调用角色 Skill。",
+            zcode_prompt,
+        )
+        self.assertNotIn("Codex", zcode_prompt)
         handoff_prompt = manual_receiver_prompt(
             ".layered-delivery/d-1/handoff-test.md"
         )

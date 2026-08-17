@@ -7,6 +7,10 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.42.0 发布候选矩阵
+
+0.42.0 针对短租约下 receiver 同步执行长构建命令（如 Maven）期间心跳停默、被误判 `WORKER_LOST` 的问题硬化执行契约：`executionPolicy.longRunningCommands` 新增 `estimatedOverSecondsRequiresBackground: 60` 与 `preferNarrowCommandScope: true`，TASK Skill 正文、`task-execution.md`、`execution-quickstart.md` 与 receiver MCP server instructions 同步要求先估算耗时、优先收窄命令范围（单模块、指定测试类、离线依赖解析）、预计超过 60 秒转非阻塞执行并保持 60 秒心跳。同时为 ZCode receiver Prompt 补齐宿主专属 Skill 调用文案，不再输出 Codex 双宿主兜底句式；`SCHEDULER_DISPATCH_DECISION_MISMATCH` 增加 expected/submitted details 便于一次定位凭据混搭，TASK/Review SKILL 增加多轮 assignment 只认最新完整凭据组的硬约束。MCP 工具联集仍为 32，三个 Profile、schema v3、租约与心跳数值协议（5 分钟租约、60 秒心跳、2 分钟续租阈值）及持久化均不变；`executionPolicy` 仅新增两个键，已有 Graph 与 `.layered-delivery/` 运行数据无需迁移。候选已完成 418 项 Python 测试（417 通过、1 项按环境跳过）、全树编译、四个 Skill、Plugin 镜像、release candidate 与差异校验。
+
 ## 0.41.1 发布候选矩阵
 
 0.41.1 修复自动调度进入 `DELIVERY_REVIEW_LOOP` 时 receiver Skill 路由缺失、导致 `plan_dispatch_batch` 被包装为 `INTERNAL_ERROR` 的问题，并删除路由表与 Review Skill 描述中的两个废弃 Loop 名称。新增合法 Loop 路由全集断言，以及从 TASK、TASK Review 推进到 Delivery Review 实际派遣的回归测试。MCP 工具联集仍为 32，三个 Profile、schema v3、租约、心跳、并发和持久化协议均不变；既有处于 `READY` 的 Delivery Review 升级后可直接重新规划派遣，无需重建 Graph。候选已完成 418 项 Python 测试（417 通过、1 项按环境跳过）、全树编译、四个 Skill、Plugin、release candidate 与差异校验。

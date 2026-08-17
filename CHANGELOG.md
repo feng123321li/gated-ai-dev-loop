@@ -4,6 +4,17 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.42.0 — 2026-08-17
+
+发布提交：以 tag `v0.42.0` 指向的提交为准
+
+- **长命令防静默契约硬化**：`executionPolicy.longRunningCommands` 新增 `estimatedOverSecondsRequiresBackground: 60` 与 `preferNarrowCommandScope: true`。receiver 在启动测试/构建前必须先估算耗时、优先收窄命令范围（单模块、指定测试类、离线依赖解析）；预计超过 60 秒的前台调用必须转为非阻塞进程或独立监控，并在运行期间保持 60 秒心跳。目标是消除 0.41.x 短租约下 receiver 同步执行长构建命令（如 Maven）期间心跳停默、被误判 `WORKER_LOST` 的场景。
+- **Skill 与 MCP 指引同步**：`delivery-graph-task` SKILL 正文、`references/task-execution.md`、`references/execution-quickstart.md` 与 receiver MCP `SERVER_INSTRUCTIONS` 同步写入“先估算、先收窄、超 60 秒转后台”硬规则。
+- **receiver Prompt 按宿主定制修复**：`receiver_skill_prompt` 与 `advisory_skill_hint_prompt` 为 ZCode 补齐专属文案（“当前宿主是 ZCode，先通过原生 Skill tool 按 catalog 名调用”），不再落入“Codex 先原生触发…其他宿主…”双宿主兜底；未知宿主保留双形式兜底，Codex 与 Claude Code 文案不变。
+- **派遣失配可诊断化与多轮凭据纪律**：`SCHEDULER_DISPATCH_DECISION_MISMATCH` 现返回 details（`expectedAttempt/expectedHostAdapterId/expectedReceiverAgentId/expectedGraphFingerprint/submittedDecisionFingerprint`），把“新 reservation 配旧 decision fingerprint/attempt”这类失配从多轮盲排变为一次定位；`delivery-graph-task` 与 `delivery-graph-review` SKILL 领取步骤同步写入“同一 receiver 多轮 assignment 只认最新一份完整凭据组，禁止跨轮混搭”硬约束。
+- **兼容性**：MCP 工具联集仍为 32，三个 Profile、schema v3、租约与心跳数值协议（5 分钟租约、60 秒心跳、2 分钟续租阈值）及 SQLite 持久化均不变；`executionPolicy` 仅新增两个键，已有 Graph 与 `.layered-delivery/` 运行数据无需迁移。
+- **验证**：全量 Python 418 项完成（417 通过、1 项按环境跳过）、全树编译、四个 Skill、Plugin 镜像重建、release candidate 与差异校验。
+
 ## 0.41.1 — 2026-08-17
 
 发布提交：以 tag `v0.41.1` 指向的提交为准

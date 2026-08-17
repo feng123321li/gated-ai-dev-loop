@@ -532,6 +532,18 @@ class HostDispatchPlanningTests(unittest.TestCase):
             caught.exception.code,
             "SCHEDULER_DISPATCH_DECISION_MISMATCH",
         )
+        details = caught.exception.details
+        self.assertEqual(details["expectedAttempt"], 1)
+        self.assertEqual(details["expectedHostAdapterId"], "codex")
+        self.assertEqual(details["expectedReceiverAgentId"], "codex")
+        self.assertEqual(
+            details["submittedDecisionFingerprint"],
+            "0" * 64,
+        )
+        self.assertNotEqual(
+            details["expectedGraphFingerprint"],
+            details["submittedDecisionFingerprint"],
+        )
 
     def test_stale_graph_fingerprint_is_rejected(self) -> None:
         with TemporaryDirectory() as root:

@@ -227,6 +227,13 @@ def dispatch_loop(
                         "The automatic dispatch decision does not match "
                         "this Graph attempt and native receiver"
                     ),
+                    expectedAttempt=state["attempt"],
+                    expectedHostAdapterId=str(host_adapter_id),
+                    expectedReceiverAgentId=str(actual_agent_id),
+                    expectedGraphFingerprint=current_graph_fingerprint,
+                    submittedDecisionFingerprint=(
+                        dispatch_decision_fingerprint
+                    ),
                 )
             reservation = connection.execute(
                 "SELECT * FROM dispatch_reservations "

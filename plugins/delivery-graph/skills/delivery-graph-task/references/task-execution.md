@@ -33,7 +33,7 @@ claim 成功后，所有 heartbeat、progress、pause、resume 和 result 都携
 5. 实施最小完整变更。实现、生成、测试或静态审查发现的 actionable 问题留在本 Loop 内修复和复验。
 6. 如果需要改变冻结的外部契约、拓扑、依赖、资源、项目 scope 或数据库 after 设计，停止扩展并提交 `REPLAN_REQUIRED`。
 
-`STANDARD` receiver 在代码工作前 heartbeat，并在检查、根因、编辑、测试、rework、最终验证等真实里程碑报告 progress。长任务用后台进程或独立监控，保证 lease 能更新。`LIGHT` 只能在短时、低风险且初始 lease 内完成时省略中间 heartbeat/progress。
+`STANDARD` receiver 在代码工作前 heartbeat，并在检查、根因、编辑、测试、rework、最终验证等真实里程碑报告 progress。长命令先估算耗时并优先缩小命令范围（单模块、指定测试类、离线依赖解析）；预计超过 60 秒必须转后台进程或独立监控，并按 60 秒间隔 heartbeat 保证 lease 能更新。`LIGHT` 只能在短时、低风险且初始 lease 内完成时省略中间 heartbeat/progress。
 
 ## 验证证据
 

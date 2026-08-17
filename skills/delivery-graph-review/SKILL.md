@@ -17,7 +17,7 @@ allowed-tools:
 
 ## 接收与证据
 
-1. 使用 assignment 的 reservation、decision fingerprint、独立 receiver context 和新 `operation_id` 调用 `dispatch_loop(AUTO)`；Review 不支持 MANUAL claim。
+1. 使用 assignment 的 reservation、decision fingerprint、独立 receiver context 和新 `operation_id` 调用 `dispatch_loop(AUTO)`；Review 不支持 MANUAL claim。同一 receiver 收到多轮 assignment 时，只使用最新一份的完整凭据组；禁止把新 reservation 与旧 decision fingerprint 或旧 attempt 混搭。
 2. claim 后读取一次 `loop_context`，确认运行时验证的 `projectScopes`、冻结验收、上游结论和 `validationEvidenceIndex`。
 3. `STANDARD` 在审查前 heartbeat，并在证据检查、缺口确认、验证开始/完成、findings rework 与最终判断等里程碑报告 progress。
 4. 只自动复用 `PASSED + EXACT_MATCH` 且 scope 覆盖当前风险的上游证据。无关 workspace 编辑不使有界 scope 失效；对 `CHANGED/UNBOUND`、缺口、findings 和高风险 seam 定向复跑。

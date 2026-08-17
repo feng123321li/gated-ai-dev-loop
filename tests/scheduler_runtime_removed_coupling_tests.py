@@ -11,10 +11,67 @@ from .scheduler_runtime_support import (
     tool_definitions,
     unittest,
     validate_hierarchy_definition,
+    loop_execution_policy,
 )
 
 
 class RemovedCouplingTests(unittest.TestCase):
+    def test_current_surface_omits_quota_and_model_reasoning_contracts(
+        self,
+    ) -> None:
+        tools = {tool["name"]: tool for tool in tool_definitions()}
+        self.assertNotIn("recommend_assurance_profile", tools)
+        self.assertNotIn(
+            "actual_model_id",
+            tools["dispatch_loop"]["inputSchema"]["properties"],
+        )
+        self.assertEqual(
+            set(tools["pause_loop"]["inputSchema"]["properties"]),
+            {"root_id", "node_id", "operation_id"},
+        )
+        result_properties = tools["record_loop_result"]["inputSchema"][
+            "properties"
+        ]["outcome"]["properties"]["result"]["properties"]
+        self.assertNotIn("workerTelemetry", result_properties)
+
+        policy_text = repr(loop_execution_policy())
+        for removed in (
+            "providerRateLimit",
+            "quota",
+            "reasoningEffort",
+            "modelPolicy",
+        ):
+            self.assertNotIn(removed, policy_text)
+
+        with TemporaryDirectory() as root:
+            preview_hierarchy(root=root, hierarchy=task_hierarchy())
+            connection = sqlite3.connect(
+                Path(root, ".layered-delivery", "scheduler.db")
+            )
+            try:
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    )
+                }
+                run_columns = {
+                    row[1]
+                    for row in connection.execute("PRAGMA table_info(runs)")
+                }
+            finally:
+                connection.close()
+
+        self.assertNotIn("host_capacity_breakers", tables)
+        self.assertTrue(
+            {
+                "host_capacity_key",
+                "host_capacity_reset_at",
+                "host_capacity_reported_at",
+                "host_capacity_reason",
+            }.isdisjoint(run_columns)
+        )
+
     def test_current_schema_indexes_event_pages_by_run_and_event_id(
         self,
     ) -> None:

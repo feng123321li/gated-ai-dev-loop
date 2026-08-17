@@ -8,9 +8,9 @@ from .jsonio import fingerprint
 DISPATCH_POLICY_VERSION = "HOST_NATIVE_RESERVATION_ROUTING_V8"
 HOST_NATIVE_DISPATCH_TRANSPORT = "HOST_NATIVE"
 
-# Receiver Agent IDs select host-native receiver families, not development
-# models. A new Adapter must provide a trusted request workspace and honor
-# the same reservation, operation, lease, and project-scope boundary.
+# Receiver Agent IDs select host-native receiver families. A new Adapter must
+# provide a trusted request workspace and honor the same reservation,
+# operation, lease, and project-scope boundary.
 HOST_ADAPTER_RECEIVER_AGENTS = {
     "claude-code": "claude-code",
     "codex": "codex",

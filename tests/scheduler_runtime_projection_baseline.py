@@ -460,8 +460,7 @@ class SchedulerRuntimeTestsPart8:
         self.assertIn("t-service", progress)
         self.assertIn(
             (
-                "| 层级路径 | 阶段 | 当前进度 | 执行代理 | 宿主观测模型 | "
-                "认领身份 | 执行轮次 | "
+                "| 层级路径 | 阶段 | 当前进度 | 执行代理 | 认领身份 | 执行轮次 | "
                 "最近更新时间（UTC+8） | 结果摘要 | 节点进展 |"
             ),
             progress,

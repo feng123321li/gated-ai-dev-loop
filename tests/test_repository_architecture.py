@@ -43,7 +43,6 @@ class RepositoryArchitectureTests(unittest.TestCase):
             "claimed_resource_reservations",
             "expire_dispatch_reservations",
             "active_dispatch_reservations",
-            "open_host_capacity_breaker",
             "reserve_dispatch_assignments",
             "consume_dispatch_reservation",
         }
@@ -56,7 +55,6 @@ class RepositoryArchitectureTests(unittest.TestCase):
         )
         static_methods = {
             "expire_dispatch_reservations",
-            "open_host_capacity_breaker",
         }
         for method_name in expected_methods:
             facade_source = inspect.getsource(

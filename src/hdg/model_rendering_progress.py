@@ -169,11 +169,11 @@ def render_manual_handoff(
             f"| 生成时间（UTC+8） | {_utc_plus_8(created_at)} |",
             "| 需求内容快照 | 已冻结（由双指纹锁定） |",
             "| Graph 调度状态 | 待接收 CLI 在实际工作区显式启动 |",
-            "| 接收执行者与模型 | 交接前不指定；由接收宿主开始开发时确定并展示 |",
+            "| 接收执行者 | 交接前不指定；由接收宿主开始开发时确定 |",
             "| 开发工作区 | 交接阶段不创建；开始实际开发时再创建或选择 |",
             "",
             "需求内容快照已冻结。本文件在交接阶段不创建接收任务、不认领 Loop，"
-            "也不预先绑定任何 Agent、原生模型或实际代理模型；接收后必须先启动"
+            "也不预先绑定任何 Agent；接收后必须先启动"
             "同一 Graph，不能脱离调度直接开发。",
             "",
             "## 接收 CLI 启动提示词",
@@ -257,7 +257,7 @@ def render_manual_handoff(
             "## 机器可读 schema v3",
             "",
             "以下附录与上面的开发内容属于同一个已冻结快照。接收方可读取后"
-            "校准工作区字段，不应把规划时 Agent 或模型补写进 hierarchy。",
+            "校准工作区字段，不应把规划时 Agent 补写进 hierarchy。",
             "",
             "```json",
             machine_hierarchy,
@@ -339,12 +339,11 @@ def render_delivery_progress(
                 )
             )
     table_header = (
-        "| 层级路径 | 阶段 | 当前进度 | 执行代理 | 宿主观测模型 | "
-        "认领身份 | 执行轮次 | "
+        "| 层级路径 | 阶段 | 当前进度 | 执行代理 | 认领身份 | 执行轮次 | "
         "最近更新时间（UTC+8） | 结果摘要 | 节点进展 |"
     )
     table_separator = (
-        "|---|---|---|---|---|---|---:|---|---|---|"
+        "|---|---|---|---|---|---:|---|---|---|"
     )
     delivery_review_lines = [table_header, table_separator]
     if hierarchy["delivery"]["reviewLoop"] is None:
@@ -354,7 +353,6 @@ def render_delivery_progress(
                 [
                     _markdown_text(hierarchy["delivery"]["id"]),
                     "LIGHT：不创建 Delivery Acceptance/Readiness",
-                    "不适用",
                     "不适用",
                     "不适用",
                     "不适用",

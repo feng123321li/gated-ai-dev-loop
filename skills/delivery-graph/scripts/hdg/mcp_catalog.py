@@ -231,9 +231,8 @@ SERVER_INSTRUCTIONS = (
     "only to clarify direction, constraints, acceptance, boundaries, and risks. "
     "It must not promote Skill defaults or examples into frozen implementation "
     "facts. Hints remain unassigned to nodes and each Loop reevaluates them in "
-    "its actual runtime context. Delivery Graph never recommends or selects a "
-    "development model. Automatic execution inherits the current trusted "
-    "host model. Manual handoff never selects a receiving Agent/model, never "
+    "its actual runtime context. Manual handoff never selects a receiving "
+    "Agent, never "
     "creates a receiving task, and never initializes a worktree. The "
     "receiver's host becomes known only after it reads the file and calls "
     "start_manual_handoff in the selected workspace. Its outer context only "
@@ -241,16 +240,15 @@ SERVER_INSTRUCTIONS = (
     "that reports its receiver identity and claims with MANUAL provenance; every "
     "subsequent Review returns to automatic host-native planning. Automatic "
     "execution uses Plugin-owned receiver concurrency within the selected "
-    "Delivery and quota pause/resume; CURRENT_WORKSPACE_SERIAL still prevents "
+    "Delivery; CURRENT_WORKSPACE_SERIAL still prevents "
     "another Delivery turn in the same physical workspace. Adapter trust comes "
     "from Plugin registration and configured "
     "host startup, never a user file or allowlist. Grok, "
     "DeepSeek, or another Agent integrates by adding one trusted outer "
-    "Adapter lifecycle; its models and internal workers remain outside the "
-    "Graph contract. For automatic execution, plan_dispatch_batch "
+    "Adapter lifecycle. For automatic execution, plan_dispatch_batch "
     "atomically reserves every READY TASK or Review Loop with its host Agent "
     "slot, then returns "
-    "outer-receiver assignments with CURRENT_HOST_INHERIT model policy. A second "
+    "outer-receiver assignments. A second "
     "dispatcher sees "
     "WAIT_FOR_DISPATCH_RECEIVER and cannot reserve or launch the same Loop. "
     "It never analyzes Loop payloads, starts Agents, or claims Loops. The "
@@ -265,9 +263,7 @@ SERVER_INSTRUCTIONS = (
     "use handoff_ready_automatic_task only after its reservation expires, "
     "the Delivery workspace is clean, and the user confirms no code changes. "
     "That TASK accepts one MANUAL receiver while the Graph remains active "
-    "and every Review remains automatic. The result may "
-    "include display-only workerTelemetry by "
-    "phase, with unknown Agent/model/effort values left unreported. Never "
+    "and every Review remains automatic. Never "
     "spawn an autonomous CLI, subprocess, or companion script such as "
     "codex-companion to satisfy an assignment. Such a route stays unclaimed and is handed "
     "off manually. prepare_delivery_revision requires explicit same-"
@@ -275,9 +271,7 @@ SERVER_INSTRUCTIONS = (
     "and leaves the current run active until freeze. It "
     "does not require a generic host approval prompt; the user's automatic "
     "freeze or manual handoff-file choice is the single business "
-    "confirmation for that revision. A host or Loop receiver observing "
-    "quota exhaustion calls pause_loop with HOST or EXECUTOR scope and a "
-    "structured provider reset time. The scheduler treats Loop payload and result "
+    "confirmation for that revision. The scheduler treats Loop payload and result "
     "as opaque and accepts only standard Loop outcomes. resourceClaims "
     "are exact cross-Delivery scheduling locks, not file scopes. Every TASK "
     "requirement starts frozen. An explicitly authorized, not-yet-started "
@@ -316,7 +310,6 @@ _PROFILE_TOOL_NAMES: Final = {
     PLANNING_TOOL_PROFILE: frozenset(
         {
             "workspace_status",
-            "recommend_assurance_profile",
             "hierarchy_contract",
             "preview_hierarchy",
             "confirm_development_baseline",

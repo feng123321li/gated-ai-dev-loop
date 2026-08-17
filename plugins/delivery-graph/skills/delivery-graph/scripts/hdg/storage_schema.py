@@ -60,10 +60,6 @@ def initialize_scheduler_storage(connection: sqlite3.Connection) -> None:
             cancelled_at TEXT,
             superseded_at TEXT,
             superseded_by_revision INTEGER,
-            host_capacity_key TEXT,
-            host_capacity_reset_at TEXT,
-            host_capacity_reported_at TEXT,
-            host_capacity_reason TEXT,
             UNIQUE(root_id, revision),
             FOREIGN KEY(root_id) REFERENCES hierarchies(root_id)
         );
@@ -173,17 +169,6 @@ def initialize_scheduler_storage(connection: sqlite3.Connection) -> None:
         active_dispatch_reservation_by_node
         ON dispatch_reservations(run_id, node_id, attempt)
         WHERE status = 'RESERVED';
-        CREATE TABLE IF NOT EXISTS host_capacity_breakers (
-            capacity_key TEXT PRIMARY KEY,
-            host_adapter_id TEXT NOT NULL,
-            agent_id TEXT NOT NULL,
-            reset_at TEXT NOT NULL,
-            report_id TEXT NOT NULL UNIQUE,
-            status TEXT NOT NULL,
-            reported_at TEXT NOT NULL,
-            restored_at TEXT,
-            reason TEXT NOT NULL
-        );
         """
     )
     ensure_compatible_scheduler_storage(connection)

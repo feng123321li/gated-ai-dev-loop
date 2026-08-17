@@ -621,11 +621,10 @@ def render_work_item_progress(
     definition = node["definition"]
     states = _projection_states(run)
     progress_header = (
-        "| 阶段 | 当前进度 | 执行代理 | 宿主观测模型 | "
-        "认领身份 | 执行轮次 | "
+        "| 阶段 | 当前进度 | 执行代理 | 认领身份 | 执行轮次 | "
         "最近更新时间（UTC+8） | 结果摘要 |"
     )
-    progress_separator = "|---|---|---|---|---|---:|---|---|"
+    progress_separator = "|---|---|---|---|---:|---|---|"
     if definition["kind"] == "TASK":
         task_progress_rows = [
             _progress_state_row(

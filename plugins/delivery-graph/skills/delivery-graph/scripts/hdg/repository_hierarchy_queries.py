@@ -69,14 +69,6 @@ class HierarchyQueryMixin:
                 "workspaceKey": workspace["workspace_key"],
             },
         }
-        if row["host_capacity_reset_at"] is not None:
-            result["hostCapacity"] = {
-                "status": "OPEN",
-                "capacityKey": row["host_capacity_key"],
-                "resetAt": row["host_capacity_reset_at"],
-                "reportedAt": row["host_capacity_reported_at"],
-                "reason": row["host_capacity_reason"],
-            }
         git_binding = hierarchy["delivery"].get("gitBinding")
         if git_binding is not None:
             result["gitBinding"] = git_binding

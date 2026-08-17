@@ -209,7 +209,7 @@ class SchedulerRuntimeTestsPart10:
                 self.assertIn(
                     (
                         f"| {path} | {stage} | {status} | "
-                        "无 | 未报告 | 无 | 1 |"
+                        "无 | 无 | 1 |"
                     ),
                     progress,
                 )
@@ -283,8 +283,7 @@ class SchedulerRuntimeTestsPart10:
         )
         self.assertIn(
             (
-                "| t-service | TASK | 执行中 | codex | 未报告 | "
-                "agent-local-time | 1 | "
+                "| t-service | TASK | 执行中 | codex | agent-local-time | 1 | "
                 "2026-01-01 08:02:00 |"
             ),
             active_progress,
@@ -309,7 +308,6 @@ class SchedulerRuntimeTestsPart10:
             node_id=node_id,
             owner="claude-reviewer",
             agent_id="claude-code",
-            actual_model_id="glm-5.2",
             operation_id="op-progress",
             now=at(2),
         )
@@ -356,13 +354,11 @@ class SchedulerRuntimeTestsPart10:
         )
         self.assertEqual(state["progress"]["progressPercent"], 70)
         self.assertNotIn("modelId", state)
-        self.assertEqual(state["actualModelId"], "glm-5.2")
-        self.assertEqual(state["actualModelSource"], "HOST_REPORTED")
         table = status["progressMonitor"]["markdownTable"]
         self.assertIn("| 节点 | 执行器 | 当前阶段 |", table)
         self.assertIn("t-service · 任务执行", table)
         self.assertIn(
-            "第 1 轮 · claude-code · 宿主观测模型 glm-5.2",
+            "第 1 轮 · claude-code",
             table,
         )
         self.assertIn("运行测试", table)

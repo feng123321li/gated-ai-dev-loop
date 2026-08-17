@@ -22,7 +22,7 @@ RUNTIME_TOOLS = (
             "receiver. The claim binds "
             "the configured trusted Adapter and request workspace to a "
             "caller-declared receiving context; it does not authenticate a "
-            "real host session or development model. The caller must guard "
+            "real host session. The caller must guard "
             "the returned Loop operation ID as a bearer capability."
         ),
         _object(
@@ -38,18 +38,6 @@ RUNTIME_TOOLS = (
                         "Caller-declared receiving Agent ID, such as codex or "
                         "claude-code. Used for execution attribution, not "
                         "authenticated identity or executor recommendation."
-                    ),
-                },
-                "actual_model_id": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 256,
-                    "description": (
-                        "Optional model actually observed by the host after "
-                        "native dispatch. It is display-only evidence: the "
-                        "controller never routes, authorizes, fingerprints, "
-                        "or evaluates capability from this value. Do not "
-                        "guess it."
                     ),
                 },
                 "dispatch_mode": {
@@ -284,34 +272,14 @@ RUNTIME_TOOLS = (
         "pause_loop",
         (
             "Pause one claimed Loop with a live lease while preserving its "
-            "current attempt and frozen Graph. Provide resume_at for a "
-            "known provider soft-stop window and identify whether the "
-            "limited capacity belongs to the executor or the native host. "
-            "Use capacity_scope=HOST when the native host observes a hard "
-            "429 and provide its structured reset time."
+            "current attempt and frozen Graph. Resume it explicitly in an "
+            "independent receiving context when work can continue."
         ),
         _object(
             {
                 "root_id": ROOT_ID,
                 "node_id": NODE_ID,
                 "operation_id": OPERATION_ID,
-                "resume_at": _string(
-                    "Optional known provider quota reset time as an ISO "
-                    "8601 timestamp. Before it, the same Agent waits for a "
-                    "host-native scheduled prompt or manual resume. The "
-                    "first frontier call at or after it makes the same Loop "
-                    "attempt ready for redispatch."
-                ),
-                "capacity_scope": {
-                    "type": "string",
-                    "enum": ["EXECUTOR", "HOST"],
-                    "description": (
-                        "Required with resume_at. EXECUTOR waits for the "
-                        "same Loop Agent; HOST means the native orchestrator "
-                        "itself is quota-limited. Both wait for a host-native "
-                        "scheduled prompt or manual Agent resume."
-                    ),
-                },
             },
             required=["root_id", "node_id", "operation_id"],
         ),

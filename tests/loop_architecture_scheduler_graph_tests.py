@@ -489,11 +489,4 @@ class SchedulerGraphTests(unittest.TestCase):
             ),
             (["PAUSED"], ["PENDING"]),
         )
-        self.assertEqual(
-            (
-                transitions["NODE_AUTO_RESUMED"]["fromStates"],
-                transitions["NODE_AUTO_RESUMED"]["toStates"],
-                transitions["NODE_AUTO_RESUMED"]["automatic"],
-            ),
-            (["PAUSED"], ["PENDING"], True),
-        )
+        self.assertNotIn("NODE_AUTO_RESUMED", transitions)

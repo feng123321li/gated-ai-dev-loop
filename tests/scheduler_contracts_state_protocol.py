@@ -511,8 +511,7 @@ class McpSurfaceTestsPart4:
                 "inside the current Loop",
                 initialized["result"]["instructions"],
             )
-            self.assertIn(
-                "Delivery Graph never recommends or selects a "
+            self.assertNotIn(
                 "development model",
                 initialized["result"]["instructions"],
             )
@@ -872,7 +871,7 @@ class McpSurfaceTestsPart4:
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 33)
+            self.assertEqual(len(listed["result"]["tools"]), 32)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

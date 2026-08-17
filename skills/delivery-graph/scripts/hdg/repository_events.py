@@ -159,22 +159,12 @@ class DeliveryEventStore:
                 if row["outcome_json"] is not None
                 else None
             )
-            pause_metadata = (
-                stored_outcome.get("schedulerPause", {})
-                if row["status"] == "PAUSED"
-                and isinstance(stored_outcome, dict)
-                else {}
-            )
             node = {
                 "nodeId": row["node_id"],
                 "attempt": row["attempt"],
                 "status": row["status"],
                 "owner": row["owner"],
                 "agentId": executor.get("agentId"),
-                "actualModelId": executor.get("actualModelId"),
-                "actualModelSource": executor.get(
-                    "actualModelSource"
-                ),
                 "receiverContextId": (
                     executor.get("receiverContextId") or row["owner"]
                 ),
@@ -205,11 +195,6 @@ class DeliveryEventStore:
                     if row["status"] == "CLAIMED"
                     else None
                 ),
-                "resumeAt": (
-                    row["finished_at"]
-                    if row["status"] == "PAUSED"
-                    else None
-                ),
                 "finishedAt": (
                     None
                     if row["status"] == "PAUSED"
@@ -231,9 +216,6 @@ class DeliveryEventStore:
                     row["node_id"]
                 ),
             }
-            capacity_scope = pause_metadata.get("capacityScope")
-            if capacity_scope in {"EXECUTOR", "HOST"}:
-                node["capacityScope"] = capacity_scope
             nodes.append(node)
         return nodes
 

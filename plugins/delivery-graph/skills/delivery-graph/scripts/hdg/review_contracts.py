@@ -21,7 +21,6 @@ REVIEW_RESULT_SUPPORT_FIELDS = frozenset(
         "evidenceWorkspaceSnapshots",
         "evidenceScopeSnapshots",
         "workspaceChanges",
-        "workerTelemetry",
     }
 )
 

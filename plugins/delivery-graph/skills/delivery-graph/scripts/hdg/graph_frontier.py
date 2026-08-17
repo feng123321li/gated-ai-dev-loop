@@ -72,13 +72,6 @@ def _attach_frontier_wait_directive(
     immediate_actions = [
         action for action in action_names if action not in _PASSIVE_FRONTIER_ACTIONS
     ]
-    capacity_wait_actions = [
-        action
-        for action in actions
-        if isinstance(action, dict)
-        and action.get("action")
-        in {"WAIT_FOR_EXECUTOR_CAPACITY", "WAIT_FOR_HOST_CAPACITY"}
-    ] if isinstance(actions, list) else []
     advance_required = directive.get("mode") == "ADVANCE_REQUIRED"
     active_receiver = bool(result.get("activeLoops"))
     waiting_for_receiver = "WAIT_FOR_DISPATCH_RECEIVER" in action_names
@@ -163,28 +156,6 @@ def _attach_frontier_wait_directive(
             "suppressUnchangedCommentary": True,
         }
     )
-    capacity_wake_times = [
-        wake_at
-        for action in capacity_wait_actions
-        for wake_at in (action.get("resumeAt") or action.get("resetAt"),)
-        if isinstance(wake_at, str)
-    ]
-    if capacity_wait_actions and capacity_wake_times:
-        directive["nativeWakeDirective"] = {
-            "mode": "HOST_NATIVE_ONE_SHOT",
-            "scheduleAfter": _minimum_timestamp(capacity_wake_times),
-            "applySafetyMargin": True,
-            "cancelRecurringMonitors": any(
-                action.get("cancelRecurringMonitors") is True
-                for action in capacity_wait_actions
-            ),
-            "capacityActions": [
-                str(action["action"])
-                for action in capacity_wait_actions
-            ],
-        }
-    else:
-        directive.pop("nativeWakeDirective", None)
     enriched_monitor["waitDirective"] = directive
     enriched["progressMonitor"] = enriched_monitor
     return enriched
@@ -432,8 +403,6 @@ def build_graph_frontier(
                 "attempt": state["attempt"],
                 "owner": state["owner"],
                 "agentId": state.get("agentId"),
-                "actualModelId": state.get("actualModelId"),
-                "actualModelSource": state.get("actualModelSource"),
                 "operationId": state["operationId"],
                 "leaseExpiresAt": state["leaseExpiresAt"],
                 "progress": state.get("progress"),
@@ -449,8 +418,6 @@ def build_graph_frontier(
                 }
             )
         elif state["status"] == "PAUSED" and kind in LOOP_NODE_KINDS:
-            resume_at = state.get("resumeAt")
-            capacity_scope = state.get("capacityScope")
             record = {
                 "nodeId": state["nodeId"],
                 "kind": kind,
@@ -459,38 +426,14 @@ def build_graph_frontier(
                 "previousOwner": state["owner"],
                 "previousOperationId": state["operationId"],
             }
-            if isinstance(resume_at, str):
-                record["resumeAt"] = resume_at
-            if capacity_scope in {"EXECUTOR", "HOST"}:
-                record["capacityScope"] = capacity_scope
             paused_loops.append(record)
-            if isinstance(resume_at, str):
-                if capacity_scope == "HOST":
-                    actions.append(
-                        {
-                            "action": "WAIT_FOR_HOST_CAPACITY",
-                            "nodeId": state["nodeId"],
-                            "resumeAt": resume_at,
-                            "executionPolicy": execution_policy,
-                        }
-                    )
-                else:
-                    actions.append(
-                        {
-                            "action": "WAIT_FOR_EXECUTOR_CAPACITY",
-                            "nodeId": state["nodeId"],
-                            "resumeAt": resume_at,
-                            "executionPolicy": execution_policy,
-                        }
-                    )
-            else:
-                actions.append(
-                    {
-                        "action": "RESUME_LOOP_IN_INDEPENDENT_CONTEXT",
-                        "nodeId": state["nodeId"],
-                        "executionPolicy": execution_policy,
-                    }
-                )
+            actions.append(
+                {
+                    "action": "RESUME_LOOP_IN_INDEPENDENT_CONTEXT",
+                    "nodeId": state["nodeId"],
+                    "executionPolicy": execution_policy,
+                }
+            )
         elif state["status"] in {"BLOCKED", "CANCELLED"}:
             record = {
                 "nodeId": state["nodeId"],
@@ -536,33 +479,6 @@ def build_graph_frontier(
             }
             for node_id in replan_nodes
         ]
-    host_capacity = run.get("hostCapacity")
-    if host_capacity is not None:
-        affected_node_ids = sorted(
-            item["nodeId"]
-            for item in paused_loops
-            if item.get("capacityScope") == "HOST"
-        )
-        actions = [
-            action
-            for action in actions
-            if action["action"]
-            not in {
-                "DISPATCH_LOOP",
-                "CONTINUE_OR_HEARTBEAT_LOOP",
-                "WAIT_FOR_HOST_CAPACITY",
-            }
-        ]
-        actions.append(
-            {
-                "action": "WAIT_FOR_HOST_CAPACITY",
-                "resetAt": host_capacity["resetAt"],
-                "capacityKey": host_capacity["capacityKey"],
-                "affectedNodeIds": affected_node_ids,
-                "cancelRecurringMonitors": True,
-                "wakeMode": "HOST_NATIVE_ONE_SHOT",
-            }
-        )
     result = {
         "rootId": run["rootId"],
         "runId": run["runId"],
@@ -573,11 +489,6 @@ def build_graph_frontier(
         "blockedLoops": blocked,
         "nextWakeAt": _minimum_timestamp(
             [
-                item["resumeAt"]
-                for item in paused_loops
-                if "resumeAt" in item
-            ]
-            + [
                 item["leaseExpiresAt"]
                 for item in active_loops
                 if isinstance(item.get("leaseExpiresAt"), str)
@@ -594,11 +505,6 @@ def build_graph_frontier(
         "actions": actions,
         "progressMonitor": run.get("progressMonitor"),
     }
-    if host_capacity is not None:
-        result["hostCapacity"] = host_capacity
-        result["nextWakeAt"] = _minimum_timestamp(
-            [result["nextWakeAt"], host_capacity["resetAt"]]
-        )
     if run.get("gitBinding") is not None:
         result["gitBinding"] = run["gitBinding"]
     return _attach_frontier_wait_directive(result)

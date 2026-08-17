@@ -3,7 +3,6 @@ from __future__ import annotations
 from .graph_runtime_common import (
     Any,
     GRAPH_EXECUTION_MODES,
-    HOST_ADAPTER_AGENTS,
     SchedulerRepository,
     _dispatch_mode_allowed,
     _locked_timestamp,
@@ -168,8 +167,6 @@ def _rebuild_graph_run_locked(
             "claimedAt": None,
             "lastHeartbeatAt": None,
             "leaseExpiresAt": None,
-            "resumeAt": None,
-            "capacityScope": None,
             "finishedAt": None,
             "outcome": None,
             "failureClass": None,
@@ -202,9 +199,6 @@ def _rebuild_graph_run_locked(
             "Graph replay found an unsupported execution mode",
             executionMode=execution_mode,
         )
-    host_capacity: dict[str, str] | None = None
-    restored_capacity_events: dict[str, dict[str, str]] = {}
-
     for event in events:
         event_type = event["eventType"]
         node_id = event["nodeId"]
@@ -241,61 +235,6 @@ def _rebuild_graph_run_locked(
                     requirement_states[task_id]["revision"] = revision
                     requirement_states[task_id]["updatedAt"] = at
             continue
-        if event_type == "HOST_CAPACITY_EXHAUSTED":
-            required_capacity_fields = (
-                "capacityKey",
-                "resetAt",
-                "reason",
-            )
-            if not all(
-                isinstance(payload.get(field), str)
-                for field in required_capacity_fields
-            ):
-                fail(
-                    "SCHEDULER_EVENT_REPLAY_INVALID",
-                    "Host capacity event is missing breaker metadata",
-                )
-            host_adapter_id = event["actor"]
-            if host_adapter_id not in HOST_ADAPTER_AGENTS:
-                fail(
-                    "SCHEDULER_EVENT_REPLAY_INVALID",
-                    "Host capacity event has an unknown host adapter",
-                )
-            host_capacity = {
-                "capacityKey": payload["capacityKey"],
-                "resetAt": payload["resetAt"],
-                "reportedAt": (
-                    payload.get("reportedAt")
-                    if isinstance(payload.get("reportedAt"), str)
-                    else at
-                ),
-                "reason": payload["reason"],
-                "hostAdapterId": host_adapter_id,
-                "agentId": HOST_ADAPTER_AGENTS[host_adapter_id],
-                "reportId": (
-                    payload.get("reportId")
-                    if isinstance(payload.get("reportId"), str)
-                    else event["eventUuid"]
-                ),
-            }
-            continue
-        if event_type == "HOST_CAPACITY_RESTORED":
-            restored_key = payload.get("capacityKey")
-            restored_reset_at = payload.get("resetAt")
-            restored_report_id = payload.get("reportId")
-            if (
-                isinstance(restored_key, str)
-                and isinstance(restored_reset_at, str)
-                and isinstance(restored_report_id, str)
-            ):
-                restored_capacity_events[restored_key] = {
-                    "capacityKey": restored_key,
-                    "resetAt": restored_reset_at,
-                    "reportId": restored_report_id,
-                    "restoredAt": at,
-                }
-            host_capacity = None
-            continue
         if event_type == "GRAPH_RUN_CANCELLED":
             cancelled_at = at
             for state in latest.values():
@@ -322,8 +261,6 @@ def _rebuild_graph_run_locked(
                 "claimedAt": None,
                 "lastHeartbeatAt": None,
                 "leaseExpiresAt": None,
-                "resumeAt": None,
-                "capacityScope": None,
                 "finishedAt": None,
                 "outcome": None,
                 "failureClass": None,
@@ -475,11 +412,9 @@ def _rebuild_graph_run_locked(
                 {
                     "status": "PAUSED",
                     "leaseExpiresAt": None,
-                    "resumeAt": payload.get("resumeAt"),
-                    "capacityScope": payload.get("capacityScope"),
                 }
             )
-        elif event_type in {"NODE_RESUMED", "NODE_AUTO_RESUMED"}:
+        elif event_type == "NODE_RESUMED":
             state.update(
                 {
                     "status": "PENDING",
@@ -488,8 +423,6 @@ def _rebuild_graph_run_locked(
                     "claimedAt": None,
                     "lastHeartbeatAt": None,
                     "leaseExpiresAt": None,
-                    "resumeAt": None,
-                    "capacityScope": None,
                 }
             )
         elif event_type in {
@@ -564,44 +497,6 @@ def _rebuild_graph_run_locked(
         else current_run["startedAt"]
     )
     with repository.transaction() as connection:
-        for restored_capacity in restored_capacity_events.values():
-            connection.execute(
-                "UPDATE host_capacity_breakers SET status = 'RESTORED', "
-                "restored_at = ? WHERE capacity_key = ? "
-                "AND report_id = ? AND reset_at = ? AND status = 'OPEN'",
-                (
-                    restored_capacity["restoredAt"],
-                    restored_capacity["capacityKey"],
-                    restored_capacity["reportId"],
-                    restored_capacity["resetAt"],
-                ),
-            )
-        if host_capacity is not None:
-            connection.execute(
-                "INSERT INTO host_capacity_breakers("
-                "capacity_key, host_adapter_id, agent_id, reset_at, "
-                "report_id, status, reported_at, reason) "
-                "VALUES (?, ?, ?, ?, ?, 'OPEN', ?, ?) "
-                "ON CONFLICT(capacity_key) DO UPDATE SET "
-                "host_adapter_id = excluded.host_adapter_id, "
-                "agent_id = excluded.agent_id, reset_at = excluded.reset_at, "
-                "report_id = excluded.report_id, status = 'OPEN', "
-                "reported_at = excluded.reported_at, restored_at = NULL, "
-                "reason = excluded.reason "
-                "WHERE (host_capacity_breakers.report_id = "
-                "excluded.report_id AND host_capacity_breakers.status = "
-                "'OPEN') OR host_capacity_breakers.reported_at < "
-                "excluded.reported_at",
-                (
-                    host_capacity["capacityKey"],
-                    host_capacity["hostAdapterId"],
-                    host_capacity["agentId"],
-                    host_capacity["resetAt"],
-                    host_capacity["reportId"],
-                    host_capacity["reportedAt"],
-                    host_capacity["reason"],
-                ),
-            )
         connection.execute(
             "DELETE FROM node_runs WHERE run_id = ?",
             (current_run["runId"],),
@@ -622,36 +517,16 @@ def _rebuild_graph_run_locked(
                     state["claimedAt"],
                     state["lastHeartbeatAt"],
                     state["leaseExpiresAt"],
-                    (
-                        state["resumeAt"]
-                        if state["status"] == "PAUSED"
-                        else state["finishedAt"]
-                    ),
+                    state["finishedAt"],
                     (
                         json.dumps(
-                            {
-                                "schedulerPause": {
-                                    "capacityScope": state[
-                                        "capacityScope"
-                                    ],
-                                }
-                            },
+                            state["outcome"],
                             ensure_ascii=False,
                             sort_keys=True,
                             separators=(",", ":"),
                         )
-                        if state["status"] == "PAUSED"
-                        and state["capacityScope"] is not None
-                        else (
-                            json.dumps(
-                                state["outcome"],
-                                ensure_ascii=False,
-                                sort_keys=True,
-                                separators=(",", ":"),
-                            )
-                            if state["outcome"] is not None
-                            else None
-                        )
+                        if state["outcome"] is not None
+                        else None
                     ),
                     state["failureClass"],
                 ),
@@ -675,9 +550,7 @@ def _rebuild_graph_run_locked(
             )
         connection.execute(
             "UPDATE runs SET status = ?, execution_mode = ?, "
-            "updated_at = ?, completed_at = ?, cancelled_at = ?, "
-            "host_capacity_key = ?, host_capacity_reset_at = ?, "
-            "host_capacity_reported_at = ?, host_capacity_reason = ? "
+            "updated_at = ?, completed_at = ?, cancelled_at = ? "
             "WHERE run_id = ?",
             (
                 run_status,
@@ -685,26 +558,6 @@ def _rebuild_graph_run_locked(
                 updated_at,
                 completed_at,
                 cancelled_at,
-                (
-                    host_capacity["capacityKey"]
-                    if host_capacity is not None
-                    else None
-                ),
-                (
-                    host_capacity["resetAt"]
-                    if host_capacity is not None
-                    else None
-                ),
-                (
-                    host_capacity["reportedAt"]
-                    if host_capacity is not None
-                    else None
-                ),
-                (
-                    host_capacity["reason"]
-                    if host_capacity is not None
-                    else None
-                ),
                 current_run["runId"],
             ),
         )

@@ -284,8 +284,8 @@ class PluginBundleTestsPart1:
             )
             self.assertNotIn("delivery-graph__*", document)
         self.assertNotIn("`recommend_executors`", main + recommendations)
-        self.assertIn("不推荐派遣模型", planning)
-        self.assertIn("不提供路由调整窗口", recommendations)
+        self.assertIn("默认使用 `STANDARD`", planning)
+        self.assertIn("Controller 不分析 Loop", recommendations)
         self.assertIn("手动开发生成完整冻结内容包", planning)
         self.assertIn(
             ".layered-delivery/<delivery-id>/handoff-<fingerprint>.md",
@@ -295,7 +295,7 @@ class PluginBundleTestsPart1:
             "不得创建跨需求共享的 `.layered-delivery/handoffs/`",
             planning,
         )
-        self.assertIn("不指定 Agent、模型或接收任务", planning)
+        self.assertIn("不指定 Agent 或接收任务", planning)
         self.assertIn("start_manual_handoff", planning)
         public_execution_contract = main + plugin_main + planning
         for removed_contract in (
@@ -338,7 +338,8 @@ class PluginBundleTestsPart1:
             planning,
         )
         self.assertIn("不能仅凭 feature 分支名", planning)
-        self.assertIn("内部 Worker 不是 Graph receiver", recommendations)
+        self.assertIn("内部 helper", recommendations)
+        self.assertIn("不是 Graph receiver", recommendations)
         self.assertIn("不得调用 `dispatch_loop`", recommendations)
         self.assertIn("MANUAL claim", recommendations)
         metadata = (
@@ -371,8 +372,16 @@ class PluginBundleTestsPart1:
         self.assertNotIn("SessionStart", contract)
         self.assertNotIn("SubagentStart", contract)
         self.assertIn("WAIT_FOR_DISPATCH_RECEIVER", contract)
-        self.assertIn("始终继承当前宿主模型", execution)
-        self.assertIn("不提供路由调整窗口", recommendations)
+        self.assertIn("固定并发槽位", execution)
+        self.assertIn("Controller 不判断供应商额度", recommendations)
+        for removed_contract in (
+            "recommend_assurance_profile",
+            "modelPolicy",
+            "reasoningEffort",
+            "workerTelemetry",
+            "quotaExhaustionPolicy",
+        ):
+            self.assertNotIn(removed_contract, contract)
         self.assertNotIn("打开中央编排器设置", readme)
 
     def test_skill_serializes_deliveries_and_versions_task_requirements(

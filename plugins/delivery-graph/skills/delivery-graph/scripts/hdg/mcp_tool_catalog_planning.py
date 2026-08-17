@@ -53,79 +53,6 @@ PLANNING_TOOLS = (
         ),
     ),
     _tool(
-        "recommend_assurance_profile",
-        (
-            "Deterministically recommend LIGHT or STANDARD from explicit task "
-            "classification facts. This read-only advisor does not parse the "
-            "task summary heuristically and does not create or mutate a Graph."
-        ),
-        _object(
-            {
-                "task_summary": _string(
-                    "Short human-readable task summary retained for audit context."
-                ),
-                "root_task_count": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 100,
-                    "description": "Expected number of root implementation TASKs.",
-                },
-                "project_count": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 100,
-                    "description": "Number of project workspaces affected.",
-                },
-                "change_scope": {
-                    "type": "string",
-                    "enum": ["LOCAL", "MULTI_MODULE", "MULTI_PROJECT"],
-                    "description": "Smallest truthful structural impact scope.",
-                },
-                "risk_factors": {
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "enum": [
-                            "DATABASE_SCHEMA",
-                            "PUBLIC_CONTRACT",
-                            "AUTHORIZATION",
-                            "SENSITIVE_DATA",
-                            "DEPLOYMENT_INFRASTRUCTURE",
-                            "DATA_MIGRATION",
-                            "UNKNOWN_IMPACT",
-                        ],
-                    },
-                    "uniqueItems": True,
-                    "maxItems": 7,
-                    "description": (
-                        "High-impact facts present in the task; use an empty "
-                        "array only when none apply."
-                    ),
-                },
-                "verification_plan": {
-                    "type": "string",
-                    "enum": ["TARGETED", "BROAD", "UNKNOWN"],
-                    "description": "How specifically the result can be verified.",
-                },
-                "risk_level": {
-                    "type": "string",
-                    "enum": ["LOW", "MEDIUM", "HIGH", "UNKNOWN"],
-                    "description": "Truthful overall risk classification.",
-                },
-            },
-            required=[
-                "task_summary",
-                "root_task_count",
-                "project_count",
-                "change_scope",
-                "risk_factors",
-                "verification_plan",
-                "risk_level",
-            ],
-        ),
-        annotations={"idempotentHint": True},
-    ),
-    _tool(
         "hierarchy_contract",
         (
             "Return the exact schema-v3 outer Graph contract, one example, "
@@ -252,7 +179,7 @@ PLANNING_TOOLS = (
             "the same directory. A requirementKey already mapped to another "
             "delivery.id is rejected. "
             "This does not prepare, freeze, or start a Graph run; do not "
-            "choose an Agent/model, create a receiving task, bind a workspace, "
+            "choose an Agent, create a receiving task, bind a workspace, "
             "or initialize another checkout. The user may open the bundle in "
             "any "
             "CLI, but that receiver must call start_manual_handoff before "

@@ -35,7 +35,6 @@ def _projection_state_values(
             "nodeId": node_id,
             "status": _status_text("NOT_STARTED"),
             "agent": "无",
-            "model": "无",
             "owner": "无",
             "attempt": "0",
             "updatedAt": "无",
@@ -49,14 +48,6 @@ def _projection_state_values(
             summary = str(outcome["summary"])
         elif outcome.get("confirmedBy"):
             summary = f"确认人：{outcome['confirmedBy']}"
-    if (
-        summary == "无"
-        and state["status"] == "PAUSED"
-        and isinstance(state.get("resumeAt"), str)
-    ):
-        summary = (
-            f"等待至 {_utc_plus_8(state['resumeAt'])} 由 Agent 恢复派遣"
-        )
     if summary == "无" and state["failureClass"]:
         summary = (
             "失败分类："
@@ -71,7 +62,6 @@ def _projection_state_values(
         "nodeId": node_id,
         "status": _status_text(state["status"]),
         "agent": state.get("agentId") or "无",
-        "model": state.get("actualModelId") or "未报告",
         "owner": state["owner"] or "无",
         "attempt": str(state["attempt"]),
         "updatedAt": _utc_plus_8(latest) if latest else "无",
@@ -97,14 +87,13 @@ def _progress_state_row(
         *prefix_values,
         values["status"],
         values["agent"],
-        values["model"],
         values["owner"],
         values["attempt"],
         values["updatedAt"],
         values["summary"],
         *suffix_values,
     ]
-    suffix_start = len(prefix_values) + 7
+    suffix_start = len(prefix_values) + 6
     return _table_row(
         row_values,
         raw_indices=set(range(suffix_start, len(row_values))),

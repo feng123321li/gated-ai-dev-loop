@@ -15,23 +15,13 @@
 - 自动冻结同一 Delivery 的任意后续 Revision（`N → N+1`）时，若原物理 workspace turn 尚未释放，项目集合、checkout、分支与冻结基线未变，Controller 复用最初的 clean `workspaceTurnStart`，前序 Revision 的 tracked、staged 和 untracked 业务改动无需删除、stash 或检查点提交；冻结确认不授权 commit。若旧 Revision 已到最终用户确认边界并在 commit/clean/receiver 安全条件下释放 turn，用户提出修改时下一 Revision 重新进入队列，轮到后切回冻结分支并捕获新的 clean turn start。未解决冲突、turn 历史改写或项目/绑定变化仍 fail closed。
 - 当前上下文不再持有精确 fingerprint 或原始 hierarchy 时，不从旧投影反推机器输入，也不猜测旧值；重新收集需求并 preview 后再请求执行方式确认。
 
-## 先按真实改动判断保障档
+## 保障档输入
 
-先由规划 Agent 根据真实仓库、预计或已经存在的 diff、接口与数据边界、运行环境和验证路径形成明确分类事实，再调用只读 `recommend_assurance_profile`。该工具不解析自由文本、不创建 Graph，只按 `assurance-v1` 规则确定性返回 `LIGHT` 或 `STANDARD`；任何事实未知都应填 `UNKNOWN` 并保守得到 `STANDARD`，不要求用户额外选择：
-
-| 保障档 | 适用条件 | Graph |
-|---|---|---|
-| `LIGHT` | 单一局部内部改动；影响边界明确；定向测试可覆盖；不触及公共/跨模块接口、数据库或迁移、权限/安全/隐私、资金、并发、生产部署或不可逆副作用 | 一个根 `TASK_LOOP → USER_CONFIRMATION`，不创建独立验收 Loop |
-| `STANDARD` | 多 TASK/多项目、任何关键边界、影响扩大或无法可靠判断 | TASK Review + 可选 GROUP seam Review + Delivery Acceptance/Readiness |
-
-`LIGHT` 必须同时满足：
-
-- 根节点是唯一 TASK；`delivery.assuranceProfile=LIGHT`。
-- `delivery.assuranceRationale` 用用户当前语言记录基于真实改动内容和影响范围的判断，不写“需求很简单”一类空泛结论。
-- `delivery.reviewLoop=null` 且根 TASK 的 `reviewLoop=null`。
-- TASK payload 明确定向验证；执行中发现范围扩大时返回 `REPLAN_REQUIRED`，用同一 `delivery.id` 准备 `STANDARD` Revision。
-
-把响应的 `recommendedProfile` 写入 `assuranceProfile`，把 `reasons` 写入 `assuranceRationale`；分类事实改变时必须重新调用。省略 `assuranceProfile` 时安全回退为 `STANDARD`。`STANDARD` 不得因为代码行数少就降级；修改认证判断、数据库字段、公共接口或生产配置，即使只有一行也不是 LIGHT。
+`assuranceProfile` 不再由 Agent 风险分类或推荐工具决定。默认使用 `STANDARD`；
+只有用户明确要求 `LIGHT`，且 hierarchy 满足一个根 TASK、无独立 Review 的结构
+约束时才使用 `LIGHT`。LIGHT 的 `assuranceRationale` 记录用户的明确选择与定向
+验证要求；执行中发现范围需要新增 TASK、Review、项目或数据库契约时返回
+`REPLAN_REQUIRED`，以同一 `delivery.id` 准备 `STANDARD` Revision。
 
 ## 规划阶段 Skill 预触发
 
@@ -437,7 +427,7 @@ preview 会先通过 `pendingInteraction.kind=DEVELOPMENT_BASELINE` 确认基线
 
 #### 手动开发内容包
 
-- 手动开发生成完整冻结内容包：固定写入本需求的 `.layered-delivery/<delivery-id>/`，包含与自动开发相同的 overview、baseline、progress、acceptance、revisions、work-items，以及自包含 `handoff-<fingerprint>.md`；同时必须生成共享 `.layered-delivery/scheduler.db` 与根 `overview.md`，把需求登记为 `HANDOFF_READY`。不创建共享 `handoffs` 目录；交接阶段不创建 Graph Run 或 workspace 绑定，不指定 Agent、模型或接收任务，也不创建 worktree。用户切换任意 CLI 后，在实际开发工作区调用 `start_manual_handoff`：基线未漂移时控制器绑定 workspace、启动同一冻结 Graph；漂移时先返回待确认基线且不写运行状态，binding 改变才生成下一不可变手动 Revision。启动后只让 TASK 实现走不带 AUTO reservation/decision fingerprint 的 MANUAL claim，完整 Review 和最终确认继续沿用统一 AUTO 协议。
+- 手动开发生成完整冻结内容包：固定写入本需求的 `.layered-delivery/<delivery-id>/`，包含与自动开发相同的 overview、baseline、progress、acceptance、revisions、work-items，以及自包含 `handoff-<fingerprint>.md`；同时必须生成共享 `.layered-delivery/scheduler.db` 与根 `overview.md`，把需求登记为 `HANDOFF_READY`。不创建共享 `handoffs` 目录；交接阶段不创建 Graph Run 或 workspace 绑定，不指定 Agent 或接收任务，也不创建 worktree。用户切换任意 CLI 后，在实际开发工作区调用 `start_manual_handoff`：基线未漂移时控制器绑定 workspace、启动同一冻结 Graph；漂移时先返回待确认基线且不写运行状态，binding 改变才生成下一不可变手动 Revision。启动后只让 TASK 实现走不带 AUTO reservation/decision fingerprint 的 MANUAL claim，完整 Review 和最终确认继续沿用统一 AUTO 协议。
 
 #### 停止条件
 
@@ -500,7 +490,7 @@ MCP 根固定只限制当前会话的主工作区锚点，不把同一 Delivery 
 1. 调用 `hierarchy_contract(root_kind=...)`。
 2. 按返回的 schema 和 example 创建完整 hierarchy。
 3. 调用 `preview_hierarchy`。该调用先登记 `CHOICE_READY`，生成共享 `.layered-delivery/scheduler.db`、根 `overview.md`、Delivery 的 `overview.md`、`baseline.md`、`progress.md`、`acceptance.md`、`revisions.md`，以及 `humanArtifacts.workItems` 指向的全部节点投影；响应的 `controlStateCreated=true` 只表示这些选择前控制状态已创建。它不绑定 workspace、不生成 Graph Run 或 worktree。只有响应同时满足 `status=CHOICE_READY` 和 `artifactsReady=true`，才可向用户概述计划并进入选择。
-4. 完整清单后不展示模型建议。Delivery Graph 无论在选择前后都不推荐派遣模型；自动 receiver 继承当前宿主，内部 Worker 由 Loop 自主管理。
+4. 完整清单后直接进入执行方式确认，不追加 receiver 路由建议。
 5. Controller 是交互文案的唯一所有者。宿主统一读取 `pendingInteraction`，并优先把其 `options` 机械映射到 `AskUserQuestion`（Claude Code、ZCode）或 `request_user_input`（Codex），保留顺序、ID、默认项、推荐项、标签和说明。只有映射工具在当前上下文不可调用时，才允许逐字显示该对象的 `markdown`。`developmentBaseline` 与 `executionChoice` 是当前兼容别名，宿主不得把它们当成两个并存问题。
 6. `pendingInteraction.kind=DEVELOPMENT_BASELINE` 时，选择本地分支、`NEW_FROM_MAINLINE`，或 Controller 实际返回的 `NEW_FROM_CURRENT_BRANCH`，把交互给出的 hierarchy/Graph/Revision/context 指纹和真实确认人传给 `confirm_development_baseline`。两个 NEW 选项都提交新 `branch_name`；stacked 选项必须原样使用交互冻结的父 feature HEAD，不自行换父分支。只有 adoption 当前脏分支时，才在用户确认全部现有改动属于本 Delivery 后回传精确 `workingTree.stateFingerprint`；选择另一个分支时延迟到队首自动 stash，且 dirty 当前 feature workspace 仍不允许创建 stacked 子分支。探测 Git HEAD、基线、权限或实现异常时必须 fail closed；非 Git 工作区才正常跳过。多 Git 项目不会从顶层偏好自动推断 secondary scope，所有 Git scope 必须显式提供完整 binding。
 7. `pendingInteraction.kind=EXECUTION_MODE` 时，原生对话框仍允许直接输入文字，但不为它创建“其他”选项。自由输入按 `freeformInput.nextAction=CONTINUE_REQUIREMENT_DISCUSSION` 继续需求沟通；需求发生变化后重新调用 preview。用户只是提问且需求未变时，回答后保留当前 fingerprint，并再次展示同一待处理交互，不得主动退回文本交互。`AUTOMATIC` 是默认和推荐项，`MANUAL` 是第二项。

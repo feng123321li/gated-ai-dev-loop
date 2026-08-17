@@ -311,10 +311,7 @@ OUTCOME = _object(
         "result": {
             "type": "object",
             "description": (
-                "Opaque Loop-owned result payload. When the receiving "
-                "Agent used internal workers, workerTelemetry reports "
-                "display-only phase evidence; it never grants Graph "
-                "authority or affects acceptance. On record_loop_result, "
+                "Opaque Loop-owned result payload. On record_loop_result, "
                 "the Controller replaces result.workspaceChanges with "
                 "read-only snapshots captured from verified writable Git "
                 "scopes; callers must not treat that snapshot as exclusive "
@@ -640,52 +637,6 @@ OUTCOME = _object(
                 "taskAcceptance": _task_acceptance_schema(),
                 "groupIntegration": _group_integration_schema(),
                 "deliveryReadiness": _delivery_readiness_schema(),
-                "workerTelemetry": {
-                    "type": "array",
-                    "maxItems": 128,
-                    "items": _object(
-                        {
-                            "phase": _string(
-                                "Loop-internal phase, such as implementation, review, or test."
-                            ),
-                            "agent": _string(
-                                "Observed or self-reported Agent ID; use the literal unreported when unknown."
-                            ),
-                            "model": _string(
-                                "Observed or self-reported model ID; use the literal unreported when unknown."
-                            ),
-                            "reasoningEffort": _string(
-                                "Reported effort, for example low, medium, high, max, or ultra; use unreported when unknown."
-                            ),
-                            "role": _string(
-                                "Optional worker role reported by the outer receiver."
-                            ),
-                            "provenance": {
-                                "type": "string",
-                                "enum": [
-                                    "HOST_EVENT",
-                                    "HOST_TOOL_RESULT",
-                                    "WORKER_SELF_REPORT",
-                                    "LOCAL_CONFIG",
-                                ],
-                            },
-                            "status": _string(
-                                "Phase status reported by the outer receiver."
-                            ),
-                            "summary": _string(
-                                "Bounded display summary without prompts or transcripts."
-                            ),
-                            "displayOnly": {"const": True},
-                            "nonAuthoritative": {"const": True},
-                        },
-                        required=[
-                            "phase",
-                            "agent",
-                            "model",
-                            "reasoningEffort",
-                        ],
-                    ),
-                }
             },
             "additionalProperties": True,
         },
@@ -718,7 +669,6 @@ TOOL_OUTPUT_SCHEMA = _object(
 READ_ONLY_TOOLS = frozenset(
     {
         "workspace_status",
-        "recommend_assurance_profile",
         "hierarchy_contract",
         "delivery_revision_history",
         "graph_frontier",

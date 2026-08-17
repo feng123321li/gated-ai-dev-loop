@@ -28,7 +28,7 @@ def _timestamp_value(value: object) -> datetime:
 
 
 class DeliveryDispatchStore:
-    """Own dispatch reservations, resource locks, and capacity state."""
+    """Own dispatch reservations and resource locks."""
 
     def __init__(
         self,
@@ -220,31 +220,6 @@ class DeliveryDispatchStore:
             )
         return result
 
-    @staticmethod
-    def open_host_capacity_breaker(
-        connection: sqlite3.Connection,
-        *,
-        agent_id: str,
-        at: str,
-    ) -> dict[str, Any] | None:
-        row = connection.execute(
-            "SELECT * FROM host_capacity_breakers "
-            "WHERE agent_id = ? AND status = 'OPEN' "
-            "AND julianday(reset_at) > julianday(?) "
-            "ORDER BY julianday(reset_at) LIMIT 1",
-            (agent_id, at),
-        ).fetchone()
-        if row is None:
-            return None
-        return {
-            "capacityKey": row["capacity_key"],
-            "hostAdapterId": row["host_adapter_id"],
-            "agentId": row["agent_id"],
-            "resetAt": row["reset_at"],
-            "reportedAt": row["reported_at"],
-            "reason": row["reason"],
-        }
-
     def reserve_dispatch_assignments(
         self,
         *,
@@ -352,7 +327,7 @@ class DeliveryDispatchStore:
                     >= orchestrator_slot_limit
                 ):
                     rejected[node_id] = {
-                        "code": "ORCHESTRATOR_CAPACITY_RESERVED",
+                        "code": "ORCHESTRATOR_SLOT_LIMIT_REACHED",
                         "message": (
                             "The configured central orchestrator "
                             "concurrency limit is already occupied."
@@ -366,7 +341,7 @@ class DeliveryDispatchStore:
                     agent_slot_limits.get(agent_id, 0)
                 ):
                     rejected[node_id] = {
-                        "code": "DISPATCH_AGENT_CAPACITY_RESERVED",
+                        "code": "DISPATCH_AGENT_SLOT_LIMIT_REACHED",
                         "message": (
                             "Another Delivery already reserved the "
                             "remaining host-native Agent slot."

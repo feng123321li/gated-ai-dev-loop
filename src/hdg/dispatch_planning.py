@@ -14,12 +14,11 @@ from .dispatch_contracts import (
 from .errors import fail
 from .graph_frontier import get_graph_frontier
 from .jsonio import fingerprint
-from .repository import SchedulerRepository, timestamp
+from .repository import SchedulerRepository
 
 
 DISPATCH_RESERVATION_SECONDS = 300
 MAX_CONCURRENT_EXECUTORS = 4
-QUOTA_EXHAUSTION_POLICY = "PAUSE_AND_RESUME"
 SAFE_HOST_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@-]{0,127}$")
 
 
@@ -28,7 +27,7 @@ def _trusted_host_receiver(
     host_adapter_id: str | None,
     host_native_agent_ids: tuple[str, ...] | None,
 ) -> tuple[str, str]:
-    """Resolve exactly one model-independent native receiver identity."""
+    """Resolve exactly one trusted native receiver identity."""
 
     if (
         not isinstance(host_adapter_id, str)
@@ -86,7 +85,6 @@ def _assignment(
         "role": _role(node["kind"]),
         "hostAdapterId": host_adapter_id,
         "receiverAgentId": receiver_agent_id,
-        "modelPolicy": "CURRENT_HOST_INHERIT",
         "dispatchTransport": HOST_NATIVE_DISPATCH_TRANSPORT,
         "hostDispatchAllowed": True,
         "contextInput": {
@@ -105,10 +103,8 @@ def _assignment(
             {
                 "code": "CURRENT_HOST_RECEIVER",
                 "message": (
-                    "Host orchestration requires the Loop receiver to "
-                    "inherit the current host model; this is a routing "
-                    "contract rather than caller identity proof, and "
-                    "worker selection stays inside the receiving Agent."
+                    "Host orchestration routes the Loop to the trusted "
+                    "native receiver for the current host Adapter."
                 ),
             }
         ],
@@ -139,7 +135,7 @@ def plan_dispatch_batch(
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
-    """Reserve the current frontier for inherited native receivers."""
+    """Reserve the current frontier for trusted native receivers."""
 
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
@@ -168,32 +164,6 @@ def plan_dispatch_batch(
             "Host-native automatic dispatch requires a governed Graph run",
             executionMode=run["executionMode"],
         )
-    if run.get("hostCapacity") is not None:
-        fail(
-            "SCHEDULER_HOST_CAPACITY_EXHAUSTED",
-            "Automatic dispatch is paused by the host capacity breaker",
-            **run["hostCapacity"],
-        )
-    observed_now = timestamp(now)
-    observation_at = (
-        observed_now
-        if datetime.fromisoformat(observed_now.replace("Z", "+00:00"))
-        >= datetime.fromisoformat(run["updatedAt"].replace("Z", "+00:00"))
-        else run["updatedAt"]
-    )
-    with repository.read() as connection:
-        shared_breaker = repository.open_host_capacity_breaker(
-            connection,
-            agent_id=receiver_agent_id,
-            at=observation_at,
-        )
-    if shared_breaker is not None:
-        fail(
-            "SCHEDULER_HOST_CAPACITY_EXHAUSTED",
-            "Automatic dispatch is paused by a shared host capacity breaker",
-            **shared_breaker,
-        )
-
     graph = stored["graph"]
     skill_hints = stored["hierarchy"]["root"]["skillHints"]
     definitions = {node["id"]: node for node in graph["nodes"]}
@@ -289,7 +259,6 @@ def plan_dispatch_batch(
         "nextAction": "CREATE_INDEPENDENT_RECEIVERS",
         "dispatchPolicy": {
             "maxConcurrentExecutors": max_concurrent_executors,
-            "quotaExhaustionPolicy": QUOTA_EXHAUSTION_POLICY,
         },
     }
     reservation_deadlines = [
@@ -346,11 +315,8 @@ def plan_dispatch_batch(
         },
         "dispatchPolicy": {
             "maxConcurrentExecutors": max_concurrent_executors,
-            "quotaExhaustionPolicy": QUOTA_EXHAUSTION_POLICY,
             "configurationSource": "PLUGIN_BUILT_IN",
             "hostNativeOnly": True,
-            "modelPolicy": "CURRENT_HOST_INHERIT",
-            "controllerSelectsDevelopmentModel": False,
             "controllerAnalyzesLoopPayload": False,
             "reserveBeforeSpawn": True,
             "reservationSeconds": DISPATCH_RESERVATION_SECONDS,
@@ -363,6 +329,5 @@ def plan_dispatch_batch(
 __all__ = (
     "DISPATCH_POLICY_VERSION",
     "MAX_CONCURRENT_EXECUTORS",
-    "QUOTA_EXHAUSTION_POLICY",
     "plan_dispatch_batch",
 )

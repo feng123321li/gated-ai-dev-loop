@@ -77,8 +77,6 @@ from .progress_reporting import (
 
 IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,191}$")
 
-CAPACITY_SCOPES = frozenset({"EXECUTOR", "HOST"})
-
 DISPATCH_MODES = frozenset({"AUTO", "MANUAL"})
 
 GRAPH_EXECUTION_MODES = frozenset({"active", "manual"})
@@ -86,14 +84,6 @@ GRAPH_EXECUTION_MODES = frozenset({"active", "manual"})
 SHA256_FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
 
 HOST_ADAPTER_AGENTS = dict(HOST_ADAPTER_RECEIVER_AGENTS)
-
-HOST_CAPACITY_KEYS = {
-    "claude-code": "claude-code:default",
-    "codex": "codex:default",
-    "zcode": "zcode:default",
-}
-
-MAX_HOST_CAPACITY_RESET = timedelta(hours=24)
 
 def _dispatch_mode_allowed(
     execution_mode: str,
@@ -149,47 +139,6 @@ def _executor_descriptor(value: object, field: str) -> str:
 
 def _parse_timestamp(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
-
-def _future_timestamp(value: object, *, at: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        fail(
-            "SCHEDULER_RESUME_TIME_INVALID",
-            "resume_at must be a future ISO 8601 timestamp",
-        )
-    try:
-        parsed = _parse_timestamp(value.strip())
-        if parsed.tzinfo is None:
-            raise ValueError("timezone required")
-        normalized = parsed.astimezone(timezone.utc)
-    except (TypeError, ValueError, OverflowError):
-        fail(
-            "SCHEDULER_RESUME_TIME_INVALID",
-            "resume_at must be a future ISO 8601 timestamp",
-        )
-    if normalized <= _parse_timestamp(at):
-        fail(
-            "SCHEDULER_RESUME_TIME_INVALID",
-            "resume_at must be later than the current scheduler time",
-        )
-    return normalized.isoformat().replace("+00:00", "Z")
-
-def _capacity_scope(
-    value: object,
-    *,
-    has_resume_at: bool,
-) -> str | None:
-    if not has_resume_at and value is None:
-        return None
-    if (
-        not has_resume_at
-        or not isinstance(value, str)
-        or value not in CAPACITY_SCOPES
-    ):
-        fail(
-            "SCHEDULER_CAPACITY_SCOPE_INVALID",
-            "capacity_scope must be EXECUTOR or HOST when resume_at is set",
-        )
-    return str(value)
 
 def _after(value: str, seconds: int) -> str:
     return (

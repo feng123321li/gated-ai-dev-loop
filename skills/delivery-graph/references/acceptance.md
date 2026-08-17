@@ -109,7 +109,7 @@ Review 成功时必须提交共同字段和且仅一个本层结论字段；没�
 - GROUP Review 使用 `groupIntegration`：至少一个 `seams` 条目，每项列出至少两个直接参与方、`status=VERIFIED` 和证据引用，`decision=INTEGRATED`。没有真实 seam 时不要伪造条目，应把 GROUP `reviewLoop` 设为 `null`。
 - Delivery Acceptance/Readiness 使用 `deliveryReadiness`：逐项 `requirementCoverage` 必须为 `COVERED` 并列出责任节点和证据引用，`integrationEvidence=SUFFICIENT`、`operationalReadiness=READY | NOT_APPLICABLE`、`openBlockingRisks=[]`、`decision=READY_FOR_USER_CONFIRMATION`。
 
-成功结果顶层只允许上述本层字段、`validationDecision`、`reviewFindings`、`affectedScopes`、`verificationEvidence`、`workerTelemetry` 和 Controller 生成的 workspace/evidence snapshots。`upstreamLoopResults` 是运行时只读 context，不得复制到 outcome；也不得复制其他层的结论字段或下层 result body。`SUCCEEDED` 不得携带状态为 `OPEN` 的 P0/P1；P2 必须始终出现在验收报告的问题表中。问题的内部修正过程仍留在 Review Loop，不新增 Graph 节点或状态。
+成功结果顶层只允许上述本层字段、`validationDecision`、`reviewFindings`、`affectedScopes`、`verificationEvidence` 和 Controller 生成的 workspace/evidence snapshots。`upstreamLoopResults` 是运行时只读 context，不得复制到 outcome；也不得复制其他层的结论字段或下层 result body。`SUCCEEDED` 不得携带状态为 `OPEN` 的 P0/P1；P2 必须始终出现在验收报告的问题表中。问题的内部修正过程仍留在 Review Loop，不新增 Graph 节点或状态。
 
 ## 分层验收投影
 

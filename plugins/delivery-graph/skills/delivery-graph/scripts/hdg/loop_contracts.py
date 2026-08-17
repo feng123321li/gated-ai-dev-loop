@@ -29,9 +29,6 @@ _LOOP_EXECUTION_POLICY = {
     "contextIsolation": "REQUIRED",
     "dispatch": {
         "preferredExecutor": "HOST_NATIVE_AGENT",
-        "noAgentCapacityBeforeClaim": (
-            "MANUAL_HANDOFF_WITHOUT_CLAIM"
-        ),
     },
     "claimedLoopHandoff": {
         "trigger": "CONTEXT_PRESSURE",
@@ -79,29 +76,6 @@ _LOOP_EXECUTION_POLICY = {
         "beforeStart": "REPORT_PROGRESS_AND_HEARTBEAT",
         "afterFinish": "HEARTBEAT_AND_REPORT_PROGRESS",
         "hostCompletionNotificationIsNotHeartbeat": True,
-    },
-    "providerRateLimit": {
-        "softStopTrigger": (
-            "KNOWN_REMAINING_CAPACITY_AT_OR_BELOW_5_PERCENT"
-        ),
-        "requiresLiveLease": True,
-        "requiresKnownResetAt": True,
-        "withResetAt": "PAUSE_UNTIL_RESET",
-        "executorScopeBeforeReset": "WAIT_FOR_EXECUTOR_NATIVE_WAKE",
-        "hostScopeBeforeReset": "WAIT_FOR_HOST_NATIVE_WAKE",
-        "nativeWake": {
-            "claudeCode": "SESSION_ONE_SHOT_CRON",
-            "codexDesktop": "THREAD_SCHEDULED_TASK",
-        },
-        "atReset": "AGENT_RELOADS_FRONTIER_AND_REDISPATCHES",
-        "sameAttempt": True,
-        "loopOutcome": "NONE",
-        "hard429": {
-            "action": "TRIP_HOST_CAPACITY_BREAKER",
-            "hostCallback": "MODEL_EXTERNAL_HOST_ADAPTER",
-            "cancelRecurringMonitors": True,
-            "scheduleWake": "HOST_NATIVE_ONE_SHOT_AT_RESET",
-        },
     },
     "expiredLeaseRecovery": {
         "action": "ADVANCE_GRAPH",

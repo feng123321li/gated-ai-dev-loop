@@ -7,6 +7,10 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.41.0 发布候选矩阵
+
+0.41.0 收敛调度与可观测边界：Loop 租约缩短为 5 分钟，receiver 每 60 秒心跳并只在剩余 2 分钟的续租窗口延长租约；派遣和心跳更新 Agent 主会话实时面板，心跳不重写 Markdown 投影。Controller 删除软额度策略、未接线的硬额度熔断子系统、Worker 模型遥测及风险分类推荐入口；MCP 工具联集为 32，planning Profile 为 15，固定并发 4、资源锁、普通显式暂停/恢复和 schema v3 namespace 保持不变。候选已完成 417 项 Python 测试（416 通过、1 项按环境跳过）、全树编译、四个 Skill、Plugin、release candidate 与差异校验。
+
 ## 0.40.3 发布候选矩阵
 
 0.40.3 是不改变外部协议的可维护性版本：按职责拆分 Graph runtime、模型渲染、规划、仓储层级、Git binding、MCP schema/catalog/adapter、层级契约与模型校验，并同步拆分超长测试；所有 `src/hdg/*.py` 与测试 Python 文件均不超过 1000 行，兼容门面继续暴露原 API。Controller 行为、33 个 MCP 工具、四个 Skill、三个 MCP Profile、schema v3、宿主交互及 `.layered-delivery/` 数据均无变化。候选已完成 429 项 Python 测试（428 通过、1 项按环境跳过）、全树编译、四个 Skill、Claude Plugin、release candidate 与差异校验。
@@ -280,11 +284,11 @@ Codex 候选包必须在 manifest 中显式声明 `./hooks/hooks.json`。真实�
 
 上述版本是 0.36.0 当时的真实宿主验证目标，不是永久兼容承诺；文档未记录它们对 0.36.0 的实测通过结果。该版本尚未把脏工作树纳入基线前置交互，`start_manual_handoff` 的 Git 漂移阻断重确认也仍是后续 Phase 2；这些限制已由 0.37.0 的现行契约取代。宿主升级后若 Hook 事件字段、Plugin manifest 或 MCP 工具命名发生变化，应先在自托管 Runner 重跑真实宿主冒烟，再更新矩阵。
 
-## 模型与内部 Worker 兼容
+## Receiver 扩展边界
 
-外层调度不选择模型。自动 receiver 继承当前宿主模型与默认 reasoning 设置，模型不进入 reservation、decision fingerprint 或 claim 授权。CC Switch、本地配置、企业网关和其他转发器属于宿主/Loop 内部能力，不改变 Graph 身份。
-
-receiver 可以在 Loop 内使用 Codex、Claude、Grok、DeepSeek 或其他 Worker，并在最终 `workerTelemetry` 中按 phase 非权威报告 agent/model/effort；无法权威观察时写 `unreported`。这些供应商不需要单独调度分支。只有要让某个供应商直接领取 Graph 时，才必须增加并验证可信外层 Adapter。
+Graph 只信任 Plugin 注册的外层 Adapter。内部 helper 对 Controller 不可见，不进入
+reservation、decision fingerprint、claim、进度面板或 outcome 专用字段。要让新的宿主
+直接领取 Graph，必须增加并验证对应 Adapter、workspace 映射和独立 receiver 编排。
 
 ## 支持状态定义
 

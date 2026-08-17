@@ -271,26 +271,6 @@ def _tool_result(
             if isinstance(wait_directive, dict)
             else []
         )
-        native_wake = (
-            wait_directive.get("nativeWakeDirective")
-            if isinstance(wait_directive, dict)
-            else None
-        )
-        native_wake_instruction = ""
-        if isinstance(native_wake, dict):
-            schedule_after = native_wake.get("scheduleAfter")
-            cancel_instruction = (
-                "先取消旧的重复监控，"
-                if native_wake.get("cancelRecurringMonitors") is True
-                else ""
-            )
-            if isinstance(schedule_after, str):
-                native_wake_instruction = (
-                    cancel_instruction
-                    + "在容量截止时间后留少量安全余量，创建一次宿主原生 "
-                    f"one-shot 唤醒（截止 {schedule_after}）；到时调用一次 "
-                    "`graph_frontier`。"
-                )
         alert_lines = [
             f"- ⚠️ {item['messageZh']}"
             for item in alerts
@@ -316,7 +296,6 @@ def _tool_result(
                 if consume_actions and immediate_actions
                 else ""
             )
-            action_instruction += native_wake_instruction
             timeout_instruction = (
                 f"无事件时最早在 {poll_not_before} 调用一次只读 "
                 "`graph_status`。"
@@ -337,7 +316,6 @@ def _tool_result(
                 "先完整消费本响应的立即动作："
                 + "、".join(str(item) for item in immediate_actions)
                 + "。"
-                + native_wake_instruction
                 + "不要用连续 `graph_frontier` 调用代替动作处理。"
             )
         elif wait_mode == "DEADLINE_ONLY":

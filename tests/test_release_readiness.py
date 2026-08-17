@@ -124,7 +124,6 @@ class TeamReleaseReadinessTests(unittest.TestCase):
             self.assertIn(required, lifecycle)
         for required in (
             "5 分钟",
-            "recommend_assurance_profile",
             "LIGHT",
             "基线",
             "workspace-changes.patch",
@@ -172,7 +171,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         )
         self.assertFalse(result["modelInvocationStarted"])
         self.assertEqual(result["pluginVersion"], __version__)
-        self.assertEqual(result["toolCount"], 33)
+        self.assertEqual(result["toolCount"], 32)
 
     def test_codex_probe_finds_candidate_alongside_installed_old_version(
         self,
@@ -537,7 +536,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
             f"当前版本：**{expected_version}**",
             (ROOT / "README.md").read_text(encoding="utf-8"),
         )
-        self.assertEqual(len(tool_definitions()), 33)
+        self.assertEqual(len(tool_definitions()), 32)
         self.assertNotIn("execution_mode", inspect.signature(freeze_hierarchy).parameters)
         tools = {tool["name"]: tool for tool in tool_definitions()}
         self.assertNotIn(

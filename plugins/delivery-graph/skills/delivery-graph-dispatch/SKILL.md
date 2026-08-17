@@ -1,6 +1,6 @@
 ---
 name: delivery-graph-dispatch
-description: "协调已冻结或已启动的 Delivery Graph：启动 MANUAL handoff、读取 frontier、原子预留 READY TASK/Review、创建独立 receiver、监控 lease/进度、处理等待、暂停、失联、容量恢复和安全重建。用于状态为 HANDOFF_READY、ACTIVE、BLOCKED、PAUSED、QUEUED，或 receiverPrompt 明确要求总协调时；不用于需求规划、TASK 实现或 Review 判断。"
+description: "协调已冻结或已启动的 Delivery Graph：启动 MANUAL handoff、读取 frontier、原子预留 READY TASK/Review、创建独立 receiver、监控 lease/进度、处理等待、暂停、失联和安全重建。用于状态为 HANDOFF_READY、ACTIVE、BLOCKED、PAUSED、QUEUED，或 receiverPrompt 明确要求总协调时；不用于需求规划、TASK 实现或 Review 判断。"
 allowed-tools:
   - mcp__plugin_delivery-graph_delivery-graph-dispatch__workspace_status
   - mcp__plugin_delivery-graph_delivery-graph-dispatch__resume_execution_mode
@@ -47,7 +47,6 @@ allowed-tools:
 | `ADVANCE_REQUIRED` | 调用一次 `advance_graph`，再刷新一次 frontier |
 | `REFREEZE_TASK_REQUIREMENT` | 停止派遣，转回 `$delivery-graph` 取得用户授权并准备 Revision |
 | `RECORD_USER_CONFIRMATION` | 转回 `$delivery-graph` 展示验收并等待真实用户确认 |
-| `WAIT_*` | 遵守返回的 deadline/nextWakeAt，不自行缩短 |
 
 ## 失败与恢复
 
@@ -55,7 +54,6 @@ allowed-tools:
 - 人工接管自动 TASK 需要确认从未 claim、无有效 reservation、workspace 干净且无代码改动，并再次取得用户明确授权；Review 不能降级为人工 claim。
 - `dispatch_loop` 响应未知时，只允许 receiver 用原 reservation、fingerprint、context 和 operation 幂等重试；primary 不伪造 operation。
 - 租约过期、receiver 失联或基础设施失败时刷新 frontier，再按 action 调用 `advance_graph`；不得复用旧 operation。
-- 仅根据宿主结构化容量状态和 `resetAt` 暂停/等待，不从错误文本猜额度，不静默切换模型或 Adapter。
 - 物化状态损坏时，受保护的 `rebuild_graph_run` 只能在明确恢复动作下从已校验事件链重建，不修改事件。
 - 需求方向、拓扑、依赖、资源、项目 scope、Review 契约或 databaseChanges 变化属于 `REPLAN_REQUIRED`，转回 `$delivery-graph` 创建同一 Delivery 的下一 Revision。
 

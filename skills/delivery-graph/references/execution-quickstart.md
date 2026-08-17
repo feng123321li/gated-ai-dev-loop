@@ -9,12 +9,10 @@
 - 每次响应同时读取 `progressMonitor.waitDirective`。先完整消费 `immediateActions`，再使用宿主原生 receiver 等待能力（Codex 等价 `wait_agent`/`wait_threads`，Claude 等价 Agent completion wait）等待完成或需要关注事件；事件发生立即调用一次 `graph_frontier`。无事件时最早到 `pollNotBefore` 才调用一次只读 `graph_status`；该截止由 Controller 对齐首次心跳、进度陈旧、失联或租约等下一个有意义健康阈值，宿主不得自行改成 10 秒等固定短周期。只有 `nextWakeAt` 或 `ADVANCE_REQUIRED` 才再次调用 `graph_frontier`。禁止 back-to-back 调用这两个工具。仅在 `changeFingerprint` 变化或新告警需要关注时，把 `markdownTable` 原样作为中文表格展示到主 Agent 窗口。`graph_events` 是诊断接口，不把原始事件、operation 或 reservation 日志直接展示给普通用户。
 
 - `CLAIM_MANUAL_TASK`：只对应 `TASK_LOOP`，来源是 `start_manual_handoff` 已启动的 manual Graph，或指定自动 TASK 的显式人工接管。总协调上下文不得实现或 claim；宿主创建独立原生 child，child 以新的显式 `operation_id` 和 receiving context 调用 `dispatch_loop(MANUAL)`，不带 AUTO reservation/decision。claim 后读取一次 `loop_context`；`STANDARD` 先 heartbeat，短时 `LIGHT` 可使用 claim 建立的初始租约直接进入 TASK Loop。
-- `DISPATCH_LOOP`：所有 READY `TASK_LOOP` 与 Review 都由当前宿主调用一次 `plan_dispatch_batch`；Controller 按当前 frontier、容量和资源锁创建绑定 decision fingerprint 的短租约 reservation。宿主按 `concurrentDispatchGroups` 立即创建独立 child，每个 child 以 `dispatch_transport=HOST_NATIVE`、assignment 和新的显式 `operation_id` 调用 `dispatch_loop(AUTO)`，固定 `modelPolicy=CURRENT_HOST_INHERIT`。完整消费所有 assignment 后执行响应的 `postActionWait`：receiver 完成、需要关注或启动失败时立即刷新一次 frontier；无事件则等到最早 reservation 截止时间只刷新一次，禁止连续轮询。
+- `DISPATCH_LOOP`：所有 READY `TASK_LOOP` 与 Review 都由当前宿主调用一次 `plan_dispatch_batch`；Controller 按当前 frontier、固定并发槽位和资源锁创建绑定 decision fingerprint 的短租约 reservation。宿主按 `concurrentDispatchGroups` 立即创建独立 child，每个 child 以 `dispatch_transport=HOST_NATIVE`、assignment 和新的显式 `operation_id` 调用 `dispatch_loop(AUTO)`。完整消费所有 assignment 后执行响应的 `postActionWait`：receiver 完成、需要关注或启动失败时立即刷新一次 frontier；无事件则等到最早 reservation 截止时间只刷新一次，禁止连续轮询。
 - `WAIT_FOR_DISPATCH_RECEIVER`：另一个调度器已为该 Ready Loop 取得短租约派遣预留；不得重复创建 Agent，等待接收方 claim 或预留过期。
 - `CONTINUE_OR_HEARTBEAT_LOOP`：继续当前 Loop，并在租约到期前 heartbeat。当前 claim 使用 5 分钟短租约、60 秒心跳间隔和 2 分钟续租阈值；阈值外的真实心跳只保活，进入阈值后才把到期时间推进到“当前时间 + 5 分钟”。
 - `RESUME_LOOP_IN_INDEPENDENT_CONTEXT`：把暂停节点路由给新的接收上下文；接收方 resume 后重新读取 frontier 并 dispatch。
-- `WAIT_FOR_EXECUTOR_CAPACITY`：receiver 在软阈值暂停后等待宿主原生的一次性恢复提示；到时由原宿主重新消费 frontier。
-- `WAIT_FOR_HOST_CAPACITY`：总调度 Agent 在软阈值暂停后等待宿主原生的一次性恢复提示；到时重新消费 frontier。两种等待都固定 `PAUSE_AND_RESUME`，不自动换 Adapter、模型或 Worker。
 - `RESOLVE_LOOP_BLOCK`：展示 Loop 返回的摘要和不透明 result，等待外部条件或人工决定。
 - `REPLAN_HIERARCHY`：展示外层契约变化及当前 Revision 无法继续的原因，等待用户决定。用户明确要求修改且尚未最终验收时，保持同一 `delivery.id` 调用 `prepare_delivery_revision`；重新评审、授权项目并冻结后，旧 run 自动成为 `SUPERSEDED`。
 - `REFREEZE_TASK_REQUIREMENT`：该未开始 TASK 的需求处于解冻编辑态，当前不可派遣。按用户已经明确提出的修改重跑 TASK 切分完整性预检，再完成 `unfreeze_task_requirement → refreeze_task_requirement`；后者从 SQLite 当前不可变 hierarchy 生成并冻结同一 Delivery 的下一 Revision，沿用执行模式并返回新 Run/双指纹。任一未领取 reservation 都绑定旧 Graph 指纹；需求修订入口因此会阻断并返回 `SCHEDULER_TASK_REQUIREMENT_RESERVATION_ACTIVE` 与 `retryAfter`，不得让旧 assignment 与新需求并存。
@@ -24,13 +22,13 @@
 
 用户选择自动执行时，`select_execution_mode(AUTOMATIC)` 立即持久化一次业务确认；workspace strategy 固定为 `CURRENT_WORKSPACE_SERIAL`。同一物理 checkout 一次只运行一个 Delivery。只有已选择自动执行的后续 Delivery 标记为 `QUEUED` 并携带自动 continuation，等待前一个 Delivery 进入 Run 终态，或到达 `RECORD_USER_CONFIRMATION`，且形成可验证业务 commit、working tree/index clean、HEAD 与冻结 binding 一致、所有 receiver/reservation 安全释放。轮到队首后，宿主按 `automaticHostPreparation.actions` 自动执行：必要时核对指纹并 stash 业务改动（排除 `.layered-delivery/**`），创建或切换目标 Delivery 的独立分支，再以明确 `rootId` 和双 fingerprint 调用 `resume_execution_mode`；不得重试 `select_execution_mode` 或再次询问用户。人工 Graph 达到同一安全边界时也可先 commit 并切换新 Delivery 分支，最终用户确认稍后按原 `rootId` 补录。资源冲突、owner dirty、未合并状态、HEAD 漂移或释放状态不明时保持排队。现有 linked checkout 只按普通 current workspace 处理，不自动创建新 worktree。状态恢复始终显式调用 `workspace_status(root_id=...)`。手动交接冻结会持久化 `HANDOFF_READY` Delivery 和完整需求快照，但不进入自动队列；接收方必须显式调用 `start_manual_handoff`，取得串行 turn 后才创建 manual Run 和独立 TASK receiver。
 
-### 宿主继承与内部 Worker
+### 接收上下文与内部协作
 
-外层 receiver 始终继承当前宿主模型和默认推理设置。模型不进入 reservation、claim 授权或决策指纹；已 claim receiver 也不能在原 attempt 中热切身份。需要更换 receiver 时必须 pause 或等待租约回收，再使用新 attempt、reservation 和独立 receiving context。
+外层 receiver 由当前宿主创建。Controller 只绑定 Adapter、receiver Agent、reservation、节点、attempt 和 decision fingerprint，不接收额外路由属性。需要更换 receiver 时必须显式 pause 并恢复，或等待租约回收，再使用独立 receiving context 和新的 operation。
 
-receiver 完成 claim 并读取 `loop_context` 后，可以在 Loop 内根据成本、任务和本机能力自主创建 Codex、Claude、Grok、DeepSeek 等 Worker，选择其模型、effort、并发和升级路径。`STANDARD` 在此之前必须提交首次独立 heartbeat；短时 `LIGHT` 可在初始租约内省略 heartbeat。内部 Worker 只向 receiver 返回工作结果，不得调用任何 Graph mutation 工具或获得 operation/reservation bearer。新增 Worker 供应商不改变 Delivery Graph；只有要让供应商成为外层 receiver 时才需要新增对应 Adapter。
+receiver 完成 claim 并读取 `loop_context` 后，可以在 Loop 内自行组织实现、测试、复核和必要协作。`STANDARD` 在此之前必须提交首次独立 heartbeat；短时 `LIGHT` 可在初始租约内省略 heartbeat。内部 helper 只向 receiver 返回工作结果，不得调用任何 Graph mutation 工具或获得 operation/reservation bearer。
 
-Plugin 内置外层 receiver 最大并发 4 与固定 `quotaExhaustionPolicy=PAUSE_AND_RESUME`。MCP Server 不读取用户级编排配置；机器上残留的旧 `orchestrator.json` 不参与启动、派遣、授权或指纹。
+Plugin 内置外层 receiver 最大并发 4。MCP Server 不读取用户级编排配置；机器上残留的旧 `orchestrator.json` 不参与启动、派遣、授权或指纹。
 
 ## 节点推进
 
@@ -66,11 +64,8 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。`STANDARD` 不得
 10. 当前目标内可修复的实现缺陷、测试失败、数据完整性或边界问题都留在当前 Loop：receiver 调整内部计划，按需创建成本合适的 Codex、Claude、Grok、DeepSeek 等 Worker，完成修正后重新验证。内部 Worker 只能向 receiver 返回结果；只有 receiver 能上报进度或终态。Review 必须保留独立复核，不要把“Review 未通过”提交成 `BLOCKED`。
 11. `STANDARD` Loop 在领取、代码检查完成、确认根因、完成修改、实际执行测试时的开始与结束、发现问题、修复、复审和最终验证等有意义的阶段立即调用 `report_loop_progress`。长时间测试或构建必须由 receiver 以非阻塞进程/宿主异步命令启动，或交给独立监控 Worker，使外层 receiver 不被单次 shell/tool call 占满；开始前 progress + heartbeat，运行期间至少每 60 秒 heartbeat，结束后立即 heartbeat + progress。`LIGHT` 在发现问题时上报；若在 5 分钟初始租约内无问题完成，可省略 heartbeat 与 progress，定向验证后直接提交真实最终结果。`summary_zh`、`completed_zh` 与 `next_step_zh` 使用用户当前语言，测试结果使用结构化计数；字段名为现有 schema v3 契约，不代表内容必须包含中文字符。禁止提交原始终端日志或内部推理。进度事件是可观测事实，不是 Graph 状态迁移，也不续租。
 12. `STANDARD` 首次独立 heartbeat 后、以及超过初始租约窗口的 `LIGHT`，都继续按 60 秒间隔调用 `heartbeat_loop`。每次真实心跳都更新 SQLite 运行态、审计事件和响应中的 `progressMonitor`；宿主据此刷新主 Agent 面板，显示最后心跳、剩余租期以及“仅保活/已续租”。剩余租期大于 2 分钟时不延长；达到 2 分钟阈值才续成从当前时刻起 5 分钟。高频心跳不重写 `progress.md` 或其他 Markdown 投影，投影仅在冻结/派遣、显式业务进度、暂停/恢复、结果、重试和终态等关键节点刷新。宿主未发出 child 完成通知只表示没有终态通知，既不是 heartbeat，也不能证明 receiver 仍存活；`SUSPECT_LOST` 也只证明控制面心跳和进度都静默，不能自行归因为 Maven 阻塞、上下文错配或进程退出。AUTO 与 MANUAL receiver 对 heartbeat、progress、pause 和 result 都必须显式提交当前 claim 的 `operation_id`；错误或旧 operation 一律拒绝。检测到上下文容量压力且工作仍可继续时，不提交失败结果；在租约有效期内调用普通 `pause_loop`。
-13. 宿主明确报告剩余额度不高于 5% 且提供真实未来 `resetAt` 时，停止启动新 Loop，并在额度耗尽前保存当前工作。已 claim 的执行 Agent 在租约有效期内调用 `pause_loop(resume_at=resetAt, capacity_scope=EXECUTOR)`；总调度宿主受限时使用 `capacity_scope=HOST` 暂停其正在承载的 claimed Loop。两者都释放租约和资源占用、保留同一 attempt；不得估算剩余额度或猜测 `resetAt`。
-14. 软阈值 pause 成功后，使用当前宿主的原生计划能力创建一次性恢复提示。为避免恢复窗口边界抖动，计划时间应晚于 `resetAt` 一小段安全余量。提示只要求原宿主调用 `workspace_status → graph_frontier → loop_context` 并重新 dispatch；额度策略固定 `PAUSE_AND_RESUME`，不自动换 Adapter、模型或 Worker。
-15. 硬 429 不由 Plugin 自动记录。宿主负责保留结构化 `resetAt`、执行自身审批/重试策略并停止继续调用供应商；receiver 仍能调用 MCP 时按第 13 步显式 pause，否则等待 lease 到期后由 `graph_frontier` 回收 attempt。需要恢复提示时由宿主按真实 `resetAt` 创建一次性唤醒，不从渲染文本或模型输出猜测时间。
-16. 普通 `pause_loop` 返回固定 handoff 数据。优先自动派遣新的接收 Agent；没有容量时输出人工交接。接收方使用同一 `rootId/nodeId` 调用 `resume_loop`，重新读取 frontier 和 `loop_context`，再以新 owner/operation dispatch；不重新 prepare/freeze。
-17. 只有真实业务终态才用 `record_loop_result` 提交标准结果。
+13. `pause_loop` 返回固定 handoff 数据。接收方使用同一 `rootId/nodeId` 调用 `resume_loop`，重新读取 frontier 和 `loop_context`，再以新 owner/operation dispatch；不重新 prepare/freeze。
+14. 只有真实业务终态才用 `record_loop_result` 提交标准结果。
     - 接收方不构造或声称 `result.workspaceChanges` 的归属。Controller 会从本次
       Adapter workspace 的已验证 `READ_WRITE` Git scopes 只读采集相对冻结
       `baseCommit` 的工作区快照，并覆盖任何调用方自报的同名字段。
@@ -80,7 +75,7 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。`STANDARD` 不得
 ## 后台进度与失联预警
 
 - `report_loop_progress` 只写入 `LOOP_PROGRESS_REPORTED` 可观测事件，不改变节点状态、不更新 `lastHeartbeatAt`、不延长 `leaseExpiresAt`。
-- `graph_status` 与 `graph_frontier` 返回中文 `progressMonitor.markdownTable`，包含节点、attempt、外层 receiver、阶段、摘要、已完成、下一步、测试、心跳/租约和健康状态。内部 Worker 事实只来自最终 `workerTelemetry`，显示为非权威信息。
+- `graph_status` 与 `graph_frontier` 返回中文 `progressMonitor.markdownTable`，包含节点、attempt、外层 receiver、阶段、摘要、已完成、下一步、测试、心跳/租约和健康状态。
 - `STANDARD` claim 后 90 秒仍无首次独立 heartbeat：`SUSPECT_NOT_STARTED / 疑似未启动`。
 - `STANDARD` 已有 progress 但 90 秒仍无首次独立 heartbeat：`HEARTBEAT_MISSING / 已开始但无独立心跳`；`LIGHT` 不设首次 heartbeat 告警。
 - heartbeat 仍在预期窗口内，但超过 5 分钟没有 progress：`ALIVE_WITHOUT_PROGRESS / 存活但无可见进展`。
@@ -100,8 +95,6 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。`STANDARD` 不得
 
 - 未 claim 且无 Agent 容量：保持 READY，不调用 `dispatch_loop` 或 `pause_loop`；仅在满足 `handoff_ready_automatic_task` 的无领取、无 reservation、clean、用户确认条件后显式转为人工接管，再由独立人工 receiver MANUAL claim。
 - 已 claim、租约有效且上下文压力升高：以当前 `operation_id` 调用 `pause_loop`，不提交 Loop outcome。
-- 已 claim、租约有效且宿主报告剩余额度不高于 5%：使用真实 `resetAt` 和对应 `capacity_scope` 定时 pause，再创建宿主原生一次性恢复提示。不是 `BLOCKED` 或新的 retry attempt。
-- 直接收到 429：Plugin 不自动打开共享熔断；宿主停止供应商调用，保留真实 `resetAt` 并按宿主策略安排一次恢复唤醒。缺少结构化 resetAt 时不猜测；无法显式 pause 的 claim 交给 lease 回收。
 - 租约已经过期：停止使用旧 operation，调用 `graph_frontier`/`advance_graph`，禁止 `pause_loop`。
 
 `predecessors` 表示 Graph 直接前驱；`upstreamLoopResults` 提供所有传递上游 Loop 的不透明结果，供依赖 TASK 和各级 Review 消费。GROUP 完成点自身没有业务 result，不能用它的空 outcome 替代 TASK 或下层 Review 的结果。
@@ -147,26 +140,12 @@ claim 超过 `leaseExpiresAt` 后，旧 operation 不能 heartbeat、pause 或�
           }
         ]
       }
-    ],
-    "workerTelemetry": [
-      {
-        "phase": "implementation",
-        "agent": "codex",
-        "model": "gpt-5.6-terra",
-        "reasoningEffort": "medium"
-      },
-      {
-        "phase": "review",
-        "agent": "unreported",
-        "model": "unreported",
-        "reasoningEffort": "unreported"
-      }
     ]
   }
 }
 ```
 
-TASK `result` 的业务内容仍由 Loop 定义，外层调度器不解释测试覆盖。成功 Review 的 `result` 是有界契约：共同字段为 `validationDecision` 和 `reviewFindings`，并且只带本层唯一结论 `taskAcceptance`、`groupIntegration` 或 `deliveryReadiness`；可另带 `affectedScopes`、`verificationEvidence`、`workerTelemetry` 和 Controller 快照。不得提交 `upstreamLoopResults`、其他层结论或下层 result body。Controller 在结果记录时覆盖 `evidenceWorkspaceSnapshots` 和 `evidenceScopeSnapshots`，并在 Review context 输出紧凑 `validationEvidenceIndex`；只有 `PASSED + EXACT_MATCH` 可自动复用。带 `scopeRefs` 的 evidence 按声明相关路径判断新鲜度，无关 workspace 变化不触发复测；没有可绑定路径的旧 evidence 保守回退到整个 workspace。`upstreamLoopResults` 只作为当前 receiver 的只读 context，并省略重复的大段 `workspaceChanges.diff`；完整内容继续从对应 acceptance 和 `workspace-changes.patch` 审核。`workerTelemetry` 只用于展示、成本分析和后续 Review，不参与授权、路由、重试、指纹或独立性判断。
+TASK `result` 的业务内容仍由 Loop 定义，外层调度器不解释测试覆盖。成功 Review 的 `result` 是有界契约：共同字段为 `validationDecision` 和 `reviewFindings`，并且只带本层唯一结论 `taskAcceptance`、`groupIntegration` 或 `deliveryReadiness`；可另带 `affectedScopes`、`verificationEvidence` 和 Controller 快照。不得提交 `upstreamLoopResults`、其他层结论或下层 result body。Controller 在结果记录时覆盖 `evidenceWorkspaceSnapshots` 和 `evidenceScopeSnapshots`，并在 Review context 输出紧凑 `validationEvidenceIndex`；只有 `PASSED + EXACT_MATCH` 可自动复用。带 `scopeRefs` 的 evidence 按声明相关路径判断新鲜度，无关 workspace 变化不触发复测；没有可绑定路径的旧 evidence 保守回退到整个 workspace。`upstreamLoopResults` 只作为当前 receiver 的只读 context，并省略重复的大段 `workspaceChanges.diff`；完整内容继续从对应 acceptance 和 `workspace-changes.patch` 审核。
 
 `workspaceChanges` 是上述不透明 result 中唯一由 Controller 在 MCP
 `record_loop_result` 路径自动替换的验收证据字段。它随 outcome 和事件链持久化，
@@ -184,8 +163,6 @@ TASK `result` 的业务内容仍由 Loop 定义，外层调度器不解释测试
 - `CANCELLED`：结束当前 Loop，不自动重试。
 - 未 claim 且宿主 Agent 暂时不可用：人工交接，不提前 claim。
 - 已 claim 且租约有效时的上下文容量不足：使用当前 operation pause/handoff，不是 `BLOCKED`、`WORKER_LOST` 或 `REPLAN_REQUIRED`。
-- 已 claim 且租约有效时的软阈值暂停：使用对应 capacity scope、真实 `resetAt` 和宿主原生计划提示；保持同一 attempt，不消耗基础设施自动重试预算。
-- 宿主原生计划不可用、宿主被关闭或计划创建失败：只在下一次人工唤醒时恢复，不能宣称自动激活。硬 429 不由 Plugin 自动持久化；宿主保留真实 resetAt 并负责自己的恢复计划。
 - 租约过期：由 `advance_graph` 记录失联并按预算恢复；不是 pause/handoff。
 
 MCP 写响应未知时先读状态。operation ID 永不复用。

@@ -35,7 +35,6 @@ SKILLS = ROOT / "skills"
 EXPECTED_PROFILE_TOOLS = {
     PLANNING_TOOL_PROFILE: {
         "workspace_status",
-        "recommend_assurance_profile",
         "hierarchy_contract",
         "preview_hierarchy",
         "confirm_development_baseline",

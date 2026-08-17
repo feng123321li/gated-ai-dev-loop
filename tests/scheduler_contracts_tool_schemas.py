@@ -92,7 +92,7 @@ class McpSurfaceTestsPart1:
     ) -> None:
         tools = tool_definitions()
         self.assertTrue(tools)
-        self.assertEqual(len(tools), 33)
+        self.assertEqual(len(tools), 32)
         self.assertNotIn("claim_current_task", {tool["name"] for tool in tools})
         descriptions = {tool["name"]: tool["description"] for tool in tools}
         self.assertIn(
@@ -353,16 +353,6 @@ class McpSurfaceTestsPart1:
                 "description"
             ],
         )
-        self.assertNotIn(
-            "actual_model_id",
-            dispatch_schema["required"],
-        )
-        self.assertIn(
-            "never routes",
-            dispatch_schema["properties"]["actual_model_id"][
-                "description"
-            ],
-        )
         self.assertEqual(
             set(dispatch_schema["properties"]),
             {
@@ -370,7 +360,6 @@ class McpSurfaceTestsPart1:
                 "node_id",
                 "owner",
                 "agent_id",
-                "actual_model_id",
                 "dispatch_mode",
                 "dispatch_transport",
                 "dispatch_reservation_id",
@@ -410,33 +399,9 @@ class McpSurfaceTestsPart1:
         self.assertTrue(recovery["annotations"]["idempotentHint"])
         self.assertIn("Review", recovery["description"])
         pause_schema = by_name["pause_loop"]["inputSchema"]
-        self.assertNotIn("resume_at", pause_schema["required"])
         self.assertEqual(
-            pause_schema["properties"]["resume_at"],
-            {
-                "type": "string",
-                "minLength": 1,
-                "description": (
-                    "Optional known provider quota reset time as an ISO "
-                    "8601 timestamp. Before it, the same Agent waits for a "
-                    "host-native scheduled prompt or manual resume. The "
-                    "first frontier call at or after it makes the same Loop "
-                    "attempt ready for redispatch."
-                ),
-            },
-        )
-        self.assertEqual(
-            pause_schema["properties"]["capacity_scope"],
-            {
-                "type": "string",
-                "enum": ["EXECUTOR", "HOST"],
-                "description": (
-                    "Required with resume_at. EXECUTOR waits for the "
-                    "same Loop Agent; HOST means the native "
-                    "orchestrator itself is quota-limited. Both wait for a "
-                    "host-native scheduled prompt or manual Agent resume."
-                ),
-            },
+            set(pause_schema["properties"]),
+            {"root_id", "node_id", "operation_id"},
         )
         freeze = by_name["freeze_hierarchy"]
         self.assertNotIn("_meta", freeze)
@@ -692,7 +657,7 @@ class McpSurfaceTestsPart1:
                 },
             )
 
-    def test_dispatch_requires_bounded_actual_executor_metadata(self) -> None:
+    def test_dispatch_requires_bounded_receiver_metadata(self) -> None:
         dispatch_schema = {
             tool["name"]: tool
             for tool in tool_definitions()
@@ -706,7 +671,6 @@ class McpSurfaceTestsPart1:
             "node_id": "loop:t-service",
             "owner": "agent-1",
             "agent_id": "codex",
-            "actual_model_id": "host-observed-model",
             "dispatch_mode": "AUTO",
             "receiver_context_id": "context-1",
             "operation_id": "op-1",
@@ -714,15 +678,6 @@ class McpSurfaceTestsPart1:
         self.assertEqual(
             validate_tool_arguments("dispatch_loop", base),
             base,
-        )
-        without_model = {
-            key: value
-            for key, value in base.items()
-            if key != "actual_model_id"
-        }
-        self.assertEqual(
-            validate_tool_arguments("dispatch_loop", without_model),
-            without_model,
         )
         for invalid in (
             {key: value for key, value in base.items() if key != "agent_id"},
@@ -737,7 +692,7 @@ class McpSurfaceTestsPart1:
                 if key != "operation_id"
             },
             {**base, "agent_id": "x" * 257},
-            {**base, "actual_model_id": "x" * 257},
+            {**base, "actual_model_id": "host-observed-model"},
             {**base, "model_id": "gpt-5.6-sol"},
         ):
             with self.subTest(invalid=invalid):

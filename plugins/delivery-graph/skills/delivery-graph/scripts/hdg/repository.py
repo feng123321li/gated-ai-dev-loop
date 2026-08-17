@@ -725,19 +725,6 @@ class SchedulerRepository(SchedulerRepositoryBase):
             at=at,
         )
 
-    @staticmethod
-    def open_host_capacity_breaker(
-        connection: sqlite3.Connection,
-        *,
-        agent_id: str,
-        at: str,
-    ) -> dict[str, Any] | None:
-        return DeliveryDispatchStore.open_host_capacity_breaker(
-            connection,
-            agent_id=agent_id,
-            at=at,
-        )
-
     def reserve_dispatch_assignments(
         self,
         *,

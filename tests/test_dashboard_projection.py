@@ -64,8 +64,6 @@ class DashboardProjectionTests(unittest.TestCase):
                     "status": "SUCCEEDED",
                     "attempt": 1,
                     "agentId": "worker-1",
-                    "actualModelId": "gpt-test",
-                    "actualModelSource": "private-source",
                     "leaseExpiresAt": "2026-08-08T09:00:00Z",
                     "failureClass": "private-failure",
                     "progress": {
@@ -78,7 +76,6 @@ class DashboardProjectionTests(unittest.TestCase):
                         "summaryZh": "接口已完成",
                         "heartbeatZh": "不适用",
                         "healthZh": "已成功",
-                        "actualModelSource": "private-monitor-source",
                         "diagnosis": {"private": True},
                     },
                 },
@@ -177,7 +174,6 @@ class DashboardProjectionTests(unittest.TestCase):
                 "healthZh": "已成功",
             },
         )
-        self.assertNotIn("actualModelSource", node)
         self.assertNotIn("leaseExpiresAt", node)
         self.assertNotIn("failureClass", node)
         self.assertEqual(

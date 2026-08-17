@@ -266,14 +266,6 @@ def compile_runtime_policy() -> dict[str, Any]:
             automatic=False,
         ),
         _transition(
-            "NODE_AUTO_RESUMED",
-            ["PAUSED"],
-            "PENDING",
-            "ON_RESUME_AT_REACHED",
-            loops,
-            automatic=True,
-        ),
-        _transition(
             "JOIN_COMPLETED",
             ["PENDING"],
             "SUCCEEDED",

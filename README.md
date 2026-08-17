@@ -2,7 +2,7 @@
 
 把已确认的软件需求拆成可执行的 Delivery Graph，协调 Agent 完成实现、Review 和最终验收。
 
-当前版本：**0.40.3** · Schema：**v3** · Python：**3.10+，仅标准库**
+当前版本：**0.41.0** · Schema：**v3** · Python：**3.10+，仅标准库**
 
 ## 核心能力
 
@@ -17,12 +17,12 @@ Delivery Graph 负责组织、状态和调度，不替代 Agent 分析代码，�
 
 | Skill | 职责 | MCP Profile |
 |---|---|---|
-| `$delivery-graph` | 需求确认、Graph 规划、Git 基线和冻结 | `planning`：16 个工具 |
+| `$delivery-graph` | 需求确认、Graph 规划、Git 基线和冻结 | `planning`：15 个工具 |
 | `$delivery-graph-dispatch` | 派遣、等待和恢复 | `dispatch`：12 个工具 |
 | `$delivery-graph-task` | TASK 实现与验证 | `receiver`：7 个工具 |
 | `$delivery-graph-review` | 独立分层 Review | `receiver`：7 个工具 |
 
-三个 MCP server 共用同一 Controller，但只向当前角色提供所需工具。完整能力仍为 33 个工具，跨 Profile 调用会被拒绝。
+三个 MCP server 共用同一 Controller，但只向当前角色提供所需工具。完整能力为 32 个工具，跨 Profile 调用会被拒绝。
 
 ```text
 需求确认 → Graph 规划与冻结 → 自动或手动执行 → TASK 实现 → 分层 Review → 用户确认

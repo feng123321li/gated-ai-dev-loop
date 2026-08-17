@@ -38,7 +38,6 @@ def dispatch_loop(
     owner: str,
     operation_id: str,
     agent_id: str | None = None,
-    actual_model_id: str | None = None,
     receiver_context_id: str | None = None,
     dispatch_mode: str,
     dispatch_transport: str | None = None,
@@ -57,11 +56,6 @@ def dispatch_loop(
     supplied_agent_id = (
         _executor_descriptor(agent_id, "agent_id")
         if agent_id is not None
-        else None
-    )
-    observed_actual_model_id = (
-        _executor_descriptor(actual_model_id, "actual_model_id")
-        if actual_model_id is not None
         else None
     )
     if dispatch_mode not in DISPATCH_MODES:
@@ -282,8 +276,6 @@ def dispatch_loop(
                     != actual_receiver_context_id
                     or payload.get("hostAdapterId") != host_adapter_id
                     or payload.get("agentId") != actual_agent_id
-                    or payload.get("actualModelId")
-                    != observed_actual_model_id
                     or payload.get("dispatchMode") != "AUTO"
                     or payload.get("dispatchTransport")
                     != dispatch_transport
@@ -296,7 +288,6 @@ def dispatch_loop(
                         "SCHEDULER_DISPATCH_REPLAY_MISMATCH",
                         "The claimed reservation does not match this dispatch replay",
                     )
-                prior_model_id = payload.get("actualModelId")
                 status = graph_status(
                     root=root,
                     root_id=root_id,
@@ -313,10 +304,6 @@ def dispatch_loop(
                     ),
                     "owner": owner,
                     "agentId": actual_agent_id,
-                    "actualModelId": prior_model_id,
-                    "actualModelSource": (
-                        "HOST_REPORTED" if prior_model_id is not None else None
-                    ),
                     "receiverContextId": actual_receiver_context_id,
                     "dispatchMode": "AUTO",
                     "dispatchTransport": dispatch_transport,
@@ -327,29 +314,6 @@ def dispatch_loop(
                     "dispatchReplayed": True,
                     "progressMonitor": status["progressMonitor"],
                 }
-        if actual_agent_id is not None:
-            global_breaker = repository.open_host_capacity_breaker(
-                connection,
-                agent_id=actual_agent_id,
-                at=at,
-            )
-            if global_breaker is not None:
-                fail(
-                    "SCHEDULER_HOST_CAPACITY_EXHAUSTED",
-                    "Dispatch is paused by a shared host capacity breaker",
-                    **global_breaker,
-                )
-        if (
-            run["host_capacity_reset_at"] is not None
-            and _parse_timestamp(run["host_capacity_reset_at"])
-            > _parse_timestamp(at)
-        ):
-            fail(
-                "SCHEDULER_HOST_CAPACITY_EXHAUSTED",
-                "Automatic dispatch is paused by the host capacity breaker",
-                capacityKey=run["host_capacity_key"],
-                resetAt=run["host_capacity_reset_at"],
-            )
         if (
             definition["kind"] not in LOOP_NODE_KINDS
             or state["status"] != "READY"
@@ -512,14 +476,6 @@ def dispatch_loop(
                 **(
                     {
                         "agentId": actual_agent_id,
-                        **(
-                            {
-                                "actualModelId": observed_actual_model_id,
-                                "actualModelSource": "HOST_REPORTED",
-                            }
-                            if observed_actual_model_id is not None
-                            else {}
-                        ),
                     }
                     if actual_agent_id is not None
                     else {}
@@ -555,12 +511,6 @@ def dispatch_loop(
         ),
         "owner": owner,
         "agentId": actual_agent_id,
-        "actualModelId": observed_actual_model_id,
-        "actualModelSource": (
-            "HOST_REPORTED"
-            if observed_actual_model_id is not None
-            else None
-        ),
         "receiverContextId": actual_receiver_context_id,
         "dispatchMode": dispatch_mode,
         "dispatchTransport": dispatch_transport,

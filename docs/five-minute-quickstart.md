@@ -4,7 +4,7 @@
 
 ## 0:00—1:00 检查注册
 
-先看宿主 MCP 列表：`delivery-graph` 应显示完整 33 个工具，其中包括 `workspace_status`、`recommend_assurance_profile`、`preview_hierarchy`、`confirm_development_baseline`、`freeze_hierarchy` 和 `record_loop_result`。stdio server 显示 `Auth: Unsupported` 是正常的，它不使用 HTTP/OAuth。
+先看宿主 MCP 列表：三个 Profile 的联集应为 32 个工具，其中包括 `workspace_status`、`preview_hierarchy`、`confirm_development_baseline`、`freeze_hierarchy` 和 `record_loop_result`。stdio server 显示 `Auth: Unsupported` 是正常的，它不使用 HTTP/OAuth。
 
 若工具未注册，报告 `PLUGIN_MCP_UNAVAILABLE` 并停止治理写入；不要尝试模拟 `workspace_status`，也不要读写 `scheduler.db`。需要跨会话证据时运行只读矩阵 Demo：
 
@@ -12,23 +12,11 @@
 python scripts/mcp_registration_probe.py --host zcode --strict
 ```
 
-## 1:00—2:00 取得确定性档位建议
+## 1:00—2:00 确认 LIGHT 是用户输入
 
-Agent 先检查真实代码与影响边界，再调用只读 `recommend_assurance_profile`。最小 LIGHT 分类示例：
-
-```json
-{
-  "task_summary": "修正一个局部展示标签并运行对应定向测试",
-  "root_task_count": 1,
-  "project_count": 1,
-  "change_scope": "LOCAL",
-  "risk_factors": [],
-  "verification_plan": "TARGETED",
-  "risk_level": "LOW"
-}
-```
-
-只有 `recommendedProfile=LIGHT` 才继续本路径，并把响应 `reasons` 写入 `delivery.assuranceRationale`。接口、数据库、权限、安全、敏感数据、迁移、部署、多模块/多项目或未知影响都会确定性返回 `STANDARD`。
+系统默认使用 `STANDARD`，不再让 Agent 根据风险、改动规模或模型判断自动推荐档位。
+只有用户明确要求 `LIGHT`，且本次交付能够建模为一个根 TASK、零 GROUP、零 Review
+时才继续本路径；否则使用 `STANDARD`。
 
 ## 2:00—3:00 建模并确认基线
 

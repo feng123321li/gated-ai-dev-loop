@@ -68,8 +68,7 @@ class SchedulerRuntimeTestsPart6:
         )
         self.assertIn(
             (
-                "| TASK | 执行中 | codex | 未报告 | "
-                "agent-task | 1 |"
+                "| TASK | 执行中 | codex | agent-task | 1 |"
             ),
             running_progress,
         )
@@ -104,16 +103,14 @@ class SchedulerRuntimeTestsPart6:
         )
         self.assertIn(
             (
-                "| 阶段 | 当前进度 | 执行代理 | 宿主观测模型 | "
-                "认领身份 | 执行轮次 | "
+                "| 阶段 | 当前进度 | 执行代理 | 认领身份 | 执行轮次 | "
                 "最近更新时间（UTC+8） | 结果摘要 |"
             ),
             completed_progress,
         )
         self.assertIn(
             (
-                "| TASK | 已成功 | codex | 未报告 | "
-                "agent-task | 1 |"
+                "| TASK | 已成功 | codex | agent-task | 1 |"
             ),
             completed_progress,
         )

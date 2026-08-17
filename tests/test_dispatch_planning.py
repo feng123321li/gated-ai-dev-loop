@@ -126,7 +126,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
             plan["assignments"][0]["independence"]["required"]
         )
 
-    def test_receiver_assignment_inherits_current_host_model_policy(
+    def test_receiver_assignment_contains_no_model_or_reasoning_policy(
         self,
     ) -> None:
         with TemporaryDirectory() as root:
@@ -135,13 +135,11 @@ class HostDispatchPlanningTests(unittest.TestCase):
 
         self.assertEqual(assignment["hostAdapterId"], "codex")
         self.assertEqual(assignment["receiverAgentId"], "codex")
-        self.assertEqual(
-            assignment["modelPolicy"],
-            "CURRENT_HOST_INHERIT",
-        )
         for removed in (
             "model",
+            "modelPolicy",
             "reasoningClass",
+            "reasoningEffort",
             "modelSelection",
             "routeReview",
         ):
@@ -495,27 +493,6 @@ class HostDispatchPlanningTests(unittest.TestCase):
                 host_adapter_id="codex",
                 host_native_agent_ids=("codex",),
             )
-            with self.assertRaises(GatedLoopError) as replay_caught:
-                dispatch_loop(
-                    root=root,
-                    root_id=prepared["rootId"],
-                    node_id=assignment["nodeId"],
-                    owner="receiver-context",
-                    receiver_context_id="receiver-context",
-                    operation_id="operation-hookless",
-                    agent_id="codex",
-                    actual_model_id="different-model",
-                    dispatch_mode="AUTO",
-                    dispatch_transport=assignment["dispatchTransport"],
-                    dispatch_reservation_id=assignment[
-                        "dispatchReservationId"
-                    ],
-                    dispatch_decision_fingerprint=assignment[
-                        "decisionFingerprint"
-                    ],
-                    host_adapter_id="codex",
-                    host_native_agent_ids=("codex",),
-                )
             state = graph_status(
                 root=root,
                 root_id=prepared["rootId"],
@@ -525,12 +502,8 @@ class HostDispatchPlanningTests(unittest.TestCase):
         self.assertFalse(claimed["dispatchReplayed"])
         self.assertTrue(replayed["dispatchReplayed"])
         self.assertEqual(replayed["operationId"], claimed["operationId"])
-        self.assertEqual(
-            replay_caught.exception.code,
-            "SCHEDULER_DISPATCH_REPLAY_MISMATCH",
-        )
-        self.assertNotIn("modelId", claimed)
-        self.assertNotIn("modelId", state["nodes"][0])
+        self.assertNotIn("actualModelId", claimed)
+        self.assertNotIn("actualModelId", state["nodes"][0])
 
     def test_auto_claim_rejects_tampered_decision_fingerprint(self) -> None:
         with TemporaryDirectory() as root:

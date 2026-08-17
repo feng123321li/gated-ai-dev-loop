@@ -126,41 +126,15 @@ class McpSurfaceTestsPart5:
                 )
             self.assertIsNone(connection.project_root.bound_root)
 
-    def test_worker_telemetry_is_display_only_phase_reporting(self) -> None:
+    def test_loop_result_schema_has_no_worker_execution_telemetry(self) -> None:
         tools = {tool["name"]: tool for tool in tool_definitions()}
-        telemetry = tools["record_loop_result"]["inputSchema"][
+        result = tools["record_loop_result"]["inputSchema"][
             "properties"
         ]["outcome"]["properties"]["result"]["properties"][
-            "workerTelemetry"
-        ]["items"]
-        self.assertEqual(
-            telemetry["required"],
-            ["phase", "agent", "model", "reasoningEffort"],
-        )
-        self.assertEqual(
-            validate_tool_arguments(
-                "record_loop_result",
-                {
-                    "root_id": "d-service",
-                    "node_id": "loop:t-service",
-                    "operation_id": "op-telemetry",
-                    "outcome": {
-                        "status": "SUCCEEDED",
-                        "summary": "Loop completed.",
-                        "result": {
-                            "workerTelemetry": [
-                                {
-                                    "phase": "review",
-                                    "agent": "unreported",
-                                    "model": "unreported",
-                                    "reasoningEffort": "unreported",
-                                    "displayOnly": True,
-                                    "nonAuthoritative": True,
-                                }
-                            ]
-                        },
-                    },
-                },
-            )["outcome"]["result"]["workerTelemetry"][0]["model"],
-            "unreported",
-        )
+            "deliveryReadiness"
+        ]
+        self.assertIsInstance(result, dict)
+        properties = tools["record_loop_result"]["inputSchema"][
+            "properties"
+        ]["outcome"]["properties"]["result"]["properties"]
+        self.assertNotIn("workerTelemetry", properties)

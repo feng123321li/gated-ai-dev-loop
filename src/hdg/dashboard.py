@@ -31,7 +31,6 @@ _REVISION_FIELDS = (
 )
 _NODE_DISPLAY_FIELDS = (
     "agentId",
-    "actualModelId",
 )
 _PROGRESS_FIELDS = (
     "progressPercent",

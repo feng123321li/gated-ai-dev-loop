@@ -48,7 +48,6 @@ from hdg.graph_runtime import (
     heartbeat_loop,
     loop_context,
     pause_loop,
-    report_host_capacity_exhausted,
     report_loop_progress,
     rebuild_graph_run,
     record_loop_result,

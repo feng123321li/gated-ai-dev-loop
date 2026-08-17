@@ -79,30 +79,19 @@ Delivery: d-commerce
 
 这保持了两个边界：用户偏好不会丢失，Loop 自治也不会被 requirement 阶段的错误猜测锁死。
 
-## Receiver 与 Worker 晚绑定
+## Receiver 边界
 
-预览 hierarchy 表达开发内容；Frozen Graph 只表达哪个 TASK/Review 何时可运行。自动
-派遣把 Ready Loop 绑定到当前配置宿主的独立外层 receiver，并固定
-`modelPolicy=CURRENT_HOST_INHERIT`；不表达或推荐具体模型与 reasoning effort。
+预览 hierarchy 表达开发内容；Frozen Graph 只表达 TASK/Review 的依赖与可运行时机。
+自动派遣把 Ready Loop 绑定到当前配置宿主的独立外层 receiver；手动开发由接收 CLI
+启动同一 Graph 并创建独立 MANUAL receiver。调度输入只包含 Adapter、receiver、
+reservation、decision fingerprint、operation、租约与资源锁。
 
-```text
-自动执行：当前配置宿主 Adapter → receiver reservation → 独立 receiver claim
-手动开发：冻结内容包 → 接收 CLI 启动同一 Graph → 独立 MANUAL receiver
-Loop 内部：receiver → 按成本/任务自主使用 Codex、Claude、Grok、DeepSeek 等 Worker
-```
+只有外层 receiver 持有 Graph mutation bearer。Loop 内部的 helper 只把结果返回
+receiver，不获得 operation 或 reservation。Controller 不收集 helper 身份、执行配置、
+成本或推理信息，也不根据这些信息授权、路由、重试或判断独立性。
 
-只有外层 receiver 持有 Graph mutation bearer，能够 claim、heartbeat、progress、pause、
-resume 和提交 result。内部 Worker 不获得 operation 或 reservation，只把结果返回 receiver。
-新增 Worker 供应商不改变外层 Graph；只有要让供应商成为 receiver 时才新增 Adapter，并
-提供 workspace 映射和独立 child 编排。独立性是宿主编排契约，不是 Controller 的密码学证明。
-
-内部 Worker 的 agent/model/effort 可以由 receiver 在最终
-`outcome.result.workerTelemetry` 中按 phase 报告。未知值写 `unreported`；该数据只用于
-展示、成本分析和后续 Review，不参与授权、路由、指纹、重试或独立性判断。
-
-运行中的容量故障不写回 Frozen Graph。额度策略固定 `PAUSE_AND_RESUME`：执行侧使用
-`EXECUTOR` 暂停，总调度宿主使用 `HOST` 暂停，均等待带真实 `resetAt` 的一次性恢复
-提示，不静默切换 Adapter、模型或 Worker。
+`pause_loop` 只做显式 live-claim 暂停；`resume_loop` 由新的独立接收上下文显式恢复。
+Controller 不保存供应商限额、reset 时间或自动唤醒状态。
 
 ## 图模型
 
@@ -242,7 +231,7 @@ GROUP/TASK 的递归存在于冻结 hierarchy 和编译 Graph 中，并镜像到
 
 外部工单号通过 `delivery.requirementKey` 与一个稳定 `delivery.id` 一对一绑定；未显式声明时，Controller 仍从 Delivery ID/标题识别常见 `PROJECT-123` 引用。不同 ID 命中同一 key 时，preview 与最终事务写入都返回连续性冲突，要求复用已有 ID。`HANDOFF_READY` 内容变化使用 `create_manual_handoff` 的显式当前 Revision、`USER_EXPLICIT_SAME_DELIVERY` 和修订原因，在原目录追加不可变手动 Revision；旧 Revision 标记为 `SUPERSEDED`，不再通过改名生成重复目录。
 
-人类投影集合必须足以完成冻结前评审、运行中跟踪和最终验收：工作区 `overview.md` 只列 Delivery 入口，Delivery `overview.md` 展示本交付状态与内部统计；Delivery 投影负责聚合与串联；节点投影覆盖双指纹、summary、`dependsOn`、Loop 引用、资源锁、不透明 payload、运行状态、Loop 结果和证据。验收内容按层归属：TASK 只完整展开本 TASK 与 `taskAcceptance`，GROUP 展开完成点并仅在配置时展开 `groupIntegration`，Delivery 只展开 `deliveryReadiness` 和用户确认；向上一层只提供直接下层或根工作项的状态、简要结果、证据引用和报告链接，不复制下层输入、result body、证据、workspace snapshot 或 findings。未配置的 GROUP Review 不生成 Graph 节点、SQLite run/event/outcome 或空投影段落。进度表展示外层 receiver、认领身份和执行轮次；内部 Worker 的 agent/model/effort 仅从最终 `workerTelemetry` 非权威展示，未知值为 `unreported`。验收摘要、子节点结果和 P0/P1/P2 问题使用表格。P0/P1 只在修复、验证和独立复审后关闭，P2 非阻断但必须列示。新增、调整或删除接口的 TASK 通过 `payload.interfaces` 显式提供 `changeType`、协议、名称、简介以及完整 before/after 快照；控制器生成 `interfaces.md` 索引，并在 `interfaces/` 下为每个接口生成一份详情。HTTP 按 Path、Query、请求头、请求体和响应参数展示，Dubbo 按接口、方法、调用参数和返回结果展示；字段表覆盖类型、必填、最大长度、说明和示例值。冻结 baseline 的 after 是开发接口与后续 Torna 发布的唯一事实来源，方法、路径或签名以及字段层级和属性必须一致。数据库变更由规划上下文在 preview 前通过 `payload.databaseChanges` 提供完整表级 before/after、字段、主键、约束、索引、外键和迁移/回滚/回填/兼容/验证方案；控制器拒绝不完整契约与 LIGHT 保障档，生成 `database-changes.md` 及每表详情，TASK Loop 只允许应用和验证冻结 after，偏离时必须重新规划为同一 Delivery 的新 Revision。删除值使用 Markdown 删除线，新增或删除字段只显示存在的一侧。代码可辅助准备和验证契约，但不成为动态投影源，接口和数据库内容也不参与 Graph 调度决策。固定展示使用中文，标明 UTC+8 的时间使用 `YYYY-MM-DD HH:mm:ss`；SQLite 继续保持机器 UTC。
+人类投影集合必须足以完成冻结前评审、运行中跟踪和最终验收：工作区 `overview.md` 只列 Delivery 入口，Delivery `overview.md` 展示本交付状态与内部统计；Delivery 投影负责聚合与串联；节点投影覆盖双指纹、summary、`dependsOn`、Loop 引用、资源锁、不透明 payload、运行状态、Loop 结果和证据。验收内容按层归属：TASK 只完整展开本 TASK 与 `taskAcceptance`，GROUP 展开完成点并仅在配置时展开 `groupIntegration`，Delivery 只展开 `deliveryReadiness` 和用户确认；向上一层只提供直接下层或根工作项的状态、简要结果、证据引用和报告链接，不复制下层输入、result body、证据、workspace snapshot 或 findings。未配置的 GROUP Review 不生成 Graph 节点、SQLite run/event/outcome 或空投影段落。进度表只展示外层 receiver、认领身份和执行轮次。验收摘要、子节点结果和 P0/P1/P2 问题使用表格。P0/P1 只在修复、验证和独立复审后关闭，P2 非阻断但必须列示。新增、调整或删除接口的 TASK 通过 `payload.interfaces` 显式提供 `changeType`、协议、名称、简介以及完整 before/after 快照；控制器生成 `interfaces.md` 索引，并在 `interfaces/` 下为每个接口生成一份详情。HTTP 按 Path、Query、请求头、请求体和响应参数展示，Dubbo 按接口、方法、调用参数和返回结果展示；字段表覆盖类型、必填、最大长度、说明和示例值。冻结 baseline 的 after 是开发接口与后续 Torna 发布的唯一事实来源，方法、路径或签名以及字段层级和属性必须一致。数据库变更由规划上下文在 preview 前通过 `payload.databaseChanges` 提供完整表级 before/after、字段、主键、约束、索引、外键和迁移/回滚/回填/兼容/验证方案；控制器拒绝不完整契约与 LIGHT 保障档，生成 `database-changes.md` 及每表详情，TASK Loop 只允许应用和验证冻结 after，偏离时必须重新规划为同一 Delivery 的新 Revision。删除值使用 Markdown 删除线，新增或删除字段只显示存在的一侧。代码可辅助准备和验证契约，但不成为动态投影源，接口和数据库内容也不参与 Graph 调度决策。固定展示使用中文，标明 UTC+8 的时间使用 `YYYY-MM-DD HH:mm:ss`；SQLite 继续保持机器 UTC。
 
 ## 可恢复性
 

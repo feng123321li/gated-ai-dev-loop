@@ -3,7 +3,6 @@ name: delivery-graph
 description: "把已确认的软件需求规划或修订为 schema v3 Delivery Graph，负责 workspace/Delivery 发现、Git 开发基线确认、层级与 DAG 建模、不可变 Revision、执行模式选择和冻结。用于新建交付、澄清边界、确认 baseline、选择 AUTOMATIC/MANUAL，或处理 REPLAN_REQUIRED；Graph 已进入 ACTIVE、BLOCKED、PAUSED 或需要 frontier 调度时改用 delivery-graph-dispatch。"
 allowed-tools:
   - mcp__plugin_delivery-graph_delivery-graph__workspace_status
-  - mcp__plugin_delivery-graph_delivery-graph__recommend_assurance_profile
   - mcp__plugin_delivery-graph_delivery-graph__hierarchy_contract
   - mcp__plugin_delivery-graph_delivery-graph__preview_hierarchy
   - mcp__plugin_delivery-graph_delivery-graph__confirm_development_baseline
@@ -52,7 +51,7 @@ allowed-tools:
 
 1. 检查真实代码和 workspace，确认目标、边界、验收点、项目范围、依赖、排他资源和外部兼容契约。
 2. 用户指定的开发 Skill 记录为共享 `root.skillHints`。仅当它能帮助规划方向、风险、边界或验收时才预触发；实现类 Skill 多数应由 `$delivery-graph-task` 在真实代码上下文中使用。
-3. 调用 `recommend_assurance_profile`，按事实填写规模、风险和验证计划；不明确时使用 `UNKNOWN`，不得凭自由文本猜档。
+3. `assuranceProfile` 默认使用 `STANDARD`；只有用户明确要求 `LIGHT` 且 hierarchy 满足 LIGHT 结构约束时才使用 `LIGHT`，不得由 Agent 做风险分档或自动推荐。
 4. 只为真实分层、依赖或汇合创建 GROUP。仅在直接子项存在需要独立验证的 seam 时配置 GROUP Review。
 5. 数据库变更在 preview 前读取当前结构，冻结字段级 before/after 和迁移策略；不得把设计留给 TASK。
 6. 调用 `hierarchy_contract`，构造 schema v3，并执行 `projectionGuidance.taskSplitIntegrityPreflight`。普通文件名、实现类、内部方法和测试组织仍由 Loop 决定；仅把用户明确要求或确认的外部契约写成冻结事实。

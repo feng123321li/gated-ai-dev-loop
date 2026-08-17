@@ -78,6 +78,99 @@ _LOOP_EXECUTION_POLICY = {
         "beforeStart": "REPORT_PROGRESS_AND_HEARTBEAT",
         "afterFinish": "HEARTBEAT_AND_REPORT_PROGRESS",
         "hostCompletionNotificationIsNotHeartbeat": True,
+        "leaseRequestArgument": "expected_command_seconds",
+        "maxExpectedCommandSeconds": 1800,
+        "leaseBufferSeconds": 120,
+    },
+    "specializedCommandWorkers": {
+        "selection": "RUNTIME_PROJECT_SIGNALS_AND_SELECTED_COMMAND",
+        "parentRetainsControlPlaneCredentials": True,
+        "workerReceivesControlPlaneCredentials": False,
+        "eventLifecycle": [
+            "QUEUED",
+            "STARTED",
+            "HEARTBEAT",
+            "FINISHED_OR_FAILED",
+        ],
+        "fallback": "NON_BLOCKING_PROCESS_OR_SEPARATE_MONITOR",
+        "profiles": [
+            {
+                "id": "JAVA_MAVEN",
+                "projectSignals": ["pom.xml", ".mvn/", "mvnw", "mvnw.cmd"],
+                "triggers": [
+                    "DEPENDENCY_WARMUP",
+                    "INSTALL",
+                    "LONG_BUILD",
+                    "LONG_TEST",
+                ],
+            },
+            {
+                "id": "JAVA_GRADLE",
+                "projectSignals": [
+                    "build.gradle",
+                    "build.gradle.kts",
+                    "gradlew",
+                    "gradlew.bat",
+                ],
+                "triggers": [
+                    "DEPENDENCY_WARMUP",
+                    "LONG_BUILD",
+                    "LONG_TEST",
+                ],
+            },
+            {
+                "id": "NODE_PACKAGE_MANAGER",
+                "projectSignals": [
+                    "package.json",
+                    "package-lock.json",
+                    "pnpm-lock.yaml",
+                    "yarn.lock",
+                ],
+                "triggers": [
+                    "DEPENDENCY_INSTALL",
+                    "LONG_BUILD",
+                    "LONG_TEST",
+                ],
+            },
+            {
+                "id": "PYTHON_ENVIRONMENT",
+                "projectSignals": [
+                    "pyproject.toml",
+                    "requirements.txt",
+                    "uv.lock",
+                ],
+                "triggers": ["DEPENDENCY_INSTALL", "LONG_TEST"],
+            },
+            {
+                "id": "GO_MODULE",
+                "projectSignals": ["go.mod", "go.sum"],
+                "triggers": ["DEPENDENCY_WARMUP", "LONG_TEST"],
+            },
+            {
+                "id": "RUST_CARGO",
+                "projectSignals": ["Cargo.toml", "Cargo.lock"],
+                "triggers": ["DEPENDENCY_WARMUP", "LONG_BUILD", "LONG_TEST"],
+            },
+        ],
+        "reviewPolicy": {
+            "TASK_REVIEW_LOOP": "ONLY_WHEN_TARGETED_RERUN_IS_NEEDED",
+            "GROUP_REVIEW_LOOP": "SEAM_GAP_ONLY_NEVER_DEFAULT_FULL_BUILD",
+            "DELIVERY_REVIEW_LOOP": "GLOBAL_GAP_ONLY",
+        },
+    },
+    "schedulerTransparency": {
+        "stateSource": "APPEND_ONLY_GRAPH_EVENTS",
+        "nodeResultSourceField": "resultProvenance",
+        "dispatchDecisionFields": [
+            "nodeId",
+            "attempt",
+            "agentId",
+            "dispatchTransport",
+            "decisionFingerprint",
+            "reservationExpiresAt",
+        ],
+        "commandWorkerLifecycleIsUserVisible": True,
+        "reviewMustDeclareReusedEvidenceAndTargetedGaps": True,
     },
     "expiredLeaseRecovery": {
         "action": "ADVANCE_GRAPH",
@@ -144,6 +237,8 @@ _LOOP_COMPLETION_POLICY = {
         "source": "CONTROLLER_CAPTURED_AT_RESULT",
         "comparison": "FROZEN_BASE_COMMIT_TO_CURRENT_WORKSPACE",
         "semantics": "WORKSPACE_SNAPSHOT_NOT_EXCLUSIVE_OWNERSHIP",
+        "contentStorage": "METADATA_ONLY_NO_SOURCE_DIFF",
+        "contentRead": "AUTHORIZED_WORKSPACE_OR_COMMIT_ON_DEMAND",
     },
     "blockedOutcome": (
         "ONLY_IF_NO_IN_SCOPE_PATH_CAN_PROGRESS_WITH_CURRENT_AUTHORITY"
@@ -426,6 +521,27 @@ def loop_completion_policy(
                 "OPERATIONAL_READINESS_AND_GLOBAL_RISK"
             ),
         }[loop_kind]
+        policy["verificationStrategy"]["layerCommandPolicy"] = {
+            "defaultDecision": "REUSE_EXACT_MATCH_UPSTREAM_EVIDENCE",
+            "newCommandScope": (
+                "DIRECT_CHILD_SEAMS_ONLY"
+                if loop_kind == "GROUP_REVIEW_LOOP"
+                else "CURRENT_LAYER_GAPS_ONLY"
+            ),
+            "taskLocalSuites": "DO_NOT_RERUN_BY_DEFAULT",
+            "fullBuild": "REQUIRE_EXPLICIT_FULL_RERUN_TRIGGER",
+            "specializedCommandWorker": (
+                "SEAM_GAP_ONLY"
+                if loop_kind == "GROUP_REVIEW_LOOP"
+                else "TARGETED_GAP_ONLY"
+            ),
+        }
+        if loop_kind in {"GROUP_REVIEW_LOOP", "DELIVERY_REVIEW_LOOP"}:
+            policy["verificationStrategy"]["reuseSources"] = [
+                "validationEvidenceIndex",
+                "upstreamLoopResults.outcome.result.verificationEvidence",
+                "upstreamLoopResults.outcome.result.validationDecision",
+            ]
         policy["reviewResultPersistence"] = {
             "scope": "CURRENT_LAYER_ONLY",
             "contractValidator": "CONTROLLER",

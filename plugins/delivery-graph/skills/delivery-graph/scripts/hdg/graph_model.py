@@ -53,6 +53,8 @@ DEFAULT_CLAIM_LEASE_SECONDS = 5 * 60
 DEFAULT_HEARTBEAT_SECONDS = 60
 DEFAULT_CLAIM_RENEW_BEFORE_SECONDS = 2 * 60
 DEFAULT_CLAIM_GRACE_SECONDS = 2 * 60
+DEFAULT_MAX_EXPECTED_COMMAND_SECONDS = 30 * 60
+DEFAULT_LONG_COMMAND_LEASE_BUFFER_SECONDS = 2 * 60
 GRAPH_FIELDS = {
     "schemaVersion",
     "rootId",
@@ -323,6 +325,12 @@ def compile_runtime_policy() -> dict[str, Any]:
             "heartbeatSeconds": DEFAULT_HEARTBEAT_SECONDS,
             "renewBeforeSeconds": DEFAULT_CLAIM_RENEW_BEFORE_SECONDS,
             "graceSeconds": DEFAULT_CLAIM_GRACE_SECONDS,
+            "maxExpectedCommandSeconds": (
+                DEFAULT_MAX_EXPECTED_COMMAND_SECONDS
+            ),
+            "longCommandLeaseBufferSeconds": (
+                DEFAULT_LONG_COMMAND_LEASE_BUFFER_SECONDS
+            ),
             "claimMode": "JUST_IN_TIME_ON_LOOP_START",
             "onExpired": "RETRY_LOOP",
         },

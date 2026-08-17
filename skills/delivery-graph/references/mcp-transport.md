@@ -80,13 +80,12 @@ TASK 显式声明 `databaseChanges` 时，同目录生成 `database-changes.md` 
 `preview_hierarchy` 的 `CHOICE_READY` 阶段就在展示 Controller 选项前生成四份 Delivery 人类主投影、revisions 和全部 GROUP/TASK 节点投影，有接口或数据库声明的 TASK 再生成自己的契约投影。`workspace_status` 会在待选择状态恢复同一 `pendingInteraction`，并在返回它之前避免把尚未确认的 binding 当成运行时漂移。自动 Graph 冻结后继续从 SQLite 刷新进度与验收 Markdown；手动接收宿主在任何代码工作前调用 `start_manual_handoff`，再由独立 child 以显式 context/operation 领取 TASK，也由 SQLite 事件链刷新同一套 progress/acceptance，不能人工维护或用 Markdown 替代 Review。若实际 Git 已偏离 handoff binding，启动操作只返回 `BLOCKED_DEVELOPMENT_BASELINE_CONFIRMATION` 与精确上下文，不创建 Run；binding 改变时 `confirm_development_baseline` 生成同一 Delivery 的下一不可变手动 Revision，未改变时恢复原 Revision，接收方按响应双指纹重试。已有 `HANDOFF_READY` 内容变化时，`create_manual_handoff` 必须携带当前 Revision、`USER_EXPLICIT_SAME_DELIVERY` 和修订原因，在原目录追加新 handoff 并把旧 Revision 标为 `SUPERSEDED`，不得换 ID 新建目录。`workspace_status` 会为当前 schema v3 Delivery 幂等补建适用的投影树，并清理旧机器 JSON，不从 Markdown 迁移 hierarchy、Graph、事件链或运行状态。
 
 `record_loop_result` 的受保护 MCP 路径会从 Adapter 提供并由 Controller 验证的
-`READ_WRITE` Git project scopes 自动采集工作区变更快照，将其作为
+`READ_WRITE` Git project scopes 自动采集轻量工作区变更索引，将其作为
 `outcome.result.workspaceChanges` 与事件一同持久化，再生成当前层 acceptance
 投影。后续投影刷新只读取 SQLite outcome，不动态扫描已移动或已删除的执行目录。
-该证据是相对冻结 `baseCommit` 的提交时 workspace snapshot，不替代默认串行策略的
-干净切换边界或代码归属判断。TASK 投影还会从同一持久化快照生成
-`work-items/<taskId>/workspace-changes.patch`，让只打开主控制根的用户通过
-`acceptance.md` 相对链接直接审核内容。
+该索引只含变更文件清单、base/HEAD 和状态指纹，不含源码 diff；它不替代默认串行
+策略的干净切换边界或代码归属判断。TASK 投影只在 `acceptance.md` 展示索引，
+需要代码内容时从已授权 workspace 或对应提交读取。
 
 已激活 AUTOMATIC Graph 的 TASK 与 Review 都只走 `plan_dispatch_batch → 独立 child → dispatch_loop(AUTO)`。每个 assignment 必须带 live reservation 和匹配的 decision fingerprint，child 使用新的显式 `operation_id`；不得由当前协调会话直领。`handoff_ready_automatic_task` 只用于满足其显式安全条件后的 MANUAL 接管，Review 继续自动独立派遣。
 

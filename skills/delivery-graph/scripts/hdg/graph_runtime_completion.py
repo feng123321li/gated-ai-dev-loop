@@ -6,10 +6,13 @@ from .graph_runtime_common import (
     LOOP_NODE_KINDS,
     SchedulerRepository,
     _active_claim,
+    _compact_loop_outcome_for_transport,
+    _compact_run_for_transport,
     _identity,
     _loaded,
     _locked_timestamp,
     _node,
+    _minimize_loop_outcome_for_graph,
     _retry_if_allowed,
     _validate_reused_evidence_refs,
     capture_verified_evidence_scope_state,
@@ -35,6 +38,7 @@ def record_loop_result(
     now: object = None,
 ) -> dict[str, Any]:
     normalized = validate_loop_outcome(outcome)
+    normalized = _minimize_loop_outcome_for_graph(normalized)
     if normalized["status"] == "BLOCKED":
         if failure_class is None:
             fail(
@@ -244,7 +248,7 @@ def record_loop_result(
     return {
         "rootId": root_id,
         "nodeId": node_id,
-        "outcome": normalized,
+        "outcome": _compact_loop_outcome_for_transport(normalized),
         "schedulerStatus": latest["status"],
         "retried": retried,
         "nextAttempt": latest["attempt"] if retried else None,
@@ -325,7 +329,7 @@ def record_user_confirmation(
             at=at,
         )
     repository.write_projections(root_id)
-    return repository.run(root_id)
+    return _compact_run_for_transport(repository.run(root_id))
 
 def cancel_graph_run(
     *,
@@ -426,4 +430,4 @@ def cancel_graph_run(
             "cancelledBy": cancelled_by,
             "reason": reason.strip(),
         }
-    return repository.run(root_id)
+    return _compact_run_for_transport(repository.run(root_id))

@@ -125,11 +125,11 @@ Review 成功时必须提交共同字段和且仅一个本层结论字段；没�
 
 通过 MCP 提交 `record_loop_result` 时，Controller 对每个已验证的
 `READ_WRITE` Git project scope 自动采集相对冻结 `baseCommit` 的当前工作区
-快照，覆盖调用方自报的同名字段，并把结构化 `result.workspaceChanges` 写入
-Loop outcome 与事件链。快照包含 committed、staged、unstaged 和 untracked 的
-变更文件清单与可展示 diff；`.layered-delivery/**` 不计入业务变更。Controller
-只读 Git，不执行 stage、commit 或其他 Git 写操作。过大的 diff 会按 Controller
-上限截断并在验收投影中明确标记，完整文件清单仍保留。
+证据索引，覆盖调用方自报的同名字段，并把结构化 `result.workspaceChanges` 写入
+Loop outcome 与事件链。索引只包含 committed、staged、unstaged 和 untracked 的
+变更文件清单、base/HEAD、工作区与快照指纹；不包含源码 diff，
+`.layered-delivery/**` 不计入业务变更。Controller 只读 Git，不执行 stage、commit
+或其他 Git 写操作。Review 需要代码内容时直接从已授权 workspace 按需读取。
 
 当前层 `acceptance.md` 在对应 Loop 结果下显示“工作区变更证据”。这是结果提交
 时的物理 workspace 快照，不是 TASK、Loop 或 Delivery 的独占归属证明。默认
@@ -144,12 +144,9 @@ index clean、已有可验证业务 commit、HEAD 与冻结 binding 一致且在
 checkout 也只按普通 current workspace 处理，不自动创建新 worktree。验收仍需结合需求、
 Review、提交边界和结果摘要判断。
 
-只要 TASK 或其 TASK Review 已保存该快照，Controller 还会在主控制根的
-`.layered-delivery/<rootId>/work-items/<taskId>/workspace-changes.patch` 生成稳定附件，
-并从同目录 `acceptance.md` 提供相对链接。附件按 Loop 阶段与 project scope 合并，
-保留实际执行 workspace 路径、冻结 base、HEAD、快照指纹和非独占归属声明；正文
-仍保留 inline diff。附件与验收 Markdown 都只由 SQLite outcome 重建，因此用户
-能在主控制根通过 `acceptance.md` 与 `workspace-changes.patch` 直接审核提交时内容。
+TASK 与 TASK Review 的 `acceptance.md` 只展示上述变更索引，不生成补丁附件，
+也不内联源码 diff。Graph 用状态和范围指纹证明证据绑定；用户或 Review receiver
+需要具体内容时从已授权 workspace 或对应提交读取。
 
 ## 用户最终确认
 

@@ -96,8 +96,6 @@ from .model_rendering_progress import (
 from .model_rendering_acceptance import (
     _acceptance_payload,
     _acceptance_result_lines,
-    _patch_header_value,
-    _render_task_workspace_changes_patch,
     _review_boundary_result_lines,
     _review_finding_lines,
     _task_workspace_change_sections,

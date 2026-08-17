@@ -1,6 +1,6 @@
 # 5 分钟 LIGHT Quickstart
 
-这条路径面向一个项目、一个根 TASK、局部低风险且有明确定向验证的短任务。目标是只保留基线冻结、真实终态验收和 `workspace-changes.patch` 快照，不创建 GROUP、独立 Review receiver 或短任务心跳仪式。
+这条路径面向一个项目、一个根 TASK、局部低风险且有明确定向验证的短任务。目标是只保留基线冻结、真实终态验收和轻量工作区变更索引，不创建 GROUP、独立 Review receiver 或短任务心跳仪式。
 
 ## 0:00—1:00 检查注册
 
@@ -41,7 +41,7 @@ TASK 成功后直接进入 `RECORD_USER_CONFIRMATION`，没有独立 Review rece
 
 - 定向验证证据和真实结果；
 - `acceptance.md`；
-- 由 Controller 从受验证 Git scope 采集并持久化的 `workspace-changes.patch`。
+- 由 Controller 从受验证 Git scope 采集并持久化的变更文件清单、base/HEAD 和状态指纹；源码 diff 不进入 Graph。
 
 只有真实用户接受后才记录最终确认。提交、推送、合并、发布与迁移仍分别需要自己的授权。
 

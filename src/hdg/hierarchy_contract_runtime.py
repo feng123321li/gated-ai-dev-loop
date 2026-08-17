@@ -404,6 +404,10 @@ def hierarchy_contract(
                     "semantics": (
                         "WORKSPACE_SNAPSHOT_NOT_EXCLUSIVE_OWNERSHIP"
                     ),
+                    "contentStorage": "METADATA_ONLY_NO_SOURCE_DIFF",
+                    "contentRead": (
+                        "AUTHORIZED_WORKSPACE_OR_COMMIT_ON_DEMAND"
+                    ),
                 },
                 "description": (
                     "Each acceptance report fully renders only its current "

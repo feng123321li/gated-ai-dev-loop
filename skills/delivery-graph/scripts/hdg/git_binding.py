@@ -47,9 +47,7 @@ from .git_binding_inspection import (
     verify_delivery_git_binding,
 )
 from .git_binding_changes import (
-    _bounded_workspace_diff,
     _git_change_entries,
-    _untracked_file_patch,
     capture_verified_evidence_scope_state,
     capture_verified_workspace_changes,
     capture_verified_workspace_state,

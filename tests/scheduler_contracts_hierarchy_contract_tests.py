@@ -491,6 +491,10 @@ class HierarchyContractTests(unittest.TestCase):
                 "semantics": (
                     "WORKSPACE_SNAPSHOT_NOT_EXCLUSIVE_OWNERSHIP"
                 ),
+                "contentStorage": "METADATA_ONLY_NO_SOURCE_DIFF",
+                "contentRead": (
+                    "AUTHORIZED_WORKSPACE_OR_COMMIT_ON_DEMAND"
+                ),
             },
         )
         interface_guidance = contract["projectionGuidance"]["interfaces"]

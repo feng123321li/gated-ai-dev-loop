@@ -52,6 +52,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
         adapter_id: str = "codex",
         receiver_agent_id: str = "codex",
         max_concurrent_executors: int = 4,
+        now: object = None,
     ) -> dict:
         return plan_dispatch_batch(
             root=root,
@@ -60,6 +61,7 @@ class HostDispatchPlanningTests(unittest.TestCase):
             host_adapter_id=adapter_id,
             host_native_agent_ids=(receiver_agent_id,),
             max_concurrent_executors=max_concurrent_executors,
+            now=now,
         )
 
     def test_trusted_host_reserves_without_model_recommendation_inputs(
@@ -544,6 +546,75 @@ class HostDispatchPlanningTests(unittest.TestCase):
             details["expectedGraphFingerprint"],
             details["submittedDecisionFingerprint"],
         )
+
+    def test_current_reservation_mismatch_returns_retryable_credential(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            first = self.plan(root, prepared)["assignments"][0]
+            retry_at = datetime.fromisoformat(
+                first["reservationExpiresAt"].replace("Z", "+00:00")
+            ) + timedelta(seconds=1)
+            second = self.plan(root, prepared, now=retry_at)["assignments"][0]
+            self.assertNotEqual(
+                first["dispatchReservationId"],
+                second["dispatchReservationId"],
+            )
+            with self.assertRaises(GatedLoopError) as caught:
+                dispatch_loop(
+                    root=root,
+                    root_id=prepared["rootId"],
+                    node_id=second["nodeId"],
+                    owner="receiver-context",
+                    receiver_context_id="receiver-context",
+                    operation_id="operation-recover-current-reservation",
+                    agent_id="codex",
+                    dispatch_mode="AUTO",
+                    dispatch_transport=second["dispatchTransport"],
+                    dispatch_reservation_id=second[
+                        "dispatchReservationId"
+                    ],
+                    dispatch_decision_fingerprint="0" * 64,
+                    host_adapter_id="codex",
+                    host_native_agent_ids=("codex",),
+                    now=retry_at,
+                )
+
+            self.assertEqual(
+                caught.exception.code,
+                "SCHEDULER_DISPATCH_DECISION_MISMATCH",
+            )
+            details = caught.exception.details
+            self.assertTrue(details["retryWithSameReservation"])
+            self.assertEqual(
+                details["expectedDecisionFingerprint"],
+                second["decisionFingerprint"],
+            )
+            self.assertEqual(
+                details["reservationExpiresAt"],
+                second["reservationExpiresAt"],
+            )
+
+            claimed = dispatch_loop(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=second["nodeId"],
+                owner="receiver-context",
+                receiver_context_id="receiver-context",
+                operation_id="operation-recover-current-reservation",
+                agent_id="codex",
+                dispatch_mode="AUTO",
+                dispatch_transport=second["dispatchTransport"],
+                dispatch_reservation_id=second["dispatchReservationId"],
+                dispatch_decision_fingerprint=details[
+                    "expectedDecisionFingerprint"
+                ],
+                host_adapter_id="codex",
+                host_native_agent_ids=("codex",),
+                now=retry_at,
+            )
+        self.assertEqual(claimed["status"], "CLAIMED")
 
     def test_stale_graph_fingerprint_is_rejected(self) -> None:
         with TemporaryDirectory() as root:

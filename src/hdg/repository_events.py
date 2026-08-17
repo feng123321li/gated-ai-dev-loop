@@ -40,6 +40,7 @@ class DeliveryEventStore:
         run_id: str,
     ) -> list[dict[str, Any]]:
         executor_metadata: dict[tuple[str, int], dict[str, Any]] = {}
+        carried_metadata: dict[tuple[str, int], dict[str, Any]] = {}
         first_heartbeats: dict[tuple[str, int], str] = {}
         latest_heartbeats: dict[tuple[str, int], dict[str, Any]] = {}
         latest_progress: dict[tuple[str, int], dict[str, Any]] = {}
@@ -73,6 +74,77 @@ class DeliveryEventStore:
             executor_metadata[
                 (claim_row["node_id"], claim_row["attempt"])
             ] = payload if isinstance(payload, dict) else {}
+        carried_rows = connection.execute(
+            """
+            SELECT node_id, attempt, payload_json
+            FROM graph_events
+            WHERE run_id = ?
+              AND event_type = 'NODE_RESULT_CARRIED_FORWARD'
+            ORDER BY event_id
+            """,
+            (run_id,),
+        ).fetchall()
+        current_run = connection.execute(
+            "SELECT root_id, revision FROM runs WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        source_nodes_by_revision: dict[
+            int, dict[str, dict[str, Any]]
+        ] = {}
+        for carried_row in carried_rows:
+            payload = json.loads(carried_row["payload_json"])
+            if not isinstance(payload, dict):
+                continue
+            from_revision = payload.get("fromRevision")
+            source_executor = payload.get("sourceExecutor")
+            if not isinstance(source_executor, dict):
+                source_executor = None
+            if (
+                source_executor is None
+                and current_run is not None
+                and isinstance(from_revision, int)
+                and not isinstance(from_revision, bool)
+                and from_revision < current_run["revision"]
+            ):
+                source_nodes = source_nodes_by_revision.get(from_revision)
+                if source_nodes is None:
+                    source_run = connection.execute(
+                        "SELECT run_id FROM runs "
+                        "WHERE root_id = ? AND revision = ?",
+                        (current_run["root_id"], from_revision),
+                    ).fetchone()
+                    source_nodes = (
+                        {
+                            item["nodeId"]: item
+                            for item in DeliveryEventStore.latest_nodes(
+                                connection,
+                                source_run["run_id"],
+                            )
+                        }
+                        if source_run is not None
+                        else {}
+                    )
+                    source_nodes_by_revision[from_revision] = source_nodes
+                source_state = source_nodes.get(carried_row["node_id"])
+                if source_state is not None:
+                    source_executor = {
+                        "owner": source_state.get("owner"),
+                        "agentId": source_state.get("agentId"),
+                        "receiverContextId": source_state.get(
+                            "receiverContextId"
+                        ),
+                        "dispatchMode": source_state.get("dispatchMode"),
+                        "dispatchTransport": source_state.get(
+                            "dispatchTransport"
+                        ),
+                        "operationId": source_state.get("operationId"),
+                    }
+            carried_metadata[
+                (carried_row["node_id"], carried_row["attempt"])
+            ] = {
+                "fromRevision": from_revision,
+                "sourceExecutor": source_executor or {},
+            }
         heartbeat_rows = connection.execute(
             """
             SELECT node_id, attempt, MIN(recorded_at) AS first_heartbeat_at
@@ -107,6 +179,16 @@ class DeliveryEventStore:
             latest_heartbeats[key] = {
                 "leaseRenewed": (
                     heartbeat_payload.get("leaseRenewed")
+                    if isinstance(heartbeat_payload, dict)
+                    else None
+                ),
+                "leaseRenewalReason": (
+                    heartbeat_payload.get("leaseRenewalReason")
+                    if isinstance(heartbeat_payload, dict)
+                    else None
+                ),
+                "expectedCommandSeconds": (
+                    heartbeat_payload.get("expectedCommandSeconds")
                     if isinstance(heartbeat_payload, dict)
                     else None
                 ),
@@ -146,14 +228,11 @@ class DeliveryEventStore:
         ).fetchall()
         nodes: list[dict[str, Any]] = []
         for row in rows:
-            executor = (
-                executor_metadata.get(
-                    (row["node_id"], row["attempt"]),
-                    {},
-                )
-                if row["operation_id"] is not None
-                else {}
-            )
+            key = (row["node_id"], row["attempt"])
+            carried = carried_metadata.get(key)
+            executor = executor_metadata.get(key, {})
+            if row["operation_id"] is None and carried is not None:
+                executor = carried["sourceExecutor"]
             stored_outcome = (
                 json.loads(row["outcome_json"])
                 if row["outcome_json"] is not None
@@ -190,6 +269,18 @@ class DeliveryEventStore:
                         {},
                     ).get("leaseRenewed")
                 ),
+                "lastHeartbeatLeaseRenewalReason": (
+                    latest_heartbeats.get(
+                        (row["node_id"], row["attempt"]),
+                        {},
+                    ).get("leaseRenewalReason")
+                ),
+                "expectedCommandSeconds": (
+                    latest_heartbeats.get(
+                        (row["node_id"], row["attempt"]),
+                        {},
+                    ).get("expectedCommandSeconds")
+                ),
                 "leaseExpiresAt": (
                     row["lease_expires_at"]
                     if row["status"] == "CLAIMED"
@@ -214,6 +305,24 @@ class DeliveryEventStore:
                 ),
                 "manualTaskHandoff": manual_handoffs.get(
                     row["node_id"]
+                ),
+                "resultProvenance": (
+                    {
+                        "mode": "CARRIED_FORWARD",
+                        "fromRevision": carried["fromRevision"],
+                        "sourceReceiverContextId": executor.get(
+                            "receiverContextId"
+                        ),
+                        "sourceOperationId": executor.get("operationId"),
+                    }
+                    if carried is not None
+                    else {
+                        "mode": "CURRENT_RUN",
+                        "sourceReceiverContextId": executor.get(
+                            "receiverContextId"
+                        ),
+                        "sourceOperationId": row["operation_id"],
+                    }
                 ),
             }
             nodes.append(node)

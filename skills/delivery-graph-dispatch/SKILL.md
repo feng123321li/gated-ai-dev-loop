@@ -25,6 +25,7 @@ allowed-tools:
 - AUTOMATIC 的每个 READY TASK/Review 先由 `plan_dispatch_batch` 原子 reservation，再创建不同的宿主原生 receiver。primary 不得 claim 或把 assignment 交给普通 helper。
 - assignment 的 `receiverPrompt` 必须原样传递：TASK 会路由到 `$delivery-graph-task`，所有 Review 会路由到 `$delivery-graph-review`。
 - 只有外层 receiver 持有 reservation、decision fingerprint、receiver context 和 `operation_id`。内部 Worker 不接触控制面凭据。
+- 派遣和等待只依据 assignment `reasons`、reservation/lease、节点 `resultProvenance`、progress/heartbeat 与事件链；把这些结构化原因展示给用户，不用隐藏推断解释“为什么在等”。
 - Graph 不授权 commit、merge、push、发布、迁移或新增权限；这些动作仍分别取得授权。
 
 ## 启动与 frontier
@@ -53,6 +54,7 @@ allowed-tools:
 - AUTO receiver 启动或 claim 失败时不得由 primary 直接领取。reservation 有效时仅按原参数重试；过期后重新规划批次。
 - 人工接管自动 TASK 需要确认从未 claim、无有效 reservation、workspace 干净且无代码改动，并再次取得用户明确授权；Review 不能降级为人工 claim。
 - `dispatch_loop` 响应未知时，只允许 receiver 用原 reservation、fingerprint、context 和 operation 幂等重试；primary 不伪造 operation。
+- `SCHEDULER_DISPATCH_DECISION_MISMATCH` 返回 `retryWithSameReservation=true` 时，receiver 用同一 reservation 与 `expectedDecisionFingerprint` 重试；否则丢弃整组旧凭据并重新规划，禁止跨轮混搭。
 - 租约过期、receiver 失联或基础设施失败时刷新 frontier，再按 action 调用 `advance_graph`；不得复用旧 operation。
 - 物化状态损坏时，受保护的 `rebuild_graph_run` 只能在明确恢复动作下从已校验事件链重建，不修改事件。
 - 需求方向、拓扑、依赖、资源、项目 scope、Review 契约或 databaseChanges 变化属于 `REPLAN_REQUIRED`，转回 `$delivery-graph` 创建同一 Delivery 的下一 Revision。

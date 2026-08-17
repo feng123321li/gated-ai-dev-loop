@@ -55,7 +55,7 @@ allowed-tools:
 4. 只为真实分层、依赖或汇合创建 GROUP。仅在直接子项存在需要独立验证的 seam 时配置 GROUP Review。
 5. 数据库变更在 preview 前读取当前结构，冻结字段级 before/after 和迁移策略；不得把设计留给 TASK。
 6. 调用 `hierarchy_contract`，构造 schema v3，并执行 `projectionGuidance.taskSplitIntegrityPreflight`。普通文件名、实现类、内部方法和测试组织仍由 Loop 决定；仅把用户明确要求或确认的外部契约写成冻结事实。
-7. 较大 hierarchy 先写 JSON 文件并校验，再通过 `hierarchy_file` 传入。
+7. hierarchy 默认直接以内联 JSON 传入，不创建 `.layered-delivery/staging` 或其他项目内中转目录。只有宿主明确触发参数大小限制且内联确实不可用时，才使用一次性 `hierarchy_file`，成功读取后立即清理该临时文件。
 8. `preview_hierarchy` 返回 `CHOICE_READY` 且 `artifactsReady=true` 后，才处理唯一规范入口 `pendingInteraction`。
 
 ## 待确认交互

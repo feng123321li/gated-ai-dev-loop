@@ -314,6 +314,39 @@ class SchedulerRuntimeTestsPart4:
         self.assertNotIn("GROUP seam Review 输入", acceptance)
         self.assertNotIn("GROUP seam Review 结果", acceptance)
 
+    def test_group_review_policy_reuses_task_evidence_and_limits_commands(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(group_hierarchy())
+        context = loop_context(
+            root=self.root,
+            root_id=prepared["rootId"],
+            node_id=group_review_node_id("g-service"),
+        )
+
+        strategy = context["completionPolicy"]["verificationStrategy"]
+        command_policy = strategy["layerCommandPolicy"]
+        self.assertEqual(
+            command_policy["defaultDecision"],
+            "REUSE_EXACT_MATCH_UPSTREAM_EVIDENCE",
+        )
+        self.assertEqual(
+            command_policy["newCommandScope"],
+            "DIRECT_CHILD_SEAMS_ONLY",
+        )
+        self.assertEqual(
+            command_policy["taskLocalSuites"],
+            "DO_NOT_RERUN_BY_DEFAULT",
+        )
+        self.assertEqual(
+            command_policy["fullBuild"],
+            "REQUIRE_EXPLICIT_FULL_RERUN_TRIGGER",
+        )
+        self.assertEqual(
+            command_policy["specializedCommandWorker"],
+            "SEAM_GAP_ONLY",
+        )
+
     def test_task_and_review_select_shared_skill_hints_at_runtime(
         self,
     ) -> None:
@@ -416,12 +449,20 @@ class SchedulerRuntimeTestsPart4:
                 operation_id=operation_id,
                 now=at(minute),
             )
+            task_outcome = success(f"{item_id} completed.")
+            task_outcome["result"]["workspaceChanges"] = [
+                {
+                    "projectId": item_id,
+                    "changedFiles": [{"path": f"{item_id}.py"}],
+                    "diff": "task implementation diff",
+                }
+            ]
             record_loop_result(
                 root=self.root,
                 root_id=root_id,
                 node_id=node_id,
                 operation_id=operation_id,
-                outcome=success(f"{item_id} completed."),
+                outcome=task_outcome,
                 now=at(minute + 1),
             )
             review_id = f"review:task:{item_id}"
@@ -435,19 +476,44 @@ class SchedulerRuntimeTestsPart4:
                 operation_id=review_operation,
                 now=at(minute + 2),
             )
+            task_review_outcome = review_success(
+                "TASK_REVIEW_LOOP",
+                f"{item_id} review completed.",
+            )
+            task_review_outcome["result"]["workspaceChanges"] = [
+                {
+                    "projectId": item_id,
+                    "changedFiles": [{"path": f"{item_id}.py"}],
+                    "diff": "task review snapshot diff",
+                }
+            ]
             record_loop_result(
                 root=self.root,
                 root_id=root_id,
                 node_id=review_id,
                 operation_id=review_operation,
-                outcome=review_success(
-                    "TASK_REVIEW_LOOP",
-                    f"{item_id} review completed.",
-                ),
+                outcome=task_review_outcome,
                 now=at(minute + 3),
             )
 
         group_review_id = group_review_node_id("g-service")
+        group_context = loop_context(
+            root=self.root,
+            root_id=root_id,
+            node_id=group_review_id,
+        )
+        omitted_implementation_detail = False
+        for upstream in group_context["upstreamLoopResults"]:
+            result = upstream["outcome"]["result"]
+            self.assertNotIn("workspaceChanges", result)
+            self.assertTrue(result["workspaceChangesOmittedFromReviewContext"])
+            self.assertNotIn("evidence", result)
+            omitted_implementation_detail = (
+                omitted_implementation_detail
+                or "evidence"
+                in result["resultDetailsOmittedFromReviewContext"]
+            )
+        self.assertTrue(omitted_implementation_detail)
         dispatch_loop(
             root=self.root,
             root_id=root_id,

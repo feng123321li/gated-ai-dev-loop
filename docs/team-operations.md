@@ -75,7 +75,7 @@ Claude 命令从当前 0.42.0 源码发布包的 `--plugin-dir` 加载 Plugin；
 - 手动交接冻结同样持久化 Delivery、不可变 Revision、完整 hierarchy、双 fingerprint 和人类投影，但状态保持 `HANDOFF_READY`。它不产生 `QUEUED`、自动 continuation、Graph Run 或 workspace binding；只有接收方显式调用 `start_manual_handoff` 才尝试取得串行 turn，等待时仍返回手动 `WAITING_FOR_WORKSPACE_*` 状态。
 - 前序 Delivery 在 Run 终态，或已到 `RECORD_USER_CONFIRMATION` 时，只要被取消 receiver 的租约已结束、没有 reservation、存在相对 turn-start 的非空业务 commit、历史未改写且工作树/index 干净，即可释放物理 workspace turn。待用户确认只释放 checkout，不标记完成；错分支、dirty、HEAD 或 scope 漂移全部失败关闭。
 - 主会话当前 checkout 与所有 `READ_WRITE` project workspace 都参与事务内 owner gate；任一 physical workspace 冲突时只允许先到 Delivery 运行。
-- TASK/TASK Review 的 Controller 可信 Git 快照必须生成 `workspace-changes.patch`，覆盖 committed、staged、unstaged 与 untracked 内容，供未打开实际 checkout 的用户审核。
+- TASK/TASK Review 的 Controller 可信 Git 证据只保存 committed、staged、unstaged 与 untracked 变更文件清单、base/HEAD 和状态指纹；不得把源码 diff 或补丁附件写入 Graph。需要内容时从授权 checkout 或对应提交读取。
 - 同一冻结分支仍不能同时属于两个未终结 Delivery；每个 Delivery 使用自己的 feature branch。
 - 未显式声明 `projectScopes` 的单仓 Delivery 必须在 AUTO claim 与 `loop_context` 中得到一个经顶层 `gitBinding` 和实际 workspace 验证的 `primary` scope；无效 binding 必须在 child 读取或修改仓库前 fail closed。
 - 执行模式只允许 `AUTOMATIC` 和 `MANUAL`。所有 AUTO TASK/Review 必须由 `plan_dispatch_batch` 创建绑定 decision fingerprint 的非空短租约 reservation，再由宿主创建独立 child，以 `dispatch_transport=HOST_NATIVE` 和新的显式 `operation_id` 调用 `dispatch_loop(AUTO)`。MANUAL 只允许 TASK，以显式 receiving context/operation claim，不带 AUTO reservation/decision/transport。普通 coordinator、helper 和内部 Worker 都不能持有 operation/reservation bearer。

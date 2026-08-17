@@ -165,6 +165,18 @@ RUNTIME_TOOLS = (
                 "root_id": ROOT_ID,
                 "node_id": NODE_ID,
                 "operation_id": OPERATION_ID,
+                "expected_command_seconds": {
+                    "type": "integer",
+                    "minimum": 61,
+                    "maximum": 1800,
+                    "description": (
+                        "Optional bounded runtime estimate for a command "
+                        "that has already been selected, such as a first "
+                        "Maven dependency warmup. The Controller adds a "
+                        "short completion buffer; this is not an unlimited "
+                        "lease."
+                    ),
+                },
             },
             required=["root_id", "node_id", "operation_id"],
         ),

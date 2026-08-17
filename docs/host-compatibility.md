@@ -147,7 +147,7 @@
 - Dashboard Resource 使用 `ui://delivery-graph/dashboard-v2.html`，避免升级后命中旧缓存；无 UI 宿主仍返回相同的文字和 `structuredContent`。
 - Graph 宽屏按 rank 横向绘制依赖边；面板空间不足时纵向换行并在节点内显示前置项，不产生水平滚动或节点裁切。
 - 同一 checkout 的后续 Delivery 必须等待队首 Run 终态或最终用户确认边界、取消 receiver 租约失效且无 reservation、产生可验证业务 commit、工作树与 index 干净且历史未改写；待用户确认仅释放物理 turn，任何分支、HEAD、scope 或 dirty 漂移都失败关闭。
-- TASK/TASK Review 的 Controller 可信 Git 快照会投影为主控制目录下的 `workspace-changes.patch`，供编辑器未打开实际 checkout 时审核 committed、staged、unstaged 与 untracked 变化。
+- TASK/TASK Review 的 Controller 可信 Git 证据投影只包含变更文件清单、base/HEAD 和状态指纹，不生成源码补丁；宿主需要具体内容时从已授权 checkout 或对应提交按需读取。
 - 核心候选已通过 369 项 Python 测试（1 项按环境跳过）、编译、Skill/Plugin 镜像、发布与差异校验；真实 Edge 已覆盖 1280/900/600/360 四档宽度。实际 Codex/Claude 会话仍需按本页定义验证面板自动/手动刷新与文本降级。
 ## 0.39.7 发布候选矩阵
 

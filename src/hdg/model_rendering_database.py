@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from .model_rendering_acceptance import (
-    _render_task_workspace_changes_patch,
     _work_item_status_lines,
     render_delivery_acceptance,
     render_work_item_acceptance,
@@ -440,14 +439,6 @@ def render_work_item_projection_documents(
                 **dynamic_arguments,
             )
         )
-        workspace_changes_patch = _render_task_workspace_changes_patch(
-            node,
-            _projection_states(run),
-        )
-        if workspace_changes_patch is not None:
-            documents[
-                f"{tree_directory}/workspace-changes.patch"
-            ] = workspace_changes_patch
         if _task_interface_declarations(definition):
             interface_documents = render_task_interface_documents(
                 definition,

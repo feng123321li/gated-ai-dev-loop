@@ -28,6 +28,8 @@
 4. TASK assignment 触发 `$delivery-graph-task`；Review assignment 触发 `$delivery-graph-review`。
 5. 全部 receiver 创建后执行 `postActionWait`。同一 reservation 的响应丢失重试必须返回原 assignment，不能重复领取。
 
+assignment 的 `reasons`、attempt、agent、transport、decision fingerprint 和 reservation 到期时间必须作为可解释派遣记录保留。receiver 领取后，节点状态通过 `resultProvenance`、progress 与 heartbeat 字段说明结果来源和当前长命令租约；协调器不得用隐藏推断替代这些结构化事实。
+
 第二个 dispatcher 只能看到 `WAIT_FOR_DISPATCH_RECEIVER`，不得抢占。receiver 创建失败时，reservation 未过期则用原 assignment 重试；过期后刷新 frontier 并重新规划。
 
 ## 手动派遣
@@ -50,6 +52,7 @@ MANUAL 只改变 TASK 的 claim 方式，不降低 Review 治理：
 - 只有 `progressMonitor.changeFingerprint` 改变或出现新告警时，才向用户更新表格。
 
 heartbeat 是 receiver 的 lease 操作，不是 primary 的轮询信号；宿主 completion notification 也不能代替 heartbeat。
+Maven/Gradle 首次依赖预热或其他预计超过 60 秒的命令，由 receiver 在 claim 后先用 `expected_command_seconds` 申请有上限的租约，再交给不持有控制面凭据的语言/构建工具 worker；primary 只观察事件和 deadline，不同步等待构建输出。
 
 ## 恢复决策
 
@@ -60,6 +63,7 @@ heartbeat 是 receiver 的 lease 操作，不是 primary 的轮询信号；宿�
 | `PAUSED` | 新建独立接收上下文，由 receiver 调用 `resume_loop` |
 | HOST/EXECUTOR 容量耗尽 | 仅按结构化 `resetAt` 等待并恢复，不猜文本、不换模型 |
 | workspace/fingerprint/operation 错误 | receiver 立即停止仓库操作，把稳定错误码交回 |
+| decision fingerprint 与当前有效 reservation 不匹配 | 若错误 details 返回 `retryWithSameReservation=true`，使用同一 reservation 和 `expectedDecisionFingerprint` 重试；否则重新规划，不混用多轮凭据 |
 | 物化 run 损坏 | 明确授权后用 `rebuild_graph_run` 从事件链重建 |
 | TASK requirement 可局部修订 | 转 planning，完成切分预检和用户授权后 unfreeze/refreeze |
 | 拓扑/依赖/资源/scope/Review/数据库契约变化 | 转 planning，创建同一 Delivery 下一 Revision |

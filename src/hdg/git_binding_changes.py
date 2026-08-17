@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from .git_binding_common import (
     Any,
-    MAX_WORKSPACE_DIFF_BYTES,
     Path,
     _DELIVERY_PATHSPEC,
     _GIT_CHANGE_STATUS,
@@ -10,13 +9,9 @@ from .git_binding_common import (
     _evidence_scope_paths,
     _evidence_scope_states,
     _git,
-    _safe_untracked_candidate,
     _working_tree_state,
-    difflib,
     fail,
     fingerprint,
-    os,
-    stat,
     validate_git_binding,
 )
 from .git_binding_inspection import verify_delivery_git_binding
@@ -153,101 +148,6 @@ def inspect_business_commit_range(
         ),
     }
 
-def _untracked_file_patch(workspace: Path, relative_path: str) -> str:
-    candidate = _safe_untracked_candidate(workspace, relative_path)
-    try:
-        metadata = os.lstat(candidate)
-    except OSError:
-        fail(
-            "SCHEDULER_GIT_DIFF_CHANGED",
-            "An untracked file changed while its snapshot was captured",
-            path=relative_path,
-        )
-    if stat.S_ISLNK(metadata.st_mode):
-        content = os.readlink(candidate).encode("utf-8")
-        mode = "120000"
-    elif stat.S_ISREG(metadata.st_mode):
-        mode = "100755" if metadata.st_mode & stat.S_IXUSR else "100644"
-        if metadata.st_size > MAX_WORKSPACE_DIFF_BYTES:
-            return "\n".join(
-                [
-                    f"diff --git a/{relative_path} b/{relative_path}",
-                    f"new file mode {mode}",
-                    (
-                        "Content omitted from this snapshot because the "
-                        f"untracked file exceeds {MAX_WORKSPACE_DIFF_BYTES} "
-                        "bytes."
-                    ),
-                ]
-            )
-        try:
-            content = candidate.read_bytes()
-        except OSError:
-            fail(
-                "SCHEDULER_GIT_DIFF_CHANGED",
-                "An untracked file changed while its snapshot was captured",
-                path=relative_path,
-            )
-    else:
-        return "\n".join(
-            [
-                f"diff --git a/{relative_path} b/{relative_path}",
-                "Content omitted because the untracked path is not a file.",
-            ]
-        )
-    header = [
-        f"diff --git a/{relative_path} b/{relative_path}",
-        f"new file mode {mode}",
-    ]
-    if b"\0" in content:
-        return "\n".join(
-            [
-                *header,
-                f"Binary files /dev/null and b/{relative_path} differ",
-            ]
-        )
-    try:
-        text = content.decode("utf-8")
-    except UnicodeDecodeError:
-        return "\n".join(
-            [
-                *header,
-                (
-                    "File content is not UTF-8 text; the binary snapshot "
-                    "is omitted."
-                ),
-            ]
-        )
-    unified = list(
-        difflib.unified_diff(
-            [],
-            text.splitlines(),
-            fromfile="/dev/null",
-            tofile=f"b/{relative_path}",
-            lineterm="",
-        )
-    )
-    if not unified:
-        unified = ["--- /dev/null", f"+++ b/{relative_path}"]
-    return "\n".join([*header, *unified])
-
-def _bounded_workspace_diff(value: str) -> tuple[str, bool, int]:
-    encoded = value.encode("utf-8")
-    byte_count = len(encoded)
-    if byte_count <= MAX_WORKSPACE_DIFF_BYTES:
-        return value, False, byte_count
-    truncated = encoded[:MAX_WORKSPACE_DIFF_BYTES].decode(
-        "utf-8",
-        errors="ignore",
-    )
-    return (
-        truncated.rstrip()
-        + "\n\n... Controller workspace snapshot truncated at "
-        + f"{MAX_WORKSPACE_DIFF_BYTES} UTF-8 bytes.\n",
-        True,
-        byte_count,
-    )
-
 def capture_verified_workspace_changes(
     verified_project_scopes: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -312,28 +212,6 @@ def capture_verified_workspace_changes(
                 item.get("previousPath", ""),
             )
         )
-        tracked_diff = _git(
-            workspace,
-            "diff",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--no-color",
-            "--no-renames",
-            "--unified=3",
-            base_commit,
-            "--",
-            *_DELIVERY_PATHSPEC,
-        ).stdout.rstrip()
-        patch_parts = [tracked_diff] if tracked_diff else []
-        patch_parts.extend(
-            _untracked_file_patch(workspace, path)
-            for path in untracked_paths
-        )
-        full_diff = "\n\n".join(
-            part.rstrip() for part in patch_parts if part
-        )
-        if full_diff:
-            full_diff += "\n"
         final_git_workspace = verify_delivery_git_binding(
             str(workspace),
             normalized_binding,
@@ -353,18 +231,19 @@ def capture_verified_workspace_changes(
                 "was captured",
                 projectId=scope["id"],
             )
-        rendered_diff, diff_truncated, diff_byte_count = (
-            _bounded_workspace_diff(full_diff)
-        )
+        snapshot_material = {
+            "projectId": scope["id"],
+            "workspaceRoot": str(workspace),
+            "baseCommit": base_commit,
+            "headCommit": git_workspace["headCommit"],
+            "workingTreeStateFingerprint": initial_working_tree[
+                "stateFingerprint"
+            ],
+            "changedFiles": changed_files,
+        }
         snapshots.append(
             {
-                "projectId": scope["id"],
-                "workspaceRoot": str(workspace),
-                "baseCommit": base_commit,
-                "headCommit": git_workspace["headCommit"],
-                "workingTreeStateFingerprint": initial_working_tree[
-                    "stateFingerprint"
-                ],
+                **snapshot_material,
                 "evidenceKind": "WORKSPACE_CHANGE_SNAPSHOT",
                 "comparison": (
                     "FROZEN_BASE_COMMIT_TO_CURRENT_WORKSPACE"
@@ -372,23 +251,8 @@ def capture_verified_workspace_changes(
                 "attribution": (
                     "NOT_EXCLUSIVE_TO_DELIVERY_TASK_OR_LOOP"
                 ),
-                "changedFiles": changed_files,
-                "diff": rendered_diff,
-                "diffTruncated": diff_truncated,
-                "diffByteCount": diff_byte_count,
-                "snapshotFingerprint": fingerprint(
-                    {
-                        "projectId": scope["id"],
-                        "workspaceRoot": str(workspace),
-                        "baseCommit": base_commit,
-                        "headCommit": git_workspace["headCommit"],
-                        "workingTreeStateFingerprint": (
-                            initial_working_tree["stateFingerprint"]
-                        ),
-                        "changedFiles": changed_files,
-                        "diff": full_diff,
-                    }
-                ),
+                "contentStorage": "OMITTED_READ_FROM_VERIFIED_WORKSPACE",
+                "snapshotFingerprint": fingerprint(snapshot_material),
             }
         )
     return snapshots

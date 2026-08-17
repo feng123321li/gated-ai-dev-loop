@@ -18,6 +18,7 @@ from .scheduler_runtime_projection_baseline import SchedulerRuntimeTestsPart8
 from .scheduler_runtime_projection_contracts import SchedulerRuntimeTestsPart9
 from .scheduler_runtime_progress_recovery import SchedulerRuntimeTestsPart10
 from .scheduler_runtime_rebuild_cancellation import SchedulerRuntimeTestsPart11
+from .scheduler_runtime_command_workers import SchedulerRuntimeTestsPart12
 from .scheduler_runtime_removed_coupling_tests import RemovedCouplingTests
 
 
@@ -34,6 +35,7 @@ class SchedulerRuntimeTests(
     SchedulerRuntimeTestsPart9,
     SchedulerRuntimeTestsPart10,
     SchedulerRuntimeTestsPart11,
+    SchedulerRuntimeTestsPart12,
     unittest.TestCase,
 ):
     pass

@@ -4,6 +4,7 @@ from .graph_runtime_common import (
     Any,
     GRAPH_EXECUTION_MODES,
     SchedulerRepository,
+    _compact_run_for_transport,
     _dispatch_mode_allowed,
     _locked_timestamp,
     fail,
@@ -563,7 +564,7 @@ def _rebuild_graph_run_locked(
         )
     repository.write_projections(root_id)
     return {
-        **repository.run(root_id),
+        **_compact_run_for_transport(repository.run(root_id)),
         "rebuiltFromEvents": len(events),
     }
 

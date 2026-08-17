@@ -40,6 +40,7 @@ from .planning_gates import (
     _pending_interaction,
     _resolve_serial_workspace_gate,
 )
+from .outcome_compaction import compact_run_for_transport
 
 
 def preview_hierarchy(
@@ -850,7 +851,7 @@ def freeze_hierarchy(
                     "SCHEDULER_REVISION_CONFLICT",
                     "Hierarchy fingerprint is not current",
                 )
-            run = repository.run(root_id)
+            run = compact_run_for_transport(repository.run(root_id))
             return {
                 **run,
                 "confirmedBy": confirmed_by.strip(),
@@ -965,6 +966,7 @@ def freeze_hierarchy(
             root_id,
             **freeze_arguments,
         )
+    result = compact_run_for_transport(result)
     return {
         **result,
         "confirmedBy": confirmed_by.strip(),

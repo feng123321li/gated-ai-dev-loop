@@ -33,7 +33,7 @@ claim 成功后，所有 heartbeat、progress、pause、resume 和 result 都携
 5. 实施最小完整变更。实现、生成、测试或静态审查发现的 actionable 问题留在本 Loop 内修复和复验。
 6. 如果需要改变冻结的外部契约、拓扑、依赖、资源、项目 scope 或数据库 after 设计，停止扩展并提交 `REPLAN_REQUIRED`。
 
-`STANDARD` receiver 在代码工作前 heartbeat，并在检查、根因、编辑、测试、rework、最终验证等真实里程碑报告 progress。长命令先估算耗时并优先缩小命令范围（单模块、指定测试类、离线依赖解析）；预计超过 60 秒必须转后台进程或独立监控，并按 60 秒间隔 heartbeat 保证 lease 能更新。`LIGHT` 只能在短时、低风险且初始 lease 内完成时省略中间 heartbeat/progress。
+`STANDARD` receiver 在代码工作前 heartbeat，并在检查、根因、编辑、测试、rework、最终验证等真实里程碑报告 progress。长命令先估算耗时并优先缩小命令范围（单模块、指定测试类、离线依赖解析）；按 `pom.xml/.mvn/mvnw`、Gradle wrapper、package lockfile、`pyproject.toml`、`go.mod` 或 `Cargo.toml` 选择专用命令 worker。首次依赖预热、install 或预计超过 60 秒的命令，先用 `heartbeat_loop(expected_command_seconds=...)` 申请最多 1800 秒并带 120 秒收尾缓冲的有界租约，再交给不持有 reservation/operation/MCP 凭据的内部 worker 或独立监控；主 receiver 继续按 60 秒心跳并报告 `QUEUED/STARTED/FINISHED_OR_FAILED`。`LIGHT` 只能在短时、低风险且初始 lease 内完成时省略中间 heartbeat/progress。
 
 ## 验证证据
 
@@ -45,7 +45,7 @@ claim 成功后，所有 heartbeat、progress、pause、resume 和 result 都携
 - 测试通过但覆盖不到影响边界不算充分；补充契约检查、构建、静态分析或定向手工验证。
 - 数据库 TASK 只验证冻结 `databaseChanges[*].after` 与迁移政策，不重新设计字段、索引或约束。
 
-Controller 会在 `record_loop_result` 时捕获可信 workspace 与逐路径 snapshot，并生成 `workspace-changes.patch` 供后续 Review。它不替代 receiver 对证据充分性的判断。
+Controller 会在 `record_loop_result` 时捕获可信 workspace 的基线、HEAD、状态指纹和变更文件清单；不把源码 diff 写入 Graph，也不生成 `workspace-changes.patch`。后续 Review 通过授权 workspace 按需读取代码，并用状态/范围指纹判断证据新鲜度。它不替代 receiver 对证据充分性的判断。
 
 ## 终态选择
 

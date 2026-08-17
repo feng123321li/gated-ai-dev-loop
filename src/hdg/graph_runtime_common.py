@@ -60,6 +60,12 @@ from .model_core import (
     validate_hierarchy_definition,
 )
 
+from .outcome_compaction import (
+    compact_loop_outcome_for_transport as _compact_loop_outcome_for_transport,
+    compact_run_for_transport as _compact_run_for_transport,
+    minimize_loop_outcome_for_graph as _minimize_loop_outcome_for_graph,
+)
+
 from .repository import (
     SchedulerRepository,
     _validated_stored_definition,
@@ -152,6 +158,7 @@ def _locked_timestamp(now: object, current: str) -> str:
     if _parse_timestamp(candidate) < _parse_timestamp(current):
         return current
     return candidate
+
 
 def _loaded(
     connection: Any,
@@ -293,26 +300,45 @@ def _upstream_loop_results(
         if definition["kind"] not in LOOP_NODE_KINDS:
             continue
         state = states[predecessor]
-        outcome = deepcopy(state["outcome"])
+        outcome = _compact_loop_outcome_for_transport(state["outcome"])
         outcome_result = (
             outcome.get("result") if isinstance(outcome, dict) else None
         )
-        workspace_changes = (
-            outcome_result.get("workspaceChanges")
-            if isinstance(outcome_result, dict)
-            else None
-        )
-        if isinstance(workspace_changes, list):
-            compact_snapshots: list[dict[str, Any]] = []
-            for snapshot in workspace_changes:
-                if not isinstance(snapshot, dict):
-                    continue
-                compact = deepcopy(snapshot)
-                if "diff" in compact:
-                    compact.pop("diff")
-                    compact["diffOmittedFromLoopContext"] = True
-                compact_snapshots.append(compact)
-            outcome_result["workspaceChanges"] = compact_snapshots
+        target_kind = definitions[node_id]["kind"]
+        if (
+            target_kind in {"GROUP_REVIEW_LOOP", "DELIVERY_REVIEW_LOOP"}
+            and isinstance(outcome_result, dict)
+        ):
+            allowed_result_fields = {
+                "affectedScopes",
+                "deliveryReadiness",
+                "evidenceScopeSnapshots",
+                "evidenceWorkspaceSnapshots",
+                "groupIntegration",
+                "reviewFindings",
+                "taskAcceptance",
+                "validationDecision",
+                "verificationEvidence",
+            }
+            omitted_fields = sorted(
+                key
+                for key in outcome_result
+                if key not in allowed_result_fields
+            )
+            compact_result = {
+                key: deepcopy(value)
+                for key, value in outcome_result.items()
+                if key in allowed_result_fields
+            }
+            if "workspaceChanges" in omitted_fields:
+                compact_result[
+                    "workspaceChangesOmittedFromReviewContext"
+                ] = True
+            if omitted_fields:
+                compact_result["resultDetailsOmittedFromReviewContext"] = (
+                    omitted_fields
+                )
+            outcome["result"] = compact_result
         results.append(
             {
                 "nodeId": predecessor,

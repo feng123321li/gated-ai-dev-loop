@@ -32,6 +32,7 @@ TASK Review `SUCCEEDED` 后，该 TASK 才成为兄弟依赖、所属 GROUP 完�
 2. 调度器自动完成 GROUP 完成点，不派发 Agent，也不产生业务 result。
 3. 若该 GROUP 没有需要独立验证的直接子项 seam，`reviewLoop` 必须为 `null`，GROUP 完成点本身就是该 GROUP 的终态；不创建 Review Graph 节点、SQLite run/event/outcome 或投影段落。
 4. 只有存在接口兼容、数据/控制流、事务、错误传播或其他真实直接子项 seam 时才配置 `GROUP_REVIEW_LOOP`。完成点成功后该 Review 才 Ready。
+5. GROUP Review 的输入只包含子层终态摘要、验证证据引用、契约锚点与状态/范围指纹；不包含 `workspaceChanges` 或源码 diff。默认复用 `PASSED + EXACT_MATCH` 证据，只为尚未覆盖的直接子项 seam 运行新命令；不得默认重跑 TASK 局部套件或全量 Maven/Gradle build。只有明确的 seam 缺口需要命令时，才按项目语言选择不持有控制面凭据的专用命令 worker。
 5. Review 使用 `loop_context` 读取 ref、payload、直接 `predecessors` 和全部 `upstreamLoopResults`，只验证直接子项之间的组合关系，再通过 `dispatch_loop` claim。
 
 配置了 GROUP Review 时，只有它 `SUCCEEDED` 后该 GROUP 才向父 GROUP 传播；未配置时由 GROUP 完成点直接传播。父层 Review 只处理父层直接子项 seam，不能替代或重复下层验收。
@@ -126,11 +127,11 @@ Review 成功时必须提交共同字段和且仅一个本层结论字段；没�
 
 通过 MCP 提交 `record_loop_result` 时，Controller 对每个已验证的
 `READ_WRITE` Git project scope 自动采集相对冻结 `baseCommit` 的当前工作区
-快照，覆盖调用方自报的同名字段，并把结构化 `result.workspaceChanges` 写入
-Loop outcome 与事件链。快照包含 committed、staged、unstaged 和 untracked 的
-变更文件清单与可展示 diff；`.layered-delivery/**` 不计入业务变更。Controller
-只读 Git，不执行 stage、commit 或其他 Git 写操作。过大的 diff 会按 Controller
-上限截断并在验收投影中明确标记，完整文件清单仍保留。
+证据索引，覆盖调用方自报的同名字段，并把结构化 `result.workspaceChanges` 写入
+Loop outcome 与事件链。索引只包含 committed、staged、unstaged 和 untracked 的
+变更文件清单、base/HEAD、工作区与快照指纹；不包含源码 diff，
+`.layered-delivery/**` 不计入业务变更。Controller 只读 Git，不执行 stage、commit
+或其他 Git 写操作。Review 需要代码内容时直接从已授权 workspace 按需读取。
 
 当前层 `acceptance.md` 在对应 Loop 结果下显示“工作区变更证据”。这是结果提交
 时的物理 workspace 快照，不是 TASK、Loop 或 Delivery 的独占归属证明。默认
@@ -145,12 +146,9 @@ index clean、已有可验证业务 commit、HEAD 与冻结 binding 一致且在
 checkout 也只按普通 current workspace 处理，不自动创建新 worktree。验收仍需结合需求、
 Review、提交边界和结果摘要判断。
 
-只要 TASK 或其 TASK Review 已保存该快照，Controller 还会在主控制根的
-`.layered-delivery/<rootId>/work-items/<taskId>/workspace-changes.patch` 生成稳定附件，
-并从同目录 `acceptance.md` 提供相对链接。附件按 Loop 阶段与 project scope 合并，
-保留实际执行 workspace 路径、冻结 base、HEAD、快照指纹和非独占归属声明；正文
-仍保留 inline diff。附件与验收 Markdown 都只由 SQLite outcome 重建，因此用户
-能在主控制根通过 `acceptance.md` 与 `workspace-changes.patch` 直接审核提交时内容。
+TASK 与 TASK Review 的 `acceptance.md` 只展示上述变更索引，不生成
+`workspace-changes.patch`，也不内联源码 diff。Graph 用状态和范围指纹证明证据绑定，
+用户或 Review receiver 需要具体内容时从已授权 workspace 或对应提交读取。
 
 ## 用户最终确认
 

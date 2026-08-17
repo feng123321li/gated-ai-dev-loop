@@ -29,7 +29,7 @@ allowed-tools:
 
 - 先界定 `result.affectedScopes`。`paths` 使用字面量仓库相对路径，并覆盖相关依赖和契约锚点。
 - 运行覆盖该范围的测试、构建、静态检查或契约检查；在 `verificationEvidence` 记录命令摘要、scope、结果和必要说明。不要宣称未运行的验证。
-- 长测试/构建先估算耗时并优先缩小命令范围（单模块、指定测试类、离线依赖解析）；预计超过 60 秒的命令必须用非阻塞进程或独立监控运行，以便继续 heartbeat；测试前后都报告进度。
+- 长测试/构建先估算耗时并优先缩小命令范围（单模块、指定测试类、离线依赖解析）。按项目文件选择命令 worker：`pom.xml/.mvn/mvnw` 使用 Maven，Gradle wrapper 使用 Gradle，其他语言按 lockfile/module manifest 选择；首次依赖预热、install 或预计超过 60 秒的命令必须交给不持有控制面凭据的内部 worker/非阻塞监控，并先用 `expected_command_seconds` heartbeat 申请有上限的命令租约。测试前后都报告进度。
 - `report_loop_progress` 在代码检查、根因确认、编辑完成、测试开始/完成、rework 和最终验证等真实里程碑调用；progress 不续租。
 - 数据库 TASK 只应用和验证冻结的 `databaseChanges[*].after`，不得在 Loop 内改设计。
 - 成功后调用 `record_loop_result` 提交标准 outcome 和可审计证据。Controller 会绑定 workspace/evidence snapshots；不要直接写投影。

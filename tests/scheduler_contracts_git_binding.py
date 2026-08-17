@@ -419,10 +419,11 @@ class McpSurfaceTestsPart3:
                 ["project-empty", "project-uncommitted"],
             )
             self.assertEqual(snapshots[0]["changedFiles"], [])
-            self.assertEqual(snapshots[0]["diff"], "")
-            self.assertIn(
-                "+secondary uncommitted evidence",
-                snapshots[1]["diff"],
+            self.assertNotIn("diff", snapshots[0])
+            self.assertNotIn("diff", snapshots[1])
+            self.assertEqual(
+                snapshots[1]["contentStorage"],
+                "OMITTED_READ_FROM_VERIFIED_WORKSPACE",
             )
             self.assertEqual(
                 [item["bindingState"] for item in evidence_binding],
@@ -467,8 +468,9 @@ class McpSurfaceTestsPart3:
                 "outcome"
             ]["result"]["workspaceChanges"]
             self.assertNotIn("diff", compact_upstream[1])
-            self.assertTrue(
-                compact_upstream[1]["diffOmittedFromLoopContext"]
+            self.assertEqual(
+                compact_upstream[1]["contentStorage"],
+                "OMITTED_READ_FROM_VERIFIED_WORKSPACE",
             )
             Path(
                 secondary_worktree,
@@ -591,29 +593,11 @@ class McpSurfaceTestsPart3:
                 "acceptance.md",
             ).read_text(encoding="utf-8")
             self.assertIn(
-                "[打开工作区变更补丁](workspace-changes.patch)",
+                "Graph 仅持久化变更清单和状态指纹",
                 acceptance,
             )
-            workspace_patch = Path(
-                task_directory,
-                "workspace-changes.patch",
-            ).read_text(encoding="utf-8")
-            self.assertIn("# Project: project-empty", workspace_patch)
-            self.assertIn(
-                "# No displayable text diff in this snapshot.",
-                workspace_patch,
-            )
-            self.assertIn(
-                "# Project: project-uncommitted",
-                workspace_patch,
-            )
-            self.assertIn(
-                f"# Workspace: {secondary_worktree.resolve()}",
-                workspace_patch,
-            )
-            self.assertIn(
-                "+secondary uncommitted evidence",
-                workspace_patch,
+            self.assertFalse(
+                Path(task_directory, "workspace-changes.patch").exists()
             )
 
     def test_workspace_change_capture_fails_if_working_tree_changes_during_snapshot(

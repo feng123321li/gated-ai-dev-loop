@@ -145,14 +145,13 @@ claim 超过 `leaseExpiresAt` 后，旧 operation 不能 heartbeat、pause 或�
 }
 ```
 
-TASK `result` 的业务内容仍由 Loop 定义，外层调度器不解释测试覆盖。成功 Review 的 `result` 是有界契约：共同字段为 `validationDecision` 和 `reviewFindings`，并且只带本层唯一结论 `taskAcceptance`、`groupIntegration` 或 `deliveryReadiness`；可另带 `affectedScopes`、`verificationEvidence` 和 Controller 快照。不得提交 `upstreamLoopResults`、其他层结论或下层 result body。Controller 在结果记录时覆盖 `evidenceWorkspaceSnapshots` 和 `evidenceScopeSnapshots`，并在 Review context 输出紧凑 `validationEvidenceIndex`；只有 `PASSED + EXACT_MATCH` 可自动复用。带 `scopeRefs` 的 evidence 按声明相关路径判断新鲜度，无关 workspace 变化不触发复测；没有可绑定路径的旧 evidence 保守回退到整个 workspace。`upstreamLoopResults` 只作为当前 receiver 的只读 context，并省略重复的大段 `workspaceChanges.diff`；完整内容继续从对应 acceptance 和 `workspace-changes.patch` 审核。
+TASK `result` 的业务内容仍由 Loop 定义，外层调度器不解释测试覆盖。成功 Review 的 `result` 是有界契约：共同字段为 `validationDecision` 和 `reviewFindings`，并且只带本层唯一结论 `taskAcceptance`、`groupIntegration` 或 `deliveryReadiness`；可另带 `affectedScopes`、`verificationEvidence` 和 Controller 快照。不得提交 `upstreamLoopResults`、其他层结论或下层 result body。Controller 在结果记录时覆盖 `evidenceWorkspaceSnapshots` 和 `evidenceScopeSnapshots`，并在 Review context 输出紧凑 `validationEvidenceIndex`；只有 `PASSED + EXACT_MATCH` 可自动复用。带 `scopeRefs` 的 evidence 按声明相关路径判断新鲜度，无关 workspace 变化不触发复测；没有可绑定路径的旧 evidence 保守回退到整个 workspace。Graph 不持久化源码 diff；GROUP/Delivery Review 的 `upstreamLoopResults` 连 `workspaceChanges` 清单也不下发，只消费结论、证据引用、契约锚点和状态指纹。
 
 `workspaceChanges` 是上述不透明 result 中唯一由 Controller 在 MCP
-`record_loop_result` 路径自动替换的验收证据字段。它随 outcome 和事件链持久化，
-投影重建不需要再次访问原执行 workspace。调用方不要自行填充、删改或把它当作
-文件写授权。TASK 投影同时在主控制根生成 `workspace-changes.patch`，并由同目录
-`acceptance.md` 相对链接；多阶段、多项目快照按带来源头的分段合并，仍明确声明
-快照本身不提供独占归属。
+`record_loop_result` 路径自动替换的验收证据字段。它只保存项目、基线、HEAD、
+状态指纹和变更文件清单，随 outcome 与事件链持久化；不保存源码 diff，也不生成
+补丁附件。调用方不要自行填充、删改或把它当作文件写授权；需要内容时从授权
+workspace 或对应提交读取。
 
 ## 失败和重试
 

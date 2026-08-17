@@ -899,6 +899,9 @@ class SchedulerRuntimeTestsPart10:
                 "beforeStart": "REPORT_PROGRESS_AND_HEARTBEAT",
                 "afterFinish": "HEARTBEAT_AND_REPORT_PROGRESS",
                 "hostCompletionNotificationIsNotHeartbeat": True,
+                "leaseRequestArgument": "expected_command_seconds",
+                "maxExpectedCommandSeconds": 1800,
+                "leaseBufferSeconds": 120,
             },
         )
 

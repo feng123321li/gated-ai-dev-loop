@@ -313,15 +313,15 @@ OUTCOME = _object(
             "description": (
                 "Opaque Loop-owned result payload. On record_loop_result, "
                 "the Controller replaces result.workspaceChanges with "
-                "read-only snapshots captured from verified writable Git "
-                "scopes; callers must not treat that snapshot as exclusive "
+                "diff-free metadata indexes captured from verified writable "
+                "Git scopes; callers must not treat that index as exclusive "
                 "TASK or Delivery ownership. A successful Review is narrower: "
                 "the independent receiver owns the technical acceptance "
                 "judgment; the Controller validates only structure and "
                 "declared terminal consistency. Therefore persist only "
                 "validationDecision, reviewFindings, the one "
                 "layer-owned acceptance field, bounded evidence metadata, and "
-                "Controller-owned snapshots. Never copy upstreamLoopResults "
+                "Controller-owned metadata. Never copy upstreamLoopResults "
                 "or lower-layer result bodies into a Review outcome."
             ),
             "properties": {

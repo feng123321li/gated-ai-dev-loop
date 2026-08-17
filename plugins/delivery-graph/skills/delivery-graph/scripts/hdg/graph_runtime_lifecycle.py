@@ -26,9 +26,20 @@ def heartbeat_loop(
     root_id: str,
     node_id: str,
     operation_id: str,
+    expected_command_seconds: int | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
+    if expected_command_seconds is not None and (
+        not isinstance(expected_command_seconds, int)
+        or isinstance(expected_command_seconds, bool)
+        or expected_command_seconds < 61
+        or expected_command_seconds > 1800
+    ):
+        fail(
+            "SCHEDULER_EXPECTED_COMMAND_SECONDS_INVALID",
+            "expected_command_seconds must be an integer from 61 to 1800",
+        )
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     with repository.transaction() as connection:
@@ -50,15 +61,40 @@ def heartbeat_loop(
             at,
             claim_policy["renewBeforeSeconds"],
         )
-        lease_renewed = (
-            _parse_timestamp(current_expires)
-            <= _parse_timestamp(renewal_boundary)
-        )
-        expires = (
-            _after(at, claim_policy["leaseSeconds"])
-            if lease_renewed
-            else current_expires
-        )
+        if expected_command_seconds is not None:
+            max_expected = claim_policy.get(
+                "maxExpectedCommandSeconds",
+                1800,
+            )
+            if expected_command_seconds > max_expected:
+                fail(
+                    "SCHEDULER_EXPECTED_COMMAND_SECONDS_INVALID",
+                    "expected_command_seconds exceeds this Graph policy",
+                    maxExpectedCommandSeconds=max_expected,
+                )
+            requested_expires = _after(
+                at,
+                expected_command_seconds
+                + claim_policy.get("longCommandLeaseBufferSeconds", 120),
+            )
+            lease_renewed = _parse_timestamp(
+                requested_expires
+            ) > _parse_timestamp(current_expires)
+            expires = requested_expires if lease_renewed else current_expires
+            renewal_reason = "LONG_COMMAND"
+        else:
+            lease_renewed = (
+                _parse_timestamp(current_expires)
+                <= _parse_timestamp(renewal_boundary)
+            )
+            expires = (
+                _after(at, claim_policy["leaseSeconds"])
+                if lease_renewed
+                else current_expires
+            )
+            renewal_reason = (
+                "RENEWAL_THRESHOLD" if lease_renewed else "NOT_REQUIRED"
+            )
         if lease_renewed:
             connection.execute(
                 "UPDATE node_runs SET last_heartbeat_at = ?, "
@@ -94,6 +130,16 @@ def heartbeat_loop(
             payload={
                 "leaseExpiresAt": expires,
                 "leaseRenewed": lease_renewed,
+                "leaseRenewalReason": renewal_reason,
+                **(
+                    {
+                        "expectedCommandSeconds": (
+                            expected_command_seconds
+                        )
+                    }
+                    if expected_command_seconds is not None
+                    else {}
+                ),
             },
             at=at,
         )
@@ -114,6 +160,12 @@ def heartbeat_loop(
         "lastHeartbeatAt": at,
         "leaseExpiresAt": expires,
         "leaseRenewed": lease_renewed,
+        "leaseRenewalReason": renewal_reason,
+        **(
+            {"expectedCommandSeconds": expected_command_seconds}
+            if expected_command_seconds is not None
+            else {}
+        ),
         "progressMonitor": status["progressMonitor"],
     }
 def report_loop_progress(

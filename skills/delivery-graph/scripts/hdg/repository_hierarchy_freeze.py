@@ -11,6 +11,7 @@ from .repository_hierarchy_common import (
     uuid,
     validate_hierarchy_definition,
 )
+from .outcome_compaction import minimize_loop_outcome_for_graph
 
 
 class HierarchyFreezeMixin:
@@ -511,6 +512,16 @@ class HierarchyFreezeMixin:
                     if carried_task is not None
                     else None
                 )
+                previous_outcome = (
+                    minimize_loop_outcome_for_graph(
+                        previous_state["outcome"]
+                    )
+                    if (
+                        previous_state is not None
+                        and isinstance(previous_state.get("outcome"), dict)
+                    )
+                    else None
+                )
                 status = (
                     "SUCCEEDED"
                     if previous_state is not None
@@ -527,11 +538,8 @@ class HierarchyFreezeMixin:
                         status,
                         at if previous_state is not None else None,
                         (
-                            canonical_json(previous_state["outcome"])
-                            if (
-                                previous_state is not None
-                                and previous_state["outcome"] is not None
-                            )
+                            canonical_json(previous_outcome)
+                            if previous_outcome is not None
                             else None
                         ),
                         (
@@ -602,15 +610,35 @@ class HierarchyFreezeMixin:
                             "fromRevision": (
                                 expected_delivery_revision - 1
                             ),
-                            "outcome": previous_nodes[node_id][
-                                "outcome"
-                            ],
+                            "outcome": minimize_loop_outcome_for_graph(
+                                previous_nodes[node_id]["outcome"]
+                            ),
                             "failureClass": previous_nodes[node_id][
                                 "failureClass"
                             ],
                             "requirementRevision": (
                                 requirement_revisions[task_id]
                             ),
+                            "sourceExecutor": {
+                                "owner": previous_nodes[node_id].get(
+                                    "owner"
+                                ),
+                                "agentId": previous_nodes[node_id].get(
+                                    "agentId"
+                                ),
+                                "receiverContextId": previous_nodes[
+                                    node_id
+                                ].get("receiverContextId"),
+                                "dispatchMode": previous_nodes[node_id].get(
+                                    "dispatchMode"
+                                ),
+                                "dispatchTransport": previous_nodes[
+                                    node_id
+                                ].get("dispatchTransport"),
+                                "operationId": previous_nodes[node_id].get(
+                                    "operationId"
+                                ),
+                            },
                         },
                         at=at,
                     )

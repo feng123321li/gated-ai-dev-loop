@@ -10,7 +10,6 @@ from .model_rendering_common import (
     WORK_ITEM_ACCEPTANCE_PROJECTION_TEMPLATE,
     WORK_ITEM_PROGRESS_PROJECTION_TEMPLATE,
     _markdown_code,
-    _markdown_diff_block,
     _markdown_text,
     _payload_value_lines,
     _render_payload_markdown,
@@ -51,19 +50,20 @@ def _workspace_change_lines(result: dict[str, Any]) -> list[str]:
     if raw_snapshots is None:
         return []
     lines = [
-        "#### 工作区变更证据",
+        "#### 工作区变更索引",
         "",
         (
             "- 证据语义：以下内容是 Loop 提交结果时，相对冻结 "
-            "`baseCommit` 的已验证 Git 工作区快照；它不声明这些变更只由"
+            "`baseCommit` 的已验证 Git 元数据索引；它不声明这些变更只由"
             "当前 TASK、Loop 或 Delivery 产生。多个 Delivery 共享同一实际 "
-            "workspace 时，快照可能包含其他 Delivery 的改动。"
+            "workspace 时，索引可能包含其他 Delivery 的改动；源码内容不"
+            "写入 Graph。"
         ),
     ]
     if not isinstance(raw_snapshots, list):
         return [
             *lines,
-            "- `workspaceChanges` 格式无效，必须为 Controller 快照数组。",
+            "- `workspaceChanges` 格式无效，必须为 Controller 索引数组。",
         ]
     snapshots = [
         item for item in raw_snapshots if isinstance(item, dict)
@@ -121,22 +121,17 @@ def _workspace_change_lines(result: dict[str, Any]) -> list[str]:
                         f"{_markdown_code(previous_path)} → {path_text}"
                     )
                 lines.append(f"- {status_text}：{path_text}")
-        diff = snapshot.get("diff")
-        lines.extend(["", "###### Diff 快照", ""])
-        if isinstance(diff, str) and diff:
-            lines.extend(_markdown_diff_block(diff))
-        else:
-            lines.append("- 相对冻结基线没有可展示的文本 diff。")
-        if snapshot.get("diffTruncated") is True:
-            lines.extend(
-                [
-                    "",
-                    (
-                        "- Diff 已按 Controller 上限截断；截断前 UTF-8 "
-                        f"字节数：{snapshot.get('diffByteCount', '未知')}。"
-                    ),
-                ]
-            )
+        lines.extend(
+            [
+                "",
+                "###### 内容读取策略",
+                "",
+                (
+                    "- Graph 仅持久化变更清单和状态指纹；代码内容请从"
+                    "已授权 workspace 按需读取。"
+                ),
+            ]
+        )
     return lines
 
 def _task_workspace_change_sections(
@@ -174,74 +169,6 @@ def _task_workspace_change_sections(
             if isinstance(snapshot, dict)
         )
     return sections
-
-def _patch_header_value(value: object) -> str:
-    return str(value).replace("\r", " ").replace("\n", " ")
-
-def _render_task_workspace_changes_patch(
-    node: dict[str, Any],
-    states: dict[str, dict[str, Any]],
-) -> str | None:
-    sections = _task_workspace_change_sections(node, states)
-    if not sections:
-        return None
-    lines = [
-        "# delivery-graph workspace change snapshots",
-        "#",
-        (
-            "# Snapshot evidence only: shared workspaces may contain changes "
-            "from other Deliveries."
-        ),
-        "# This bundle does not assert exclusive TASK/Loop/Delivery ownership.",
-    ]
-    for position, (stage, snapshot) in enumerate(sections, start=1):
-        lines.extend(
-            [
-                "",
-                "# ============================================================",
-                f"# Snapshot: {position}",
-                f"# Stage: {_patch_header_value(stage)}",
-                (
-                    "# Project: "
-                    f"{_patch_header_value(snapshot.get('projectId', 'unknown'))}"
-                ),
-                (
-                    "# Workspace: "
-                    f"{_patch_header_value(snapshot.get('workspaceRoot', 'unknown'))}"
-                ),
-                (
-                    "# Frozen baseCommit: "
-                    f"{_patch_header_value(snapshot.get('baseCommit', 'unknown'))}"
-                ),
-                (
-                    "# Current HEAD: "
-                    f"{_patch_header_value(snapshot.get('headCommit', 'unknown'))}"
-                ),
-                (
-                    "# Snapshot fingerprint: "
-                    + _patch_header_value(
-                        snapshot.get("snapshotFingerprint", "unknown")
-                    )
-                ),
-                (
-                    "# Attribution: "
-                    f"{_patch_header_value(snapshot.get('attribution', 'unknown'))}"
-                ),
-            ]
-        )
-        if snapshot.get("diffTruncated") is True:
-            lines.append(
-                "# Diff truncated by Controller; original UTF-8 bytes: "
-                + _patch_header_value(
-                    snapshot.get("diffByteCount", "unknown")
-                )
-            )
-        diff = snapshot.get("diff")
-        if isinstance(diff, str) and diff:
-            lines.extend(["", diff.rstrip()])
-        else:
-            lines.extend(["", "# No displayable text diff in this snapshot."])
-    return "\n".join(lines).rstrip() + "\n"
 
 def _review_boundary_result_lines(result: dict[str, Any]) -> list[str]:
     lines: list[str] = []
@@ -737,16 +664,11 @@ def render_work_item_acceptance(
         if _task_workspace_change_sections(node, states):
             task_sections.extend(
                 [
-                    "## 工作区变更附件",
+                    "## 工作区变更索引",
                     "",
                     (
-                        "- [打开工作区变更补丁]"
-                        "(workspace-changes.patch)"
-                    ),
-                    (
-                        "- 附件与下方 inline diff 均为 Controller 持久化的"
-                        "提交时 workspace 快照，不代表当前 TASK/Delivery 的"
-                        "独占归属。"
+                        "- Controller 仅持久化项目、基线、状态指纹和变更"
+                        "文件清单；不把源码 diff 写入 Graph 或投影。"
                     ),
                     "",
                 ]

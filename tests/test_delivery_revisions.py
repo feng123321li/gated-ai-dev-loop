@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from pathlib import Path
 import sqlite3
 from tempfile import TemporaryDirectory
@@ -66,13 +67,16 @@ class DeliveryRevisionTests(unittest.TestCase):
         self,
         root_id: str,
         task_id: str,
+        *,
+        task_owner: str = "agent-task",
+        review_owner: str = "agent-review",
     ) -> None:
         task_node_id = loop_node_id(task_id)
         dispatch_loop(
             root=self.root,
             root_id=root_id,
             node_id=task_node_id,
-            owner="agent-task",
+            owner=task_owner,
             operation_id=f"op-{task_id}",
             now=at(2),
         )
@@ -89,7 +93,7 @@ class DeliveryRevisionTests(unittest.TestCase):
             root=self.root,
             root_id=root_id,
             node_id=review_id,
-            owner="agent-review",
+            owner=review_owner,
             operation_id=f"op-{task_id}-review",
             now=at(4),
         )
@@ -228,6 +232,144 @@ class DeliveryRevisionTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("当前修订：2", revisions_projection)
         self.assertIn("SUPERSEDED", revisions_projection)
+
+    def test_all_carried_results_keep_review_independence_provenance(
+        self,
+    ) -> None:
+        initial = group_hierarchy()
+        prepared = self._freeze_initial(initial)
+        root_id = prepared["rootId"]
+        for task_id in ("t-api", "t-core"):
+            self._complete_task_and_review(
+                root_id,
+                task_id,
+                task_owner=f"agent-task-{task_id}",
+                review_owner=f"agent-review-{task_id}",
+            )
+        repository = SchedulerRepository(self.root)
+        legacy_task_outcome = success("Legacy large TASK result.")
+        legacy_task_outcome["result"]["workspaceChanges"] = [
+            {"projectId": "legacy", "diff": "x" * 500_000}
+        ]
+        run_id = repository.run(root_id)["runId"]
+        with repository.transaction() as connection:
+            connection.execute(
+                "UPDATE node_runs SET outcome_json = ? "
+                "WHERE run_id = ? AND node_id = ?",
+                (
+                    json.dumps(legacy_task_outcome),
+                    run_id,
+                    loop_node_id("t-api"),
+                ),
+            )
+
+        revised = deepcopy(initial)
+        revised["delivery"]["summary"] = (
+            "Keep the same TASK contracts and rerun only the group seam."
+        )
+        revision = prepare_delivery_revision(
+            root=self.root,
+            root_id=root_id,
+            expected_current_revision=1,
+            hierarchy=revised,
+            reason="Retry only the GROUP seam after scheduler recovery.",
+            continuity_basis="USER_EXPLICIT_SAME_DELIVERY",
+            requested_by="human",
+            now=at(6),
+        )
+        frozen = freeze_hierarchy(
+            root=self.root,
+            root_id=root_id,
+            expected_delivery_revision=2,
+            expected_hierarchy_fingerprint=revision[
+                "hierarchyFingerprint"
+            ],
+            authorized_project_ids=[],
+            confirmed=True,
+            confirmed_by="human",
+            now=at(7),
+        )
+
+        self.assertEqual(
+            frozen["carriedForwardTaskIds"],
+            ["t-api", "t-core"],
+        )
+        self.assertLess(
+            len(json.dumps(frozen).encode("utf-8")),
+            100_000,
+        )
+        carried = {
+            item["nodeId"]: item
+            for item in frozen["nodes"]
+            if item["nodeId"]
+            in {
+                loop_node_id("t-api"),
+                loop_node_id("t-core"),
+                task_review_node_id("t-api"),
+                task_review_node_id("t-core"),
+            }
+        }
+        self.assertEqual(
+            carried[loop_node_id("t-api")]["receiverContextId"],
+            "agent-task-t-api",
+        )
+        carried_workspace = carried[loop_node_id("t-api")]["outcome"][
+            "result"
+        ]["workspaceChanges"][0]
+        self.assertNotIn("diff", carried_workspace)
+        self.assertTrue(carried_workspace["diffOmittedFromGraph"])
+        with repository.read() as connection:
+            carried_payload = connection.execute(
+                "SELECT payload_json FROM graph_events "
+                "WHERE event_type = 'NODE_RESULT_CARRIED_FORWARD' "
+                "AND node_id = ? ORDER BY event_id DESC LIMIT 1",
+                (loop_node_id("t-api"),),
+            ).fetchone()["payload_json"]
+        self.assertNotIn('"diff":', carried_payload)
+        self.assertEqual(
+            carried[task_review_node_id("t-api")][
+                "receiverContextId"
+            ],
+            "agent-review-t-api",
+        )
+
+        rebuilt = rebuild_graph_run(root=self.root, root_id=root_id)
+        rebuilt_by_id = {
+            item["nodeId"]: item for item in rebuilt["nodes"]
+        }
+        self.assertEqual(
+            rebuilt_by_id[loop_node_id("t-core")][
+                "receiverContextId"
+            ],
+            "agent-task-t-core",
+        )
+        self.assertEqual(
+            rebuilt_by_id[task_review_node_id("t-core")][
+                "receiverContextId"
+            ],
+            "agent-review-t-core",
+        )
+
+        frontier = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=at(8),
+        )
+        group_review_id = "review:group:g-service"
+        self.assertEqual(
+            [item["nodeId"] for item in frontier["readyLoops"]],
+            [group_review_id],
+        )
+        claimed = dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=group_review_id,
+            owner="group-reviewer",
+            receiver_context_id="group-review-revision-2",
+            operation_id="op-group-review-revision-2",
+            now=at(9),
+        )
+        self.assertEqual(claimed["status"], "CLAIMED")
 
     def test_prepared_revision_keeps_the_current_run_active(self) -> None:
         initial = task_hierarchy()

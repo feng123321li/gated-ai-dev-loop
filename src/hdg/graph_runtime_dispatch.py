@@ -220,7 +220,27 @@ def dispatch_loop(
                     dispatch_transport=str(dispatch_transport),
                 )
             )
+            reservation = connection.execute(
+                "SELECT * FROM dispatch_reservations "
+                "WHERE reservation_id = ?",
+                (actual_reservation_id,),
+            ).fetchone()
             if dispatch_decision_fingerprint != expected_dispatch_decision:
+                retry_with_same_reservation = bool(
+                    reservation is not None
+                    and reservation["status"] == "RESERVED"
+                    and reservation["run_id"] == run["run_id"]
+                    and reservation["root_id"] == root_id
+                    and reservation["node_id"] == node_id
+                    and reservation["attempt"] == state["attempt"]
+                    and reservation["agent_id"] == actual_agent_id
+                    and reservation["graph_fingerprint"]
+                    == current_graph_fingerprint
+                    and reservation["decision_fingerprint"]
+                    == expected_dispatch_decision
+                    and _parse_timestamp(reservation["expires_at"])
+                    > _parse_timestamp(at)
+                )
                 fail(
                     "SCHEDULER_DISPATCH_DECISION_MISMATCH",
                     (
@@ -234,12 +254,25 @@ def dispatch_loop(
                     submittedDecisionFingerprint=(
                         dispatch_decision_fingerprint
                     ),
+                    retryWithSameReservation=retry_with_same_reservation,
+                    **(
+                        {
+                            "expectedDecisionFingerprint": (
+                                expected_dispatch_decision
+                            ),
+                            "reservationExpiresAt": reservation[
+                                "expires_at"
+                            ],
+                            "recoveryAction": (
+                                "RETRY_DISPATCH_WITH_SAME_RESERVATION"
+                            ),
+                        }
+                        if retry_with_same_reservation
+                        else {
+                            "recoveryAction": "PLAN_NEW_DISPATCH_BATCH"
+                        }
+                    ),
                 )
-            reservation = connection.execute(
-                "SELECT * FROM dispatch_reservations "
-                "WHERE reservation_id = ?",
-                (actual_reservation_id,),
-            ).fetchone()
             if (
                 reservation is not None
                 and reservation["status"] == "CLAIMED"

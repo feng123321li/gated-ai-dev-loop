@@ -126,7 +126,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
             "5 分钟",
             "LIGHT",
             "基线",
-            "workspace-changes.patch",
+            "状态指纹",
             "短任务不要求 heartbeat_loop",
             "PLUGIN_MCP_UNAVAILABLE",
         ):

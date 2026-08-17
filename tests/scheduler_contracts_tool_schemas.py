@@ -378,6 +378,12 @@ class McpSurfaceTestsPart1:
                 "operation_id",
                 by_name[mutation]["inputSchema"]["required"],
             )
+        heartbeat_schema = by_name["heartbeat_loop"]["inputSchema"]
+        expected_command = heartbeat_schema["properties"][
+            "expected_command_seconds"
+        ]
+        self.assertEqual(expected_command["minimum"], 61)
+        self.assertEqual(expected_command["maximum"], 1800)
         recovery = by_name["handoff_ready_automatic_task"]
         self.assertEqual(
             recovery["inputSchema"]["required"],

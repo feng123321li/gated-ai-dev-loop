@@ -6,6 +6,7 @@ from .graph_runtime_common import (
     Path,
     SchedulerRepository,
     _current_upstream_scope_snapshots,
+    _compact_run_for_transport,
     _loaded,
     _locked_timestamp,
     _node,
@@ -94,7 +95,7 @@ def advance_graph(
         ) or materialized_changed
     if materialized_changed:
         repository.write_projections(root_id)
-    return repository.run(root_id)
+    return _compact_run_for_transport(repository.run(root_id))
 
 def graph_status(
     *,
@@ -106,7 +107,7 @@ def graph_status(
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     definition = repository.hierarchy(root_id)
-    run = repository.run(root_id)
+    run = _compact_run_for_transport(repository.run(root_id))
     node_by_id = {
         node["id"]: node
         for node in definition["graph"]["nodes"]

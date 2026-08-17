@@ -7,6 +7,10 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.42.1 发布候选矩阵
+
+0.42.1 修复 carry-forward Revision 丢失 receiver 来源、导致 GROUP seam Review 无法通过独立性门禁的问题，并对 0.42.0 已有事件按 `fromRevision` 回溯前序来源。Graph 改为只持久化工作区变更清单、base/HEAD 与状态/范围指纹，不再存源码 diff 或生成 `workspace-changes.patch`；GROUP/Delivery Review 同时裁掉 `workspaceChanges` 与 TASK 实现细节，只复用证据引用并补验直接 seam。`heartbeat_loop` 新增可选 `expected_command_seconds`（61–1800）和 120 秒收尾缓冲，为 Maven 等首次依赖预热提供有界长租约；当前有效 reservation 的 decision mismatch 可返回同 reservation 重试凭据。MCP 工具联集仍为 32，schema v3 与 `.layered-delivery/` namespace 不变，旧 Graph 无需迁移。候选已完成 424 项 Python 测试（423 通过、1 项按环境跳过）、全树编译、四个 Skill、Plugin 镜像、Claude Plugin、release candidate 与差异校验。
+
 ## 0.42.0 发布候选矩阵
 
 0.42.0 针对短租约下 receiver 同步执行长构建命令（如 Maven）期间心跳停默、被误判 `WORKER_LOST` 的问题硬化执行契约：`executionPolicy.longRunningCommands` 新增 `estimatedOverSecondsRequiresBackground: 60` 与 `preferNarrowCommandScope: true`，TASK Skill 正文、`task-execution.md`、`execution-quickstart.md` 与 receiver MCP server instructions 同步要求先估算耗时、优先收窄命令范围（单模块、指定测试类、离线依赖解析）、预计超过 60 秒转非阻塞执行并保持 60 秒心跳。同时为 ZCode receiver Prompt 补齐宿主专属 Skill 调用文案，不再输出 Codex 双宿主兜底句式；`SCHEDULER_DISPATCH_DECISION_MISMATCH` 增加 expected/submitted details 便于一次定位凭据混搭，TASK/Review SKILL 增加多轮 assignment 只认最新完整凭据组的硬约束。MCP 工具联集仍为 32，三个 Profile、schema v3、租约与心跳数值协议（5 分钟租约、60 秒心跳、2 分钟续租阈值）及持久化均不变；`executionPolicy` 仅新增两个键，已有 Graph 与 `.layered-delivery/` 运行数据无需迁移。候选已完成 418 项 Python 测试（417 通过、1 项按环境跳过）、全树编译、四个 Skill、Plugin 镜像、release candidate 与差异校验。

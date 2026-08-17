@@ -4,6 +4,17 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.42.1 — 2026-08-17
+
+发布提交：以 tag `v0.42.1` 指向的提交为准
+
+- **GROUP Review 恢复**：Revision carry-forward 事件保留原 receiver/operation 来源；对 0.42.0 已有事件按 `fromRevision` 回溯不可变前序证据，修复 GROUP seam Review 因 `receiverContextId` 缺失而无法领取的问题。重建后仍保持同一来源链，无需新建 Delivery 或业务重确认。
+- **Graph 证据瘦身**：Controller 只持久化变更文件清单、base/HEAD 与状态/范围指纹，不再把源码 diff 写入 outcome、事件、SQLite 或 `workspace-changes.patch`。GROUP/Delivery Review 不接收 `workspaceChanges` 和 TASK 实现细节；历史大 diff 在 status/advance/rebuild/freeze 响应中兼容裁剪，carry 到新 Revision 前也会最小化。
+- **长命令与派遣恢复**：`heartbeat_loop` 新增可选 `expected_command_seconds`（61–1800），为 Maven 首次依赖预热等命令提供最多 30 分钟并带 120 秒收尾缓冲的有界租约；执行策略按 Maven、Gradle、Node、Python、Go、Rust 项目信号提供无控制面凭据的命令 worker 触发框架。当前有效 reservation 的 decision mismatch 返回同 reservation 可重试凭据。
+- **GROUP 验收边界**：GROUP Review 默认复用 `PASSED + EXACT_MATCH` 的 TASK 证据，只补验直接子项 seam，不复查 TASK 内部实现、不默认重跑子模块套件或全量 build。普通 hierarchy 默认内联传输，不再创建 `.layered-delivery/staging`。
+- **兼容性**：MCP 工具联集仍为 32，schema v3 与 `.layered-delivery/` namespace 不变；新增 heartbeat 参数为可选，旧 Graph 无需迁移，历史事件哈希不改写。
+- **验证**：全量 Python 424 项完成（423 通过、1 项按环境跳过），全树编译、四个 Skill、Plugin 镜像、Claude Plugin、release candidate 与差异校验通过。
+
 ## 0.42.0 — 2026-08-17
 
 发布提交：以 tag `v0.42.0` 指向的提交为准

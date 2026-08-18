@@ -244,6 +244,23 @@ class McpAppsContractTestsPart1:
             "return callCompatibilityDashboard(rootId)",
             fallback_catch,
         )
+        standard_call = html.split(
+            "const callStandardDashboard = async",
+            1,
+        )[1].split(
+            "const callCompatibilityDashboard = async",
+            1,
+        )[0]
+        compatibility_call = html.split(
+            "const callCompatibilityDashboard = async",
+            1,
+        )[1].split(
+            "const dashboardErrorCode",
+            1,
+        )[0]
+        for bridge_call in (standard_call, compatibility_call):
+            self.assertIn("open_delivery_dashboard", bridge_call)
+            self.assertNotIn("graph_frontier", bridge_call)
         self.assertIn("--on-accent", html)
         self.assertIn(
             '["SUCCEEDED", "COMPLETED"].includes(node.status)',

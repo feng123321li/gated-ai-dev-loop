@@ -1,13 +1,76 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from pathlib import Path
+import sqlite3
+from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
 from hdg.dashboard import open_delivery_dashboard
+from hdg.planning import freeze_hierarchy, prepare_hierarchy
+
+from .loop_architecture_support import task_hierarchy
 
 
 class DashboardProjectionTests(unittest.TestCase):
+    def test_repeated_dashboard_refresh_does_not_mutate_graph_state(
+        self,
+    ) -> None:
+        def database_snapshot(database: Path) -> tuple[object, ...]:
+            connection = sqlite3.connect(database)
+            try:
+                tables = [
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master "
+                        "WHERE type = 'table' ORDER BY name"
+                    )
+                ]
+                return tuple(
+                    (
+                        table,
+                        tuple(connection.execute(
+                            f'SELECT * FROM "{table}" ORDER BY rowid'
+                        )),
+                    )
+                    for table in tables
+                )
+            finally:
+                connection.close()
+
+        with TemporaryDirectory() as root:
+            prepared = prepare_hierarchy(
+                root=root,
+                hierarchy=task_hierarchy(),
+            )
+            freeze_hierarchy(
+                root=root,
+                root_id=prepared["rootId"],
+                expected_hierarchy_fingerprint=(
+                    prepared["hierarchyFingerprint"]
+                ),
+                confirmed=True,
+                confirmed_by="dashboard-read-test",
+            )
+            database = Path(root, ".layered-delivery", "scheduler.db")
+            before = database_snapshot(database)
+
+            first = open_delivery_dashboard(
+                root=root,
+                root_id=prepared["rootId"],
+            )
+            second = open_delivery_dashboard(
+                root=root,
+                root_id=prepared["rootId"],
+            )
+
+            after = database_snapshot(database)
+
+        self.assertTrue(first["readOnly"])
+        self.assertTrue(second["readOnly"])
+        self.assertEqual(before, after)
+
     def test_snapshot_is_locked_and_projection_is_minimized(self) -> None:
         definition = {
             "rootId": "d-dashboard",

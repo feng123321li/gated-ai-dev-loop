@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 
 import sys
 
+import time
+
 import traceback
 
 from typing import Any, Mapping
@@ -76,6 +78,84 @@ RESOURCES_TTL_MS = 60 * 60 * 1000
 
 CACHE_SCOPE = "private"
 
+DASHBOARD_READ_GRANT_TTL_SECONDS = 5 * 60
+
+DASHBOARD_READ_GRANT_LIMIT = 8
+
+
+@dataclass(frozen=True)
+class _DashboardReadGrant:
+    resolution: ProjectRootResolution
+    host_adapter: str
+    protocol_era: str
+    expires_at: float
+
+
+@dataclass
+class _DashboardReadGrantStore:
+    """Bounded, connection-local authority for embedded dashboard reads."""
+
+    _entries: dict[str, _DashboardReadGrant] = field(
+        default_factory=dict,
+        repr=False,
+    )
+
+    def _purge_expired(self, now: float) -> None:
+        expired = [
+            root_id
+            for root_id, grant in self._entries.items()
+            if grant.expires_at <= now
+        ]
+        for root_id in expired:
+            self._entries.pop(root_id, None)
+
+    def get(
+        self,
+        root_id: str,
+        *,
+        host_adapter: str,
+        protocol_era: str,
+    ) -> ProjectRootResolution | None:
+        now = time.monotonic()
+        self._purge_expired(now)
+        grant = self._entries.get(root_id)
+        if grant is None:
+            return None
+        if (
+            grant.host_adapter != host_adapter
+            or grant.protocol_era != protocol_era
+        ):
+            return None
+        return grant.resolution
+
+    def remember(
+        self,
+        root_id: str,
+        resolution: ProjectRootResolution,
+        *,
+        host_adapter: str,
+        protocol_era: str,
+    ) -> None:
+        now = time.monotonic()
+        self._purge_expired(now)
+        self._entries.pop(root_id, None)
+        while len(self._entries) >= DASHBOARD_READ_GRANT_LIMIT:
+            oldest_root_id = next(iter(self._entries))
+            self._entries.pop(oldest_root_id, None)
+        self._entries[root_id] = _DashboardReadGrant(
+            resolution=resolution,
+            host_adapter=host_adapter,
+            protocol_era=protocol_era,
+            expires_at=now + DASHBOARD_READ_GRANT_TTL_SECONDS,
+        )
+
+    def clear(self) -> None:
+        self._entries.clear()
+
+    def __len__(self) -> int:
+        self._purge_expired(time.monotonic())
+        return len(self._entries)
+
 def report_internal_error(
     error: BaseException,
     *,
@@ -135,12 +215,17 @@ class McpConnection:
     legacy_client_info: dict[str, object] | None = None
     trusted_host_adapter: str | None = None
     tool_profile: str = ALL_TOOL_PROFILE
-    # The embedded app cannot mint workspace metadata. Reuse only a prior
-    # successful dashboard read from this exact legacy connection/root.
-    _dashboard_read_grants: dict[str, ProjectRootResolution] = field(
-        default_factory=dict,
+    # The embedded app cannot mint workspace metadata. Reuse only a recent,
+    # successful dashboard read from this exact host connection/root.
+    _dashboard_read_grants: _DashboardReadGrantStore = field(
+        default_factory=_DashboardReadGrantStore,
         repr=False,
     )
+
+    def close(self) -> None:
+        """Revoke connection-local embedded dashboard authority."""
+
+        self._dashboard_read_grants.clear()
 
 @dataclass(frozen=True)
 class ModernRequestContext:

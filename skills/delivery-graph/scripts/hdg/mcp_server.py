@@ -235,6 +235,7 @@ def serve(
                 toolCatalogDelivered=tool_catalog_delivered,
                 diagnosticHint=hint,
             )
+            connection.close()
             break
         if invalid_encoding:
             _write_response(
@@ -307,6 +308,7 @@ def serve(
                         "or process cancellation details."
                     ),
                 )
+                connection.close()
                 raise
         if safe_method == "server/discover" and response is not None:
             _write_lifecycle_event(

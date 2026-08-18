@@ -7,6 +7,12 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.43.2 发布候选矩阵
+
+0.43.2 修复 Codex Desktop 首次成功打开 Delivery Graph 面板后，15 秒自动刷新或手动刷新报 `PROJECT_ROOT_UNAVAILABLE` 的问题。根因是旧 grant 逻辑只覆盖 legacy 且完全省略 `_meta` 的同连接调用；modern MCP Apps 刷新仍携带协议/client `_meta`，但不携带 `codex/sandbox-state-meta`，因此首次带 sandbox metadata 的成功读取从未形成可复用 grant，标准与兼容 bridge 都会失败关闭。
+
+修复后，modern 与 legacy wire shim 都可在同一可信 Codex MCP 连接内复用此前成功授权的精确 `root_id`/workspace。grant 只服务 `open_delivery_dashboard`，按协议 era 隔离，5 分钟内的成功刷新滑动续期，每连接最多保留 8 个 root；同 root 的新授权替换旧 workspace，超时、容量淘汰或连接关闭立即清理。未授权 root、其他工具、非 Codex Adapter、跨连接复用、legacy 显式空/畸形 metadata 继续要求 sandbox metadata 并 fail closed；没有全局或跨进程 root 缓存。标准 `tools/call` 与 `window.openai.callTool` 仍只重放只读 Dashboard 工具，刷新不调用 `graph_frontier`、不改变 Graph/SQLite 状态，无 UI 宿主的文字与 `structuredContent` 降级保持不变。MCP 工具联集保持 32，schema v3 与 `.layered-delivery/` namespace 不变；候选已完成 442 项 Python 测试（441 通过、1 项按环境跳过）、全树编译、四个 Skill、Codex/Claude Plugin、release candidate、镜像与差异校验。
+
 ## 0.43.1 发布候选矩阵
 
 0.43.1 修复 receiver claim 后在长时间代码检查或构建期间停止 heartbeat、最终被判定 `WORKER_LOST` 的问题。AUTO TASK、MANUAL TASK 与 Review 统一在 claim 后立即 heartbeat，并按 Controller 的 `heartbeatDirective` 每约 60 秒继续保活；`NOT_REQUIRED` 保留原租约截止时间且不停止后续心跳，`progress` 继续不续租。代码检查、文件检索、依赖分析、构建、测试与 Review 全部纳入租约执行期，预计超过 60 秒的命令先申请有上限的 `expected_command_seconds` 租约，必要时由无凭据 worker 非阻塞执行。Controller 不伪造 heartbeat，旧 receiver 不热更新提示并需在恢复后重派。MCP 工具联集保持 32，schema v3 与 `.layered-delivery/` namespace 不变。候选已完成 429 项 Python 测试（428 通过、1 项按环境跳过）、全树编译、四个 Skill、Plugin 镜像、release candidate 与差异校验。

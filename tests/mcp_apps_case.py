@@ -103,9 +103,13 @@ class McpAppsContractTestsSupport:
         params: dict[str, object] | None = None,
         *,
         request_id: str = "modern-request",
+        sandbox_root: str | None = None,
     ) -> dict[str, object]:
         request_params = dict(params or {})
-        request_params["_meta"] = modern_meta()
+        request_meta = modern_meta()
+        if sandbox_root is not None:
+            request_meta.update(self._sandbox_meta(sandbox_root))
+        request_params["_meta"] = request_meta
         response = handle_message(
             {
                 "jsonrpc": "2.0",

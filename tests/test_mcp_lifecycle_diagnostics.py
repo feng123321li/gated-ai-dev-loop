@@ -4,6 +4,7 @@ from io import BytesIO, StringIO
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from hdg.mcp_adapter import MODERN_PROTOCOL_VERSION
 from hdg.mcp_server import serve
@@ -72,7 +73,10 @@ class McpLifecycleDiagnosticsTests(unittest.TestCase):
 
     def test_eof_before_any_request_explains_host_spawn_boundary(self) -> None:
         diagnostics = StringIO()
-        with tempfile.TemporaryDirectory() as root:
+        with tempfile.TemporaryDirectory() as root, patch(
+            "hdg.mcp_server.McpConnection.close",
+            autospec=True,
+        ) as close:
             serve(
                 stdin=BytesIO(),
                 stdout=StringIO(),
@@ -80,6 +84,7 @@ class McpLifecycleDiagnosticsTests(unittest.TestCase):
                 diagnostic_stream=diagnostics,
             )
 
+        close.assert_called_once()
         events = [json.loads(line) for line in diagnostics.getvalue().splitlines()]
         self.assertEqual(events[-1]["stage"], "TRANSPORT_EOF")
         self.assertEqual(events[-1]["requestCount"], 0)

@@ -23,12 +23,14 @@ from .mcp_apps_support import (
     unittest,
 )
 from .mcp_apps_case import McpAppsContractTestsSupport
+from .mcp_apps_grants import McpAppsDashboardGrantTests
 from .mcp_apps_protocol import McpAppsContractTestsPart1
 from .mcp_apps_projection import McpAppsContractTestsPart2
 
 
 class McpAppsContractTests(
     McpAppsContractTestsSupport,
+    McpAppsDashboardGrantTests,
     McpAppsContractTestsPart1,
     McpAppsContractTestsPart2,
     unittest.TestCase,

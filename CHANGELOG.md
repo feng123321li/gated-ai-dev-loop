@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.43.2 — 2026-08-18
+
+发布提交：以 tag `v0.43.2` 指向的提交为准
+
+- **Codex MCP Apps 刷新恢复**：修复首次带 sandbox metadata 成功打开 Delivery Graph 面板后，modern standard `tools/call` 或兼容 bridge 刷新缺少 `codex/sandbox-state-meta` 而返回 `PROJECT_ROOT_UNAVAILABLE`。Modern 与 Legacy wire shim 现在可在同一可信 Codex MCP 连接内复用此前成功读取的精确 `root_id`/workspace grant。
+- **有界只读授权**：grant 只服务 `open_delivery_dashboard`，按协议 era 隔离，采用 5 分钟滑动 TTL、每连接最多 8 个 root；同 root 的新授权替换旧 workspace，失败读取不授权，超时、容量淘汰或连接关闭立即撤销。未授权 root、其他工具、非 Codex Adapter、跨连接请求及显式空/畸形 metadata 继续 fail closed，不引入全局 root 缓存。
+- **只读 UI 契约保持**：看板可见时继续每 15 秒串行刷新，隐藏时暂停，手动刷新立即调用 `open_delivery_dashboard`；标准与兼容路径都不调用 `graph_frontier`，重复刷新不改变 Graph/SQLite 状态，无 UI 宿主仍获得文字与 `structuredContent` 降级结果。
+- **兼容性与验证**：MCP 工具联集仍为 32，schema v3 与 `.layered-delivery/` namespace 不变，无运行数据迁移。新增 modern/legacy、host/connection/workspace/root 隔离、grant 生命周期和只读状态回归；全量 Python 442 项完成（441 通过、1 项按环境跳过），全树编译、四个 Skill、Codex/Claude Plugin、release candidate、镜像与差异校验通过。
+
 ## 0.43.1 — 2026-08-18
 
 发布提交：以 tag `v0.43.1` 指向的提交为准

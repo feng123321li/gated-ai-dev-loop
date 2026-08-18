@@ -164,21 +164,44 @@ def _call_scheduler_tool(
             if name == "open_delivery_dashboard"
             else None
         )
-        root_resolution = None
-        if (
-            not modern
-            and name == "open_delivery_dashboard"
-            and "_meta" not in params
+        request_meta = params.get("_meta")
+        dashboard_grant_scope = (
+            name == "open_delivery_dashboard"
             and isinstance(dashboard_root_id, str)
             and connection.trusted_host_adapter == "codex"
             and connection.project_root.from_sandbox_meta
-        ):
-            root_resolution = connection._dashboard_read_grants.get(
-                dashboard_root_id
+        )
+        has_sandbox_metadata = (
+            isinstance(request_meta, dict)
+            and CODEX_SANDBOX_META_KEY in request_meta
+        )
+        bridge_omitted_sandbox_metadata = (
+            dashboard_grant_scope
+            and (
+                (
+                    modern
+                    and isinstance(request_meta, dict)
+                    and not has_sandbox_metadata
+                )
+                or (not modern and "_meta" not in params)
             )
+        )
+        protocol_era = (
+            _MODERN_PROTOCOL_ERA if modern else _LEGACY_PROTOCOL_ERA
+        )
+        root_resolution = None
+        used_dashboard_grant = False
+        if bridge_omitted_sandbox_metadata:
+            assert isinstance(dashboard_root_id, str)
+            root_resolution = connection._dashboard_read_grants.get(
+                dashboard_root_id,
+                host_adapter="codex",
+                protocol_era=protocol_era,
+            )
+            used_dashboard_grant = root_resolution is not None
         if root_resolution is None:
             root_resolution = connection.project_root.resolve_request(
-                params.get("_meta"),
+                request_meta,
                 stateless=modern,
                 require_sandbox_metadata=True,
             )
@@ -193,16 +216,16 @@ def _call_scheduler_tool(
             trusted_host_adapter=connection.trusted_host_adapter,
         )
         if (
-            not modern
-            and name == "open_delivery_dashboard"
-            and "_meta" in params
-            and isinstance(dashboard_root_id, str)
-            and connection.trusted_host_adapter == "codex"
-            and connection.project_root.from_sandbox_meta
+            dashboard_grant_scope
+            and (has_sandbox_metadata or used_dashboard_grant)
         ):
-            connection._dashboard_read_grants[
-                dashboard_root_id
-            ] = root_resolution
+            assert isinstance(dashboard_root_id, str)
+            connection._dashboard_read_grants.remember(
+                dashboard_root_id,
+                root_resolution,
+                host_adapter="codex",
+                protocol_era=protocol_era,
+            )
         payload = {
             "ok": True,
             "result": business_result,

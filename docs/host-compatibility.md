@@ -9,7 +9,9 @@
 
 ## 0.43.1 发布候选矩阵
 
-0.43.1 修复 receiver claim 后在长时间代码检查或构建期间停止 heartbeat、最终被判定 `WORKER_LOST` 的问题。AUTO TASK、MANUAL TASK 与 Review 统一在 claim 后立即 heartbeat，并按 Controller 的 `heartbeatDirective` 每约 60 秒继续保活；`NOT_REQUIRED` 保留原租约截止时间且不停止后续心跳，`progress` 继续不续租。代码检查、文件检索、依赖分析、构建、测试与 Review 全部纳入租约执行期，预计超过 60 秒的命令先申请有上限的 `expected_command_seconds` 租约，必要时由无凭据 worker 非阻塞执行。Controller 不伪造 heartbeat，旧 receiver 不热更新提示并需在恢复后重派。MCP 工具联集保持 32，schema v3 与 `.layered-delivery/` namespace 不变。候选已完成 427 项 Python 测试（426 通过、1 项按环境跳过）、全树编译、四个 Skill、Plugin 镜像、release candidate 与差异校验。
+0.43.1 修复 receiver claim 后在长时间代码检查或构建期间停止 heartbeat、最终被判定 `WORKER_LOST` 的问题。AUTO TASK、MANUAL TASK 与 Review 统一在 claim 后立即 heartbeat，并按 Controller 的 `heartbeatDirective` 每约 60 秒继续保活；`NOT_REQUIRED` 保留原租约截止时间且不停止后续心跳，`progress` 继续不续租。代码检查、文件检索、依赖分析、构建、测试与 Review 全部纳入租约执行期，预计超过 60 秒的命令先申请有上限的 `expected_command_seconds` 租约，必要时由无凭据 worker 非阻塞执行。Controller 不伪造 heartbeat，旧 receiver 不热更新提示并需在恢复后重派。MCP 工具联集保持 32，schema v3 与 `.layered-delivery/` namespace 不变。候选已完成 429 项 Python 测试（428 通过、1 项按环境跳过）、全树编译、四个 Skill、Plugin 镜像、release candidate 与差异校验。
+
+同一候选还把整文件 Write、大 patch、批量编辑和其他宿主 tool call 纳入阻塞操作边界：对既有大文件优先拆成语义小 patch 并在块间 heartbeat，只有不可拆的原子调用才允许在预先申请的有界覆盖租约内执行。
 
 ## 0.43.0 发布候选矩阵
 

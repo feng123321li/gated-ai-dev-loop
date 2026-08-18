@@ -30,6 +30,7 @@ allowed-tools:
 - 先界定 `result.affectedScopes`。`paths` 使用字面量仓库相对路径，并覆盖相关依赖和契约锚点。
 - 运行覆盖该范围的测试、构建、静态检查或契约检查；在 `verificationEvidence` 记录命令摘要、scope、结果和必要说明。不要宣称未运行的验证。
 - 长测试/构建先估算耗时并优先缩小命令范围（单模块、指定测试类、离线依赖解析）。按项目文件选择命令 worker：`pom.xml/.mvn/mvnw` 使用 Maven，Gradle wrapper 使用 Gradle，其他语言按 lockfile/module manifest 选择；首次依赖预热、install 或预计超过 60 秒的命令必须交给不持有控制面凭据的内部 worker/非阻塞监控，并先用 `expected_command_seconds` heartbeat 申请有上限的命令租约。测试前后都报告进度。
+- 整文件 Write、大 patch、批量编辑与其他宿主 tool call 同样先估算耗时。既有大文件不得为方便而单次整体重写；优先拆成可审查的语义小 patch，每块之间 heartbeat。确实无法拆分且预计超过 60 秒时，必须在调用前用 `heartbeat_loop(expected_command_seconds=...)` 申请能覆盖整个原子调用与收尾的有界租约。
 - claim 后到 `record_loop_result` 或显式释放 claim 之前，代码检查、文件检索、依赖分析、编辑、构建、测试和 rework 都是租约执行期；外层 receiver 按响应 `heartbeatDirective` 约每 60 秒 heartbeat。内部 worker 不接收 reservation、operation 或 MCP 凭据，primary 也不得代发 heartbeat。
 - `report_loop_progress` 在代码检查、根因确认、编辑完成、测试开始/完成、rework 和最终验证等真实里程碑调用；progress 不续租。
 - 数据库 TASK 只应用和验证冻结的 `databaseChanges[*].after`，不得在 Loop 内改设计。

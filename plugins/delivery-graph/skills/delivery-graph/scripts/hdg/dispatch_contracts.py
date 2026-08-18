@@ -110,6 +110,10 @@ def receiver_skill_prompt(
         "leaseRenewed=false / NOT_REQUIRED，原 leaseExpiresAt 继续有效，仍须每约 "
         "60 秒继续 heartbeat，直到 record_loop_result 或显式释放 claim。"
         "progress 不续租，也不改变 heartbeat 计划；primary 不得代发 heartbeat。"
+        "任何预计超过 60 秒的单次阻塞操作，包括整文件 Write、"
+        "大 patch、批量编辑或命令，都必须先用 "
+        "heartbeat_loop(expected_command_seconds=...) 申请有上限的覆盖"
+        "租约；可拆分的编辑必须改为语义小 patch，并在分块之间 heartbeat。"
     )
     advisory = advisory_skill_hint_prompt(
         skill_hints,

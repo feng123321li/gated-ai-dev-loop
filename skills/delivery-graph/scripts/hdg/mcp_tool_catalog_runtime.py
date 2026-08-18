@@ -173,11 +173,13 @@ RUNTIME_TOOLS = (
                     "minimum": 61,
                     "maximum": 1800,
                     "description": (
-                        "Optional bounded runtime estimate for a command "
-                        "that has already been selected, such as a first "
-                        "Maven dependency warmup. The Controller adds a "
-                        "short completion buffer; this is not an unlimited "
-                        "lease."
+                        "Optional bounded runtime estimate for an already "
+                        "selected blocking operation, including a command "
+                        "or host tool call such as a whole-file write or "
+                        "large patch. The Controller adds a short completion "
+                        "buffer; this is not an unlimited lease. Prefer "
+                        "semantic chunks with heartbeats between them when "
+                        "the operation can be split."
                     ),
                 },
             },

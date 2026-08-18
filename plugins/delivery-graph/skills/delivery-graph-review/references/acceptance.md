@@ -5,6 +5,8 @@ Review 是一个标准 Loop，不是 delivery-graph 内置 Gate。
 
 每个 TASK/GROUP/Delivery Review receiver 在 claim 成功后立即用当前 operation 调用 `heartbeat_loop`，早于 `loop_context` 解读、证据检查、文件检索和验证；首次 `leaseRenewed=false / NOT_REQUIRED` 保留原 `leaseExpiresAt`，并继续按 `heartbeatDirective` 约每 60 秒 heartbeat，直到提交 result 或释放 claim。Review progress 不续租，内部验证 worker 不持有控制面凭据，primary dispatcher 不得代发 heartbeat。
 
+对整文件 Write、大 patch、批量编辑与其他单次宿主 tool call 也要在开始前估时。可拆的既有大文件改为语义小 patch，块间 heartbeat；只有无法拆分时才可使用单次原子调用，且预计超过 60 秒时必须先用 `heartbeat_loop(expected_command_seconds=...)` 申请有上限的覆盖租约。
+
 本文件的分层 Review 规则适用于 `STANDARD`。`LIGHT` 只用于根据真实改动内容和影响范围确认的单一低风险根 TASK，不创建 TASK Review、GROUP seam Review 或 Delivery Acceptance/Readiness；TASK 完成定向验证后直接进入用户确认。执行中发现接口、数据、权限、安全、生产配置、跨模块影响或其他不确定边界时，必须返回 `REPLAN_REQUIRED`，用同一 Delivery 的 `STANDARD` Revision 继续。
 
 ## 三段职责边界

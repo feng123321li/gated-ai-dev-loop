@@ -6,6 +6,7 @@ from .scheduler_runtime_support import (
     get_graph_frontier,
     graph_events,
     heartbeat_loop,
+    loop_execution_policy,
     loop_node_id,
     record_loop_result,
     report_loop_progress,
@@ -16,6 +17,104 @@ from .scheduler_runtime_support import (
 
 
 class SchedulerRuntimeTestsPart14:
+    def test_blocking_tool_call_policy_requires_chunks_or_covering_lease(
+        self,
+    ) -> None:
+        policy = loop_execution_policy()["blockingToolCalls"]
+
+        self.assertEqual(
+            policy["examples"],
+            [
+                "WHOLE_FILE_WRITE",
+                "LARGE_PATCH",
+                "BULK_EDIT",
+                "LONG_HOST_TOOL_CALL",
+            ],
+        )
+        self.assertTrue(policy["estimateBeforeStart"])
+        self.assertEqual(
+            policy["estimatedOverSecondsRequiresLeaseRequest"],
+            60,
+        )
+        self.assertEqual(policy["leaseRequestTool"], "heartbeat_loop")
+        self.assertEqual(
+            policy["leaseRequestArgument"],
+            "expected_command_seconds",
+        )
+        self.assertTrue(policy["preferSemanticChunks"])
+        self.assertTrue(policy["heartbeatBetweenChunks"])
+        self.assertTrue(policy["existingFileWholeRewriteDiscouraged"])
+        self.assertTrue(policy["singleBlockingCallRequiresCoveredLease"])
+
+    def test_blocking_file_write_requests_covering_lease_before_tool_call(
+        self,
+    ) -> None:
+        prepared = self.prepare_and_freeze(task_hierarchy())
+        root_id = prepared["rootId"]
+        node_id = loop_node_id("t-service")
+        operation_id = "op-blocking-file-write"
+        claimed_at = at(2)
+        claimed = dispatch_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            owner="file-edit-agent",
+            operation_id=operation_id,
+            now=claimed_at,
+        )
+        heartbeat_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id=operation_id,
+            now=claimed_at + timedelta(seconds=1),
+        )
+
+        covered = heartbeat_loop(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id=operation_id,
+            expected_command_seconds=420,
+            now=claimed_at + timedelta(seconds=30),
+        )
+        self.assertTrue(covered["leaseRenewed"])
+        self.assertEqual(covered["leaseRenewalReason"], "LONG_COMMAND")
+        self.assertGreater(
+            covered["leaseExpiresAt"],
+            claimed["leaseExpiresAt"],
+        )
+
+        after_base_lease = get_graph_frontier(
+            root=self.root,
+            root_id=root_id,
+            now=claimed_at + timedelta(seconds=330),
+        )
+        self.assertEqual(
+            [item["nodeId"] for item in after_base_lease["activeLoops"]],
+            [node_id],
+        )
+        completed = record_loop_result(
+            root=self.root,
+            root_id=root_id,
+            node_id=node_id,
+            operation_id=operation_id,
+            outcome=success("Atomic file write completed under covering lease."),
+            now=claimed_at + timedelta(seconds=450),
+        )
+        self.assertEqual(completed["schedulerStatus"], "SUCCEEDED")
+
+        events = graph_events(root=self.root, root_id=root_id)["events"]
+        self.assertFalse(
+            any(event["eventType"] == "CLAIM_LEASE_EXPIRED" for event in events)
+        )
+        self.assertFalse(
+            any(
+                event.get("payload", {}).get("failureClass") == "WORKER_LOST"
+                for event in events
+            )
+        )
+
     def test_initial_not_required_heartbeat_keeps_schedule_past_base_lease(
         self,
     ) -> None:

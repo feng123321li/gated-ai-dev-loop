@@ -72,6 +72,8 @@ GROUP 完成点不需要 dispatch，也不包含实现内容。`STANDARD` 不得
     - 快照用于让主会话和用户查看实际文件与 diff，只代表提交时刻证据，不替代
       可验证 commit、clean tree、HEAD 一致性或变更归属判断。快照会投影回主控制目录。
 
+阻塞操作不只是 shell 命令：整文件 Write、大 patch、批量编辑和其他宿主 tool call 都必须先估时。既有大文件优先拆成可审查的语义小 patch，并在分块之间 heartbeat；只有无法拆分时才使用单次原子调用，且预计超过 60 秒时必须在调用前以 `heartbeat_loop(expected_command_seconds=...)` 取得覆盖整个调用及收尾的有界租约。
+
 ## 后台进度与失联预警
 
 - `report_loop_progress` 只写入 `LOOP_PROGRESS_REPORTED` 可观测事件，不改变节点状态、不更新 `lastHeartbeatAt`、不延长 `leaseExpiresAt`。

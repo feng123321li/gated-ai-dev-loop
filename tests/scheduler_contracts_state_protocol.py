@@ -636,6 +636,14 @@ class McpSurfaceTestsPart4:
                 "NOT_REQUIRED preserves the current lease expiry",
                 initialized["result"]["instructions"],
             )
+            self.assertIn(
+                "whole-file writes, large patches, bulk edits",
+                initialized["result"]["instructions"],
+            )
+            self.assertIn(
+                "Prefer semantic edit chunks with a heartbeat between chunks",
+                initialized["result"]["instructions"],
+            )
             handle_message(
                 {
                     "jsonrpc": "2.0",

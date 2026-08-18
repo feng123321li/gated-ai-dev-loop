@@ -53,6 +53,7 @@ MANUAL 只改变 TASK 的 claim 方式，不降低 Review 治理：
 
 heartbeat 是 receiver 的 lease 操作，不是 primary 的轮询信号；primary 不得使用或借用 child operation 代发，宿主 completion notification 也不能代替 heartbeat。receiver 在 claim 后立即首次 heartbeat，并持续每约 60 秒直到 result/claim release；`NOT_REQUIRED` 只保留当前 expiry，不取消后续 heartbeat，progress 也不续租。
 Maven/Gradle 首次依赖预热或其他预计超过 60 秒的命令，由 receiver 在 claim 后先用 `expected_command_seconds` 申请有上限的租约，再交给不持有控制面凭据的语言/构建工具 worker；primary 只观察事件和 deadline，不同步等待构建输出。
+整文件 Write、大 patch、批量编辑与其他宿主 tool call 也属于同一阻塞边界：可拆时改为语义小 patch 并在块间 heartbeat；不可拆且预计超过 60 秒时，receiver 必须在单次调用前用 `expected_command_seconds` 申请覆盖租约。
 
 ## 恢复决策
 

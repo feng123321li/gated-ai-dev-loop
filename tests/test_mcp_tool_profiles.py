@@ -212,6 +212,9 @@ class McpToolProfileTests(unittest.TestCase):
                 )
                 self.assertIn("代码检查、文件检索、依赖分析", prompt)
                 self.assertIn("progress 不续租", prompt)
+                self.assertIn("整文件 Write", prompt)
+                self.assertIn("语义小 patch", prompt)
+                self.assertIn("expected_command_seconds", prompt)
         handoff_prompt = manual_receiver_prompt(
             ".layered-delivery/d-1/handoff-test.md"
         )
@@ -220,6 +223,8 @@ class McpToolProfileTests(unittest.TestCase):
         self.assertIn("delivery-graph-review", handoff_prompt)
         self.assertIn("claim 后立即首次 heartbeat", handoff_prompt)
         self.assertIn("primary 不得代发 heartbeat", handoff_prompt)
+        self.assertIn("整文件 Write", handoff_prompt)
+        self.assertIn("语义小 patch", handoff_prompt)
 
     def test_receiver_skill_routes_cover_every_loop_kind(self) -> None:
         self.assertEqual(

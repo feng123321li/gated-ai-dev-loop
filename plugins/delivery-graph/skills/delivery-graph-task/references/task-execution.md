@@ -33,7 +33,7 @@ claim 成功后立即用相同 operation 首次 heartbeat，早于 Loop context 
 5. 实施最小完整变更。实现、生成、测试或静态审查发现的 actionable 问题留在本 Loop 内修复和复验。
 6. 如果需要改变冻结的外部契约、拓扑、依赖、资源、项目 scope 或数据库 after 设计，停止扩展并提交 `REPLAN_REQUIRED`。
 
-所有 receiver 都在 claim 后立即 heartbeat，并从 claim 到 result/claim release 持续按 `heartbeatDirective` 约每 60 秒 heartbeat；代码检查、文件检索、依赖分析、编辑、测试、rework 和最终验证没有“非租约阶段”。`STANDARD` 在这些真实里程碑另行报告 progress；`LIGHT` 可减少 progress，但不能省略 heartbeat。长命令先估算耗时并优先缩小命令范围（单模块、指定测试类、离线依赖解析）；按 `pom.xml/.mvn/mvnw`、Gradle wrapper、package lockfile、`pyproject.toml`、`go.mod` 或 `Cargo.toml` 选择专用命令 worker。首次依赖预热、install 或预计超过 60 秒的命令，先用 `heartbeat_loop(expected_command_seconds=...)` 申请最多 1800 秒并带 120 秒收尾缓冲的有界租约，再交给不持有 reservation/operation/MCP 凭据的内部 worker 或独立监控；外层 receiver 继续按 60 秒心跳并报告 `QUEUED/STARTED/FINISHED_OR_FAILED`。progress 与 heartbeat 独立，永不续租或改变 heartbeat 截止。
+所有 receiver 都在 claim 后立即 heartbeat，并从 claim 到 result/claim release 持续按 `heartbeatDirective` 约每 60 秒 heartbeat；代码检查、文件检索、依赖分析、编辑、测试、rework 和最终验证没有“非租约阶段”。`STANDARD` 在这些真实里程碑另行报告 progress；`LIGHT` 可减少 progress，但不能省略 heartbeat。每个可能阻塞的单次操作都先估时，不只是命令。整文件 Write、大 patch 或批量编辑优先拆成可审查的语义小 patch，并在块间 heartbeat；无法拆分且预计超过 60 秒时，先用 `heartbeat_loop(expected_command_seconds=...)` 申请覆盖整个原子 tool call 及收尾的有界租约。长命令还应优先缩小范围（单模块、指定测试类、离线依赖解析）；按 `pom.xml/.mvn/mvnw`、Gradle wrapper、package lockfile、`pyproject.toml`、`go.mod` 或 `Cargo.toml` 选择专用命令 worker。首次依赖预热、install 或预计超过 60 秒的命令，先申请最多 1800 秒并带 120 秒收尾缓冲的有界租约，再交给不持有 reservation/operation/MCP 凭据的内部 worker 或独立监控；外层 receiver 继续按 60 秒心跳并报告 `QUEUED/STARTED/FINISHED_OR_FAILED`。progress 与 heartbeat 独立，永不续租或改变 heartbeat 截止。
 
 ## 验证证据
 

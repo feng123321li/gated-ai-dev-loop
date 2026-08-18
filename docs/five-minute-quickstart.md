@@ -35,6 +35,8 @@ AUTOMATIC 由 primary 调用 `plan_dispatch_batch` 并启动一个独立 TASK re
 
 所有 claim 都必须立即 heartbeat。首次 heartbeat 返回 `leaseRenewed=false / NOT_REQUIRED` 时保留原 `leaseExpiresAt`，receiver 仍按 `heartbeatDirective` 每约 60 秒继续 heartbeat，直到 `record_loop_result` 或 claim release。短任务可以减少中间 progress，但 progress 不续租且不改变 heartbeat 计划；primary 不得代发。任何影响扩大都返回 `REPLAN_REQUIRED`，在同一 Delivery 的下一 Revision 升级为 `STANDARD`。
 
+单次整文件 Write、大 patch、批量编辑或命令也可能阻塞 receiver。修改既有大文件时优先拆成语义小 patch 并在块间 heartbeat；无法拆分且预计超过 60 秒时，在调用前用 `heartbeat_loop(expected_command_seconds=...)` 申请有上限的覆盖租约。
+
 ## 4:30—5:00 验收
 
 TASK 成功后直接进入 `RECORD_USER_CONFIRMATION`，没有独立 Review receiver。用户检查：

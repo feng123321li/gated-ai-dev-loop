@@ -10,8 +10,9 @@
 
 - **receiver 心跳连续性**：AUTO TASK、MANUAL TASK 与 Review receiver 在 claim 后立即 heartbeat，并消费 Controller 返回的 `heartbeatDirective` 继续约每 60 秒保活，直到记录 result 或释放 claim。首次返回 `NOT_REQUIRED` / `leaseRenewed=false` 时保留原 `expiresAt`，不再被误解为本轮停止心跳。
 - **执行期边界明确化**：代码检查、文件检索、依赖分析、Maven/Gradle、测试与 Review 全部属于租约执行期；`progress` 只作状态投影，不续租也不重排心跳。预计超过 60 秒的命令先用 `expected_command_seconds` 申请有上限的覆盖租约，必要时由无控制面凭据的非阻塞 worker 执行。
+- **阻塞编辑防失联**：整文件 Write、大 patch、批量编辑和其他宿主 tool call 统一纳入预估时与预扩租约规则。修改既有大文件优先使用语义小 patch 并在块间 heartbeat；无法拆分且预计超过 60 秒的原子调用，必须在开始前用 `expected_command_seconds` 取得能覆盖整个调用及收尾的有界租约。
 - **安全边界**：外层 receiver 持有心跳凭据并负责保活，primary dispatcher 不得冒充 receiver 代发 heartbeat，Controller 也不伪造存活。已在运行的旧 receiver 不会热更新提示，需按现有租约恢复流程重派；无 schema 或 `.layered-delivery/` 数据迁移。
-- **回归与验证**：新增“首次 heartbeat 为 `NOT_REQUIRED`，检查持续超过基础租约”的时钟回归，断言后续 heartbeat 续租、progress 不续租且不产生 `CLAIM_LEASE_EXPIRED` / `WORKER_LOST`。全量 Python 427 项完成（426 通过、1 项按环境跳过），全树编译、四个 Skill、Plugin 镜像、release candidate 与差异校验通过。
+- **回归与验证**：新增“首次 heartbeat 为 `NOT_REQUIRED`，检查持续超过基础租约”与“单次文件写入预扩租约后跨过基础租约”的时钟回归，断言后续 heartbeat/覆盖租约有效、progress 不续租且不产生 `CLAIM_LEASE_EXPIRED` / `WORKER_LOST`。全量 Python 429 项完成（428 通过、1 项按环境跳过），全树编译、四个 Skill、Plugin 镜像、release candidate 与差异校验通过。
 
 ## 0.43.0 — 2026-08-18
 

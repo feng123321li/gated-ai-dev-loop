@@ -51,7 +51,7 @@ MANUAL 只改变 TASK 的 claim 方式，不降低 Review 治理：
 - 不 back-to-back 调用 `graph_frontier` 和 `graph_status`。
 - 只有 `progressMonitor.changeFingerprint` 改变或出现新告警时，才向用户更新表格。
 
-heartbeat 是 receiver 的 lease 操作，不是 primary 的轮询信号；宿主 completion notification 也不能代替 heartbeat。
+heartbeat 是 receiver 的 lease 操作，不是 primary 的轮询信号；primary 不得使用或借用 child operation 代发，宿主 completion notification 也不能代替 heartbeat。receiver 在 claim 后立即首次 heartbeat，并持续每约 60 秒直到 result/claim release；`NOT_REQUIRED` 只保留当前 expiry，不取消后续 heartbeat，progress 也不续租。
 Maven/Gradle 首次依赖预热或其他预计超过 60 秒的命令，由 receiver 在 claim 后先用 `expected_command_seconds` 申请有上限的租约，再交给不持有控制面凭据的语言/构建工具 worker；primary 只观察事件和 deadline，不同步等待构建输出。
 
 ## 恢复决策

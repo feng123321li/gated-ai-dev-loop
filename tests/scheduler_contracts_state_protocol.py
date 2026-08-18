@@ -629,7 +629,11 @@ class McpSurfaceTestsPart4:
                 initialized["result"]["instructions"],
             )
             self.assertIn(
-                "short problem-free LIGHT Loop may omit heartbeat and progress",
+                "Every claimed Loop must heartbeat immediately after claim",
+                initialized["result"]["instructions"],
+            )
+            self.assertIn(
+                "NOT_REQUIRED preserves the current lease expiry",
                 initialized["result"]["instructions"],
             )
             handle_message(

@@ -25,6 +25,7 @@ allowed-tools:
 - AUTOMATIC 的每个 READY TASK/Review 先由 `plan_dispatch_batch` 原子 reservation，再创建不同的宿主原生 receiver。primary 不得 claim 或把 assignment 交给普通 helper。
 - assignment 的 `receiverPrompt` 必须原样传递：TASK 会路由到 `$delivery-graph-task`，所有 Review 会路由到 `$delivery-graph-review`。
 - 只有外层 receiver 持有 reservation、decision fingerprint、receiver context 和 `operation_id`。内部 Worker 不接触控制面凭据。
+- primary 不持有或借用 receiver operation，绝不代发 heartbeat；每个 receiver 自己在 claim 后立即 heartbeat，并持续到 result/claim release。`NOT_REQUIRED` 不取消其约 60 秒计划，progress 不续租。
 - 派遣和等待只依据 assignment `reasons`、reservation/lease、节点 `resultProvenance`、progress/heartbeat 与事件链；把这些结构化原因展示给用户，不用隐藏推断解释“为什么在等”。
 - Graph 不授权 commit、merge、push、发布、迁移或新增权限；这些动作仍分别取得授权。
 

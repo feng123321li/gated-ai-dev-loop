@@ -157,8 +157,11 @@ RUNTIME_TOOLS = (
         (
             "Record a live heartbeat for one claimed Loop, refresh the "
             "agent progress monitor, and renew its short lease only after "
-            "the renewal threshold is reached. Heartbeats do not rewrite "
-            "human projection files."
+            "the renewal threshold is reached. Call it immediately after "
+            "claim and then about every 60 seconds until result or claim "
+            "release. leaseRenewed=false with NOT_REQUIRED preserves the "
+            "existing expiry and does not cancel the next heartbeat. "
+            "Heartbeats do not rewrite human projection files."
         ),
         _object(
             {

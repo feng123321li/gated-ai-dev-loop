@@ -176,10 +176,13 @@ class McpToolProfileTests(unittest.TestCase):
         )
 
     def test_receiver_prompts_always_route_to_the_role_skill(self) -> None:
-        self.assertIn(
-            "$delivery-graph-task",
-            receiver_skill_prompt("TASK_LOOP", [], host_adapter_id="codex"),
+        task_prompt = receiver_skill_prompt(
+            "TASK_LOOP", [], host_adapter_id="codex"
         )
+        self.assertIn("$delivery-graph-task", task_prompt)
+        self.assertIn("claim 成功后立即调用 heartbeat_loop", task_prompt)
+        self.assertIn("NOT_REQUIRED", task_prompt)
+        self.assertIn("仍须每约 60 秒继续 heartbeat", task_prompt)
         self.assertIn(
             "$delivery-graph-review",
             receiver_skill_prompt(
@@ -199,12 +202,24 @@ class McpToolProfileTests(unittest.TestCase):
             zcode_prompt,
         )
         self.assertNotIn("Codex", zcode_prompt)
+        self.assertIn("claim 成功后立即调用 heartbeat_loop", zcode_prompt)
+        for loop_kind in LOOP_KINDS:
+            with self.subTest(loop_kind=loop_kind):
+                prompt = receiver_skill_prompt(
+                    loop_kind,
+                    [],
+                    host_adapter_id="codex",
+                )
+                self.assertIn("代码检查、文件检索、依赖分析", prompt)
+                self.assertIn("progress 不续租", prompt)
         handoff_prompt = manual_receiver_prompt(
             ".layered-delivery/d-1/handoff-test.md"
         )
         self.assertIn("delivery-graph-dispatch", handoff_prompt)
         self.assertIn("delivery-graph-task", handoff_prompt)
         self.assertIn("delivery-graph-review", handoff_prompt)
+        self.assertIn("claim 后立即首次 heartbeat", handoff_prompt)
+        self.assertIn("primary 不得代发 heartbeat", handoff_prompt)
 
     def test_receiver_skill_routes_cover_every_loop_kind(self) -> None:
         self.assertEqual(

@@ -12,7 +12,7 @@
 
 外层 receiver 是唯一控制面主体。AUTO receiver 提交 assignment 的 reservation 和 decision fingerprint；MANUAL receiver 省略 reservation。两者都必须提供自己的 `receiver_context_id`、新的 `operation_id`、可信 Adapter 和明确节点。
 
-claim 成功后，所有 heartbeat、progress、pause、resume 和 result 都携带相同 operation。内部 Worker 可以协助分析、编码或测试，但不得看到或使用 reservation、operation、MCP 凭据，也不得调用 Loop 生命周期工具。
+claim 成功后立即用相同 operation 首次 heartbeat，早于 Loop context 解读、代码检查、文件检索、依赖分析和任何命令；此后所有 heartbeat、progress、pause、resume 和 result 都携带该 operation。首次 `leaseRenewed=false / NOT_REQUIRED` 不会撤销原 `leaseExpiresAt`，也不终止后续每约 60 秒的 heartbeat。内部 Worker 可以协助分析、编码或测试，但不得看到或使用 reservation、operation、MCP 凭据，也不得调用 Loop 生命周期工具；primary dispatcher 同样不得冒充 receiver 代发 heartbeat。
 
 ## 项目访问边界
 
@@ -33,7 +33,7 @@ claim 成功后，所有 heartbeat、progress、pause、resume 和 result 都携
 5. 实施最小完整变更。实现、生成、测试或静态审查发现的 actionable 问题留在本 Loop 内修复和复验。
 6. 如果需要改变冻结的外部契约、拓扑、依赖、资源、项目 scope 或数据库 after 设计，停止扩展并提交 `REPLAN_REQUIRED`。
 
-`STANDARD` receiver 在代码工作前 heartbeat，并在检查、根因、编辑、测试、rework、最终验证等真实里程碑报告 progress。长命令先估算耗时并优先缩小命令范围（单模块、指定测试类、离线依赖解析）；按 `pom.xml/.mvn/mvnw`、Gradle wrapper、package lockfile、`pyproject.toml`、`go.mod` 或 `Cargo.toml` 选择专用命令 worker。首次依赖预热、install 或预计超过 60 秒的命令，先用 `heartbeat_loop(expected_command_seconds=...)` 申请最多 1800 秒并带 120 秒收尾缓冲的有界租约，再交给不持有 reservation/operation/MCP 凭据的内部 worker 或独立监控；主 receiver 继续按 60 秒心跳并报告 `QUEUED/STARTED/FINISHED_OR_FAILED`。`LIGHT` 只能在短时、低风险且初始 lease 内完成时省略中间 heartbeat/progress。
+所有 receiver 都在 claim 后立即 heartbeat，并从 claim 到 result/claim release 持续按 `heartbeatDirective` 约每 60 秒 heartbeat；代码检查、文件检索、依赖分析、编辑、测试、rework 和最终验证没有“非租约阶段”。`STANDARD` 在这些真实里程碑另行报告 progress；`LIGHT` 可减少 progress，但不能省略 heartbeat。长命令先估算耗时并优先缩小命令范围（单模块、指定测试类、离线依赖解析）；按 `pom.xml/.mvn/mvnw`、Gradle wrapper、package lockfile、`pyproject.toml`、`go.mod` 或 `Cargo.toml` 选择专用命令 worker。首次依赖预热、install 或预计超过 60 秒的命令，先用 `heartbeat_loop(expected_command_seconds=...)` 申请最多 1800 秒并带 120 秒收尾缓冲的有界租约，再交给不持有 reservation/operation/MCP 凭据的内部 worker 或独立监控；外层 receiver 继续按 60 秒心跳并报告 `QUEUED/STARTED/FINISHED_OR_FAILED`。progress 与 heartbeat 独立，永不续租或改变 heartbeat 截止。
 
 ## 验证证据
 

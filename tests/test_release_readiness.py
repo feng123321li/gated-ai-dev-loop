@@ -127,7 +127,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
             "LIGHT",
             "基线",
             "状态指纹",
-            "短任务不要求 heartbeat_loop",
+            "所有 claim 都必须立即 heartbeat",
             "PLUGIN_MCP_UNAVAILABLE",
         ):
             self.assertIn(required, quickstart)
@@ -457,8 +457,8 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         self.assertNotIn("background coordinator", prompt)
         self.assertNotIn("linked worktree", prompt)
         self.assertNotIn("git worktree add", prompt)
-        self.assertIn("short LIGHT receiver may finish without", prompt)
-        self.assertNotIn("smoke is failed if LOOP_HEARTBEAT is absent", prompt)
+        self.assertIn("immediately after a successful claim", prompt)
+        self.assertIn("smoke is failed if LOOP_HEARTBEAT is absent", prompt)
 
     def test_codex_host_smoke_uses_reserved_independent_receivers(self) -> None:
         bootstrap = codex_bootstrap_prompt("light")
@@ -472,7 +472,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         self.assertIn("distinct host-native child", codex_resume_prompt("standard"))
         self.assertNotIn("SessionStart", resumed)
         self.assertNotIn("claim_current_task", resumed)
-        self.assertIn("short LIGHT receiver may finish without", resumed)
+        self.assertIn("heartbeat_loop with that operation_id immediately", resumed)
         standard = codex_resume_prompt("standard")
         self.assertIn("heartbeat_loop", standard)
 

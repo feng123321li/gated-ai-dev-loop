@@ -871,12 +871,12 @@ class SchedulerRuntimeTestsPart4:
                 "shortLoopMayReportOnlyFinal"
             ]
         )
-        self.assertFalse(
+        self.assertTrue(
             execution_policy["progressReporting"][
                 "initialHeartbeatRequiredBeforeWork"
             ]
         )
-        self.assertTrue(
+        self.assertFalse(
             execution_policy["progressReporting"][
                 "shortLoopMayCompleteWithoutExplicitHeartbeat"
             ]

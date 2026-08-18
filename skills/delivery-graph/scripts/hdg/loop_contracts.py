@@ -36,6 +36,25 @@ _LOOP_EXECUTION_POLICY = {
         "action": "PAUSE_AND_HANDOFF",
         "loopOutcome": "NONE",
     },
+    "leaseHeartbeat": {
+        "owner": "OUTER_LOOP_RECEIVER",
+        "initial": "IMMEDIATE_AFTER_CLAIM_BEFORE_LOOP_CONTEXT_OR_WORK",
+        "intervalSeconds": 60,
+        "continueUntil": "LOOP_RESULT_RECORDED_OR_CLAIM_RELEASED",
+        "continueDuring": [
+            "CODE_INSPECTION",
+            "FILE_SEARCH",
+            "DEPENDENCY_ANALYSIS",
+            "BUILD",
+            "TEST",
+            "REVIEW",
+        ],
+        "notRequiredMeaning": (
+            "PRESERVE_CURRENT_EXPIRY_AND_CONTINUE_HEARTBEAT_SCHEDULE"
+        ),
+        "progressIndependent": True,
+        "primaryMayHeartbeatForReceiver": False,
+    },
     "unclaimedAutomaticRecovery": {
         "tool": "handoff_ready_automatic_task",
         "requiresReadyTask": True,
@@ -427,12 +446,6 @@ def loop_execution_policy(
             "FINAL_VERIFICATION",
         ]
         policy["progressReporting"]["shortLoopMayReportOnlyFinal"] = True
-        policy["progressReporting"][
-            "initialHeartbeatRequiredBeforeWork"
-        ] = False
-        policy["progressReporting"][
-            "shortLoopMayCompleteWithoutExplicitHeartbeat"
-        ] = True
     return policy
 
 

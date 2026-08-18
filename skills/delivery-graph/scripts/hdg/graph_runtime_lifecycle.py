@@ -8,6 +8,7 @@ from .graph_runtime_common import (
     _active_claim,
     _after,
     _assert_graph_not_replanning,
+    _heartbeat_directive,
     _loaded,
     _locked_timestamp,
     _node,
@@ -161,6 +162,12 @@ def heartbeat_loop(
         "leaseExpiresAt": expires,
         "leaseRenewed": lease_renewed,
         "leaseRenewalReason": renewal_reason,
+        "heartbeatDirective": _heartbeat_directive(
+            claim_policy,
+            observed_at=at,
+            claimed_at=state["claimedAt"],
+            last_heartbeat_at=at,
+        ),
         **(
             {"expectedCommandSeconds": expected_command_seconds}
             if expected_command_seconds is not None
@@ -224,6 +231,12 @@ def report_loop_progress(
             (at, run["run_id"]),
         )
         lease_expires_at = state["leaseExpiresAt"]
+        heartbeat_directive = _heartbeat_directive(
+            graph["runtime"]["claimPolicy"],
+            observed_at=at,
+            claimed_at=state["claimedAt"],
+            last_heartbeat_at=state["lastHeartbeatAt"],
+        )
     repository.write_projections(root_id)
     return {
         "rootId": root_id,
@@ -248,6 +261,7 @@ def report_loop_progress(
         **({"tests": payload["tests"]} if "tests" in payload else {}),
         "leaseExpiresAt": lease_expires_at,
         "leaseRenewed": False,
+        "heartbeatDirective": heartbeat_directive,
     }
 
 def pause_loop(

@@ -1,6 +1,6 @@
 # 5 分钟 LIGHT Quickstart
 
-这条路径面向一个项目、一个根 TASK、局部低风险且有明确定向验证的短任务。目标是只保留基线冻结、真实终态验收和轻量工作区变更索引，不创建 GROUP、独立 Review receiver 或短任务心跳仪式。
+这条路径面向一个项目、一个根 TASK、局部低风险且有明确定向验证的短任务。目标是只保留基线冻结、真实终态验收和轻量工作区变更索引，不创建 GROUP 或独立 Review receiver；receiver 仍执行统一的租约 heartbeat 协议。
 
 ## 0:00—1:00 检查注册
 
@@ -31,9 +31,9 @@ python scripts/mcp_registration_probe.py --host zcode --strict
 
 ## 3:00—4:30 执行唯一 TASK
 
-AUTOMATIC 由 primary 调用 `plan_dispatch_batch` 并启动一个独立 TASK receiver；receiver 用 assignment 调用 `dispatch_loop`，读取一次 `loop_context`，只在验证过的项目 scope 内修改。
+AUTOMATIC 由 primary 调用 `plan_dispatch_batch` 并启动一个独立 TASK receiver；receiver 用 assignment 调用 `dispatch_loop`，立即调用首次 `heartbeat_loop`，再解读 claim 已返回的 Loop context，只在验证过的项目 scope 内修改。
 
-短任务不要求 heartbeat_loop：claim 已建立初始租约，receiver 可直接修改、运行定向验证并调用 `record_loop_result`。若工作超出初始租约窗口，或发现问题需要继续处理，则按返回的 heartbeat/progress 契约上报。任何影响扩大都返回 `REPLAN_REQUIRED`，在同一 Delivery 的下一 Revision 升级为 `STANDARD`。
+所有 claim 都必须立即 heartbeat。首次 heartbeat 返回 `leaseRenewed=false / NOT_REQUIRED` 时保留原 `leaseExpiresAt`，receiver 仍按 `heartbeatDirective` 每约 60 秒继续 heartbeat，直到 `record_loop_result` 或 claim release。短任务可以减少中间 progress，但 progress 不续租且不改变 heartbeat 计划；primary 不得代发。任何影响扩大都返回 `REPLAN_REQUIRED`，在同一 Delivery 的下一 Revision 升级为 `STANDARD`。
 
 ## 4:30—5:00 验收
 
@@ -49,6 +49,6 @@ TASK 成功后直接进入 `RECORD_USER_CONFIRMATION`，没有独立 Review rece
 
 - 一个根 TASK、零 GROUP、零 Review；
 - 基线和需求已冻结；
-- 短任务可为零 heartbeat/progress；
+- 至少有 claim 后立即 heartbeat；短任务可减少 progress；
 - 有定向验证证据与 patch 快照；
 - 最终确认来自用户，不由 Agent 代填。

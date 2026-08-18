@@ -48,11 +48,8 @@ class SchedulerRuntimeTestsPart10:
             operation_id=operation_id,
             now=claimed_at,
         )
-        progress_path = (
-            Path(self.root)
-            / ".layered-delivery"
-            / root_id
-            / "progress.md"
+        progress_path = Path(
+            self.root, ".layered-delivery", root_id, "progress.md"
         )
         projection_after_claim = progress_path.read_bytes()
 
@@ -398,7 +395,7 @@ class SchedulerRuntimeTestsPart10:
             "正在运行测试，准备检查接口兼容性。",
         )
 
-    def test_light_short_loop_has_no_first_heartbeat_ceremony(self) -> None:
+    def test_light_loop_also_requires_an_immediate_first_heartbeat(self) -> None:
         hierarchy = task_hierarchy()
         hierarchy["delivery"].update(
             {
@@ -414,7 +411,7 @@ class SchedulerRuntimeTestsPart10:
         root_id = prepared["rootId"]
         node_id = loop_node_id("t-service")
         claimed_at = at(2)
-        dispatch_loop(
+        claimed = dispatch_loop(
             root=self.root,
             root_id=root_id,
             node_id=node_id,
@@ -430,11 +427,20 @@ class SchedulerRuntimeTestsPart10:
             now=claimed_at + timedelta(seconds=91),
         )["progressMonitor"]
 
-        self.assertEqual(within_short_window["alerts"], [])
-        self.assertIn(
-            "LIGHT 短任务可免显式心跳",
-            within_short_window["markdownTable"],
+        self.assertTrue(
+            claimed["executionPolicy"]["progressReporting"][
+                "initialHeartbeatRequiredBeforeWork"
+            ]
         )
+        self.assertEqual(
+            claimed["heartbeatDirective"]["action"],
+            "HEARTBEAT_NOW",
+        )
+        self.assertEqual(
+            within_short_window["alerts"][0]["code"],
+            "SUSPECT_NOT_STARTED",
+        )
+        self.assertIn("疑似未启动", within_short_window["markdownTable"])
         events = graph_events(root=self.root, root_id=root_id)["events"]
         self.assertFalse(
             any(event["eventType"] == "LOOP_HEARTBEAT" for event in events)

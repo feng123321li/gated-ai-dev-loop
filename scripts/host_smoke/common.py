@@ -251,9 +251,13 @@ def validate_smoke(
             "real-host smoke must claim only the current Agent; "
             f"expected {host!r}, found {sorted(claimed_agents)!r}"
         )
-    required_event_types = ["LOOP_CLAIMED", "LOOP_SUCCEEDED"]
+    required_event_types = [
+        "LOOP_CLAIMED",
+        "LOOP_HEARTBEAT",
+        "LOOP_SUCCEEDED",
+    ]
     if scenario != "light":
-        required_event_types.extend(["LOOP_HEARTBEAT", "LOOP_PROGRESS_REPORTED"])
+        required_event_types.append("LOOP_PROGRESS_REPORTED")
     for event_type in required_event_types:
         if events.get(event_type, 0) < minimum_successes:
             raise RuntimeError(
@@ -293,25 +297,19 @@ def review_requirement(profile: str) -> str:
 
 def frozen_progress_requirement(profile: str) -> str:
     return (
-        "The frozen TASK payload must explicitly allow a short LIGHT receiver "
-        "to finish without heartbeat_loop. The claim establishes its initial "
-        "lease; heartbeat only if work continues beyond that lease window."
-        if profile == "LIGHT"
-        else (
-            "The frozen TASK payload and every child assignment must explicitly "
-            "make this host check an acceptance condition: immediately after a "
-            "successful claim, the child calls heartbeat_loop once before "
-            "editing any file. The smoke is failed if LOOP_HEARTBEAT is absent "
-            "even when the task is short."
-        )
+        "The frozen TASK payload and every child assignment must explicitly "
+        "make this host check an acceptance condition for every assurance "
+        "profile: immediately after a successful claim, the child calls "
+        "heartbeat_loop once before interpreting loop_context or inspecting "
+        "any file. The smoke is failed if LOOP_HEARTBEAT is absent even when "
+        "the task is short."
     )
 
 
 def completion_progress_requirement(profile: str) -> str:
     return (
-        "The TASK receiver may report its truthful final result directly when "
-        "the short LIGHT task completes inside the initial lease; structured "
-        "progress and heartbeat remain optional in that case."
+        "The TASK receiver must send an immediate heartbeat, but may omit "
+        "nonessential structured progress before its truthful final result."
         if profile == "LIGHT"
         else (
             "Every TASK or Review receiver must send at least one heartbeat "
@@ -323,21 +321,12 @@ def completion_progress_requirement(profile: str) -> str:
 
 def receiver_start_requirement(profile: str) -> str:
     return (
-        "The child must call dispatch_loop first with the exact reservation_id "
-        "and decision_fingerprint, its own receiver_context_id, and a fresh "
-        "operation_id, then read loop_context once. A short LIGHT receiver may "
-        "finish without an explicit heartbeat; if it keeps working beyond the "
-        "initial lease window, it must call heartbeat_loop before that window "
-        "expires."
-        if profile == "LIGHT"
-        else (
-            "Each child must call dispatch_loop first with the exact "
-            "reservation_id and decision_fingerprint, its own "
-            "receiver_context_id, and a fresh operation_id; then call "
-            "loop_context once and heartbeat_loop with that operation_id "
-            "immediately before any shell, file read/write, implementation "
-            "analysis, or extra discovery."
-        )
+        "Each child must call dispatch_loop first with the exact "
+        "reservation_id and decision_fingerprint, its own receiver_context_id, "
+        "and a fresh operation_id; then call heartbeat_loop with that operation "
+        "immediately before interpreting the returned Loop context or doing any "
+        "shell, file read/write, implementation analysis, or extra discovery. "
+        "NOT_REQUIRED does not cancel the next heartbeat."
     )
 
 

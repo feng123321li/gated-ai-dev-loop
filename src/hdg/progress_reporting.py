@@ -7,7 +7,6 @@ from types import MappingProxyType
 from typing import Any
 
 from .errors import GatedLoopError, fail
-from .graph_model import graph_assurance_profile
 from .jsonio import fingerprint
 
 
@@ -444,7 +443,7 @@ def build_progress_monitor(
     heartbeat_stale_seconds = int(claim_policy["heartbeatSeconds"]) + int(
         claim_policy["graceSeconds"]
     )
-    first_heartbeat_required = graph_assurance_profile(graph) != "LIGHT"
+    first_heartbeat_required = True
     rows: list[dict[str, Any]] = []
     alerts: list[dict[str, Any]] = []
     health_deadlines: list[datetime] = []
@@ -473,18 +472,11 @@ def build_progress_monitor(
             if health_deadline is not None:
                 health_deadlines.append(health_deadline)
             if state.get("firstHeartbeatAt") is None:
-                if first_heartbeat_required:
-                    heartbeat_zh = (
-                        "尚无独立心跳；领取 "
-                        f"{_duration_zh(_seconds_between(observed, state.get('claimedAt')))}"
-                        "前"
-                    )
-                else:
-                    heartbeat_zh = (
-                        "LIGHT 短任务可免显式心跳；领取 "
-                        f"{_duration_zh(_seconds_between(observed, state.get('claimedAt')))}"
-                        "前"
-                    )
+                heartbeat_zh = (
+                    "尚无独立心跳；领取 "
+                    f"{_duration_zh(_seconds_between(observed, state.get('claimedAt')))}"
+                    "前"
+                )
             else:
                 heartbeat_zh = (
                     "最后心跳 "

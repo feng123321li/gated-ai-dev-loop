@@ -105,6 +105,11 @@ def receiver_skill_prompt(
     required = (
         f"这是 {role} receiver；{host_instruction}"
         "只处理 assignment 指定的 node，不规划、派遣或接管其他 Loop。"
+        "claim 成功后立即调用 heartbeat_loop，必须早于 loop_context 解读以及"
+        "任何代码检查、文件检索、依赖分析、构建、测试或 Review；即使首次返回 "
+        "leaseRenewed=false / NOT_REQUIRED，原 leaseExpiresAt 继续有效，仍须每约 "
+        "60 秒继续 heartbeat，直到 record_loop_result 或显式释放 claim。"
+        "progress 不续租，也不改变 heartbeat 计划；primary 不得代发 heartbeat。"
     )
     advisory = advisory_skill_hint_prompt(
         skill_hints,

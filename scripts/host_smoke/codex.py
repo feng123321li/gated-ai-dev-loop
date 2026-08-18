@@ -90,18 +90,14 @@ def codex_resume_prompt(scenario: str) -> str:
         )
     )
     receiver_progress_requirement = (
-        "A short LIGHT receiver may finish without an explicit heartbeat. Its "
-        "dispatch_loop claim establishes the initial lease; call heartbeat_loop "
-        "only if work continues beyond that lease window."
-        if scenario == "light"
-        else (
-            "The child must call heartbeat_loop with that operation_id before "
-            "any implementation inspection or edit."
-        )
+        "The child must call heartbeat_loop with that operation_id immediately "
+        "after claim and before reading the returned Loop context or doing any "
+        "implementation inspection or edit. NOT_REQUIRED keeps the current "
+        "expiry and does not cancel the next heartbeat."
     )
     result_progress_requirement = (
-        "It may report the truthful final result directly when it finishes "
-        "inside the initial lease."
+        "After the immediate heartbeat, it may omit nonessential progress and "
+        "report the truthful final result directly."
         if scenario == "light"
         else "Report structured progress before recording the truthful result."
     )

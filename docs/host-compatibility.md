@@ -7,6 +7,10 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.43.1 发布候选矩阵
+
+0.43.1 修复 receiver claim 后在长时间代码检查或构建期间停止 heartbeat、最终被判定 `WORKER_LOST` 的问题。AUTO TASK、MANUAL TASK 与 Review 统一在 claim 后立即 heartbeat，并按 Controller 的 `heartbeatDirective` 每约 60 秒继续保活；`NOT_REQUIRED` 保留原租约截止时间且不停止后续心跳，`progress` 继续不续租。代码检查、文件检索、依赖分析、构建、测试与 Review 全部纳入租约执行期，预计超过 60 秒的命令先申请有上限的 `expected_command_seconds` 租约，必要时由无凭据 worker 非阻塞执行。Controller 不伪造 heartbeat，旧 receiver 不热更新提示并需在恢复后重派。MCP 工具联集保持 32，schema v3 与 `.layered-delivery/` namespace 不变。候选已完成 427 项 Python 测试（426 通过、1 项按环境跳过）、全树编译、四个 Skill、Plugin 镜像、release candidate 与差异校验。
+
 ## 0.43.0 发布候选矩阵
 
 0.43.0 把 MANUAL handoff 接入 AUTOMATIC 使用的同一 `CURRENT_WORKSPACE_SERIAL`：选择时原子记录 `manual_pending`、workspace binding 和队列 turn，非队首投影为 `QUEUED`，轮到后由 `manualHostPreparation → start_manual_handoff` 复用 commit、clean、HEAD、receiver/reservation 与多项目 scope 门禁。Graph runtime 增加 `schema-v3-graph-compiler-v2`；0.42.1 及更早的未启动 `HANDOFF_READY` 只有在无 Run 且 hierarchy、节点和边完全一致时才刷新 runtime policy 与 graph fingerprint，层级指纹和 Revision 不变；ACTIVE/FROZEN Graph 仍拒绝运行时协议漂移，升级前应完成或取消。MCP 工具联集保持 32，schema v3 与 `.layered-delivery/` namespace 不变。候选已完成 426 项 Python 测试（425 通过、1 项按环境跳过）、全树编译、四个 Skill、Plugin 镜像、release candidate 与差异校验。

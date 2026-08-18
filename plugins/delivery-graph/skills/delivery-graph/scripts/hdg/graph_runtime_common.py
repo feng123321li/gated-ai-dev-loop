@@ -151,6 +151,35 @@ def _after(value: str, seconds: int) -> str:
         _parse_timestamp(value) + timedelta(seconds=seconds)
     ).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
+
+def _heartbeat_directive(
+    claim_policy: dict[str, Any],
+    *,
+    observed_at: str,
+    claimed_at: str,
+    last_heartbeat_at: str | None,
+) -> dict[str, Any]:
+    """Return the receiver-owned heartbeat schedule for a live claim."""
+
+    interval_seconds = int(claim_policy["heartbeatSeconds"])
+    due_at = (
+        claimed_at
+        if last_heartbeat_at is None
+        else _after(last_heartbeat_at, interval_seconds)
+    )
+    return {
+        "action": (
+            "HEARTBEAT_NOW"
+            if _parse_timestamp(due_at) <= _parse_timestamp(observed_at)
+            else "HEARTBEAT_BY_DUE_AT"
+        ),
+        "dueAt": due_at,
+        "intervalSeconds": interval_seconds,
+        "continueUntil": "LOOP_RESULT_RECORDED_OR_CLAIM_RELEASED",
+        "continueAfterLeaseRenewalNotRequired": True,
+        "progressDoesNotAffectSchedule": True,
+    }
+
 def _locked_timestamp(now: object, current: str) -> str:
     """Resolve commit time under the scheduler lock without regression."""
 

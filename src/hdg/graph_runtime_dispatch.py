@@ -13,6 +13,7 @@ from .graph_runtime_common import (
     _assert_graph_not_replanning,
     _dispatch_mode_allowed,
     _executor_descriptor,
+    _heartbeat_directive,
     _identity,
     _loaded,
     _locked_timestamp,
@@ -351,6 +352,12 @@ def dispatch_loop(
                     "dispatchDecisionFingerprint": dispatch_decision_fingerprint,
                     "operationId": operation_id,
                     "leaseExpiresAt": state["leaseExpiresAt"],
+                    "heartbeatDirective": _heartbeat_directive(
+                        graph["runtime"]["claimPolicy"],
+                        observed_at=at,
+                        claimed_at=state["claimedAt"],
+                        last_heartbeat_at=state["lastHeartbeatAt"],
+                    ),
                     "dispatchReplayed": True,
                     "progressMonitor": status["progressMonitor"],
                 }
@@ -560,6 +567,12 @@ def dispatch_loop(
         ),
         "operationId": operation_id,
         "leaseExpiresAt": expires,
+        "heartbeatDirective": _heartbeat_directive(
+            graph["runtime"]["claimPolicy"],
+            observed_at=at,
+            claimed_at=at,
+            last_heartbeat_at=None,
+        ),
         "dispatchReplayed": False,
         "progressMonitor": status["progressMonitor"],
     }

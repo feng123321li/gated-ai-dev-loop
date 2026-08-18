@@ -418,7 +418,7 @@ class SchedulerRepository(SchedulerRepositoryBase):
         self,
         root_id: str,
     ) -> dict[str, Any] | None:
-        """Return Controller-captured Git state from GRAPH_RUN_STARTED."""
+        """Return the latest Controller-captured Git turn-start state."""
 
         if not self.database_path.is_file():
             return None
@@ -429,7 +429,9 @@ class SchedulerRepository(SchedulerRepositoryBase):
                 "JOIN hierarchies h ON h.root_id = r.root_id "
                 "AND h.revision = r.revision "
                 "WHERE r.root_id = ? "
-                "AND e.event_type = 'GRAPH_RUN_STARTED' "
+                "AND e.event_type IN ("
+                "'GRAPH_RUN_STARTED', 'WORKSPACE_TURN_REACQUIRED'"
+                ") "
                 "ORDER BY e.event_id DESC LIMIT 1",
                 (root_id,),
             ).fetchone()
@@ -453,6 +455,12 @@ class SchedulerRepository(SchedulerRepositoryBase):
                 "AND h.revision = r.revision "
                 "WHERE r.root_id = ? "
                 "AND e.event_type = 'WORKSPACE_TURN_RELEASED' "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM graph_events requeued "
+                "WHERE requeued.run_id = e.run_id "
+                "AND requeued.event_type = 'WORKSPACE_TURN_REQUEUED' "
+                "AND requeued.event_id > e.event_id"
+                ") "
                 "ORDER BY e.event_id DESC LIMIT 1",
                 (root_id,),
             ).fetchone()
@@ -573,6 +581,13 @@ class SchedulerRepository(SchedulerRepositoryBase):
             )
         return leases
 
+    def serial_workspace_release_blockers(
+        self,
+        root_id: str,
+    ) -> dict[str, list[dict[str, Any]]]:
+        store = self._delivery_execution_setup_store()
+        return store.serial_workspace_release_blockers(root_id)
+
     def release_serial_workspace_turn(
         self,
         root_id: str,
@@ -599,10 +614,16 @@ class SchedulerRepository(SchedulerRepositoryBase):
                     f"Graph run is missing: {root_id}",
                 )
             existing = connection.execute(
-                "SELECT payload_json FROM graph_events "
-                "WHERE run_id = ? "
-                "AND event_type = 'WORKSPACE_TURN_RELEASED' "
-                "ORDER BY event_id DESC LIMIT 1",
+                "SELECT released.payload_json FROM graph_events released "
+                "WHERE released.run_id = ? "
+                "AND released.event_type = 'WORKSPACE_TURN_RELEASED' "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM graph_events requeued "
+                "WHERE requeued.run_id = released.run_id "
+                "AND requeued.event_type = 'WORKSPACE_TURN_REQUEUED' "
+                "AND requeued.event_id > released.event_id"
+                ") "
+                "ORDER BY released.event_id DESC LIMIT 1",
                 (run["run_id"],),
             ).fetchone()
             if existing is not None:
@@ -614,6 +635,8 @@ class SchedulerRepository(SchedulerRepositoryBase):
                 "SUPERSEDED",
             }
             release_reason = "RUN_TERMINAL" if terminal else None
+            if run["status"] == "PAUSED":
+                release_reason = "RUN_PAUSED_SAFE_CHECKPOINT"
             if not terminal:
                 _, graph = _validated_stored_definition(run)
                 confirmation = next(
@@ -636,7 +659,8 @@ class SchedulerRepository(SchedulerRepositoryBase):
                 fail(
                     "SCHEDULER_WORKSPACE_TURN_NOT_RELEASABLE",
                     "A workspace turn can release only after its Run is "
-                    "terminal or ready for final user confirmation",
+                    "terminal, paused at a safe checkpoint, or ready for "
+                    "final user confirmation",
                     rootId=root_id,
                     status=run["status"],
                 )
@@ -691,6 +715,39 @@ class SchedulerRepository(SchedulerRepositoryBase):
                 at=at,
             )
         return payload
+
+    def requeue_paused_workspace_turn(
+        self,
+        root_id: str,
+        *,
+        node_id: str,
+    ) -> dict[str, Any]:
+        return self._delivery_execution_setup_store(
+        ).requeue_paused_workspace_turn(
+            root_id,
+            node_id=node_id,
+        )
+
+    def paused_workspace_turn_requeue(
+        self,
+        root_id: str,
+    ) -> dict[str, Any] | None:
+        store = self._delivery_execution_setup_store()
+        return store.paused_workspace_turn_requeue(root_id)
+
+    def reacquire_paused_workspace_turn(
+        self,
+        root_id: str,
+        *,
+        node_id: str,
+        workspace_turn_start: dict[str, Any],
+    ) -> dict[str, Any]:
+        return self._delivery_execution_setup_store(
+        ).reacquire_paused_workspace_turn(
+            root_id,
+            node_id=node_id,
+            workspace_turn_start=workspace_turn_start,
+        )
 
     def revision_history(self, root_id: str) -> dict[str, Any]:
         return self._delivery_hierarchy_store().revision_history(

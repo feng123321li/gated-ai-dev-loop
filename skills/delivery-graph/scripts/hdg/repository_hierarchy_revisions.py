@@ -339,9 +339,15 @@ class HierarchyRevisionMixin:
             )
             if not is_reprepare:
                 released_turn = connection.execute(
-                    "SELECT 1 FROM graph_events "
-                    "WHERE run_id = ? "
-                    "AND event_type = 'WORKSPACE_TURN_RELEASED' "
+                    "SELECT 1 FROM graph_events released "
+                    "WHERE released.run_id = ? "
+                    "AND released.event_type = 'WORKSPACE_TURN_RELEASED' "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM graph_events requeued "
+                    "WHERE requeued.run_id = released.run_id "
+                    "AND requeued.event_type = 'WORKSPACE_TURN_REQUEUED' "
+                    "AND requeued.event_id > released.event_id"
+                    ") "
                     "LIMIT 1",
                     (previous_run["run_id"],),
                 ).fetchone()

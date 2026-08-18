@@ -41,7 +41,7 @@ claude plugin list --json
 python -m scripts.host_smoke probe --json
 ```
 
-结果必须报告 Plugin 版本 0.43.2、32 个 MCP 工具的 Profile 联集以及 3 个 MCP server，并如实标记本机已安装的宿主。单个 Agent 只应看到其 Skill 对应的 Profile 子集。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在目标宿主执行真实宿主冒烟任务；宿主不要求安装在同一台机器。MCP 工具是否真正注入各 workspace/Agent schema，使用[注册矩阵与生命周期契约](mcp-host-lifecycle-contract.md)中的只读 Demo 单独验证。
+结果必须报告 Plugin 版本 0.43.3、32 个 MCP 工具的 Profile 联集以及 3 个 MCP server，并如实标记本机已安装的宿主。单个 Agent 只应看到其 Skill 对应的 Profile 子集。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在目标宿主执行真实宿主冒烟任务；宿主不要求安装在同一台机器。MCP 工具是否真正注入各 workspace/Agent schema，使用[注册矩阵与生命周期契约](mcp-host-lifecycle-contract.md)中的只读 Demo 单独验证。
 
 真实冒烟按宿主各自由独立模块实现（`scripts/host_smoke/` 下的 `codex.py`、`claude.py`、`zcode.py`），共享证据规则在 `common.py`。Codex 与 Claude Code 默认先只展示计划，必须显式增加 `--execute` 才调用模型，两个宿主分别运行，绝不从一个终端跨调另一个 Agent：
 
@@ -60,7 +60,7 @@ python -m scripts.host_smoke run --host zcode --scenario light --execute --works
 python -m scripts.host_smoke run --host zcode --scenario light --verify-only --workspace-dir <同一目录>
 ```
 
-Claude 命令从当前 0.43.2 源码发布包的 `--plugin-dir` 加载 Plugin；Codex 命令要求候选 Plugin 已从 Marketplace 安装；ZCode 由已安装 Plugin 的真实会话加载。发布前可用用户明确选择的 LIGHT 验证 `select_execution_mode → 当前 checkout 分支准备 → resume_execution_mode → plan_dispatch_batch → 独立 TASK child → dispatch_loop(AUTO) → immediate heartbeat → result`；另以 MANUAL 覆盖 `select_execution_mode → QUEUED → manualHostPreparation → start_manual_handoff` 的同队列续调。LIGHT 可省略非必要 progress，但所有 claim 都必须立即 heartbeat。再用 STANDARD 覆盖 progress、持续 heartbeat 和独立 Review。Claude 由主会话在 `CURRENT_WORKSPACE_SERIAL` 边界内协调当前分支和独立 receiver Agent，不启动专用后台 coordinator。任何输出中的 `claimedAgents` 都只能包含命令指定的当前宿主。
+Claude 命令从当前 0.43.3 源码发布包的 `--plugin-dir` 加载 Plugin；Codex 命令要求候选 Plugin 已从 Marketplace 安装；ZCode 由已安装 Plugin 的真实会话加载。发布前可用用户明确选择的 LIGHT 验证 `select_execution_mode → 当前 checkout 分支准备 → resume_execution_mode → plan_dispatch_batch → 独立 TASK child → dispatch_loop(AUTO) → immediate heartbeat → result`；另以 MANUAL 覆盖 `select_execution_mode → QUEUED → manualHostPreparation → start_manual_handoff` 的同队列续调。LIGHT 可省略非必要 progress，但所有 claim 都必须立即 heartbeat。再用 STANDARD 覆盖 progress、持续 heartbeat 和独立 Review。Claude 由主会话在 `CURRENT_WORKSPACE_SERIAL` 边界内协调当前分支和独立 receiver Agent，不启动专用后台 coordinator。任何输出中的 `claimedAgents` 都只能包含命令指定的当前宿主。
 
 0.40.0 真实冒烟还必须覆盖以下交互和失败关闭边界：
 
@@ -73,7 +73,7 @@ Claude 命令从当前 0.43.2 源码发布包的 `--plugin-dir` 加载 Plugin；
 - 同一物理 workspace 可以绑定多个 Delivery，但每个会话必须保存并显式传自己的 `rootId`。无参发现多个未结束绑定时只返回 `DELIVERY_SELECTION_REQUIRED`，不能按更新时间猜选。
 - AUTOMATIC 与 MANUAL 选择在排队时都立即持久化。非队首 Delivery 对外标记为 `QUEUED`，包含队列位置、owner 和无需再次确认的 mode-specific continuation；不创建 Run、不派遣 receiver。前序 Delivery 释放后，宿主消费 `automaticHostPreparation` 或 `manualHostPreparation`：必要时按精确指纹 stash 业务改动（排除 `.layered-delivery/**`），创建或切换目标分支，再调用 `resume_execution_mode` 或 `start_manual_handoff`，不能重选。
 - 手动交接冻结同样持久化 Delivery、不可变 Revision、完整 hierarchy、双 fingerprint 和人类投影，内部状态保持 `HANDOFF_READY`，并原子记录 MANUAL 选择与 workspace binding。已有 owner 时它对外产生 `QUEUED`，等待期间不创建 Graph Run；只有接收方显式调用 `start_manual_handoff` 才启动。旧版未绑定 handoff 只能用明确 `rootId` 恢复；无 Run 且 hierarchy/节点/边完全一致时，启动前可刷新 Graph 编译协议、runtime policy 和 graph fingerprint，ACTIVE/FROZEN 状态仍拒绝版本漂移。
-- 前序 Delivery 在 Run 终态，或已到 `RECORD_USER_CONFIRMATION` 时，只要被取消 receiver 的租约已结束、没有 reservation、存在相对 turn-start 的非空业务 commit、历史未改写且工作树/index 干净，即可释放物理 workspace turn。待用户确认只释放 checkout，不标记完成；错分支、dirty、HEAD 或 scope 漂移全部失败关闭。
+- 前序 Delivery 到达 `PAUSED`、Run 终态或 `RECORD_USER_CONFIRMATION` 只形成 release eligibility；被取消 receiver 的租约必须结束且没有 reservation，所有 READ_WRITE scope 都要在各自冻结独立分支形成相对 turn-start 的非空业务 commit，并保持历史未改写、工作树/index clean 与 binding 匹配。Controller 复核全部 scope 并持久化 `WORKSPACE_TURN_RELEASED` 后才释放物理 turn；待用户确认只释放 checkout，不标记完成，暂停恢复重新排队并重获 turn。错分支、dirty、HEAD 或 scope 漂移全部失败关闭。
 - 主会话当前 checkout 与所有 `READ_WRITE` project workspace 都参与事务内 owner gate；任一 physical workspace 冲突时只允许先到 Delivery 运行。
 - TASK/TASK Review 的 Controller 可信 Git 证据只保存 committed、staged、unstaged 与 untracked 变更文件清单、base/HEAD 和状态指纹；不得把源码 diff 或补丁附件写入 Graph。需要内容时从授权 checkout 或对应提交读取。
 - 同一冻结分支仍不能同时属于两个未终结 Delivery；每个 Delivery 使用自己的 feature branch。

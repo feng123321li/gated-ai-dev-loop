@@ -15,10 +15,10 @@ from .planning_gates import (
     _delivery_queue_marker,
     _pending_interaction,
     _resolve_serial_workspace_gate,
+    _serial_workspace_release_handshake,
     _serial_turn_for_recorded_selection,
 )
 from .planning_workspace import (
-    _SERIAL_TERMINAL_STATUSES,
     _automatic_serial_workspace_preparation,
     _manual_serial_workspace_preparation,
 )
@@ -127,15 +127,18 @@ def workspace_status(
                 )
                 result["workspaceStrategy"] = "CURRENT_WORKSPACE_SERIAL"
                 result["workspaceTurn"] = serial_gate["workspaceTurn"]
-                if serial_gate["state"] == "RELEASED":
-                    result["nextAction"] = (
-                        "GRAPH_RUN_ALREADY_TERMINAL"
-                        if result["status"] in _SERIAL_TERMINAL_STATUSES
-                        else "READ_GRAPH_FRONTIER"
+                if serial_gate["state"] in {
+                    "RELEASED",
+                    "WAITING_FOR_WORKSPACE_COMMIT",
+                    "WAITING_FOR_WORKSPACE_QUIESCENCE",
+                }:
+                    result.update(
+                        _serial_workspace_release_handshake(
+                            repository,
+                            workspace_root or root,
+                            selected_root_id,
+                        )
                     )
-                    return result
-                if serial_gate["state"] == "WAITING_FOR_WORKSPACE_COMMIT":
-                    result["nextAction"] = "WAIT_FOR_WORKSPACE_COMMIT"
                     return result
         if selection is not None:
             serial_gate = _resolve_serial_workspace_gate(
@@ -152,11 +155,21 @@ def workspace_status(
             )
             result["workspaceStrategy"] = "CURRENT_WORKSPACE_SERIAL"
             result["workspaceTurn"] = serial_gate["workspaceTurn"]
-            if serial_gate["state"] == "RELEASED":
-                result["nextAction"] = (
-                    "GRAPH_RUN_ALREADY_TERMINAL"
-                    if result["status"] in _SERIAL_TERMINAL_STATUSES
-                    else "READ_GRAPH_FRONTIER"
+            if serial_gate["state"] in {
+                "RELEASED",
+                "WAITING_FOR_WORKSPACE_COMMIT",
+                "WAITING_FOR_WORKSPACE_QUIESCENCE",
+            } and (
+                serial_gate["state"] == "RELEASED"
+                or serial_gate["workspaceTurn"].get("ownerRootId")
+                == selected_root_id
+            ):
+                result.update(
+                    _serial_workspace_release_handshake(
+                        repository,
+                        workspace_root or root,
+                        selected_root_id,
+                    )
                 )
                 return result
             if serial_gate["state"] != "ACQUIRED":

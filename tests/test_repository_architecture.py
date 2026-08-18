@@ -152,6 +152,10 @@ class RepositoryArchitectureTests(unittest.TestCase):
             "record_choice_ready",
             "record_automatic_selection",
             "execution_selection",
+            "serial_workspace_release_blockers",
+            "requeue_paused_workspace_turn",
+            "paused_workspace_turn_requeue",
+            "reacquire_paused_workspace_turn",
         }
 
         self._assert_store_boundary(

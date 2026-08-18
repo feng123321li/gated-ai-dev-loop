@@ -289,8 +289,10 @@ RUNTIME_TOOLS = (
         "pause_loop",
         (
             "Pause one claimed Loop with a live lease while preserving its "
-            "current attempt and frozen Graph. Resume it explicitly in an "
-            "independent receiving context when work can continue."
+            "current attempt and frozen Graph. The response separately "
+            "reports workspaceRelease=PENDING or RELEASED; release requires "
+            "all receivers/reservations quiesced plus a business commit and "
+            "clean matching frozen branch in every writable Git scope."
         ),
         _object(
             {
@@ -304,8 +306,11 @@ RUNTIME_TOOLS = (
     _tool(
         "resume_loop",
         (
-            "Resume one paused Loop in a receiving independent context and "
-            "return it to Graph readiness."
+            "Resume one paused Loop in a receiving independent context. If "
+            "its workspace turn was released, first append it to the serial "
+            "queue, wait for ownership, prepare the frozen branches, and "
+            "capture a fresh clean turn start; only then return the node to "
+            "Graph readiness."
         ),
         _object(
             {"root_id": ROOT_ID, "node_id": NODE_ID},
@@ -354,10 +359,11 @@ RUNTIME_TOOLS = (
         "record_user_confirmation",
         (
             "Complete the graph after its Review Loop succeeds and the user "
-            "accepts. If the clean committed workspace turn was already "
-            "released at the confirmation boundary, record this control-plane "
-            "decision by root ID without requiring the old Delivery branch to "
-            "be checked out."
+            "accepts. Before returning, recheck and persist the independent "
+            "Delivery branch release when its business commit, clean tree, "
+            "frozen binding, receiver, reservation, and project-scope gates "
+            "all pass. If it was already released, record this control-plane "
+            "decision by root ID without requiring the old branch."
         ),
         _object(
             {
@@ -382,7 +388,11 @@ RUNTIME_TOOLS = (
     ),
     _tool(
         "cancel_graph_run",
-        "Cancel all unfinished nodes in a non-terminal scheduler run.",
+        (
+            "Cancel all unfinished nodes in a non-terminal scheduler run, "
+            "then separately report whether the committed clean frozen "
+            "workspace turn was safely released or remains pending."
+        ),
         _object(
             {
                 "root_id": ROOT_ID,

@@ -1,6 +1,6 @@
 {
   "name": "delivery-graph",
-  "version": "0.43.2",
+  "version": "0.43.3",
   "description": "确认 Git 基线，以显式 rootId 管理多 Delivery，在当前 workspace 串行调度 GROUP/TASK，并支持冻结开发包、验收与恢复",
   "author": {
     "name": "delivery-graph contributors",
@@ -100,7 +100,7 @@
   "interface": {
     "displayName": "分层交付 Graph 控制面",
     "shortDescription": "多 Delivery 串行 workspace、Graph 调度与分层审查",
-    "longDescription": "每个 Delivery 使用稳定 rootId 和不可变 Revision 管理需求与验收；同一物理 checkout 可绑定多个 Delivery，但只允许队首 Run 执行。前序 Run 终态或到达最终用户确认边界，并满足业务 commit、clean、HEAD 与 receiver/reservation 安全门禁后，后续 Delivery 才能切换自己的冻结分支并恢复；待用户确认只释放物理 turn，不提前完成 Delivery。自动 TASK 与 Review 继续使用 reservation、operation 租约和完整分层治理，Controller 只持久化轻量工作区变更索引，不复制源码 diff。",
+    "longDescription": "每个 Delivery 使用稳定 rootId 和不可变 Revision 管理需求与验收；同一物理 checkout 可绑定多个 Delivery，但只允许队首 Run 执行。PAUSED、终态或最终用户确认只形成释放资格；全部冻结独立分支必须完成业务 commit/clean、binding 与 receiver/reservation 复核，并由 Controller 持久化 WORKSPACE_TURN_RELEASED 后才可切分支。暂停恢复会重新排队并重获 turn。自动 TASK 与 Review 继续使用 reservation、operation 租约和完整分层治理。",
     "developerName": "delivery-graph contributors",
     "category": "Productivity",
     "capabilities": [

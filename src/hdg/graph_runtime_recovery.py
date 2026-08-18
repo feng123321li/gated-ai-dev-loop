@@ -247,6 +247,12 @@ def _rebuild_graph_run_locked(
                     state["status"] = "CANCELLED"
                     state["finishedAt"] = at
             continue
+        if event_type in {
+            "WORKSPACE_TURN_RELEASED",
+            "WORKSPACE_TURN_REQUEUED",
+            "WORKSPACE_TURN_REACQUIRED",
+        }:
+            continue
         if node_id not in latest:
             fail(
                 "SCHEDULER_EVENT_REPLAY_INVALID",
@@ -453,10 +459,7 @@ def _rebuild_graph_run_locked(
                 "summary": payload["summary"],
             }
             completed_at = at
-        elif event_type in {
-            "RETRY_EXHAUSTED",
-            "WORKSPACE_TURN_RELEASED",
-        }:
+        elif event_type == "RETRY_EXHAUSTED":
             continue
         else:
             fail(

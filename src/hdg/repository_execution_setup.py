@@ -345,7 +345,13 @@ class DeliveryExecutionSetupStore:
             "h.status AS hierarchy_status, r.status AS run_status, "
             "CASE WHEN EXISTS("
             "SELECT 1 FROM graph_events e WHERE e.run_id = r.run_id "
-            "AND e.event_type = 'WORKSPACE_TURN_RELEASED'"
+            "AND e.event_type = 'WORKSPACE_TURN_RELEASED' "
+            "AND NOT EXISTS("
+            "SELECT 1 FROM graph_events requeued "
+            "WHERE requeued.run_id = e.run_id "
+            "AND requeued.event_type = 'WORKSPACE_TURN_REQUEUED' "
+            "AND requeued.event_id > e.event_id"
+            ")"
             ") AND NOT EXISTS("
             "SELECT 1 FROM delivery_revisions pending "
             "WHERE pending.root_id = h.root_id "
@@ -462,6 +468,272 @@ class DeliveryExecutionSetupStore:
                 workspace_key=binding["workspace_key"],
                 requested_root_id=root_id,
             )
+
+    def serial_workspace_release_blockers(
+        self,
+        root_id: str,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Return live receiver and reservation blockers for one release."""
+
+        if not self.database_path.is_file():
+            return {"receiverClaims": [], "dispatchReservations": []}
+        with self.read() as connection:
+            run = connection.execute(
+                "SELECT run_id FROM runs WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if run is None:
+                return {"receiverClaims": [], "dispatchReservations": []}
+            claims = [
+                {
+                    "nodeId": row["node_id"],
+                    "attempt": row["attempt"],
+                    "owner": row["owner"],
+                    "operationId": row["operation_id"],
+                    "leaseExpiresAt": row["lease_expires_at"],
+                }
+                for row in connection.execute(
+                    "SELECT node_id, attempt, owner, operation_id, "
+                    "lease_expires_at FROM node_runs WHERE run_id = ? "
+                    "AND status = 'CLAIMED' ORDER BY node_id, attempt",
+                    (run["run_id"],),
+                ).fetchall()
+            ]
+            reservations = [
+                reservation
+                for reservation in self.active_dispatch_reservations(
+                    connection,
+                    at=self.timestamp_fn(self.now),
+                )
+                if reservation["rootId"] == root_id
+            ]
+        return {
+            "receiverClaims": claims,
+            "dispatchReservations": reservations,
+        }
+
+    def requeue_paused_workspace_turn(
+        self,
+        root_id: str,
+        *,
+        node_id: str,
+    ) -> dict[str, Any]:
+        """Invalidate a paused release and append the Delivery at queue tail."""
+
+        with self.transaction() as connection:
+            run = connection.execute(
+                "SELECT * FROM runs WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if run is None:
+                fail(
+                    "SCHEDULER_RUN_MISSING",
+                    f"Graph run is missing: {root_id}",
+                )
+            node = connection.execute(
+                "SELECT status, attempt FROM node_runs WHERE run_id = ? "
+                "AND node_id = ? ORDER BY attempt DESC LIMIT 1",
+                (run["run_id"], node_id),
+            ).fetchone()
+            if (
+                run["status"] != "PAUSED"
+                or node is None
+                or node["status"] != "PAUSED"
+            ):
+                fail(
+                    "SCHEDULER_LOOP_NOT_PAUSED",
+                    f"{node_id} is not paused at a releasable checkpoint",
+                )
+            release = connection.execute(
+                "SELECT released.event_id, released.payload_json "
+                "FROM graph_events released "
+                "WHERE released.run_id = ? "
+                "AND released.event_type = 'WORKSPACE_TURN_RELEASED' "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM graph_events requeued "
+                "WHERE requeued.run_id = released.run_id "
+                "AND requeued.event_type = 'WORKSPACE_TURN_REQUEUED' "
+                "AND requeued.event_id > released.event_id"
+                ") ORDER BY released.event_id DESC LIMIT 1",
+                (run["run_id"],),
+            ).fetchone()
+            if release is None:
+                existing = connection.execute(
+                    "SELECT payload_json FROM graph_events WHERE run_id = ? "
+                    "AND event_type = 'WORKSPACE_TURN_REQUEUED' "
+                    "ORDER BY event_id DESC LIMIT 1",
+                    (run["run_id"],),
+                ).fetchone()
+                if existing is not None:
+                    return json.loads(existing["payload_json"])
+                fail(
+                    "SCHEDULER_WORKSPACE_TURN_NOT_RELEASED",
+                    "A paused workspace turn must be released before it can "
+                    "requeue",
+                    rootId=root_id,
+                    nodeId=node_id,
+                )
+            at = self.commit_timestamp_fn(self.now, run["updated_at"])
+            payload = {
+                "state": "QUEUED",
+                "strategy": "CURRENT_WORKSPACE_SERIAL",
+                "nodeId": node_id,
+                "requeuedAt": at,
+                "release": json.loads(release["payload_json"]),
+                "requeueReason": "PAUSED_LOOP_RESUME_REQUESTED",
+            }
+            self.append_event(
+                connection,
+                run_id=run["run_id"],
+                node_id=node_id,
+                attempt=node["attempt"],
+                event_type="WORKSPACE_TURN_REQUEUED",
+                actor="CONTROLLER",
+                operation_id=None,
+                payload=payload,
+                at=at,
+            )
+            connection.execute(
+                "UPDATE delivery_workspaces SET created_at = ?, "
+                "updated_at = ? WHERE root_id = ?",
+                (at, at, root_id),
+            )
+            connection.execute(
+                "UPDATE runs SET updated_at = ? WHERE run_id = ?",
+                (at, run["run_id"]),
+            )
+        return payload
+
+    def paused_workspace_turn_requeue(
+        self,
+        root_id: str,
+    ) -> dict[str, Any] | None:
+        """Return an active paused requeue not yet reacquired."""
+
+        if not self.database_path.is_file():
+            return None
+        with self.read() as connection:
+            row = connection.execute(
+                "SELECT requeued.payload_json FROM graph_events requeued "
+                "JOIN runs r ON r.run_id = requeued.run_id "
+                "WHERE r.root_id = ? "
+                "AND requeued.event_type = 'WORKSPACE_TURN_REQUEUED' "
+                "AND NOT EXISTS ("
+                "SELECT 1 FROM graph_events reacquired "
+                "WHERE reacquired.run_id = requeued.run_id "
+                "AND reacquired.event_type = 'WORKSPACE_TURN_REACQUIRED' "
+                "AND reacquired.event_id > requeued.event_id"
+                ") ORDER BY requeued.event_id DESC LIMIT 1",
+                (root_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        payload = json.loads(row["payload_json"])
+        return payload if isinstance(payload, dict) else None
+
+    def reacquire_paused_workspace_turn(
+        self,
+        root_id: str,
+        *,
+        node_id: str,
+        workspace_turn_start: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Persist a fresh Git checkpoint before a paused Loop resumes."""
+
+        with self.transaction() as connection:
+            run = connection.execute(
+                "SELECT * FROM runs WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if run is None:
+                fail(
+                    "SCHEDULER_RUN_MISSING",
+                    f"Graph run is missing: {root_id}",
+                )
+            node = connection.execute(
+                "SELECT status, attempt FROM node_runs WHERE run_id = ? "
+                "AND node_id = ? ORDER BY attempt DESC LIMIT 1",
+                (run["run_id"], node_id),
+            ).fetchone()
+            if (
+                run["status"] != "PAUSED"
+                or node is None
+                or node["status"] != "PAUSED"
+            ):
+                fail(
+                    "SCHEDULER_LOOP_NOT_PAUSED",
+                    f"{node_id} is not paused",
+                )
+            requeue = connection.execute(
+                "SELECT event_id, payload_json FROM graph_events "
+                "WHERE run_id = ? "
+                "AND event_type = 'WORKSPACE_TURN_REQUEUED' "
+                "ORDER BY event_id DESC LIMIT 1",
+                (run["run_id"],),
+            ).fetchone()
+            if requeue is None:
+                fail(
+                    "SCHEDULER_WORKSPACE_TURN_REQUEUE_REQUIRED",
+                    "A released paused Loop must requeue before reacquiring",
+                    rootId=root_id,
+                    nodeId=node_id,
+                )
+            existing = connection.execute(
+                "SELECT payload_json FROM graph_events WHERE run_id = ? "
+                "AND event_type = 'WORKSPACE_TURN_REACQUIRED' "
+                "AND event_id > ? ORDER BY event_id DESC LIMIT 1",
+                (run["run_id"], requeue["event_id"]),
+            ).fetchone()
+            if existing is not None:
+                return json.loads(existing["payload_json"])
+            binding = connection.execute(
+                "SELECT workspace_key FROM delivery_workspaces "
+                "WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if binding is None:
+                fail(
+                    "SCHEDULER_DELIVERY_WORKSPACE_MISSING",
+                    f"Delivery workspace binding is missing: {root_id}",
+                )
+            turn = self._serial_workspace_turn_state_from_connection(
+                connection,
+                workspace_key=binding["workspace_key"],
+                requested_root_id=root_id,
+            )
+            if turn["state"] != "ACQUIRED":
+                fail(
+                    "SCHEDULER_WORKSPACE_TURN_NOT_OWNED",
+                    "A paused Loop cannot resume before it reacquires the "
+                    "serial workspace turn",
+                    rootId=root_id,
+                    workspaceTurn=turn,
+                )
+            at = self.commit_timestamp_fn(self.now, run["updated_at"])
+            payload = {
+                "state": "ACQUIRED",
+                "strategy": "CURRENT_WORKSPACE_SERIAL",
+                "nodeId": node_id,
+                "reacquiredAt": at,
+                "workspaceTurnStart": workspace_turn_start,
+                "requeue": json.loads(requeue["payload_json"]),
+            }
+            self.append_event(
+                connection,
+                run_id=run["run_id"],
+                node_id=node_id,
+                attempt=node["attempt"],
+                event_type="WORKSPACE_TURN_REACQUIRED",
+                actor="CONTROLLER",
+                operation_id=None,
+                payload=payload,
+                at=at,
+            )
+            connection.execute(
+                "UPDATE runs SET updated_at = ? WHERE run_id = ?",
+                (at, run["run_id"]),
+            )
+        return payload
 
     def record_automatic_selection(
         self,

@@ -540,9 +540,13 @@ class McpSurfaceTestsPart4:
                 instructions,
             )
             self.assertIn(
-                "verifiable commit, a clean working tree and index, HEAD "
-                "still matching its frozen binding, and no in-flight "
-                "receiver",
+                "verifiable business commit on every frozen independent "
+                "branch, a clean working tree and index, HEAD still matching "
+                "its frozen binding, and no in-flight receiver",
+                instructions,
+            )
+            self.assertIn(
+                "workspaceRelease=RELEASED",
                 instructions,
             )
             self.assertIn(

@@ -45,6 +45,7 @@ from .planning import (
     start_manual_handoff,
     workspace_status,
 )
+from .planning_gates import _serial_workspace_release_handshake
 from .repository import SchedulerRepository
 
 
@@ -57,6 +58,7 @@ CONTROL_ROOT_MONITOR_TOOLS = frozenset(
         "graph_events",
         "open_delivery_dashboard",
         "record_user_confirmation",
+        "resume_loop",
     }
 )
 
@@ -219,6 +221,7 @@ class LayeredDeliveryController:
                 "select_execution_mode",
                 "resume_execution_mode",
                 "start_manual_handoff",
+                "resume_loop",
             } and not monitoring_from_control_root:
                 stored = repository.hierarchy(root_id)
                 git_binding = stored["hierarchy"]["delivery"].get(
@@ -263,6 +266,7 @@ class LayeredDeliveryController:
             "resume_execution_mode",
             "start_manual_handoff",
             "handoff_ready_automatic_task",
+            "resume_loop",
         }:
             arguments_value["workspace_root"] = workspace_root
         if name == "loop_context":
@@ -304,6 +308,24 @@ class LayeredDeliveryController:
             explicit_dogfood=context.explicit_dogfood,
             **arguments_value,
         )
+        if (
+            isinstance(root_id, str)
+            and name
+            in {
+                "pause_loop",
+                "record_user_confirmation",
+                "cancel_graph_run",
+            }
+            and result.get("status")
+            in {"PAUSED", "COMPLETED", "CANCELLED"}
+        ):
+            result.update(
+                _serial_workspace_release_handshake(
+                    SchedulerRepository(context.project_root),
+                    workspace_root,
+                    root_id,
+                )
+            )
         if git_binding is not None:
             result["gitBinding"] = git_binding
         if git_workspace is not None:

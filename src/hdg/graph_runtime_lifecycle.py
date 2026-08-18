@@ -375,11 +375,128 @@ def resume_loop(
     root: str,
     root_id: str,
     node_id: str,
+    workspace_root: str | None = None,
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
+    workspace_turn: dict[str, Any] | None = None
+    workspace_reacquisition: dict[str, Any] | None = None
+    if workspace_root is not None:
+        from .git_binding import (
+            verify_delivery_git_binding,
+            verify_runtime_delivery_project_scopes,
+        )
+        from .planning_gates import (
+            _capture_workspace_turn_start,
+            _serial_workspace_release_handshake,
+        )
+        from .planning_workspace import (
+            _automatic_workspace_requests,
+            _paused_serial_workspace_preparation,
+        )
+
+        release = repository.workspace_turn_release(root_id)
+        if release is None and repository.run(root_id)["status"] == "PAUSED":
+            handshake = _serial_workspace_release_handshake(
+                repository,
+                workspace_root,
+                root_id,
+            )
+            if handshake["workspaceRelease"]["state"] != "RELEASED":
+                return {
+                    "rootId": root_id,
+                    "nodeId": node_id,
+                    "status": "PAUSED",
+                    "deliveryStatus": "PAUSED",
+                    **handshake,
+                    "workspaceResume": {
+                        "state": "WAITING_FOR_WORKSPACE_RELEASE",
+                        "nextAction": handshake["nextAction"],
+                    },
+                }
+            release = repository.workspace_turn_release(root_id)
+        if release is not None:
+            repository.requeue_paused_workspace_turn(
+                root_id,
+                node_id=node_id,
+            )
+        active_requeue = repository.paused_workspace_turn_requeue(root_id)
+        if active_requeue is not None:
+            workspace_turn = repository.serial_workspace_turn_state(root_id)
+            if workspace_turn["state"] != "ACQUIRED":
+                return {
+                    "rootId": root_id,
+                    "nodeId": node_id,
+                    "status": "QUEUED",
+                    "deliveryStatus": "PAUSED",
+                    "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
+                    "workspaceTurn": workspace_turn,
+                    "workspaceRequeue": active_requeue,
+                    "workspaceResume": {
+                        "state": "WAITING_FOR_WORKSPACE_TURN",
+                        "nextAction": (
+                            "WAIT_FOR_PAUSED_LOOP_WORKSPACE_TURN"
+                        ),
+                    },
+                    "nextAction": "WAIT_FOR_PAUSED_LOOP_WORKSPACE_TURN",
+                }
+            stored = repository.hierarchy(root_id)
+            preparation = _paused_serial_workspace_preparation(
+                control_root=root,
+                workspace_root=workspace_root,
+                hierarchy=stored["hierarchy"],
+            )
+            if preparation is not None:
+                return {
+                    "rootId": root_id,
+                    "nodeId": node_id,
+                    "status": "PAUSED",
+                    "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
+                    "workspaceTurn": workspace_turn,
+                    "workspaceRequeue": active_requeue,
+                    "workspacePreparation": preparation,
+                    "workspaceResume": {
+                        "state": "WORKSPACE_PREPARATION_REQUIRED",
+                        "nextAction": preparation["nextAction"],
+                    },
+                    "nextAction": preparation["nextAction"],
+                }
+            turn_start = _capture_workspace_turn_start(
+                _automatic_workspace_requests(
+                    control_root=root,
+                    workspace_root=workspace_root,
+                    hierarchy=stored["hierarchy"],
+                ),
+                workspace_root,
+            )
+            workspace_reacquisition = (
+                repository.reacquire_paused_workspace_turn(
+                    root_id,
+                    node_id=node_id,
+                    workspace_turn_start=turn_start,
+                )
+            )
+        stored = repository.hierarchy(root_id)
+        repository.assert_delivery_workspace(root_id, workspace_root)
+        verified_projects = verify_runtime_delivery_project_scopes(
+            workspace_root,
+            stored["hierarchy"]["delivery"],
+            preparing=False,
+        )
+        if stored["hierarchy"]["delivery"].get("projectScopes") is None:
+            verify_delivery_git_binding(
+                workspace_root,
+                stored["hierarchy"]["delivery"].get("gitBinding"),
+                preparing=False,
+            )
+        elif not verified_projects:
+            fail(
+                "SCHEDULER_PROJECT_SCOPE_INVALID",
+                "The paused Delivery has no verified project scope",
+                rootId=root_id,
+            )
     with repository.transaction() as connection:
         graph, run, nodes = _loaded(connection, root_id)
         at = _locked_timestamp(now, run["updated_at"])
@@ -419,7 +536,7 @@ def resume_loop(
             at=at,
         )
     repository.write_projections(root_id)
-    return {
+    result = {
         "rootId": root_id,
         "nodeId": node_id,
         "status": "READY",
@@ -431,3 +548,18 @@ def resume_loop(
             "IN_INDEPENDENT_CONTEXT"
         ),
     }
+    if workspace_root is not None:
+        result.update(
+            {
+                "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
+                "workspaceTurn": (
+                    repository.serial_workspace_turn_state(root_id)
+                ),
+                "workspaceResume": {
+                    "state": "REACQUIRED",
+                    "reacquisition": workspace_reacquisition,
+                    "nextAction": result["nextAction"],
+                },
+            }
+        )
+    return result

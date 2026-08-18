@@ -251,21 +251,33 @@ def _current_workspace_serial_preparation(
     *,
     selection: str = "AUTOMATIC",
 ) -> dict[str, Any]:
-    if selection not in {"AUTOMATIC", "MANUAL"}:
+    if selection not in {"AUTOMATIC", "MANUAL", "PAUSED"}:
         fail(
             "SCHEDULER_EXECUTION_CHOICE_INVALID",
-            "Workspace preparation requires AUTOMATIC or MANUAL",
+            "Workspace preparation requires AUTOMATIC, MANUAL, or PAUSED",
             selection=selection,
         )
     manual = selection == "MANUAL"
     resume_action = (
-        "START_MANUAL_HANDOFF" if manual else "RESUME_EXECUTION_MODE"
+        "START_MANUAL_HANDOFF"
+        if manual
+        else (
+            "RESUME_LOOP" if selection == "PAUSED" else "RESUME_EXECUTION_MODE"
+        )
     )
     resume_tool = (
-        "start_manual_handoff" if manual else "resume_execution_mode"
+        "start_manual_handoff"
+        if manual
+        else (
+            "resume_loop"
+            if selection == "PAUSED"
+            else "resume_execution_mode"
+        )
     )
     preparation_suffix = (
-        "START_MANUAL_HANDOFF" if manual else "RESUME_EXECUTION"
+        "START_MANUAL_HANDOFF"
+        if manual
+        else ("RESUME_LOOP" if selection == "PAUSED" else "RESUME_EXECUTION")
     )
     project_preparations = []
     for request in requests:
@@ -524,6 +536,34 @@ def _manual_serial_workspace_preparation(
         selection="MANUAL",
     )
 
+
+def _paused_serial_workspace_preparation(
+    *,
+    control_root: str,
+    workspace_root: str,
+    hierarchy: dict[str, Any],
+) -> dict[str, Any] | None:
+    requests = _automatic_workspace_requests(
+        control_root=control_root,
+        workspace_root=workspace_root,
+        hierarchy=hierarchy,
+    )
+    pending_requests = [
+        request
+        for request in requests
+        if not _current_workspace_satisfies_request(
+            request,
+            workspace_root,
+        )
+    ]
+    if not pending_requests:
+        return None
+    return _current_workspace_serial_preparation(
+        pending_requests,
+        workspace_root,
+        selection="PAUSED",
+    )
+
 _SERIAL_TERMINAL_STATUSES = frozenset(
     {"ARCHIVED", "COMPLETED", "CANCELLED", "SUPERSEDED"}
 )
@@ -551,6 +591,11 @@ def _serial_workspace_release_eligibility(
         return {
             "ownerStatus": run["status"],
             "releaseReason": "RUN_TERMINAL",
+        }
+    if run["status"] == "PAUSED":
+        return {
+            "ownerStatus": run["status"],
+            "releaseReason": "RUN_PAUSED_SAFE_CHECKPOINT",
         }
     if run["status"] != "ACTIVE":
         return None
@@ -586,7 +631,7 @@ def _serial_commit_barrier(
     )
     if receiver_leases:
         return {
-            "state": "WAITING_FOR_WORKSPACE_COMMIT",
+            "state": "WAITING_FOR_WORKSPACE_QUIESCENCE",
             "ownerRootId": previous_turn["rootId"],
             "ownerStatus": previous_turn["status"],
             "reason": "CANCELLED_RECEIVER_LEASE_ACTIVE",
@@ -594,6 +639,38 @@ def _serial_commit_barrier(
                 "OWNER_RECEIVER_RELEASE_COMMIT_CLEAN_AND_SAFE_BOUNDARY"
             ),
             "receiverLeases": receiver_leases,
+        }
+    blocker_reader = getattr(
+        repository,
+        "serial_workspace_release_blockers",
+        None,
+    )
+    blockers = (
+        blocker_reader(previous_turn["rootId"])
+        if callable(blocker_reader)
+        else {"receiverClaims": [], "dispatchReservations": []}
+    )
+    if blockers["receiverClaims"]:
+        return {
+            "state": "WAITING_FOR_WORKSPACE_QUIESCENCE",
+            "ownerRootId": previous_turn["rootId"],
+            "ownerStatus": previous_turn["status"],
+            "reason": "WORKSPACE_RECEIVER_ACTIVE",
+            "releasePolicy": (
+                "OWNER_RECEIVER_RELEASE_COMMIT_CLEAN_AND_SAFE_BOUNDARY"
+            ),
+            "receiverClaims": blockers["receiverClaims"],
+        }
+    if blockers["dispatchReservations"]:
+        return {
+            "state": "WAITING_FOR_WORKSPACE_QUIESCENCE",
+            "ownerRootId": previous_turn["rootId"],
+            "ownerStatus": previous_turn["status"],
+            "reason": "WORKSPACE_RESERVATION_ACTIVE",
+            "releasePolicy": (
+                "OWNER_RESERVATION_RELEASE_COMMIT_CLEAN_AND_SAFE_BOUNDARY"
+            ),
+            "dispatchReservations": blockers["dispatchReservations"],
         }
     previous = repository.hierarchy(previous_turn["rootId"])
     requests = _automatic_workspace_requests(
@@ -731,10 +808,33 @@ def _serial_commit_barrier(
             }
         )
     if not pending_projects:
-        repository.release_serial_workspace_turn(
-            previous_turn["rootId"],
-            evidence={"projects": release_projects},
-        )
+        try:
+            repository.release_serial_workspace_turn(
+                previous_turn["rootId"],
+                evidence={"projects": release_projects},
+            )
+        except GatedLoopError as error:
+            if error.code not in {
+                "SCHEDULER_WORKSPACE_TURN_RECEIVER_ACTIVE",
+                "SCHEDULER_WORKSPACE_TURN_RESERVATION_ACTIVE",
+            }:
+                raise
+            return {
+                "state": "WAITING_FOR_WORKSPACE_QUIESCENCE",
+                "ownerRootId": previous_turn["rootId"],
+                "ownerStatus": previous_turn["status"],
+                "reason": (
+                    "WORKSPACE_RECEIVER_ACTIVE"
+                    if error.code
+                    == "SCHEDULER_WORKSPACE_TURN_RECEIVER_ACTIVE"
+                    else "WORKSPACE_RESERVATION_ACTIVE"
+                ),
+                "releasePolicy": (
+                    "OWNER_RECEIVER_AND_RESERVATION_RELEASE_"
+                    "COMMIT_CLEAN_AND_SAFE_BOUNDARY"
+                ),
+                "details": error.details,
+            }
         return None
     return {
         "state": "WAITING_FOR_WORKSPACE_COMMIT",

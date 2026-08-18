@@ -7,6 +7,12 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.43.3 发布候选矩阵
+
+0.43.3 修复 `CURRENT_WORKSPACE_SERIAL` 在 Graph 完成、取消或暂停后先改变状态、后持久化物理 workspace turn release 的生命周期缺陷。`PAUSED`、Run 终态与最终用户确认边界现在只形成 release eligibility；全部 READ_WRITE scope 必须在各自冻结独立分支形成 turn start 之后的业务 commit，并保持 working tree/index clean、HEAD/binding 匹配且 receiver/reservation 安全收束。Controller 原子复核全部 scope 并记录 `WORKSPACE_TURN_RELEASED` 后，协议才返回 `workspaceRelease=RELEASED` 并允许宿主切分支。dirty、空提交、仅控制面提交、历史改写、提前切分支、live receiver/reservation 或任一 scope 未通过均返回稳定 `PENDING` reason/nextAction，不产生部分释放。
+
+已释放的暂停节点在 `resume_loop` 时重新排到 workspace 队尾；轮到、全部冻结 binding/clean 复核通过并记录新的 `WORKSPACE_TURN_REACQUIRED` turn start 后才恢复 READY，后续 dispatch 继续要求新的 reservation、resource、fingerprint 与 operation 门禁。事件重放忽略 release/requeue/reacquire 控制面事件并保持节点物化状态一致。Controller 仍不执行 commit、stash 或 branch switch。MCP 工具联集保持 32，schema v3 与 `.layered-delivery/` namespace 不变，无数据库 schema 迁移。候选已完成 452 项 Python 测试（451 通过、1 项按环境跳过）、定向标准库行覆盖、全树编译、四个 Skill、Codex/Claude Plugin、release candidate、镜像与差异校验。
+
 ## 0.43.2 发布候选矩阵
 
 0.43.2 修复 Codex Desktop 首次成功打开 Delivery Graph 面板后，15 秒自动刷新或手动刷新报 `PROJECT_ROOT_UNAVAILABLE` 的问题。根因是旧 grant 逻辑只覆盖 legacy 且完全省略 `_meta` 的同连接调用；modern MCP Apps 刷新仍携带协议/client `_meta`，但不携带 `codex/sandbox-state-meta`，因此首次带 sandbox metadata 的成功读取从未形成可复用 grant，标准与兼容 bridge 都会失败关闭。

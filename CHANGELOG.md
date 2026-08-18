@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.43.3 — 2026-08-18
+
+发布提交：以 tag `v0.43.3` 指向的提交为准
+
+- **串行 workspace 安全释放握手**：`PAUSED`、`COMPLETED`、`CANCELLED` 与最终确认边界只形成 release eligibility，不再等同于物理 turn 已释放。全部 READ_WRITE scope 必须在各自冻结独立分支形成 turn start 之后的业务 commit，并保持 working tree/index clean、HEAD/binding 匹配、receiver/reservation 安全收束；Controller 原子复核后持久化 `WORKSPACE_TURN_RELEASED`，宿主才能切分支或推进下一 Delivery。
+- **协议失败关闭与原子多项目门禁**：`pause_loop`、`record_user_confirmation`、`cancel_graph_run` 和 `workspace_status` 明确返回 `workspaceRelease=PENDING|RELEASED` 与唯一合法 `nextAction`。dirty、空提交、仅控制面提交、历史改写、提前切分支、live receiver/reservation 或任一项目 scope 未通过均稳定等待，不产生部分释放，也不提前暴露 branch preparation。
+- **暂停恢复重新排队**：已释放的暂停节点在 `resume_loop` 时记录 `WORKSPACE_TURN_REQUEUED` 并排到队尾；轮到、冻结 binding/clean 复核通过并记录新的 `WORKSPACE_TURN_REACQUIRED` turn start 后才恢复 READY，随后仍需新的 reservation、resource、fingerprint 与 operation 门禁。事件重放识别上述控制面事件，不把无 nodeId 的 release 误判为损坏事件。
+- **兼容性与验证**：MCP 工具联集仍为 32，schema v3 与 `.layered-delivery/` namespace 不变，无数据库 schema 迁移。全量 Python 452 项完成（451 通过、1 项按环境跳过），定向 release 回归与标准库行覆盖检查、全树编译、四个 Skill、Codex/Claude Plugin、release candidate、镜像与差异校验通过。
+
 ## 0.43.2 — 2026-08-18
 
 发布提交：以 tag `v0.43.2` 指向的提交为准

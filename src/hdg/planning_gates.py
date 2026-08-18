@@ -63,7 +63,7 @@ def _resolve_serial_workspace_gate(
             )
             if commit_barrier is not None:
                 return {
-                    "state": "WAITING_FOR_WORKSPACE_COMMIT",
+                    "state": commit_barrier["state"],
                     "workspaceTurn": {
                         **current,
                         **commit_barrier,
@@ -109,13 +109,97 @@ def _resolve_serial_workspace_gate(
         )
         if commit_barrier is not None:
             return {
-                "state": "WAITING_FOR_WORKSPACE_COMMIT",
+                "state": commit_barrier["state"],
                 "workspaceTurn": {
                     **current,
                     **commit_barrier,
                 },
             }
         current = repository.serial_workspace_turn_state(root_id)
+
+
+def _serial_workspace_release_handshake(
+    repository: SchedulerRepository,
+    workspace_root: str,
+    root_id: str,
+) -> dict[str, Any]:
+    """Resolve and describe the only legal action after a release boundary."""
+
+    resolved = _resolve_serial_workspace_gate(
+        repository,
+        workspace_root,
+        root_id,
+        repository.serial_workspace_turn_state(root_id),
+    )
+    workspace_turn = resolved["workspaceTurn"]
+    if resolved["state"] == "RELEASED":
+        release = workspace_turn.get("release")
+        if not isinstance(release, dict):
+            release = repository.workspace_turn_release(root_id) or {}
+        return {
+            "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
+            "workspaceTurn": workspace_turn,
+            "workspaceRelease": {
+                "state": "RELEASED",
+                "releaseReason": release.get("releaseReason"),
+                "releasedAt": release.get("releasedAt"),
+                "nextAction": (
+                    "WORKSPACE_RELEASED_BRANCH_SWITCH_ALLOWED"
+                ),
+            },
+            "nextAction": "WORKSPACE_RELEASED_BRANCH_SWITCH_ALLOWED",
+        }
+    project_barriers = workspace_turn.get("projectBarriers")
+    project_reasons = [
+        barrier.get("reason")
+        for barrier in (
+            project_barriers
+            if isinstance(project_barriers, list)
+            else []
+        )
+        if isinstance(barrier, dict)
+        and isinstance(barrier.get("reason"), str)
+    ]
+    reason = workspace_turn.get("reason")
+    if not isinstance(reason, str):
+        reason = (
+            project_reasons[0]
+            if len(set(project_reasons)) == 1 and project_reasons
+            else (
+                "PROJECT_RELEASE_BARRIERS"
+                if project_reasons
+                else "RUN_NOT_AT_RELEASE_BOUNDARY"
+            )
+        )
+    if resolved["state"] == "WAITING_FOR_WORKSPACE_QUIESCENCE":
+        next_action = "QUIESCE_RECEIVERS_AND_RECHECK_RELEASE"
+    elif any(
+        isinstance(barrier, dict)
+        and barrier.get("state") == "WORKSPACE_DRIFTED"
+        for barrier in (
+            project_barriers
+            if isinstance(project_barriers, list)
+            else []
+        )
+    ):
+        next_action = "RESTORE_FROZEN_WORKSPACE_AND_RECHECK_RELEASE"
+    elif resolved["state"] == "WAITING_FOR_WORKSPACE_COMMIT":
+        next_action = (
+            "COMMIT_CLEAN_FROZEN_WORKSPACE_AND_RECHECK_RELEASE"
+        )
+    else:
+        next_action = "REACH_SAFE_RELEASE_BOUNDARY_AND_RECHECK"
+    return {
+        "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
+        "workspaceTurn": workspace_turn,
+        "workspaceRelease": {
+            "state": "PENDING",
+            "reason": reason,
+            "gateState": resolved["state"],
+            "nextAction": next_action,
+        },
+        "nextAction": next_action,
+    }
 
 def _serial_turn_for_recorded_selection(
     repository: SchedulerRepository,
@@ -519,7 +603,7 @@ def _unbound_manual_serial_workspace_gate(
         )
         if commit_barrier is not None:
             return {
-                "state": "WAITING_FOR_WORKSPACE_COMMIT",
+                "state": commit_barrier["state"],
                 "workspaceTurn": {
                     **workspace_turn,
                     **commit_barrier,

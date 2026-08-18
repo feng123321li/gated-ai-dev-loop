@@ -27,6 +27,7 @@ allowed-tools:
 - 本 Skill 只做发现、规划、基线、Revision、执行选择、冻结和最终用户交互；不得调用 frontier、dispatch、claim、heartbeat、result 等执行工具，也不得在 primary 内实现或审查 Loop。
 - Graph 范围不是 Git 或外部操作授权。Controller 不写 Git；commit、merge、push、发布、迁移和新增权限仍分别取得授权。
 - 一个物理 checkout 只运行一个 Delivery turn，策略固定为 `CURRENT_WORKSPACE_SERIAL`。每个 Delivery 使用独立分支；不得把 linked checkout 当成自动新建 worktree 的授权。
+- `PAUSED`、`COMPLETED`、`CANCELLED` 不等同于 workspace release。必须先收束 receiver/reservation，再在每个冻结独立分支完成业务 commit 并保持 tree/index clean 与 binding 匹配，由协议复核并持久化 `WORKSPACE_TURN_RELEASED`；只有响应明确为 `workspaceRelease=RELEASED` 后宿主才可切换分支。
 - 同一需求保持稳定 `delivery.id`、`requirementKey` 和 `.layered-delivery/<delivery-id>/`。新业务目标默认新建 Delivery；同一需求延续或 `REPLAN_REQUIRED` 才创建下一不可变 Revision。
 - 只有真实用户确认后才记录最终完成；归档也必须再次明确授权。
 
@@ -71,7 +72,7 @@ allowed-tools:
 
 - 初次开发前用户修改需求时重新 preview；冻结后拓扑、依赖、资源、项目 scope、Review 契约或 databaseChanges 必须变化时，调用 `prepare_delivery_revision`，保持相同 `delivery.id`，不要创建新的 Delivery ID。
 - TASK 局部 requirement 只有在用户明确授权、未开始且无有效 reservation 时才可 unfreeze/refreeze；这些受保护工具不在自动允许列表中。
-- 执行完成后由 `$delivery-graph-dispatch` 返回 `RECORD_USER_CONFIRMATION`。本 Skill 展示分层验收并等待真实用户确认；只有确认后调用受保护的 `record_user_confirmation`。
+- 执行完成后由 `$delivery-graph-dispatch` 返回 `RECORD_USER_CONFIRMATION`。本 Skill 展示分层验收并等待真实用户确认；只有确认后调用受保护的 `record_user_confirmation`。该响应会把 Graph 终态与 Git release 分开报告：`workspaceRelease=PENDING` 时按 `nextAction` 在原冻结分支 commit/clean 并调用 `workspace_status(rootId=...)` 复核，禁止先切分支；`RELEASED` 才允许推进下一 Delivery。
 - `archive_delivery` 只在完成后又收到单独、明确的归档请求时调用。
 
 ## 按需读取

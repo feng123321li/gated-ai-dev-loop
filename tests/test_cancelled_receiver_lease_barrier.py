@@ -285,6 +285,51 @@ class CancelledReceiverLeaseBarrierTests(unittest.TestCase):
         self.assertEqual(result["reason"], "CANCELLED_RECEIVER_LEASE_ACTIVE")
         self.assertEqual(result["receiverLeases"], [lease])
 
+    def test_paused_release_gate_short_circuits_on_live_reservation(
+        self,
+    ) -> None:
+        reservation = {
+            "rootId": "d-paused-reserved",
+            "nodeId": "loop-d-paused-reserved",
+            "dispatchReservationId": "reservation-paused",
+        }
+
+        class RepositoryDouble:
+            @staticmethod
+            def workspace_turn_release(_root_id: str) -> None:
+                return None
+
+            @staticmethod
+            def unexpired_cancelled_receiver_leases(
+                _root_id: str,
+            ) -> list[dict]:
+                return []
+
+            @staticmethod
+            def serial_workspace_release_blockers(
+                _root_id: str,
+            ) -> dict:
+                return {
+                    "receiverClaims": [],
+                    "dispatchReservations": [reservation],
+                }
+
+            @staticmethod
+            def hierarchy(_root_id: str) -> dict:
+                raise AssertionError(
+                    "Git commit inspection must wait for reservation release"
+                )
+
+        result = planning._serial_commit_barrier(
+            RepositoryDouble(),
+            "unused-workspace",
+            {"rootId": "d-paused-reserved", "status": "PAUSED"},
+        )
+
+        self.assertEqual(result["state"], "WAITING_FOR_WORKSPACE_QUIESCENCE")
+        self.assertEqual(result["reason"], "WORKSPACE_RESERVATION_ACTIVE")
+        self.assertEqual(result["dispatchReservations"], [reservation])
+
 
 if __name__ == "__main__":
     unittest.main()

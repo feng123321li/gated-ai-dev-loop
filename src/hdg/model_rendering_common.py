@@ -30,7 +30,7 @@ KIND_TEXT = {
 
 STATUS_TEXT = {
     "CHOICE_READY": "基线已生成，待选择开发方式",
-    "QUEUED": "排队中（等待自动调度）",
+    "QUEUED": "排队中（等待工作区串行调度）",
     "HANDOFF_READY": "需求已冻结（手动开发，调度未启动）",
     "PREPARED": "待冻结",
     "FROZEN": "已冻结",

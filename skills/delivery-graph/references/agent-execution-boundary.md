@@ -49,6 +49,6 @@ reset 时间、不创建定时唤醒，也不自动切换 Adapter。
 
 ## 手动 Graph
 
-手动 handoff 在 `start_manual_handoff` 前不绑定 workspace 或 receiver。启动后 TASK 由
-独立宿主 receiver MANUAL claim；后续 Review 仍使用独立 AUTO receiver。两种模式遵守
-同一 mutation、lease、资源锁和结果边界。
+手动 handoff 在选择时绑定当前 workspace 的串行队列，但在 `start_manual_handoff` 前不绑定
+receiver、不创建 Run。启动后 TASK 由独立宿主 receiver MANUAL claim；后续 Review 仍使用
+独立 AUTO receiver。两种模式遵守同一 queue、mutation、lease、资源锁和结果边界。

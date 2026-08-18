@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .graph_model import GRAPH_COMPILER_CONTRACT
 from .repository_hierarchy_common import (
     Any,
     canonical_json,
@@ -35,6 +36,20 @@ class HierarchyRevisionMixin:
                 "Scheduler hierarchy is missing",
             )
         hierarchy, graph = self.validate_stored_definition(row)
+        compiler_contract = (
+            graph.get("runtime", {}).get("compilerContract")
+            if isinstance(graph.get("runtime"), dict)
+            else None
+        )
+        graph_compatibility = {
+            "state": (
+                "CURRENT"
+                if compiler_contract == GRAPH_COMPILER_CONTRACT
+                else "REFRESH_ON_MANUAL_START"
+            ),
+            "compilerContract": compiler_contract,
+            "currentCompilerContract": GRAPH_COMPILER_CONTRACT,
+        }
         return {
             "rootId": row["root_id"],
             "deliveryRevision": row["revision"],
@@ -43,6 +58,7 @@ class HierarchyRevisionMixin:
             "graphFingerprint": row["graph_fingerprint"],
             "hierarchy": hierarchy,
             "graph": graph,
+            "graphCompatibility": graph_compatibility,
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
         }

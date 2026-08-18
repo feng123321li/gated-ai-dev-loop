@@ -182,7 +182,13 @@ class LayeredDeliveryController:
                     repository.assert_delivery_workspace(
                         root_id,
                         workspace_root,
-                        allow_unbound_manual=(name == "workspace_status"),
+                        allow_unbound_manual=(
+                            name
+                            in {
+                                "workspace_status",
+                                "delivery_revision_history",
+                            }
+                        ),
                         allow_unbound_choice=(
                             name in {"workspace_status", "cancel_graph_run"}
                         ),
@@ -248,6 +254,7 @@ class LayeredDeliveryController:
         if name in {
             "workspace_status",
             "preview_hierarchy",
+            "create_manual_handoff",
             "prepare_hierarchy",
             "prepare_delivery_revision",
             "freeze_hierarchy",

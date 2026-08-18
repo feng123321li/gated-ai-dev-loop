@@ -248,7 +248,25 @@ def _current_workspace_satisfies_request(
 def _current_workspace_serial_preparation(
     requests: list[dict[str, Any]],
     workspace_root: str,
+    *,
+    selection: str = "AUTOMATIC",
 ) -> dict[str, Any]:
+    if selection not in {"AUTOMATIC", "MANUAL"}:
+        fail(
+            "SCHEDULER_EXECUTION_CHOICE_INVALID",
+            "Workspace preparation requires AUTOMATIC or MANUAL",
+            selection=selection,
+        )
+    manual = selection == "MANUAL"
+    resume_action = (
+        "START_MANUAL_HANDOFF" if manual else "RESUME_EXECUTION_MODE"
+    )
+    resume_tool = (
+        "start_manual_handoff" if manual else "resume_execution_mode"
+    )
+    preparation_suffix = (
+        "START_MANUAL_HANDOFF" if manual else "RESUME_EXECUTION"
+    )
     project_preparations = []
     for request in requests:
         target_root = _request_workspace_root(request, workspace_root)
@@ -263,7 +281,7 @@ def _current_workspace_serial_preparation(
             (
                 "RESOLVE_UNMERGED_CHANGES_OR_KEEP_CHANGES_AND_WAIT"
                 if working_tree.get("hasUnmergedChanges") is True
-                else "HOST_STASH_PREPARE_BRANCH_THEN_RESUME_EXECUTION"
+                else f"HOST_STASH_PREPARE_BRANCH_THEN_{preparation_suffix}"
             )
             if dirty
             else "CREATE_OR_SWITCH_CURRENT_WORKSPACE_BRANCH"
@@ -298,12 +316,12 @@ def _current_workspace_serial_preparation(
     )
     next_action = (
         (
-            "HOST_STASH_PREPARE_BRANCH_THEN_RESUME_EXECUTION"
+            f"HOST_STASH_PREPARE_BRANCH_THEN_{preparation_suffix}"
             if stash_available
             else "RESOLVE_CONFLICTS_OR_KEEP_CHANGES_AND_WAIT"
         )
         if dirty
-        else "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION"
+        else f"PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_{preparation_suffix}"
     )
     result = {
         "state": "CURRENT_WORKSPACE_PREPARATION_REQUIRED",
@@ -326,18 +344,18 @@ def _current_workspace_serial_preparation(
         ]
         if stash_available:
             result["workspaceChangeHandling"] = {
-                "kind": "AUTOMATIC_DIRTY_WORKSPACE_PREPARATION",
+                "kind": f"{selection}_DIRTY_WORKSPACE_PREPARATION",
                 "action": "STASH_AND_RUN",
                 "confirmationRequired": False,
-                "authorizationSource": "AUTOMATIC_EXECUTION_SELECTION",
+                "authorizationSource": f"{selection}_EXECUTION_SELECTION",
                 "fallbackAction": "KEEP_CHANGES_AND_WAIT",
                 "hostAction": {
                     "label": "暂存现有改动后运行",
                     "description": (
-                        "AUTOMATIC 选择已授权宿主机械准备 workspace；宿主"
+                        f"{selection} 选择已授权宿主机械准备 workspace；宿主"
                         "精确复核工作树指纹，stash 已跟踪、暂存和未跟踪"
                         "业务改动；工作树变干净后创建或切换 Delivery 分支，"
-                        "再调用 resume_execution_mode。"
+                        f"再调用 {resume_tool}。"
                     ),
                     "owner": "HOST",
                     "controllerExecutesGit": False,
@@ -363,7 +381,7 @@ def _current_workspace_serial_preparation(
                         "retainStashUntilSuccessfulRestore": True,
                     },
                     "nextAction": (
-                        "HOST_STASH_PREPARE_BRANCH_THEN_RESUME_EXECUTION"
+                        f"HOST_STASH_PREPARE_BRANCH_THEN_{preparation_suffix}"
                     ),
                 },
                 "preservedUnrelatedChanges": {
@@ -377,10 +395,10 @@ def _current_workspace_serial_preparation(
             }
         else:
             result["workspaceChangeHandling"] = {
-                "kind": "AUTOMATIC_DIRTY_WORKSPACE_PREPARATION",
+                "kind": f"{selection}_DIRTY_WORKSPACE_PREPARATION",
                 "action": "KEEP_CHANGES_AND_WAIT",
                 "confirmationRequired": False,
-                "authorizationSource": "AUTOMATIC_EXECUTION_SELECTION",
+                "authorizationSource": f"{selection}_EXECUTION_SELECTION",
                 "blockedAutomaticAction": "STASH_AND_RUN",
                 "blockedReason": "UNMERGED_CHANGES",
                 "expectedProjects": expected_projects,
@@ -421,22 +439,30 @@ def _current_workspace_serial_preparation(
                     ],
                 },
                 {
-                    "action": "RESUME_EXECUTION_MODE",
-                    "tool": "resume_execution_mode",
+                    "action": resume_action,
+                    "tool": resume_tool,
                 },
             ]
         )
-        result["automaticHostPreparation"] = {
+        result[
+            "manualHostPreparation"
+            if manual
+            else "automaticHostPreparation"
+        ] = {
             "state": "READY",
-            "authorizationSource": "AUTOMATIC_EXECUTION_SELECTION",
+            "authorizationSource": f"{selection}_EXECUTION_SELECTION",
             "confirmationRequired": False,
             "controllerExecutesGit": False,
             "actions": actions,
         }
     else:
-        result["automaticHostPreparation"] = {
+        result[
+            "manualHostPreparation"
+            if manual
+            else "automaticHostPreparation"
+        ] = {
             "state": "BLOCKED",
-            "authorizationSource": "AUTOMATIC_EXECUTION_SELECTION",
+            "authorizationSource": f"{selection}_EXECUTION_SELECTION",
             "confirmationRequired": False,
             "controllerExecutesGit": False,
             "reason": "UNMERGED_CHANGES",
@@ -468,6 +494,34 @@ def _automatic_serial_workspace_preparation(
     return _current_workspace_serial_preparation(
         pending_requests,
         workspace_root,
+    )
+
+
+def _manual_serial_workspace_preparation(
+    *,
+    control_root: str,
+    workspace_root: str,
+    hierarchy: dict[str, Any],
+) -> dict[str, Any] | None:
+    requests = _automatic_workspace_requests(
+        control_root=control_root,
+        workspace_root=workspace_root,
+        hierarchy=hierarchy,
+    )
+    pending_requests = [
+        request
+        for request in requests
+        if not _current_workspace_satisfies_request(
+            request,
+            workspace_root,
+        )
+    ]
+    if not pending_requests:
+        return None
+    return _current_workspace_serial_preparation(
+        pending_requests,
+        workspace_root,
+        selection="MANUAL",
     )
 
 _SERIAL_TERMINAL_STATUSES = frozenset(

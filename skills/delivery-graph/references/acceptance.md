@@ -137,8 +137,8 @@ Loop outcome 与事件链。索引只包含 committed、staged、unstaged 和 un
 index clean、已有可验证业务 commit、HEAD 与冻结 binding 一致且在途 receiver/reservation
 安全释放后推进自动队首。前一个 Run 已终态，或已到 `RECORD_USER_CONFIRMATION`，均可在
 满足该 Git 安全边界后释放物理 turn；后一种情况只释放 workspace，不把 Delivery 标记为
-`COMPLETED`。已有 owner 时，只有已选择 `AUTOMATIC` 的后续 Delivery 标记为 `QUEUED`；
-手动交接冻结仍持久化为 `HANDOFF_READY`，不进入自动队列。发现资源冲突、owner dirty、
+`COMPLETED`。已有 owner 时，已选择 `AUTOMATIC` 或 `MANUAL` 的后续 Delivery 都标记为 `QUEUED`；
+手动交接内部仍持久化为 `HANDOFF_READY`，但进入同一串行队列。发现资源冲突、owner dirty、
 未合并或 HEAD 漂移时保持等待，不能继续共享 checkout。队首的非 owner 既存业务改动
 只能按已授权的精确 stash 准备处理，不能 stash 正在运行 owner 的未完成改动。现有 linked
 checkout 也只按普通 current workspace 处理，不自动创建新 worktree。验收仍需结合需求、

@@ -33,6 +33,7 @@ from hdg.errors import GatedLoopError
 from hdg.graph_frontier import get_graph_frontier
 
 from hdg.graph_model import (
+    GRAPH_COMPILER_CONTRACT,
     group_review_node_id,
     join_node_id,
     loop_node_id,

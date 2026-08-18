@@ -307,15 +307,23 @@ class FrozenExecutionGuardTests(unittest.TestCase):
                 manual_branch,
             )
             handoff = _select_manual(repository, manual)
-            self.assertEqual(handoff["status"], "HANDOFF_READY")
-            self.assertNotIn("deliveryQueue", handoff)
+            self.assertEqual(handoff["status"], "QUEUED")
+            self.assertEqual(handoff["deliveryStatus"], "HANDOFF_READY")
+            self.assertEqual(
+                handoff["deliveryQueue"]["continuation"]["tool"],
+                "start_manual_handoff",
+            )
 
             active_wait = _start_manual(repository, handoff)
             self.assertEqual(
                 active_wait["status"],
+                "QUEUED",
+            )
+            self.assertEqual(
+                active_wait["manualStartState"],
                 "WAITING_FOR_WORKSPACE_TURN",
             )
-            self.assertNotIn("deliveryQueue", active_wait)
+            self.assertIn("deliveryQueue", active_wait)
             manual_overview = (
                 repository
                 / ".layered-delivery"
@@ -323,10 +331,9 @@ class FrozenExecutionGuardTests(unittest.TestCase):
                 / "overview.md"
             ).read_text(encoding="utf-8")
             self.assertIn(
-                "需求已冻结（手动开发，调度未启动）",
+                "排队中（等待工作区串行调度）",
                 manual_overview,
             )
-            self.assertNotIn("排队中（等待自动调度）", manual_overview)
             self.assertEqual(
                 active_wait["workspaceTurn"]["ownerRootId"],
                 first["rootId"],
@@ -355,12 +362,12 @@ class FrozenExecutionGuardTests(unittest.TestCase):
 
             branch_setup = _start_manual(repository, handoff)
             self.assertEqual(
-                branch_setup["code"],
-                "SCHEDULER_MANUAL_BASELINE_RECONFIRMATION_REQUIRED",
+                branch_setup["workspacePreparation"]["state"],
+                "CURRENT_WORKSPACE_PREPARATION_REQUIRED",
             )
-            self.assertNotEqual(
-                branch_setup["status"],
-                "WAITING_FOR_WORKSPACE_COMMIT",
+            self.assertEqual(
+                branch_setup["nextAction"],
+                "PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_START_MANUAL_HANDOFF",
             )
             scheduler = SchedulerRepository(str(repository))
             self.assertIsNotNone(

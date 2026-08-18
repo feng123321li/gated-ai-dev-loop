@@ -510,10 +510,20 @@ class DeliveryWorkspaceStore:
                     "workspaceKey": None,
                 }
             elif state == "HANDOFF_READY":
-                result["workspaceIsolation"] = {
-                    "mode": "UNBOUND_MANUAL_HANDOFF",
-                    "workspaceKey": None,
-                }
+                try:
+                    result["workspaceIsolation"] = self.binding(
+                        latest["root_id"]
+                    )
+                except GatedLoopError as error:
+                    if (
+                        error.code
+                        != "SCHEDULER_DELIVERY_WORKSPACE_MISSING"
+                    ):
+                        raise
+                    result["workspaceIsolation"] = {
+                        "mode": "UNBOUND_MANUAL_HANDOFF",
+                        "workspaceKey": None,
+                    }
             else:
                 result["workspaceIsolation"] = self.binding(
                     latest["root_id"]

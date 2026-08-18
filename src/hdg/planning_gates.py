@@ -125,12 +125,14 @@ def _serial_turn_for_recorded_selection(
     selection: dict[str, Any],
     workspace_root: str,
 ) -> dict[str, Any]:
-    """Recover a pre-queue AUTOMATIC choice into the current serial queue."""
+    """Resolve a recorded execution choice in the current serial queue."""
 
     try:
         workspace_turn = repository.serial_workspace_turn_state(root_id)
     except GatedLoopError as error:
         if error.code != "SCHEDULER_DELIVERY_WORKSPACE_MISSING":
+            raise
+        if selection["selection"] != "AUTOMATIC":
             raise
         recorded = repository.record_automatic_selection(
             root_id,
@@ -330,10 +332,13 @@ def _workspace_turn_waiting(
 def _delivery_queue_marker(
     serial_gate: dict[str, Any],
     root_id: str,
+    *,
+    selection: str = "AUTOMATIC",
 ) -> dict[str, Any]:
-    """Project a persisted serial turn as an automatic Delivery queue."""
+    """Project a persisted serial turn as a Delivery execution queue."""
 
     workspace_turn = serial_gate["workspaceTurn"]
+    automatic = selection == "AUTOMATIC"
     return {
         "state": "QUEUED",
         "position": workspace_turn["position"],
@@ -341,8 +346,12 @@ def _delivery_queue_marker(
         "ownerRootId": workspace_turn["ownerRootId"],
         "ownerStatus": workspace_turn["ownerStatus"],
         "continuation": {
-            "automatic": True,
-            "tool": "resume_execution_mode",
+            "automatic": automatic,
+            "tool": (
+                "resume_execution_mode"
+                if automatic
+                else "start_manual_handoff"
+            ),
             "rootId": root_id,
             "confirmationRequired": False,
             "trigger": "OWNER_SAFE_BOUNDARY_COMMIT_CLEAN_AND_RELEASED",
@@ -561,7 +570,7 @@ def _manual_workspace_waiting_result(
     )
     return {
         "rootId": stored["rootId"],
-        "status": serial_gate["state"],
+        "status": "QUEUED",
         "deliveryStatus": stored["status"],
         "hierarchyFingerprint": stored["hierarchyFingerprint"],
         "graphFingerprint": stored["graphFingerprint"],
@@ -571,6 +580,11 @@ def _manual_workspace_waiting_result(
         "manualStartAlreadyApplied": already_applied,
         "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
         "workspaceTurn": serial_gate["workspaceTurn"],
+        "deliveryQueue": _delivery_queue_marker(
+            serial_gate,
+            stored["rootId"],
+            selection="MANUAL",
+        ),
         "nextAction": (
             "WAIT_FOR_WORKSPACE_COMMIT"
             if waiting_for_commit

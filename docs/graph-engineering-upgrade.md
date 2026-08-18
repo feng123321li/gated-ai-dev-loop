@@ -186,7 +186,7 @@ Revision 连续性必须来自用户明确说明，而不是来自工作区恰�
 
 `preview_hierarchy` 只登记不绑定工作区的 `CHOICE_READY`，并返回当前唯一 `pendingInteraction`：缺 binding 时先处理 `DEVELOPMENT_BASELINE`，之后才是 `EXECUTION_MODE`；兼容字段 `developmentBaseline` / `executionChoice` 指向同一对象。干净和脏工作区都遵循该顺序；dirty 指纹覆盖 porcelain、变化路径的 workspace blob 与 index state，`.layered-delivery/**` 不计入业务 dirty。宿主能调用原生选择器时必须使用原生交互，不能自行改写为自由文本确认。
 
-AUTOMATIC 由 `select_execution_mode` 持久记录后进入当前 workspace 的串行队列。宿主仅在前序 Delivery 已提交、clean、HEAD 未漂移且 receiver 安全释放后，按冻结 binding 在当前 checkout 创建或切换目标分支，再用原 `rootId` 与双 fingerprint 调用 `resume_execution_mode`；不创建新的 linked worktree，也不启动专用后台 coordinator。手动接管若发生单仓 Git 漂移，则在任何控制状态写入前返回基线重确认：确认原 binding 保持当前 Revision，确认新 binding 创建下一不可变 Revision。多仓漂移 fail closed，要求完整 project bindings，不能由单仓选择器局部修订。
+AUTOMATIC 与 MANUAL 都由 `select_execution_mode` 持久记录后进入当前 workspace 的同一串行队列。宿主仅在前序 Delivery 已提交、clean、HEAD 未漂移且 receiver 安全释放后，按冻结 binding 在当前 checkout 创建或切换目标分支，再用原 `rootId` 与双 fingerprint 调用 `resume_execution_mode` 或 `start_manual_handoff`；不创建新的 linked worktree，也不启动专用后台 coordinator。手动启动若发生单仓 Git 漂移，则先返回基线重确认且不创建 Run：确认原 binding 保持当前 Revision，确认新 binding 创建下一不可变 Revision。多仓漂移 fail closed，要求完整 project bindings，不能由单仓选择器局部修订。
 
 ## 逻辑递归与物理布局
 
@@ -227,7 +227,7 @@ GROUP/TASK 的递归存在于冻结 hierarchy 和编译 Graph 中，并镜像到
     └── acceptance.md
 ```
 
-`scheduler.db` 是需求与调度状态的机器权威；一个需求的自动与手动开发都进入同一个稳定 Delivery 目录并使用同结构人类投影，不再使用共享 `handoffs` 目录。手动包另含 `handoff-<fingerprint>.md`，并以 `HANDOFF_READY` 登记到 SQLite、刷新根 `overview.md`；交接阶段不创建 Graph Run、事件链或 workspace 绑定。接收 CLI 在任何代码工作前调用 `start_manual_handoff` 后，同一快照进入 `execution_mode=manual` 的 run：TASK 实现只允许 MANUAL claim，所有 Review 只允许正常 AUTO claim。Graph 投影只保留分离的需求基线、执行进展和验收记录，不再生成 hierarchy、编译 Graph 或当前状态 JSON 副本。Delivery baseline 链接全部节点 baseline；每个 GROUP/TASK 在 `work-items/<root-id>/children/...` 的对应节点目录拥有 baseline、progress 和 acceptance。只有 TASK 显式声明接口时才在自己的目录增加接口契约投影；协议字段保持开放，HTTP、Dubbo、gRPC、GraphQL、消息等均可表达。接口投影展开实际 request/response 字段，空字段列表明确标记无入参或无出参；HTTP 位置容器和 Controller 返回元数据只参与规范化，不作为业务字段输出，`wireType`、`frameworkEnvelope`、`wrapping` 与 `Rs` 包装信息一律忽略。目录名使用不可变 ID，不使用可修改标题；物理递归只镜像父子关系，不重新引入文件 scope，兄弟执行顺序仍由 `dependsOn` 控制。
+`scheduler.db` 是需求与调度状态的机器权威；一个需求的自动与手动开发都进入同一个稳定 Delivery 目录并使用同结构人类投影，不再使用共享 `handoffs` 目录。手动包另含 `handoff-<fingerprint>.md`，并以 `HANDOFF_READY` 登记到 SQLite、原子记录 MANUAL 选择与 workspace 队列绑定、刷新根 `overview.md`；交接阶段不创建 Graph Run 或事件链。接收 CLI 在任何代码工作前调用 `start_manual_handoff` 后，同一快照进入 `execution_mode=manual` 的 run：TASK 实现只允许 MANUAL claim，所有 Review 只允许正常 AUTO claim。旧版未绑定 handoff 只有在无 Run 且 hierarchy/节点/边完全一致时，才允许启动前刷新 Graph 编译协议、runtime policy 和 graph fingerprint；需求 Revision 与 hierarchy fingerprint 不变，ACTIVE/FROZEN Graph 仍严格拒绝漂移。Graph 投影只保留分离的需求基线、执行进展和验收记录，不再生成 hierarchy、编译 Graph 或当前状态 JSON 副本。Delivery baseline 链接全部节点 baseline；每个 GROUP/TASK 在 `work-items/<root-id>/children/...` 的对应节点目录拥有 baseline、progress 和 acceptance。只有 TASK 显式声明接口时才在自己的目录增加接口契约投影；协议字段保持开放，HTTP、Dubbo、gRPC、GraphQL、消息等均可表达。接口投影展开实际 request/response 字段，空字段列表明确标记无入参或无出参；HTTP 位置容器和 Controller 返回元数据只参与规范化，不作为业务字段输出，`wireType`、`frameworkEnvelope`、`wrapping` 与 `Rs` 包装信息一律忽略。目录名使用不可变 ID，不使用可修改标题；物理递归只镜像父子关系，不重新引入文件 scope，兄弟执行顺序仍由 `dependsOn` 控制。
 
 外部工单号通过 `delivery.requirementKey` 与一个稳定 `delivery.id` 一对一绑定；未显式声明时，Controller 仍从 Delivery ID/标题识别常见 `PROJECT-123` 引用。不同 ID 命中同一 key 时，preview 与最终事务写入都返回连续性冲突，要求复用已有 ID。`HANDOFF_READY` 内容变化使用 `create_manual_handoff` 的显式当前 Revision、`USER_EXPLICIT_SAME_DELIVERY` 和修订原因，在原目录追加不可变手动 Revision；旧 Revision 标记为 `SUPERSEDED`，不再通过改名生成重复目录。
 

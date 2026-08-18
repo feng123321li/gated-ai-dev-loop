@@ -20,7 +20,7 @@
 
 不要自行增加 TASK/Gate 节点，也不要根据 payload 内容改变 frontier 顺序。
 
-用户选择自动执行时，`select_execution_mode(AUTOMATIC)` 立即持久化一次业务确认；workspace strategy 固定为 `CURRENT_WORKSPACE_SERIAL`。同一物理 checkout 一次只运行一个 Delivery。只有已选择自动执行的后续 Delivery 标记为 `QUEUED` 并携带自动 continuation，等待前一个 Delivery 进入 Run 终态，或到达 `RECORD_USER_CONFIRMATION`，且形成可验证业务 commit、working tree/index clean、HEAD 与冻结 binding 一致、所有 receiver/reservation 安全释放。轮到队首后，宿主按 `automaticHostPreparation.actions` 自动执行：必要时核对指纹并 stash 业务改动（排除 `.layered-delivery/**`），创建或切换目标 Delivery 的独立分支，再以明确 `rootId` 和双 fingerprint 调用 `resume_execution_mode`；不得重试 `select_execution_mode` 或再次询问用户。人工 Graph 达到同一安全边界时也可先 commit 并切换新 Delivery 分支，最终用户确认稍后按原 `rootId` 补录。资源冲突、owner dirty、未合并状态、HEAD 漂移或释放状态不明时保持排队。现有 linked checkout 只按普通 current workspace 处理，不自动创建新 worktree。状态恢复始终显式调用 `workspace_status(root_id=...)`。手动交接冻结会持久化 `HANDOFF_READY` Delivery 和完整需求快照，但不进入自动队列；接收方必须显式调用 `start_manual_handoff`，取得串行 turn 后才创建 manual Run 和独立 TASK receiver。
+用户选择 AUTOMATIC 或 MANUAL 时，`select_execution_mode` 立即持久化一次业务确认；workspace strategy 统一为 `CURRENT_WORKSPACE_SERIAL`。同一物理 checkout 一次只运行一个 Delivery。已选择任一模式的后续 Delivery 都标记为 `QUEUED` 并携带 mode-specific continuation，等待前一个 Delivery 进入 Run 终态，或到达 `RECORD_USER_CONFIRMATION`，且形成可验证业务 commit、working tree/index clean、HEAD 与冻结 binding 一致、所有 receiver/reservation 安全释放。轮到队首后，宿主按 `automaticHostPreparation.actions` 或 `manualHostPreparation.actions` 执行：必要时核对指纹并 stash 业务改动（排除 `.layered-delivery/**`），创建或切换目标 Delivery 的独立分支，再以明确 `rootId` 和双 fingerprint 调用 `resume_execution_mode` 或 `start_manual_handoff`；不得重试 `select_execution_mode` 或再次询问用户。人工 Graph 达到同一安全边界时也可先 commit 并切换新 Delivery 分支，最终用户确认稍后按原 `rootId` 补录。资源冲突、owner dirty、未合并状态、HEAD 漂移或释放状态不明时保持排队。现有 linked checkout 只按普通 current workspace 处理，不自动创建新 worktree。状态恢复始终显式调用 `workspace_status(root_id=...)`。手动交接冻结会持久化 `HANDOFF_READY` Delivery、完整需求快照、MANUAL 选择与 workspace 队列绑定；接收方轮到后显式调用 `start_manual_handoff`，才创建 manual Run 和独立 TASK receiver。
 
 ### 接收上下文与内部协作
 
@@ -168,7 +168,7 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 
 ## 资源锁
 
-租约有效的已 claim Loop 占用其全部 `resourceClaims`。共享控制根内任何 Delivery 的另一个 Ready Loop 只要存在相同键就不能 dispatch；frontier 会用 `<rootId>/<nodeId>` 标识跨 Delivery 冲突。租约过期后不再占用跨 Delivery 资源；原 Delivery 下次推进时仍按 `WORKER_LOST` 回收旧 attempt。无 claim 交集也不能绕过 `CURRENT_WORKSPACE_SERIAL`：同一实际 workspace 中只有已选择 `AUTOMATIC` 的后启动或后发现 Delivery 标记为 `QUEUED`，直到前一个 Delivery 已进入 Run 终态或到达最终用户确认边界，并形成可验证业务 commit、working tree/index clean、HEAD 未漂移且 receiver/reservation 安全释放才自动续调；手动冻结 Delivery 保持 `HANDOFF_READY`。`CANCELLED` 在该安全边界释放 owner，不需要归档；终态查询忽略过期 `workspaceRebase`。冲突、owner dirty、未合并状态或漂移使队列保持等待，不创建新 worktree 规避，也不 stash owner 的未完成改动。不要从路径、仓库层级或模块前缀推导额外资源锁。
+租约有效的已 claim Loop 占用其全部 `resourceClaims`。共享控制根内任何 Delivery 的另一个 Ready Loop 只要存在相同键就不能 dispatch；frontier 会用 `<rootId>/<nodeId>` 标识跨 Delivery 冲突。租约过期后不再占用跨 Delivery 资源；原 Delivery 下次推进时仍按 `WORKER_LOST` 回收旧 attempt。无 claim 交集也不能绕过 `CURRENT_WORKSPACE_SERIAL`：同一实际 workspace 中已选择 `AUTOMATIC` 或 `MANUAL` 的后启动或后发现 Delivery 都标记为 `QUEUED`，直到前一个 Delivery 已进入 Run 终态或到达最终用户确认边界，并形成可验证业务 commit、working tree/index clean、HEAD 未漂移且 receiver/reservation 安全释放才按记录模式续调；手动冻结 Delivery 内部保持 `HANDOFF_READY`。`CANCELLED` 在该安全边界释放 owner，不需要归档；终态查询忽略过期 `workspaceRebase`。冲突、owner dirty、未合并状态或漂移使队列保持等待，不创建新 worktree 规避，也不 stash owner 的未完成改动。不要从路径、仓库层级或模块前缀推导额外资源锁。
 
 ## 未开始 TASK 的需求修订
 

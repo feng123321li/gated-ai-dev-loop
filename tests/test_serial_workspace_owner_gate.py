@@ -216,6 +216,29 @@ class SerialWorkspaceOwnerGateTests(unittest.TestCase):
                 workspace_root=str(workspace),
             )
 
+            repository = SchedulerRepository(str(root))
+            selection = repository.execution_selection(handoff["rootId"])
+            self.assertEqual(handoff["status"], "QUEUED")
+            self.assertEqual(handoff["deliveryStatus"], "HANDOFF_READY")
+            self.assertEqual(selection["selection"], "MANUAL")
+            self.assertEqual(selection["state"], "QUEUED")
+            self.assertEqual(
+                repository.workspace_binding(handoff["rootId"])[
+                    "workspaceKey"
+                ],
+                SchedulerRepository.workspace_key(workspace),
+            )
+            self.assertEqual(
+                handoff["deliveryQueue"]["continuation"],
+                {
+                    "automatic": False,
+                    "tool": "start_manual_handoff",
+                    "rootId": handoff["rootId"],
+                    "confirmationRequired": False,
+                    "trigger": "OWNER_SAFE_BOUNDARY_COMMIT_CLEAN_AND_RELEASED",
+                },
+            )
+
             result = call_tool(
                 "start_manual_handoff",
                 {
@@ -232,16 +255,42 @@ class SerialWorkspaceOwnerGateTests(unittest.TestCase):
                 workspace_root=str(workspace),
             )
 
-            self.assertEqual(result["status"], "WAITING_FOR_WORKSPACE_TURN")
-            self.assertEqual(result["manualStartState"], result["status"])
+            self.assertEqual(result["status"], "QUEUED")
+            self.assertEqual(
+                result["manualStartState"],
+                "WAITING_FOR_WORKSPACE_TURN",
+            )
+            self.assertEqual(result["deliveryQueue"]["state"], "QUEUED")
+            self.assertFalse(
+                result["deliveryQueue"]["continuation"]["automatic"]
+            )
             self.assertFalse(result["graphRunCreated"])
             self.assertEqual(
                 result["workspaceTurn"]["ownerRootId"],
                 owner["rootId"],
             )
             with self.assertRaises(GatedLoopError) as missing:
-                SchedulerRepository(str(root)).run(handoff["rootId"])
+                repository.run(handoff["rootId"])
             self.assertEqual(missing.exception.code, "SCHEDULER_RUN_MISSING")
+
+            _cancel_and_release(root, workspace, owner)
+            started = call_tool(
+                "start_manual_handoff",
+                {
+                    "root_id": handoff["rootId"],
+                    "expected_hierarchy_fingerprint": handoff[
+                        "hierarchyFingerprint"
+                    ],
+                    "expected_graph_fingerprint": handoff[
+                        "graphFingerprint"
+                    ],
+                    "started_by": "manual-test-agent",
+                },
+                root=str(root),
+                workspace_root=str(workspace),
+            )
+            self.assertEqual(started["status"], "ACTIVE")
+            self.assertEqual(started["executionMode"], "manual")
 
     def test_recorded_unbound_choice_recovers_into_serial_queue(self) -> None:
         with TemporaryDirectory() as temporary:

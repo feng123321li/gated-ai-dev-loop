@@ -15,6 +15,7 @@ from .planning_workspace import (
     _automatic_workspace_requests,
     _current_workspace_satisfies_request,
     _current_workspace_serial_preparation,
+    _manual_serial_workspace_preparation,
 )
 from .planning_gates import (
     _attach_pending_interaction,
@@ -30,11 +31,11 @@ from .planning_gates import (
     _verify_frozen_delivery_workspace,
     _workspace_turn_waiting,
 )
-from .planning_hierarchy import (
+from .planning_hierarchy import freeze_hierarchy, prepare_hierarchy
+from .planning_manual_handoff import (
     _assert_exact_project_authorization,
+    _refresh_manual_handoff_runtime,
     create_manual_handoff,
-    freeze_hierarchy,
-    prepare_hierarchy,
 )
 
 
@@ -176,6 +177,7 @@ def start_manual_handoff(
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     stored = repository.hierarchy(root_id)
+    graph_runtime_refresh: dict[str, Any] | None = None
     if (
         stored["hierarchyFingerprint"]
         != expected_hierarchy_fingerprint
@@ -262,6 +264,27 @@ def start_manual_handoff(
             serial_gate=serial_gate,
             already_applied=False,
         )
+    manual_preparation = _manual_serial_workspace_preparation(
+        control_root=root,
+        workspace_root=actual_workspace,
+        hierarchy=stored["hierarchy"],
+    )
+    if manual_preparation is not None:
+        return {
+            "rootId": root_id,
+            "deliveryRevision": stored["deliveryRevision"],
+            "status": stored["status"],
+            "hierarchyFingerprint": stored["hierarchyFingerprint"],
+            "graphFingerprint": stored["graphFingerprint"],
+            "selection": "MANUAL",
+            "graphRunCreated": False,
+            "manualStartState": "WORKSPACE_PREPARATION_REQUIRED",
+            "manualStartAlreadyApplied": False,
+            "workspaceStrategy": "CURRENT_WORKSPACE_SERIAL",
+            "workspaceTurn": serial_gate["workspaceTurn"],
+            "workspacePreparation": manual_preparation,
+            "nextAction": manual_preparation["nextAction"],
+        }
     if stored["status"] == "HANDOFF_READY":
         blocked = _manual_baseline_reconfirmation(
             stored=stored,
@@ -271,6 +294,20 @@ def start_manual_handoff(
         )
         if blocked is not None:
             return blocked
+        graph_runtime_refresh = _refresh_manual_handoff_runtime(
+            root=root,
+            repository=repository,
+            root_id=root_id,
+            expected_hierarchy_fingerprint=(
+                expected_hierarchy_fingerprint
+            ),
+            expected_graph_fingerprint=expected_graph_fingerprint,
+        )
+        if graph_runtime_refresh["refreshed"]:
+            expected_graph_fingerprint = graph_runtime_refresh[
+                "graphFingerprint"
+            ]
+            stored = repository.hierarchy(root_id)
         prepared = prepare_hierarchy(
             root=root,
             hierarchy=stored["hierarchy"],
@@ -351,6 +388,12 @@ def start_manual_handoff(
         "startedBy": started_by.strip(),
         "graphRunCreated": True,
         "manualStartAlreadyApplied": False,
+        **(
+            {"graphRuntimeRefresh": graph_runtime_refresh}
+            if graph_runtime_refresh is not None
+            and graph_runtime_refresh["refreshed"]
+            else {}
+        ),
         "nextAction": "READ_GRAPH_FRONTIER",
     }
 
@@ -609,7 +652,11 @@ def select_execution_mode(
         )
     hierarchy = stored["hierarchy"]
     if selection == "MANUAL":
-        if repository.execution_selection(root_id) is not None:
+        existing_selection = repository.execution_selection(root_id)
+        if (
+            existing_selection is not None
+            and existing_selection["selection"] != "MANUAL"
+        ):
             fail(
                 "SCHEDULER_EXECUTION_CHOICE_CONFLICT",
                 "Automatic execution has already been selected; continue "

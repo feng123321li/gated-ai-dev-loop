@@ -55,6 +55,7 @@ DEFAULT_CLAIM_RENEW_BEFORE_SECONDS = 2 * 60
 DEFAULT_CLAIM_GRACE_SECONDS = 2 * 60
 DEFAULT_MAX_EXPECTED_COMMAND_SECONDS = 30 * 60
 DEFAULT_LONG_COMMAND_LEASE_BUFFER_SECONDS = 2 * 60
+GRAPH_COMPILER_CONTRACT = "schema-v3-graph-compiler-v2"
 GRAPH_FIELDS = {
     "schemaVersion",
     "rootId",
@@ -310,6 +311,7 @@ def compile_runtime_policy() -> dict[str, Any]:
         ),
     ]
     return {
+        "compilerContract": GRAPH_COMPILER_CONTRACT,
         "states": list(RUNTIME_STATES),
         "terminalStates": list(RUNTIME_TERMINAL_STATES),
         "retryPolicy": {

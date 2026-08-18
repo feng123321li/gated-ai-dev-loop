@@ -20,6 +20,7 @@ from .planning_gates import (
 from .planning_workspace import (
     _SERIAL_TERMINAL_STATUSES,
     _automatic_serial_workspace_preparation,
+    _manual_serial_workspace_preparation,
 )
 
 
@@ -66,6 +67,7 @@ def workspace_status(
                 candidate["deliveryQueue"] = _delivery_queue_marker(
                     serial_gate,
                     candidate_root_id,
+                    selection=selection["selection"],
                 )
         return result
     selected_root_id = result.get("rootId")
@@ -73,6 +75,8 @@ def workspace_status(
         if result["status"] == "ARCHIVED":
             return result
         stored = repository.hierarchy(selected_root_id)
+        if stored["graphCompatibility"]["state"] != "CURRENT":
+            result["graphCompatibility"] = stored["graphCompatibility"]
         delivery = stored["hierarchy"]["delivery"]
         git_binding = delivery.get("gitBinding")
         project_scopes = delivery.get("projectScopes")
@@ -162,17 +166,28 @@ def workspace_status(
                 result["deliveryQueue"] = _delivery_queue_marker(
                     serial_gate,
                     selected_root_id,
+                    selection=selection["selection"],
                 )
                 result["automaticDispatchRequested"] = False
-                result["nextAction"] = "WAIT_FOR_AUTOMATIC_QUEUE_TURN"
+                result["nextAction"] = (
+                    "WAIT_FOR_AUTOMATIC_QUEUE_TURN"
+                    if selection["selection"] == "AUTOMATIC"
+                    else "WAIT_FOR_MANUAL_QUEUE_TURN"
+                )
                 if git_binding is not None:
                     result["gitBinding"] = git_binding
                 result["projectScopes"] = project_scopes or []
                 return result
-            recorded_preparation = _automatic_serial_workspace_preparation(
-                control_root=root,
-                workspace_root=workspace_root or root,
-                hierarchy=stored["hierarchy"],
+            recorded_preparation = (
+                (
+                    _automatic_serial_workspace_preparation
+                    if selection["selection"] == "AUTOMATIC"
+                    else _manual_serial_workspace_preparation
+                )(
+                    control_root=root,
+                    workspace_root=workspace_root or root,
+                    hierarchy=stored["hierarchy"],
+                )
             )
             if recorded_preparation is not None:
                 result["workspacePreparation"] = recorded_preparation
@@ -259,7 +274,11 @@ def workspace_status(
             result["projectScopes"] = project_scopes
             result["verifiedProjectScopes"] = verified_projects
         if selection is not None:
-            result["nextAction"] = "RESUME_RECORDED_AUTOMATIC_SELECTION"
+            result["nextAction"] = (
+                "RESUME_RECORDED_AUTOMATIC_SELECTION"
+                if selection["selection"] == "AUTOMATIC"
+                else "START_QUEUED_MANUAL_HANDOFF"
+            )
     else:
         discovery = inspect_delivery_git_workspace(
             workspace_root or root,

@@ -39,13 +39,13 @@ allowed-tools:
 | `ABSENT` | 读取[规划说明](references/planning-quickstart.md)，只读问答不创建状态 |
 | `DELIVERY_SELECTION_REQUIRED` | 展示候选并按本会话持有的 `rootId` 重查，绝不按更新时间猜测 |
 | `CHOICE_READY` | 严格处理 `pendingInteraction`，已有选择时不重复询问 |
-| `HANDOFF_READY` | 原样交付 `manualHandoff.receiverPrompt`；接收方使用 `$delivery-graph-dispatch` |
+| `HANDOFF_READY` | 原样交付 `manualHandoff.receiverPrompt`；已绑定同一串行队列，接收方使用 `$delivery-graph-dispatch` |
 | `PREPARED` | 需求未变且尚无 `executionSelection` 时不要重复 preview |
 | `ACTIVE` / `BLOCKED` / `PAUSED` | 停止本 Skill，切换到 `$delivery-graph-dispatch` |
 | `COMPLETED` | 展示结果；真实用户确认后才记录，明确要求后才归档 |
 | `ARCHIVED` / `CANCELLED` | 报告终态；续接同一未验收需求时创建 Revision |
 
-无参发现不会恢复未绑定的 `CHOICE_READY/HANDOFF_READY` 草稿；必须使用创建响应中的 `rootId`。遇到未知写响应、MCP 重连、Git binding 异常或投影问题时，读取[MCP 与状态说明](references/mcp-transport.md)，不要盲目重放写操作。
+无参发现不会恢复未绑定的 `CHOICE_READY` 或旧版 `HANDOFF_READY` 草稿；必须使用创建响应中的 `rootId`。当前 MANUAL 选择会原子绑定当前 workspace 并进入与 AUTOMATIC 相同的串行队列。遇到未知写响应、MCP 重连、Git binding 异常或投影问题时，读取[MCP 与状态说明](references/mcp-transport.md)，不要盲目重放写操作。
 
 ## 规划顺序
 
@@ -63,9 +63,9 @@ allowed-tools:
 - 原样遵循 `presentationPolicy`、选项顺序、默认项、推荐项和文案。宿主原生 selector 可用时机械映射；不可用时才原样展示 `markdown`，不自行添加选项。
 - `DEVELOPMENT_BASELINE` 冻结只读 Git binding。adopt 当前脏分支时必须取得用户归属确认并回传精确 dirty fingerprint；NEW 选项在这里不创建分支或 worktree。
 - 多 Git 项目的每个 `projectScopes[*]` 都必须有完整 binding；任一缺失即停止。
-- `EXECUTION_MODE` 只确认一次。`select_execution_mode` 已持久化选择；若返回 `PREPARE_CURRENT_WORKSPACE_BRANCH_THEN_RESUME_EXECUTION`，机械完成被授权的串行 workspace 准备后调用 `resume_execution_mode`，不得重试选择。
-- `AUTOMATIC` 只使用 `CURRENT_WORKSPACE_SERIAL`。已有 owner 时保持 `QUEUED`，不要抢占或 stash owner 的未完成改动。
-- `MANUAL` 原样展示 `manualHandoff.receiverPrompt`。`HANDOFF_READY` 只是冻结包，不是 Graph Run；接收宿主必须先使用 `$delivery-graph-dispatch` 调用 `start_manual_handoff`。
+- `EXECUTION_MODE` 只确认一次。`select_execution_mode` 已持久化选择；若返回 workspace 准备动作，机械完成被授权的串行准备后，AUTOMATIC 调用 `resume_execution_mode`，MANUAL 调用 `start_manual_handoff`，不得重试选择。
+- `AUTOMATIC` 与 `MANUAL` 都只使用 `CURRENT_WORKSPACE_SERIAL`。已有 owner 时保持 `QUEUED`，不要抢占或 stash owner 的未完成改动。
+- `MANUAL` 原样展示 `manualHandoff.receiverPrompt`。`HANDOFF_READY` 是已排队的冻结包，不是 Graph Run；接收宿主必须先使用 `$delivery-graph-dispatch` 调用 `start_manual_handoff`。旧版未绑定 handoff 只能按明确 `rootId` 恢复；层级完全一致且尚未启动时，启动操作会把旧运行时策略刷新为当前 Graph 编译协议。
 
 ## Revision 与最终确认
 

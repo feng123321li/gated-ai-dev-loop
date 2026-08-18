@@ -388,7 +388,8 @@ class HierarchyFreezeMixin:
                         "authorized_project_ids_json"
                     ]
                     is not None
-                    and previous_definition["execution_mode"] is None
+                    and previous_definition["execution_mode"]
+                    in {None, "manual_pending"}
                 )
                 if previous_run is None and not previous_is_manual:
                     fail(

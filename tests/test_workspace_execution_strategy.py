@@ -28,11 +28,13 @@ from .workspace_execution_strategy_support import (
 )
 from .workspace_execution_strategy_lifecycle import WorkspaceExecutionStrategyTestsPart1
 from .workspace_execution_strategy_completion import WorkspaceExecutionStrategyTestsPart2
+from .workspace_execution_strategy_manual_queue import WorkspaceExecutionStrategyTestsPart3
 
 
 class WorkspaceExecutionStrategyTests(
     WorkspaceExecutionStrategyTestsPart1,
     WorkspaceExecutionStrategyTestsPart2,
+    WorkspaceExecutionStrategyTestsPart3,
     unittest.TestCase,
 ):
     pass

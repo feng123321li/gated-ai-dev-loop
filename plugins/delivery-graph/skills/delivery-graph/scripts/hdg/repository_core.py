@@ -89,6 +89,7 @@ def _validated_stored_graph(
     graph_fingerprint: object,
     *,
     root_id: str,
+    allow_pending_runtime_drift: bool = False,
 ) -> dict[str, Any]:
     if not isinstance(graph_json, str) or not isinstance(
         graph_fingerprint,
@@ -113,6 +114,14 @@ def _validated_stored_graph(
             "Stored scheduler graph changed",
             rootId=root_id,
         )
+    if allow_pending_runtime_drift:
+        if not isinstance(graph, dict):
+            fail(
+                "SCHEDULER_STATE_INVALID",
+                "Stored pending scheduler graph is not an object",
+                rootId=root_id,
+            )
+        return graph
     try:
         return validate_delivery_graph(graph)
     except GatedLoopError as error:
@@ -162,10 +171,12 @@ def _validated_stored_definition(
             "Stored scheduler hierarchy is not canonical",
             rootId=root_id,
         )
+    allow_pending_runtime_drift = row["status"] == "HANDOFF_READY"
     graph = _validated_stored_graph(
         row["graph_json"],
         row["graph_fingerprint"],
         root_id=root_id,
+        allow_pending_runtime_drift=allow_pending_runtime_drift,
     )
     try:
         expected_graph = compile_delivery_graph(
@@ -175,13 +186,32 @@ def _validated_stored_definition(
     except GatedLoopError as error:
         error.details.setdefault("rootId", root_id)
         raise
-    if (
+    graph_identity_mismatch = (
         row["root_id"] != normalized["delivery"]["id"]
-        or graph["rootId"] != normalized["delivery"]["id"]
-        or graph["hierarchyFingerprint"]
+        or graph.get("rootId") != normalized["delivery"]["id"]
+        or graph.get("hierarchyFingerprint")
         != row["hierarchy_fingerprint"]
-        or graph != expected_graph
-        or graph_fingerprint(expected_graph) != row["graph_fingerprint"]
+    )
+    graph_is_current = (
+        graph == expected_graph
+        and graph_fingerprint(expected_graph) == row["graph_fingerprint"]
+    )
+    pending_runtime_only_drift = (
+        allow_pending_runtime_drift
+        and isinstance(graph.get("runtime"), dict)
+        and all(
+            graph.get(field) == expected_graph[field]
+            for field in (
+                "schemaVersion",
+                "rootId",
+                "hierarchyFingerprint",
+                "nodes",
+                "edges",
+            )
+        )
+    )
+    if graph_identity_mismatch or not (
+        graph_is_current or pending_runtime_only_drift
     ):
         fail(
             "SCHEDULER_STATE_INVALID",

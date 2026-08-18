@@ -792,10 +792,24 @@ class SchedulerRuntimeTestsPart1:
         self.assertIn("`$springboot-tdd`", prompt)
         self.assertIn("应在当前相应阶段优先原生触发", prompt)
         self.assertIn("才跳过", prompt)
+        repeated_selection = select_execution_mode(
+            root=self.root,
+            root_id="d-select-manual",
+            selection="MANUAL",
+            expected_hierarchy_fingerprint=preview[
+                "hierarchyFingerprint"
+            ],
+            expected_graph_fingerprint=preview["graphFingerprint"],
+            authorized_project_ids=[],
+            confirmed_by="human",
+            now=at(2),
+        )
+        self.assertTrue(repeated_selection["selectionAlreadyApplied"])
+        self.assertEqual(repeated_selection["status"], "HANDOFF_READY")
         repeated_preview = preview_hierarchy(
             root=self.root,
             hierarchy=hierarchy,
-            now=at(2),
+            now=at(3),
         )
         self.assertEqual(repeated_preview["status"], "HANDOFF_READY")
         self.assertNotIn("executionChoice", repeated_preview)

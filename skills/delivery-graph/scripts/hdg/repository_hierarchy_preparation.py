@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from .graph_model import (
+    GRAPH_COMPILER_CONTRACT,
+    compile_delivery_graph,
+    graph_fingerprint,
+)
 from .repository_hierarchy_common import (
     Any,
     canonical_json,
@@ -9,6 +14,88 @@ from .repository_hierarchy_common import (
 
 
 class HierarchyPreparationMixin:
+    def refresh_manual_handoff_graph(
+        self,
+        root_id: str,
+        *,
+        expected_hierarchy_fingerprint: str,
+        expected_graph_fingerprint: str,
+    ) -> dict[str, Any]:
+        """Refresh only an unstarted manual handoff's runtime policy."""
+
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM hierarchies WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if row is None:
+                fail(
+                    "SCHEDULER_HIERARCHY_MISSING",
+                    f"Unknown hierarchy: {root_id}",
+                )
+            if (
+                row["hierarchy_fingerprint"]
+                != expected_hierarchy_fingerprint
+                or row["graph_fingerprint"]
+                != expected_graph_fingerprint
+            ):
+                fail(
+                    "SCHEDULER_MANUAL_HANDOFF_STALE",
+                    "The manual handoff fingerprints are not current",
+                    rootId=root_id,
+                    actualHierarchyFingerprint=row[
+                        "hierarchy_fingerprint"
+                    ],
+                    actualGraphFingerprint=row["graph_fingerprint"],
+                )
+            run = connection.execute(
+                "SELECT 1 FROM runs WHERE root_id = ? AND revision = ?",
+                (root_id, row["revision"]),
+            ).fetchone()
+            if row["status"] != "HANDOFF_READY" or run is not None:
+                return {
+                    "refreshed": False,
+                    "previousGraphFingerprint": row["graph_fingerprint"],
+                    "graphFingerprint": row["graph_fingerprint"],
+                    "compilerContract": GRAPH_COMPILER_CONTRACT,
+                }
+            hierarchy, stored_graph = self.validate_stored_definition(row)
+            current_graph = compile_delivery_graph(
+                hierarchy,
+                hierarchy_fingerprint=row["hierarchy_fingerprint"],
+            )
+            current_graph_fingerprint = graph_fingerprint(current_graph)
+            if stored_graph == current_graph:
+                return {
+                    "refreshed": False,
+                    "previousGraphFingerprint": row["graph_fingerprint"],
+                    "graphFingerprint": current_graph_fingerprint,
+                    "compilerContract": GRAPH_COMPILER_CONTRACT,
+                }
+            encoded_graph = canonical_json(current_graph)
+            connection.execute(
+                "UPDATE hierarchies SET graph_fingerprint = ?, "
+                "graph_json = ? WHERE root_id = ?",
+                (current_graph_fingerprint, encoded_graph, root_id),
+            )
+            connection.execute(
+                "UPDATE delivery_revisions SET graph_fingerprint = ?, "
+                "graph_json = ? WHERE root_id = ? AND revision = ?",
+                (
+                    current_graph_fingerprint,
+                    encoded_graph,
+                    root_id,
+                    row["revision"],
+                ),
+            )
+        self.write_projections(root_id)
+        return {
+            "refreshed": True,
+            "previousGraphFingerprint": expected_graph_fingerprint,
+            "graphFingerprint": current_graph_fingerprint,
+            "compilerContract": GRAPH_COMPILER_CONTRACT,
+        }
+
     def record_manual_handoff(
         self,
         hierarchy: dict[str, Any],
@@ -21,10 +108,17 @@ class HierarchyPreparationMixin:
         continuity_basis: str | None,
         revision_reason: str | None,
         confirmed_by: str,
+        workspace_key: str,
     ) -> dict[str, Any]:
-        """Register a frozen manual snapshot without creating a Graph run."""
+        """Register a frozen manual snapshot in the serial execution queue."""
 
         root_id = graph["rootId"]
+        if not isinstance(workspace_key, str) or not workspace_key:
+            fail(
+                "SCHEDULER_DELIVERY_WORKSPACE_MISSING",
+                "Manual handoff queue registration requires a workspace key",
+                rootId=root_id,
+            )
         hierarchy_json = canonical_json(hierarchy)
         graph_json = canonical_json(graph)
         previous_revision: int | None = None
@@ -38,6 +132,20 @@ class HierarchyPreparationMixin:
                 "SELECT * FROM hierarchies WHERE root_id = ?",
                 (root_id,),
             ).fetchone()
+            existing_binding = connection.execute(
+                "SELECT workspace_key FROM delivery_workspaces "
+                "WHERE root_id = ?",
+                (root_id,),
+            ).fetchone()
+            if (
+                existing_binding is not None
+                and existing_binding["workspace_key"] != workspace_key
+            ):
+                fail(
+                    "SCHEDULER_DELIVERY_WORKSPACE_MISMATCH",
+                    "A queued manual handoff cannot move to another workspace",
+                    rootId=root_id,
+                )
             if existing is not None:
                 self.validate_stored_definition(existing)
                 if existing["status"] == "ARCHIVED":
@@ -46,6 +154,26 @@ class HierarchyPreparationMixin:
                         "An archived Delivery cannot become a manual handoff",
                         rootId=root_id,
                     )
+                if existing["status"] in {
+                    "CHOICE_READY",
+                    "HANDOFF_READY",
+                }:
+                    current_revision = connection.execute(
+                        "SELECT execution_mode FROM delivery_revisions "
+                        "WHERE root_id = ? AND revision = ?",
+                        (root_id, existing["revision"]),
+                    ).fetchone()
+                    if (
+                        current_revision is not None
+                        and current_revision["execution_mode"]
+                        not in {None, "manual_pending"}
+                    ):
+                        fail(
+                            "SCHEDULER_EXECUTION_CHOICE_CONFLICT",
+                            "The Delivery already has a non-manual execution "
+                            "selection",
+                            rootId=root_id,
+                        )
                 content_changed = (
                     existing["hierarchy_fingerprint"]
                     != hierarchy_fingerprint
@@ -126,10 +254,10 @@ class HierarchyPreparationMixin:
                             graph_fingerprint, hierarchy_json, graph_json,
                             status, reason, continuity_basis, requested_by,
                             confirmed_by, authorized_project_ids_json,
-                            created_at, updated_at
+                            execution_mode, created_at, updated_at
                         ) VALUES (
                             ?, ?, ?, ?, ?, ?, 'HANDOFF_READY', ?, ?, ?,
-                            ?, ?, ?, ?
+                            ?, ?, 'manual_pending', ?, ?
                         )
                         """,
                         (
@@ -197,6 +325,7 @@ class HierarchyPreparationMixin:
                             "UPDATE delivery_revisions SET status = "
                             "'HANDOFF_READY', reason = ?, confirmed_by = ?, "
                             "authorized_project_ids_json = ?, "
+                            "execution_mode = 'manual_pending', "
                             "updated_at = ? WHERE root_id = ? "
                             "AND revision = ?",
                             (
@@ -220,7 +349,8 @@ class HierarchyPreparationMixin:
                         )
                         connection.execute(
                             "UPDATE delivery_revisions SET confirmed_by = ?, "
-                            "authorized_project_ids_json = ?, updated_at = ? "
+                            "authorized_project_ids_json = ?, "
+                            "execution_mode = 'manual_pending', updated_at = ? "
                             "WHERE root_id = ? AND revision = ?",
                             (
                                 confirmed_by,
@@ -273,9 +403,11 @@ class HierarchyPreparationMixin:
                         root_id, revision, hierarchy_fingerprint,
                         graph_fingerprint, hierarchy_json, graph_json,
                         status, reason, confirmed_by,
-                        authorized_project_ids_json, created_at, updated_at
+                        authorized_project_ids_json, execution_mode,
+                        created_at, updated_at
                     ) VALUES (
-                        ?, 1, ?, ?, ?, ?, 'HANDOFF_READY', ?, ?, ?, ?, ?
+                        ?, 1, ?, ?, ?, ?, 'HANDOFF_READY', ?, ?, ?,
+                        'manual_pending', ?, ?
                     )
                     """,
                     (
@@ -291,16 +423,27 @@ class HierarchyPreparationMixin:
                         at,
                     ),
                 )
+            connection.execute(
+                "INSERT INTO delivery_workspaces("
+                "root_id, workspace_key, created_at, updated_at"
+                ") VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(root_id) DO UPDATE SET "
+                "updated_at = excluded.updated_at",
+                (root_id, workspace_key, at, at),
+            )
         self.write_projections(
             root_id,
             preserve_manual_updates=preserve_manual_updates,
         )
+        workspace_turn = self.serial_workspace_turn_state(root_id)
         return {
             "rootId": root_id,
             "status": "HANDOFF_READY",
             "deliveryRevision": delivery_revision,
             "previousRevision": previous_revision,
             "recordedAt": at,
+            "selection": "MANUAL",
+            "workspaceTurn": workspace_turn,
         }
 
     def prepare(

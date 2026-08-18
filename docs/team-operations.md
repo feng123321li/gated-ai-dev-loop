@@ -71,8 +71,8 @@ Claude 命令从当前 0.42.1 源码发布包的 `--plugin-dir` 加载 Plugin；
 - `start_manual_handoff` 的单仓 Git 漂移先阻断且零写入。确认原 binding 时保持当前 Revision，确认新 binding 时生成下一不可变 Revision；多仓漂移 fail closed，要求用完整 project bindings 创建新的手动 Revision。
 - Controller 只读计算并冻结 binding；当前 checkout 的分支创建或切换仍由宿主完成。Plugin 不公开 worktree setup 工具，也不自动创建 linked worktree；已存在的 linked checkout 仅作为普通 current workspace。
 - 同一物理 workspace 可以绑定多个 Delivery，但每个会话必须保存并显式传自己的 `rootId`。无参发现多个未结束绑定时只返回 `DELIVERY_SELECTION_REQUIRED`，不能按更新时间猜选。
-- AUTOMATIC 选择在排队时立即持久化。非队首 Delivery 对外标记为 `QUEUED`，包含队列位置、owner 和无需再次确认的 `resume_execution_mode` continuation；不创建 Run、不派遣 receiver。前序 Delivery 释放后，宿主自动消费 `automaticHostPreparation`：必要时按精确指纹 stash 业务改动（排除 `.layered-delivery/**`），创建或切换目标分支，再调用 `resume_execution_mode`，不能重选。
-- 手动交接冻结同样持久化 Delivery、不可变 Revision、完整 hierarchy、双 fingerprint 和人类投影，但状态保持 `HANDOFF_READY`。它不产生 `QUEUED`、自动 continuation、Graph Run 或 workspace binding；只有接收方显式调用 `start_manual_handoff` 才尝试取得串行 turn，等待时仍返回手动 `WAITING_FOR_WORKSPACE_*` 状态。
+- AUTOMATIC 与 MANUAL 选择在排队时都立即持久化。非队首 Delivery 对外标记为 `QUEUED`，包含队列位置、owner 和无需再次确认的 mode-specific continuation；不创建 Run、不派遣 receiver。前序 Delivery 释放后，宿主消费 `automaticHostPreparation` 或 `manualHostPreparation`：必要时按精确指纹 stash 业务改动（排除 `.layered-delivery/**`），创建或切换目标分支，再调用 `resume_execution_mode` 或 `start_manual_handoff`，不能重选。
+- 手动交接冻结同样持久化 Delivery、不可变 Revision、完整 hierarchy、双 fingerprint 和人类投影，内部状态保持 `HANDOFF_READY`，并原子记录 MANUAL 选择与 workspace binding。已有 owner 时它对外产生 `QUEUED`，等待期间不创建 Graph Run；只有接收方显式调用 `start_manual_handoff` 才启动。旧版未绑定 handoff 只能用明确 `rootId` 恢复；无 Run 且 hierarchy/节点/边完全一致时，启动前可刷新 Graph 编译协议、runtime policy 和 graph fingerprint，ACTIVE/FROZEN 状态仍拒绝版本漂移。
 - 前序 Delivery 在 Run 终态，或已到 `RECORD_USER_CONFIRMATION` 时，只要被取消 receiver 的租约已结束、没有 reservation、存在相对 turn-start 的非空业务 commit、历史未改写且工作树/index 干净，即可释放物理 workspace turn。待用户确认只释放 checkout，不标记完成；错分支、dirty、HEAD 或 scope 漂移全部失败关闭。
 - 主会话当前 checkout 与所有 `READ_WRITE` project workspace 都参与事务内 owner gate；任一 physical workspace 冲突时只允许先到 Delivery 运行。
 - TASK/TASK Review 的 Controller 可信 Git 证据只保存 committed、staged、unstaged 与 untracked 变更文件清单、base/HEAD 和状态指纹；不得把源码 diff 或补丁附件写入 Graph。需要内容时从授权 checkout 或对应提交读取。

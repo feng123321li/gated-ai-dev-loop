@@ -686,7 +686,7 @@ class WorkspaceExecutionStrategyTestsPart1:
                 second_waiting,
             )
             self.assertIn(
-                "排队中（等待自动调度）",
+                "排队中（等待工作区串行调度）",
                 (
                     repository
                     / ".layered-delivery"

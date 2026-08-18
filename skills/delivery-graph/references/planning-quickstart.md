@@ -382,7 +382,7 @@ Torna 必须保持相同的方法、路径或签名、字段层级、类型、�
 
 ## 准备与冻结
 
-`preview_hierarchy` 与手动选择都不绑定 Delivery 工作区。preview 先把需求登记为 `CHOICE_READY`，生成共享 SQLite、根总览和完整投影；自动按钮由 `select_execution_mode(AUTOMATIC)` 立即记录选择与项目授权，工作区策略固定为 `CURRENT_WORKSPACE_SERIAL`。同一实际 workspace 可以绑定多个 Delivery，但每个 Delivery 使用独立分支，同一物理 checkout 一次只运行一个 Delivery。已有 owner 时，只有已选择 `AUTOMATIC` 的后续 Delivery 标记为 `QUEUED` 并保存自动 continuation；前一个 Delivery 进入 Run 终态，或到达 `RECORD_USER_CONFIRMATION`，并形成可验证业务 commit、working tree/index clean、HEAD 与冻结 binding 一致且所有 receiver/reservation 安全释放后，宿主自动消费 `automaticHostPreparation`，必要时 stash 既有业务改动、创建或切换目标分支，并以明确 `rootId` 和双 fingerprint 调用 `resume_execution_mode`。待用户确认只释放物理 turn，不标记完成；人工 Graph 也适用相同边界。手动冻结同样持久化 Delivery、不可变 Revision、完整 hierarchy、双 fingerprint 和投影，但保持 `HANDOFF_READY`，不进入自动队列或创建 Run/workspace binding。资源冲突、owner dirty、未合并状态、HEAD 漂移或无法证明释放时保持排队。现有 linked checkout 只作为普通 current workspace，不自动创建新 worktree。所有继续调用都显式传创建响应中的 `rootId`；控制状态隔离不承诺文件、index 或 HEAD 隔离。Controller 自身始终不执行 Git 写操作。
+`preview_hierarchy` 不绑定 Delivery 工作区；`select_execution_mode` 在确认 AUTOMATIC 或 MANUAL 后立即记录选择、项目授权和当前 workspace 绑定，工作区策略统一为 `CURRENT_WORKSPACE_SERIAL`。同一实际 workspace 可以绑定多个 Delivery，但每个 Delivery 使用独立分支，同一物理 checkout 一次只运行一个 Delivery。已有 owner 时，后续 Delivery 无论选择 AUTOMATIC 还是 MANUAL 都对外标记为 `QUEUED`，保存各自 continuation；前一个 Delivery 进入 Run 终态，或到达 `RECORD_USER_CONFIRMATION`，并形成可验证业务 commit、working tree/index clean、HEAD 与冻结 binding 一致且所有 receiver/reservation 安全释放后，宿主消费对应的 `automaticHostPreparation` 或 `manualHostPreparation`，必要时 stash 既有业务改动、创建或切换目标分支，再以明确 `rootId` 和双 fingerprint 调用 `resume_execution_mode` 或 `start_manual_handoff`。待用户确认只释放物理 turn，不标记完成；人工 Graph 也适用相同边界。手动冻结持久化 Delivery、不可变 Revision、完整 hierarchy、双 fingerprint 和投影，内部状态保持 `HANDOFF_READY`，排队期间不创建 Run。资源冲突、owner dirty、未合并状态、HEAD 漂移或无法证明释放时保持排队。现有 linked checkout 只作为普通 current workspace，不自动创建新 worktree。所有继续调用都显式传创建响应中的 `rootId`；控制状态隔离不承诺文件、index 或 HEAD 隔离。Controller 自身始终不执行 Git 写操作。
 
 `preview_hierarchy`、`prepare_delivery_revision` 与 `create_manual_handoff` 默认直接传内联 `hierarchy`，不得为了普通规划创建 `.layered-delivery/staging`。只有宿主明确报告参数大小限制且内联确实不可用时，才改用一次性 `hierarchy_file`；控制器在工作区沙箱内读取并解析该文件，等价于内联 `hierarchy`。两者二选一，同时给或都不给都会被拒绝，路径穿越、符号链接和跨盘也会被拒绝；成功读取后应清理该临时文件。
 
@@ -396,7 +396,7 @@ preview 会先通过 `pendingInteraction.kind=DEVELOPMENT_BASELINE` 确认基线
 
 #### `CURRENT_WORKSPACE_SERIAL`
 
-- 自动 Git Delivery 只使用 `CURRENT_WORKSPACE_SERIAL`。`select_execution_mode(AUTOMATIC)` 立即持久化选择。非队首返回 `status=QUEUED`、队列位置和无需再次确认的 continuation；不得重选模式。轮到队首后读取 `automaticHostPreparation.actions`：无 dirty 时创建或切换冻结分支；有既存业务 dirty 且无冲突时先核对精确指纹并 stash tracked/staged/untracked 内容，pathspec 必须排除 `.layered-delivery/**`，再准备分支；最后以明确 `rootId` 与双 fingerprint 调用 `resume_execution_mode`。同一物理 checkout 一次只运行一个 Delivery，不能以多个 `rootId` 的控制状态隔离为由并行写文件、index 或 HEAD。
+- AUTOMATIC 与 MANUAL Git Delivery 都只使用 `CURRENT_WORKSPACE_SERIAL`。`select_execution_mode` 立即持久化选择。非队首返回 `status=QUEUED`、队列位置和无需再次确认的 mode-specific continuation；不得重选模式。轮到队首后读取 `automaticHostPreparation.actions` 或 `manualHostPreparation.actions`：无 dirty 时创建或切换冻结分支；有既存业务 dirty 且无冲突时先核对精确指纹并 stash tracked/staged/untracked 内容，pathspec 必须排除 `.layered-delivery/**`，再准备分支；最后以明确 `rootId` 与双 fingerprint 调用 `resume_execution_mode` 或 `start_manual_handoff`。同一物理 checkout 一次只运行一个 Delivery，不能以多个 `rootId` 的控制状态隔离为由并行写文件、index 或 HEAD。
 - Controller 不创建、复用或预留新 worktree。当前目录本身是既有 linked checkout 时，也只按普通 current workspace 校验和调度。多项目 Delivery 的所有 `READ_WRITE` scope 必须同时满足 commit、clean、HEAD 与释放条件；任一 scope 冲突或漂移就停止切换。
 
 #### `workspaceProvenance` 与基线发现
@@ -423,11 +423,11 @@ preview 会先通过 `pendingInteraction.kind=DEVELOPMENT_BASELINE` 确认基线
 
 #### Delivery turn 切换
 
-- 在某个 Delivery 运行期间收到另一个独立 Delivery 时，登记/规划新控制状态、记录 AUTOMATIC 选择并保留其 `rootId`；Controller 把它标记为 `QUEUED`，不让它在该 checkout 开始代码执行。当前 Delivery 进入 Run 终态，或到达 `RECORD_USER_CONFIRMATION`，并已形成可验证业务 commit、工作树与 index clean、HEAD 未漂移且 receiver/reservation 安全释放时，宿主才自动续调队首。待用户确认的最终业务验收可稍后按旧 `rootId` 补录；若用户要求修改，下一 Revision 重新排队。资源冲突、owner dirty、HEAD 漂移或释放状态不明时保持排队，不能以 stash owner 改动、新 worktree或另一个独立执行任务绕过。
+- 在某个 Delivery 运行期间收到另一个独立 Delivery 时，登记/规划新控制状态、记录 AUTOMATIC 或 MANUAL 选择并保留其 `rootId`；Controller 把它标记为 `QUEUED`，不让它在该 checkout 开始代码执行。当前 Delivery 进入 Run 终态，或到达 `RECORD_USER_CONFIRMATION`，并已形成可验证业务 commit、工作树与 index clean、HEAD 未漂移且 receiver/reservation 安全释放时，宿主才按已记录模式续调队首。待用户确认的最终业务验收可稍后按旧 `rootId` 补录；若用户要求修改，下一 Revision 重新排队。资源冲突、owner dirty、HEAD 漂移或释放状态不明时保持排队，不能以 stash owner 改动、新 worktree或另一个独立执行任务绕过。
 
 #### 手动开发内容包
 
-- 手动开发生成完整冻结内容包：固定写入本需求的 `.layered-delivery/<delivery-id>/`，包含与自动开发相同的 overview、baseline、progress、acceptance、revisions、work-items，以及自包含 `handoff-<fingerprint>.md`；同时必须生成共享 `.layered-delivery/scheduler.db` 与根 `overview.md`，把需求登记为 `HANDOFF_READY`。不创建共享 `handoffs` 目录；交接阶段不创建 Graph Run 或 workspace 绑定，不指定 Agent 或接收任务，也不创建 worktree。用户切换任意 CLI 后，在实际开发工作区调用 `start_manual_handoff`：基线未漂移时控制器绑定 workspace、启动同一冻结 Graph；漂移时先返回待确认基线且不写运行状态，binding 改变才生成下一不可变手动 Revision。启动后只让 TASK 实现走不带 AUTO reservation/decision fingerprint 的 MANUAL claim，完整 Review 和最终确认继续沿用统一 AUTO 协议。
+- 手动开发生成完整冻结内容包：固定写入本需求的 `.layered-delivery/<delivery-id>/`，包含与自动开发相同的 overview、baseline、progress、acceptance、revisions、work-items，以及自包含 `handoff-<fingerprint>.md`；同时生成共享 `.layered-delivery/scheduler.db` 与根 `overview.md`，原子登记 `HANDOFF_READY`、MANUAL 选择和当前 workspace 队列绑定。不创建共享 `handoffs` 目录；交接阶段不创建 Graph Run，不指定 Agent 或接收任务，也不创建 worktree。用户切换任意 CLI 后，在已绑定 workspace 调用 `start_manual_handoff`：未到串行 turn 时继续返回 `QUEUED`；轮到且基线未漂移时启动同一冻结 Graph；漂移时先返回待确认基线且不写运行状态，binding 改变才生成下一不可变手动 Revision。旧版未绑定 handoff 只允许明确 `rootId` 恢复；若 hierarchy 完全一致且仍未启动，启动前只刷新当前 Graph 编译协议、运行时策略和 graph fingerprint，不改变需求 Revision。启动后只让 TASK 实现走不带 AUTO reservation/decision fingerprint 的 MANUAL claim，完整 Review 和最终确认继续沿用统一 AUTO 协议。
 
 #### 停止条件
 
@@ -502,7 +502,7 @@ MCP 根固定只限制当前会话的主工作区锚点，不把同一 Delivery 
 
 ## 多 Delivery 工作区与资源串行化
 
-同一个实际 workspace 可以绑定多个 Delivery，Graph 状态、Revision、run 和验收始终按 `rootId` 路由，但执行策略只有 `CURRENT_WORKSPACE_SERIAL`。每个 Delivery 保持独立分支；只有已选择 `AUTOMATIC` 的后启动或后发现 Delivery 标记 `QUEUED`，前一个 Delivery 进入 Run 终态，或到达最终用户确认边界，并形成可验证业务 commit、working tree/index clean、HEAD 未漂移且 receiver/reservation 安全释放后自动续调队首。`CANCELLED` 的 owner 在安全边界独立释放，不需要归档；终态状态不继续返回过期 `workspaceRebase`。手动冻结 Delivery 保持 `HANDOFF_READY` 并等待接收方显式启动，手动 Run 到达相同安全边界后也可 commit 并让出 checkout。资源冲突、owner dirty、未合并状态或 HEAD 漂移时保持排队，不创建新 worktree，也不允许跨 Delivery 并行。
+同一个实际 workspace 可以绑定多个 Delivery，Graph 状态、Revision、run 和验收始终按 `rootId` 路由，但执行策略只有 `CURRENT_WORKSPACE_SERIAL`。每个 Delivery 保持独立分支；已选择 `AUTOMATIC` 或 `MANUAL` 的后启动或后发现 Delivery 都标记 `QUEUED`，前一个 Delivery 进入 Run 终态，或到达最终用户确认边界，并形成可验证业务 commit、working tree/index clean、HEAD 未漂移且 receiver/reservation 安全释放后按已记录模式续调队首。`CANCELLED` 的 owner 在安全边界独立释放，不需要归档；终态状态不继续返回过期 `workspaceRebase`。手动冻结 Delivery 内部保持 `HANDOFF_READY` 并等待接收方显式启动，手动 Run 到达相同安全边界后也可 commit 并让出 checkout。资源冲突、owner dirty、未合并状态或 HEAD 漂移时保持排队，不创建新 worktree，也不允许跨 Delivery 并行。
 
 ### 同文件/同区域：声明式串行化（`resourceClaims`）
 

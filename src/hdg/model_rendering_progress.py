@@ -31,6 +31,7 @@ def render_manual_handoff(
     *,
     hierarchy_fingerprint: str,
     graph_fingerprint: str,
+    graph_compiler_contract: str,
     confirmed_by: str,
     created_at: str,
     receiver_prompt: str,
@@ -168,9 +169,9 @@ def render_manual_handoff(
             f"| 确认人 | {_markdown_text(confirmed_by)} |",
             f"| 生成时间（UTC+8） | {_utc_plus_8(created_at)} |",
             "| 需求内容快照 | 已冻结（由双指纹锁定） |",
-            "| Graph 调度状态 | 待接收 CLI 在实际工作区显式启动 |",
+            "| Graph 调度状态 | 已进入工作区串行队列；轮到后由接收 CLI 显式启动 |",
             "| 接收执行者 | 交接前不指定；由接收宿主开始开发时确定 |",
-            "| 开发工作区 | 交接阶段不创建；开始实际开发时再创建或选择 |",
+            "| 开发工作区 | 已绑定当前物理 workspace 的串行队列；不创建新 checkout |",
             "",
             "需求内容快照已冻结。本文件在交接阶段不创建接收任务、不认领 Loop，"
             "也不预先绑定任何 Agent；接收后必须先启动"
@@ -185,6 +186,7 @@ def render_manual_handoff(
             f"- 数据结构版本：{hierarchy['root']['schemaVersion']}",
             f"- 层级指纹：{hierarchy_fingerprint}",
             f"- 调度图指纹：{graph_fingerprint}",
+            f"- Graph 编译协议：{graph_compiler_contract}",
             "",
             "## Delivery 目标",
             "",
@@ -199,8 +201,8 @@ def render_manual_handoff(
             "",
             _render_project_scopes(delivery),
             "",
-            "接收方开始开发时必须按实际工作区重新校准路径、Git 分支绑定"
-            "和项目授权；交接文件中的规划时路径不等于已创建开发环境。",
+            "接收方开始开发时必须在已绑定 workspace 中重新校准路径、Git 分支绑定"
+            "和项目授权；交接文件中的规划时路径不等于已准备好目标分支。",
             "",
             "## GROUP/TASK 总览",
             "",
@@ -227,14 +229,15 @@ def render_manual_handoff(
             "",
             "1. 切换到任意 CLI，读取本目录中的 overview、baseline、progress、"
             "acceptance、revisions、work-items 和本交接文件。",
-            "2. 校验本文件记录的层级指纹与调度图指纹；二者共同标识本次已冻结需求。",
+            "2. 校验本文件记录的层级指纹、调度图指纹与 Graph 编译协议；旧编译协议"
+            "只允许在 hierarchy 完全一致且尚未启动时刷新运行时策略与调度图指纹。",
             "3. 在当前实际 workspace 中串行接收本 Delivery。上一 Delivery 必须"
             "已有可验证提交、工作树和索引干净、HEAD 未漂移且所有接收方已安全释放；"
             "否则等待或停止，不切换分支，也不创建新的 worktree。",
             "4. 按实际工作区校准 projectScopes、gitBinding 和本地路径，但不得"
             "静默改变已冻结的业务目标、TASK、依赖或验收标准。",
             "5. 在任何代码检查、分析、修改或测试前，使用本文件的 Delivery ID 和"
-            "双指纹调用 start_manual_handoff；该操作绑定实际工作区并创建 manual "
+            "双指纹调用 start_manual_handoff；该操作校验已绑定工作区并创建 manual "
             "Graph Run。",
             "6. 总协调上下文只消费 frontier。每个 CLAIM_MANUAL_TASK 在独立接收"
             "上下文中以 dispatch_mode=MANUAL claim，随后 heartbeat、上报进度、"

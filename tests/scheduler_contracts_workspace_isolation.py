@@ -128,7 +128,11 @@ class McpSurfaceTestsPart2:
             self.assertEqual(status["rootId"], handoff["rootId"])
             self.assertEqual(
                 status["workspaceIsolation"]["mode"],
-                "UNBOUND_MANUAL_HANDOFF",
+                "MULTI_DELIVERY_WORKSPACE",
+            )
+            self.assertEqual(
+                status["workspaceIsolation"]["workspaceKey"],
+                SchedulerRepository.workspace_key(root),
             )
             started = call_tool(
                 "start_manual_handoff",

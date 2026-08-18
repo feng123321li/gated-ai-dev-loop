@@ -230,6 +230,7 @@ class SchedulerRepository(SchedulerRepositoryBase):
         continuity_basis: str | None,
         revision_reason: str | None,
         confirmed_by: str,
+        workspace_key: str,
     ) -> dict[str, Any]:
         return self._delivery_hierarchy_store().record_manual_handoff(
             hierarchy,
@@ -241,6 +242,22 @@ class SchedulerRepository(SchedulerRepositoryBase):
             continuity_basis=continuity_basis,
             revision_reason=revision_reason,
             confirmed_by=confirmed_by,
+            workspace_key=workspace_key,
+        )
+
+    def refresh_manual_handoff_graph(
+        self,
+        root_id: str,
+        *,
+        expected_hierarchy_fingerprint: str,
+        expected_graph_fingerprint: str,
+    ) -> dict[str, Any]:
+        return self._delivery_hierarchy_store().refresh_manual_handoff_graph(
+            root_id,
+            expected_hierarchy_fingerprint=(
+                expected_hierarchy_fingerprint
+            ),
+            expected_graph_fingerprint=expected_graph_fingerprint,
         )
 
     def prepare(

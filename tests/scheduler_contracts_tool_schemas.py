@@ -242,7 +242,8 @@ class McpSurfaceTestsPart1:
         )
         self.assertNotIn("confirmed", selection_properties)
         self.assertIn(
-            "call resume_execution_mode and never retry the selection",
+            "call resume_execution_mode for AUTOMATIC or "
+            "start_manual_handoff for MANUAL",
             by_name["select_execution_mode"]["description"],
         )
         self.assertEqual(

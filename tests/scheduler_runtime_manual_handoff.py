@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .scheduler_runtime_support import (
+    GRAPH_COMPILER_CONTRACT,
     GatedLoopError,
     Path,
     SchedulerRepository,
@@ -77,18 +78,24 @@ class SchedulerRuntimeTestsPart2:
             preview["nextAction"],
             "PRESENT_HOST_NATIVE_EXECUTION_CHOICE",
         )
-        self.assertEqual(handoff["status"], "HANDOFF_READY")
+        self.assertEqual(handoff["status"], "QUEUED")
+        self.assertEqual(handoff["deliveryStatus"], "HANDOFF_READY")
+        self.assertEqual(
+            handoff["deliveryQueue"]["continuation"]["tool"],
+            "start_manual_handoff",
+        )
         self.assertEqual(
             handoff["requirementSnapshotStatus"],
             "FROZEN",
         )
         self.assertEqual(
             handoff["nextAction"],
-            "OPEN_FROZEN_BUNDLE_AND_START_MANUAL_HANDOFF_IN_RECEIVING_CLI",
+            "WAIT_FOR_MANUAL_QUEUE_TURN",
         )
         self.assertTrue(handoff["controlStateCreated"])
         self.assertFalse(handoff["graphRunCreated"])
         self.assertFalse(handoff["workspaceCreated"])
+        self.assertTrue(handoff["workspaceBound"])
         self.assertEqual(
             set(handoff["manualHandoff"]),
             {"path", "format", "selfContained", "receiverPrompt"},
@@ -181,8 +188,9 @@ class SchedulerRuntimeTestsPart2:
             "实现第二个独立需求并完成验证。",
             preview["hierarchyFingerprint"],
             preview["graphFingerprint"],
+            GRAPH_COMPILER_CONTRACT,
             "交接前不指定",
-            "开始实际开发时再创建",
+            "已绑定当前物理 workspace 的串行队列",
             "需求内容快照已冻结",
             "切换到任意 CLI",
             "start_manual_handoff",
@@ -215,7 +223,7 @@ class SchedulerRuntimeTestsPart2:
                     projection_name,
                 ).read_text(encoding="utf-8")
                 self.assertIn(
-                    "需求已冻结（手动开发，调度未启动）",
+                    "排队中（等待工作区串行调度）",
                     projection,
                 )
         revisions = Path(
@@ -226,8 +234,14 @@ class SchedulerRuntimeTestsPart2:
         self.assertIn("已冻结，未创建 Graph Run", revisions)
 
         active = workspace_status(root=self.root)
-        self.assertEqual(active["rootId"], "d-first")
-        self.assertEqual(active["status"], "ACTIVE")
+        self.assertEqual(active["status"], "DELIVERY_SELECTION_REQUIRED")
+        self.assertEqual(
+            sorted(
+                item["rootId"]
+                for item in active["candidateDeliveries"]
+            ),
+            ["d-first", "d-second"],
+        )
         stored_manual = SchedulerRepository(self.root).hierarchy(
             "d-second"
         )
@@ -256,7 +270,7 @@ class SchedulerRuntimeTestsPart2:
         self.assertIn("d-first", workspace_overview)
         self.assertIn("d-second", workspace_overview)
         self.assertIn(
-            "需求已冻结（手动开发，调度未启动）",
+            "排队中（等待工作区串行调度）",
             workspace_overview,
         )
 

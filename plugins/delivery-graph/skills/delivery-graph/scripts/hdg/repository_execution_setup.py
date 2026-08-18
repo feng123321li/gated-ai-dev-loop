@@ -631,7 +631,8 @@ class DeliveryExecutionSetupStore:
             workspace_turn = None
             if (
                 row is not None
-                and row["execution_mode"] == "automatic_pending"
+                and row["execution_mode"]
+                in {"automatic_pending", "manual_pending"}
             ):
                 binding = connection.execute(
                     "SELECT workspace_key FROM delivery_workspaces "
@@ -646,11 +647,20 @@ class DeliveryExecutionSetupStore:
                             requested_root_id=root_id,
                         )
                     )
-        if row is None or row["execution_mode"] != "automatic_pending":
+        if (
+            row is None
+            or row["execution_mode"]
+            not in {"automatic_pending", "manual_pending"}
+        ):
             return None
+        selection = (
+            "AUTOMATIC"
+            if row["execution_mode"] == "automatic_pending"
+            else "MANUAL"
+        )
         authorized = json.loads(row["authorized_project_ids_json"] or "[]")
         return {
-            "selection": "AUTOMATIC",
+            "selection": selection,
             "state": (
                 (
                     "QUEUED"

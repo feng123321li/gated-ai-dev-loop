@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.43.0 — 2026-08-18
+
+发布提交：以 tag `v0.43.0` 指向的提交为准
+
+- **HANDOFF 统一排队**：MANUAL 选择与 AUTOMATIC 共用 `CURRENT_WORKSPACE_SERIAL`。Controller 原子持久化 `manual_pending`、当前 workspace binding 和队列顺序；非队首对外返回 `QUEUED` 与 `start_manual_handoff` continuation，队首继续以 `HANDOFF_READY` 等待接收方显式启动，不提前创建 Run 或 receiver。
+- **统一工作区准备**：MANUAL 轮到队首后复用业务 commit、clean、HEAD、receiver/reservation 和多项目 scope 门禁，并返回 `manualHostPreparation` 完成精确 stash、分支创建或切换；准备后调用 `start_manual_handoff`，与 AUTOMATIC 的 `automaticHostPreparation → resume_execution_mode` 保持同一后续调度协议。
+- **版本化 Graph 编译协议**：Graph runtime 新增 `schema-v3-graph-compiler-v2` 标识。旧版未绑定 `HANDOFF_READY` 可通过明确 `rootId` 查询状态和 Revision 历史；当尚无 Run 且 hierarchy、节点和边与当前编译结果完全一致时，`start_manual_handoff` 只刷新 runtime policy、handoff 文件和 graph fingerprint，保持 hierarchy fingerprint 与 Revision 不变。
+- **兼容边界**：MCP 工具联集仍为 32，schema v3 与 `.layered-delivery/` namespace 不变。0.42.1 及更早版本创建的 ACTIVE/FROZEN Graph 不做运行时策略迁移，升级前应完成或取消；只有未启动 HANDOFF 具有上述受限刷新入口，需求内容或拓扑变化仍严格拒绝。
+- **验证**：全量 Python 426 项完成（425 通过、1 项按环境跳过），全树编译、四个 Skill、Plugin 镜像、release candidate 与差异校验通过。
+
 ## 0.42.1 — 2026-08-17
 
 发布提交：以 tag `v0.42.1` 指向的提交为准

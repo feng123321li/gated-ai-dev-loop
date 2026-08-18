@@ -7,6 +7,10 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.43.0 发布候选矩阵
+
+0.43.0 把 MANUAL handoff 接入 AUTOMATIC 使用的同一 `CURRENT_WORKSPACE_SERIAL`：选择时原子记录 `manual_pending`、workspace binding 和队列 turn，非队首投影为 `QUEUED`，轮到后由 `manualHostPreparation → start_manual_handoff` 复用 commit、clean、HEAD、receiver/reservation 与多项目 scope 门禁。Graph runtime 增加 `schema-v3-graph-compiler-v2`；0.42.1 及更早的未启动 `HANDOFF_READY` 只有在无 Run 且 hierarchy、节点和边完全一致时才刷新 runtime policy 与 graph fingerprint，层级指纹和 Revision 不变；ACTIVE/FROZEN Graph 仍拒绝运行时协议漂移，升级前应完成或取消。MCP 工具联集保持 32，schema v3 与 `.layered-delivery/` namespace 不变。候选已完成 426 项 Python 测试（425 通过、1 项按环境跳过）、全树编译、四个 Skill、Plugin 镜像、release candidate 与差异校验。
+
 ## 0.42.1 发布候选矩阵
 
 0.42.1 修复 carry-forward Revision 丢失 receiver 来源、导致 GROUP seam Review 无法通过独立性门禁的问题，并对 0.42.0 已有事件按 `fromRevision` 回溯前序来源。Graph 改为只持久化工作区变更清单、base/HEAD 与状态/范围指纹，不再存源码 diff 或生成 `workspace-changes.patch`；GROUP/Delivery Review 同时裁掉 `workspaceChanges` 与 TASK 实现细节，只复用证据引用并补验直接 seam。`heartbeat_loop` 新增可选 `expected_command_seconds`（61–1800）和 120 秒收尾缓冲，为 Maven 等首次依赖预热提供有界长租约；当前有效 reservation 的 decision mismatch 可返回同 reservation 重试凭据。MCP 工具联集仍为 32，schema v3 与 `.layered-delivery/` namespace 不变，旧 Graph 无需迁移。候选已完成 424 项 Python 测试（423 通过、1 项按环境跳过）、全树编译、四个 Skill、Plugin 镜像、Claude Plugin、release candidate 与差异校验。

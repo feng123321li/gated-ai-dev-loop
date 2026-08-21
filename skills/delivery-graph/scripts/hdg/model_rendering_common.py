@@ -44,6 +44,7 @@ STATUS_TEXT = {
     "PAUSED": "已暂停",
     "CANCELLED": "已取消",
     "SUPERSEDED": "已被新修订取代",
+    "ABANDONED": "已放弃",
     "COMPLETED": "已完成",
     "ARCHIVED": "已归档",
     "NOT_STARTED": "未启动",

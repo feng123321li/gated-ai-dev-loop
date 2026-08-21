@@ -231,7 +231,44 @@ class DeliveryRevisionTests(unittest.TestCase):
             / "revisions.md"
         ).read_text(encoding="utf-8")
         self.assertIn("当前修订：2", revisions_projection)
-        self.assertIn("SUPERSEDED", revisions_projection)
+        self.assertIn(
+            "| 1 | 已被新修订取代（SUPERSEDED） | "
+            "已被新修订取代（SUPERSEDED） |",
+            revisions_projection,
+        )
+        self.assertIn("## 状态枚举说明", revisions_projection)
+        self.assertIn("### 范围状态", revisions_projection)
+        self.assertIn(
+            "| CHOICE\\_READY | 基线已生成，待选择开发方式 |",
+            revisions_projection,
+        )
+        self.assertIn(
+            "| HANDOFF\\_READY | "
+            "需求已冻结（手动开发，调度未启动） |",
+            revisions_projection,
+        )
+        self.assertIn("| PREPARED | 待冻结 |", revisions_projection)
+        self.assertIn("| FROZEN | 已冻结 |", revisions_projection)
+        self.assertIn(
+            "| SUPERSEDED | 已被新修订取代 |",
+            revisions_projection,
+        )
+        self.assertIn("| ABANDONED | 已放弃 |", revisions_projection)
+        self.assertIn("| ARCHIVED | 已归档 |", revisions_projection)
+        self.assertIn("### 运行状态", revisions_projection)
+        self.assertIn(
+            "| NOT\\_STARTED | 未启动 |",
+            revisions_projection,
+        )
+        self.assertIn("| ACTIVE | 运行中 |", revisions_projection)
+        self.assertIn("| BLOCKED | 已阻塞 |", revisions_projection)
+        self.assertIn("| PAUSED | 已暂停 |", revisions_projection)
+        self.assertIn("| COMPLETED | 已完成 |", revisions_projection)
+        self.assertIn("| CANCELLED | 已取消 |", revisions_projection)
+        self.assertIn(
+            "| SUPERSEDED | 已被新修订取代 |",
+            revisions_projection,
+        )
 
     def test_all_carried_results_keep_review_independence_provenance(
         self,

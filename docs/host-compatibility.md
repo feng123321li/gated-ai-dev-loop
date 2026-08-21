@@ -7,6 +7,12 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.43.5 发布候选矩阵
+
+0.43.5 将 `revisions.md` 的范围状态与运行状态统一渲染为“中文（ENUM）”，并在修订历史末尾列出两套完整枚举：范围状态覆盖 `CHOICE_READY`、`PREPARED`、`HANDOFF_READY`、`FROZEN`、`SUPERSEDED`、`ABANDONED`、`ARCHIVED`，运行状态覆盖 `NOT_STARTED`、`ACTIVE`、`BLOCKED`、`PAUSED`、`COMPLETED`、`CANCELLED`、`SUPERSEDED`。每项同时给出中文名称与生命周期说明，既方便项目成员阅读，也保留与 MCP、SQLite 和诊断输出精确对照的英文值。
+
+本版本只改变 Controller 拥有的人类 Markdown 投影，不改变 MCP 工具联集、Profile、schema v3、SQLite、Graph 编译协议或 `.layered-delivery/` namespace，无运行数据迁移。候选已完成 456 项 Python 测试（455 通过、1 项按环境跳过）、全树编译、四个 Skill、Codex/Claude/ZCode Plugin、release candidate、镜像与差异校验。
+
 ## 0.43.4 发布候选矩阵
 
 0.43.4 将“当前 Revision 阶段完成”和“Delivery 已上线交付”拆成两个独立状态。`record_user_confirmation` 仍完成当前 Run，但 Delivery 保持 `OPEN`（未上线），因此测试反馈、业务验收修改与上线前优化可在同一 rootId 下继续创建不可变 Revision；新增受人工审批保护且幂等的 `close_delivery`，仅在当前 Revision 已完成且 workspace turn 已安全释放后记录 `DELIVERY_CLOSED`，把 Delivery 转为 `CLOSED`（已上线交付），随后禁止继续追加 Revision。归档继续只控制发现与展示，但现在要求先关闭 Delivery；若已上线后仍有新需求，应创建新的 Delivery。

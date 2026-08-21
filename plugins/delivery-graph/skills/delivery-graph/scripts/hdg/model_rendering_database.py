@@ -11,8 +11,10 @@ from .model_rendering_common import (
     DATABASE_CHANGES_PROJECTION_TEMPLATE,
     DATABASE_CHANGE_DETAIL_PROJECTION_TEMPLATE,
     INTERFACE_CHANGE_TYPE_TEXT,
+    STATUS_TEXT,
     WORK_ITEM_DIRECTORY,
     _markdown_text,
+    _status_text,
     _table_row,
     _task_database_declarations,
     _task_interface_declarations,
@@ -36,6 +38,44 @@ from .model_rendering_state import (
     _projection_states,
     render_delivery_baseline,
 )
+
+
+DELIVERY_REVISION_STATUS_DESCRIPTIONS = {
+    "CHOICE_READY": "基线与规划资料已生成，等待选择自动或手动执行。",
+    "PREPARED": "修订已准备完成，等待确认并冻结。",
+    "HANDOFF_READY": "手动开发快照已冻结，但 Graph Run 尚未启动。",
+    "FROZEN": "需求范围、层级、依赖、契约与指纹已经锁定。",
+    "SUPERSEDED": "该范围已被更新的修订取代，历史仍只读保留。",
+    "ABANDONED": "该范围在正式冻结运行前被取消。",
+    "ARCHIVED": "已上线关闭的 Delivery 已被明确归档。",
+}
+
+GRAPH_RUN_STATUS_DESCRIPTIONS = {
+    "NOT_STARTED": "该修订尚未创建 Graph Run。",
+    "ACTIVE": "Graph Run 正在执行；节点可分别处于等待或执行状态。",
+    "BLOCKED": "至少一个节点阻塞，当前运行无法继续推进。",
+    "PAUSED": "运行已暂停，等待恢复。",
+    "COMPLETED": "运行及最终用户确认均已完成。",
+    "CANCELLED": "运行已被明确取消。",
+    "SUPERSEDED": "运行中的旧修订已被新修订取代。",
+}
+
+
+def _status_with_enum(value: str) -> str:
+    return f"{_status_text(value)}（{value}）"
+
+
+def _status_enum_table(descriptions: dict[str, str]) -> list[str]:
+    return [
+        "| 枚举 | 中文 | 说明 |",
+        "|---|---|---|",
+        *[
+            _table_row(
+                [status, STATUS_TEXT[status], description],
+            )
+            for status, description in descriptions.items()
+        ],
+    ]
 
 
 def _database_identity(change: dict[str, Any]) -> str:
@@ -328,8 +368,12 @@ def render_projection_documents(
             + " | ".join(
                 [
                     str(item["revision"]),
-                    _markdown_text(item["status"]),
-                    _markdown_text(item["runStatus"] or "NOT_STARTED"),
+                    _markdown_text(_status_with_enum(item["status"])),
+                    _markdown_text(
+                        _status_with_enum(
+                            item["runStatus"] or "NOT_STARTED"
+                        )
+                    ),
                     _markdown_text(item["reason"] or "初始范围"),
                     _markdown_text(
                         "、".join(item["authorizedProjectIds"]) or "无"
@@ -353,11 +397,27 @@ def render_projection_documents(
             *(
                 rows
                 or [
-                    "| 1 | PREPARED | NOT_STARTED | 初始范围 | 无 | "
+                    "| 1 | 待冻结（PREPARED） | 未启动（NOT\\_STARTED） | "
+                    "初始范围 | 无 | "
                     + _utc_plus_8(stored_definition["updatedAt"])
                     + " |"
                 ]
             ),
+            "",
+            "## 状态枚举说明",
+            "",
+            (
+                "范围状态描述修订内容是否已锁定或被取代；运行状态描述"
+                "该修订对应的 Graph Run。"
+            ),
+            "",
+            "### 范围状态",
+            "",
+            *_status_enum_table(DELIVERY_REVISION_STATUS_DESCRIPTIONS),
+            "",
+            "### 运行状态",
+            "",
+            *_status_enum_table(GRAPH_RUN_STATUS_DESCRIPTIONS),
             "",
         ]
     )

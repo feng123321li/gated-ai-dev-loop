@@ -826,8 +826,15 @@ class SchedulerRuntimeTestsPart2:
         revisions = (handoff_root / "revisions.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("| 1 | SUPERSEDED |", revisions)
-        self.assertIn("| 2 | HANDOFF\\_READY |", revisions)
+        self.assertIn(
+            "| 1 | 已被新修订取代（SUPERSEDED） |",
+            revisions,
+        )
+        self.assertIn(
+            "| 2 | 需求已冻结（手动开发，调度未启动）"
+            "（HANDOFF\\_READY） |",
+            revisions,
+        )
 
     def test_changed_manual_handoff_requires_explicit_revision_continuity(
         self,

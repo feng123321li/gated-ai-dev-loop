@@ -190,6 +190,17 @@ class HierarchyRevisionMixin:
                     "An archived Delivery cannot be revised",
                     rootId=root_id,
                 )
+            closure = self.delivery_closure_from_connection(
+                connection,
+                root_id,
+            )
+            if closure["state"] == "CLOSED":
+                fail(
+                    "SCHEDULER_DELIVERY_CLOSED",
+                    "An already delivered Delivery cannot accept another "
+                    "revision; start a new Delivery instead",
+                    rootId=root_id,
+                )
             binding = connection.execute(
                 "SELECT workspace_key FROM delivery_workspaces "
                 "WHERE root_id = ?",
@@ -262,13 +273,10 @@ class HierarchyRevisionMixin:
                     "SCHEDULER_REVISION_CONFLICT",
                     "The previous frozen Delivery revision is missing",
                 )
-            if previous_run["status"] in {
-                "COMPLETED",
-                "SUPERSEDED",
-            }:
+            if previous_run["status"] == "SUPERSEDED":
                 fail(
                     "SCHEDULER_DELIVERY_TERMINAL",
-                    "Only an unaccepted active Delivery can be revised",
+                    "A superseded Delivery run cannot be revised",
                     runStatus=previous_run["status"],
                 )
             previous_hierarchy = validate_hierarchy_definition(

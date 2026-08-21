@@ -257,6 +257,7 @@ class PluginBundleTestsPart1:
         protected_tools = {
             "archive_delivery",
             "cancel_graph_run",
+            "close_delivery",
             "handoff_ready_automatic_task",
             "rebuild_graph_run",
             "record_user_confirmation",

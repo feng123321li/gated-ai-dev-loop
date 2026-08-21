@@ -8,7 +8,7 @@
 - 不得仅因 `workspace_status` 返回旧 Delivery 就进入 Revision。只有用户明确要求修改或继续该 Delivery 时，才允许调用 `unfreeze_task_requirement` 或 `prepare_delivery_revision`；Agent 的语义判断不能替代这项用户连续性授权。
 - 当前上下文仍保留最近一次 `preview_hierarchy` 响应和原始 hierarchy 时，复用其中的双 fingerprint、完整清单和 `pendingInteraction`；需求未变且尚无 `executionSelection` 时不要重复 preview，回答用户问题后重新展示 Controller 返回的同一交互。若已记录 `AUTOMATIC`，只续接 `CURRENT_WORKSPACE_SERIAL` 的当前分支准备；不得创建新 worktree 或重新展示选择器。
 - 初次开发前用户修改需求时，更新 hierarchy 并重新调用 `preview_hierarchy`；Controller 在同一 `CHOICE_READY` Delivery 中重新生成基线与关联文档，只使用新响应的 fingerprint，不复用旧值。初始自动选择统一调用 `select_execution_mode`，不得由 Skill 拆成或猜测 `prepare_hierarchy` / `freeze_hierarchy` 步骤。
-- 初次冻结后、最终用户验收前用户修改依赖、项目范围、资源或拓扑时，保持相同 `delivery.id` 调用 `prepare_delivery_revision`，不得重新调用初始 prepare，也不得创建另一个 Delivery ID。用户明确要求继续同一 Delivery 时提交 `continuity_basis=USER_EXPLICIT_SAME_DELIVERY`；只有当前 Graph 已记录 `REPLAN_REQUIRED` 时提交 `ACTIVE_LOOP_REPLAN`。路径、分支和旧 Delivery 状态都不是连续性依据。
+- 初次冻结后、Delivery 仍为 `OPEN/未上线` 时，用户修改依赖、项目范围、资源或拓扑，保持相同 `delivery.id` 调用 `prepare_delivery_revision`，不得重新调用初始 prepare，也不得创建另一个 Delivery ID。上一 Revision 可以仍在执行，也可以已经 `COMPLETED`。`CLOSED/已上线交付` 后禁止追加 Revision，后续改动创建新 Delivery。
 - 用户给出工单号、需求号等稳定外部标识时，将其规范化写入 `delivery.requirementKey`。同一 key 只能映射一个稳定 `delivery.id`；Controller 还会从 Delivery ID/标题识别常见 `PROJECT-123` 工单号，在 preview 与最终写入两处拒绝换 ID 后重复冻结。
 - `HANDOFF_READY` 手动需求变化时不创建新 Delivery，也不调用只适用于自动 Graph 的 `prepare_delivery_revision`。保持相同 `delivery.id` 重新 preview 后，再调用 `create_manual_handoff`，同时提交 `expected_current_revision`、`continuity_basis=USER_EXPLICIT_SAME_DELIVERY` 和非空 `revision_reason`；旧手动 Revision 标记为 `SUPERSEDED`，新 handoff 与当前投影继续位于原目录。
 - `prepare_delivery_revision` 只生成待确认候选，不替换当前 hierarchy 或旧 run，不应触发宿主通用确认弹窗；用户在完整范围和授权清单上选择自动执行或手动开发，才是该 Revision 唯一一次业务确认。
@@ -96,11 +96,11 @@ L1 只在需求明确要求删除、改名、移动类符号或修改公共字�
 }
 ```
 
-`delivery.requirementKey` 是可选但在用户提供外部工单号时必须声明的业务身份；它与 `delivery.id` 一对一绑定，归档也不释放该映射。`delivery.id` 是稳定的 Delivery/Graph 标识，也是需求投影目录的 namespace。工作区未归档 Delivery 的入口位于 `.layered-delivery/overview.md`，这里只列 Delivery 标识、标题、状态、更新时间和详情链接；该 Delivery 自己的 TASK 进度与 GROUP 数量位于 `.layered-delivery/<delivery-id>/overview.md`。`STANDARD` 的 `delivery.reviewLoop` 在根终态之后执行；`LIGHT` 将其设为 `null`，根 TASK 成功后直接进入用户确认。
+`delivery.requirementKey` 是可选但在用户提供外部工单号时必须声明的业务身份；它与 `delivery.id` 一对一绑定，归档也不释放该映射。`delivery.id` 是稳定的 Delivery/Graph 标识，也是需求投影目录的 namespace。工作区未归档 Delivery 的入口位于 `.layered-delivery/overview.md`，分别展示当前阶段与上线状态（`未上线` / `已上线交付`）；该 Delivery 自己的 TASK 进度与 GROUP 数量位于 `.layered-delivery/<delivery-id>/overview.md`。
 
 同一需求的所有人类文件共用 `.layered-delivery/<delivery-id>/`。自动与手动开发都生成 overview、baseline、progress、acceptance、revisions 和同结构 work-items；手动开发另有 `.layered-delivery/<delivery-id>/handoff-<fingerprint>.md`，包含完整 schema v3。不得创建跨需求共享的 `.layered-delivery/handoffs/`。手动包以双 fingerprint 冻结需求内容并在 SQLite 登记为 `HANDOFF_READY`；交接阶段尚未形成 Graph Run。接收宿主必须在任何代码工作前以精确双 fingerprint 调用 `start_manual_handoff`，在实际工作区把同一快照启动为 manual Graph；随后由独立原生 child 以显式 receiving context 与 `operation_id` 领取 TASK，Graph 状态仍只以 MCP 返回和 SQLite 事件链为准。
 
-一个 `delivery.id` 可以拥有多个不可变 Delivery Revision。Revision 1 是初次冻结范围；用户最终验收前的外层范围调整形成 Revision 2、3……，仍位于同一投影目录并通过 `revisions.md` 串联。旧 Revision 及其 run/event 不覆盖、不删除；新 Revision 冻结时，旧 run 变为 `SUPERSEDED`。
+一个 `delivery.id` 在 `OPEN/未上线` 期间可以拥有多个不可变 Delivery Revision。Revision 1 是初次冻结范围；测试反馈、业务验收优化或 `REPLAN_REQUIRED` 可形成 Revision 2、3……。旧 Revision 及其 run/event 不覆盖、不删除；新 Revision 冻结时，活动旧 run 变为 `SUPERSEDED`，已经完成的旧 run 保持 `COMPLETED`，仅旧 Revision scope 标记为 `SUPERSEDED`。`close_delivery` 后禁止继续追加。
 
 ## 定义递归节点
 

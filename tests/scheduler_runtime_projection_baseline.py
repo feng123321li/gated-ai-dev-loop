@@ -105,7 +105,7 @@ class SchedulerRuntimeTestsPart8:
         self.assertIn(prepared["graphFingerprint"], delivery_baseline)
         self.assertIn(
             (
-                "| 交付标识 | 标题 | 当前状态 | TASK 进度 | "
+                "| 交付标识 | 标题 | 当前阶段 | 上线状态 | TASK 进度 | "
                 "GROUP 数量 | 最近更新（UTC+8） |"
             ),
             overview,
@@ -113,7 +113,7 @@ class SchedulerRuntimeTestsPart8:
         self.assertIn(
             (
                 f"| {prepared['rootId']} | {hierarchy['delivery']['title']} "
-                "| 待冻结 | 已完成 0/6 | 4 |"
+                "| 待冻结 | 未上线 | 已完成 0/6 | 4 |"
             ),
             overview,
         )
@@ -149,7 +149,7 @@ class SchedulerRuntimeTestsPart8:
         self.assertIn("未归档交付数量：1", workspace_overview)
         self.assertIn(
             (
-                "| 交付标识 | 需求标题 | 当前状态 | "
+                "| 交付标识 | 需求标题 | 当前阶段 | 上线状态 | "
                 "最近更新（UTC+8） | 交付详情 |"
             ),
             workspace_overview,
@@ -479,7 +479,10 @@ class SchedulerRuntimeTestsPart8:
             "Delivery receiver：顶层技术验收与运行准备度判断",
             acceptance,
         )
-        self.assertIn("用户：最终业务确认", acceptance)
+        self.assertIn(
+            "用户：确认当前 Revision 完成，并在生产上线后单独关闭 Delivery",
+            acceptance,
+        )
         self.assertIn(
             (
                 "| 当前进度 | 认领身份 | 执行轮次 | "
@@ -488,7 +491,7 @@ class SchedulerRuntimeTestsPart8:
             acceptance,
         )
         self.assertIn("The loop returns verified evidence.", acceptance)
-        self.assertIn("最终用户确认", acceptance)
+        self.assertIn("当前 Revision 完成确认", acceptance)
 
         self.assertIn("# TASK 接口契约", interfaces)
         for label in (

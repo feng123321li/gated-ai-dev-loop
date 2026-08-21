@@ -43,7 +43,7 @@ class McpDynamicCatalogDemoTests(unittest.TestCase):
         self.assertEqual(first["status"], "PLUGIN_MCP_UNAVAILABLE")
         self.assertEqual(first["toolCount"], 0)
         self.assertEqual(second["status"], "REGISTERED")
-        self.assertEqual(second["toolCount"], 32)
+        self.assertEqual(second["toolCount"], 33)
         self.assertEqual(first["toolCount"], 0)
         self.assertEqual(first["sessionId"], second["sessionId"])
 
@@ -82,7 +82,7 @@ class McpDynamicCatalogDemoTests(unittest.TestCase):
 
         self.assertEqual(child["status"], "REGISTERED")
         self.assertEqual(child["catalogGeneration"], 1)
-        self.assertEqual(child["toolCount"], 32)
+        self.assertEqual(child["toolCount"], 33)
 
     def test_reference_demo_covers_workspaces_and_agent_roles(self) -> None:
         demo = run_reference_demo()

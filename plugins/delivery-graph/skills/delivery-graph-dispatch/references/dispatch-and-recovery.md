@@ -16,7 +16,8 @@
 - `QUEUED`：执行响应中的串行释放检查；只有前一个 Delivery 的 `workspaceRelease=RELEASED` 且 `WORKSPACE_TURN_RELEASED` 已持久化，才机械完成授权的 branch 准备并调用 `resume_execution_mode`。
 - `ACTIVE/BLOCKED/PAUSED`：先处理 `workspaceRelease`。`PENDING` 只允许按 `nextAction` quiesce、在冻结独立分支完成业务 commit/clean、恢复漂移并重新检查；不得切换下一分支。之后调用一次 `graph_frontier`，完整消费 action。
 - `CHOICE_READY/PREPARED`：转交 `$delivery-graph`，不要替用户确认 baseline 或执行模式。
-- `COMPLETED` 且待最终确认：转交 `$delivery-graph`；协调器不代签。
+- `COMPLETED` + `OPEN/未上线`：转交 `$delivery-graph`，由用户决定追加 Revision 或在生产上线后关闭；协调器不代签。
+- `COMPLETED` + `CLOSED/已上线交付`：不再派遣或修订；仅报告可选归档动作。
 
 每次写响应未知时，先通过只读状态确认是否已经持久化，再决定是否用完全相同的幂等键重试。不得凭超时直接重放新的 reservation 或 operation。
 

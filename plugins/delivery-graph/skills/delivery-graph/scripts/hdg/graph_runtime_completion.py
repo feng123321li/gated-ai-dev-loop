@@ -267,7 +267,7 @@ def record_user_confirmation(
     if confirmed is not True:
         fail(
             "SCHEDULER_USER_CONFIRMATION_REQUIRED",
-            "Final completion requires explicit user confirmation",
+            "Revision completion requires explicit user confirmation",
         )
     confirmed_by = _identity(confirmed_by, "confirmed_by")
     if not isinstance(summary, str) or not summary.strip():
@@ -289,7 +289,7 @@ def record_user_confirmation(
         if state["status"] != "READY":
             fail(
                 "SCHEDULER_CONFIRMATION_NOT_READY",
-                "Final user confirmation is not ready",
+                "Current Revision completion confirmation is not ready",
             )
         connection.execute(
             "UPDATE node_runs SET status = 'COMPLETED', "
@@ -329,7 +329,130 @@ def record_user_confirmation(
             at=at,
         )
     repository.write_projections(root_id)
-    return _compact_run_for_transport(repository.run(root_id))
+    result = _compact_run_for_transport(repository.run(root_id))
+    closure = repository.delivery_closure(root_id)
+    return {
+        **result,
+        "deliveryClosure": closure["state"],
+        "deliveryStateLabel": closure["label"],
+        "archiveState": "ACTIVE",
+        "canPrepareRevision": True,
+        "canCloseDelivery": True,
+        "nextAction": "PREPARE_REVISION_OR_CLOSE_DELIVERY",
+    }
+
+
+def close_delivery(
+    *,
+    root: str,
+    root_id: str,
+    confirmed: bool,
+    closed_by: str,
+    summary: str,
+    explicit_dogfood: bool = False,
+    now: object = None,
+) -> dict[str, Any]:
+    """Close a completed Delivery after production delivery."""
+
+    if confirmed is not True:
+        fail(
+            "SCHEDULER_DELIVERY_CLOSE_CONFIRMATION_REQUIRED",
+            "Delivery closure requires explicit confirmation",
+        )
+    closed_by = _identity(closed_by, "closed_by")
+    if not isinstance(summary, str) or not summary.strip():
+        fail(
+            "SCHEDULER_DELIVERY_CLOSE_CONFIRMATION_REQUIRED",
+            "summary must describe the accepted production delivery",
+        )
+    repository = SchedulerRepository(root, now=now)
+    repository.assert_self_hosting_dogfood(explicit_dogfood)
+    already_closed = False
+    archive_state = "ACTIVE"
+    with repository.transaction() as connection:
+        hierarchy = connection.execute(
+            "SELECT revision, status, updated_at FROM hierarchies "
+            "WHERE root_id = ?",
+            (root_id,),
+        ).fetchone()
+        if hierarchy is None:
+            fail(
+                "SCHEDULER_HIERARCHY_MISSING",
+                f"Scheduler hierarchy is missing: {root_id}",
+            )
+        run = connection.execute(
+            "SELECT * FROM runs WHERE root_id = ? AND revision = ?",
+            (root_id, hierarchy["revision"]),
+        ).fetchone()
+        if run is None or run["status"] != "COMPLETED":
+            fail(
+                "SCHEDULER_DELIVERY_NOT_COMPLETED",
+                "Only a completed Delivery revision can be closed",
+                runStatus=run["status"] if run is not None else None,
+            )
+        closure = repository.delivery_closure_from_connection(
+            connection,
+            root_id,
+        )
+        archive_state = (
+            "ARCHIVED" if hierarchy["status"] == "ARCHIVED" else "ACTIVE"
+        )
+        if closure["state"] == "CLOSED":
+            already_closed = True
+        else:
+            pending_revision = connection.execute(
+                "SELECT revision FROM delivery_revisions "
+                "WHERE root_id = ? AND revision > ? "
+                "AND status = 'PREPARED' ORDER BY revision LIMIT 1",
+                (root_id, hierarchy["revision"]),
+            ).fetchone()
+            if pending_revision is not None:
+                fail(
+                    "SCHEDULER_REVISION_CONFLICT",
+                    "A prepared Delivery revision must be resolved before "
+                    "the Delivery can be closed",
+                    preparedRevision=pending_revision["revision"],
+                )
+            at = _locked_timestamp(
+                now,
+                max(hierarchy["updated_at"], run["updated_at"]),
+            )
+            repository.append_event(
+                connection,
+                run_id=run["run_id"],
+                node_id=None,
+                attempt=None,
+                event_type="DELIVERY_CLOSED",
+                actor=closed_by,
+                operation_id=None,
+                payload={
+                    "summary": summary.strip(),
+                    "revision": hierarchy["revision"],
+                },
+                at=at,
+            )
+            closure = repository.delivery_closure_from_connection(
+                connection,
+                root_id,
+            )
+    repository.write_projections(root_id)
+    archived = archive_state == "ARCHIVED"
+    return {
+        "rootId": root_id,
+        "status": "ARCHIVED" if archived else "COMPLETED",
+        "runStatus": "COMPLETED",
+        "deliveryRevision": hierarchy["revision"],
+        "deliveryClosure": closure["state"],
+        "deliveryStateLabel": closure["label"],
+        "archiveState": archive_state,
+        "closedAt": closure["closedAt"],
+        "closedBy": closure["closedBy"],
+        "summary": closure["summary"],
+        "alreadyClosed": already_closed,
+        "canPrepareRevision": False,
+        "canCloseDelivery": False,
+        "nextAction": "NONE" if archived else "ARCHIVE_DELIVERY_OPTIONAL",
+    }
 
 def cancel_graph_run(
     *,

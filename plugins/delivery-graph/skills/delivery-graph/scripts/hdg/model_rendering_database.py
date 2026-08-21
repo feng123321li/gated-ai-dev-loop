@@ -297,6 +297,7 @@ def render_projection_documents(
             hierarchy,
             **human_projection_arguments,
             run=run,
+            delivery_closure=stored_definition.get("deliveryClosure"),
         ),
         "baseline.md": render_delivery_baseline(
             hierarchy,

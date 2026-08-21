@@ -1,6 +1,6 @@
 {
   "name": "delivery-graph",
-  "version": "0.43.3",
+  "version": "0.43.4",
   "description": "确认 Git 基线，以显式 rootId 管理多 Delivery，在当前 workspace 串行调度 GROUP/TASK，并支持冻结开发包、验收与恢复",
   "author": {
     "name": "delivery-graph contributors",
@@ -39,6 +39,9 @@
       "supports_parallel_tool_calls": false,
       "default_tools_approval_mode": "approve",
       "tools": {
+        "close_delivery": {
+          "approval_mode": "prompt"
+        },
         "archive_delivery": {
           "approval_mode": "prompt"
         },
@@ -100,7 +103,7 @@
   "interface": {
     "displayName": "分层交付 Graph 控制面",
     "shortDescription": "多 Delivery 串行 workspace、Graph 调度与分层审查",
-    "longDescription": "每个 Delivery 使用稳定 rootId 和不可变 Revision 管理需求与验收；同一物理 checkout 可绑定多个 Delivery，但只允许队首 Run 执行。PAUSED、终态或最终用户确认只形成释放资格；全部冻结独立分支必须完成业务 commit/clean、binding 与 receiver/reservation 复核，并由 Controller 持久化 WORKSPACE_TURN_RELEASED 后才可切分支。暂停恢复会重新排队并重获 turn。自动 TASK 与 Review 继续使用 reservation、operation 租约和完整分层治理。",
+    "longDescription": "每个 Delivery 使用稳定 rootId 和不可变 Revision 管理需求与验收；当前 Revision 完成后 Delivery 仍保持未上线，可继续追加测试反馈、业务验收修改和上线前优化。只有显式 close_delivery 才标记已上线交付并禁止继续追加 Revision。全部冻结独立分支仍须通过业务 commit/clean、binding、receiver/reservation 与 WORKSPACE_TURN_RELEASED 安全门禁。自动 TASK 与 Review 继续使用 reservation、operation 租约和完整分层治理。",
     "developerName": "delivery-graph contributors",
     "category": "Productivity",
     "capabilities": [

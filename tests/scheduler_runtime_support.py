@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 
 from copy import deepcopy
 
@@ -44,6 +44,7 @@ from hdg.graph_model import (
 from hdg.graph_runtime import (
     archive_delivery,
     cancel_graph_run,
+    close_delivery,
     graph_events,
     graph_status,
     heartbeat_loop,
@@ -80,6 +81,7 @@ from hdg.planning import (
     create_manual_handoff,
     freeze_hierarchy,
     prepare_hierarchy,
+    prepare_delivery_revision,
     preview_hierarchy,
     select_execution_mode,
     start_manual_handoff,

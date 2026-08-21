@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.43.4 — 2026-08-21
+
+发布提交：以 tag `v0.43.4` 指向的提交为准
+
+- **阶段完成与上线交付分离**：`record_user_confirmation` 只把当前 Revision/Run 标记为 `COMPLETED`，Delivery 继续保持 `OPEN`（未上线），可在同一 rootId 下追加下一不可变 Revision，覆盖测试反馈、业务验收修改和上线前优化；不再因一次阶段性里程碑结束而被迫新建 Delivery 或清理历史分支。
+- **显式上线关闭**：新增受人工审批保护且幂等的 `close_delivery`。只有当前 Revision 已完成且 workspace turn 已安全释放时，才记录 `DELIVERY_CLOSED` 并把 Delivery 标记为 `CLOSED`（已上线交付）；关闭后禁止继续追加 Revision，如需后续变更必须新建 Delivery。`archive_delivery` 只负责可见性归档，并明确要求 Delivery 已关闭。
+- **历史语义与投影校正**：冻结下一 Revision 时，已完成的旧 Run 保持 `COMPLETED`，仅旧 Revision scope 标记为 `SUPERSEDED`；仍在执行的旧 Run 才进入 `SUPERSEDED`。workspace、生命周期响应和人类投影分别展示当前阶段、上线状态、归档状态、可追加/可关闭能力及唯一下一动作，根目录自动发现继续识别“已完成但未上线”的 Delivery。
+- **兼容性与验证**：MCP 工具联集增至 33，planning Profile 增至 16；schema v3 与 `.layered-delivery/` namespace 不变，无数据库 schema 迁移。全量 Python 456 项完成（455 通过、1 项按环境跳过），全树编译、四个 Skill、Codex/Claude/ZCode Plugin、release candidate、镜像与差异校验通过。
+
 ## 0.43.3 — 2026-08-18
 
 发布提交：以 tag `v0.43.3` 指向的提交为准

@@ -577,6 +577,11 @@ def render_workspace_overview(
                 else hierarchy["delivery"]["title"]
             ),
             _status_text(status),
+            (
+                item.get("deliveryClosure", {}).get("label", "—")
+                if state_error is None
+                else "—"
+            ),
             _utc_plus_8(updated_at),
         ]
         detail_link = (
@@ -836,6 +841,7 @@ def render_scheduling_plan(
     hierarchy_status: str | None = None,
     updated_at: str | None = None,
     run: dict[str, Any] | None = None,
+    delivery_closure: dict[str, Any] | None = None,
 ) -> str:
     """Render the concise Delivery overview and projection navigation."""
 
@@ -883,6 +889,7 @@ def render_scheduling_plan(
             delivery["id"],
             delivery["title"],
             _status_text(status),
+            (delivery_closure or {}).get("label", "未上线"),
             f"已完成 {completed_tasks}/{len(tasks)}",
             str(len(groups)),
             _utc_plus_8(latest_update),
@@ -893,10 +900,10 @@ def render_scheduling_plan(
         delivery_status="\n".join(
             [
                 (
-                    "| 交付标识 | 标题 | 当前状态 | TASK 进度 | "
+                    "| 交付标识 | 标题 | 当前阶段 | 上线状态 | TASK 进度 | "
                     "GROUP 数量 | 最近更新（UTC+8） |"
                 ),
-                "|---|---|---|---|---:|---|",
+                "|---|---|---|---|---|---:|---|",
                 status_row,
             ]
         ),

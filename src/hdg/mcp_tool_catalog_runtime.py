@@ -358,8 +358,11 @@ RUNTIME_TOOLS = (
     _tool(
         "record_user_confirmation",
         (
-            "Complete the graph after its Review Loop succeeds and the user "
-            "accepts. Before returning, recheck and persist the independent "
+            "Complete the current immutable Revision after its Review Loop "
+            "succeeds and the user accepts. The Delivery remains OPEN/未上线 "
+            "so it can receive another Revision or be explicitly closed "
+            "after production delivery. Before returning, recheck and persist "
+            "the independent "
             "Delivery branch release when its business commit, clean tree, "
             "frozen binding, receiver, reservation, and project-scope gates "
             "all pass. If it was already released, record this control-plane "
@@ -376,7 +379,7 @@ RUNTIME_TOOLS = (
                     ),
                 },
                 "confirmed_by": _string("Human confirmer identity."),
-                "summary": _string("Human completion summary."),
+                "summary": _string("Current Revision completion summary."),
             },
             required=[
                 "root_id",
@@ -385,6 +388,35 @@ RUNTIME_TOOLS = (
                 "summary",
             ],
         ),
+    ),
+    _tool(
+        "close_delivery",
+        (
+            "Close a COMPLETED Delivery after testing, business acceptance, "
+            "and production delivery. CLOSED/已上线交付 is terminal for new "
+            "Revisions; archival remains a separate optional action."
+        ),
+        _object(
+            {
+                "root_id": ROOT_ID,
+                "confirmed": {
+                    "type": "boolean",
+                    "const": True,
+                    "description": (
+                        "JSON Boolean true after explicit production-delivery "
+                        "confirmation."
+                    ),
+                },
+                "closed_by": _string("Human closer identity."),
+                "summary": _string(
+                    "Testing, business acceptance, and production-delivery "
+                    "summary."
+                ),
+            },
+            required=["root_id", "confirmed", "closed_by", "summary"],
+        ),
+        human=True,
+        annotations={"idempotentHint": True},
     ),
     _tool(
         "cancel_graph_run",
@@ -406,7 +438,7 @@ RUNTIME_TOOLS = (
     _tool(
         "archive_delivery",
         (
-            "Archive a completed Delivery from default workspace discovery "
+            "Archive a CLOSED/已上线交付 Delivery from default workspace discovery "
             "while retaining its SQLite history and detail projections."
         ),
         _object(

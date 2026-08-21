@@ -14,7 +14,7 @@
 - `CONTINUE_OR_HEARTBEAT_LOOP`：继续当前 Loop，并在租约到期前 heartbeat。当前 claim 使用 5 分钟短租约、60 秒心跳间隔和 2 分钟续租阈值；阈值外的真实心跳只保活，进入阈值后才把到期时间推进到“当前时间 + 5 分钟”。
 - `RESUME_LOOP_IN_INDEPENDENT_CONTEXT`：把暂停节点路由给新的接收上下文；接收方 resume 后重新读取 frontier 并 dispatch。
 - `RESOLVE_LOOP_BLOCK`：展示 Loop 返回的摘要和不透明 result，等待外部条件或人工决定。
-- `REPLAN_HIERARCHY`：展示外层契约变化及当前 Revision 无法继续的原因，等待用户决定。用户明确要求修改且尚未最终验收时，保持同一 `delivery.id` 调用 `prepare_delivery_revision`；重新评审、授权项目并冻结后，旧 run 自动成为 `SUPERSEDED`。
+- `REPLAN_HIERARCHY`：展示外层契约变化及当前 Revision 无法继续的原因，等待用户决定。用户明确要求修改且 Delivery 仍为 `OPEN/未上线` 时，保持同一 `delivery.id` 调用 `prepare_delivery_revision`。
 - `REFREEZE_TASK_REQUIREMENT`：该未开始 TASK 的需求处于解冻编辑态，当前不可派遣。按用户已经明确提出的修改重跑 TASK 切分完整性预检，再完成 `unfreeze_task_requirement → refreeze_task_requirement`；后者从 SQLite 当前不可变 hierarchy 生成并冻结同一 Delivery 的下一 Revision，沿用执行模式并返回新 Run/双指纹。任一未领取 reservation 都绑定旧 Graph 指纹；需求修订入口因此会阻断并返回 `SCHEDULER_TASK_REQUIREMENT_RESERVATION_ACTIVE` 与 `retryAfter`，不得让旧 assignment 与新需求并存。
 - `RECORD_USER_CONFIRMATION`：Controller 已按 Graph 确认 `STANDARD` 的 Delivery Acceptance/Readiness 节点进入合法成功终态，或 `LIGHT` 的唯一 TASK 已进入合法成功终态；读取 [acceptance.md](acceptance.md)，等待用户最终接受。这里是状态门禁，不是 Controller 再做一次技术验收。若业务变更已 commit、工作区干净且 receiver/reservation 全部释放，可先释放物理 workspace turn；Delivery 仍保持待用户确认。
 
@@ -185,7 +185,7 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 
 ## Delivery Revision
 
-用户最终确认之前的需求扩展仍属于同一个 Delivery：
+Delivery 保持 `OPEN/未上线` 时，测试反馈、业务验收优化或需求扩展仍可属于同一个 Delivery：
 
 1. 读取 `delivery_revision_history` 与当前 hierarchy，保留原 `delivery.id`。
 2. 将完整新范围传给 `prepare_delivery_revision`，同时提交当前 revision、变更原因、真实请求人和连续性依据。用户明确要求继续同一 Delivery 时传 `continuity_basis=USER_EXPLICIT_SAME_DELIVERY`；只有当前 Graph 已记录 `REPLAN_REQUIRED` 才传 `ACTIVE_LOOP_REPLAN`。工作区、路径、分支或旧 Delivery 仍处于 Active 都不能充当连续性。该调用只写候选 Revision，不替换当前 hierarchy/run，也不应触发宿主通用确认弹窗；可重复 prepare 尚未冻结的同一新 Revision，但不能修改旧 Revision。
@@ -193,7 +193,7 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 4. 展示完整新范围、Revision 编号、携带候选和 `requiredProjectAuthorizations`。跨项目 scope 必须包含当前工作区，所有可写 Git 项目使用同名 feature 分支。
 5. 后续 Revision 没有 Controller `executionChoice`：宿主用自己的原生对话询问自动或手动（这是本 Revision 唯一一次业务确认），随后直接调用对应工具，不要再调用 `select_execution_mode`。自动执行调用 `freeze_hierarchy`，同时提交精确 `expected_delivery_revision`、新 fingerprint、与准备结果完全一致的 `authorized_project_ids` 和真实 `confirmed_by`。手动开发调用 `create_manual_handoff` 输出修订后的完整冻结内容包，但不替换当前 run；接收方真正开始开发前需再次确认如何承接该活动 Delivery。
 6. 自动冻结同一 Delivery 的任意后续 Revision（`N → N+1`）时，若原物理 turn 尚未释放，项目集合、checkout、分支与冻结基线完全一致，Controller 复用最初的 clean `workspaceTurnStart`；当前 tracked、staged 与 untracked 业务改动继续属于同一次 Delivery turn，不要求删除、stash 或检查点提交，且本次 Revision 确认不扩大为 commit 授权。若旧 Revision 已在最终用户确认边界释放 turn，用户提出修改时下一 Revision 重新排到当前 owner 之后；轮到后宿主按返回的 workspace preparation 切回冻结分支并捕获新的 clean `workspaceTurnStart`。存在未解决冲突、turn 历史改写，或项目/绑定变化时仍按 Controller 返回 fail closed。
-7. 只有自动冻结成功后，旧 run 才标记为 `SUPERSEDED`，新 run 继续同一 Delivery 的验收；`revisions.md` 与 `delivery_revision_history` 保留审计链。
+7. 只有自动冻结成功后才替换当前 Revision。活动旧 run 标记为 `SUPERSEDED`；已经完成的旧 run 保持 `COMPLETED`，仅旧 Revision scope 标为 `SUPERSEDED`。`revisions.md` 与 `delivery_revision_history` 保留审计链。
 
 ## 恢复
 

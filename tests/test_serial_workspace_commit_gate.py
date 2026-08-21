@@ -325,6 +325,10 @@ class SerialWorkspaceCommitGateTests(unittest.TestCase):
             )
             self.assertEqual(
                 completed["nextAction"],
+                "PREPARE_REVISION_OR_CLOSE_DELIVERY",
+            )
+            self.assertEqual(
+                completed["workspaceNextAction"],
                 "WORKSPACE_RELEASED_BRANCH_SWITCH_ALLOWED",
             )
             self.assertIsNotNone(
@@ -381,6 +385,10 @@ class SerialWorkspaceCommitGateTests(unittest.TestCase):
             )
             self.assertEqual(
                 completed["nextAction"],
+                "PREPARE_REVISION_OR_CLOSE_DELIVERY",
+            )
+            self.assertEqual(
+                completed["workspaceNextAction"],
                 "COMMIT_CLEAN_FROZEN_WORKSPACE_AND_RECHECK_RELEASE",
             )
             self.assertIsNone(
@@ -451,6 +459,10 @@ class SerialWorkspaceCommitGateTests(unittest.TestCase):
             )
             self.assertEqual(
                 completed["nextAction"],
+                "PREPARE_REVISION_OR_CLOSE_DELIVERY",
+            )
+            self.assertEqual(
+                completed["workspaceNextAction"],
                 "RESTORE_FROZEN_WORKSPACE_AND_RECHECK_RELEASE",
             )
             self.assertIsNone(

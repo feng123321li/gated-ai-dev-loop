@@ -44,11 +44,11 @@ SERVER_INSTRUCTIONS = (
     "Delivery turn at a time. A later-started or later-discovered Delivery "
     "with a recorded AUTOMATIC or MANUAL selection is marked QUEUED with a "
     "mode-specific continuation and waits until the prior Delivery is paused, "
-    "terminal, or ready for final user confirmation, has a verifiable business "
+    "terminal, or ready for current Revision confirmation, has a verifiable business "
     "commit on every frozen independent branch, a clean working "
     "tree and index, HEAD still matching its frozen binding, and no in-flight "
     "receiver or reservation. Releasing at the confirmation boundary does not "
-    "complete the Delivery; final confirmation may be recorded later by root ID "
+    "close the Delivery; Revision completion may be recorded later by root ID "
     "after another Delivery branch is checked out. Status change is not release: "
     "the response must say workspaceRelease=RELEASED and the Controller must "
     "persist WORKSPACE_TURN_RELEASED before any branch preparation. The fixed "
@@ -120,7 +120,7 @@ SERVER_INSTRUCTIONS = (
     "previewed again. A selected button supplies the only human confirmation. "
     "AUTOMATIC and MANUAL use the same CURRENT_WORKSPACE_SERIAL queue. A non-owner "
     "Delivery is marked QUEUED and its persisted mode-specific continuation waits until the previous "
-    "one is paused, terminal, or ready for final user confirmation, has a "
+    "one is paused, terminal, or ready for current Revision confirmation, has a "
     "verifiable business commit on its frozen independent branch, a clean tree "
     "and index, unchanged frozen HEAD binding, "
     "and no receiver or reservation. select_execution_mode already persisted the choice "
@@ -151,7 +151,7 @@ SERVER_INSTRUCTIONS = (
     "unchanged, then starts the Graph in manual mode. Only TASK implementation Loops use "
     "MANUAL claims. TASK Reviews, configured GROUP seam Reviews, and Delivery "
     "Acceptance/Readiness retain complete host-native automatic routing, "
-    "isolated judgment, findings closure, and final user confirmation. "
+    "isolated judgment, findings closure, and Revision completion confirmation. "
     "Changed "
     "HANDOFF_READY content keeps the same delivery.id and calls "
     "create_manual_handoff with the current revision, "
@@ -250,10 +250,10 @@ SERVER_INSTRUCTIONS = (
     "terminal outcome. BLOCKED is only for a concrete condition that leaves "
     "no in-scope path with current authority; REPLAN_REQUIRED is only for a "
     "required change to frozen dependencies, resources, project scope, "
-    "topology, or a databaseChanges contract. Before final user acceptance, "
-    "such a change creates the next "
-    "immutable revision under the same Delivery ID; the prior run becomes "
-    "SUPERSEDED when the new revision is frozen. Shared "
+    "topology, or a databaseChanges contract. While the Delivery remains "
+    "OPEN/未上线, such a change creates the next immutable revision under the "
+    "same Delivery ID. When the new revision is frozen, an active prior run "
+    "becomes SUPERSEDED while a completed prior run remains COMPLETED. Shared "
     "skillHints are advisory shared preferences. After initial scope inspection "
     "and before forming TASK boundaries or payload, the planning host should "
     "pre-trigger a hint natively when it is applicable and available, using it "
@@ -310,8 +310,10 @@ SERVER_INSTRUCTIONS = (
     "workspace change index, and the main control directory acceptance.md "
     "renders that metadata for review; this evidence does not replace the "
     "verifiable commit, clean tree, or HEAD checks required before switching. "
-    "Final completion still "
-    "requires explicit user confirmation. A completed Delivery is archived "
+    "Each Revision completion still requires explicit user confirmation. "
+    "A completed Delivery remains OPEN/未上线 and may receive another "
+    "Revision. close_delivery marks production delivery CLOSED/已上线交付; "
+    "only then may the Delivery be archived "
     "only after another explicit user action; archive_delivery hides it from "
     "default workspace discovery while retaining its history and detail "
     "projections. External Git and publication "
@@ -331,7 +333,8 @@ CODEX_SERVER_INSTRUCTIONS = (
     "Pass receiverPrompt verbatim; a requested Skill should run when applicable "
     "and available, usually in TASK. Never claim inline or expose operation IDs. "
     "Follow pendingInteraction and wait directives exactly. Git, publication, "
-    "migrations, permissions, final confirmation, and archive retain explicit "
+    "migrations, permissions, Revision confirmation, Delivery closure, and "
+    "archive retain explicit "
     "authority."
 )
 
@@ -352,6 +355,7 @@ _PROFILE_TOOL_NAMES: Final = {
             "unfreeze_task_requirement",
             "refreeze_task_requirement",
             "record_user_confirmation",
+            "close_delivery",
             "archive_delivery",
         }
     ),
@@ -398,7 +402,8 @@ _PROFILE_INSTRUCTIONS: Final = {
     PLANNING_TOOL_PROFILE: (
         "Use $delivery-graph for workspace discovery, requirement modeling, "
         "baseline confirmation, immutable revision preparation, execution-mode "
-        "selection, freeze, and final user confirmation. Retain rootId. Do not "
+        "selection, freeze, Revision completion confirmation, explicit production "
+        "Delivery closure, and optional archival. Retain rootId. Do not "
         "dispatch, claim, execute, or review Loops from this profile."
     ),
     DISPATCH_TOOL_PROFILE: (

@@ -383,23 +383,45 @@ class DeliveryWorkspaceStore:
                         else candidate["status"]
                     )
                 )
+                candidate_closure = (
+                    self.repository.delivery_closure_from_connection(
+                        connection,
+                        candidate["root_id"],
+                    )
+                )
                 evaluated_candidates.append(
-                    (candidate, candidate_run, candidate_state)
+                    (
+                        candidate,
+                        candidate_run,
+                        candidate_state,
+                        candidate_closure,
+                    )
                 )
             unfinished_candidates = [
                 item
                 for item in evaluated_candidates
-                if item[2]
-                not in {
-                    "ARCHIVED",
-                    "COMPLETED",
-                    "CANCELLED",
-                    "SUPERSEDED",
-                }
+                if (
+                    item[2]
+                    not in {
+                        "ARCHIVED",
+                        "COMPLETED",
+                        "CANCELLED",
+                        "SUPERSEDED",
+                    }
+                    or (
+                        item[2] == "COMPLETED"
+                        and item[3]["state"] == "OPEN"
+                    )
+                )
             ]
             if root_id is None and len(unfinished_candidates) > 1:
                 candidate_deliveries = []
-                for candidate, _candidate_run, candidate_state in (
+                for (
+                    candidate,
+                    _candidate_run,
+                    candidate_state,
+                    candidate_closure,
+                ) in (
                     unfinished_candidates
                 ):
                     candidate_hierarchy, _ = (
@@ -410,6 +432,16 @@ class DeliveryWorkspaceStore:
                         "rootId": candidate["root_id"],
                         "deliveryRevision": candidate["revision"],
                         "status": candidate_state,
+                        "deliveryClosure": candidate_closure["state"],
+                        "deliveryStateLabel": candidate_closure["label"],
+                        "canPrepareRevision": (
+                            candidate_state == "COMPLETED"
+                            and candidate_closure["state"] == "OPEN"
+                        ),
+                        "canCloseDelivery": (
+                            candidate_state == "COMPLETED"
+                            and candidate_closure["state"] == "OPEN"
+                        ),
                         "title": delivery["title"],
                         "updatedAt": candidate["updated_at"],
                     }
@@ -445,7 +477,7 @@ class DeliveryWorkspaceStore:
                 if root_id is None and unfinished_candidates
                 else evaluated_candidates[0]
             )
-            latest, run, state = selected
+            latest, run, state, closure = selected
             latest_hierarchy, _ = self.validate_stored_definition(latest)
             if latest["status"] == "ARCHIVED":
                 revision = connection.execute(
@@ -496,6 +528,17 @@ class DeliveryWorkspaceStore:
             "rootId": latest["root_id"],
             "deliveryRevision": latest["revision"],
             "controlRoot": self.governance_directory,
+            "deliveryClosure": closure["state"],
+            "deliveryStateLabel": closure["label"],
+            "archiveState": (
+                "ARCHIVED" if state == "ARCHIVED" else "ACTIVE"
+            ),
+            "canPrepareRevision": (
+                state == "COMPLETED" and closure["state"] == "OPEN"
+            ),
+            "canCloseDelivery": (
+                state == "COMPLETED" and closure["state"] == "OPEN"
+            ),
         }
         if run is not None:
             result["executionMode"] = run["execution_mode"]
@@ -503,6 +546,13 @@ class DeliveryWorkspaceStore:
             result["archivedAt"] = latest["updated_at"]
             result["runStatus"] = run["status"]
             result["nextAction"] = "START_NEW_DELIVERY"
+        elif state == "COMPLETED":
+            result["runStatus"] = "COMPLETED"
+            result["nextAction"] = (
+                "PREPARE_REVISION_OR_CLOSE_DELIVERY"
+                if closure["state"] == "OPEN"
+                else "ARCHIVE_DELIVERY_OPTIONAL"
+            )
         if workspace_root is not None:
             if state == "CHOICE_READY":
                 result["workspaceIsolation"] = {

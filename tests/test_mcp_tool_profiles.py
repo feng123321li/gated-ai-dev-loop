@@ -49,6 +49,7 @@ EXPECTED_PROFILE_TOOLS = {
         "unfreeze_task_requirement",
         "refreeze_task_requirement",
         "record_user_confirmation",
+        "close_delivery",
         "archive_delivery",
     },
     DISPATCH_TOOL_PROFILE: {
@@ -268,6 +269,7 @@ class McpToolProfileTests(unittest.TestCase):
         protected = {
             "archive_delivery",
             "cancel_graph_run",
+            "close_delivery",
             "handoff_ready_automatic_task",
             "rebuild_graph_run",
             "record_user_confirmation",

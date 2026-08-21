@@ -32,7 +32,7 @@ PLANNING_TOOLS = (
             "a time. A later Delivery is returned as QUEUED after either its "
             "AUTOMATIC or MANUAL selection is recorded, and carries the matching "
             "resume or manual-start continuation until the previous run is "
-            "paused, terminal, or ready for final user confirmation; every "
+            "paused, terminal, or ready for current Revision confirmation; every "
             "frozen writable branch must have a verifiable business commit, "
             "a clean work tree and index, matching HEAD binding, and quiesced "
             "receivers/reservations. Status alone is not release: the Controller "
@@ -120,7 +120,7 @@ PLANNING_TOOLS = (
             "the human choice immediately and fixes execution to "
             "CURRENT_WORKSPACE_SERIAL: the actual workspace runs one Delivery "
             "turn at a time. A later AUTOMATIC or MANUAL Delivery waits until "
-            "the previous run is paused, terminal, or ready for final user "
+            "the previous run is paused, terminal, or ready for current Revision "
             "confirmation, then requires a verifiable business commit and clean "
             "matching binding on every frozen writable branch, quiesced receivers "
             "and reservations, and persisted WORKSPACE_TURN_RELEASED before any "
@@ -205,7 +205,8 @@ PLANNING_TOOLS = (
             "governed manual Graph run. TASK implementation Loops must be "
             "claimed with MANUAL provenance; TASK Reviews, configured GROUP "
             "seam Reviews, and Delivery Acceptance/Readiness remain independent "
-            "host-native automatic Loops, followed by final user confirmation. "
+            "host-native automatic Loops, followed by current Revision completion "
+            "confirmation. "
             "It never weakens or skips configured STANDARD Review nodes."
         ),
         _manual_start_tool_schema(),
@@ -229,11 +230,12 @@ PLANNING_TOOLS = (
     _tool(
         "prepare_delivery_revision",
         (
-            "Prepare the next immutable revision of the same active "
-            "Delivery after its frozen scope changes. The Delivery ID stays "
+            "Prepare the next immutable revision of the same OPEN/未上线 "
+            "Delivery after its frozen scope changes, including after the "
+            "previous Revision is COMPLETED. The Delivery ID stays "
             "stable, completed unchanged TASKs are candidates for "
             "carry-forward, and every project scope is reauthorized at "
-            "freeze."
+            "freeze. CLOSED/已上线交付 rejects new Revisions."
         ),
         _prepare_revision_tool_schema(),
     ),

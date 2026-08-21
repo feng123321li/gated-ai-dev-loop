@@ -844,6 +844,19 @@ class SchedulerRepository(SchedulerRepositoryBase):
         )
 
     @staticmethod
+    def delivery_closure_from_connection(
+        connection: sqlite3.Connection,
+        root_id: str,
+    ) -> dict[str, Any]:
+        return DeliveryEventStore.delivery_closure_from_connection(
+            connection,
+            root_id,
+        )
+
+    def delivery_closure(self, root_id: str) -> dict[str, Any]:
+        return self._delivery_event_store().delivery_closure(root_id)
+
+    @staticmethod
     def latest_nodes(
         connection: sqlite3.Connection,
         run_id: str,

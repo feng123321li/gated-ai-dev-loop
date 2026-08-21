@@ -64,6 +64,7 @@ EXISTING_TOOL_NAMES = (
     "resume_loop",
     "record_loop_result",
     "record_user_confirmation",
+    "close_delivery",
     "cancel_graph_run",
     "archive_delivery",
 )

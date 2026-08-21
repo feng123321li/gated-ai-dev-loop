@@ -50,7 +50,7 @@ allowed-tools:
 | `RESUME_LOOP_IN_INDEPENDENT_CONTEXT` | 新建独立 receiver，并让它使用原 node 调用 `resume_loop`；若暂停时已释放 turn，该调用先重新排队，返回 `QUEUED` 时保持节点 `PAUSED`，轮到且冻结分支 clean 后再次调用才重获 turn 并恢复为 READY |
 | `ADVANCE_REQUIRED` | 调用一次 `advance_graph`，再刷新一次 frontier |
 | `REFREEZE_TASK_REQUIREMENT` | 停止派遣，转回 `$delivery-graph` 取得用户授权并准备 Revision |
-| `RECORD_USER_CONFIRMATION` | 转回 `$delivery-graph` 展示验收并等待真实用户确认 |
+| `RECORD_USER_CONFIRMATION` | 转回 `$delivery-graph` 展示验收并等待当前 Revision 的真实用户确认；确认后 Delivery 仍为 `OPEN/未上线` |
 
 ## 失败与恢复
 
@@ -62,5 +62,6 @@ allowed-tools:
 - 暂停释放后恢复必须经过 `WORKSPACE_TURN_REQUEUED → 队首/冻结 binding/clean 复核 → WORKSPACE_TURN_REACQUIRED`；重获 turn 前不得派遣、复用旧 operation、跳过 reservation/resource/fingerprint 门禁或自行把节点改为 READY。
 - 物化状态损坏时，受保护的 `rebuild_graph_run` 只能在明确恢复动作下从已校验事件链重建，不修改事件。
 - 需求方向、拓扑、依赖、资源、项目 scope、Review 契约或 databaseChanges 变化属于 `REPLAN_REQUIRED`，转回 `$delivery-graph` 创建同一 Delivery 的下一 Revision。
+- Graph Run `COMPLETED` 不等于 Delivery `CLOSED`。协调器不调用 `close_delivery` 或 `archive_delivery`；测试、业务验收、生产上线与归档都转回 `$delivery-graph` 取得用户明确授权。
 
 详细协议见[派遣与恢复说明](references/dispatch-and-recovery.md)。

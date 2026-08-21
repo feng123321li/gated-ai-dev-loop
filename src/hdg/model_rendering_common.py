@@ -196,7 +196,7 @@ PAYLOAD_FIELD_ORDER = MappingProxyType(
 
 UTC_PLUS_8 = timezone(timedelta(hours=8))
 
-PROJECTION_TEMPLATE_VERSION = 19
+PROJECTION_TEMPLATE_VERSION = 20
 
 WORK_ITEM_DIRECTORY = "work-items"
 
@@ -212,8 +212,8 @@ WORKSPACE_OVERVIEW_PROJECTION_TEMPLATE = Template(
 
 ## 未归档 Delivery 清单
 
-| 交付标识 | 需求标题 | 当前状态 | 最近更新（UTC+8） | 交付详情 |
-|---|---|---|---|---|
+| 交付标识 | 需求标题 | 当前阶段 | 上线状态 | 最近更新（UTC+8） | 交付详情 |
+|---|---|---|---|---|---|
 ${delivery_rows}
 """
 )
@@ -316,7 +316,7 @@ ${acceptance_status}
 
 - Controller：Graph 门禁、结果契约校验与持久化；不做技术验收。
 - Delivery receiver：顶层技术验收与运行准备度判断；不重验每个下层 Loop。
-- 用户：最终业务确认。
+- 用户：确认当前 Revision 完成，并在生产上线后单独关闭 Delivery。
 
 ## 根工作项验收
 
@@ -324,7 +324,7 @@ ${root_acceptance}
 ## Delivery 最终技术验收与交付准备度
 
 ${delivery_acceptance}
-## 最终用户确认
+## 当前 Revision 完成确认
 
 ${confirmation}
 """

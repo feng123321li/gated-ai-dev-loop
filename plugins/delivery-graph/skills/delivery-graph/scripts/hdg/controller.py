@@ -16,6 +16,7 @@ from .graph_runtime import (
     advance_graph,
     archive_delivery,
     cancel_graph_run,
+    close_delivery,
     dispatch_loop,
     graph_events,
     graph_status,
@@ -57,6 +58,7 @@ CONTROL_ROOT_MONITOR_TOOLS = frozenset(
         "graph_status",
         "graph_events",
         "open_delivery_dashboard",
+        "close_delivery",
         "record_user_confirmation",
         "resume_loop",
     }
@@ -93,6 +95,7 @@ CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "record_loop_result": record_loop_result,
     "rebuild_graph_run": rebuild_graph_run,
     "record_user_confirmation": record_user_confirmation,
+    "close_delivery": close_delivery,
     "cancel_graph_run": cancel_graph_run,
     "archive_delivery": archive_delivery,
 }
@@ -214,6 +217,7 @@ class LayeredDeliveryController:
                     monitoring_from_control_root = True
             if name not in {
                 "archive_delivery",
+                "close_delivery",
                 "record_user_confirmation",
                 "workspace_status",
                 "confirm_development_baseline",
@@ -319,6 +323,7 @@ class LayeredDeliveryController:
             and result.get("status")
             in {"PAUSED", "COMPLETED", "CANCELLED"}
         ):
+            lifecycle_next_action = result.get("nextAction")
             result.update(
                 _serial_workspace_release_handshake(
                     SchedulerRepository(context.project_root),
@@ -326,6 +331,9 @@ class LayeredDeliveryController:
                     root_id,
                 )
             )
+            if name == "record_user_confirmation":
+                result["workspaceNextAction"] = result.get("nextAction")
+                result["nextAction"] = lifecycle_next_action
         if git_binding is not None:
             result["gitBinding"] = git_binding
         if git_workspace is not None:

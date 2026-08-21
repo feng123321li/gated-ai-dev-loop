@@ -24,6 +24,20 @@ from .planning_workspace import (
 )
 
 
+def _attach_release_handshake(
+    result: dict[str, Any],
+    handshake: dict[str, Any],
+) -> None:
+    lifecycle_next_action = result.get("nextAction")
+    result.update(handshake)
+    if (
+        result.get("status") == "COMPLETED"
+        and isinstance(lifecycle_next_action, str)
+    ):
+        result["workspaceNextAction"] = result.get("nextAction")
+        result["nextAction"] = lifecycle_next_action
+
+
 def workspace_status(
     *,
     root: str,
@@ -132,12 +146,13 @@ def workspace_status(
                     "WAITING_FOR_WORKSPACE_COMMIT",
                     "WAITING_FOR_WORKSPACE_QUIESCENCE",
                 }:
-                    result.update(
+                    _attach_release_handshake(
+                        result,
                         _serial_workspace_release_handshake(
                             repository,
                             workspace_root or root,
                             selected_root_id,
-                        )
+                        ),
                     )
                     return result
         if selection is not None:
@@ -164,12 +179,13 @@ def workspace_status(
                 or serial_gate["workspaceTurn"].get("ownerRootId")
                 == selected_root_id
             ):
-                result.update(
+                _attach_release_handshake(
+                    result,
                     _serial_workspace_release_handshake(
                         repository,
                         workspace_root or root,
                         selected_root_id,
-                    )
+                    ),
                 )
                 return result
             if serial_gate["state"] != "ACQUIRED":

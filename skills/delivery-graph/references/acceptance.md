@@ -148,15 +148,15 @@ TASK 与 TASK Review 的 `acceptance.md` 只展示上述变更索引，不生成
 也不内联源码 diff。Graph 用状态和范围指纹证明证据绑定；用户或 Review receiver
 需要具体内容时从已授权 workspace 或对应提交读取。
 
-## 用户最终确认
+## Revision 完成确认与 Delivery 关闭
 
 frontier 返回 `RECORD_USER_CONFIRMATION` 后：
 
 1. `STANDARD` 向用户展示根工作项摘要和报告链接、实际存在的分层验收报告链、Delivery Acceptance/Readiness 摘要以及重要阻断/风险；`LIGHT` 展示保障判断依据、实际 diff 范围、定向测试和唯一 TASK 结果。不要重复展开无关内容。
-2. 等待用户明确接受。到达此边界后，若业务改动已有可验证 commit、working tree/index clean、HEAD 未漂移且 receiver/reservation 全部释放，Controller 可以先释放物理 workspace turn；人工或自动宿主都可在已有 Git 授权范围内切换并开发下一 Delivery。此释放不等于用户验收，旧 Delivery 继续显示为待确认。
-3. 用户此时提出需求修改，说明当前 Delivery 尚未结束；不要确认完成，也不要直接修改已冻结 Revision。保持同一 `delivery.id` 进入 `prepare_delivery_revision`。若旧 turn 已释放，下一 Revision 重新进入串行队列，轮到后切回冻结分支并捕获新的 clean turn start；不能抢占当前 Delivery。
-4. 用户明确接受本身就是写入最终验收的授权；用 `root_id`、`confirmed=true`、控制器接受的可移植 ASCII `confirmed_by` 和简短 `summary` 调用 `record_user_confirmation`，不要再请求通用 Yes/No，也不要触发宿主权限弹窗。该确认只写控制面，可在 workspace 已切到另一 Delivery 分支后按旧 `root_id` 补录，不得要求恢复旧 checkout。
-5. Graph 进入 `COMPLETED` 后只返回简短终态摘要；不要自行写入宿主记忆、触发持续学习、维护旧 schema 笔记或更新任何项目文件。
-6. 归档不是完成的自动副作用。只有用户再次明确要求归档时才调用 `archive_delivery`；它只接受当前 `COMPLETED` Delivery，从默认 `workspace_status` 与工作区总览隐藏该 Delivery，但保留 SQLite、Revision/Run 历史、事件链、详情投影及 `requirementKey` 身份映射。显式传 `root_id` 仍返回 `ARCHIVED`。`CANCELLED` 的 workspace turn 在安全边界独立释放，不靠归档清理 owner。
+2. 等待用户明确接受当前 Revision。到达此边界后，若业务改动已有可验证 commit、working tree/index clean、HEAD 未漂移且 receiver/reservation 全部释放，Controller 可以先释放物理 workspace turn；此释放不等于 Revision 完成或 Delivery 关闭。
+3. 用户此时提出需求修改时，不要直接修改已冻结 Revision。保持同一 `delivery.id` 进入 `prepare_delivery_revision`；即使上一 Revision 已确认 `COMPLETED`，只要 Delivery 仍为 `OPEN/未上线`，仍可追加下一 Revision。若旧 turn 已释放，下一 Revision 重新进入串行队列，不能抢占当前 owner。
+4. 用户明确接受当前 Revision 本身就是写入本轮完成的授权；用 `root_id`、`confirmed=true`、可移植 ASCII `confirmed_by` 和简短 `summary` 调用 `record_user_confirmation`。该确认只写控制面并把 Graph Run 标为 `COMPLETED`，Delivery 继续保持 `OPEN/未上线`。
+5. 测试、业务验收和生产上线全部完成，且用户明确要求结束本 Delivery 时，才调用 `close_delivery(confirmed=true)`。`CLOSED/已上线交付` 后不得追加 Revision；后续改动创建新 Delivery。
+6. 归档不是关闭的自动副作用。只有关闭后用户再次明确要求归档时才调用 `archive_delivery`；它从默认发现与工作区总览隐藏 Delivery，但保留 SQLite、Revision/Run 历史、事件链、详情投影及 `requirementKey` 身份映射。
 
-不要用冻结确认、测试通过、内部 Gate PASS 或 Review Loop 自述替代用户确认。完成 Graph 不自动授权提交、推送、合并、迁移或发布。
+不要用冻结确认、测试通过、内部 Gate PASS 或 Review Loop 自述替代用户的 Revision 完成确认，更不能替代生产上线后的 Delivery 关闭确认。完成 Graph 或关闭 Delivery 都不自动授权提交、推送、合并、迁移或发布。

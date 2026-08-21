@@ -192,6 +192,8 @@ class RepositoryArchitectureTests(unittest.TestCase):
 
     def test_graph_events_are_owned_by_a_dedicated_store(self) -> None:
         expected_methods = {
+            "delivery_closure_from_connection",
+            "delivery_closure",
             "latest_nodes",
             "_append_event",
             "append_event",
@@ -203,7 +205,10 @@ class RepositoryArchitectureTests(unittest.TestCase):
             expected_methods,
             DeliveryEventStore,
             "_delivery_event_store",
-            static_methods={"latest_nodes"},
+            static_methods={
+                "delivery_closure_from_connection",
+                "latest_nodes",
+            },
         )
 
     def _assert_store_boundary(

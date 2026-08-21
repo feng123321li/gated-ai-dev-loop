@@ -92,7 +92,7 @@ class McpSurfaceTestsPart1:
     ) -> None:
         tools = tool_definitions()
         self.assertTrue(tools)
-        self.assertEqual(len(tools), 32)
+        self.assertEqual(len(tools), 33)
         self.assertNotIn("claim_current_task", {tool["name"] for tool in tools})
         descriptions = {tool["name"]: tool["description"] for tool in tools}
         self.assertIn(
@@ -148,6 +148,7 @@ class McpSurfaceTestsPart1:
             human,
             {
                 "archive_delivery",
+                "close_delivery",
                 "cancel_graph_run",
                 "refreeze_task_requirement",
                 "unfreeze_task_requirement",
@@ -174,6 +175,13 @@ class McpSurfaceTestsPart1:
         )
         self.assertTrue(archive_tool["annotations"]["destructiveHint"])
         self.assertTrue(archive_tool["annotations"]["idempotentHint"])
+        close_tool = by_name["close_delivery"]
+        self.assertEqual(
+            close_tool["inputSchema"]["required"],
+            ["root_id", "confirmed", "closed_by", "summary"],
+        )
+        self.assertTrue(close_tool["annotations"]["destructiveHint"])
+        self.assertTrue(close_tool["annotations"]["idempotentHint"])
         progress_tool = by_name["report_loop_progress"]
         self.assertFalse(progress_tool["annotations"]["readOnlyHint"])
         self.assertEqual(

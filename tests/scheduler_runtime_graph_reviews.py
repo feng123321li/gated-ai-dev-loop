@@ -7,6 +7,8 @@ from .scheduler_runtime_support import (
     WORK_ITEM_DIRECTORY,
     archive_delivery,
     at,
+    close_delivery,
+    closing,
     delivery_task_hierarchy,
     dispatch_loop,
     get_graph_frontier,
@@ -38,6 +40,14 @@ class SchedulerRuntimeTestsPart4:
     def test_archived_delivery_cannot_be_previewed_again(self) -> None:
         completed = self.complete_task_delivery("d-archived-preview")
         root_id = completed["rootId"]
+        close_delivery(
+            root=self.root,
+            root_id=root_id,
+            confirmed=True,
+            closed_by="archive-user",
+            summary="Production delivery completed.",
+            now=at(9),
+        )
         archive_delivery(root=self.root, root_id=root_id, now=at(9))
         stored = SchedulerRepository(self.root).hierarchy(root_id)
 
@@ -63,6 +73,14 @@ class SchedulerRuntimeTestsPart4:
         completed = self.complete_task_delivery(
             "d-archived-requirement",
             requirement_key="ORDER-443",
+        )
+        close_delivery(
+            root=self.root,
+            root_id=completed["rootId"],
+            confirmed=True,
+            closed_by="archive-user",
+            summary="Production delivery completed.",
+            now=at(9),
         )
         archive_delivery(
             root=self.root,
@@ -98,6 +116,14 @@ class SchedulerRuntimeTestsPart4:
     def test_archived_delivery_state_is_checked_fail_closed(self) -> None:
         completed = self.complete_task_delivery("d-archived-corrupt")
         root_id = completed["rootId"]
+        close_delivery(
+            root=self.root,
+            root_id=root_id,
+            confirmed=True,
+            closed_by="archive-user",
+            summary="Production delivery completed.",
+            now=at(9),
+        )
         archive_delivery(root=self.root, root_id=root_id, now=at(9))
         repository = SchedulerRepository(self.root)
         with repository.transaction() as connection:
@@ -278,9 +304,9 @@ class SchedulerRuntimeTestsPart4:
             group_review_node_id("g-service"),
             {item["nodeId"] for item in run["nodes"]},
         )
-        with sqlite3.connect(
+        with closing(sqlite3.connect(
             Path(self.root, ".layered-delivery", "scheduler.db")
-        ) as connection:
+        )) as connection:
             stored_review_rows = connection.execute(
                 "SELECT COUNT(*) FROM node_runs "
                 "WHERE run_id = ? AND node_id = ?",

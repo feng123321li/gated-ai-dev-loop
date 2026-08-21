@@ -35,6 +35,60 @@ class DeliveryEventStore:
         return getattr(self.repository, name)
 
     @staticmethod
+    def delivery_closure_from_connection(
+        connection: sqlite3.Connection,
+        root_id: str,
+    ) -> dict[str, Any]:
+        hierarchy = connection.execute(
+            "SELECT status, updated_at FROM hierarchies WHERE root_id = ?",
+            (root_id,),
+        ).fetchone()
+        if hierarchy is None:
+            fail(
+                "SCHEDULER_HIERARCHY_MISSING",
+                f"Scheduler hierarchy is missing: {root_id}",
+            )
+        row = connection.execute(
+            "SELECT e.actor, e.payload_json, e.recorded_at "
+            "FROM graph_events e "
+            "JOIN runs r ON r.run_id = e.run_id "
+            "WHERE r.root_id = ? AND e.event_type = 'DELIVERY_CLOSED' "
+            "ORDER BY e.event_id DESC LIMIT 1",
+            (root_id,),
+        ).fetchone()
+        if row is not None:
+            payload = json.loads(row["payload_json"])
+            return {
+                "state": "CLOSED",
+                "label": "已上线交付",
+                "closedAt": row["recorded_at"],
+                "closedBy": row["actor"],
+                "summary": payload.get("summary"),
+                "revision": payload.get("revision"),
+            }
+        if hierarchy["status"] == "ARCHIVED":
+            return {
+                "state": "CLOSED",
+                "label": "已上线交付",
+                "closedAt": hierarchy["updated_at"],
+                "closedBy": None,
+                "summary": None,
+                "revision": None,
+            }
+        return {
+            "state": "OPEN",
+            "label": "未上线",
+            "closedAt": None,
+            "closedBy": None,
+            "summary": None,
+            "revision": None,
+        }
+
+    def delivery_closure(self, root_id: str) -> dict[str, Any]:
+        with self.read() as connection:
+            return self.delivery_closure_from_connection(connection, root_id)
+
+    @staticmethod
     def latest_nodes(
         connection: sqlite3.Connection,
         run_id: str,

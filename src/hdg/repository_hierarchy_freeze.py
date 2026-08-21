@@ -430,39 +430,56 @@ class HierarchyFreezeMixin:
                             previous_run["run_id"],
                         )
                     }
-                    connection.execute(
-                        "UPDATE node_runs SET status = 'CANCELLED', "
-                        "finished_at = COALESCE(finished_at, ?) "
-                        "WHERE run_id = ? AND status NOT IN "
-                        "('SUCCEEDED', 'COMPLETED', 'CANCELLED')",
-                        (at, previous_run["run_id"]),
-                    )
-                    self._append_event(
-                        connection,
-                        run_id=previous_run["run_id"],
-                        node_id=None,
-                        attempt=None,
-                        event_type="GRAPH_RUN_SUPERSEDED",
-                        actor="USER",
-                        operation_id=None,
-                        payload={
-                            "fromRevision": previous_revision,
-                            "toRevision": expected_delivery_revision,
-                            "confirmedBy": confirmed_by,
-                        },
-                        at=at,
-                    )
-                    connection.execute(
-                        "UPDATE runs SET status = 'SUPERSEDED', "
-                        "updated_at = ?, superseded_at = ?, "
-                        "superseded_by_revision = ? WHERE run_id = ?",
-                        (
-                            at,
-                            at,
-                            expected_delivery_revision,
-                            previous_run["run_id"],
-                        ),
-                    )
+                    if previous_run["status"] == "COMPLETED":
+                        self._append_event(
+                            connection,
+                            run_id=previous_run["run_id"],
+                            node_id=None,
+                            attempt=None,
+                            event_type="DELIVERY_REVISION_ADVANCED",
+                            actor="USER",
+                            operation_id=None,
+                            payload={
+                                "fromRevision": previous_revision,
+                                "toRevision": expected_delivery_revision,
+                                "confirmedBy": confirmed_by,
+                            },
+                            at=at,
+                        )
+                    else:
+                        connection.execute(
+                            "UPDATE node_runs SET status = 'CANCELLED', "
+                            "finished_at = COALESCE(finished_at, ?) "
+                            "WHERE run_id = ? AND status NOT IN "
+                            "('SUCCEEDED', 'COMPLETED', 'CANCELLED')",
+                            (at, previous_run["run_id"]),
+                        )
+                        self._append_event(
+                            connection,
+                            run_id=previous_run["run_id"],
+                            node_id=None,
+                            attempt=None,
+                            event_type="GRAPH_RUN_SUPERSEDED",
+                            actor="USER",
+                            operation_id=None,
+                            payload={
+                                "fromRevision": previous_revision,
+                                "toRevision": expected_delivery_revision,
+                                "confirmedBy": confirmed_by,
+                            },
+                            at=at,
+                        )
+                        connection.execute(
+                            "UPDATE runs SET status = 'SUPERSEDED', "
+                            "updated_at = ?, superseded_at = ?, "
+                            "superseded_by_revision = ? WHERE run_id = ?",
+                            (
+                                at,
+                                at,
+                                expected_delivery_revision,
+                                previous_run["run_id"],
+                            ),
+                        )
                 connection.execute(
                     "UPDATE delivery_revisions "
                     "SET status = 'SUPERSEDED', updated_at = ?, "

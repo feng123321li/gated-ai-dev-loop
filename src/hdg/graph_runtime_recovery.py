@@ -68,6 +68,17 @@ def archive_delivery(
                     rootId=root_id,
                     runStatus=(run["status"] if run is not None else None),
                 )
+            closure = repository.delivery_closure_from_connection(
+                connection,
+                root_id,
+            )
+            if closure["state"] != "CLOSED":
+                fail(
+                    "SCHEDULER_DELIVERY_NOT_CLOSED",
+                    "A completed Delivery must be confirmed as production "
+                    "delivered before it can be archived",
+                    rootId=root_id,
+                )
             if hierarchy["status"] != "FROZEN":
                 fail(
                     "SCHEDULER_STATE_INVALID",
@@ -109,6 +120,12 @@ def archive_delivery(
         "runStatus": "COMPLETED",
         "archivedAt": archived_at,
         "alreadyArchived": already_archived,
+        "deliveryClosure": "CLOSED",
+        "deliveryStateLabel": "已上线交付",
+        "archiveState": "ARCHIVED",
+        "canPrepareRevision": False,
+        "canCloseDelivery": False,
+        "nextAction": "NONE",
     }
 
 def graph_events(

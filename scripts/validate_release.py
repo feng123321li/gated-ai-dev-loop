@@ -48,7 +48,7 @@ CLAUDE_MCP = PLUGIN / ".mcp.json"
 ZCODE_MANIFEST = PLUGIN / ".zcode-plugin" / "plugin.json"
 REPO_MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 TEMPLATES = ROOT / "examples" / "team-loops"
-EXPECTED_TOOL_COUNT = 32
+EXPECTED_TOOL_COUNT = 33
 EXPECTED_MCP_PROFILES = {
     "delivery-graph": PLANNING_TOOL_PROFILE,
     "delivery-graph-dispatch": DISPATCH_TOOL_PROFILE,

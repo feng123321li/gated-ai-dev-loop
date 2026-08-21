@@ -276,7 +276,7 @@ def _delivery_readiness_schema() -> dict[str, Any]:
             ),
             "decision": {"const": "READY_FOR_USER_CONFIRMATION"},
             "rationale": _bounded_string(
-                "Why the Delivery is ready for final user confirmation.",
+                "Why the current Revision is ready for user completion confirmation.",
                 maximum=4096,
             ),
         },
@@ -683,6 +683,7 @@ DESTRUCTIVE_TOOLS = frozenset(
     {
         "archive_delivery",
         "cancel_graph_run",
+        "close_delivery",
         "rebuild_graph_run",
         "unfreeze_task_requirement",
     }

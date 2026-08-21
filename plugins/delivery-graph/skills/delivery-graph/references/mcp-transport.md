@@ -2,6 +2,8 @@
 
 正常 hierarchy、Loop payload 和 outcome 直接传给对应 MCP 工具。Agent 只从 MCP 响应取得调度数据；当前调度器不提供第二套 CLI、直接 SQLite 或 payload 暂存旁路。
 
+生命周期字段将 Graph 阶段与 Delivery 上线状态分开：`runStatus=COMPLETED` 只表示当前 Revision 完成；`deliveryClosure=OPEN` 显示“未上线”并允许追加 Revision，`close_delivery` 后变为 `CLOSED/已上线交付` 且禁止追加。`archive_delivery` 只接受已关闭 Delivery。根级与 Delivery 级 overview 都分别展示当前阶段和上线状态。
+
 ## 连接失败
 
 - Plugin 未安装、工具未注册或 MCP 未连接：报告 `PLUGIN_MCP_UNAVAILABLE` 并停止治理写入。

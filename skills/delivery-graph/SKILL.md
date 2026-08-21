@@ -24,12 +24,12 @@ allowed-tools:
 - 只调用 frontmatter 中列出的 planning Profile 工具。MCP 不可用时报告 `PLUGIN_MCP_UNAVAILABLE` 并停止控制面写入。
 - 只使用 schema v3；准备前调用 `hierarchy_contract`，不得从源码、旧会话或示例猜参数。
 - 把 SQLite 与事件链视为机器权威；不得用 Shell、Python或数据库连接读写 `scheduler.db`，不得人工修补 Graph 或 Markdown 投影。
-- 本 Skill 只做发现、规划、基线、Revision、执行选择、冻结和最终用户交互；不得调用 frontier、dispatch、claim、heartbeat、result 等执行工具，也不得在 primary 内实现或审查 Loop。
+- 本 Skill 只做发现、规划、基线、Revision、执行选择、冻结、Revision 完成确认与 Delivery 关闭交互；不得调用 frontier、dispatch、claim、heartbeat、result 等执行工具，也不得在 primary 内实现或审查 Loop。
 - Graph 范围不是 Git 或外部操作授权。Controller 不写 Git；commit、merge、push、发布、迁移和新增权限仍分别取得授权。
 - 一个物理 checkout 只运行一个 Delivery turn，策略固定为 `CURRENT_WORKSPACE_SERIAL`。每个 Delivery 使用独立分支；不得把 linked checkout 当成自动新建 worktree 的授权。
 - `PAUSED`、`COMPLETED`、`CANCELLED` 不等同于 workspace release。必须先收束 receiver/reservation，再在每个冻结独立分支完成业务 commit 并保持 tree/index clean 与 binding 匹配，由协议复核并持久化 `WORKSPACE_TURN_RELEASED`；只有响应明确为 `workspaceRelease=RELEASED` 后宿主才可切换分支。
 - 同一需求保持稳定 `delivery.id`、`requirementKey` 和 `.layered-delivery/<delivery-id>/`。新业务目标默认新建 Delivery；同一需求延续或 `REPLAN_REQUIRED` 才创建下一不可变 Revision。
-- 只有真实用户确认后才记录最终完成；归档也必须再次明确授权。
+- 只有真实用户确认后才记录当前 Revision 完成。`COMPLETED` 不会自动关闭 Delivery：`OPEN/未上线` 可继续追加 Revision；测试、业务验收和生产上线完成后，必须再次明确授权 `close_delivery` 才进入 `CLOSED/已上线交付`。归档与关闭分离，也必须单独明确授权。
 
 ## 入口路由
 
@@ -43,8 +43,9 @@ allowed-tools:
 | `HANDOFF_READY` | 原样交付 `manualHandoff.receiverPrompt`；已绑定同一串行队列，接收方使用 `$delivery-graph-dispatch` |
 | `PREPARED` | 需求未变且尚无 `executionSelection` 时不要重复 preview |
 | `ACTIVE` / `BLOCKED` / `PAUSED` | 停止本 Skill，切换到 `$delivery-graph-dispatch` |
-| `COMPLETED` | 展示结果；真实用户确认后才记录，明确要求后才归档 |
-| `ARCHIVED` / `CANCELLED` | 报告终态；续接同一未验收需求时创建 Revision |
+| `COMPLETED` + `OPEN/未上线` | 当前 Revision 已完成；展示结果，按用户意图继续同一 Delivery 的 Revision，或在生产上线后明确关闭 |
+| `COMPLETED` + `CLOSED/已上线交付` | 不得追加 Revision；用户单独明确要求时才归档 |
+| `ARCHIVED` / `CANCELLED` | 报告终态；已关闭/归档后的新增改动创建新 Delivery |
 
 无参发现不会恢复未绑定的 `CHOICE_READY` 或旧版 `HANDOFF_READY` 草稿；必须使用创建响应中的 `rootId`。当前 MANUAL 选择会原子绑定当前 workspace 并进入与 AUTOMATIC 相同的串行队列。遇到未知写响应、MCP 重连、Git binding 异常或投影问题时，读取[MCP 与状态说明](references/mcp-transport.md)，不要盲目重放写操作。
 
@@ -68,12 +69,14 @@ allowed-tools:
 - `AUTOMATIC` 与 `MANUAL` 都只使用 `CURRENT_WORKSPACE_SERIAL`。已有 owner 时保持 `QUEUED`，不要抢占或 stash owner 的未完成改动。
 - `MANUAL` 原样展示 `manualHandoff.receiverPrompt`。`HANDOFF_READY` 是已排队的冻结包，不是 Graph Run；接收宿主必须先使用 `$delivery-graph-dispatch` 调用 `start_manual_handoff`。旧版未绑定 handoff 只能按明确 `rootId` 恢复；层级完全一致且尚未启动时，启动操作会把旧运行时策略刷新为当前 Graph 编译协议。
 
-## Revision 与最终确认
+## Revision、完成与关闭
 
 - 初次开发前用户修改需求时重新 preview；冻结后拓扑、依赖、资源、项目 scope、Review 契约或 databaseChanges 必须变化时，调用 `prepare_delivery_revision`，保持相同 `delivery.id`，不要创建新的 Delivery ID。
 - TASK 局部 requirement 只有在用户明确授权、未开始且无有效 reservation 时才可 unfreeze/refreeze；这些受保护工具不在自动允许列表中。
-- 执行完成后由 `$delivery-graph-dispatch` 返回 `RECORD_USER_CONFIRMATION`。本 Skill 展示分层验收并等待真实用户确认；只有确认后调用受保护的 `record_user_confirmation`。该响应会把 Graph 终态与 Git release 分开报告：`workspaceRelease=PENDING` 时按 `nextAction` 在原冻结分支 commit/clean 并调用 `workspace_status(rootId=...)` 复核，禁止先切分支；`RELEASED` 才允许推进下一 Delivery。
-- `archive_delivery` 只在完成后又收到单独、明确的归档请求时调用。
+- 执行完成后由 `$delivery-graph-dispatch` 返回 `RECORD_USER_CONFIRMATION`。本 Skill 展示分层验收并等待真实用户确认；只有确认后调用受保护的 `record_user_confirmation`。它只把当前 Revision/Graph Run 标为 `COMPLETED`，Delivery 保持 `OPEN/未上线`。该响应会把 Graph 终态与 Git release 分开报告：`workspaceRelease=PENDING` 时按 `workspaceNextAction` 在原冻结分支 commit/clean 并调用 `workspace_status(rootId=...)` 复核，禁止先切分支；`RELEASED` 后仍按 `nextAction=PREPARE_REVISION_OR_CLOSE_DELIVERY` 决定后续。
+- 用户在测试或业务验收后回来优化时，保持同一 `delivery.id` 调用 `prepare_delivery_revision`；冻结新 Revision 时，已完成的旧 run 保持 `COMPLETED` 审计终态，只有旧 Revision scope 标为 `SUPERSEDED`。
+- 只有用户明确确认测试、业务验收与生产上线均已完成时，才调用受保护的 `close_delivery(confirmed=true)`。关闭后不得追加 Revision，后续新增需求创建新 Delivery。
+- `archive_delivery` 只接受 `CLOSED/已上线交付`，且只在关闭后又收到单独、明确的归档请求时调用。
 
 ## 按需读取
 

@@ -12,6 +12,8 @@ from .scheduler_runtime_support import (
     at,
     call_tool,
     cancel_graph_run,
+    close_delivery,
+    closing,
     create_manual_handoff,
     datetime,
     deepcopy,
@@ -608,9 +610,9 @@ class SchedulerRuntimeTestsPart3:
         self.assertNotIn("taskAcceptance", completed_overview)
         self.assertNotIn("upstreamLoopResults", completed_overview)
         self.assertNotIn("SUCCEEDED", completed_overview)
-        with sqlite3.connect(
+        with closing(sqlite3.connect(
             Path(self.root) / ".layered-delivery" / "scheduler.db"
-        ) as connection:
+        )) as connection:
             row = connection.execute(
                 "SELECT outcome_json FROM node_runs "
                 "WHERE run_id = ? AND node_id = ?",
@@ -660,6 +662,14 @@ class SchedulerRuntimeTestsPart3:
     def test_completed_delivery_can_be_archived_idempotently(self) -> None:
         completed = self.complete_task_delivery()
         root_id = completed["rootId"]
+        close_delivery(
+            root=self.root,
+            root_id=root_id,
+            confirmed=True,
+            closed_by="archive-user",
+            summary="Accepted production delivery.",
+            now=at(9),
+        )
         events_before = graph_events(
             root=self.root,
             root_id=root_id,
@@ -686,6 +696,12 @@ class SchedulerRuntimeTestsPart3:
                 "runStatus": "COMPLETED",
                 "archivedAt": archived["archivedAt"],
                 "alreadyArchived": False,
+                "deliveryClosure": "CLOSED",
+                "deliveryStateLabel": "已上线交付",
+                "archiveState": "ARCHIVED",
+                "canPrepareRevision": False,
+                "canCloseDelivery": False,
+                "nextAction": "NONE",
             },
         )
         self.assertEqual(
@@ -823,6 +839,14 @@ class SchedulerRuntimeTestsPart3:
     def test_archived_delivery_cannot_be_refrozen(self) -> None:
         completed = self.complete_task_delivery("d-archived-freeze")
         root_id = completed["rootId"]
+        close_delivery(
+            root=self.root,
+            root_id=root_id,
+            confirmed=True,
+            closed_by="archive-user",
+            summary="Production delivery completed.",
+            now=at(9),
+        )
         archive_delivery(root=self.root, root_id=root_id, now=at(9))
         stored = SchedulerRepository(self.root).hierarchy(root_id)
 
@@ -850,6 +874,14 @@ class SchedulerRuntimeTestsPart3:
     def test_archived_delivery_cannot_become_a_manual_handoff(self) -> None:
         completed = self.complete_task_delivery("d-archived-manual")
         root_id = completed["rootId"]
+        close_delivery(
+            root=self.root,
+            root_id=root_id,
+            confirmed=True,
+            closed_by="archive-user",
+            summary="Production delivery completed.",
+            now=at(9),
+        )
         archive_delivery(root=self.root, root_id=root_id, now=at(9))
         stored = SchedulerRepository(self.root).hierarchy(root_id)
 
@@ -879,6 +911,14 @@ class SchedulerRuntimeTestsPart3:
     def test_archived_delivery_cannot_be_cancelled(self) -> None:
         completed = self.complete_task_delivery("d-archived-cancel")
         root_id = completed["rootId"]
+        close_delivery(
+            root=self.root,
+            root_id=root_id,
+            confirmed=True,
+            closed_by="archive-user",
+            summary="Production delivery completed.",
+            now=at(9),
+        )
         archive_delivery(root=self.root, root_id=root_id, now=at(9))
 
         with self.assertRaises(GatedLoopError) as caught:

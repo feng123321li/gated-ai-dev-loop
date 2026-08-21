@@ -4,7 +4,7 @@
 
 ## 0:00—1:00 检查注册
 
-先看宿主 MCP 列表：三个 Profile 的联集应为 32 个工具，其中包括 `workspace_status`、`preview_hierarchy`、`confirm_development_baseline`、`freeze_hierarchy` 和 `record_loop_result`。stdio server 显示 `Auth: Unsupported` 是正常的，它不使用 HTTP/OAuth。
+先看宿主 MCP 列表：三个 Profile 的联集应为 33 个工具，其中包括 `workspace_status`、`preview_hierarchy`、`confirm_development_baseline`、`freeze_hierarchy`、`record_loop_result` 和 `close_delivery`。stdio server 显示 `Auth: Unsupported` 是正常的，它不使用 HTTP/OAuth。
 
 若工具未注册，报告 `PLUGIN_MCP_UNAVAILABLE` 并停止治理写入；不要尝试模拟 `workspace_status`，也不要读写 `scheduler.db`。需要跨会话证据时运行只读矩阵 Demo：
 
@@ -45,7 +45,7 @@ TASK 成功后直接进入 `RECORD_USER_CONFIRMATION`，没有独立 Review rece
 - `acceptance.md`；
 - 由 Controller 从受验证 Git scope 采集并持久化的变更文件清单、base/HEAD 和状态指纹；源码 diff 不进入 Graph。
 
-只有真实用户接受后才记录最终确认。提交、推送、合并、发布与迁移仍分别需要自己的授权。
+只有真实用户接受后才记录当前 Revision 完成；Delivery 此时仍是 `OPEN/未上线`。测试、业务验收和生产上线完成后再单独调用 `close_delivery`，进入 `CLOSED/已上线交付`。提交、推送、合并、发布与迁移仍分别需要自己的授权。
 
 ## 五分钟成功标准
 
@@ -53,4 +53,4 @@ TASK 成功后直接进入 `RECORD_USER_CONFIRMATION`，没有独立 Review rece
 - 基线和需求已冻结；
 - 至少有 claim 后立即 heartbeat；短任务可减少 progress；
 - 有定向验证证据与 patch 快照；
-- 最终确认来自用户，不由 Agent 代填。
+- Revision 完成确认来自用户，不由 Agent 代填；本快速演练不自动关闭或归档 Delivery。

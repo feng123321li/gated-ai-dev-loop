@@ -38,6 +38,6 @@ allowed-tools:
 - Actionable finding 留在当前 Review Loop 内：记录、推动定向 rework、复验，再作结论；不要把普通 Review 未通过提交为 `BLOCKED`。
 - `SUCCEEDED` 只在当前层验收成立时提交，并仅保存 `validationDecision`、`reviewFindings`、本层唯一结论字段、有界 `verificationEvidence` 和必要引用。
 - 真实依赖或权限阻塞才用 `BLOCKED`；必须改变冻结需求、拓扑、依赖、资源、project scope 或数据库契约时用 `REPLAN_REQUIRED`。
-- 调用 `record_loop_result` 后结束本 receiver。最终业务确认由 planning Skill 与真实用户完成，不由 Review 代签。
+- 调用 `record_loop_result` 后结束本 receiver。当前 Revision 完成确认以及生产上线后的 Delivery 关闭确认都由 planning Skill 与真实用户完成，不由 Review 代签。
 
 完整分层验收规则见[分层验收说明](references/acceptance.md)。

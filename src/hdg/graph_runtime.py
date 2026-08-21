@@ -94,6 +94,7 @@ from .graph_runtime_lifecycle import (
 )
 from .graph_runtime_completion import (
     cancel_graph_run,
+    close_delivery,
     record_loop_result,
     record_user_confirmation,
 )
@@ -109,6 +110,7 @@ __all__ = (
     "advance_graph",
     "archive_delivery",
     "cancel_graph_run",
+    "close_delivery",
     "dispatch_loop",
     "graph_events",
     "graph_status",

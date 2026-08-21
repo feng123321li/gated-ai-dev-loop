@@ -114,7 +114,10 @@ class DeliveryProjectionStore:
                     observed_at=self.timestamp_fn(self.now),
                 )
             selection = self.execution_selection(root_id)
-            projection_definition = definition
+            projection_definition = {
+                **definition,
+                "deliveryClosure": self.delivery_closure(root_id),
+            }
             if (
                 run is None
                 and selection is not None
@@ -287,6 +290,12 @@ class DeliveryProjectionStore:
                         "createdAt": row["created_at"],
                         "updatedAt": row["updated_at"],
                         "run": run,
+                        "deliveryClosure": (
+                            self.delivery_closure_from_connection(
+                                connection,
+                                row["root_id"],
+                            )
+                        ),
                     }
                 )
         for source in sources:

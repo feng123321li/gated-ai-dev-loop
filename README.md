@@ -2,14 +2,14 @@
 
 把已确认的软件需求拆成可执行的 Delivery Graph，协调 Agent 完成实现、Review 和最终验收。
 
-当前版本：**0.43.3** · Schema：**v3** · Python：**3.10+，仅标准库**
+当前版本：**0.43.4** · Schema：**v3** · Python：**3.10+，仅标准库**
 
 ## 核心能力
 
 - 用 `Delivery → GROUP → TASK` 管理任务、依赖和整体进度。
 - 规划、调度、实现、Review 职责分离，避免单个 Agent 承担全部上下文。
 - 保存 Git 基线和运行状态，任务中断或换会话后可以继续。
-- 对项目范围、技术 Review 和最终用户确认设置明确门禁。
+- 对项目范围、技术 Review、Revision 完成和上线交付关闭设置明确门禁。
 
 Delivery Graph 负责组织、状态和调度，不替代 Agent 分析代码，也不会擅自提交、合并、推送或发布。
 
@@ -17,15 +17,15 @@ Delivery Graph 负责组织、状态和调度，不替代 Agent 分析代码，�
 
 | Skill | 职责 | MCP Profile |
 |---|---|---|
-| `$delivery-graph` | 需求确认、Graph 规划、Git 基线和冻结 | `planning`：15 个工具 |
+| `$delivery-graph` | 需求确认、Graph 规划、Git 基线、冻结和交付关闭 | `planning`：16 个工具 |
 | `$delivery-graph-dispatch` | 派遣、等待和恢复 | `dispatch`：12 个工具 |
 | `$delivery-graph-task` | TASK 实现与验证 | `receiver`：7 个工具 |
 | `$delivery-graph-review` | 独立分层 Review | `receiver`：7 个工具 |
 
-三个 MCP server 共用同一 Controller，但只向当前角色提供所需工具。完整能力为 32 个工具，跨 Profile 调用会被拒绝。
+三个 MCP server 共用同一 Controller，但只向当前角色提供所需工具。完整能力为 33 个工具，跨 Profile 调用会被拒绝。
 
 ```text
-需求确认 → Graph 规划与冻结 → 自动或手动执行 → TASK 实现 → 分层 Review → 用户确认
+需求确认 → Graph 规划与冻结 → TASK 实现与分层 Review → Revision 完成（未上线，可继续优化）→ 上线交付关闭 → 可选归档
 ```
 
 - `LIGHT`：单一、局部、低风险 TASK，定向验证后由用户确认。
@@ -40,6 +40,8 @@ Delivery Graph 负责组织、状态和调度，不替代 Agent 分析代码，�
 ```
 
 Agent 会依次确认需求、Git 开发基线、保障档和执行方式，然后推进 TASK 与 Review。执行期间可以说“打开当前 Delivery 的进度面板”。
+
+当前 Revision 完成后 Delivery 保持 `OPEN/未上线`，测试或业务验收反馈可继续追加 Revision；只有测试、业务验收和生产上线都完成后，才显式关闭为 `CLOSED/已上线交付`。关闭后不能追加 Revision，归档仍是独立的可选动作。
 
 中断后，在新会话中提供原 Delivery 的 `rootId` 即可继续；存在多个未完成 Delivery 时需要明确选择一个。不要手动修改 `.layered-delivery/`。
 

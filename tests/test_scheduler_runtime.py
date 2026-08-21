@@ -21,6 +21,7 @@ from .scheduler_runtime_rebuild_cancellation import SchedulerRuntimeTestsPart11
 from .scheduler_runtime_command_workers import SchedulerRuntimeTestsPart12
 from .scheduler_runtime_manual_compatibility import SchedulerRuntimeTestsPart13
 from .scheduler_runtime_heartbeat_continuity import SchedulerRuntimeTestsPart14
+from .scheduler_runtime_delivery_closure import SchedulerRuntimeTestsPart15
 from .scheduler_runtime_removed_coupling_tests import RemovedCouplingTests
 
 
@@ -40,6 +41,7 @@ class SchedulerRuntimeTests(
     SchedulerRuntimeTestsPart12,
     SchedulerRuntimeTestsPart13,
     SchedulerRuntimeTestsPart14,
+    SchedulerRuntimeTestsPart15,
     unittest.TestCase,
 ):
     pass

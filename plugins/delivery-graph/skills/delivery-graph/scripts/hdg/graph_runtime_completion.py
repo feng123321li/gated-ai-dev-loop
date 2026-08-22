@@ -23,6 +23,10 @@ from .graph_runtime_common import (
     validate_loop_outcome,
     validate_review_result_contract,
 )
+from .result_ledger import (
+    assemble_delivery_result,
+    assert_result_ledger_complete,
+)
 
 
 def record_loop_result(
@@ -291,6 +295,10 @@ def record_user_confirmation(
                 "SCHEDULER_CONFIRMATION_NOT_READY",
                 "Current Revision completion confirmation is not ready",
             )
+        assert_result_ledger_complete(
+            graph,
+            {"nodes": nodes},
+        )
         connection.execute(
             "UPDATE node_runs SET status = 'COMPLETED', "
             "finished_at = ?, outcome_json = ? WHERE run_id = ? "
@@ -330,6 +338,12 @@ def record_user_confirmation(
         )
     repository.write_projections(root_id)
     result = _compact_run_for_transport(repository.run(root_id))
+    stored = repository.hierarchy(root_id)
+    assembled_result = assemble_delivery_result(
+        stored["hierarchy"],
+        stored["graph"],
+        result,
+    )
     closure = repository.delivery_closure(root_id)
     return {
         **result,
@@ -339,6 +353,7 @@ def record_user_confirmation(
         "canPrepareRevision": True,
         "canCloseDelivery": True,
         "nextAction": "PREPARE_REVISION_OR_CLOSE_DELIVERY",
+        "deliveryResult": assembled_result,
     }
 
 

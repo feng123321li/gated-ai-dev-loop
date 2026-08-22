@@ -45,6 +45,8 @@ EXPECTED_PROFILE_TOOLS = {
         "prepare_hierarchy",
         "prepare_delivery_revision",
         "delivery_revision_history",
+        "delivery_result",
+        "route_entry_intent",
         "freeze_hierarchy",
         "unfreeze_task_requirement",
         "refreeze_task_requirement",
@@ -65,6 +67,7 @@ EXPECTED_PROFILE_TOOLS = {
         "rebuild_graph_run",
         "handoff_ready_automatic_task",
         "cancel_graph_run",
+        "route_entry_intent",
     },
     RECEIVER_TOOL_PROFILE: {
         "loop_context",

@@ -206,6 +206,13 @@ class DeliveryDispatchStore:
                     "decisionFingerprint": row[
                         "decision_fingerprint"
                     ],
+                    "agentProfileId": row["agent_profile_id"],
+                    "agentCatalogFingerprint": row[
+                        "agent_catalog_fingerprint"
+                    ],
+                    "teamPlanFingerprint": row[
+                        "team_plan_fingerprint"
+                    ],
                     "reservedAt": row["reserved_at"],
                     "reservationExpiresAt": row["expires_at"],
                     **(
@@ -227,6 +234,7 @@ class DeliveryDispatchStore:
         graph_fingerprint: str,
         assignments: list[dict[str, Any]],
         agent_slot_limits: dict[str, int],
+        profile_slot_limits: dict[str, int],
         orchestrator_slot_limit: int | None = None,
         reservation_seconds: int,
     ) -> dict[str, Any]:
@@ -274,11 +282,17 @@ class DeliveryDispatchStore:
                 for item in active
             }
             reserved_agent_slots: dict[str, int] = {}
+            reserved_profile_slots: dict[str, int] = {}
             for item in active:
                 agent_id = item.get("agentId")
                 if isinstance(agent_id, str):
                     reserved_agent_slots[agent_id] = (
                         reserved_agent_slots.get(agent_id, 0) + 1
+                    )
+                profile_id = item.get("agentProfileId")
+                if isinstance(profile_id, str):
+                    reserved_profile_slots[profile_id] = (
+                        reserved_profile_slots.get(profile_id, 0) + 1
                     )
             occupied = [
                 *self.claimed_resource_reservations(
@@ -303,6 +317,7 @@ class DeliveryDispatchStore:
             for assignment in assignments:
                 node_id = assignment["nodeId"]
                 agent_id = assignment["receiverAgentId"]
+                profile_id = assignment["agentProfileId"]
                 state = states.get(node_id)
                 definition = definitions.get(node_id)
                 key = (
@@ -347,6 +362,22 @@ class DeliveryDispatchStore:
                             "remaining host-native Agent slot."
                         ),
                         "agentId": agent_id,
+                    }
+                    continue
+                if reserved_profile_slots.get(profile_id, 0) >= (
+                    profile_slot_limits.get(profile_id, 0)
+                ):
+                    rejected[node_id] = {
+                        "code": "DISPATCH_PROFILE_SLOT_LIMIT_REACHED",
+                        "message": (
+                            "The specialist Agent profile concurrency "
+                            "limit is already occupied."
+                        ),
+                        "agentProfileId": profile_id,
+                        "maxConcurrent": profile_slot_limits.get(
+                            profile_id,
+                            0,
+                        ),
                     }
                     continue
                 if (
@@ -399,10 +430,12 @@ class DeliveryDispatchStore:
                     INSERT INTO dispatch_reservations(
                         reservation_id, run_id, root_id, node_id, attempt,
                         agent_id,
-                        graph_fingerprint, decision_fingerprint, status,
+                        graph_fingerprint, decision_fingerprint,
+                        agent_profile_id, agent_catalog_fingerprint,
+                        team_plan_fingerprint, status,
                         reserved_at, expires_at
                     ) VALUES (
-                        ?, ?, ?, ?, ?, ?, ?, ?, 'RESERVED', ?, ?
+                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'RESERVED', ?, ?
                     )
                     """,
                     (
@@ -414,6 +447,9 @@ class DeliveryDispatchStore:
                         agent_id,
                         graph_fingerprint,
                         assignment["decisionFingerprint"],
+                        profile_id,
+                        assignment["agentCatalogFingerprint"],
+                        assignment["teamPlan"]["teamPlanFingerprint"],
                         at,
                         expires_at,
                     ),
@@ -425,6 +461,9 @@ class DeliveryDispatchStore:
                 accepted[node_id] = reservation
                 reserved_agent_slots[agent_id] = (
                     reserved_agent_slots.get(agent_id, 0) + 1
+                )
+                reserved_profile_slots[profile_id] = (
+                    reserved_profile_slots.get(profile_id, 0) + 1
                 )
                 occupied.append(
                     {

@@ -3,6 +3,7 @@ name: delivery-graph
 description: "把已确认的软件需求规划或修订为 schema v3 Delivery Graph，负责 workspace/Delivery 发现、Git 开发基线确认、层级与 DAG 建模、不可变 Revision、执行模式选择和冻结。用于新建交付、澄清边界、确认 baseline、选择 AUTOMATIC/MANUAL，或处理 REPLAN_REQUIRED；Graph 已进入 ACTIVE、BLOCKED、PAUSED 或需要 frontier 调度时改用 delivery-graph-dispatch。"
 allowed-tools:
   - mcp__plugin_delivery-graph_delivery-graph__workspace_status
+  - mcp__plugin_delivery-graph_delivery-graph__route_entry_intent
   - mcp__plugin_delivery-graph_delivery-graph__hierarchy_contract
   - mcp__plugin_delivery-graph_delivery-graph__preview_hierarchy
   - mcp__plugin_delivery-graph_delivery-graph__confirm_development_baseline
@@ -12,6 +13,7 @@ allowed-tools:
   - mcp__plugin_delivery-graph_delivery-graph__prepare_hierarchy
   - mcp__plugin_delivery-graph_delivery-graph__prepare_delivery_revision
   - mcp__plugin_delivery-graph_delivery-graph__delivery_revision_history
+  - mcp__plugin_delivery-graph_delivery-graph__delivery_result
   - mcp__plugin_delivery-graph_delivery-graph__freeze_hierarchy
 ---
 
@@ -33,7 +35,7 @@ allowed-tools:
 
 ## 入口路由
 
-先调用 `workspace_status`；已知 Delivery 时始终传 `rootId`。
+先把用户原始请求传给 `route_entry_intent`；只消费其结构化 intent、状态、reason codes 和目标 Skill。`supervisorRouting.shouldInvoke=true` 时，按 `selectedSupervisorId` 创建无 MCP 工具的决策专用上下文，只允许它返回 `outputContract` 规定的分类建议；它不得查数据、执行路由或生成最终回答，建议仍交回 Entry Router/primary。`allowed=false` 时不得执行写操作，按返回的 clarification/fallback 处理。进入本 planning Skill 后再调用 `workspace_status`；已知 Delivery 时始终传 `rootId`。
 
 | 状态 | 动作 |
 |---|---|
@@ -73,7 +75,7 @@ allowed-tools:
 
 - 初次开发前用户修改需求时重新 preview；冻结后拓扑、依赖、资源、项目 scope、Review 契约或 databaseChanges 必须变化时，调用 `prepare_delivery_revision`，保持相同 `delivery.id`，不要创建新的 Delivery ID。
 - TASK 局部 requirement 只有在用户明确授权、未开始且无有效 reservation 时才可 unfreeze/refreeze；这些受保护工具不在自动允许列表中。
-- 执行完成后由 `$delivery-graph-dispatch` 返回 `RECORD_USER_CONFIRMATION`。本 Skill 展示分层验收并等待真实用户确认；只有确认后调用受保护的 `record_user_confirmation`。它只把当前 Revision/Graph Run 标为 `COMPLETED`，Delivery 保持 `OPEN/未上线`。该响应会把 Graph 终态与 Git release 分开报告：`workspaceRelease=PENDING` 时按 `workspaceNextAction` 在原冻结分支 commit/clean 并调用 `workspace_status(rootId=...)` 复核，禁止先切分支；`RELEASED` 后仍按 `nextAction=PREPARE_REVISION_OR_CLOSE_DELIVERY` 决定后续。
+- 执行完成后由 `$delivery-graph-dispatch` 返回 `RECORD_USER_CONFIRMATION`。先调用 `delivery_result`，只依据其确定性结果账本展示全部 Loop 结果、验收、证据、finding 与明确缺项；`completeness.complete=false` 时不得请求用户确认。等待真实用户确认后才调用受保护的 `record_user_confirmation`。它只把当前 Revision/Graph Run 标为 `COMPLETED`，Delivery 保持 `OPEN/未上线`。该响应会把 Graph 终态与 Git release 分开报告：`workspaceRelease=PENDING` 时按 `workspaceNextAction` 在原冻结分支 commit/clean 并调用 `workspace_status(rootId=...)` 复核，禁止先切分支；`RELEASED` 后仍按 `nextAction=PREPARE_REVISION_OR_CLOSE_DELIVERY` 决定后续。
 - 用户在测试或业务验收后回来优化时，保持同一 `delivery.id` 调用 `prepare_delivery_revision`；冻结新 Revision 时，已完成的旧 run 保持 `COMPLETED` 审计终态，只有旧 Revision scope 标为 `SUPERSEDED`。
 - 只有用户明确确认测试、业务验收与生产上线均已完成时，才调用受保护的 `close_delivery(confirmed=true)`。关闭后不得追加 Revision，后续新增需求创建新 Delivery。
 - `archive_delivery` 只接受 `CLOSED/已上线交付`，且只在关闭后又收到单独、明确的归档请求时调用。

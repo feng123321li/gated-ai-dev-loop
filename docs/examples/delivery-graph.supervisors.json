@@ -1,0 +1,28 @@
+{
+  "registryVersion": 1,
+  "enabled": true,
+  "activationMode": "AMBIGUOUS_ONLY",
+  "profiles": [
+    {
+      "id": "requirements-supervisor",
+      "handles": ["NEW_DELIVERY", "REPLAN"]
+    },
+    {
+      "id": "execution-supervisor",
+      "handles": ["RESUME_PAUSED", "CONTINUE_DELIVERY"]
+    },
+    {
+      "id": "lifecycle-supervisor",
+      "handles": ["CONFIRM_REVISION", "CLOSE_DELIVERY", "ARCHIVE_DELIVERY"]
+    },
+    {
+      "id": "observation-supervisor",
+      "handles": ["QUERY_STATUS"]
+    },
+    {
+      "id": "entry-supervisor",
+      "handles": ["AMBIGUOUS"]
+    }
+  ],
+  "fallbackProfileId": "entry-supervisor"
+}

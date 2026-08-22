@@ -34,8 +34,6 @@ from .scheduler_runtime_support import (
     task_hierarchy,
     workspace_status,
 )
-
-
 class SchedulerRuntimeTestsPart4:
     def test_archived_delivery_cannot_be_previewed_again(self) -> None:
         completed = self.complete_task_delivery("d-archived-preview")

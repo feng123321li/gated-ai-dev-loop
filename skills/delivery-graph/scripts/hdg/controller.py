@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from .dispatch_planning import plan_dispatch_batch
+from .entry_routing import route_entry_intent
 from .dashboard import open_delivery_dashboard
 from .errors import GatedLoopError, fail
 from .graph_frontier import get_graph_frontier
@@ -48,6 +49,7 @@ from .planning import (
 )
 from .planning_gates import _serial_workspace_release_handshake
 from .repository import SchedulerRepository
+from .result_ledger import delivery_result
 
 
 ControllerOperation = Callable[..., dict[str, Any]]
@@ -56,6 +58,8 @@ CONTROL_ROOT_MONITOR_TOOLS = frozenset(
     {
         "graph_frontier",
         "graph_status",
+        "delivery_result",
+        "route_entry_intent",
         "graph_events",
         "open_delivery_dashboard",
         "close_delivery",
@@ -66,6 +70,7 @@ CONTROL_ROOT_MONITOR_TOOLS = frozenset(
 
 CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "workspace_status": workspace_status,
+    "route_entry_intent": route_entry_intent,
     "hierarchy_contract": hierarchy_contract,
     "preview_hierarchy": preview_hierarchy,
     "confirm_development_baseline": confirm_development_baseline,
@@ -80,6 +85,7 @@ CONTROLLER_OPERATIONS: Mapping[str, ControllerOperation] = {
     "freeze_hierarchy": freeze_hierarchy,
     "graph_frontier": get_graph_frontier,
     "graph_status": graph_status,
+    "delivery_result": delivery_result,
     "open_delivery_dashboard": open_delivery_dashboard,
     "graph_events": graph_events,
     "advance_graph": advance_graph,
@@ -192,10 +198,16 @@ class LayeredDeliveryController:
                             in {
                                 "workspace_status",
                                 "delivery_revision_history",
+                                "route_entry_intent",
                             }
                         ),
                         allow_unbound_choice=(
-                            name in {"workspace_status", "cancel_graph_run"}
+                            name
+                            in {
+                                "workspace_status",
+                                "cancel_graph_run",
+                                "route_entry_intent",
+                            }
                         ),
                     )
                 except GatedLoopError as error:
@@ -260,10 +272,12 @@ class LayeredDeliveryController:
                 )
         if name in {
             "workspace_status",
+            "route_entry_intent",
             "preview_hierarchy",
             "create_manual_handoff",
             "prepare_hierarchy",
             "prepare_delivery_revision",
+            "plan_dispatch_batch",
             "freeze_hierarchy",
             "confirm_development_baseline",
             "select_execution_mode",

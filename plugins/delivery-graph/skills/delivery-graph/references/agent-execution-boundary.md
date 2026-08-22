@@ -19,9 +19,11 @@ workspace strategy 固定为 `CURRENT_WORKSPACE_SERIAL`。同一实际 checkout 
 HEAD 与 receiver/reservation 释放条件全部满足。现有 linked checkout 仍只是普通当前
 workspace，不会自动创建新 worktree。
 
-assignment 绑定宿主 Adapter、receiver Agent、reservation、节点、attempt 和 decision
-fingerprint。非空 `receiverPrompt` 必须原样传给 receiver。Controller 不分析 Loop
-payload 来改变路由，也不从 receiver 输出推断额外调度属性。
+assignment 绑定宿主 Adapter、receiver Agent、专用 `agentProfileId`、版本化 catalog/team
+fingerprint、reservation、节点、attempt 和 decision fingerprint。非空 `receiverPrompt`
+与 `teamPlan` 必须原样传给 receiver。宿主 Agent 身份负责可信执行边界，profile 负责专业分工，
+二者不能互相替代。Controller 不分析 Loop payload 来改变路由，也不从 receiver 输出推断
+额外调度属性。
 
 每次 claim 返回的 `operation_id` 是该 attempt 后续 mutation 的 bearer。receiver 必须
 显式携带并保密，不能复制给 helper、日志、进度、result 或用户消息。需要更换外层
@@ -30,7 +32,9 @@ reservation 重新领取；旧 operation 立即失效。
 
 ## Loop 内部实现
 
-receiver 取得冻结输入后，自主管理实现、测试、复核和必要的内部协作。内部 helper
+receiver 取得冻结输入后，按版本化 Agent Profile Catalog 自主管理实现、测试、复核和
+必要的内部协作。`teamPlan.owner` 是唯一外层 receiver；`teamPlan.helpers` 是可选的专用
+内部角色，不是额外 Graph Loop。内部 helper
 不是 Graph receiver，不得调用 `dispatch_loop`、`heartbeat_loop`、
 `report_loop_progress`、`pause_loop`、`resume_loop` 或 `record_loop_result`，也不得接收
 operation 或 reservation bearer。它们只把结果返回 receiver，由 receiver 验证、整合

@@ -41,7 +41,7 @@ claude plugin list --json
 python -m scripts.host_smoke probe --json
 ```
 
-结果必须报告 Plugin 版本 0.43.5、33 个 MCP 工具的 Profile 联集以及 3 个 MCP server，并如实标记本机已安装的宿主。单个 Agent 只应看到其 Skill 对应的 Profile 子集。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在目标宿主执行真实宿主冒烟任务；宿主不要求安装在同一台机器。MCP 工具是否真正注入各 workspace/Agent schema，使用[注册矩阵与生命周期契约](mcp-host-lifecycle-contract.md)中的只读 Demo 单独验证。
+结果必须报告 Plugin 版本 0.43.5、35 个 MCP 工具的 Profile 联集以及 3 个 MCP server，并如实标记本机已安装的宿主。单个 Agent 只应看到其 Skill 对应的 Profile 子集。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在目标宿主执行真实宿主冒烟任务；宿主不要求安装在同一台机器。MCP 工具是否真正注入各 workspace/Agent schema，使用[注册矩阵与生命周期契约](mcp-host-lifecycle-contract.md)中的只读 Demo 单独验证。
 
 真实冒烟按宿主各自由独立模块实现（`scripts/host_smoke/` 下的 `codex.py`、`claude.py`、`zcode.py`），共享证据规则在 `common.py`。Codex 与 Claude Code 默认先只展示计划，必须显式增加 `--execute` 才调用模型，两个宿主分别运行，绝不从一个终端跨调另一个 Agent：
 
@@ -82,7 +82,7 @@ Claude 命令从当前 0.43.5 源码发布包的 `--plugin-dir` 加载 Plugin；
 - `archive_delivery` 只接受已完成 Delivery，默认状态发现和根总览不再列出它；显式 `root_id` 仍能读取 `ARCHIVED`、完成 run、Revision 历史和详情投影。
 - 对已有 run 输入“打开当前 Delivery 的进度面板”，支持 MCP Apps 的宿主应渲染 `Delivery Graph 运行看板`；看板可见时每 15 秒自动更新，隐藏时暂停，点击“刷新状态”立即重读 `open_delivery_dashboard`。宽面板 Graph 不产生水平溢出，窄面板转为纵向并展示前置项。所有刷新都只能调用只读 Dashboard 工具；不支持 UI 的宿主必须继续返回可读文字和结构化结果，且不得改用 `graph_frontier` 模拟只读刷新。
 - Codex 与 Claude manifest 都只声明当前实际 payload，Plugin 包中不得保留生命周期命令目录。敏感 MCP 工具必须继续触发各宿主自身的审批，不得由 Plugin 自动批准。
-- 有效 Adapter/workspace 调用 `plan_dispatch_batch` 时应创建统一 AUTO assignment；缺失宿主 Adapter、workspace/Git/project scope、容量或资源条件时必须在 claim 前 fail closed，不能靠模型输入或未声明元数据绕过。
+- 有效 Adapter/workspace 调用 `plan_dispatch_batch` 时应创建统一 AUTO assignment；assignment 必须绑定 Agent Profile Catalog、专用 owner/helper `teamPlan` 和 catalog/profile/team decision fingerprint。只为 owner 创建外层 receiver，helper 不持有控制面凭据。缺失宿主 Adapter、workspace/Git/project scope、容量、profile 或资源条件时必须在 claim 前 fail closed，不能靠模型输入或未声明元数据绕过。
 - AUTO child 使用错误/过期 reservation、错误 decision fingerprint、错误 attempt/workspace/scope 或错误 operation 时，`dispatch_loop` 或后续 mutation 必须拒绝；协调器刷新 frontier，等待 reservation/lease 恢复规则，不代交结果。
 
 真实冒烟必须验证宿主确实按 assignment 创建独立 TASK/Review child，但 Plugin 只看到 Adapter 提供的 workspace/receiver 元数据，不对 parent-child、receiver 延续或 reviewer 独立性提供密码学证明。测试记录只能作为宿主编排证据，不能宣称 Controller 已认证这些关系。

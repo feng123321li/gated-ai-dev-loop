@@ -483,6 +483,7 @@ def build_graph_frontier(
         "rootId": run["rootId"],
         "runId": run["runId"],
         "status": run["status"],
+        "executionMode": run.get("executionMode"),
         "readyLoops": ready_loops,
         "activeLoops": active_loops,
         "pausedLoops": paused_loops,

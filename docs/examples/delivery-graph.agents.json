@@ -1,0 +1,61 @@
+{
+  "catalogVersion": 1,
+  "profiles": [
+    {
+      "id": "task-implementation",
+      "kind": "RECEIVER",
+      "loopKinds": ["TASK_LOOP"],
+      "roleSkill": "delivery-graph-task",
+      "capabilities": ["code.change", "verification.execute", "result.compose"],
+      "helperProfiles": ["result-checker"],
+      "outputContract": "task-loop-result-v1",
+      "maxConcurrent": 4
+    },
+    {
+      "id": "task-review",
+      "kind": "RECEIVER",
+      "loopKinds": ["TASK_REVIEW_LOOP"],
+      "roleSkill": "delivery-graph-review",
+      "capabilities": ["evidence.audit", "finding.resolve", "result.compose"],
+      "helperProfiles": ["result-checker"],
+      "outputContract": "review-loop-result-v1",
+      "maxConcurrent": 4
+    },
+    {
+      "id": "group-review",
+      "kind": "RECEIVER",
+      "loopKinds": ["GROUP_REVIEW_LOOP"],
+      "roleSkill": "delivery-graph-review",
+      "capabilities": ["cross-task.audit", "evidence.audit", "result.compose"],
+      "helperProfiles": ["result-checker"],
+      "outputContract": "review-loop-result-v1",
+      "maxConcurrent": 2
+    },
+    {
+      "id": "delivery-review",
+      "kind": "RECEIVER",
+      "loopKinds": ["DELIVERY_REVIEW_LOOP"],
+      "roleSkill": "delivery-graph-review",
+      "capabilities": ["delivery.audit", "evidence.audit", "result.compose"],
+      "helperProfiles": ["result-checker"],
+      "outputContract": "review-loop-result-v1",
+      "maxConcurrent": 1
+    },
+    {
+      "id": "result-checker",
+      "kind": "HELPER",
+      "loopKinds": [],
+      "roleSkill": null,
+      "capabilities": ["result.audit", "evidence.coverage", "omission.detect"],
+      "helperProfiles": [],
+      "outputContract": "advisory-result-v1",
+      "maxConcurrent": 1
+    }
+  ],
+  "loopRoutes": {
+    "TASK_LOOP": "task-implementation",
+    "TASK_REVIEW_LOOP": "task-review",
+    "GROUP_REVIEW_LOOP": "group-review",
+    "DELIVERY_REVIEW_LOOP": "delivery-review"
+  }
+}

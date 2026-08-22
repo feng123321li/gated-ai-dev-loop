@@ -3,6 +3,7 @@ name: delivery-graph-dispatch
 description: "协调已冻结或已启动的 Delivery Graph：启动 MANUAL handoff、读取 frontier、原子预留 READY TASK/Review、创建独立 receiver、监控 lease/进度、处理等待、暂停、失联和安全重建。用于状态为 HANDOFF_READY、ACTIVE、BLOCKED、PAUSED、QUEUED，或 receiverPrompt 明确要求总协调时；不用于需求规划、TASK 实现或 Review 判断。"
 allowed-tools:
   - mcp__plugin_delivery-graph_delivery-graph-dispatch__workspace_status
+  - mcp__plugin_delivery-graph_delivery-graph-dispatch__route_entry_intent
   - mcp__plugin_delivery-graph_delivery-graph-dispatch__resume_execution_mode
   - mcp__plugin_delivery-graph_delivery-graph-dispatch__start_manual_handoff
   - mcp__plugin_delivery-graph_delivery-graph-dispatch__plan_dispatch_batch
@@ -24,8 +25,9 @@ allowed-tools:
 - `CURRENT_WORKSPACE_SERIAL` 同时约束自动和手动 Run；同一物理 checkout 一次只推进一个 Delivery turn。
 - `PAUSED`、`COMPLETED`、`CANCELLED` 只是释放资格边界，不等于已释放。固定顺序为 `quiesce receiver/reservation → 到达 eligible state → 在各自冻结独立分支完成业务 commit 且 clean → 再次调用协议并持久化 WORKSPACE_TURN_RELEASED → 才可切分支或推进下一 Delivery`。响应为 `workspaceRelease=PENDING` 时只能执行其 `nextAction`，不得准备或切换下一分支。
 - AUTOMATIC 的每个 READY TASK/Review 先由 `plan_dispatch_batch` 原子 reservation，再创建不同的宿主原生 receiver。primary 不得 claim 或把 assignment 交给普通 helper。
-- assignment 的 `receiverPrompt` 必须原样传递：TASK 会路由到 `$delivery-graph-task`，所有 Review 会路由到 `$delivery-graph-review`。
-- 只有外层 receiver 持有 reservation、decision fingerprint、receiver context 和 `operation_id`。内部 Worker 不接触控制面凭据。
+- assignment 的 `agentProfileId`、`agentCatalogFingerprint`、`teamPlan` 与 `receiverPrompt` 必须完整原样传递：TASK 会路由到 `$delivery-graph-task`，所有 Review 会路由到 `$delivery-graph-review`。profile 决定专业分工，不替代宿主 `receiverAgentId` 身份。
+- 每个 assignment 只创建一个持有控制面的外层 receiver；它是 `teamPlan.owner`。`teamPlan.helpers` 由 owner 在 Loop 内按需使用，primary 不为 helper 分发 reservation，也不等待 helper 控制面事件。
+- 只有外层 receiver 持有 reservation、decision fingerprint、receiver context 和 `operation_id`。专用 helper/内部 Worker 不接触控制面凭据。
 - primary 不持有或借用 receiver operation，绝不代发 heartbeat；每个 receiver 自己在 claim 后立即 heartbeat，并持续到 result/claim release。`NOT_REQUIRED` 不取消其约 60 秒计划，progress 不续租。
 - 完整传递 assignment 的 `receiverPrompt`；receiver 在预计超过 60 秒的整文件 Write、大 patch、批量编辑或命令前自行申请覆盖租约，可拆编辑改为语义小 patch 并在块间 heartbeat；primary 只监控，不代执行或代续租。
 - 派遣和等待只依据 assignment `reasons`、reservation/lease、节点 `resultProvenance`、progress/heartbeat 与事件链；把这些结构化原因展示给用户，不用隐藏推断解释“为什么在等”。
@@ -33,10 +35,10 @@ allowed-tools:
 
 ## 启动与 frontier
 
-1. 调用 `workspace_status(rootId=...)`。先处理 `workspaceRelease`：`PENDING` 时只完成返回的 quiesce/commit/clean/恢复冻结分支/recheck 动作；只有 `RELEASED` 才允许宿主切换分支。`HANDOFF_READY` 时，在实际开发 workspace、任何代码检查前调用 `start_manual_handoff`；Git 漂移返回 baseline 交互时转回 `$delivery-graph`。
+1. 新用户请求先原样调用 `route_entry_intent`；`supervisorRouting.shouldInvoke=true` 时，只把入口文本、持久化状态摘要和 Router 候选交给指定的无工具决策 Supervisor，取回结构化分类建议后仍由 primary 判断，不让 Supervisor 调工具、执行路由或生成最终回答。只有 Router `allowed=true` 且 `targetSkill=delivery-graph-dispatch` 才继续本流程，歧义、状态冲突或 planning 目标必须停止派遣并按结构化 reason codes 转交。随后调用 `workspace_status(rootId=...)`。先处理 `workspaceRelease`：`PENDING` 时只完成返回的 quiesce/commit/clean/恢复冻结分支/recheck 动作；只有 `RELEASED` 才允许宿主切换分支。`HANDOFF_READY` 时，在实际开发 workspace、任何代码检查前调用 `start_manual_handoff`；Git 漂移返回 baseline 交互时转回 `$delivery-graph`。
 2. 首次进入、receiver 事件、`nextWakeAt` 到达或 `ADVANCE_REQUIRED` 时调用一次 `graph_frontier`。
 3. 完整消费当前批次所有立即 action；不得只处理第一项，也不得在 reservation 后继续分析 assignment。
-4. 对 READY 自动节点调用一次 `plan_dispatch_batch`，完整创建所有 `assignments` 的独立 receiver，并原样传递 `receiverPrompt`。
+4. 对 READY 自动节点调用一次 `plan_dispatch_batch`，完整创建所有 `assignments` 的独立 owner receiver，并原样传递整个 assignment 与 `receiverPrompt`；不得把 `teamPlan.helpers` 当作额外 Graph receiver。
 5. 对 `CLAIM_MANUAL_TASK` 创建独立人工 TASK receiver。MANUAL 只允许 TASK；Review 仍走 AUTOMATIC reservation。
 6. 全部派遣后严格执行 `postActionWait` 或 `progressMonitor.waitDirective`。优先等待宿主原生 receiver 事件；到 deadline 才读取一次 frontier/status，禁止 back-to-back 轮询。
 

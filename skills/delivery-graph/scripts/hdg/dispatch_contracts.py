@@ -5,7 +5,7 @@ from copy import deepcopy
 from .jsonio import fingerprint
 
 
-DISPATCH_POLICY_VERSION = "HOST_NATIVE_RESERVATION_ROUTING_V8"
+DISPATCH_POLICY_VERSION = "HOST_NATIVE_RESERVATION_ROUTING_V9"
 HOST_NATIVE_DISPATCH_TRANSPORT = "HOST_NATIVE"
 
 # Receiver Agent IDs select host-native receiver families. A new Adapter must
@@ -81,6 +81,8 @@ def receiver_skill_prompt(
     skill_hints: list[dict[str, str]],
     *,
     host_adapter_id: str | None = None,
+    agent_profile_id: str | None = None,
+    team_plan: dict[str, object] | None = None,
 ) -> str:
     """Route one isolated Loop receiver to its mandatory role Skill."""
 
@@ -115,11 +117,35 @@ def receiver_skill_prompt(
         "heartbeat_loop(expected_command_seconds=...) 申请有上限的覆盖"
         "租约；可拆分的编辑必须改为语义小 patch，并在分块之间 heartbeat。"
     )
+    team_instruction = ""
+    if agent_profile_id is not None and team_plan is not None:
+        helpers = team_plan.get("helpers")
+        helper_ids = (
+            [
+                item.get("profileId")
+                for item in helpers
+                if isinstance(item, dict)
+                and isinstance(item.get("profileId"), str)
+            ]
+            if isinstance(helpers, list)
+            else []
+        )
+        rendered_helpers = "、".join(
+            f"`{item}`" for item in helper_ids
+        ) or "无"
+        team_instruction = (
+            f"本 Loop 使用专用 Team：owner profile 为 "
+            f"`{agent_profile_id}`，可按需并行使用辅助 profile "
+            f"{rendered_helpers}。owner 是唯一 reservation/operation/lease "
+            "持有者并负责最终 record_loop_result；辅助 Agent 只返回建议性结果，"
+            "不得获得控制面凭据，不得调用 dispatch、heartbeat、progress、pause "
+            "或 result 等生命周期工具。"
+        )
     advisory = advisory_skill_hint_prompt(
         skill_hints,
         host_adapter_id=host_adapter_id,
     )
-    return required + (advisory or "")
+    return required + team_instruction + (advisory or "")
 
 
 def automatic_dispatch_decision_fingerprint(
@@ -130,6 +156,9 @@ def automatic_dispatch_decision_fingerprint(
     host_adapter_id: str,
     receiver_agent_id: str,
     dispatch_transport: str,
+    agent_profile_id: str,
+    agent_catalog_fingerprint: str,
+    team_plan_fingerprint: str,
 ) -> str:
     """Bind one reservation to its Graph attempt and native receiver."""
 
@@ -142,6 +171,9 @@ def automatic_dispatch_decision_fingerprint(
             "hostAdapterId": host_adapter_id,
             "receiverAgentId": receiver_agent_id,
             "dispatchTransport": dispatch_transport,
+            "agentProfileId": agent_profile_id,
+            "agentCatalogFingerprint": agent_catalog_fingerprint,
+            "teamPlanFingerprint": team_plan_fingerprint,
         }
     )
 

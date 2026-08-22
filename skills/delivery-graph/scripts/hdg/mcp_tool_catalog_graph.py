@@ -13,14 +13,38 @@ from .mcp_tool_schemas import (
 
 GRAPH_TOOLS = (
     _tool(
+        "route_entry_intent",
+        (
+            "Return a deterministic entry route for a user request by "
+            "combining explicit intent rules with authoritative Delivery "
+            "state. Ambiguous or state-conflicting requests fail closed in "
+            "the decision and require model classification or user "
+            "confirmation. The response also contains an optional, "
+            "decision-only multi-Supervisor plan; Supervisors have no tools, "
+            "do not query business data, execute routes, or generate the "
+            "final response. This tool never mutates Graph state."
+        ),
+        _object(
+            {
+                "request_text": _string(
+                    "The current user request to classify."
+                ),
+                "root_id": ROOT_ID,
+            },
+            required=["request_text"],
+        ),
+    ),
+    _tool(
         "plan_dispatch_batch",
         (
             "Plan one concurrent batch for the current DISPATCH_LOOP "
             "frontier when an independent receiver is required, including "
             "every Review Loop. It reserves each assignment before the "
             "trusted current host creates an independent outer receiver. "
-            "Returns receiver identities "
-            "and decision fingerprints; when shared Skill hints exist, each "
+            "Returns receiver identities, a versioned specialist Agent "
+            "Profile Catalog binding, an owner/helper teamPlan, and decision "
+            "fingerprints. Only the owner receives control-plane credentials; "
+            "helpers are optional Loop-internal roles. When shared Skill hints exist, each "
             "assignment also carries their exact advisory receiverPrompt. A "
             "user-explicit Skill should be invoked host-natively at each "
             "applicable and available stage, usually TASK for implementation "
@@ -185,6 +209,19 @@ GRAPH_TOOLS = (
             "progressMonitor.waitDirective.pollNotBefore, never back-to-back. "
             "Call graph_frontier only for returned actions, receiver events, "
             "nextWakeAt, or ADVANCE_REQUIRED."
+        ),
+        _object(
+            {"root_id": ROOT_ID},
+            required=["root_id"],
+        ),
+    ),
+    _tool(
+        "delivery_result",
+        (
+            "Read the deterministic Delivery result assembled from every "
+            "persisted Loop outcome, acceptance record, verification "
+            "evidence item, and Review finding. It reports completeness "
+            "issues explicitly and never relies on conversation memory."
         ),
         _object(
             {"root_id": ROOT_ID},

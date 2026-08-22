@@ -54,7 +54,7 @@ Demo 只解析 model request 的工具目录与宿主生命周期 JSONL；不会
 - `PARTIAL_REGISTRATION`：只注入部分工具；
 - `NOT_OBSERVABLE`：日志没有工具目录，不能下故障结论。
 
-ZCode 默认读取 `~/.zcode/cli/rollout/model-io-*.jsonl` 与 `~/.zcode/cli/log/*.jsonl`；Codex 日志位置由宿主版本决定，因此显式传入。三个 Profile 的工具联集为 32，但单 server 只发布自己的静态子集。若宿主使用不同 namespace 或 server 名，可用 `--tool-prefix`、`--server-name` 覆盖。
+ZCode 默认读取 `~/.zcode/cli/rollout/model-io-*.jsonl` 与 `~/.zcode/cli/log/*.jsonl`；Codex 日志位置由宿主版本决定，因此显式传入。三个 Profile 的工具联集为 35，但单 server 只发布自己的静态子集。若宿主使用不同 namespace 或 server 名，可用 `--tool-prefix`、`--server-name` 覆盖。
 
 仓库还提供会话外 supervisor / 每-turn 动态目录的纯参考模拟：
 

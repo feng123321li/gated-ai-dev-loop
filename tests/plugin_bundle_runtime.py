@@ -152,7 +152,7 @@ class PluginBundleTestsPart2:
 
     def test_tool_count_is_the_scheduler_surface(self) -> None:
         tool_count = len(tool_definitions())
-        self.assertEqual(tool_count, 33)
+        self.assertEqual(tool_count, 35)
         self.assertIn(
             "start_manual_handoff",
             {tool["name"] for tool in tool_definitions()},
@@ -303,7 +303,7 @@ class PluginBundleTestsPart2:
         )
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            33,
+            35,
         )
         preview_result = responses[2]["result"]["structuredContent"][
             "result"
@@ -474,7 +474,7 @@ class PluginBundleTestsPart2:
         ]
         self.assertEqual(len(responses), 2)
         tools = responses[1]["result"]["tools"]
-        self.assertEqual(len(tools), 33)
+        self.assertEqual(len(tools), 35)
         self.assertNotIn(
             "open_orchestrator_settings",
             {tool["name"] for tool in tools},
@@ -552,5 +552,5 @@ class PluginBundleTestsPart2:
         self.assertNotIn("resultType", responses[0]["result"])
         self.assertEqual(
             len(responses[1]["result"]["tools"]),
-            33,
+            35,
         )

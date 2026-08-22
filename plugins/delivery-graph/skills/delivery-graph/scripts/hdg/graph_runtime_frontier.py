@@ -125,6 +125,19 @@ def graph_status(
             for state in run["nodes"]
         ],
     }
+    from .result_ledger import build_result_ledger
+
+    ledger = build_result_ledger(
+        definition["graph"],
+        result,
+        compacted=True,
+    )
+    result["resultCompleteness"] = {
+        "ledgerVersion": ledger["ledgerVersion"],
+        "complete": ledger["complete"],
+        "summary": ledger["summary"],
+        "issues": ledger["issues"],
+    }
     observed_now = timestamp(now)
     observation_at = (
         observed_now

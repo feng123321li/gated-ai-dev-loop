@@ -67,7 +67,7 @@ class McpLifecycleDiagnosticsTests(unittest.TestCase):
         )
         catalog = events[2]
         self.assertEqual(catalog["protocolMode"], "STATELESS_2026_07_28")
-        self.assertEqual(catalog["toolCount"], 33)
+        self.assertEqual(catalog["toolCount"], 35)
         self.assertTrue(events[-1]["toolCatalogDelivered"])
         self.assertIn("schema", events[-1]["diagnosticHint"].lower())
 

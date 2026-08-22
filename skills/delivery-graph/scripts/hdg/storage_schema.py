@@ -27,6 +27,22 @@ def ensure_compatible_scheduler_storage(
 ) -> None:
     """Apply non-destructive additions within the current state contract."""
 
+    dispatch_columns = {
+        row["name"] if isinstance(row, sqlite3.Row) else row[1]
+        for row in connection.execute(
+            "PRAGMA table_info(dispatch_reservations)"
+        ).fetchall()
+    }
+    for column_name in (
+        "agent_profile_id",
+        "agent_catalog_fingerprint",
+        "team_plan_fingerprint",
+    ):
+        if dispatch_columns and column_name not in dispatch_columns:
+            connection.execute(
+                f"ALTER TABLE dispatch_reservations "
+                f"ADD COLUMN {column_name} TEXT"
+            )
     connection.executescript(_COMPATIBLE_INDEX_SCHEMA)
 
 
@@ -158,6 +174,9 @@ def initialize_scheduler_storage(connection: sqlite3.Connection) -> None:
             agent_id TEXT,
             graph_fingerprint TEXT NOT NULL,
             decision_fingerprint TEXT NOT NULL,
+            agent_profile_id TEXT,
+            agent_catalog_fingerprint TEXT,
+            team_plan_fingerprint TEXT,
             status TEXT NOT NULL,
             reserved_at TEXT NOT NULL,
             expires_at TEXT NOT NULL,

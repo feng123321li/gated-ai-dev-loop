@@ -342,6 +342,7 @@ _PROFILE_TOOL_NAMES: Final = {
     PLANNING_TOOL_PROFILE: frozenset(
         {
             "workspace_status",
+            "route_entry_intent",
             "hierarchy_contract",
             "preview_hierarchy",
             "confirm_development_baseline",
@@ -351,6 +352,7 @@ _PROFILE_TOOL_NAMES: Final = {
             "prepare_hierarchy",
             "prepare_delivery_revision",
             "delivery_revision_history",
+            "delivery_result",
             "freeze_hierarchy",
             "unfreeze_task_requirement",
             "refreeze_task_requirement",
@@ -362,6 +364,7 @@ _PROFILE_TOOL_NAMES: Final = {
     DISPATCH_TOOL_PROFILE: frozenset(
         {
             "workspace_status",
+            "route_entry_intent",
             "resume_execution_mode",
             "start_manual_handoff",
             "plan_dispatch_batch",
@@ -409,7 +412,8 @@ _PROFILE_INSTRUCTIONS: Final = {
     DISPATCH_TOOL_PROFILE: (
         "Use $delivery-graph-dispatch as the primary coordinator. Route by rootId, "
         "consume the full frontier, reserve with plan_dispatch_batch, create one "
-        "independent receiver per assignment, pass receiverPrompt verbatim, and "
+        "independent owner receiver per assignment, pass the full Agent profile/"
+        "teamPlan and receiverPrompt verbatim, and "
         "obey postActionWait. Never claim or execute a Loop inline."
     ),
     RECEIVER_TOOL_PROFILE: (
@@ -419,7 +423,8 @@ _PROFILE_INSTRUCTIONS: Final = {
         "continue about every 60 seconds until result or claim release even when "
         "leaseRenewed is false with NOT_REQUIRED. Progress never renews the lease "
         "or changes this schedule. Submit one truthful standard result. Never "
-        "plan or dispatch other Loops."
+        "plan or dispatch other Loops. The outer receiver is the only control-plane "
+        "owner; optional teamPlan helpers never receive reservation or operation."
     ),
 }
 

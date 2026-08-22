@@ -9,6 +9,8 @@
 - 用 `Delivery → GROUP → TASK` 管理任务、依赖和整体进度。
 - 规划、调度、实现、Review 职责分离，避免单个 Agent 承担全部上下文。
 - 保存 Git 基线和运行状态，任务中断或换会话后可以继续。
+- 用版本化 Agent Profile Catalog 为不同 Loop 配置专用 owner/helper Team，同时保持单一控制面 owner。
+- 用完整结果账本和确定性 Result Assembler 防止漏项，并输出关键路径与慢 Loop 指标。
 - 对项目范围、技术 Review、Revision 完成和上线交付关闭设置明确门禁。
 
 Delivery Graph 负责组织、状态和调度，不替代 Agent 分析代码，也不会擅自提交、合并、推送或发布。
@@ -17,12 +19,12 @@ Delivery Graph 负责组织、状态和调度，不替代 Agent 分析代码，�
 
 | Skill | 职责 | MCP Profile |
 |---|---|---|
-| `$delivery-graph` | 需求确认、Graph 规划、Git 基线、冻结和交付关闭 | `planning`：16 个工具 |
-| `$delivery-graph-dispatch` | 派遣、等待和恢复 | `dispatch`：12 个工具 |
+| `$delivery-graph` | 入口路由、需求确认、Graph 规划、Git 基线、冻结、确定性结果和交付关闭 | `planning`：18 个工具 |
+| `$delivery-graph-dispatch` | 入口复核、派遣、等待和恢复 | `dispatch`：13 个工具 |
 | `$delivery-graph-task` | TASK 实现与验证 | `receiver`：7 个工具 |
 | `$delivery-graph-review` | 独立分层 Review | `receiver`：7 个工具 |
 
-三个 MCP server 共用同一 Controller，但只向当前角色提供所需工具。完整能力为 33 个工具，跨 Profile 调用会被拒绝。
+三个 MCP server 共用同一 Controller，但只向当前角色提供所需工具。完整能力为 35 个工具，跨 Profile 调用会被拒绝。
 
 ```text
 需求确认 → Graph 规划与冻结 → TASK 实现与分层 Review → Revision 完成（未上线，可继续优化）→ 上线交付关闭 → 可选归档
@@ -70,6 +72,8 @@ git diff --check
 
 - [规划、Git 基线与冻结](skills/delivery-graph/references/planning-quickstart.md)
 - [派遣、等待与恢复](skills/delivery-graph-dispatch/references/dispatch-and-recovery.md)
+- [Agent Profile Catalog 与专用 Team](docs/agent-profile-catalog.md)
+- [可选多 Supervisor 入口路由](docs/supervisor-routing.md)
 - [TASK 执行](skills/delivery-graph-task/references/task-execution.md)
 - [分层 Review 与验收](skills/delivery-graph-review/references/acceptance.md)
 - [按变更范围验证与发布](docs/release-strategy.md)

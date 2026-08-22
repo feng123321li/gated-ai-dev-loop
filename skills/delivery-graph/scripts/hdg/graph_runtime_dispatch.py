@@ -159,6 +159,9 @@ def dispatch_loop(
         if dispatch_reservation_id is not None
         else None
     )
+    agent_profile_id = None
+    agent_catalog_fingerprint = None
+    team_plan_fingerprint = None
     if (
         dispatch_mode == "AUTO"
         and host_native_agent_ids is not None
@@ -211,6 +214,39 @@ def dispatch_loop(
             )
         if dispatch_mode == "AUTO":
             current_graph_fingerprint = graph_fingerprint(graph)
+            reservation = connection.execute(
+                "SELECT * FROM dispatch_reservations "
+                "WHERE reservation_id = ?",
+                (actual_reservation_id,),
+            ).fetchone()
+            if reservation is None:
+                fail(
+                    "SCHEDULER_DISPATCH_RESERVATION_MISSING",
+                    "The automatic dispatch reservation does not exist",
+                )
+            agent_profile_id = reservation["agent_profile_id"]
+            agent_catalog_fingerprint = reservation[
+                "agent_catalog_fingerprint"
+            ]
+            team_plan_fingerprint = reservation[
+                "team_plan_fingerprint"
+            ]
+            if (
+                not isinstance(agent_profile_id, str)
+                or not agent_profile_id
+                or not isinstance(agent_catalog_fingerprint, str)
+                or SHA256_FINGERPRINT.fullmatch(
+                    agent_catalog_fingerprint
+                )
+                is None
+                or not isinstance(team_plan_fingerprint, str)
+                or SHA256_FINGERPRINT.fullmatch(team_plan_fingerprint)
+                is None
+            ):
+                fail(
+                    "SCHEDULER_STATE_INVALID",
+                    "Dispatch reservation specialist profile binding is invalid",
+                )
             expected_dispatch_decision = (
                 automatic_dispatch_decision_fingerprint(
                     graph_fingerprint=current_graph_fingerprint,
@@ -219,13 +255,13 @@ def dispatch_loop(
                     host_adapter_id=str(host_adapter_id),
                     receiver_agent_id=str(actual_agent_id),
                     dispatch_transport=str(dispatch_transport),
+                    agent_profile_id=agent_profile_id,
+                    agent_catalog_fingerprint=(
+                        agent_catalog_fingerprint
+                    ),
+                    team_plan_fingerprint=team_plan_fingerprint,
                 )
             )
-            reservation = connection.execute(
-                "SELECT * FROM dispatch_reservations "
-                "WHERE reservation_id = ?",
-                (actual_reservation_id,),
-            ).fetchone()
             if dispatch_decision_fingerprint != expected_dispatch_decision:
                 retry_with_same_reservation = bool(
                     reservation is not None
@@ -324,6 +360,12 @@ def dispatch_loop(
                     != actual_reservation_id
                     or payload.get("dispatchDecisionFingerprint")
                     != dispatch_decision_fingerprint
+                    or payload.get("agentProfileId")
+                    != agent_profile_id
+                    or payload.get("agentCatalogFingerprint")
+                    != agent_catalog_fingerprint
+                    or payload.get("teamPlanFingerprint")
+                    != team_plan_fingerprint
                 ):
                     fail(
                         "SCHEDULER_DISPATCH_REPLAY_MISMATCH",
@@ -350,6 +392,9 @@ def dispatch_loop(
                     "dispatchTransport": dispatch_transport,
                     "dispatchReservationId": actual_reservation_id,
                     "dispatchDecisionFingerprint": dispatch_decision_fingerprint,
+                    "agentProfileId": agent_profile_id,
+                    "agentCatalogFingerprint": agent_catalog_fingerprint,
+                    "teamPlanFingerprint": team_plan_fingerprint,
                     "operationId": operation_id,
                     "leaseExpiresAt": state["leaseExpiresAt"],
                     "heartbeatDirective": _heartbeat_directive(
@@ -533,6 +578,17 @@ def dispatch_loop(
                 "dispatchDecisionFingerprint": (
                     dispatch_decision_fingerprint
                 ),
+                **(
+                    {
+                        "agentProfileId": agent_profile_id,
+                        "agentCatalogFingerprint": (
+                            agent_catalog_fingerprint
+                        ),
+                        "teamPlanFingerprint": team_plan_fingerprint,
+                    }
+                    if dispatch_mode == "AUTO"
+                    else {}
+                ),
             },
             at=at,
         )
@@ -564,6 +620,15 @@ def dispatch_loop(
         "dispatchReservationId": actual_reservation_id,
         "dispatchDecisionFingerprint": (
             dispatch_decision_fingerprint
+        ),
+        **(
+            {
+                "agentProfileId": agent_profile_id,
+                "agentCatalogFingerprint": agent_catalog_fingerprint,
+                "teamPlanFingerprint": team_plan_fingerprint,
+            }
+            if dispatch_mode == "AUTO"
+            else {}
         ),
         "operationId": operation_id,
         "leaseExpiresAt": expires,

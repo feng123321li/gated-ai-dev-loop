@@ -4,6 +4,11 @@ from datetime import datetime
 import re
 from typing import Any
 
+from .agent_profiles import (
+    load_agent_profile_catalog,
+    profile_for_loop,
+    team_plan_for_profile,
+)
 from .dispatch_contracts import (
     DISPATCH_POLICY_VERSION,
     HOST_ADAPTER_RECEIVER_AGENTS,
@@ -76,7 +81,10 @@ def _assignment(
     host_adapter_id: str,
     receiver_agent_id: str,
     skill_hints: list[dict[str, str]],
+    agent_catalog: dict[str, Any],
 ) -> dict[str, Any]:
+    profile = profile_for_loop(agent_catalog, node["kind"])
+    team_plan = team_plan_for_profile(agent_catalog, profile)
     assignment = {
         "nodeId": node["id"],
         "kind": node["kind"],
@@ -87,6 +95,12 @@ def _assignment(
         "receiverAgentId": receiver_agent_id,
         "dispatchTransport": HOST_NATIVE_DISPATCH_TRANSPORT,
         "hostDispatchAllowed": True,
+        "agentProfileId": profile["id"],
+        "agentCatalogVersion": agent_catalog["catalogVersion"],
+        "agentCatalogFingerprint": agent_catalog["catalogFingerprint"],
+        "requiredCapabilities": list(profile["capabilities"]),
+        "outputContract": profile["outputContract"],
+        "teamPlan": team_plan,
         "contextInput": {
             "rootId": None,
             "nodeId": node["id"],
@@ -98,6 +112,11 @@ def _assignment(
             host_adapter_id=host_adapter_id,
             receiver_agent_id=receiver_agent_id,
             dispatch_transport=HOST_NATIVE_DISPATCH_TRANSPORT,
+            agent_profile_id=profile["id"],
+            agent_catalog_fingerprint=agent_catalog[
+                "catalogFingerprint"
+            ],
+            team_plan_fingerprint=team_plan["teamPlanFingerprint"],
         ),
         "reasons": [
             {
@@ -117,6 +136,8 @@ def _assignment(
         node["kind"],
         skill_hints,
         host_adapter_id=host_adapter_id,
+        agent_profile_id=profile["id"],
+        team_plan=team_plan,
     )
     assignment["receiverPrompt"] = receiver_prompt
     if skill_hints:
@@ -131,6 +152,7 @@ def plan_dispatch_batch(
     expected_graph_fingerprint: str,
     host_native_agent_ids: tuple[str, ...] | None = None,
     host_adapter_id: str | None = None,
+    workspace_root: str | None = None,
     max_concurrent_executors: int = MAX_CONCURRENT_EXECUTORS,
     explicit_dogfood: bool = False,
     now: object = None,
@@ -157,17 +179,21 @@ def plan_dispatch_batch(
         explicit_dogfood=explicit_dogfood,
         now=now,
     )
-    run = repository.run(root_id)
-    if run["executionMode"] not in {"active", "manual"}:
+    execution_mode = frontier.get("executionMode")
+    if execution_mode not in {"active", "manual"}:
         fail(
             "SCHEDULER_AUTO_DISPATCH_DISABLED",
             "Host-native automatic dispatch requires a governed Graph run",
-            executionMode=run["executionMode"],
+            executionMode=execution_mode,
         )
     graph = stored["graph"]
+    agent_catalog = load_agent_profile_catalog(workspace_root or root)
     skill_hints = stored["hierarchy"]["root"]["skillHints"]
     definitions = {node["id"]: node for node in graph["nodes"]}
-    states = {node["nodeId"]: node for node in run["nodes"]}
+    ready_states = {
+        node["nodeId"]: node
+        for node in frontier["readyLoops"]
+    }
     frontier_dispatch_node_ids = sorted(
         action["nodeId"]
         for action in frontier["actions"]
@@ -182,11 +208,12 @@ def plan_dispatch_batch(
     assignments = [
         _assignment(
             node=definitions[node_id],
-            attempt=states[node_id]["attempt"],
+            attempt=ready_states[node_id]["attempt"],
             graph_fingerprint=stored["graphFingerprint"],
             host_adapter_id=actual_host_adapter_id,
             receiver_agent_id=receiver_agent_id,
             skill_hints=skill_hints,
+            agent_catalog=agent_catalog,
         )
         for node_id in dispatch_node_ids
     ]
@@ -199,6 +226,14 @@ def plan_dispatch_batch(
         assignments=assignments,
         agent_slot_limits={
             receiver_agent_id: max_concurrent_executors
+        },
+        profile_slot_limits={
+            profile["id"]: min(
+                profile["maxConcurrent"],
+                max_concurrent_executors,
+            )
+            for profile in agent_catalog["profiles"]
+            if profile["kind"] == "RECEIVER"
         },
         orchestrator_slot_limit=max_concurrent_executors,
         reservation_seconds=DISPATCH_RESERVATION_SECONDS,
@@ -253,12 +288,17 @@ def plan_dispatch_batch(
         "graphFingerprint": stored["graphFingerprint"],
         "hostAdapterId": actual_host_adapter_id,
         "receiverAgentId": receiver_agent_id,
+        "agentCatalogFingerprint": agent_catalog["catalogFingerprint"],
         "dispatchNodeIds": dispatch_node_ids,
         "assignments": reserved_assignments,
         "deferred": deferred,
         "nextAction": "CREATE_INDEPENDENT_RECEIVERS",
         "dispatchPolicy": {
             "maxConcurrentExecutors": max_concurrent_executors,
+            "agentCatalogVersion": agent_catalog["catalogVersion"],
+            "agentCatalogFingerprint": agent_catalog[
+                "catalogFingerprint"
+            ],
         },
     }
     reservation_deadlines = [
@@ -316,6 +356,16 @@ def plan_dispatch_batch(
         "dispatchPolicy": {
             "maxConcurrentExecutors": max_concurrent_executors,
             "configurationSource": "PLUGIN_BUILT_IN",
+            "agentCatalogVersion": agent_catalog["catalogVersion"],
+            "agentCatalogFingerprint": agent_catalog[
+                "catalogFingerprint"
+            ],
+            "agentCatalogConfigurationSource": agent_catalog[
+                "configurationSource"
+            ],
+            "stateSnapshotSource": "GRAPH_FRONTIER",
+            "parallelizeDisjointFrontier": True,
+            "reuseExactMatchEvidence": True,
             "hostNativeOnly": True,
             "controllerAnalyzesLoopPayload": False,
             "reserveBeforeSpawn": True,

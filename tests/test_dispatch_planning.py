@@ -2,9 +2,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timedelta
+from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
+from hdg.agent_profiles import (
+    AGENT_PROFILE_CATALOG_FILE,
+    built_in_agent_profile_catalog,
+)
 from hdg.dispatch_planning import plan_dispatch_batch
 from hdg.errors import GatedLoopError
 from hdg.graph_frontier import get_graph_frontier
@@ -14,6 +19,7 @@ from hdg.graph_runtime import (
 )
 from hdg.planning import freeze_hierarchy, prepare_hierarchy
 from hdg.repository import SchedulerRepository
+from hdg.jsonio import pretty_json
 
 from .test_loop_architecture import (
     group_hierarchy,
@@ -78,6 +84,13 @@ class HostDispatchPlanningTests(unittest.TestCase):
         )
         self.assertEqual(plan["nextAction"], "CREATE_INDEPENDENT_RECEIVERS")
         self.assertEqual(
+            plan["dispatchPolicy"]["stateSnapshotSource"],
+            "GRAPH_FRONTIER",
+        )
+        self.assertTrue(
+            plan["dispatchPolicy"]["parallelizeDisjointFrontier"]
+        )
+        self.assertEqual(
             plan["postActionWait"],
             {
                 "mode": "HOST_NATIVE_EVENT_OR_RESERVATION_DEADLINE",
@@ -133,7 +146,8 @@ class HostDispatchPlanningTests(unittest.TestCase):
     ) -> None:
         with TemporaryDirectory() as root:
             prepared = self.prepare_and_freeze(root, task_hierarchy())
-            assignment = self.plan(root, prepared)["assignments"][0]
+            plan = self.plan(root, prepared)
+            assignment = plan["assignments"][0]
 
         self.assertEqual(assignment["hostAdapterId"], "codex")
         self.assertEqual(assignment["receiverAgentId"], "codex")
@@ -146,6 +160,90 @@ class HostDispatchPlanningTests(unittest.TestCase):
             "routeReview",
         ):
             self.assertNotIn(removed, assignment)
+
+    def test_assignment_binds_specialist_profile_and_team_catalog(self) -> None:
+        with TemporaryDirectory() as root:
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            plan = self.plan(root, prepared)
+            assignment = plan["assignments"][0]
+
+        self.assertEqual(assignment["agentProfileId"], "task-implementation")
+        self.assertEqual(assignment["agentCatalogVersion"], 1)
+        self.assertRegex(
+            assignment["agentCatalogFingerprint"],
+            r"^[0-9a-f]{64}$",
+        )
+        self.assertEqual(
+            assignment["teamPlan"]["owner"]["profileId"],
+            "task-implementation",
+        )
+        self.assertEqual(
+            [
+                item["profileId"]
+                for item in assignment["teamPlan"]["helpers"]
+            ],
+            ["codebase-researcher", "test-runner", "result-checker"],
+        )
+        self.assertIn("专用 Team", assignment["receiverPrompt"])
+        self.assertIn("不得获得控制面凭据", assignment["receiverPrompt"])
+        self.assertEqual(
+            assignment["agentCatalogFingerprint"],
+            plan["dispatchPolicy"]["agentCatalogFingerprint"],
+        )
+
+    def test_reserved_profile_binding_survives_later_catalog_edit(self) -> None:
+        with TemporaryDirectory() as root:
+            custom = built_in_agent_profile_catalog()
+            custom.pop("catalogFingerprint")
+            custom.pop("configurationSource")
+            custom["profiles"][0]["capabilities"].append("domain.billing")
+            catalog_path = Path(root, AGENT_PROFILE_CATALOG_FILE)
+            catalog_path.write_text(pretty_json(custom), encoding="utf-8")
+            prepared = self.prepare_and_freeze(root, task_hierarchy())
+            plan = plan_dispatch_batch(
+                root=root,
+                workspace_root=root,
+                root_id=prepared["rootId"],
+                expected_graph_fingerprint=prepared["graphFingerprint"],
+                host_adapter_id="codex",
+                host_native_agent_ids=("codex",),
+            )
+            assignment = plan["assignments"][0]
+            custom["profiles"][0]["capabilities"].append("domain.changed")
+            catalog_path.write_text(pretty_json(custom), encoding="utf-8")
+
+            claimed = dispatch_loop(
+                root=root,
+                root_id=prepared["rootId"],
+                node_id=assignment["nodeId"],
+                owner="profile-bound-receiver",
+                receiver_context_id="profile-bound-receiver",
+                operation_id="profile-bound-operation",
+                agent_id="codex",
+                dispatch_mode="AUTO",
+                dispatch_transport=assignment["dispatchTransport"],
+                dispatch_reservation_id=assignment[
+                    "dispatchReservationId"
+                ],
+                dispatch_decision_fingerprint=assignment[
+                    "decisionFingerprint"
+                ],
+                host_adapter_id="codex",
+                host_native_agent_ids=("codex",),
+            )
+
+        self.assertEqual(
+            plan["dispatchPolicy"]["agentCatalogConfigurationSource"],
+            "PROJECT_JSON",
+        )
+        self.assertEqual(
+            claimed["agentCatalogFingerprint"],
+            assignment["agentCatalogFingerprint"],
+        )
+        self.assertEqual(
+            claimed["teamPlanFingerprint"],
+            assignment["teamPlan"]["teamPlanFingerprint"],
+        )
 
     def test_receiver_assignment_carries_advisory_native_skill_prompt(
         self,
@@ -449,6 +547,35 @@ class HostDispatchPlanningTests(unittest.TestCase):
         self.assertEqual(
             plan["dispatchPolicy"]["maxConcurrentExecutors"],
             1,
+        )
+
+    def test_project_profile_concurrency_limit_is_reserved_atomically(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as root:
+            custom = built_in_agent_profile_catalog()
+            custom.pop("catalogFingerprint")
+            custom.pop("configurationSource")
+            custom["profiles"][0]["maxConcurrent"] = 1
+            Path(root, AGENT_PROFILE_CATALOG_FILE).write_text(
+                pretty_json(custom),
+                encoding="utf-8",
+            )
+            prepared = self.prepare_and_freeze(
+                root,
+                parallel_group_hierarchy(),
+            )
+            plan = self.plan(root, prepared)
+
+        self.assertEqual(len(plan["assignments"]), 1)
+        self.assertEqual(len(plan["deferred"]), 1)
+        self.assertEqual(
+            plan["deferred"][0]["code"],
+            "DISPATCH_PROFILE_SLOT_LIMIT_REACHED",
+        )
+        self.assertEqual(
+            plan["deferred"][0]["agentProfileId"],
+            "task-implementation",
         )
 
     def test_auto_claim_uses_reserved_receiver_fingerprint_without_model(

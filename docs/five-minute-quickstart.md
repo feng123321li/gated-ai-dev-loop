@@ -4,7 +4,7 @@
 
 ## 0:00—1:00 检查注册
 
-先看宿主 MCP 列表：三个 Profile 的联集应为 33 个工具，其中包括 `workspace_status`、`preview_hierarchy`、`confirm_development_baseline`、`freeze_hierarchy`、`record_loop_result` 和 `close_delivery`。stdio server 显示 `Auth: Unsupported` 是正常的，它不使用 HTTP/OAuth。
+先看宿主 MCP 列表：三个 Profile 的联集应为 35 个工具，其中包括 `route_entry_intent`、`workspace_status`、`preview_hierarchy`、`confirm_development_baseline`、`freeze_hierarchy`、`delivery_result`、`record_loop_result` 和 `close_delivery`。stdio server 显示 `Auth: Unsupported` 是正常的，它不使用 HTTP/OAuth。
 
 若工具未注册，报告 `PLUGIN_MCP_UNAVAILABLE` 并停止治理写入；不要尝试模拟 `workspace_status`，也不要读写 `scheduler.db`。需要跨会话证据时运行只读矩阵 Demo：
 

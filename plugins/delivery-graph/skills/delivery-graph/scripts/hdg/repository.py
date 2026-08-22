@@ -806,6 +806,7 @@ class SchedulerRepository(SchedulerRepositoryBase):
         graph_fingerprint: str,
         assignments: list[dict[str, Any]],
         agent_slot_limits: dict[str, int],
+        profile_slot_limits: dict[str, int],
         orchestrator_slot_limit: int | None = None,
         reservation_seconds: int,
     ) -> dict[str, Any]:
@@ -814,6 +815,7 @@ class SchedulerRepository(SchedulerRepositoryBase):
             graph_fingerprint=graph_fingerprint,
             assignments=assignments,
             agent_slot_limits=agent_slot_limits,
+            profile_slot_limits=profile_slot_limits,
             orchestrator_slot_limit=orchestrator_slot_limit,
             reservation_seconds=reservation_seconds,
         )

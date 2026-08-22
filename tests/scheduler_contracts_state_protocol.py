@@ -887,7 +887,7 @@ class McpSurfaceTestsPart4:
                 listed["result"]["resultType"],
                 "complete",
             )
-            self.assertEqual(len(listed["result"]["tools"]), 33)
+            self.assertEqual(len(listed["result"]["tools"]), 35)
             self.assertEqual(listed["result"]["cacheScope"], "private")
 
             response = handle_message(

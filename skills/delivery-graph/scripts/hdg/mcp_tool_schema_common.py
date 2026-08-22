@@ -669,10 +669,12 @@ TOOL_OUTPUT_SCHEMA = _object(
 READ_ONLY_TOOLS = frozenset(
     {
         "workspace_status",
+        "route_entry_intent",
         "hierarchy_contract",
         "delivery_revision_history",
         "graph_frontier",
         "graph_status",
+        "delivery_result",
         "open_delivery_dashboard",
         "graph_events",
         "loop_context",

@@ -17,14 +17,16 @@ allowed-tools:
 
 ## 接收与证据
 
-1. 使用 assignment 的 reservation、decision fingerprint、独立 receiver context 和新 `operation_id` 调用 `dispatch_loop(AUTO)`；Review 不支持 MANUAL claim。同一 receiver 收到多轮 assignment 时，只使用最新一份的完整凭据组；禁止把新 reservation 与旧 decision fingerprint 或旧 attempt 混搭。
-2. claim 后立即用精确 operation 调用 `heartbeat_loop`，早于 `loop_context` 解读及任何证据/代码检查。首次返回 `leaseRenewed=false / NOT_REQUIRED` 只表示尚未进入续租阈值：保留原 `leaseExpiresAt`，继续按响应 `heartbeatDirective` 约每 60 秒 heartbeat，直到 `record_loop_result` 或显式释放 claim。
+1. 使用 assignment 的 reservation、decision fingerprint、`agentProfileId`、catalog/team fingerprint、独立 receiver context 和新 `operation_id` 调用 `dispatch_loop(AUTO)`；Review 不支持 MANUAL claim。同一 receiver 收到多轮 assignment 时，只使用最新一份的完整凭据组；禁止把新 reservation 与旧 decision/profile fingerprint 或旧 attempt 混搭。
+2. claim 后先确认返回的 profile 与两类 fingerprint 和 assignment 一致，再立即用精确 operation 调用 `heartbeat_loop`，早于 `loop_context` 解读及任何证据/代码检查。首次返回 `leaseRenewed=false / NOT_REQUIRED` 只表示尚未进入续租阈值：保留原 `leaseExpiresAt`，继续按响应 `heartbeatDirective` 约每 60 秒 heartbeat，直到 `record_loop_result` 或显式释放 claim。
 3. 随后读取 claim 响应中已经返回的 Loop context；确需刷新时再调用一次 `loop_context`，确认运行时验证的 `projectScopes`、冻结验收、上游结论和 `validationEvidenceIndex`。证据检查、文件检索、缺口分析、验证命令、findings rework 与最终判断全都属于租约执行期；progress 不续租，primary 不得代发 heartbeat。
 4. `STANDARD` 在证据检查、缺口确认、验证开始/完成、findings rework 与最终判断等里程碑报告 progress。
    只有确认存在当前层验证缺口且命令预计超过 60 秒时，才按项目文件选择专用命令 worker，并先用 `expected_command_seconds` heartbeat 申请有上限租约；内部 worker 不接收任何控制面凭据。
    整文件 Write、大 patch、批量编辑或其他单次宿主 tool call 也应先估时：可拆时用语义小 patch 并在块间 heartbeat；无法拆分且预计超过 60 秒时，调用前必须用 `heartbeat_loop(expected_command_seconds=...)` 取得覆盖租约。
 5. 只自动复用 `PASSED + EXACT_MATCH` 且 scope 覆盖当前风险的上游证据。无关 workspace 编辑不使有界 scope 失效；对 `CHANGED/UNBOUND`、缺口、findings 和高风险 seam 定向复跑。
 6. 影响范围无法界定、关键跨边界风险没有隔离检查，或冻结要求明确指定全量时才升级全量验证。
+
+`teamPlan.helpers` 只用于当前 Review 的只读证据核对与漏项检查；外层 Review receiver 是唯一控制面 owner 和最终判断者。helper 不得获得 reservation、operation、decision fingerprint 或生命周期工具，也不得替 owner 作 `validationDecision`。
 
 ## 分层所有权
 

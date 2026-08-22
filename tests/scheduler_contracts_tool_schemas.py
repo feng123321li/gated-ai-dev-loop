@@ -92,9 +92,17 @@ class McpSurfaceTestsPart1:
     ) -> None:
         tools = tool_definitions()
         self.assertTrue(tools)
-        self.assertEqual(len(tools), 33)
+        self.assertEqual(len(tools), 35)
         self.assertNotIn("claim_current_task", {tool["name"] for tool in tools})
         descriptions = {tool["name"]: tool["description"] for tool in tools}
+        self.assertIn(
+            "deterministic",
+            descriptions["delivery_result"],
+        )
+        self.assertIn(
+            "deterministic entry route",
+            descriptions["route_entry_intent"],
+        )
         self.assertIn(
             "Never call it back-to-back",
             descriptions["graph_frontier"],

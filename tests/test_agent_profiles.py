@@ -88,6 +88,23 @@ class AgentProfileCatalogTests(unittest.TestCase):
 
         self.assertEqual(caught.exception.code, "AGENT_PROFILE_CATALOG_INVALID")
 
+    def test_helper_does_not_expose_unenforced_concurrency_limit(self) -> None:
+        catalog = built_in_agent_profile_catalog()
+        helper = next(
+            profile
+            for profile in catalog["profiles"]
+            if profile["kind"] == "HELPER"
+        )
+        self.assertNotIn("maxConcurrent", helper)
+
+        catalog.pop("catalogFingerprint")
+        catalog.pop("configurationSource")
+        helper["maxConcurrent"] = 1
+        with self.assertRaises(GatedLoopError) as caught:
+            validate_agent_profile_catalog(catalog)
+
+        self.assertEqual(caught.exception.code, "AGENT_PROFILE_CATALOG_INVALID")
+
     def test_receiver_role_skill_cannot_bypass_loop_boundary(self) -> None:
         catalog = built_in_agent_profile_catalog()
         catalog.pop("catalogFingerprint")

@@ -43,6 +43,7 @@ claim 成功后立即用相同 operation 首次 heartbeat，早于 Loop context 
 - 命令证据记录实际命令摘要、执行 workspace、覆盖 scope、退出结果和关键输出摘要。
 - 没有运行的测试不得写成 PASSED；因环境无法运行时如实记录 gap。
 - 测试通过但覆盖不到影响边界不算充分；补充契约检查、构建、静态分析或定向手工验证。
+- 每项 `verificationEvidence` 必须有唯一 `evidenceId` 和非空 `scopeRefs`，只能引用本结果已声明的 scope；成功 TASK 的每个 affected scope 至少由一项 `PASSED` 证据覆盖。Controller 在写入和最终结果账本两处失败关闭，单句“测试通过”不能代替结构化证据。
 - 数据库 TASK 只验证冻结 `databaseChanges[*].after` 与迁移政策，不重新设计字段、索引或约束。
 
 Controller 会在 `record_loop_result` 时捕获可信 workspace 的基线、HEAD、状态指纹和变更文件清单；不把源码 diff 写入 Graph，也不生成 `workspace-changes.patch`。后续 Review 通过授权 workspace 按需读取代码，并用状态/范围指纹判断证据新鲜度。它不替代 receiver 对证据充分性的判断。
@@ -50,8 +51,9 @@ Controller 会在 `record_loop_result` 时捕获可信 workspace 的基线、HEA
 ## 终态选择
 
 - `SUCCEEDED`：冻结 TASK 方向满足，必要变更完成，影响范围和验证证据真实可审计。
-- `FAILED`：在当前 attempt 内完成诊断和合理 rework 后仍不满足，但不需要修改冻结 Graph。
+- 可修复的实现或验证失败不是外层终态：继续在当前 Loop 诊断、rework 和复验；协议没有 `FAILED` outcome。
 - `BLOCKED`：存在具体外部条件，当前权限和 scope 内没有可行路径。普通测试失败或 Review finding 不是自动 BLOCKED。
 - `REPLAN_REQUIRED`：必须改变冻结拓扑、依赖、资源、project scope、外部契约或 databaseChanges。
+- `CANCELLED`：仅在本 attempt 已被明确取消、且不再提交业务成功结果时使用。
 
 提交 `record_loop_result` 后停止本 receiver，不继续读取 frontier或领取下一节点。

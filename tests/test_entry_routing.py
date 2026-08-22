@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from hdg.entry_routing import decide_entry_route
+from hdg.errors import GatedLoopError
 
 
 class EntryRoutingTests(unittest.TestCase):
@@ -43,6 +44,33 @@ class EntryRoutingTests(unittest.TestCase):
         self.assertEqual(completed["intent"], "CONTINUE_DELIVERY")
         self.assertEqual(completed["targetSkill"], "delivery-graph")
 
+    def test_continue_execution_does_not_become_paused_resume(self) -> None:
+        for status in ("QUEUED", "HANDOFF_READY"):
+            with self.subTest(status=status):
+                decision = decide_entry_route(
+                    request_text="继续执行",
+                    workspace_state={
+                        "status": status,
+                        "rootId": "d-existing",
+                    },
+                )
+
+                self.assertEqual(decision["intent"], "DISPATCH_ACTIVE")
+                self.assertTrue(decision["allowed"])
+                self.assertEqual(
+                    decision["targetSkill"],
+                    "delivery-graph-dispatch",
+                )
+
+    def test_bare_recovery_phrase_routes_paused_delivery(self) -> None:
+        decision = decide_entry_route(
+            request_text="恢复",
+            workspace_state={"status": "PAUSED", "rootId": "d-paused"},
+        )
+
+        self.assertEqual(decision["intent"], "RESUME_PAUSED")
+        self.assertTrue(decision["allowed"])
+
     def test_resume_and_close_fail_closed_on_state_conflict(self) -> None:
         resume = decide_entry_route(
             request_text="恢复执行",
@@ -80,6 +108,55 @@ class EntryRoutingTests(unittest.TestCase):
             "delivery-graph-dispatch",
         )
         self.assertEqual(prepared["targetSkill"], "delivery-graph")
+
+    def test_lifecycle_routes_require_their_authoritative_gate(self) -> None:
+        replan = decide_entry_route(
+            request_text="修改需求",
+            workspace_state={"status": "ACTIVE", "rootId": "d-active"},
+        )
+        confirmation = decide_entry_route(
+            request_text="确认验收",
+            workspace_state={
+                "status": "ACTIVE",
+                "rootId": "d-ready",
+                "nextAction": "RECORD_USER_CONFIRMATION",
+            },
+        )
+        close = decide_entry_route(
+            request_text="关闭交付",
+            workspace_state={"status": "COMPLETED", "rootId": "d-done"},
+        )
+        archive = decide_entry_route(
+            request_text="归档",
+            workspace_state={
+                "status": "COMPLETED",
+                "rootId": "d-closed",
+                "deliveryClosure": "CLOSED",
+            },
+        )
+
+        self.assertEqual(replan["intent"], "REPLAN")
+        self.assertEqual(confirmation["intent"], "CONFIRM_REVISION")
+        self.assertEqual(close["intent"], "CLOSE_DELIVERY")
+        self.assertEqual(archive["intent"], "ARCHIVE_DELIVERY")
+        self.assertTrue(
+            all(item["allowed"] for item in (replan, confirmation, close, archive))
+        )
+
+    def test_invalid_entry_input_fails_before_model_fallback(self) -> None:
+        with self.assertRaises(GatedLoopError) as caught:
+            decide_entry_route(
+                request_text=" ",
+                workspace_state={"status": "ABSENT"},
+            )
+        self.assertEqual(caught.exception.code, "ENTRY_ROUTE_INVALID")
+
+        with self.assertRaises(GatedLoopError) as caught:
+            decide_entry_route(
+                request_text="继续",
+                workspace_state=[],
+            )
+        self.assertEqual(caught.exception.code, "ENTRY_ROUTE_INVALID")
 
     def test_multiple_candidates_require_deterministic_selection(self) -> None:
         decision = decide_entry_route(

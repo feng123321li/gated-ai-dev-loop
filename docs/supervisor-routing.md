@@ -22,6 +22,6 @@ Entry Router 先用确定性规则与持久化 Delivery 状态处理“新需求
 默认 `enabled=false`，因此没有额外模型调用或延迟。需要启用时，把[完整示例](examples/delivery-graph.supervisors.json)复制到业务项目根目录。
 
 - `AMBIGUOUS_ONLY`：仅没有高置信规则时调用 `entry-supervisor`，推荐用于生产；
-- `ALWAYS_VERIFY`：每个入口都由对应 Supervisor 再核对一次，成本和延迟更高，适合灰度评估。
+- `ALWAYS_ADVISE`：每个入口都向宿主请求对应 Supervisor 建议，成本和延迟更高，适合灰度评估。
 
-配置必须完整覆盖九种入口 intent，且每种 intent 只能归一个 profile；修改配置会改变 registry fingerprint。Supervisor 输出不会直接覆盖状态冲突、明确 `rootId` 选择、完整性门禁或生命周期授权。
+配置必须完整覆盖九种入口 intent，且每种 intent 只能归一个 profile；修改配置会改变 registry fingerprint。当前 Controller 只返回 `shouldInvoke`，不接收 Supervisor decision receipt，也无法证明宿主实际调用，因此两种模式都是宿主 advisory，不是强制门禁。Supervisor 输出不会直接覆盖状态冲突、明确 `rootId` 选择、完整性门禁或生命周期授权；如果未来需要强制全入口复核，应另增持久化 decision receipt 与消费门禁，不能把 `ALWAYS_ADVISE` 描述成已强制验证。

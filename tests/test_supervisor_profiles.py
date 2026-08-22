@@ -75,14 +75,14 @@ class SupervisorProfileTests(unittest.TestCase):
         )
         self.assertFalse(stable["shouldInvoke"])
 
-    def test_always_verify_selects_a_specialist_without_route_authority(
+    def test_always_advisory_selects_specialist_without_claiming_enforcement(
         self,
     ) -> None:
         registry = built_in_supervisor_registry()
         registry.pop("registryFingerprint")
         registry.pop("configurationSource")
         registry["enabled"] = True
-        registry["activationMode"] = "ALWAYS_VERIFY"
+        registry["activationMode"] = "ALWAYS_ADVISE"
         validated = validate_supervisor_registry(registry)
 
         decision = decide_entry_route(
@@ -97,6 +97,13 @@ class SupervisorProfileTests(unittest.TestCase):
         self.assertEqual(
             decision["supervisorRouting"]["selectedSupervisorId"],
             "execution-supervisor",
+        )
+        self.assertEqual(
+            decision["supervisorRouting"]["enforcement"],
+            "HOST_ADVISORY_NO_DECISION_RECEIPT",
+        )
+        self.assertFalse(
+            decision["supervisorRouting"]["decisionReceiptRequired"]
         )
 
     def test_project_registry_can_enable_multi_supervisor(self) -> None:

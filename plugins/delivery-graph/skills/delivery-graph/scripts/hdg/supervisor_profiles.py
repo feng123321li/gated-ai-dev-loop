@@ -104,10 +104,10 @@ def validate_supervisor_registry(
         _invalid("enabled must be boolean", field="enabled")
     if value["activationMode"] not in {
         "AMBIGUOUS_ONLY",
-        "ALWAYS_VERIFY",
+        "ALWAYS_ADVISE",
     }:
         _invalid(
-            "activationMode must be AMBIGUOUS_ONLY or ALWAYS_VERIFY",
+            "activationMode must be AMBIGUOUS_ONLY or ALWAYS_ADVISE",
             field="activationMode",
         )
     profiles_value = value["profiles"]
@@ -222,7 +222,7 @@ def build_supervisor_routing(
     should_invoke = bool(
         registry["enabled"]
         and (
-            registry["activationMode"] == "ALWAYS_VERIFY"
+            registry["activationMode"] == "ALWAYS_ADVISE"
             or explicit_intent == "AMBIGUOUS"
         )
     )
@@ -234,6 +234,8 @@ def build_supervisor_routing(
         "activationMode": registry["activationMode"],
         "selectedSupervisorId": profile["id"],
         "shouldInvoke": should_invoke,
+        "enforcement": "HOST_ADVISORY_NO_DECISION_RECEIPT",
+        "decisionReceiptRequired": False,
         "invocationReason": (
             "AMBIGUOUS_ENTRY_REQUIRES_CLASSIFICATION"
             if should_invoke and explicit_intent == "AMBIGUOUS"

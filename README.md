@@ -2,7 +2,7 @@
 
 把已确认的软件需求拆成可执行的 Delivery Graph，协调 Agent 完成实现、Review 和最终验收。
 
-当前版本：**0.43.5** · Schema：**v3** · Python：**3.10+，仅标准库**
+当前版本：**0.43.6** · Schema：**v3** · Python：**3.10+，仅标准库**
 
 ## 核心能力
 
@@ -10,7 +10,7 @@
 - 规划、调度、实现、Review 职责分离，避免单个 Agent 承担全部上下文。
 - 保存 Git 基线和运行状态，任务中断或换会话后可以继续。
 - 用版本化 Agent Profile Catalog 为不同 Loop 配置专用 owner/helper Team，同时保持单一控制面 owner。
-- 用完整结果账本和确定性 Result Assembler 防止漏项，并输出关键路径与慢 Loop 指标。
+- 用完整结果账本和确定性 Result Assembler 防止漏项，并把 retry/lost attempt 一并计入关键路径与慢 Loop 指标。
 - 对项目范围、技术 Review、Revision 完成和上线交付关闭设置明确门禁。
 
 Delivery Graph 负责组织、状态和调度，不替代 Agent 分析代码，也不会擅自提交、合并、推送或发布。

@@ -16,7 +16,7 @@
 - `RESOLVE_LOOP_BLOCK`：展示 Loop 返回的摘要和不透明 result，等待外部条件或人工决定。
 - `REPLAN_HIERARCHY`：展示外层契约变化及当前 Revision 无法继续的原因，等待用户决定。用户明确要求修改且 Delivery 仍为 `OPEN/未上线` 时，保持同一 `delivery.id` 调用 `prepare_delivery_revision`。
 - `REFREEZE_TASK_REQUIREMENT`：该未开始 TASK 的需求处于解冻编辑态，当前不可派遣。按用户已经明确提出的修改重跑 TASK 切分完整性预检，再完成 `unfreeze_task_requirement → refreeze_task_requirement`；后者从 SQLite 当前不可变 hierarchy 生成并冻结同一 Delivery 的下一 Revision，沿用执行模式并返回新 Run/双指纹。任一未领取 reservation 都绑定旧 Graph 指纹；需求修订入口因此会阻断并返回 `SCHEDULER_TASK_REQUIREMENT_RESERVATION_ACTIVE` 与 `retryAfter`，不得让旧 assignment 与新需求并存。
-- `RECORD_USER_CONFIRMATION`：Controller 已按 Graph 确认 `STANDARD` 的 Delivery Acceptance/Readiness 节点进入合法成功终态，或 `LIGHT` 的唯一 TASK 已进入合法成功终态；读取 [acceptance.md](acceptance.md)，等待用户最终接受。这里是状态门禁，不是 Controller 再做一次技术验收。若业务变更已 commit、工作区干净且 receiver/reservation 全部释放，可先释放物理 workspace turn；Delivery 仍保持待用户确认。
+- `RECORD_USER_CONFIRMATION`：Controller 已按 Graph 确认 `STANDARD` 的 Delivery Acceptance/Readiness 节点进入合法成功终态，或 `LIGHT` 的唯一 TASK 已进入合法成功终态。先调用 `delivery_result` 读取确定性结果账本；只有 `completeness.complete=true` 才结合 [acceptance.md](acceptance.md) 展示全部 Loop 结果、证据、验收与 finding，并等待用户最终接受。缺少 TASK 影响范围、未通过或未绑定 scope 的证据、Review 悬空引用及任一 Loop 结果都会失败关闭。这里是完整性门禁，不是 Controller 再做一次技术验收。若业务变更已 commit、工作区干净且 receiver/reservation 全部释放，可先释放物理 workspace turn；Delivery 仍保持待用户确认。
 
 不要自行增加 TASK/Gate 节点，也不要根据 payload 内容改变 frontier 顺序。
 
@@ -110,7 +110,6 @@ claim 超过 `leaseExpiresAt` 后，旧 operation 不能 heartbeat、pause 或�
   "status": "SUCCEEDED",
   "summary": "内部开发、测试和 Gate 已完成",
   "result": {
-    "evidence": "由该 Loop 自己定义",
     "affectedScopes": [
       {
         "scopeId": "task-change",

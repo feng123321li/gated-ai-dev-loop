@@ -122,12 +122,48 @@ def build_execution_metrics(
     }
     durations: list[dict[str, Any]] = []
     duration_by_node: dict[str, float] = {}
+    raw_attempts = run.get("attempts")
+    attempts_by_node: dict[str, list[dict[str, Any]]] = {}
+    if isinstance(raw_attempts, list):
+        for attempt in raw_attempts:
+            if (
+                isinstance(attempt, dict)
+                and isinstance(attempt.get("nodeId"), str)
+                and attempt["nodeId"] in loop_node_ids
+            ):
+                attempts_by_node.setdefault(attempt["nodeId"], []).append(
+                    attempt
+                )
+    else:
+        for node_id, state in states.items():
+            if node_id in loop_node_ids:
+                attempts_by_node[node_id] = [state]
+    measured_attempts = 0
+    unmeasured_attempts = 0
+    retried_loops = 0
     for node_id in sorted(loop_node_ids):
         state = states.get(node_id, {})
-        duration = _seconds_between(
-            state.get("claimedAt"),
-            state.get("finishedAt"),
+        attempts = sorted(
+            attempts_by_node.get(node_id, []),
+            key=lambda item: (
+                item.get("attempt")
+                if isinstance(item.get("attempt"), int)
+                else 0
+            ),
         )
+        attempt_durations = [
+            _seconds_between(
+                attempt.get("claimedAt"),
+                attempt.get("finishedAt"),
+            )
+            for attempt in attempts
+        ]
+        measured = [item for item in attempt_durations if item is not None]
+        measured_attempts += len(measured)
+        unmeasured_attempts += len(attempt_durations) - len(measured)
+        if len(attempts) > 1:
+            retried_loops += 1
+        duration = round(sum(measured), 3) if measured else None
         if duration is not None:
             duration_by_node[node_id] = duration
         definition = definitions[node_id]
@@ -137,6 +173,8 @@ def build_execution_metrics(
                 "kind": definition["kind"],
                 "workItemId": definition["workItemId"],
                 "attempt": state.get("attempt"),
+                "attemptCount": len(attempts),
+                "measuredAttempts": len(measured),
                 "status": state.get("status", "MISSING"),
                 "durationSeconds": duration,
             }
@@ -161,6 +199,9 @@ def build_execution_metrics(
         "recordedLoopSeconds": recorded_loop_seconds,
         "measuredLoops": measured_loops,
         "unmeasuredLoops": len(loop_node_ids) - measured_loops,
+        "measuredAttempts": measured_attempts,
+        "unmeasuredAttempts": unmeasured_attempts,
+        "retriedLoops": retried_loops,
         "criticalPathSeconds": round(critical_path_seconds, 3),
         "criticalPathLoopIds": critical_path,
         "parallelizableLoopSeconds": round(

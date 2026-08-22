@@ -10,7 +10,7 @@
 | 一个需要独立实现和审查的功能 | [single-task-standard.json](../examples/team-loops/single-task-standard.json) | `STANDARD` |
 | 多个结果并行、依赖或汇合 | [parallel-group-standard.json](../examples/team-loops/parallel-group-standard.json) | `STANDARD` |
 
-`LIGHT` 不是按代码行数判断。规划 Agent 应基于实际改动内容和影响范围，检查真实代码、预计或已有 diff、调用方、数据、权限、部署和测试影响；不确定时使用 `STANDARD`。LIGHT 只编译一个根 TASK 和用户确认，执行中影响扩大必须 `REPLAN_REQUIRED` 升级为 STANDARD。
+`LIGHT` 不是 Agent 根据实际改动内容和影响范围自行作出的风险分类结果。默认始终为 `STANDARD`；只有用户明确选择 LIGHT，且 hierarchy 能保持单一根 TASK、没有 GROUP 或 Review 时才采用。LIGHT 只编译一个根 TASK 和用户确认，执行中发现接口、数据、权限、安全、部署、跨模块影响或范围不确定时必须 `REPLAN_REQUIRED` 升级为 STANDARD。
 
 跨仓库交付使用 STANDARD 模板，并在实际开发工作区把每个仓库加入 `delivery.projectScopes`。所有可写 Git 项目使用同名 feature 分支，但各自冻结自己的基线提交。模板不写机器相关绝对路径，路径从接收工作区实时生成。
 

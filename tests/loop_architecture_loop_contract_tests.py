@@ -69,7 +69,13 @@ class LoopContractTests(unittest.TestCase):
         common = {
             "validationDecision": {
                 "decision": "REUSED",
-                "reusedEvidenceRefs": [],
+                "reusedEvidenceRefs": [
+                    {
+                        "nodeId": "loop:upstream",
+                        "attempt": 1,
+                        "evidenceId": "upstream-check",
+                    }
+                ],
                 "executedEvidenceRefs": [],
                 "riskTriggers": [],
                 "rationale": "The accepted evidence is current and sufficient.",
@@ -83,7 +89,7 @@ class LoopContractTests(unittest.TestCase):
                     {
                         "acceptancePoint": "The frozen TASK contract is met.",
                         "status": "SATISFIED",
-                        "evidenceRefs": ["task-targeted-tests"],
+                        "evidenceRefs": ["upstream-check"],
                     }
                 ],
                 "localBehavior": "VERIFIED",
@@ -101,7 +107,7 @@ class LoopContractTests(unittest.TestCase):
                         "seam": "API to core handoff",
                         "participants": ["t-api", "t-core"],
                         "status": "VERIFIED",
-                        "evidenceRefs": ["group-contract-check"],
+                        "evidenceRefs": ["upstream-check"],
                     }
                 ],
                 "decision": "INTEGRATED",
@@ -116,7 +122,7 @@ class LoopContractTests(unittest.TestCase):
                         "acceptancePoint": "The complete user flow is delivered.",
                         "ownerRefs": ["g-service"],
                         "status": "COVERED",
-                        "evidenceRefs": ["delivery-smoke"],
+                        "evidenceRefs": ["upstream-check"],
                     }
                 ],
                 "integrationEvidence": "SUFFICIENT",
@@ -186,16 +192,64 @@ class LoopContractTests(unittest.TestCase):
             validate_review_result_contract("DELIVERY_REVIEW_LOOP", invalid)
         self.assertEqual(caught.exception.code, "LOOP_REVIEW_RESULT_INVALID")
 
+    def test_review_result_rejects_unresolved_executed_evidence(self) -> None:
+        result = {
+            "validationDecision": {
+                "decision": "TARGETED_RERUN",
+                "reusedEvidenceRefs": [],
+                "executedEvidenceRefs": ["review-check"],
+                "riskTriggers": ["A targeted check was required."],
+                "rationale": "The Review executed a focused check.",
+            },
+            "reviewFindings": [],
+            "taskAcceptance": {
+                "acceptanceChecks": [
+                    {
+                        "acceptancePoint": "The TASK contract is met.",
+                        "status": "SATISFIED",
+                        "evidenceRefs": ["review-check"],
+                    }
+                ],
+                "localBehavior": "VERIFIED",
+                "publicContract": "NOT_APPLICABLE",
+                "targetedRegression": "VERIFIED",
+                "decision": "ACCEPTED",
+                "rationale": "The TASK boundary is accepted.",
+            },
+        }
+
         with self.assertRaises(GatedLoopError) as caught:
-            validate_review_result_contract(
-                "GROUP_REVIEW_LOOP",
-                {
-                    "validationDecision": invalid["validationDecision"],
-                    "reviewFindings": [],
-                    "deliveryReadiness": invalid["deliveryReadiness"],
-                },
-            )
+            validate_review_result_contract("TASK_REVIEW_LOOP", result)
+
         self.assertEqual(caught.exception.code, "LOOP_REVIEW_RESULT_INVALID")
+        self.assertEqual(
+            caught.exception.details["field"],
+            "loopOutcome.result.validationDecision.executedEvidenceRefs[0]",
+        )
+
+        result["verificationEvidence"] = [
+            {
+                "evidenceId": evidence_id,
+                "kind": "INSPECTION",
+                "check": f"Independent check {evidence_id}",
+                "command": "independent review inspection",
+                "scope": "The TASK Review boundary",
+                "status": "PASSED",
+                "completedAt": "2030-01-01T00:00:00Z",
+            }
+            for evidence_id in ("review-check", "undeclared-check")
+        ]
+        result["taskAcceptance"]["acceptanceChecks"][0][
+            "evidenceRefs"
+        ] = ["undeclared-check"]
+
+        with self.assertRaises(GatedLoopError) as caught:
+            validate_review_result_contract("TASK_REVIEW_LOOP", result)
+
+        self.assertEqual(
+            caught.exception.details["field"],
+            "loopOutcome.result.taskAcceptance.acceptanceChecks[0].evidenceRefs[0]",
+        )
 
     def test_review_policies_assign_one_non_overlapping_boundary_per_layer(
         self,

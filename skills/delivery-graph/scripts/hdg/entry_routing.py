@@ -11,7 +11,7 @@ from .supervisor_profiles import (
 )
 
 
-ENTRY_ROUTER_VERSION = 2
+ENTRY_ROUTER_VERSION = 3
 _RUNTIME_STATUSES = frozenset(
     {"ACTIVE", "BLOCKED", "PAUSED", "QUEUED", "HANDOFF_READY"}
 )
@@ -31,7 +31,7 @@ _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     (
         "RESUME_PAUSED",
-        ("恢复执行", "继续执行", "恢复任务", "resume"),
+        ("恢复执行", "恢复任务", "恢复", "resume"),
     ),
     (
         "QUERY_STATUS",
@@ -41,7 +41,10 @@ _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "NEW_DELIVERY",
         ("新需求", "新建交付", "新的交付", "new delivery", "new requirement"),
     ),
-    ("CONTINUE_DELIVERY", ("继续", "接着", "continue")),
+    (
+        "CONTINUE_DELIVERY",
+        ("继续执行", "继续", "接着", "continue"),
+    ),
 )
 
 

@@ -48,8 +48,7 @@
       "roleSkill": null,
       "capabilities": ["result.audit", "evidence.coverage", "omission.detect"],
       "helperProfiles": [],
-      "outputContract": "advisory-result-v1",
-      "maxConcurrent": 1
+      "outputContract": "advisory-result-v1"
     }
   ],
   "loopRoutes": {

@@ -39,7 +39,7 @@ AUTOMATIC 由 primary 调用 `plan_dispatch_batch` 并启动一个独立 TASK re
 
 ## 4:30—5:00 验收
 
-TASK 成功后直接进入 `RECORD_USER_CONFIRMATION`，没有独立 Review receiver。用户检查：
+TASK 成功后直接进入 `RECORD_USER_CONFIRMATION`，没有独立 Review receiver。primary 先调用 `delivery_result`；只有其结果账本 `completeness.complete=true`，且唯一 TASK 的全部 affected scope 都有 `PASSED` 证据覆盖，才向用户展示：
 
 - 定向验证证据和真实结果；
 - `acceptance.md`；
@@ -52,5 +52,5 @@ TASK 成功后直接进入 `RECORD_USER_CONFIRMATION`，没有独立 Review rece
 - 一个根 TASK、零 GROUP、零 Review；
 - 基线和需求已冻结；
 - 至少有 claim 后立即 heartbeat；短任务可减少 progress；
-- 有定向验证证据与 patch 快照；
+- 有逐 affected scope 绑定的定向验证证据，以及 Controller 记录的变更文件清单和状态指纹；
 - Revision 完成确认来自用户，不由 Agent 代填；本快速演练不自动关闭或归档 Delivery。

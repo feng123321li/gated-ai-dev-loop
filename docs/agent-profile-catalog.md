@@ -31,12 +31,12 @@ Delivery Graph 把三件事分开：
 | `profiles` | 非空且 ID 唯一的完整 profile 数组 |
 | `loopRoutes` | 必须精确覆盖四种 Loop kind |
 
-每个 profile 必须精确包含 `id`、`kind`、`loopKinds`、`roleSkill`、`capabilities`、`helperProfiles`、`outputContract` 和 `maxConcurrent`。
+每个 profile 必须精确包含 `id`、`kind`、`loopKinds`、`roleSkill`、`capabilities`、`helperProfiles` 和 `outputContract`。`RECEIVER` 还必须包含 `maxConcurrent`；`HELPER` 不得包含该字段，因为 helper 是宿主内部可选协作，不由 Controller 建立 reservation 或并发计数。
 
 - `RECEIVER` 必须绑定合法 Loop kind；`roleSkill` 只能是该 Loop 原有的 `delivery-graph-task` 或 `delivery-graph-review`，不能绕过职责边界。
 - `HELPER` 不拥有 Loop，`loopKinds=[]`、`roleSkill=null`、`helperProfiles=[]`。
 - `helperProfiles` 只能引用已定义的 `HELPER`，不能形成嵌套派遣。
-- `maxConcurrent` 为 `1..4`，同时受全局 executor 和资源冲突门禁约束。
+- RECEIVER 的 `maxConcurrent` 为 `1..4`，同时受全局 executor 和资源冲突门禁约束。
 - `capabilities` 是声明与提示，不扩大文件、Git、工具或控制面权限。
 
 ## 为什么配置文件使用 JSON

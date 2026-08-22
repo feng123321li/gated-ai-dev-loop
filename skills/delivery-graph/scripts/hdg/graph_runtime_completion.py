@@ -27,6 +27,7 @@ from .result_ledger import (
     assemble_delivery_result,
     assert_result_ledger_complete,
 )
+from .result_contracts import assert_successful_task_result_complete
 
 
 def record_loop_result(
@@ -187,6 +188,13 @@ def record_loop_result(
                 definition["kind"],
                 normalized["result"],
             )
+        elif (
+            normalized["status"] == "SUCCEEDED"
+            and definition["kind"] == "TASK_LOOP"
+        ):
+            normalized["result"] = assert_successful_task_result_complete(
+                normalized["result"]
+            )
         scheduler_status = state_by_status[normalized["status"]]
         effective_failure = (
             "REPLAN_REQUIRED"
@@ -338,6 +346,7 @@ def record_user_confirmation(
         )
     repository.write_projections(root_id)
     result = _compact_run_for_transport(repository.run(root_id))
+    result["attempts"] = repository.attempt_history(root_id)
     stored = repository.hierarchy(root_id)
     assembled_result = assemble_delivery_result(
         stored["hierarchy"],

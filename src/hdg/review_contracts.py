@@ -138,6 +138,115 @@ def _validate_validation_decision(value: object) -> None:
     _text(decision["rationale"], field=f"{field}.rationale")
 
 
+def _validate_review_evidence(value: object) -> set[str]:
+    field = "loopOutcome.result.verificationEvidence"
+    if value is None:
+        return set()
+    if not isinstance(value, list):
+        _contract_error("verificationEvidence must be an array", field=field)
+    evidence_ids: set[str] = set()
+    required = {
+        "evidenceId",
+        "kind",
+        "check",
+        "command",
+        "scope",
+        "status",
+        "completedAt",
+    }
+    allowed = required | {"scopeRefs", "tests", "testedWorkspaceSnapshots"}
+    for index, raw in enumerate(value):
+        item_field = f"{field}[{index}]"
+        if not isinstance(raw, dict) or not required <= set(raw) or not set(raw) <= allowed:
+            _contract_error(
+                "Review evidence fields are incomplete or unsupported",
+                field=item_field,
+            )
+        evidence_id = _text(raw["evidenceId"], field=f"{item_field}.evidenceId")
+        if evidence_id in evidence_ids:
+            _contract_error(
+                "Review evidence IDs must be unique",
+                field=f"{item_field}.evidenceId",
+            )
+        for name in ("kind", "check", "command", "scope", "completedAt"):
+            _text(raw[name], field=f"{item_field}.{name}")
+        if raw["status"] != "PASSED":
+            _contract_error(
+                "A successful Review may only reference PASSED local evidence",
+                field=f"{item_field}.status",
+            )
+        if "scopeRefs" in raw:
+            _texts(raw["scopeRefs"], field=f"{item_field}.scopeRefs")
+        evidence_ids.add(evidence_id)
+    return evidence_ids
+
+
+def _decision_evidence_ids(
+    decision: dict[str, Any],
+    local_evidence_ids: set[str],
+) -> set[str]:
+    field = "loopOutcome.result.validationDecision"
+    reused_ids = {
+        reference["evidenceId"]
+        for reference in decision["reusedEvidenceRefs"]
+    }
+    mode = decision["decision"]
+    if mode == "REUSED" and not reused_ids:
+        _contract_error(
+            "A REUSED decision must reference upstream evidence",
+            field=f"{field}.reusedEvidenceRefs",
+        )
+    if mode in {"TARGETED_RERUN", "FULL_RERUN"} and not decision[
+        "executedEvidenceRefs"
+    ]:
+        _contract_error(
+            f"A {mode} decision must reference locally executed evidence",
+            field=f"{field}.executedEvidenceRefs",
+        )
+    for index, evidence_id in enumerate(decision["executedEvidenceRefs"]):
+        if evidence_id not in local_evidence_ids:
+            _contract_error(
+                "Executed evidence reference does not resolve to this Review result",
+                field=f"{field}.executedEvidenceRefs[{index}]",
+            )
+    return reused_ids | set(decision["executedEvidenceRefs"])
+
+
+def _acceptance_evidence_fields(
+    layer_field: str,
+    value: dict[str, Any],
+) -> list[tuple[str, str]]:
+    if layer_field == "taskAcceptance":
+        return [
+            (
+                evidence_id,
+                "loopOutcome.result.taskAcceptance."
+                f"acceptanceChecks[{index}].evidenceRefs[{ref_index}]",
+            )
+            for index, check in enumerate(value["acceptanceChecks"])
+            for ref_index, evidence_id in enumerate(check["evidenceRefs"])
+        ]
+    if layer_field == "groupIntegration":
+        return [
+            (
+                evidence_id,
+                "loopOutcome.result.groupIntegration."
+                f"seams[{index}].evidenceRefs[{ref_index}]",
+            )
+            for index, seam in enumerate(value["seams"])
+            for ref_index, evidence_id in enumerate(seam["evidenceRefs"])
+        ]
+    return [
+        (
+            evidence_id,
+            "loopOutcome.result.deliveryReadiness."
+            f"requirementCoverage[{index}].evidenceRefs[{ref_index}]",
+        )
+        for index, entry in enumerate(value["requirementCoverage"])
+        for ref_index, evidence_id in enumerate(entry["evidenceRefs"])
+    ]
+
+
 def _validate_review_findings(value: object) -> None:
     field = "loopOutcome.result.reviewFindings"
     if not isinstance(value, list):
@@ -420,6 +529,22 @@ def validate_review_result_contract(
     _validate_validation_decision(normalized["validationDecision"])
     _validate_review_findings(normalized["reviewFindings"])
     _LAYER_VALIDATORS[required_layer_field](normalized[required_layer_field])
+    local_evidence_ids = _validate_review_evidence(
+        normalized.get("verificationEvidence")
+    )
+    available_evidence_ids = _decision_evidence_ids(
+        normalized["validationDecision"],
+        local_evidence_ids,
+    )
+    for evidence_id, field in _acceptance_evidence_fields(
+        required_layer_field,
+        normalized[required_layer_field],
+    ):
+        if evidence_id not in available_evidence_ids:
+            _contract_error(
+                "Acceptance evidence reference does not resolve to reused or locally executed evidence",
+                field=field,
+            )
     return normalized
 
 

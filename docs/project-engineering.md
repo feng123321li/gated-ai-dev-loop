@@ -10,12 +10,21 @@ src/hdg/
 │                      # 外层 receiver 派遣决策指纹与策略版本
 ├── dispatch_planning.py
 │                      # 当前宿主 receiver 预留与并发批次规划
+├── agent_profiles.py   # 版本化专用 receiver/helper Profile Catalog
+├── entry_routing.py    # 入口文本与持久状态的确定性路由
+├── supervisor_profiles.py
+│                      # 可选无工具、只作决策的 Supervisor 配置
 ├── loop_contracts.py   # Loop descriptor、outcome、资源锁
 ├── review_contracts.py # Controller 对 Review 结果的机械结构/终态一致性校验
+├── result_contracts.py # TASK scope/evidence 完整性门禁
+├── result_ledger.py    # 全 Loop 结果账本与确定性 Delivery 组装
+├── execution_metrics.py
+│                      # 含全部 attempt 的耗时、关键路径与慢 Loop 指标
 ├── model_core.py       # schema v3 Delivery 与递归 GROUP/TASK 校验
 ├── git_binding.py      # Git worktree/feature/mainline 只读发现与校验
 ├── graph_model.py      # GROUP Join/可选 seam Review、Delivery Acceptance/Readiness、DAG 与 FSM
-├── repository.py       # SQLite、事件链、投影
+├── repository.py       # SQLite repository 兼容 façade
+├── repository_*.py    # workspace、Revision、事件、预留与投影 stores
 ├── planning.py         # prepare / freeze / workspace status
 ├── graph_frontier.py   # 下一步调度动作
 ├── graph_runtime.py    # claim、lease、结果、重试、恢复
@@ -29,7 +38,7 @@ src/hdg/
 └── mcp_server.py       # stdio framing、输入限制与进程入口
 ```
 
-旧的 `acceptance.py`、`execution.py`、`remediation.py`、`skill_execution.py`、evidence hydration 和分拆 repository 模块已经删除，因为这些职责属于内部 Task Loop 或已收敛到外层 scheduler。
+旧的 `acceptance.py`、`execution.py`、`remediation.py`、`skill_execution.py` 和 evidence hydration 已删除，因为这些职责属于内部 Task Loop 或已收敛到外层 scheduler。repository 职责则已拆到 `repository_*.py`，`repository.py` 只保留兼容 façade。
 
 ## 数据库
 
@@ -133,13 +142,13 @@ Controller 只读发现和校验 Git，不执行 branch、worktree、stash、sta
 
 ## MCP
 
-工具分为六组：
+工具分为八组：
 
 - 入口与外层 receiver 派遣：`route_entry_intent` 先把原始入口文本与持久化状态合成为确定性路由；可选 decision-only Supervisor 默认关闭且无工具权限。`plan_dispatch_batch` 按当前宿主 Adapter、版本化 Agent Profile Catalog、profile 并发槽位和 frontier 直接预留 receiver，不接收模型或推理档位字段。
 - 规划与交接：`workspace_status`、`hierarchy_contract`、`preview_hierarchy`、`confirm_development_baseline`、`select_execution_mode`、`resume_execution_mode`、`create_manual_handoff`、`start_manual_handoff`、`prepare_hierarchy`、`freeze_hierarchy`。`workspace_status(base_ref=...)` 可承接宿主明确选择的基线；未指定时按有效 `origin/HEAD`、本地 `main`、本地 `master` 降级发现。preview 先登记 `CHOICE_READY` 并生成关联投影，再返回唯一 `pendingInteraction`：缺 binding 时为 `DEVELOPMENT_BASELINE`，确认后为 `EXECUTION_MODE`。`developmentBaseline` / `executionChoice` 只是该对象的兼容别名。Codex 映射 `request_user_input`，Claude 映射 `AskUserQuestion`，可调用时必须使用原生选择器。AUTOMATIC 先持久化业务确认，再按 `CURRENT_WORKSPACE_SERIAL` 在当前实际 checkout 续接；手动 Git 漂移遵循上一节的单仓双分支和多仓 fail-closed 规则。
 - Delivery 修订与关闭：`delivery_revision_history`、`prepare_delivery_revision`、`close_delivery`
 - 需求修订：`unfreeze_task_requirement`、`refreeze_task_requirement`
-- 查询：`graph_frontier`、`graph_status`、`delivery_result`、`graph_events`、`loop_context`、`open_delivery_dashboard`。`delivery_result` 用结果账本完整枚举所有 Loop，输出确定性验收/证据汇总与关键路径性能指标；结果不完整时用户确认门禁失败关闭。
+- 查询：`graph_frontier`、`graph_status`、`delivery_result`、`graph_events`、`loop_context`、`open_delivery_dashboard`。`delivery_result` 用结果账本完整枚举所有 Loop，输出确定性验收/证据汇总，并把当前 Revision 的全部 retry/lost attempts 计入总耗时、关键路径和慢 Loop 指标；结果不完整时用户确认门禁失败关闭。
 - Loop 控制：`dispatch_loop`、`handoff_ready_automatic_task`、`heartbeat_loop`、`report_loop_progress`、`pause_loop`、`resume_loop`、`record_loop_result`
 
 公开的 `freeze_hierarchy` 不接收 `execution_mode`，自动路径固定创建 `active` run。只有 `start_manual_handoff` 能把精确 `HANDOFF_READY` 双 fingerprint 启动为 `manual` run；Git 漂移 blocker 在任何控制状态写入前返回。`dispatch_loop(MANUAL)` 通常只允许该 run 的 `TASK_LOOP`；唯一例外是 `handoff_ready_automatic_task` 已对 active Graph 中 READY、从未领取、clean 且无有效 reservation 的指定 TASK 记录显式人工恢复事件。两种 MANUAL claim 都拒绝 AUTO reservation、decision fingerprint、transport 和模型选择，要求独立 receiver 显式提交 receiving context 与新的 `operation_id`；Review 继续使用统一 AUTO reservation/decision/独立 child 协议。
@@ -152,7 +161,7 @@ Plugin MCP 工具不接收业务 `root` 参数。Adapter 从宿主配置或请�
 
 `prepare_hierarchy.inputSchema` 由 `hierarchy_contract.py` 的 schema v3 生成器直接构建，以 `oneOf` 暴露 GROUP/TASK 两种根节点，并保持所有结构对象闭合、仅 `loop.payload` 开放。`validate_tool_arguments` 在调用 Controller 前复用 `validate_hierarchy_definition` 完成跨字段语义预检，将 hierarchy 契约错误统一包装为 `MCP_TOOL_ARGUMENT_INVALID`；Controller 内部校验继续作为非 MCP 调用的防御边界。
 
-`loop_context.completionPolicy` 明确输入和终态边界：payload 是目标、明确约束和已知验收点的输入，Loop 在运行时从真实代码、契约和数据链路推导 scope 内必要条件；冻结 Graph 不冻结内部实现计划，可修复 finding 必须在当前 Loop 内调整方案、修正并复验。TASK 的默认验证范围是实际变更影响面的最小充分 `affectedScopes`，并以有界 `verificationEvidence` 记录检查 scope 与结果；Controller 在结果时附加轻量 `evidenceWorkspaceSnapshots` 与逐相关路径的 `evidenceScopeSnapshots`。Review 使用 `EVIDENCE_FIRST_TARGETED_RERUN`：`validationEvidenceIndex` 把证据标为 `EXACT_MATCH/CHANGED/UNBOUND`，只自动复用匹配的通过证据；无关文件变化不使有界 scope 失效，相关路径变化才触发定向补验。Review 按 TASK 缺口、GROUP seam、Delivery 最终 smoke/E2E 证据分层补验；普通局部失效只重跑受影响范围，只有无法界定影响面等明确风险才全量复跑。为控制 Review context，传递上游 outcome 时保留快照元数据并省略重复 diff，完整补丁仍在验收投影。`loop_context.projectScopes` 是按当前 Delivery workspace 与冻结 Git binding 验证后的实际 workspace 列表；单仓未声明 `projectScopes` 时包含合成的 `primary`，多仓则逐项验证显式 scope。`projectScopeAnchors` 才是 hierarchy 中不可变的 preview 路径；当前实际 workspace 的不同 Delivery receiver 严格按 turn 串行，不能同时切换分支或写文件。Loop 不拥有分支生命周期，只能在有效 scope 路径内开发。STANDARD 执行完整声明验收并保留分层 Review；LIGHT 对已声明改动做定向验证，并在实际内容或影响超出判断依据时以 `REPLAN_REQUIRED` 退出，不能继续借轻量档绕过 Review。初始 freeze 同时为所有 TASK 建立 revision 1 冻结记录；`unfreeze_task_requirement` 只接受未开始 TASK，`refreeze_task_requirement` 只替换标题、摘要和 payload，并把确认后的完整定义冻结为同一 Delivery 的下一不可变 Revision。旧 Revision hierarchy/Graph 双指纹保持不变，新 Run、TASK requirement revision、事件链与人类投影使用新指纹一致重建。`record_loop_result` 的 `BLOCKED` 要求显式 failure class，只用于当前 scope 和权限内没有继续路径的真实终态；调度器仍不解释不透明 finding，也不为返工创建 Graph 环。
+`loop_context.completionPolicy` 明确输入和终态边界：payload 是目标、明确约束和已知验收点的输入，Loop 在运行时从真实代码、契约和数据链路推导 scope 内必要条件；冻结 Graph 不冻结内部实现计划，可修复 finding 必须在当前 Loop 内调整方案、修正并复验。TASK 的默认验证范围是实际变更影响面的最小充分 `affectedScopes`，并以有界 `verificationEvidence` 记录检查 scope 与结果；每个 scope 必须由至少一项 `PASSED` 证据引用，Controller 在结果写入和最终账本处双重失败关闭，并附加轻量 `evidenceWorkspaceSnapshots` 与逐相关路径的 `evidenceScopeSnapshots`。Review 使用 `EVIDENCE_FIRST_TARGETED_RERUN`：`validationEvidenceIndex` 把证据标为 `EXACT_MATCH/CHANGED/UNBOUND`，只自动复用匹配的通过证据；本层执行证据和验收 evidence refs 必须能解析到本层或显式复用记录。无关文件变化不使有界 scope 失效，相关路径变化才触发定向补验。Review 按 TASK 缺口、GROUP seam、Delivery 最终 smoke/E2E 证据分层补验；普通局部失效只重跑受影响范围，只有无法界定影响面等明确风险才全量复跑。为控制 Review context，传递上游 outcome 时只保留有界证据与状态元数据，不传递源码 diff 或补丁附件；需要内容时从授权 workspace 或对应提交读取。`loop_context.projectScopes` 是按当前 Delivery workspace 与冻结 Git binding 验证后的实际 workspace 列表；单仓未声明 `projectScopes` 时包含合成的 `primary`，多仓则逐项验证显式 scope。`projectScopeAnchors` 才是 hierarchy 中不可变的 preview 路径；当前实际 workspace 的不同 Delivery receiver 严格按 turn 串行，不能同时切换分支或写文件。Loop 不拥有分支生命周期，只能在有效 scope 路径内开发。STANDARD 执行完整声明验收并保留分层 Review；LIGHT 只来自用户明确选择，对已声明改动做定向验证，并在实际内容或影响超出判断依据时以 `REPLAN_REQUIRED` 退出，不能继续借轻量档绕过 Review。初始 freeze 同时为所有 TASK 建立 revision 1 冻结记录；`unfreeze_task_requirement` 只接受未开始 TASK，`refreeze_task_requirement` 只替换标题、摘要和 payload，并把确认后的完整定义冻结为同一 Delivery 的下一不可变 Revision。旧 Revision hierarchy/Graph 双指纹保持不变，新 Run、TASK requirement revision、事件链与人类投影使用新指纹一致重建。`record_loop_result` 的 `BLOCKED` 要求显式 failure class，只用于当前 scope 和权限内没有继续路径的真实终态；调度器仍不解释不透明 finding，也不为返工创建 Graph 环。
 
 `controller.py` 是唯一共享应用入口；`mcp_tools.py` 把 35 个模型可调用工具映射到 Controller。`mcp_catalog.py` 把它们声明为 `planning`、`dispatch`、`receiver` 三个静态 Profile，并维护 Skill→Profile 路由；Profile 联集必须覆盖全部工具，planning/dispatch 只在 workspace 发现、入口路由和队列恢复上有明确重叠。Plugin 启动三个独立 stdio MCP 进程，它们使用同一运行包和 project root，因此共享同一个 `scheduler.db`，但 `tools/list` 只返回当前 Profile，`tools/call` 对目录外工具返回 `MCP_TOOL_OUTSIDE_PROFILE`。
 
@@ -160,7 +169,7 @@ Plugin MCP 工具不接收业务 `root` 参数。Adapter 从宿主配置或请�
 
 `mcp_apps.py` 发布固定的 `ui://delivery-graph/dashboard-v2.html` Resource，`dashboard.py` 把当前定义、`graph_status` 与 Revision 历史投影成有界只读 view model。该投影删除 Loop payload、operation ID、Revision 原因和操作者等非展示字段；HTML 只通过 MCP Apps bridge 接收 `structuredContent`，不访问 SQLite、网络、Cookie 或宿主 DOM。看板可见时每 15 秒串行自动重读，隐藏时暂停，手动按钮可立即刷新；标准 `tools/call` 与 `window.openai.callTool` 兼容路径都只调用 `open_delivery_dashboard`，绝不调用会先推进状态的 `graph_frontier`。Codex modern MCP Apps 请求会保留协议 `_meta` 但可能缺少 `codex/sandbox-state-meta`，legacy 兼容 bridge 也可能完全省略 `_meta`；两种 wire shim 只能复用同一 MCP 连接上、此前带有效 sandbox metadata 且成功读取的精确 `root_id`/workspace grant。grant 仅限可信 Codex Adapter 与 Dashboard 工具，modern/legacy era 隔离，采用 5 分钟滑动 TTL、每连接最多 8 个 root，重新授权同一 root 时替换 workspace，连接关闭时全部撤销；跨连接、其他宿主、其他工具、未授权 root，以及 legacy 显式空或畸形 metadata 仍失败关闭。宽面板按 rank 绘制横向依赖边，空间不足时改为纵向换行并在节点内展示前置项。无 UI 宿主继续消费同一工具的文字/结构化降级结果。
 
-`dispatch_planning.py` 内置全局 `maxConcurrentExecutors=4`，并允许业务项目用严格的 `delivery-graph.agents.json` 完整定义专用 receiver/helper profile、capabilities、输出契约和每 profile 并发上限；缺少文件时使用 Plugin 内置 catalog。它复用当前 frontier 状态快照，不再为 attempt/执行模式重复读取完整 run；无资源冲突的 frontier Loop 继续并行，EXACT_MATCH 证据继续复用。预留和已认领 receiver 共同占用协调槽位。`plan_dispatch_batch` 为 Ready TASK/Review 创建绑定 node、attempt、Graph、agent catalog、profile 和 team fingerprint 的短租约 reservation；宿主只创建 `teamPlan.owner` 外层 child，helper 由 owner 按需协调且永不取得控制面凭据。child 以 `dispatch_transport=HOST_NATIVE`、live reservation、匹配 decision fingerprint 和新的显式 `operation_id` 调用 `dispatch_loop(AUTO)`。MANUAL TASK 不进入 planning。后续 heartbeat、progress、pause 和 result 都显式携带 claim 对应的 operation；已安全释放 turn 的暂停节点在 `resume_loop` 时先重新排队，只有重获 workspace turn、冻结 binding/clean 复核通过并记录新 turn start 后才恢复 Ready，再以新 operation、reservation、fingerprint 和资源门禁重新领取。Controller 继续强制 workspace/Git/project scope、attempt、reservation、fingerprint、operation、lease 和资源锁。长时间 shell/build 必须与 heartbeat 解耦；`SUSPECT_LOST` 只表示控制面静默。
+`dispatch_planning.py` 内置全局 `maxConcurrentExecutors=4`，并允许业务项目用严格的 `delivery-graph.agents.json` 完整定义专用 receiver/helper profile、capabilities、输出契约和每 RECEIVER profile 并发上限；HELPER 由宿主在 owner 内部按需协调，不建立 Controller reservation 或独立并发计数。缺少文件时使用 Plugin 内置 catalog。它复用当前 frontier 状态快照，不再为 attempt/执行模式重复读取完整 run；无资源冲突的 frontier Loop 继续并行，EXACT_MATCH 证据继续复用。预留和已认领 receiver 共同占用协调槽位。`plan_dispatch_batch` 为 Ready TASK/Review 创建绑定 node、attempt、Graph、agent catalog、profile 和 team fingerprint 的短租约 reservation；宿主只创建 `teamPlan.owner` 外层 child，helper 永不取得控制面凭据。child 以 `dispatch_transport=HOST_NATIVE`、live reservation、匹配 decision fingerprint 和新的显式 `operation_id` 调用 `dispatch_loop(AUTO)`。MANUAL TASK 不进入 planning。后续 heartbeat、progress、pause 和 result 都显式携带 claim 对应的 operation；已安全释放 turn 的暂停节点在 `resume_loop` 时先重新排队，只有重获 workspace turn、冻结 binding/clean 复核通过并记录新 turn start 后才恢复 Ready，再以新 operation、reservation、fingerprint 和资源门禁重新领取。Controller 继续强制 workspace/Git/project scope、attempt、reservation、fingerprint、operation、lease 和资源锁。长时间 shell/build 必须与 heartbeat 解耦；`SUSPECT_LOST` 只表示控制面静默。
 
 `progressMonitor.changeFingerprint` 只覆盖节点状态、业务进度、健康与告警等有意义变化，不包含观测时间、心跳年龄或租约倒计时。`waitDirective` 要求先消费当前立即 action，再使用宿主原生 receiver event 等待；`pollNotBefore` 直接取首次心跳、进度陈旧、失联或租约的下一个有意义健康阈值，不使用固定短周期轮询。截止时只读一次 `graph_status`，只有 receiver event、`nextWakeAt` 或 `ADVANCE_REQUIRED` 才推进 `graph_frontier`。这是一项宿主编排契约，不依赖 MCP resource subscription。
 

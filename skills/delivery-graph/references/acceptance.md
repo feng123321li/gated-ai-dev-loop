@@ -2,7 +2,7 @@
 
 Review 是一个标准 Loop，不是 delivery-graph 内置 Gate。
 
-本文件的分层 Review 规则适用于 `STANDARD`。`LIGHT` 只用于根据真实改动内容和影响范围确认的单一低风险根 TASK，不创建 TASK Review、GROUP seam Review 或 Delivery Acceptance/Readiness；TASK 完成定向验证后直接进入用户确认。执行中发现接口、数据、权限、安全、生产配置、跨模块影响或其他不确定边界时，必须返回 `REPLAN_REQUIRED`，用同一 Delivery 的 `STANDARD` Revision 继续。
+本文件的分层 Review 规则适用于 `STANDARD`。只有用户明确选择 `LIGHT`，且 hierarchy 是单一根 TASK、没有 GROUP 或 Review 时才使用轻量路径；Agent 不按风险或改动规模自行选择。TASK 完成定向验证后直接进入用户确认。执行中发现接口、数据、权限、安全、生产配置、跨模块影响或其他不确定边界时，必须返回 `REPLAN_REQUIRED`，用同一 Delivery 的 `STANDARD` Revision 继续。
 
 ## 三段职责边界
 
@@ -152,11 +152,12 @@ TASK 与 TASK Review 的 `acceptance.md` 只展示上述变更索引，不生成
 
 frontier 返回 `RECORD_USER_CONFIRMATION` 后：
 
-1. `STANDARD` 向用户展示根工作项摘要和报告链接、实际存在的分层验收报告链、Delivery Acceptance/Readiness 摘要以及重要阻断/风险；`LIGHT` 展示保障判断依据、实际 diff 范围、定向测试和唯一 TASK 结果。不要重复展开无关内容。
-2. 等待用户明确接受当前 Revision。到达此边界后，若业务改动已有可验证 commit、working tree/index clean、HEAD 未漂移且 receiver/reservation 全部释放，Controller 可以先释放物理 workspace turn；此释放不等于 Revision 完成或 Delivery 关闭。
-3. 用户此时提出需求修改时，不要直接修改已冻结 Revision。保持同一 `delivery.id` 进入 `prepare_delivery_revision`；即使上一 Revision 已确认 `COMPLETED`，只要 Delivery 仍为 `OPEN/未上线`，仍可追加下一 Revision。若旧 turn 已释放，下一 Revision 重新进入串行队列，不能抢占当前 owner。
-4. 用户明确接受当前 Revision 本身就是写入本轮完成的授权；用 `root_id`、`confirmed=true`、可移植 ASCII `confirmed_by` 和简短 `summary` 调用 `record_user_confirmation`。该确认只写控制面并把 Graph Run 标为 `COMPLETED`，Delivery 继续保持 `OPEN/未上线`。
-5. 测试、业务验收和生产上线全部完成，且用户明确要求结束本 Delivery 时，才调用 `close_delivery(confirmed=true)`。`CLOSED/已上线交付` 后不得追加 Revision；后续改动创建新 Delivery。
-6. 归档不是关闭的自动副作用。只有关闭后用户再次明确要求归档时才调用 `archive_delivery`；它从默认发现与工作区总览隐藏 Delivery，但保留 SQLite、Revision/Run 历史、事件链、详情投影及 `requirementKey` 身份映射。
+1. 先调用 `delivery_result`，只使用其确定性账本汇总全部 Loop 结果、验收、证据与 finding。`completeness.complete=false` 时展示明确缺项并停止，不请求用户确认。
+2. `STANDARD` 向用户展示根工作项摘要和报告链接、实际存在的分层验收报告链、Delivery Acceptance/Readiness 摘要以及重要阻断/风险；`LIGHT` 展示用户选择依据、实际 diff 范围、定向测试和唯一 TASK 结果。不要重复展开无关内容。
+3. 等待用户明确接受当前 Revision。到达此边界后，若业务改动已有可验证 commit、working tree/index clean、HEAD 未漂移且 receiver/reservation 全部释放，Controller 可以先释放物理 workspace turn；此释放不等于 Revision 完成或 Delivery 关闭。
+4. 用户此时提出需求修改时，不要直接修改已冻结 Revision。保持同一 `delivery.id` 进入 `prepare_delivery_revision`；即使上一 Revision 已确认 `COMPLETED`，只要 Delivery 仍为 `OPEN/未上线`，仍可追加下一 Revision。若旧 turn 已释放，下一 Revision 重新进入串行队列，不能抢占当前 owner。
+5. 用户明确接受当前 Revision 本身就是写入本轮完成的授权；用 `root_id`、`confirmed=true`、可移植 ASCII `confirmed_by` 和简短 `summary` 调用 `record_user_confirmation`。该确认只写控制面并把 Graph Run 标为 `COMPLETED`，Delivery 继续保持 `OPEN/未上线`。
+6. 测试、业务验收和生产上线全部完成，且用户明确要求结束本 Delivery 时，才调用 `close_delivery(confirmed=true)`。`CLOSED/已上线交付` 后不得追加 Revision；后续改动创建新 Delivery。
+7. 归档不是关闭的自动副作用。只有关闭后用户再次明确要求归档时才调用 `archive_delivery`；它从默认发现与工作区总览隐藏 Delivery，但保留 SQLite、Revision/Run 历史、事件链、详情投影及 `requirementKey` 身份映射。
 
 不要用冻结确认、测试通过、内部 Gate PASS 或 Review Loop 自述替代用户的 Revision 完成确认，更不能替代生产上线后的 Delivery 关闭确认。完成 Graph 或关闭 Delivery 都不自动授权提交、推送、合并、迁移或发布。

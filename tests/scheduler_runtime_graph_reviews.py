@@ -474,6 +474,9 @@ class SchedulerRuntimeTestsPart4:
                 now=at(minute),
             )
             task_outcome = success(f"{item_id} completed.")
+            task_outcome["result"]["implementationNotes"] = [
+                "Internal implementation details are not Review context."
+            ]
             task_outcome["result"]["workspaceChanges"] = [
                 {
                     "projectId": item_id,
@@ -531,10 +534,10 @@ class SchedulerRuntimeTestsPart4:
             result = upstream["outcome"]["result"]
             self.assertNotIn("workspaceChanges", result)
             self.assertTrue(result["workspaceChangesOmittedFromReviewContext"])
-            self.assertNotIn("evidence", result)
+            self.assertNotIn("implementationNotes", result)
             omitted_implementation_detail = (
                 omitted_implementation_detail
-                or "evidence"
+                or "implementationNotes"
                 in result["resultDetailsOmittedFromReviewContext"]
             )
         self.assertTrue(omitted_implementation_detail)

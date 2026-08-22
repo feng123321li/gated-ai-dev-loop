@@ -414,6 +414,31 @@ class SchedulerRepository(SchedulerRepositoryBase):
             root_id,
         )
 
+    def attempt_history(self, root_id: str) -> list[dict[str, Any]]:
+        """Return bounded timing metadata for every current-Revision attempt."""
+
+        with self.read() as connection:
+            run = self._delivery_hierarchy_store()._run_from_connection(
+                connection,
+                root_id,
+            )
+            rows = connection.execute(
+                "SELECT node_id, attempt, status, claimed_at, finished_at "
+                "FROM node_runs WHERE run_id = ? "
+                "ORDER BY node_id, attempt",
+                (run["runId"],),
+            ).fetchall()
+        return [
+            {
+                "nodeId": row["node_id"],
+                "attempt": row["attempt"],
+                "status": row["status"],
+                "claimedAt": row["claimed_at"],
+                "finishedAt": row["finished_at"],
+            }
+            for row in rows
+        ]
+
     def workspace_turn_start(
         self,
         root_id: str,

@@ -17,9 +17,9 @@ allowed-tools:
 
 ## 接收顺序
 
-1. 原样读取 assignment/manual action；保留 `rootId`、`nodeId`、reservation、decision fingerprint、`agentProfileId`、`agentCatalogFingerprint`、`teamPlan`、receiver context 和新的 `operation_id`。同一 receiver 收到多轮 assignment 时，只使用最新一份的完整凭据组；禁止把新 reservation 与旧 decision/profile fingerprint 或旧 attempt 混搭。
-2. AUTO 使用 `dispatch_loop(AUTO)` 并提交一次性 reservation；MANUAL 省略 AUTO reservation，但必须使用独立 receiver context、新 operation 和可信 Adapter。
-3. claim 成功后先确认返回的 `agentProfileId`、catalog/team fingerprint 与 assignment 一致，再立即用精确 operation 调用 `heartbeat_loop`，早于 `loop_context` 解读及任何代码检查、文件检索、依赖分析或命令。首次返回 `leaseRenewed=false / NOT_REQUIRED` 只表示尚未进入续租阈值：保留原 `leaseExpiresAt`，不得停止本轮 heartbeat 计划。
+1. 原样读取 assignment/manual action；始终保留 `rootId`、`nodeId`、receiver context 和新的 `operation_id`。AUTO 还必须保留 reservation、decision fingerprint、`agentProfileId`、`agentCatalogFingerprint` 与 `teamPlan`；MANUAL action 不携带这些 AUTO-only 字段。同一 receiver 收到多轮 assignment 时，只使用最新一份的完整凭据组；禁止把新 reservation 与旧 decision/profile fingerprint 或旧 attempt 混搭。
+2. AUTO 使用 `dispatch_loop(AUTO)` 并提交一次性 reservation 与完整 Profile/Team 决策；MANUAL 省略 reservation、decision/Profile/Team fingerprint，但必须使用独立 receiver context、新 operation 和可信 Adapter。
+3. claim 成功后，AUTO 先确认返回的 `agentProfileId`、catalog/team fingerprint 与 assignment 一致；MANUAL 只核对返回的 node/attempt、Agent、receiver context 与 operation。随后立即用精确 operation 调用 `heartbeat_loop`，早于 `loop_context` 解读及任何代码检查、文件检索、依赖分析或命令。首次返回 `leaseRenewed=false / NOT_REQUIRED` 只表示尚未进入续租阈值：保留原 `leaseExpiresAt`，不得停止本轮 heartbeat 计划。
 4. 随后读取 claim 响应中已经返回的 Loop context；确需刷新时再调用一次 `loop_context`。至少存在一个运行时验证过的 `projectScopes`；只访问其中授权的路径，不创建、切换或 checkout Git 分支。
 5. 检查真实代码、依赖、数据流和外部契约，形成 Loop 内部计划。冻结 payload 给出方向与明确约束，不是完整实现说明；必要细节由 TASK 自己推导。
 6. 用户 `skillHints` 在当前阶段适用且宿主可用时原生触发；只有阶段不适用或宿主不可用才跳过，不伪造已使用。不得把 Skill 默认示例、命名或实现偏好升级为冻结需求事实。

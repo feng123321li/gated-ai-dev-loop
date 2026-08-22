@@ -30,8 +30,8 @@ _PROFILE_FIELDS = {
     "capabilities",
     "helperProfiles",
     "outputContract",
-    "maxConcurrent",
 }
+_RECEIVER_PROFILE_FIELDS = _PROFILE_FIELDS | {"maxConcurrent"}
 
 
 def _raw_built_in_catalog() -> dict[str, Any]:
@@ -110,7 +110,6 @@ def _raw_built_in_catalog() -> dict[str, Any]:
                 ],
                 "helperProfiles": [],
                 "outputContract": "advisory-result-v1",
-                "maxConcurrent": 1,
             },
             {
                 "id": "test-runner",
@@ -124,7 +123,6 @@ def _raw_built_in_catalog() -> dict[str, Any]:
                 ],
                 "helperProfiles": [],
                 "outputContract": "advisory-result-v1",
-                "maxConcurrent": 1,
             },
             {
                 "id": "result-checker",
@@ -138,7 +136,6 @@ def _raw_built_in_catalog() -> dict[str, Any]:
                 ],
                 "helperProfiles": [],
                 "outputContract": "advisory-result-v1",
-                "maxConcurrent": 1,
             },
         ],
         "loopRoutes": {
@@ -180,9 +177,25 @@ def _string_array(
 
 def _normalized_profile(value: object, *, index: int) -> dict[str, Any]:
     field = f"profiles[{index}]"
-    if not isinstance(value, dict) or set(value) != _PROFILE_FIELDS:
+    if not isinstance(value, dict):
         _invalid(
             f"{field} must contain exactly the profile contract fields",
+            field=field,
+        )
+    kind = value.get("kind")
+    if kind not in {"RECEIVER", "HELPER"}:
+        _invalid(
+            f"{field}.kind must be RECEIVER or HELPER",
+            field=f"{field}.kind",
+        )
+    expected_fields = (
+        _RECEIVER_PROFILE_FIELDS
+        if kind == "RECEIVER"
+        else _PROFILE_FIELDS
+    )
+    if set(value) != expected_fields:
+        _invalid(
+            f"{field} fields do not match its {kind} contract",
             field=field,
         )
     profile_id = value["id"]
@@ -191,12 +204,6 @@ def _normalized_profile(value: object, *, index: int) -> dict[str, Any]:
         or SAFE_PROFILE_ID.fullmatch(profile_id) is None
     ):
         _invalid(f"{field}.id is invalid", field=f"{field}.id")
-    kind = value["kind"]
-    if kind not in {"RECEIVER", "HELPER"}:
-        _invalid(
-            f"{field}.kind must be RECEIVER or HELPER",
-            field=f"{field}.kind",
-        )
     loop_kinds = _string_array(
         value["loopKinds"],
         field=f"{field}.loopKinds",
@@ -230,18 +237,18 @@ def _normalized_profile(value: object, *, index: int) -> dict[str, Any]:
             f"{field}.outputContract is invalid",
             field=f"{field}.outputContract",
         )
-    max_concurrent = value["maxConcurrent"]
-    if (
-        not isinstance(max_concurrent, int)
-        or isinstance(max_concurrent, bool)
-        or not 1 <= max_concurrent <= 4
-    ):
-        _invalid(
-            f"{field}.maxConcurrent must be an integer from 1 to 4",
-            field=f"{field}.maxConcurrent",
-        )
     role_skill = value["roleSkill"]
     if kind == "RECEIVER":
+        max_concurrent = value["maxConcurrent"]
+        if (
+            not isinstance(max_concurrent, int)
+            or isinstance(max_concurrent, bool)
+            or not 1 <= max_concurrent <= 4
+        ):
+            _invalid(
+                f"{field}.maxConcurrent must be an integer from 1 to 4",
+                field=f"{field}.maxConcurrent",
+            )
         if not loop_kinds:
             _invalid(
                 f"{field}.loopKinds must not be empty for a receiver",
@@ -258,7 +265,7 @@ def _normalized_profile(value: object, *, index: int) -> dict[str, Any]:
             f"{field} helper profiles cannot own Loops or other helpers",
             field=field,
         )
-    return {
+    normalized = {
         "id": profile_id,
         "kind": kind,
         "loopKinds": loop_kinds,
@@ -266,8 +273,10 @@ def _normalized_profile(value: object, *, index: int) -> dict[str, Any]:
         "capabilities": capabilities,
         "helperProfiles": helper_profiles,
         "outputContract": output_contract,
-        "maxConcurrent": max_concurrent,
     }
+    if kind == "RECEIVER":
+        normalized["maxConcurrent"] = max_concurrent
+    return normalized
 
 
 def validate_agent_profile_catalog(

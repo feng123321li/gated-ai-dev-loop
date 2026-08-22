@@ -13,6 +13,7 @@ from hdg.result_ledger import (
     assert_result_ledger_complete,
     build_result_ledger,
 )
+from hdg.review_contracts import validate_review_result_contract
 from hdg.errors import GatedLoopError
 
 from .loop_architecture_support import task_hierarchy
@@ -126,6 +127,78 @@ class ResultLedgerTests(unittest.TestCase):
             [broken_state["nodeId"]],
         )
 
+    def test_ledger_rejects_successful_task_without_scope_and_evidence(
+        self,
+    ) -> None:
+        broken = deepcopy(self.run)
+        task_state = next(
+            state
+            for state in broken["nodes"]
+            if state["nodeId"].startswith("loop:")
+        )
+        task_state["outcome"]["result"] = {
+            "implementationNotes": ["Changed the implementation."],
+        }
+
+        ledger = build_result_ledger(self.graph, broken)
+
+        self.assertFalse(ledger["complete"])
+        self.assertEqual(
+            [issue["code"] for issue in ledger["issues"]],
+            [
+                "TASK_AFFECTED_SCOPES_MISSING",
+                "TASK_VERIFICATION_EVIDENCE_MISSING",
+            ],
+        )
+        self.assertEqual(
+            {issue["nodeId"] for issue in ledger["issues"]},
+            {task_state["nodeId"]},
+        )
+
+    def test_ledger_rejects_unpassed_or_unscoped_task_evidence(self) -> None:
+        broken = deepcopy(self.run)
+        task_state = next(
+            state
+            for state in broken["nodes"]
+            if state["nodeId"].startswith("loop:")
+        )
+        task_state["outcome"]["result"] = {
+            "affectedScopes": [
+                {
+                    "scopeId": "task-change",
+                    "projectId": "primary",
+                    "paths": [],
+                    "modules": ["service"],
+                    "contracts": [],
+                    "dependencyBasis": "The changed service module.",
+                    "exclusions": [],
+                }
+            ],
+            "verificationEvidence": [
+                {
+                    "evidenceId": "skipped-check",
+                    "kind": "TEST",
+                    "check": "Focused service tests",
+                    "command": "test service",
+                    "scope": "Service module",
+                    "scopeRefs": [],
+                    "status": "SKIPPED",
+                    "completedAt": "2030-01-01T00:00:00Z",
+                }
+            ],
+        }
+
+        ledger = build_result_ledger(self.graph, broken)
+
+        self.assertFalse(ledger["complete"])
+        self.assertEqual(
+            [issue["code"] for issue in ledger["issues"]],
+            [
+                "TASK_EVIDENCE_NOT_PASSED",
+                "TASK_SCOPE_NOT_VERIFIED",
+            ],
+        )
+
     def test_assembler_preserves_all_results_evidence_and_findings(
         self,
     ) -> None:
@@ -135,10 +208,27 @@ class ResultLedgerTests(unittest.TestCase):
             if state["nodeId"].startswith("loop:")
         )
         task_state["outcome"]["result"] = {
+            "affectedScopes": [
+                {
+                    "scopeId": "task-change",
+                    "projectId": "primary",
+                    "paths": [],
+                    "modules": ["service"],
+                    "contracts": [],
+                    "dependencyBasis": "The service module changed.",
+                    "exclusions": [],
+                }
+            ],
             "verificationEvidence": [
                 {
                     "evidenceId": "targeted-test",
+                    "kind": "TEST",
+                    "check": "Targeted service test",
+                    "command": "test service",
+                    "scope": "Service module",
+                    "scopeRefs": ["task-change"],
                     "status": "PASSED",
+                    "completedAt": "2030-01-01T00:00:00Z",
                 }
             ],
             "implementationNotes": ["first", "second"],
@@ -181,6 +271,59 @@ class ResultLedgerTests(unittest.TestCase):
             assembled["reviewFindings"][0]["finding"]["summary"],
             "Document the fallback.",
         )
+
+    def test_review_evidence_decision_failures_are_closed(self) -> None:
+        base = review_success("TASK_REVIEW_LOOP")["result"]
+
+        invalid_evidence_array = deepcopy(base)
+        invalid_evidence_array["verificationEvidence"] = {}
+
+        duplicate_evidence = deepcopy(base)
+        duplicate_evidence["verificationEvidence"].append(
+            deepcopy(duplicate_evidence["verificationEvidence"][0])
+        )
+
+        failed_evidence = deepcopy(base)
+        failed_evidence["verificationEvidence"][0]["status"] = "FAILED"
+
+        missing_executed_ref = deepcopy(base)
+        missing_executed_ref["validationDecision"][
+            "executedEvidenceRefs"
+        ] = []
+
+        reused_without_source = deepcopy(base)
+        reused_without_source["validationDecision"].update(
+            {
+                "decision": "REUSED",
+                "reusedEvidenceRefs": [],
+                "executedEvidenceRefs": [],
+            }
+        )
+
+        dangling_acceptance = deepcopy(base)
+        dangling_acceptance["taskAcceptance"]["acceptanceChecks"][0][
+            "evidenceRefs"
+        ] = ["missing-evidence"]
+
+        cases = (
+            invalid_evidence_array,
+            duplicate_evidence,
+            failed_evidence,
+            missing_executed_ref,
+            reused_without_source,
+            dangling_acceptance,
+        )
+        for result in cases:
+            with self.subTest(result=result):
+                with self.assertRaises(GatedLoopError) as caught:
+                    validate_review_result_contract(
+                        "TASK_REVIEW_LOOP",
+                        result,
+                    )
+                self.assertEqual(
+                    caught.exception.code,
+                    "LOOP_REVIEW_RESULT_INVALID",
+                )
 
     def test_delivery_result_is_a_read_only_controller_operation(self) -> None:
         definition = next(
@@ -235,6 +378,66 @@ class ResultLedgerTests(unittest.TestCase):
         self.assertEqual(len(metrics["criticalPathLoopIds"]), 3)
         self.assertEqual(len(metrics["slowestLoops"]), 3)
         self.assertEqual(assembled["executionMetrics"], metrics)
+
+    def test_execution_metrics_include_retry_attempt_time(self) -> None:
+        timed_run = deepcopy(self.run)
+        timed_run.update(
+            {
+                "startedAt": "2030-01-01T00:00:00Z",
+                "updatedAt": "2030-01-01T00:00:35Z",
+                "completedAt": "2030-01-01T00:00:35Z",
+            }
+        )
+        attempts = []
+        loop_states = []
+        for state in timed_run["nodes"]:
+            definition = next(
+                item
+                for item in self.graph["nodes"]
+                if item["id"] == state["nodeId"]
+            )
+            if definition["kind"].endswith("_LOOP"):
+                loop_states.append(state)
+        for index, state in enumerate(loop_states):
+            start = 5 + index * 10
+            state["claimedAt"] = f"2030-01-01T00:00:{start:02d}Z"
+            state["finishedAt"] = f"2030-01-01T00:00:{start + 10:02d}Z"
+            attempts.append(
+                {
+                    "nodeId": state["nodeId"],
+                    "attempt": state["attempt"],
+                    "status": state["status"],
+                    "claimedAt": state["claimedAt"],
+                    "finishedAt": state["finishedAt"],
+                }
+            )
+        first = loop_states[0]
+        first["attempt"] = 2
+        attempts[0]["attempt"] = 2
+        attempts.append(
+            {
+                "nodeId": first["nodeId"],
+                "attempt": 1,
+                "status": "BLOCKED",
+                "claimedAt": "2030-01-01T00:00:00Z",
+                "finishedAt": "2030-01-01T00:00:05Z",
+            }
+        )
+        timed_run["attempts"] = attempts
+
+        metrics = build_execution_metrics(self.graph, timed_run)
+
+        self.assertEqual(metrics["recordedLoopSeconds"], 35.0)
+        self.assertEqual(metrics["criticalPathSeconds"], 35.0)
+        self.assertEqual(metrics["measuredAttempts"], 4)
+        self.assertEqual(metrics["retriedLoops"], 1)
+        slowest = next(
+            item
+            for item in metrics["slowestLoops"]
+            if item["nodeId"] == first["nodeId"]
+        )
+        self.assertEqual(slowest["attemptCount"], 2)
+        self.assertEqual(slowest["durationSeconds"], 15.0)
 
 
 if __name__ == "__main__":

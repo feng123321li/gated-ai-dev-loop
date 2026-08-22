@@ -1,6 +1,6 @@
 # 团队安装与运维
 
-本文面向团队管理员和普通使用者，覆盖 `delivery-graph` 0.40.0 的安装、升级、恢复、卸载与回滚。展示名为“分层交付 Graph 控制面”。Plugin 同时支持 Codex、Claude Code 与 ZCode，项目运行时仅依赖 Python 3.10+ 和标准库。
+本文面向团队管理员和普通使用者，覆盖当前 `delivery-graph` 的安装、升级、恢复、卸载与回滚。展示名为“分层交付 Graph 控制面”。Plugin 同时支持 Codex、Claude Code 与 ZCode，项目运行时仅依赖 Python 3.10+ 和标准库。
 
 ## 安装前检查
 
@@ -41,7 +41,7 @@ claude plugin list --json
 python -m scripts.host_smoke probe --json
 ```
 
-结果必须报告 Plugin 版本 0.43.5、35 个 MCP 工具的 Profile 联集以及 3 个 MCP server，并如实标记本机已安装的宿主。单个 Agent 只应看到其 Skill 对应的 Profile 子集。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在目标宿主执行真实宿主冒烟任务；宿主不要求安装在同一台机器。MCP 工具是否真正注入各 workspace/Agent schema，使用[注册矩阵与生命周期契约](mcp-host-lifecycle-contract.md)中的只读 Demo 单独验证。
+结果必须报告 Plugin 版本 0.43.6、35 个 MCP 工具的 Profile 联集以及 3 个 MCP server，并如实标记本机已安装的宿主。单个 Agent 只应看到其 Skill 对应的 Profile 子集。`probe` 只验证本地发布产物和宿主可发现性，不调用模型，也不能作为真实宿主通过记录。发布管理员还必须按[宿主兼容矩阵](host-compatibility.md)分别在目标宿主执行真实宿主冒烟任务；宿主不要求安装在同一台机器。MCP 工具是否真正注入各 workspace/Agent schema，使用[注册矩阵与生命周期契约](mcp-host-lifecycle-contract.md)中的只读 Demo 单独验证。
 
 真实冒烟按宿主各自由独立模块实现（`scripts/host_smoke/` 下的 `codex.py`、`claude.py`、`zcode.py`），共享证据规则在 `common.py`。Codex 与 Claude Code 默认先只展示计划，必须显式增加 `--execute` 才调用模型，两个宿主分别运行，绝不从一个终端跨调另一个 Agent：
 
@@ -60,9 +60,9 @@ python -m scripts.host_smoke run --host zcode --scenario light --execute --works
 python -m scripts.host_smoke run --host zcode --scenario light --verify-only --workspace-dir <同一目录>
 ```
 
-Claude 命令从当前 0.43.5 源码发布包的 `--plugin-dir` 加载 Plugin；Codex 命令要求候选 Plugin 已从 Marketplace 安装；ZCode 由已安装 Plugin 的真实会话加载。发布前可用用户明确选择的 LIGHT 验证 `select_execution_mode → 当前 checkout 分支准备 → resume_execution_mode → plan_dispatch_batch → 独立 TASK child → dispatch_loop(AUTO) → immediate heartbeat → result`；另以 MANUAL 覆盖 `select_execution_mode → QUEUED → manualHostPreparation → start_manual_handoff` 的同队列续调。LIGHT 可省略非必要 progress，但所有 claim 都必须立即 heartbeat。再用 STANDARD 覆盖 progress、持续 heartbeat 和独立 Review。Claude 由主会话在 `CURRENT_WORKSPACE_SERIAL` 边界内协调当前分支和独立 receiver Agent，不启动专用后台 coordinator。任何输出中的 `claimedAgents` 都只能包含命令指定的当前宿主。
+Claude 命令从当前 0.43.6 源码发布包的 `--plugin-dir` 加载 Plugin；Codex 命令要求候选 Plugin 已从 Marketplace 安装；ZCode 由已安装 Plugin 的真实会话加载。发布前可用用户明确选择的 LIGHT 验证 `select_execution_mode → 当前 checkout 分支准备 → resume_execution_mode → plan_dispatch_batch → 独立 TASK child → dispatch_loop(AUTO) → immediate heartbeat → result → delivery_result`；另以 MANUAL 覆盖 `select_execution_mode → QUEUED → manualHostPreparation → start_manual_handoff` 的同队列续调。LIGHT 可省略非必要 progress，但所有 claim 都必须立即 heartbeat。再用 STANDARD 覆盖 progress、持续 heartbeat、独立 Review、证据引用解析和完整性门禁。Claude 由主会话在 `CURRENT_WORKSPACE_SERIAL` 边界内协调当前分支和独立 receiver Agent，不启动专用后台 coordinator。任何输出中的 `claimedAgents` 都只能包含命令指定的当前宿主。
 
-0.40.0 真实冒烟还必须覆盖以下交互和失败关闭边界：
+当前版本的真实冒烟还必须覆盖以下交互和失败关闭边界：
 
 - `preview_hierarchy`、`workspace_status` 和手动接管只返回一个当前 `pendingInteraction`。缺少 `gitBinding` 时先处理 `DEVELOPMENT_BASELINE`，确认后才出现 `EXECUTION_MODE`；同一 Delivery 的后续 Revision 可复用已记忆基线。
 - 同一 Delivery 连续冻结 Revision 2、3、4、5 时，项目集合、checkout、分支和完整 Git binding 未变应复用最初的 clean `workspaceTurnStart`；tracked、staged、untracked 与未忽略的 `__pycache__` 保持原地，不要求删除、stash 或检查点提交。改变完整 binding、改写 turn 历史或制造未解决冲突时必须 fail closed。
@@ -79,7 +79,7 @@ Claude 命令从当前 0.43.5 源码发布包的 `--plugin-dir` 加载 Plugin；
 - 同一冻结分支仍不能同时属于两个未终结 Delivery；每个 Delivery 使用自己的 feature branch。
 - 未显式声明 `projectScopes` 的单仓 Delivery 必须在 AUTO claim 与 `loop_context` 中得到一个经顶层 `gitBinding` 和实际 workspace 验证的 `primary` scope；无效 binding 必须在 child 读取或修改仓库前 fail closed。
 - 执行模式只允许 `AUTOMATIC` 和 `MANUAL`。所有 AUTO TASK/Review 必须由 `plan_dispatch_batch` 创建绑定 decision fingerprint 的非空短租约 reservation，再由宿主创建独立 child，以 `dispatch_transport=HOST_NATIVE` 和新的显式 `operation_id` 调用 `dispatch_loop(AUTO)`。MANUAL 只允许 TASK，以显式 receiving context/operation claim，不带 AUTO reservation/decision/transport。普通 coordinator、helper 和内部 Worker 都不能持有 operation/reservation bearer。
-- `archive_delivery` 只接受已完成 Delivery，默认状态发现和根总览不再列出它；显式 `root_id` 仍能读取 `ARCHIVED`、完成 run、Revision 历史和详情投影。
+- `archive_delivery` 只接受已 `CLOSED/已上线` 且又收到独立明确归档授权的 Delivery；默认状态发现和根总览不再列出它，显式 `root_id` 仍能读取 `ARCHIVED`、完成 run、Revision 历史和详情投影。
 - 对已有 run 输入“打开当前 Delivery 的进度面板”，支持 MCP Apps 的宿主应渲染 `Delivery Graph 运行看板`；看板可见时每 15 秒自动更新，隐藏时暂停，点击“刷新状态”立即重读 `open_delivery_dashboard`。宽面板 Graph 不产生水平溢出，窄面板转为纵向并展示前置项。所有刷新都只能调用只读 Dashboard 工具；不支持 UI 的宿主必须继续返回可读文字和结构化结果，且不得改用 `graph_frontier` 模拟只读刷新。
 - Codex 与 Claude manifest 都只声明当前实际 payload，Plugin 包中不得保留生命周期命令目录。敏感 MCP 工具必须继续触发各宿主自身的审批，不得由 Plugin 自动批准。
 - 有效 Adapter/workspace 调用 `plan_dispatch_batch` 时应创建统一 AUTO assignment；assignment 必须绑定 Agent Profile Catalog、专用 owner/helper `teamPlan` 和 catalog/profile/team decision fingerprint。只为 owner 创建外层 receiver，helper 不持有控制面凭据。缺失宿主 Adapter、workspace/Git/project scope、容量、profile 或资源条件时必须在 claim 前 fail closed，不能靠模型输入或未声明元数据绕过。

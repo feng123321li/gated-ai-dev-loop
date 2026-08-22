@@ -7,6 +7,7 @@ from .errors import fail
 from .execution_metrics import build_execution_metrics
 from .outcome_compaction import compact_run_for_transport
 from .repository import SchedulerRepository
+from .result_contracts import task_result_completeness_gaps
 
 
 RESULT_LEDGER_VERSION = 1
@@ -125,6 +126,18 @@ def build_result_ledger(
                         "The Loop result object is missing.",
                     )
                 )
+            elif (
+                definition.get("kind") == "TASK_LOOP"
+                and outcome_status == "SUCCEEDED"
+            ):
+                for gap in task_result_completeness_gaps(result):
+                    issues.append(
+                        _issue(
+                            gap["code"],
+                            definition,
+                            gap["message"],
+                        )
+                    )
             expected_outcome_statuses = {
                 "SUCCEEDED": {"SUCCEEDED"},
                 "BLOCKED": {"BLOCKED", "REPLAN_REQUIRED"},
@@ -297,6 +310,7 @@ def delivery_result(
     repository.assert_self_hosting_dogfood(explicit_dogfood)
     stored = repository.hierarchy(root_id)
     run = repository.run(root_id)
+    run["attempts"] = repository.attempt_history(root_id)
     return assemble_delivery_result(
         stored["hierarchy"],
         stored["graph"],

@@ -7,6 +7,12 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.43.6 发布候选矩阵
+
+0.43.6 新增完整结果账本和确定性 Result Assembler：`delivery_result` 枚举每个 Graph Loop，成功 TASK 必须用 `affectedScopes` 和 `PASSED` scope-bound evidence 覆盖全部影响范围，Review 的执行/复用/验收 evidence refs 必须可解析，结果写入与用户确认均失败关闭。入口 Router 按持久化状态稳定区分新需求、继续、恢复、确认、关闭、归档与查询；版本化 Agent Profile Catalog 为 TASK/Review 分配专用 owner/helper Team，MANUAL 与 AUTO 凭据边界保持分离。性能指标纳入当前 Revision 的全部 retry/lost attempts；可选多 Supervisor 默认关闭、无工具且只给 advisory，`ALWAYS_ADVISE` 不等于 Controller 强制 receipt。
+
+本版本 MCP 工具联集为 35，schema v3 与 `.layered-delivery/` namespace 不变，无 SQLite 数据迁移。项目级 HELPER profile 不再接受未执行的 `maxConcurrent`；新提交的成功 TASK/Review 必须满足增强结果契约。候选已完成 498 项 Python 测试（497 通过、1 项按环境跳过）、全树编译、四个 canonical Skill、Codex/Claude/ZCode Plugin、release candidate、镜像与差异校验。
+
 ## 0.43.5 发布候选矩阵
 
 0.43.5 将 `revisions.md` 的范围状态与运行状态统一渲染为“中文（ENUM）”，并在修订历史末尾列出两套完整枚举：范围状态覆盖 `CHOICE_READY`、`PREPARED`、`HANDOFF_READY`、`FROZEN`、`SUPERSEDED`、`ABANDONED`、`ARCHIVED`，运行状态覆盖 `NOT_STARTED`、`ACTIVE`、`BLOCKED`、`PAUSED`、`COMPLETED`、`CANCELLED`、`SUPERSEDED`。每项同时给出中文名称与生命周期说明，既方便项目成员阅读，也保留与 MCP、SQLite 和诊断输出精确对照的英文值。

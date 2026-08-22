@@ -73,16 +73,16 @@ class SchedulerRuntimeTestsPart6:
             running_progress,
         )
 
+        task_outcome = success("任务实现与验证已完成。")
+        task_outcome["result"]["verificationEvidence"][0][
+            "check"
+        ] = "全部自动化检查通过"
         record_loop_result(
             root=self.root,
             root_id=root_id,
             node_id=node_id,
             operation_id="op-task-projection",
-            outcome={
-                "status": "SUCCEEDED",
-                "summary": "任务实现与验证已完成。",
-                "result": {"evidence": "全部自动化检查通过"},
-            },
+            outcome=task_outcome,
             now=at(3),
         )
         rebuild_graph_run(root=self.root, root_id=root_id)

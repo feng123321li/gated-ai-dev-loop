@@ -130,7 +130,31 @@ def success(summary: str = "Loop completed.") -> dict:
     return {
         "status": "SUCCEEDED",
         "summary": summary,
-        "result": {"evidence": "opaque-to-scheduler"},
+        "result": {
+            "affectedScopes": [
+                {
+                    "scopeId": "task-scope",
+                    "projectId": "primary",
+                    "paths": [],
+                    "modules": ["task-module"],
+                    "contracts": [],
+                    "dependencyBasis": "The TASK-owned module was changed.",
+                    "exclusions": [],
+                }
+            ],
+            "verificationEvidence": [
+                {
+                    "evidenceId": "task-check",
+                    "kind": "TEST",
+                    "check": "Focused TASK verification",
+                    "command": "project-specific focused test",
+                    "scope": "The TASK-owned module",
+                    "scopeRefs": ["task-scope"],
+                    "status": "PASSED",
+                    "completedAt": "2026-07-29T08:00:00Z",
+                }
+            ],
+        },
     }
 
 def review_success(
@@ -148,6 +172,17 @@ def review_success(
             "rationale": "The layer-owned acceptance boundary was checked.",
         },
         "reviewFindings": findings or [],
+        "verificationEvidence": [
+            {
+                "evidenceId": "review-boundary-check",
+                "kind": "INSPECTION",
+                "check": "Independent Review boundary check",
+                "command": "independent review inspection",
+                "scope": "The current Review layer boundary",
+                "status": "PASSED",
+                "completedAt": "2026-07-29T08:00:00Z",
+            }
+        ],
     }
     if loop_kind == "TASK_REVIEW_LOOP":
         result["taskAcceptance"] = {

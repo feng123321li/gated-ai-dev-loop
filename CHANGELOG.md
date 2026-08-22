@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.43.6 — 2026-08-22
+
+发布提交：以 tag `v0.43.6` 指向的提交为准
+
+- **结果账本与完整性门禁**：新增确定性 `delivery_result` / Result Assembler，完整枚举所有 Graph Loop；成功 TASK 必须声明有界 `affectedScopes`，并以 `PASSED`、可审计且 scope-bound 的 `verificationEvidence` 覆盖每个范围。Review 的本层执行证据、复用证据和验收引用必须可解析；结果写入与最终用户确认双重 fail closed，不再接受单句 opaque success 造成漏项。
+- **确定性入口与专用 Agent Team**：新增状态感知的 `route_entry_intent`，稳定区分新需求、继续、恢复、确认、关闭、归档和查询，并修复“继续执行”在 QUEUED/HANDOFF_READY 被误判为暂停恢复。版本化 Agent Profile Catalog 为 TASK、各层 Review 绑定专用 owner/helper Team；只有 RECEIVER 具有 Controller 强制的并发上限，MANUAL 不伪装携带 AUTO Profile/Team 凭据。
+- **性能与可选 Supervisor**：执行指标把当前 Revision 的全部 retry/lost attempts 计入总耗时、关键路径与慢 Loop；多 Supervisor 保持默认关闭、无工具和 decision-only，`ALWAYS_ADVISE` 明确为无 decision receipt 的宿主 advisory，不宣称 Controller 已强制复核。
+- **兼容性**：MCP 工具联集为 35，schema v3 与 `.layered-delivery/` namespace 不变，无 SQLite 数据迁移。新提交的成功 TASK/Review 必须满足增强后的结果契约；项目级 `delivery-graph.agents.json` 的 HELPER 不再接受 `maxConcurrent`，Supervisor 全入口模式使用 `ALWAYS_ADVISE`。
+- **验证**：全量 Python 498 项完成（497 通过、1 项按环境跳过），全树编译、四个 canonical Skill、Codex/Claude/ZCode Plugin、release candidate、镜像与差异校验通过。
+
 ## 0.43.5 — 2026-08-21
 
 发布提交：以 tag `v0.43.5` 指向的提交为准

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .errors import GatedLoopError, fail
@@ -11,7 +12,7 @@ from .supervisor_profiles import (
 )
 
 
-ENTRY_ROUTER_VERSION = 3
+ENTRY_ROUTER_VERSION = 4
 _RUNTIME_STATUSES = frozenset(
     {"ACTIVE", "BLOCKED", "PAUSED", "QUEUED", "HANDOFF_READY"}
 )
@@ -46,14 +47,78 @@ _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("继续执行", "继续", "接着", "continue"),
     ),
 )
+_NEGATED_PREFIXES = (
+    "不",
+    "不要",
+    "别",
+    "不用",
+    "无需",
+    "暂不",
+    "不能",
+    "不需要",
+    "没有",
+)
+_NEGATED_SUFFIXES = ("不了", "不成", "失败")
+_ENGLISH_NEGATION = re.compile(
+    r"(?:do not|don't|dont|not|never|without)\s*$",
+)
 
 
-def _classify_explicit_intent(request_text: str) -> str | None:
+def _ascii_pattern_is_bounded(
+    normalized: str,
+    start: int,
+    end: int,
+) -> bool:
+    before = normalized[start - 1] if start else ""
+    after = normalized[end] if end < len(normalized) else ""
+    return not (
+        before and (before.isascii() and (before.isalnum() or before in "_-"))
+    ) and not (
+        after and (after.isascii() and (after.isalnum() or after in "_-"))
+    )
+
+
+def _match_is_negated(normalized: str, start: int, end: int) -> bool:
+    prefix = normalized[max(0, start - 16) : start].rstrip()
+    suffix = normalized[end : end + 4].lstrip()
+    return (
+        any(prefix.endswith(item) for item in _NEGATED_PREFIXES)
+        or _ENGLISH_NEGATION.search(prefix) is not None
+        or any(suffix.startswith(item) for item in _NEGATED_SUFFIXES)
+    )
+
+
+def _classify_explicit_intents(
+    request_text: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
     normalized = " ".join(request_text.casefold().split())
+    positive: list[str] = []
+    negated: list[str] = []
     for intent, patterns in _PATTERNS:
-        if any(pattern in normalized for pattern in patterns):
-            return intent
-    return None
+        intent_positive = False
+        intent_negated = False
+        for pattern in patterns:
+            offset = 0
+            while True:
+                start = normalized.find(pattern, offset)
+                if start < 0:
+                    break
+                end = start + len(pattern)
+                offset = end
+                if (
+                    pattern.isascii()
+                    and not _ascii_pattern_is_bounded(normalized, start, end)
+                ):
+                    continue
+                if _match_is_negated(normalized, start, end):
+                    intent_negated = True
+                else:
+                    intent_positive = True
+        if intent_positive:
+            positive.append(intent)
+        elif intent_negated:
+            negated.append(intent)
+    return tuple(positive), tuple(negated)
 
 
 def _decision(
@@ -123,7 +188,35 @@ def _decide_entry_route(
     status = str(workspace_state.get("status", "ABSENT"))
     root_value = workspace_state.get("rootId")
     root_id = root_value if isinstance(root_value, str) else None
-    explicit_intent = _classify_explicit_intent(request_text)
+    explicit_intents, negated_intents = _classify_explicit_intents(request_text)
+    if len(explicit_intents) > 1:
+        return _decision(
+            intent="AMBIGUOUS",
+            status=status,
+            root_id=root_id,
+            target_skill=None,
+            allowed=False,
+            requires_clarification=True,
+            reason_codes=[
+                "MULTIPLE_ENTRY_INTENTS",
+                *[f"CANDIDATE_{intent}" for intent in explicit_intents],
+            ],
+        )
+    explicit_intent = explicit_intents[0] if explicit_intents else None
+
+    if explicit_intent is None and negated_intents:
+        return _decision(
+            intent="AMBIGUOUS",
+            status=status,
+            root_id=root_id,
+            target_skill=None,
+            allowed=False,
+            requires_clarification=True,
+            reason_codes=[
+                "NEGATED_ENTRY_ACTION",
+                *[f"NEGATED_{intent}" for intent in negated_intents],
+            ],
+        )
 
     if explicit_intent == "NEW_DELIVERY":
         return _decision(
@@ -330,7 +423,12 @@ def decide_entry_route(
         request_text=request_text,
         workspace_state=workspace_state,
     )
-    explicit_intent = _classify_explicit_intent(request_text) or "AMBIGUOUS"
+    explicit_intents, _ = _classify_explicit_intents(request_text)
+    explicit_intent = (
+        explicit_intents[0]
+        if len(explicit_intents) == 1
+        else "AMBIGUOUS"
+    )
     registry = supervisor_registry or built_in_supervisor_registry()
     return {
         **decision,

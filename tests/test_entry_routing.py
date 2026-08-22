@@ -196,6 +196,90 @@ class EntryRoutingTests(unittest.TestCase):
             "NONE",
         )
 
+    def test_negated_lifecycle_actions_do_not_override_positive_intent(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "不要关闭交付，继续优化",
+                {"status": "COMPLETED", "rootId": "d-completed"},
+                "CONTINUE_DELIVERY",
+            ),
+            (
+                "不要归档，查看状态",
+                {
+                    "status": "COMPLETED",
+                    "rootId": "d-closed",
+                    "deliveryClosure": "CLOSED",
+                },
+                "QUERY_STATUS",
+            ),
+            (
+                "不要确认完成，继续执行",
+                {
+                    "status": "ACTIVE",
+                    "rootId": "d-active",
+                    "nextAction": "RECORD_USER_CONFIRMATION",
+                },
+                "DISPATCH_ACTIVE",
+            ),
+        )
+
+        for request_text, workspace_state, expected_intent in cases:
+            with self.subTest(request_text=request_text):
+                decision = decide_entry_route(
+                    request_text=request_text,
+                    workspace_state=workspace_state,
+                )
+                self.assertEqual(decision["intent"], expected_intent)
+                self.assertTrue(decision["allowed"])
+
+    def test_english_negation_and_word_boundaries_are_deterministic(
+        self,
+    ) -> None:
+        negated = decide_entry_route(
+            request_text="don't close delivery; continue",
+            workspace_state={"status": "COMPLETED", "rootId": "d-done"},
+        )
+        unrelated = decide_entry_route(
+            request_text="describe progressive delivery",
+            workspace_state={"status": "ACTIVE", "rootId": "d-active"},
+        )
+
+        self.assertEqual(negated["intent"], "CONTINUE_DELIVERY")
+        self.assertEqual(unrelated["intent"], "AMBIGUOUS")
+        self.assertIn(
+            "NO_HIGH_CONFIDENCE_ENTRY_RULE",
+            unrelated["reasonCodes"],
+        )
+
+    def test_only_negated_action_requires_clarification(self) -> None:
+        decision = decide_entry_route(
+            request_text="不要关闭交付",
+            workspace_state={"status": "COMPLETED", "rootId": "d-done"},
+        )
+
+        self.assertEqual(decision["intent"], "AMBIGUOUS")
+        self.assertFalse(decision["allowed"])
+        self.assertTrue(decision["requiresClarification"])
+        self.assertIn("NEGATED_ENTRY_ACTION", decision["reasonCodes"])
+
+    def test_multiple_positive_actions_require_clarification(self) -> None:
+        decision = decide_entry_route(
+            request_text="关闭交付，然后归档",
+            workspace_state={
+                "status": "COMPLETED",
+                "rootId": "d-closed",
+                "deliveryClosure": "CLOSED",
+            },
+        )
+
+        self.assertEqual(decision["intent"], "AMBIGUOUS")
+        self.assertFalse(decision["allowed"])
+        self.assertTrue(decision["requiresClarification"])
+        self.assertIn("MULTIPLE_ENTRY_INTENTS", decision["reasonCodes"])
+        self.assertEqual(decision["routerVersion"], 4)
+
 
 if __name__ == "__main__":
     unittest.main()

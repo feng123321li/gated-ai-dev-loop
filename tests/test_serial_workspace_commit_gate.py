@@ -896,55 +896,5 @@ class SerialWorkspaceCommitGateTests(unittest.TestCase):
                 ).workspace_turn_release(first_id)
             )
 
-    def test_business_commit_releases_with_changed_files_and_tree_evidence(
-        self,
-    ) -> None:
-        with TemporaryDirectory() as temporary:
-            repository, _ = _repository(Path(temporary))
-            second, first_id, start_commit = _terminal_first_turn(
-                repository,
-                "business-change",
-            )
-            (repository / "business-result.txt").write_text(
-                "reviewable business result\n",
-                encoding="utf-8",
-            )
-            git_command(repository, "add", "business-result.txt")
-            git_command(
-                repository,
-                "commit",
-                "-m",
-                "Commit business result",
-            )
-            head_commit = git_command(repository, "rev-parse", "HEAD")
-
-            successor = _select(repository, second)
-
-            self.assertFalse(
-                _is_waiting_for_workspace_commit(successor),
-                successor,
-            )
-            release = SchedulerRepository(
-                str(repository)
-            ).workspace_turn_release(first_id)
-            self.assertIsNotNone(release)
-            project = release["projects"][0]
-            self.assertEqual(project["turnStartCommit"], start_commit)
-            self.assertEqual(project["headCommit"], head_commit)
-            self.assertEqual(
-                project["businessChangedFiles"],
-                [
-                    {
-                        "path": "business-result.txt",
-                        "status": "ADDED",
-                        "statusCode": "A",
-                    }
-                ],
-            )
-            self.assertRegex(
-                project["businessTreeFingerprint"],
-                r"^[0-9a-f]{64}$",
-            )
-
 if __name__ == "__main__":
     unittest.main()

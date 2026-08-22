@@ -20,8 +20,8 @@
 | 发布元数据 | `pyproject.toml` 版本、三个 Plugin manifest 版本、vendored `__init__.py` | 是，用构建同步版本镜像 | `validate_release.py`、Plugin manifest 校验、版本/入口文档定向测试、`git diff --check` | 否 |
 | Skill/Plugin 契约 | canonical `skills/**`、Plugin manifest 工具/Profile/审批配置 | 是；仅 manifest 文案除外 | 四个 Skill 校验、Plugin 校验、`test_plugin_bundle`、`test_mcp_tool_profiles`、相关契约测试 | 仅触及 receiver/工具协议或范围不明时 |
 | 宿主与发布脚本 | `scripts/host_smoke/**`、注册探针、发布校验、CI 配置 | 仅改变生成链时 | 对应脚本测试、`test_release_readiness`、必要的本地 probe | 仅触及共享生成链、CI 测试入口或公共 fixture 时 |
-| 局部 Controller | 可明确隔离的 `src/hdg/**` 实现 | 是 | 相关测试模块、编译、Skill/Plugin 校验、release candidate | 正式发布前是 |
-| 核心协议/状态 | MCP catalog/tools、Controller operation、Graph runtime、repository、schema、调度身份/租约、构建器 | 是 | 相关测试、全量测试、编译、四 Skill、Plugin、release candidate、差异校验 | 是 |
+| 局部 Controller | 可明确隔离的 `src/hdg/**` 实现 | 是 | 相关测试模块、编译、Skill/Plugin 校验、release candidate；影响关键路径时运行合成性能基准 | 正式发布前是 |
+| 核心协议/状态 | MCP catalog/tools、Controller operation、Graph runtime、repository、schema、调度身份/租约、构建器 | 是 | 相关测试、全量测试、合成性能基准、编译、四 Skill、Plugin、release candidate、差异校验 | 是 |
 | 仅测试 | 单个测试模块 | 否 | 修改的测试模块 | 修改公共 fixture、发现入口或测试基础设施时 |
 
 ## 构建判定
@@ -47,3 +47,5 @@ git diff --check
 此外按矩阵补充定向测试、构建、编译、Skill/Plugin 校验或全量测试。失败后先修复，再从受影响层级重新验证；不要为了快速发布跳过已被实际改动触发的高等级门禁。
 
 CI 可以继续执行跨 Python 版本的完整防线；本地已经完成同一提交的充分验证时，不因 CI 存在而机械重复无关测试。
+
+性能基准使用固定合成输入、临时 SQLite/投影工作区和 P95 预算，负责发现 Controller 代码回退；它不调用模型或真实宿主。影响 Agent 编排、模型调用或业务构建体验的正式版本，还应在代表性业务仓库建立独立性能验收 Delivery，固定需求与依赖缓存条件后记录端到端阶段耗时。详见[性能量化与真实项目验收](performance-validation.md)。

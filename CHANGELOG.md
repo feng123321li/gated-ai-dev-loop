@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.43.7 — 2026-08-22
+
+发布提交：以 tag `v0.43.7` 指向的提交为准
+
+- **入口路由失败关闭**：Router 契约升级到版本 4；确定性 Entry Router 先排除“不要关闭”“暂不归档”“don't resume”等否定动作，并对英文关键词执行单词边界检查。一句话包含多个肯定入口动作时返回 `AMBIGUOUS` 和 `MULTIPLE_ENTRY_INTENTS`，只有否定动作时返回 `NEGATED_ENTRY_ACTION`，不再由关键词遍历顺序误派。
+- **性能量化闭环**：`HDG_TIMING=1` 可在 stderr 输出不改变业务响应的结构化 Controller/stage 计时；新增纯标准库合成基准，在临时 Delivery 上量化 Router、prepare/freeze、workspace status 与 graph frontier 的 mean/P95/max/预算，并加入 Python 3.10/3.12/3.14 CI 门禁。真实模型、Agent、MCP 和业务构建另由代表性业务仓库的独立性能验收 Delivery 覆盖。
+- **维护复杂度收敛**：继续拆分 planning baseline、overview 渲染、execution selection、event/projection façade 及大型测试场景；源码与测试文件门禁从 1000 行收紧到 900 行。删除仅证明旧符号不存在、已移除耦合或重复保障建议的历史测试，同时保留当前 SQLite 索引、事件分页、失败关闭和业务提交证据契约。
+- **兼容性**：MCP 工具联集仍为 35，schema v3、SQLite schema、公开 Controller operation 与 `.layered-delivery/` namespace 不变，无运行数据迁移；默认不开启计时，也不增加模型或 Supervisor 调用。
+- **验证**：全量 Python 499 项完成（498 通过、1 项按环境跳过），合成性能预算、全树编译、四个 canonical Skill、Codex/Claude/ZCode Plugin、release candidate、镜像与差异校验通过。
+
 ## 0.43.6 — 2026-08-22
 
 发布提交：以 tag `v0.43.6` 指向的提交为准

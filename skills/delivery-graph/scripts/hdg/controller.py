@@ -50,6 +50,12 @@ from .planning import (
 from .planning_gates import _serial_workspace_release_handshake
 from .repository import SchedulerRepository
 from .result_ledger import delivery_result
+from .timing import (
+    controller_timing_enabled,
+    emit_controller_timing,
+    timed_stage,
+    timing_session,
+)
 
 
 ControllerOperation = Callable[..., dict[str, Any]]
@@ -132,6 +138,32 @@ class LayeredDeliveryController:
         return frozenset(self._operations)
 
     def execute(
+        self,
+        name: str,
+        arguments: Mapping[str, Any],
+        *,
+        context: ControllerContext,
+    ) -> dict[str, Any]:
+        with timing_session(
+            command=name,
+            enabled=controller_timing_enabled(),
+        ) as collector:
+            try:
+                with timed_stage("controller.execute"):
+                    result = self._execute(
+                        name,
+                        arguments,
+                        context=context,
+                    )
+            except Exception:
+                if collector is not None:
+                    emit_controller_timing(collector, ok=False)
+                raise
+            if collector is not None:
+                emit_controller_timing(collector, ok=True)
+            return result
+
+    def _execute(
         self,
         name: str,
         arguments: Mapping[str, Any],

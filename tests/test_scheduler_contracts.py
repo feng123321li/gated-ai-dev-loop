@@ -61,6 +61,7 @@ from .scheduler_contracts_tool_schemas import McpSurfaceTestsPart1
 from .scheduler_contracts_workspace_isolation import McpSurfaceTestsPart2
 from .scheduler_contracts_git_binding import McpSurfaceTestsPart3
 from .scheduler_contracts_state_protocol import McpSurfaceTestsPart4
+from .scheduler_contracts_modern_protocol import McpModernProtocolTests
 from .scheduler_contracts_protocol_metadata import McpSurfaceTestsPart5
 from .scheduler_contracts_hierarchy_file_tests import HierarchyFileTests
 from .scheduler_contracts_draft_cleanup_tests import DraftCleanupTests
@@ -72,6 +73,7 @@ class McpSurfaceTests(
     McpSurfaceTestsPart2,
     McpSurfaceTestsPart3,
     McpSurfaceTestsPart4,
+    McpModernProtocolTests,
     McpSurfaceTestsPart5,
     unittest.TestCase,
 ):

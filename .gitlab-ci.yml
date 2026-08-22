@@ -14,6 +14,7 @@ contract:
   script:
     - python -m unittest discover -s tests -t .
     - python -m compileall -q src tests scripts
+    - python scripts/benchmark_controller.py --iterations 5 --warmup 1 --compact
     - python scripts/build_skill.py
     - git diff --exit-code -- skills/delivery-graph/scripts/hdg skills/delivery-graph/scripts/hdg_mcp.py plugins/delivery-graph/skills/delivery-graph
     - python scripts/validate_release.py

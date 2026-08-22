@@ -7,6 +7,12 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.43.7 发布候选矩阵
+
+0.43.7 将 Router 契约升级到版本 4，修复确定性 Entry Router 对中文/英文否定入口动作与一句多动作的抢先命中，并给英文关键词增加单词边界：否定动作被排除，多个肯定动作或只有否定动作均失败关闭并要求澄清。`HDG_TIMING=1` 新增默认关闭的 stderr 结构化 Controller/stage 计时，不改变 stdout、MCP 或业务返回；纯标准库合成基准在临时目录测量 Router、prepare/freeze、workspace status 和 graph frontier 的 P95，并进入 Python 3.10/3.12/3.14 CI。模型、原生 Agent、网络和业务构建仍由真实宿主/业务仓库单独验收，不能由合成数据替代。
+
+本版本继续按职责拆分 planning baseline、模型 overview、repository execution selection、event/projection façade 与大型测试文件，并把源码/测试文件上限从 1000 行收紧到 900 行；删除低价值历史墓碑与重复测试，但保留当前状态、索引、事件链、失败关闭和提交证据契约。MCP 工具联集仍为 35，schema v3、SQLite schema、公开操作、三个 Profile 和 `.layered-delivery/` namespace 不变，无运行数据迁移。候选已完成 499 项 Python 测试（498 通过、1 项按环境跳过）、合成性能预算、全树编译、四个 canonical Skill、Codex/Claude/ZCode Plugin、release candidate、镜像与差异校验。
+
 ## 0.43.6 发布候选矩阵
 
 0.43.6 新增完整结果账本和确定性 Result Assembler：`delivery_result` 枚举每个 Graph Loop，成功 TASK 必须用 `affectedScopes` 和 `PASSED` scope-bound evidence 覆盖全部影响范围，Review 的执行/复用/验收 evidence refs 必须可解析，结果写入与用户确认均失败关闭。入口 Router 按持久化状态稳定区分新需求、继续、恢复、确认、关闭、归档与查询；版本化 Agent Profile Catalog 为 TASK/Review 分配专用 owner/helper Team，MANUAL 与 AUTO 凭据边界保持分离。性能指标纳入当前 Revision 的全部 retry/lost attempts；可选多 Supervisor 默认关闭、无工具且只给 advisory，`ALWAYS_ADVISE` 不等于 Controller 强制 receipt。

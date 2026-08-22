@@ -3,6 +3,9 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+import json
+import os
+import sys
 from time import perf_counter
 from typing import Any, Iterator
 
@@ -93,3 +96,45 @@ def timing_increment(name: str, amount: int = 1) -> None:
     collector = _ACTIVE_TIMING.get()
     if collector is not None:
         collector.metric(name, collector.metrics.get(name, 0) + amount)
+
+
+def controller_timing_enabled() -> bool:
+    return os.environ.get("HDG_TIMING", "").strip().casefold() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def emit_controller_timing(
+    collector: TimingCollector,
+    *,
+    ok: bool,
+) -> None:
+    event = {"event": "controller.timing", **collector.result(ok=ok)}
+    try:
+        sys.stderr.write(
+            json.dumps(
+                event,
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            + "\n"
+        )
+        sys.stderr.flush()
+    except (OSError, TypeError, ValueError):
+        return
+
+
+__all__ = (
+    "TimingCollector",
+    "controller_timing_enabled",
+    "emit_controller_timing",
+    "timed_stage",
+    "timing_increment",
+    "timing_metric",
+    "timing_session",
+)

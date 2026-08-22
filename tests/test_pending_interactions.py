@@ -506,7 +506,7 @@ class PendingInteractionTests(unittest.TestCase):
                 "synthetic Git discovery failure",
             )
             with patch(
-                "hdg.planning_gates.inspect_delivery_git_workspace",
+                "hdg.planning_baseline_gates.inspect_delivery_git_workspace",
                 side_effect=expected,
             ):
                 with self.assertRaises(GatedLoopError) as caught:
@@ -530,7 +530,7 @@ class PendingInteractionTests(unittest.TestCase):
     def test_unexpected_baseline_discovery_error_is_not_downgraded(self) -> None:
         with TemporaryDirectory() as root:
             with patch(
-                "hdg.planning_gates.inspect_delivery_git_workspace",
+                "hdg.planning_baseline_gates.inspect_delivery_git_workspace",
                 side_effect=RuntimeError("synthetic implementation failure"),
             ):
                 with self.assertRaises(RuntimeError):

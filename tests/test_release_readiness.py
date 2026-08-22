@@ -139,6 +139,7 @@ class TeamReleaseReadinessTests(unittest.TestCase):
         for command in (
             "python -m unittest",
             "python -m compileall",
+            "python scripts/benchmark_controller.py",
             "python scripts/build_skill.py",
             "python scripts/validate_release.py",
         ):

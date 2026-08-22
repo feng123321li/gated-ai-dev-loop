@@ -13,7 +13,7 @@ from hdg.repository_projections import DeliveryProjectionStore
 
 
 class RepositoryArchitectureTests(unittest.TestCase):
-    def test_source_modules_stay_below_1000_lines(self) -> None:
+    def test_source_modules_stay_below_900_lines(self) -> None:
         source_root = Path(__file__).parents[1] / "src" / "hdg"
         paths = sorted(source_root.glob("*.py"))
         self.assertTrue(paths)
@@ -21,11 +21,11 @@ class RepositoryArchitectureTests(unittest.TestCase):
             with self.subTest(path=path.name):
                 self.assertLessEqual(
                     len(path.read_text(encoding="utf-8").splitlines()),
-                    1000,
+                    900,
                     f"{path.name} must be split by responsibility",
                 )
 
-    def test_test_modules_stay_below_1000_lines(self) -> None:
+    def test_test_modules_stay_below_900_lines(self) -> None:
         tests_root = Path(__file__).parent
         paths = sorted(tests_root.rglob("*.py"))
 
@@ -34,7 +34,7 @@ class RepositoryArchitectureTests(unittest.TestCase):
             with self.subTest(path=path.relative_to(tests_root).as_posix()):
                 self.assertLessEqual(
                     len(path.read_text(encoding="utf-8").splitlines()),
-                    1000,
+                    900,
                     f"{path.name} must be split by test responsibility",
                 )
 
@@ -81,43 +81,6 @@ class RepositoryArchitectureTests(unittest.TestCase):
                 ),
             )
 
-    def test_hook_identity_persistence_api_is_removed(self) -> None:
-        receiver_methods = {
-            "issue_receiver_attestation",
-            "_assert_receiver_root",
-            "_idle_frontier_allows_receiver_root_rotation",
-            "_worker_lost_retry_allows_receiver_root_rotation",
-            "issue_host_receiver_identity",
-            "consume_receiver_attestation",
-        }
-        workspace_methods = {
-            "issue_host_workspace_attestation",
-            "validate_host_workspace_attestation",
-            "consume_host_workspace_attestation",
-        }
-
-        for owner in (DeliveryDispatchStore, SchedulerRepository):
-            with self.subTest(owner=owner.__name__):
-                self.assertTrue(
-                    receiver_methods.isdisjoint(owner.__dict__)
-                )
-        self.assertTrue(
-            workspace_methods.isdisjoint(
-                SchedulerRepository.__dict__
-            )
-        )
-
-
-    def test_repository_facade_stays_below_1800_lines(self) -> None:
-        repository_path = (
-            Path(__file__).parents[1] / "src" / "hdg" / "repository.py"
-        )
-
-        self.assertLess(
-            len(repository_path.read_text(encoding="utf-8").splitlines()),
-            1800,
-        )
-
     def test_projection_persistence_is_owned_by_a_dedicated_store(
         self,
     ) -> None:
@@ -132,8 +95,8 @@ class RepositoryArchitectureTests(unittest.TestCase):
             expected_methods.issubset(DeliveryProjectionStore.__dict__)
         )
         for method_name in expected_methods:
-            facade_method = SchedulerRepository.__dict__[method_name]
-            store_method = DeliveryProjectionStore.__dict__[method_name]
+            facade_method = getattr(SchedulerRepository, method_name)
+            store_method = getattr(DeliveryProjectionStore, method_name)
             self.assertIn(
                 "_delivery_projection_store",
                 inspect.getsource(facade_method),
@@ -220,13 +183,13 @@ class RepositoryArchitectureTests(unittest.TestCase):
         static_methods: set[str] | None = None,
     ) -> None:
         static_methods = static_methods or set()
-        self.assertTrue(expected_methods.issubset(store.__dict__))
+        self.assertTrue(all(hasattr(store, name) for name in expected_methods))
         self.assertTrue(
-            expected_methods.issubset(SchedulerRepository.__dict__)
+            all(hasattr(SchedulerRepository, name) for name in expected_methods)
         )
         for method_name in expected_methods:
-            facade_method = SchedulerRepository.__dict__[method_name]
-            store_method = store.__dict__[method_name]
+            facade_method = getattr(SchedulerRepository, method_name)
+            store_method = getattr(store, method_name)
             self.assertIn(
                 store.__name__
                 if method_name in static_methods

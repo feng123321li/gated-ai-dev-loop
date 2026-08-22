@@ -2,6 +2,8 @@
 
 Entry Router 先用确定性规则与持久化 Delivery 状态处理“新需求、继续、恢复、确认、关闭、归档、查状态”等入口。多 Supervisor 是这个稳定路由器之后的可选决策层，不是执行层。
 
+Router 会先排除“不要关闭”“暂不归档”“don't resume”等否定动作；一句话同时包含两个肯定入口动作时返回 `AMBIGUOUS` 并要求澄清，不依赖关键词遍历顺序抢先命中。只有一个明确肯定动作时才进入对应状态门禁。
+
 默认 registry：
 
 - `requirements-supervisor`：新需求与重新规划；

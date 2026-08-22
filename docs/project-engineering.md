@@ -12,6 +12,7 @@ src/hdg/
 │                      # 当前宿主 receiver 预留与并发批次规划
 ├── agent_profiles.py   # 版本化专用 receiver/helper Profile Catalog
 ├── entry_routing.py    # 入口文本与持久状态的确定性路由
+├── timing.py           # 可选 Controller/stage 结构化计时
 ├── supervisor_profiles.py
 │                      # 可选无工具、只作决策的 Supervisor 配置
 ├── loop_contracts.py   # Loop descriptor、outcome、资源锁
@@ -24,12 +25,15 @@ src/hdg/
 ├── git_binding.py      # Git worktree/feature/mainline 只读发现与校验
 ├── graph_model.py      # GROUP Join/可选 seam Review、Delivery Acceptance/Readiness、DAG 与 FSM
 ├── repository.py       # SQLite repository 兼容 façade
-├── repository_*.py    # workspace、Revision、事件、预留与投影 stores
-├── planning.py         # prepare / freeze / workspace status
+├── repository_*.py    # workspace、Revision、事件、预留、选择与投影 stores/mixins
+├── planning.py         # prepare / freeze / workspace status façade
+├── planning_*.py      # 规划、baseline 门禁、交互与 workspace 职责模块
 ├── graph_frontier.py   # 下一步调度动作
 ├── graph_runtime.py    # claim、lease、结果、重试、恢复
 ├── hierarchy_contract.py
-├── model_rendering.py  # Delivery/层级总览渲染
+├── model_rendering.py  # Delivery/层级总览渲染 façade
+├── model_rendering_*.py
+│                      # overview、baseline、acceptance 等确定性渲染模块
 ├── controller.py       # 协议无关的共享应用 Controller
 ├── operations.py       # 旧 Python 公共导入面的薄兼容 façade
 ├── host_policy.py      # Codex 项目根与 Claude 审批兼容策略
@@ -57,7 +61,7 @@ src/hdg/
 | `task_requirement_states` | 每个 TASK 当前 requirement revision、冻结/解冻状态与更新时间 |
 | `graph_events` | 带前序哈希的不可变调度事件 |
 
-`SchedulerRepository` 只保留 SQLite 连接/事务、共享定义校验与兼容 facade。workspace 绑定、执行模式、hierarchy/revision/run 生命周期、Graph 事件状态、dispatch reservation 以及人类投影分别由 `repository_workspaces.py`、`repository_execution_setup.py`、`repository_hierarchies.py`、`repository_events.py`、`repository_dispatch.py` 和 `repository_projections.py` 管理。各 store 复用同一事务连接与 SQLite schema，不引入第二套状态，也不改变外部方法签名。
+`SchedulerRepository` 只保留 SQLite 连接/事务、共享定义校验与兼容 facade。workspace 绑定、执行模式与选择、hierarchy/revision/run 生命周期、Graph 事件状态、dispatch reservation 以及人类投影分别由 `repository_workspaces.py`、`repository_execution_setup.py`、`repository_execution_selection.py`、`repository_hierarchies.py`、`repository_events.py`、`repository_event_projection_facade.py`、`repository_dispatch.py` 和 `repository_projections.py` 管理。各 store/mixin 复用同一事务连接与 SQLite schema，不引入第二套状态，也不改变外部方法签名。
 
 TASK Loop payload/outcome 以不透明 JSON 保存；成功 Review outcome 只允许本层结论、findings、有界证据元数据和 Controller 快照，不复制 `upstreamLoopResults` 或下层 result body。共享 `root.skillHints` 作为 hierarchy 输入原样持久化，并由 `loop_context` 在运行时交给各 TASK、TASK Review、已配置的 GROUP seam Review 和 Delivery Acceptance/Readiness Loop；数据库没有 Task-Skill 分配、文件 scope、开发计划、Gate evidence 或 Skill activation 表。
 
@@ -144,7 +148,13 @@ Controller 只读发现和校验 Git，不执行 branch、worktree、stash、sta
 
 工具分为八组：
 
-- 入口与外层 receiver 派遣：`route_entry_intent` 先把原始入口文本与持久化状态合成为确定性路由；可选 decision-only Supervisor 默认关闭且无工具权限。`plan_dispatch_batch` 按当前宿主 Adapter、版本化 Agent Profile Catalog、profile 并发槽位和 frontier 直接预留 receiver，不接收模型或推理档位字段。
+- 入口与外层 receiver 派遣：`route_entry_intent` 先排除被否定的生命周期动作，再把唯一肯定入口文本与持久化状态合成为确定性路由；多个肯定动作失败关闭为 `AMBIGUOUS`。可选 decision-only Supervisor 默认关闭且无工具权限。`plan_dispatch_batch` 按当前宿主 Adapter、版本化 Agent Profile Catalog、profile 并发槽位和 frontier 直接预留 receiver，不接收模型或推理档位字段。
+
+## 维护与性能边界
+
+所有 `src/hdg/*.py` 与 `tests/*.py` 均由架构测试限制为不超过 900 行；兼容 façade 通过职责模块或 mixin 组合公共方法，不把实现重新复制回大文件。测试保留当前正向契约、失败关闭和数据完整性场景，删除只断言历史符号已经不存在的墓碑测试。
+
+设置 `HDG_TIMING=1` 后，Controller 在 stderr 输出单行 `controller.timing` JSON，包含 operation、总耗时、stage 聚合与文件写入计数；默认关闭，stdout 与业务结果契约不变。仓库内 `scripts/benchmark_controller.py` 使用临时目录合成 schema v3 Delivery，量化入口 Router、prepare/freeze、workspace status 和 graph frontier 的均值、P95、最大值及预算。真实模型、Agent 和业务构建速度按[性能量化与真实项目验收](performance-validation.md)另行验证。
 - 规划与交接：`workspace_status`、`hierarchy_contract`、`preview_hierarchy`、`confirm_development_baseline`、`select_execution_mode`、`resume_execution_mode`、`create_manual_handoff`、`start_manual_handoff`、`prepare_hierarchy`、`freeze_hierarchy`。`workspace_status(base_ref=...)` 可承接宿主明确选择的基线；未指定时按有效 `origin/HEAD`、本地 `main`、本地 `master` 降级发现。preview 先登记 `CHOICE_READY` 并生成关联投影，再返回唯一 `pendingInteraction`：缺 binding 时为 `DEVELOPMENT_BASELINE`，确认后为 `EXECUTION_MODE`。`developmentBaseline` / `executionChoice` 只是该对象的兼容别名。Codex 映射 `request_user_input`，Claude 映射 `AskUserQuestion`，可调用时必须使用原生选择器。AUTOMATIC 先持久化业务确认，再按 `CURRENT_WORKSPACE_SERIAL` 在当前实际 checkout 续接；手动 Git 漂移遵循上一节的单仓双分支和多仓 fail-closed 规则。
 - Delivery 修订与关闭：`delivery_revision_history`、`prepare_delivery_revision`、`close_delivery`
 - 需求修订：`unfreeze_task_requirement`、`refreeze_task_requirement`

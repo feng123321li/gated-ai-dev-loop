@@ -1,6 +1,6 @@
 {
   "name": "delivery-graph",
-  "version": "0.43.7",
+  "version": "0.43.8",
   "description": "确认 Git 基线，以显式 rootId 管理多 Delivery，在当前 workspace 串行调度 GROUP/TASK，并支持冻结开发包、验收与恢复",
   "author": {
     "name": "delivery-graph contributors",

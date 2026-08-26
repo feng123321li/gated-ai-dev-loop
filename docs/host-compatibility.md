@@ -7,6 +7,12 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.43.8 发布候选矩阵
+
+0.43.8 将 Delivery 实时进度从 Markdown 投影中解耦：`progress.md` 不再嵌入“实时进度监控”表，heartbeat 与显式业务 progress 均不重写文件；`report_loop_progress` 直接返回更新后的 `progressMonitor`，Dashboard、`graph_status` 与 `graph_frontier` 继续按读取时刻即时构造实时展示。SQLite 保留有界 progress 里程碑事件及 heartbeat/租约状态，用于重连、重启、审计和 run 重建；时间敏感的 monitor 快照不持久化。
+
+本版本 MCP 工具联集仍为 35，schema v3、SQLite schema、Graph FSM、公开操作、三个 Profile 和 `.layered-delivery/` namespace 不变，无运行数据迁移。投影模板升级到版本 21；既有 Delivery 在下一次合法关键状态刷新或重建时移除旧实时监控区块。候选已完成 500 项 Python 测试（499 通过、1 项按环境跳过）、合成性能预算、全树编译、四个 canonical Skill、Codex/Claude/ZCode Plugin、release candidate、93 个 runtime 镜像文件与差异校验。
+
 ## 0.43.7 发布候选矩阵
 
 0.43.7 将 Router 契约升级到版本 4，修复确定性 Entry Router 对中文/英文否定入口动作与一句多动作的抢先命中，并给英文关键词增加单词边界：否定动作被排除，多个肯定动作或只有否定动作均失败关闭并要求澄清。`HDG_TIMING=1` 新增默认关闭的 stderr 结构化 Controller/stage 计时，不改变 stdout、MCP 或业务返回；纯标准库合成基准在临时目录测量 Router、prepare/freeze、workspace status 和 graph frontier 的 P95，并进入 Python 3.10/3.12/3.14 CI。模型、原生 Agent、网络和业务构建仍由真实宿主/业务仓库单独验收，不能由合成数据替代。

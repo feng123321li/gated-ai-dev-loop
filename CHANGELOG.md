@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.43.8 — 2026-08-26
+
+发布提交：以 tag `v0.43.8` 指向的提交为准
+
+- **实时进度只走运行中展示**：Delivery `progress.md` 不再嵌入“实时进度监控”表；`heartbeat_loop` 与 `report_loop_progress` 都不因实时观测变化重写 Markdown。业务进度上报直接返回最新 `progressMonitor`，Agent 与 Dashboard 继续即时刷新阶段、摘要、里程碑、测试、心跳、租约和健康预警。
+- **持久化边界明确化**：SQLite 继续追加有界的 `LOOP_PROGRESS_REPORTED` 里程碑事件，并保存 heartbeat/租约运行态，支持 MCP 重连、进程重启、attempt 审计与 run 重建；包含心跳年龄、租约倒计时和健康判断的 `progressMonitor` 展示快照按读取时刻即时计算，不入库、不写文件。
+- **投影与执行契约收敛**：投影模板升级到版本 21，`progress.md` 只保留关键运行状态、TASK/GROUP 与 Delivery Acceptance/Readiness 聚合；执行策略显式声明 progress 事件持久化、实时面板更新和禁止文件投影三项边界。减少每个业务进度里程碑的原子目录/文件写入。
+- **兼容性**：MCP 工具联集仍为 35，schema v3、SQLite schema、Graph FSM、公开 Controller operation 与 `.layered-delivery/` namespace 不变，无运行数据迁移。既有 Delivery 在下一次合法关键状态投影刷新或重建时自然移除旧实时监控区块。
+- **验证**：全量 Python 500 项完成（499 通过、1 项按环境跳过），合成性能预算、全树编译、四个 canonical Skill、Codex/Claude/ZCode Plugin、release candidate、93 个 runtime 镜像文件与差异校验通过。
+
 ## 0.43.7 — 2026-08-22
 
 发布提交：以 tag `v0.43.7` 指向的提交为准

@@ -72,7 +72,6 @@ class SchedulerRepository(
         return DeliveryProjectionStore(
             self,
             validate_stored_definition=_validated_stored_definition,
-            timestamp_fn=timestamp,
         )
 
     def _delivery_execution_setup_store(

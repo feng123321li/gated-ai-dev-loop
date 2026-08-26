@@ -114,7 +114,7 @@ class SchedulerRuntimeTestsPart10:
             [False, True],
         )
 
-        report_loop_progress(
+        reported = report_loop_progress(
             root=self.root,
             root_id=root_id,
             node_id=node_id,
@@ -123,7 +123,11 @@ class SchedulerRuntimeTestsPart10:
             summary_zh="关键测试阶段已开始。",
             now=at(6),
         )
-        self.assertNotEqual(progress_path.read_bytes(), projection_after_claim)
+        self.assertIn(
+            "关键测试阶段已开始。",
+            reported["progressMonitor"]["markdownTable"],
+        )
+        self.assertEqual(progress_path.read_bytes(), projection_after_claim)
 
     def test_frozen_projection_contains_runtime_progress(self) -> None:
         hierarchy = auditable_recursive_hierarchy()
@@ -330,6 +334,10 @@ class SchedulerRuntimeTestsPart10:
 
         self.assertEqual(reported["phaseZh"], "运行测试")
         self.assertEqual(reported["leaseExpiresAt"], claimed["leaseExpiresAt"])
+        self.assertIn(
+            "正在运行测试，准备检查接口兼容性。",
+            reported["progressMonitor"]["markdownTable"],
+        )
         events = graph_events(root=self.root, root_id=root_id)["events"]
         progress_event = next(
             event
@@ -382,8 +390,8 @@ class SchedulerRuntimeTestsPart10:
             / root_id
             / "progress.md"
         ).read_text(encoding="utf-8")
-        self.assertIn("## 实时进度监控", projection)
-        self.assertIn("74/74 通过", projection)
+        self.assertNotIn("## 实时进度监控", projection)
+        self.assertNotIn("74/74 通过", projection)
         self.assertNotIn("op-progress", projection)
 
         rebuilt = rebuild_graph_run(root=self.root, root_id=root_id)

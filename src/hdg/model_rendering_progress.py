@@ -379,12 +379,6 @@ def render_delivery_progress(
                 suffix=["[查看验收](acceptance.md)"],
             )
         )
-    progress_monitor = (
-        run.get("progressMonitor", {}).get("markdownTable")
-        if isinstance(run, dict)
-        and isinstance(run.get("progressMonitor"), dict)
-        else None
-    )
     return PROGRESS_PROJECTION_TEMPLATE.substitute(
         template_version=str(PROJECTION_TEMPLATE_VERSION),
         progress_status="\n".join(
@@ -396,10 +390,6 @@ def render_delivery_progress(
                 updated_at=updated_at,
                 run=run,
             )
-        ),
-        progress_monitor=(
-            progress_monitor
-            or "- 尚无运行监控数据；主 Agent 将在下一次调度轮询时刷新。"
         ),
         task_progress="\n".join(
             [table_header, table_separator, *task_rows]

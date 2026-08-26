@@ -197,7 +197,7 @@ PAYLOAD_FIELD_ORDER = MappingProxyType(
 
 UTC_PLUS_8 = timezone(timedelta(hours=8))
 
-PROJECTION_TEMPLATE_VERSION = 20
+PROJECTION_TEMPLATE_VERSION = 21
 
 WORK_ITEM_DIRECTORY = "work-items"
 
@@ -289,10 +289,6 @@ PROGRESS_PROJECTION_TEMPLATE = Template(
 ## 运行状态
 
 ${progress_status}
-
-## 实时进度监控
-
-${progress_monitor}
 
 ## TASK 执行进展
 

@@ -18,9 +18,6 @@ from .model_rendering import (
     render_work_item_projection_documents,
     render_workspace_overview,
 )
-from .progress_reporting import attach_progress_monitor
-
-
 MANUAL_WRITABLE_PROJECTIONS = frozenset(
     {"progress.md", "acceptance.md"}
 )
@@ -78,11 +75,9 @@ class DeliveryProjectionStore:
         repository: Any,
         *,
         validate_stored_definition: Callable[..., Any],
-        timestamp_fn: Callable[[object], str],
     ) -> None:
         self.repository = repository
         self.validate_stored_definition = validate_stored_definition
-        self.timestamp_fn = timestamp_fn
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.repository, name)
@@ -107,12 +102,6 @@ class DeliveryProjectionStore:
                     != "SCHEDULER_RUN_MISSING"
                 ):
                     raise
-            if run is not None:
-                run = attach_progress_monitor(
-                    run,
-                    definition["graph"],
-                    observed_at=self.timestamp_fn(self.now),
-                )
             selection = self.execution_selection(root_id)
             projection_definition = {
                 **definition,

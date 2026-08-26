@@ -14,6 +14,15 @@ from .loop_architecture_support import (
 
 
 class LoopContractTests(unittest.TestCase):
+    def test_progress_policy_separates_persistence_display_and_projection(
+        self,
+    ) -> None:
+        reporting = loop_execution_policy()["progressReporting"]
+
+        self.assertTrue(reporting["progressPersistsEvent"])
+        self.assertTrue(reporting["progressUpdatesLiveMonitor"])
+        self.assertFalse(reporting["progressWritesProjection"])
+
     def test_loop_descriptor_is_opaque_but_resource_claims_are_normalized(
         self,
     ) -> None:

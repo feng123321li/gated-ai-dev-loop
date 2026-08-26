@@ -190,7 +190,7 @@ def report_loop_progress(
     explicit_dogfood: bool = False,
     now: object = None,
 ) -> dict[str, Any]:
-    """Record bounded user-visible progress without renewing a lease."""
+    """Record progress and return a live monitor without writing projections."""
 
     repository = SchedulerRepository(root, now=now)
     repository.assert_self_hosting_dogfood(explicit_dogfood)
@@ -237,7 +237,12 @@ def report_loop_progress(
             claimed_at=state["claimedAt"],
             last_heartbeat_at=state["lastHeartbeatAt"],
         )
-    repository.write_projections(root_id)
+    status = graph_status(
+        root=root,
+        root_id=root_id,
+        explicit_dogfood=explicit_dogfood,
+        now=now,
+    )
     return {
         "rootId": root_id,
         "nodeId": node_id,
@@ -262,6 +267,7 @@ def report_loop_progress(
         "leaseExpiresAt": lease_expires_at,
         "leaseRenewed": False,
         "heartbeatDirective": heartbeat_directive,
+        "progressMonitor": status["progressMonitor"],
     }
 
 def pause_loop(

@@ -186,6 +186,8 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 
 Delivery 保持 `OPEN/未上线` 时，测试反馈、业务验收优化或需求扩展仍可属于同一个 Delivery：
 
+若上一 Run 已 `CANCELLED`，它永久保持终态，不能由 `resume_loop`、`resume_execution_mode` 或 receiver 接管复活。只有 `workspaceRelease=RELEASED` 已持久化且用户明确继续或修订同一 `OPEN` Delivery 时，入口路由才返回 `NEXT_REVISION_REQUIRED`；下面的流程创建并冻结新 Revision。release 为 `PENDING` 时先完成安全释放，不能提前准备候选或修改业务代码。
+
 1. 读取 `delivery_revision_history` 与当前 hierarchy，保留原 `delivery.id`。
 2. 将完整新范围传给 `prepare_delivery_revision`，同时提交当前 revision、变更原因、真实请求人和连续性依据。用户明确要求继续同一 Delivery 时传 `continuity_basis=USER_EXPLICIT_SAME_DELIVERY`；只有当前 Graph 已记录 `REPLAN_REQUIRED` 才传 `ACTIVE_LOOP_REPLAN`。工作区、路径、分支或旧 Delivery 仍处于 Active 都不能充当连续性。该调用只写候选 Revision，不替换当前 hierarchy/run，也不应触发宿主通用确认弹窗；可重复 prepare 尚未冻结的同一新 Revision，但不能修改旧 Revision。
 3. 检查响应中的 `carryForwardTaskIds`。只有 TASK definition、依赖、Loop、资源声明与 TASK Review 完全未变，而且旧 Revision 的实现及 Review 都成功，才会成为携带候选；GROUP 与 Delivery Acceptance/Readiness 不携带。

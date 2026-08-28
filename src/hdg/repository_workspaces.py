@@ -523,6 +523,15 @@ class DeliveryWorkspaceStore:
                     }
                 )
         repository.write_workspace_overview()
+        cancelled_release = (
+            repository.workspace_turn_release(latest["root_id"])
+            if state == "CANCELLED"
+            else None
+        )
+        can_prepare_revision = closure["state"] == "OPEN" and (
+            state == "COMPLETED"
+            or (state == "CANCELLED" and cancelled_release is not None)
+        )
         result: dict[str, Any] = {
             "status": "PREPARED" if state == "PREPARED" else state,
             "rootId": latest["root_id"],
@@ -533,9 +542,7 @@ class DeliveryWorkspaceStore:
             "archiveState": (
                 "ARCHIVED" if state == "ARCHIVED" else "ACTIVE"
             ),
-            "canPrepareRevision": (
-                state == "COMPLETED" and closure["state"] == "OPEN"
-            ),
+            "canPrepareRevision": can_prepare_revision,
             "canCloseDelivery": (
                 state == "COMPLETED" and closure["state"] == "OPEN"
             ),
@@ -552,6 +559,13 @@ class DeliveryWorkspaceStore:
                 "PREPARE_REVISION_OR_CLOSE_DELIVERY"
                 if closure["state"] == "OPEN"
                 else "ARCHIVE_DELIVERY_OPTIONAL"
+            )
+        elif state == "CANCELLED":
+            result["runStatus"] = "CANCELLED"
+            result["nextAction"] = (
+                "PREPARE_DELIVERY_REVISION"
+                if can_prepare_revision
+                else "RELEASE_WORKSPACE_TURN_BEFORE_REVISION"
             )
         if workspace_root is not None:
             if state == "CHOICE_READY":

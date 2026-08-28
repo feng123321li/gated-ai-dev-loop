@@ -47,7 +47,9 @@ allowed-tools:
 | `ACTIVE` / `BLOCKED` / `PAUSED` | 停止本 Skill，切换到 `$delivery-graph-dispatch` |
 | `COMPLETED` + `OPEN/未上线` | 当前 Revision 已完成；展示结果，按用户意图继续同一 Delivery 的 Revision，或在生产上线后明确关闭 |
 | `COMPLETED` + `CLOSED/已上线交付` | 不得追加 Revision；用户单独明确要求时才归档 |
-| `ARCHIVED` / `CANCELLED` | 报告终态；已关闭/归档后的新增改动创建新 Delivery |
+| `CANCELLED` + `OPEN` + `workspaceRelease=RELEASED` | 旧 Run 保持终态；用户明确继续或修订时只调用 `prepare_delivery_revision` 创建下一不可变 Revision，不调用 `resume_loop` 或恢复旧 Run |
+| `CANCELLED` + `workspaceRelease=PENDING` | 先按 Controller 返回动作完成安全释放；不得提前准备 Revision、切分支或修改业务代码 |
+| `ARCHIVED` | 报告终态；新增改动创建新 Delivery |
 
 无参发现不会恢复未绑定的 `CHOICE_READY` 或旧版 `HANDOFF_READY` 草稿；必须使用创建响应中的 `rootId`。当前 MANUAL 选择会原子绑定当前 workspace 并进入与 AUTOMATIC 相同的串行队列。遇到未知写响应、MCP 重连、Git binding 异常或投影问题时，读取[MCP 与状态说明](references/mcp-transport.md)，不要盲目重放写操作。
 

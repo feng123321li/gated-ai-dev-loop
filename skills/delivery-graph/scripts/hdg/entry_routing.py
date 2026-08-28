@@ -12,7 +12,7 @@ from .supervisor_profiles import (
 )
 
 
-ENTRY_ROUTER_VERSION = 5
+ENTRY_ROUTER_VERSION = 6
 _RUNTIME_STATUSES = frozenset(
     {"ACTIVE", "BLOCKED", "PAUSED", "QUEUED", "HANDOFF_READY"}
 )
@@ -183,6 +183,64 @@ def _state_conflict(
     )
 
 
+def _cancelled_revision_route(
+    *,
+    intent: str,
+    root_id: str | None,
+    workspace_state: dict[str, Any],
+) -> dict[str, Any]:
+    """Route a safely released cancelled Run to a new Revision only."""
+
+    if root_id is None:
+        return _state_conflict(
+            intent,
+            "CANCELLED",
+            root_id,
+            "CONTINUE_REQUIRES_EXISTING_DELIVERY",
+        )
+    if workspace_state.get("deliveryClosure") != "OPEN":
+        return _state_conflict(
+            intent,
+            "CANCELLED",
+            root_id,
+            "CANCELLED_REVISION_REQUIRES_OPEN_DELIVERY",
+        )
+    workspace_release = workspace_state.get("workspaceRelease")
+    workspace_turn = workspace_state.get("workspaceTurn")
+    released = (
+        isinstance(workspace_release, dict)
+        and workspace_release.get("state") == "RELEASED"
+    ) or (
+        isinstance(workspace_turn, dict)
+        and workspace_turn.get("state") == "RELEASED"
+    )
+    if not released:
+        return _state_conflict(
+            intent,
+            "CANCELLED",
+            root_id,
+            "CANCELLED_REVISION_REQUIRES_WORKSPACE_RELEASE",
+        )
+    return _decision(
+        intent=intent,
+        status="CANCELLED",
+        root_id=root_id,
+        target_skill="delivery-graph",
+        allowed=True,
+        reason_codes=[
+            (
+                "EXPLICIT_CONTINUE"
+                if intent == "CONTINUE_DELIVERY"
+                else "EXPLICIT_REPLAN"
+            ),
+            "STATE_CANCELLED",
+            "DELIVERY_OPEN",
+            "WORKSPACE_RELEASED",
+            "NEXT_REVISION_REQUIRED",
+        ],
+    )
+
+
 def _decide_entry_route(
     *,
     request_text: str,
@@ -340,6 +398,12 @@ def _decide_entry_route(
                 allowed=True,
                 reason_codes=["EXPLICIT_CONTINUE", f"STATE_{status}"],
             )
+        if status == "CANCELLED":
+            return _cancelled_revision_route(
+                intent="CONTINUE_DELIVERY",
+                root_id=root_id,
+                workspace_state=workspace_state,
+            )
         return _state_conflict(
             "CONTINUE_DELIVERY",
             status,
@@ -348,6 +412,12 @@ def _decide_entry_route(
         )
 
     if explicit_intent == "REPLAN":
+        if status == "CANCELLED":
+            return _cancelled_revision_route(
+                intent="REPLAN",
+                root_id=root_id,
+                workspace_state=workspace_state,
+            )
         if status not in {"ACTIVE", "BLOCKED", "PAUSED", "COMPLETED"}:
             return _state_conflict(
                 "REPLAN",
@@ -472,6 +542,22 @@ def route_entry_intent(
         workspace_root=workspace_root or root,
     )
     selected_root_id = state.get("rootId")
+    if (
+        isinstance(selected_root_id, str)
+        and state.get("status") == "CANCELLED"
+    ):
+        release = repository.workspace_turn_release(selected_root_id)
+        state["workspaceRelease"] = {
+            "state": "RELEASED" if release is not None else "PENDING",
+            **(
+                {
+                    "releaseReason": release.get("releaseReason"),
+                    "releasedAt": release.get("releasedAt"),
+                }
+                if release is not None
+                else {}
+            ),
+        }
     if isinstance(selected_root_id, str) and state.get("status") not in {
         "ARCHIVED",
         "COMPLETED",

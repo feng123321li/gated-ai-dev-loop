@@ -4,6 +4,8 @@ Entry Router 先用确定性规则与持久化 Delivery 状态处理“新需求
 
 Router 会先排除“不要关闭”“暂不归档”“don't resume”等否定动作；一句话同时包含两个肯定入口动作时返回 `AMBIGUOUS` 并要求澄清，不依赖关键词遍历顺序抢先命中。只有一个明确肯定动作时才进入对应状态门禁。
 
+取消态保持单向终态：`RESUME_PAUSED` 对 `CANCELLED` 始终失败关闭。只有 Delivery 为 `OPEN` 且 `WORKSPACE_TURN_RELEASED` 已持久化时，明确“继续”或“修订”才返回 `NEXT_REVISION_REQUIRED` 并进入 planning，创建下一 Revision，而不是复活旧 Run。
+
 默认 registry：
 
 - `requirements-supervisor`：新需求与重新规划；

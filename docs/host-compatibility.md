@@ -7,6 +7,14 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.43.11 发布候选矩阵
+
+0.43.11 将 Entry Router 契约升级到版本 6，修复已取消且安全释放的未上线 Delivery 无法进入后续 Revision 的恢复死锁。`CANCELLED + OPEN + workspaceRelease=RELEASED` 的明确继续/修订请求现在只路由到 planning，并返回 `NEXT_REVISION_REQUIRED`；宿主保持原 `rootId` 执行 `prepare_delivery_revision`，再确认并冻结下一 Revision。
+
+旧 `CANCELLED` Run 始终保持终态：直接“恢复执行”继续失败关闭，workspace release 尚未持久化时也不能准备候选、切分支或修改业务代码。状态投影同步返回 `canPrepareRevision` 与 `PREPARE_DELIVERY_REVISION`，不需要空提交、伪造 handoff、直接修改 SQLite 或创建额外 worktree。
+
+本版本 MCP 工具联集仍为 35，schema v3、SQLite schema、公开操作、三个 Profile 和 `.layered-delivery/` namespace 不变，无运行数据迁移。候选已完成 509 项 Python 测试（508 通过、1 项按环境跳过）、合成性能预算、全树编译、四个 canonical Skill、Codex/Claude/ZCode Plugin、release candidate、runtime 镜像文件与差异校验。
+
 ## 0.43.10 发布候选矩阵
 
 0.43.10 修复 `CURRENT_WORKSPACE_SERIAL` 在暂停和零改动取消边界上的释放死锁。尚未记录 `WORKSPACE_TURN_RELEASED` 的 `PAUSED` Run 现在保留当前物理 turn 并原地恢复；已经释放的 Run 仍按原协议重新排队并重获 turn。Codex 与 ZCode 只要宿主适配最终解析为同一实际 workspace，也允许在原 turn 内接管，不以适配器名称差异误判为跨 workspace。

@@ -30,10 +30,14 @@ def _attach_release_handshake(
 ) -> None:
     lifecycle_next_action = result.get("nextAction")
     result.update(handshake)
-    if (
-        result.get("status") == "COMPLETED"
-        and isinstance(lifecycle_next_action, str)
-    ):
+    release = handshake.get("workspaceRelease")
+    preserve_lifecycle_action = result.get("status") == "COMPLETED" or (
+        result.get("status") == "CANCELLED"
+        and result.get("canPrepareRevision") is True
+        and isinstance(release, dict)
+        and release.get("state") == "RELEASED"
+    )
+    if preserve_lifecycle_action and isinstance(lifecycle_next_action, str):
         result["workspaceNextAction"] = result.get("nextAction")
         result["nextAction"] = lifecycle_next_action
 

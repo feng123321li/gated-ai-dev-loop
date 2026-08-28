@@ -83,6 +83,73 @@ class EntryRoutingTests(unittest.TestCase):
         self.assertEqual(completed["intent"], "CONTINUE_DELIVERY")
         self.assertEqual(completed["targetSkill"], "delivery-graph")
 
+    def test_cancelled_open_released_delivery_routes_to_next_revision(
+        self,
+    ) -> None:
+        decision = decide_entry_route(
+            request_text="继续这个交付",
+            workspace_state={
+                "status": "CANCELLED",
+                "rootId": "d-cancelled-open",
+                "deliveryClosure": "OPEN",
+                "workspaceRelease": {"state": "RELEASED"},
+            },
+        )
+
+        self.assertEqual(decision["intent"], "CONTINUE_DELIVERY")
+        self.assertEqual(decision["targetSkill"], "delivery-graph")
+        self.assertTrue(decision["allowed"])
+        self.assertFalse(decision["requiresClarification"])
+        self.assertIn("NEXT_REVISION_REQUIRED", decision["reasonCodes"])
+
+    def test_cancelled_delivery_cannot_continue_before_release(self) -> None:
+        decision = decide_entry_route(
+            request_text="继续这个交付",
+            workspace_state={
+                "status": "CANCELLED",
+                "rootId": "d-cancelled-owned",
+                "deliveryClosure": "OPEN",
+                "workspaceTurn": {"state": "ACQUIRED"},
+            },
+        )
+
+        self.assertFalse(decision["allowed"])
+        self.assertIn("ROUTE_STATE_CONFLICT", decision["reasonCodes"])
+        self.assertIn(
+            "CANCELLED_REVISION_REQUIRES_WORKSPACE_RELEASE",
+            decision["reasonCodes"],
+        )
+
+    def test_cancelled_released_delivery_replans_but_does_not_resume_run(
+        self,
+    ) -> None:
+        workspace_state = {
+            "status": "CANCELLED",
+            "rootId": "d-cancelled-replan",
+            "deliveryClosure": "OPEN",
+            "workspaceRelease": {"state": "RELEASED"},
+        }
+
+        replan = decide_entry_route(
+            request_text="修改需求",
+            workspace_state=workspace_state,
+        )
+        resume = decide_entry_route(
+            request_text="恢复执行",
+            workspace_state=workspace_state,
+        )
+
+        self.assertEqual(replan["intent"], "REPLAN")
+        self.assertEqual(replan["targetSkill"], "delivery-graph")
+        self.assertTrue(replan["allowed"])
+        self.assertIn("NEXT_REVISION_REQUIRED", replan["reasonCodes"])
+        self.assertEqual(resume["intent"], "RESUME_PAUSED")
+        self.assertFalse(resume["allowed"])
+        self.assertIn(
+            "RESUME_REQUIRES_PAUSED_OR_ACTIVE_RUN",
+            resume["reasonCodes"],
+        )
+
     def test_continue_execution_does_not_become_paused_resume(self) -> None:
         for status in ("QUEUED", "HANDOFF_READY"):
             with self.subTest(status=status):
@@ -317,7 +384,7 @@ class EntryRoutingTests(unittest.TestCase):
         self.assertFalse(decision["allowed"])
         self.assertTrue(decision["requiresClarification"])
         self.assertIn("MULTIPLE_ENTRY_INTENTS", decision["reasonCodes"])
-        self.assertEqual(decision["routerVersion"], 5)
+        self.assertEqual(decision["routerVersion"], 6)
 
 
 if __name__ == "__main__":

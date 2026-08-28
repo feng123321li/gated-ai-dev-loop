@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
 from hdg.mcp_tools import call_tool
+from hdg.planning import freeze_hierarchy, prepare_delivery_revision
 from hdg.repository import SchedulerRepository
 
 from .test_scheduler_contracts import git_command
@@ -226,6 +228,95 @@ class SerialWorkspacePauseRecoveryTests(unittest.TestCase):
                 release["projects"][0]["businessChangedFiles"],
                 [],
             )
+
+    def test_cancelled_released_automatic_delivery_starts_next_revision(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temporary:
+            repository, _ = _repository(Path(temporary))
+            delivery_id = "d-cancelled-next-revision"
+            task_id = "t-cancelled-next-revision"
+            branch_ref = f"feature/{delivery_id}"
+            git_command(repository, "switch", "-c", branch_ref)
+            confirmed = _confirm_existing_branch(
+                repository,
+                delivery_id,
+                task_id,
+                branch_ref,
+            )
+            _select(repository, confirmed)
+            cancelled = call_tool(
+                "cancel_graph_run",
+                {
+                    "root_id": delivery_id,
+                    "cancelled_by": "human",
+                    "reason": "Move the unfinished goal to Revision 2.",
+                },
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="codex",
+            )
+            self.assertEqual(cancelled["workspaceRelease"]["state"], "RELEASED")
+            status = call_tool(
+                "workspace_status",
+                {"root_id": delivery_id},
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="codex",
+            )
+            self.assertTrue(status["canPrepareRevision"], status)
+            self.assertEqual(
+                status["nextAction"],
+                "PREPARE_DELIVERY_REVISION",
+            )
+
+            route = call_tool(
+                "route_entry_intent",
+                {
+                    "root_id": delivery_id,
+                    "request_text": "继续这个交付",
+                },
+                root=str(repository),
+                workspace_root=str(repository),
+                trusted_host_adapter="codex",
+            )
+
+            self.assertTrue(route["allowed"], route)
+            self.assertEqual(route["intent"], "CONTINUE_DELIVERY")
+            self.assertEqual(route["targetSkill"], "delivery-graph")
+            revised = deepcopy(
+                SchedulerRepository(str(repository)).hierarchy(delivery_id)[
+                    "hierarchy"
+                ]
+            )
+            revised["root"]["definition"]["summary"] = (
+                "Continue the cancelled automatic Delivery in Revision 2."
+            )
+            candidate = prepare_delivery_revision(
+                root=str(repository),
+                root_id=delivery_id,
+                expected_current_revision=1,
+                hierarchy=revised,
+                reason="Continue the same open Delivery after cancellation.",
+                continuity_basis="USER_EXPLICIT_SAME_DELIVERY",
+                requested_by="human",
+                workspace_root=str(repository),
+            )
+            frozen = freeze_hierarchy(
+                root=str(repository),
+                root_id=delivery_id,
+                expected_delivery_revision=2,
+                expected_hierarchy_fingerprint=candidate[
+                    "hierarchyFingerprint"
+                ],
+                authorized_project_ids=[],
+                confirmed=True,
+                confirmed_by="human",
+                workspace_root=str(repository),
+            )
+
+            self.assertEqual(frozen["deliveryRevision"], 2)
+            self.assertEqual(frozen["status"], "ACTIVE")
 
 
 if __name__ == "__main__":

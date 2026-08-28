@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.43.11 — 2026-08-28
+
+发布提交：以 tag `v0.43.11` 指向的提交为准
+
+- **取消后可继续同一 Delivery**：Entry Router 契约升级到版本 6。`CANCELLED + OPEN + workspaceRelease=RELEASED` 收到明确继续或修订请求时，返回 `NEXT_REVISION_REQUIRED` 并进入 planning，允许以原 `delivery.id` 创建、确认并冻结下一不可变 Revision。
+- **旧 Run 保持终态**：`RESUME_PAUSED` 对 `CANCELLED` 继续失败关闭，未持久化 workspace release 时也拒绝准备新 Revision。新路径不复活旧 Run、不伪造 handoff、不要求空提交，也不允许在释放前修改业务代码。
+- **状态与宿主契约同步**：`workspace_status` 对已安全释放的取消态返回 `canPrepareRevision=true` 与 `PREPARE_DELIVERY_REVISION`；Controller、MCP 工具说明、planning Skill、执行恢复文档和运维文档统一该状态边界。
+- **兼容性**：MCP 工具联集仍为 35，schema v3、SQLite schema、公开 Controller operation、三个 Profile 与 `.layered-delivery/` namespace 不变，无运行数据迁移。
+- **验证**：全量 Python 509 项完成（508 通过、1 项按环境跳过），合成性能预算、全树编译、四个 canonical Skill、Codex/Claude/ZCode Plugin、release candidate、runtime 镜像与差异校验通过。
+
 ## 0.43.10 — 2026-08-28
 
 发布提交：以 tag `v0.43.10` 指向的提交为准

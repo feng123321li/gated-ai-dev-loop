@@ -12,7 +12,7 @@ from .supervisor_profiles import (
 )
 
 
-ENTRY_ROUTER_VERSION = 4
+ENTRY_ROUTER_VERSION = 5
 _RUNTIME_STATUSES = frozenset(
     {"ACTIVE", "BLOCKED", "PAUSED", "QUEUED", "HANDOFF_READY"}
 )
@@ -47,6 +47,15 @@ _PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("继续执行", "继续", "接着", "continue"),
     ),
 )
+_FLEXIBLE_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
+    "NEW_DELIVERY": (
+        re.compile(
+            r"(?:新建|创建)\s*(?:一个\s*)?"
+            r"(?:(?:全新|新)(?:的)?\s*)?(?:独立\s*)?"
+            r"(?:delivery|交付)"
+        ),
+    ),
+}
 _NEGATED_PREFIXES = (
     "不",
     "不要",
@@ -111,6 +120,12 @@ def _classify_explicit_intents(
                 ):
                     continue
                 if _match_is_negated(normalized, start, end):
+                    intent_negated = True
+                else:
+                    intent_positive = True
+        for pattern in _FLEXIBLE_PATTERNS.get(intent, ()):
+            for match in pattern.finditer(normalized):
+                if _match_is_negated(normalized, match.start(), match.end()):
                     intent_negated = True
                 else:
                     intent_positive = True

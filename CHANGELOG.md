@@ -4,6 +4,15 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.43.9 — 2026-08-28
+
+发布提交：以 tag `v0.43.9` 指向的提交为准
+
+- **明确新建不再被旧 Delivery 阻断**：Entry Router 契约升级到版本 5，识别“新建一个全新的独立 Delivery”“创建一个新的 Delivery”等创建动词、可选量词、新/全新/独立修饰语与中英文 Delivery 名称的常见组合。工作区即使已有多个候选，明确新建仍返回 `NEW_DELIVERY / allowed=true`，不再误入 `SELECT_DELIVERY / MULTIPLE_DELIVERIES_REQUIRE_EXPLICIT_ROOT`。
+- **失败关闭边界保持不变**：否定的新建请求仍不创建 Delivery；同时出现多个肯定入口动作或只有否定动作时继续要求澄清，不猜测、续接或修改旧 rootId。新增确定性单元测试与真实 MCP 多 Delivery 工作区集成回归。
+- **兼容性**：MCP 工具联集仍为 35，schema v3、SQLite schema、Graph FSM、公开 Controller operation、三个 Profile 与 `.layered-delivery/` namespace 不变，无运行数据迁移。
+- **验证**：全量 Python 503 项完成（502 通过、1 项按环境跳过），合成性能预算、全树编译、四个 canonical Skill、Codex/Claude/ZCode Plugin、release candidate、93 个 runtime 镜像文件与差异校验通过。
+
 ## 0.43.8 — 2026-08-26
 
 发布提交：以 tag `v0.43.8` 指向的提交为准

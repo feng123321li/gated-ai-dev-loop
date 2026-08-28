@@ -86,6 +86,38 @@ class MultiDeliveryWorkspaceTests(unittest.TestCase):
                 },
             )
 
+    def test_explicit_new_delivery_bypasses_candidate_selection(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            workspace.mkdir()
+
+            active = _prepare(root, workspace, "d-active")
+            _freeze(root, workspace, active)
+            _prepare(root, workspace, "d-prepared")
+
+            decision = call_tool(
+                "route_entry_intent",
+                {
+                    "request_text": (
+                        "新建一个全新的独立 Delivery，"
+                        "不选择或续接任何现有 Delivery。"
+                    )
+                },
+                root=str(root),
+                workspace_root=str(workspace),
+            )
+
+            self.assertEqual(
+                decision["observedStatus"],
+                "DELIVERY_SELECTION_REQUIRED",
+            )
+            self.assertEqual(decision["intent"], "NEW_DELIVERY")
+            self.assertEqual(decision["targetSkill"], "delivery-graph")
+            self.assertIsNone(decision["rootId"])
+            self.assertTrue(decision["allowed"])
+            self.assertFalse(decision["requiresClarification"])
+
     def test_single_unfinished_delivery_wins_over_terminal_history(
         self,
     ) -> None:

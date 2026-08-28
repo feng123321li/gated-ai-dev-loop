@@ -22,6 +22,45 @@ class EntryRoutingTests(unittest.TestCase):
             decision["reasonCodes"],
         )
 
+    def test_explicit_new_delivery_ignores_existing_delivery_candidates(
+        self,
+    ) -> None:
+        workspace_state = {
+            "status": "DELIVERY_SELECTION_REQUIRED",
+            "candidateDeliveries": [
+                {"rootId": "d-one"},
+                {"rootId": "d-two"},
+            ],
+        }
+
+        for request_text in (
+            "新建一个全新的独立 Delivery，不选择任何旧 Delivery。",
+            "创建一个新的 Delivery，不复用现有 Delivery。",
+            "Create a new delivery without reusing an existing delivery.",
+        ):
+            with self.subTest(request_text=request_text):
+                decision = decide_entry_route(
+                    request_text=request_text,
+                    workspace_state=workspace_state,
+                )
+
+                self.assertEqual(decision["intent"], "NEW_DELIVERY")
+                self.assertEqual(decision["targetSkill"], "delivery-graph")
+                self.assertIsNone(decision["rootId"])
+                self.assertTrue(decision["allowed"])
+                self.assertFalse(decision["requiresClarification"])
+                self.assertEqual(decision["candidateRootIds"], [])
+
+    def test_negated_flexible_new_delivery_phrase_does_not_create(self) -> None:
+        decision = decide_entry_route(
+            request_text="不要新建一个新的 Delivery，继续当前交付。",
+            workspace_state={"status": "ACTIVE", "rootId": "d-active"},
+        )
+
+        self.assertEqual(decision["intent"], "DISPATCH_ACTIVE")
+        self.assertEqual(decision["rootId"], "d-active")
+        self.assertTrue(decision["allowed"])
+
     def test_continue_routes_by_authoritative_delivery_state(self) -> None:
         active = decide_entry_route(
             request_text="继续这个交付",
@@ -278,7 +317,7 @@ class EntryRoutingTests(unittest.TestCase):
         self.assertFalse(decision["allowed"])
         self.assertTrue(decision["requiresClarification"])
         self.assertIn("MULTIPLE_ENTRY_INTENTS", decision["reasonCodes"])
-        self.assertEqual(decision["routerVersion"], 4)
+        self.assertEqual(decision["routerVersion"], 5)
 
 
 if __name__ == "__main__":

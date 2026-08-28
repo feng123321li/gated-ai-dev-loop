@@ -23,7 +23,7 @@ allowed-tools:
 - 只调用 frontmatter 中列出的 dispatch Profile 工具。不得调用 planning 或 receiver Profile 的工具。
 - 始终保留并传递明确 `rootId`；SQLite、事件链和 frontier 是机器权威，不读写 `scheduler.db`。
 - `CURRENT_WORKSPACE_SERIAL` 同时约束自动和手动 Run；同一物理 checkout 一次只推进一个 Delivery turn。
-- `PAUSED`、`COMPLETED`、`CANCELLED` 只是释放资格边界，不等于已释放。固定顺序为 `quiesce receiver/reservation → 到达 eligible state → 在各自冻结独立分支完成业务 commit 且 clean → 再次调用协议并持久化 WORKSPACE_TURN_RELEASED → 才可切分支或推进下一 Delivery`。响应为 `workspaceRelease=PENDING` 时只能执行其 `nextAction`，不得准备或切换下一分支。
+- `PAUSED`、`COMPLETED`、`CANCELLED` 只是释放资格边界，不等于已释放。让出 turn 的固定顺序为 `quiesce receiver/reservation → 到达 eligible state → 在各自冻结独立分支完成业务 commit 且 clean → 再次调用协议并持久化 WORKSPACE_TURN_RELEASED → 才可切分支或推进下一 Delivery`；`CANCELLED` 且全部 scope 从 turn start 起零业务变化、clean、HEAD 未移动时可用确定性零变化证据直接释放，不制造空提交。`workspaceRelease=PENDING` 禁止准备/切换下一分支，但显式恢复同一 PAUSED Loop 时，若 turn 尚未释放且仍由本 Delivery 持有，可由新的独立 receiver 原地 `resume_loop`。
 - AUTOMATIC 的每个 READY TASK/Review 先由 `plan_dispatch_batch` 原子 reservation，再创建不同的宿主原生 receiver。primary 不得 claim 或把 assignment 交给普通 helper。
 - assignment 的 `agentProfileId`、`agentCatalogFingerprint`、`teamPlan` 与 `receiverPrompt` 必须完整原样传递：TASK 会路由到 `$delivery-graph-task`，所有 Review 会路由到 `$delivery-graph-review`。profile 决定专业分工，不替代宿主 `receiverAgentId` 身份。
 - 每个 assignment 只创建一个持有控制面的外层 receiver；它是 `teamPlan.owner`。`teamPlan.helpers` 由 owner 在 Loop 内按需使用，primary 不为 helper 分发 reservation，也不等待 helper 控制面事件。
@@ -35,7 +35,7 @@ allowed-tools:
 
 ## 启动与 frontier
 
-1. 新用户请求先原样调用 `route_entry_intent`；`supervisorRouting.shouldInvoke=true` 时，只把入口文本、持久化状态摘要和 Router 候选交给指定的无工具决策 Supervisor，取回结构化分类建议后仍由 primary 判断，不让 Supervisor 调工具、执行路由或生成最终回答。只有 Router `allowed=true` 且 `targetSkill=delivery-graph-dispatch` 才继续本流程，歧义、状态冲突或 planning 目标必须停止派遣并按结构化 reason codes 转交。随后调用 `workspace_status(rootId=...)`。先处理 `workspaceRelease`：`PENDING` 时只完成返回的 quiesce/commit/clean/恢复冻结分支/recheck 动作；只有 `RELEASED` 才允许宿主切换分支。`HANDOFF_READY` 时，在实际开发 workspace、任何代码检查前调用 `start_manual_handoff`；Git 漂移返回 baseline 交互时转回 `$delivery-graph`。
+1. 新用户请求先原样调用 `route_entry_intent`；`supervisorRouting.shouldInvoke=true` 时，只把入口文本、持久化状态摘要和 Router 候选交给指定的无工具决策 Supervisor，取回结构化分类建议后仍由 primary 判断，不让 Supervisor 调工具、执行路由或生成最终回答。只有 Router `allowed=true` 且 `targetSkill=delivery-graph-dispatch` 才继续本流程，歧义、状态冲突或 planning 目标必须停止派遣并按结构化 reason codes 转交。随后调用 `workspace_status(rootId=...)`。`workspaceRelease=PENDING` 时不得准备或切换下一分支；若入口是显式恢复同一 PAUSED Loop，则读取一次 frontier，并按 `RESUME_LOOP_IN_INDEPENDENT_CONTEXT` 让新 receiver 原地恢复尚未释放且仍归本 Delivery 的 turn。其他让路场景只完成返回的 quiesce/commit/clean/恢复冻结分支/recheck 动作，只有 `RELEASED` 才允许宿主切换分支。`HANDOFF_READY` 时，在实际开发 workspace、任何代码检查前调用 `start_manual_handoff`；Git 漂移返回 baseline 交互时转回 `$delivery-graph`。
 2. 首次进入、receiver 事件、`nextWakeAt` 到达或 `ADVANCE_REQUIRED` 时调用一次 `graph_frontier`。
 3. 完整消费当前批次所有立即 action；不得只处理第一项，也不得在 reservation 后继续分析 assignment。
 4. 对 READY 自动节点调用一次 `plan_dispatch_batch`，完整创建所有 `assignments` 的独立 owner receiver，并原样传递整个 assignment 与 `receiverPrompt`；不得把 `teamPlan.helpers` 当作额外 Graph receiver。

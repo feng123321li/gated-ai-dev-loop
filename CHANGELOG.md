@@ -4,6 +4,16 @@
 
 后续发布新版本时，应在版本提交中同步更新本文档，按“最新版本在前”的顺序记录发布日期、发布提交、核心能力、兼容性或迁移影响以及主要验证结果。
 
+## 0.43.10 — 2026-08-28
+
+发布提交：以 tag `v0.43.10` 指向的提交为准
+
+- **暂停可在原 workspace turn 内恢复**：`resume_loop` 不再把 `WORKSPACE_TURN_RELEASED` 当作所有暂停恢复的前置条件。尚未释放 turn 的 `PAUSED` Run 保留当前串行占用并原地恢复；已经释放的 Run 继续走原有重新排队和重获 turn 路径。Codex 与 ZCode 只要解析为同一实际 workspace，也可在不释放物理 turn 的前提下安全接管。
+- **零改动取消可安全释放**：`CANCELLED` Run 在没有业务改动、所有 READ_WRITE scope 均 clean、Git binding 保持一致且 HEAD 精确等于 turn-start commit 时，可记录确定性的 `unchangedSinceTurnStart` 证明并释放 workspace。空提交、控制面提交、脏工作区、提前切分支或基线漂移继续失败关闭，不需要伪造业务提交。
+- **恢复与释放契约同步**：Controller、MCP 工具说明、四个职责 Skill、运行手册和 quickstart 已统一新边界；新增暂停恢复、跨宿主接管与零变化取消回归，并保留真实空提交/控制面提交拒绝覆盖。
+- **兼容性**：MCP 工具联集仍为 35，schema v3、SQLite schema、公开 Controller operation、三个 Profile 与 `.layered-delivery/` namespace 不变，无运行数据迁移。
+- **验证**：全量 Python 505 项完成（504 通过、1 项按环境跳过），合成性能预算、全树编译、四个 canonical Skill、Codex/Claude/ZCode Plugin、release candidate、runtime 镜像与差异校验通过。
+
 ## 0.43.9 — 2026-08-28
 
 发布提交：以 tag `v0.43.9` 指向的提交为准

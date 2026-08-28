@@ -7,6 +7,14 @@
 
 当前 canonical Plugin/Skill 名为 `delivery-graph`，展示名为“分层交付 Graph 控制面”。`.layered-delivery/` 只是稳定的项目数据目录，不随 Plugin identity 更名。
 
+## 0.43.10 发布候选矩阵
+
+0.43.10 修复 `CURRENT_WORKSPACE_SERIAL` 在暂停和零改动取消边界上的释放死锁。尚未记录 `WORKSPACE_TURN_RELEASED` 的 `PAUSED` Run 现在保留当前物理 turn 并原地恢复；已经释放的 Run 仍按原协议重新排队并重获 turn。Codex 与 ZCode 只要宿主适配最终解析为同一实际 workspace，也允许在原 turn 内接管，不以适配器名称差异误判为跨 workspace。
+
+零业务改动的 `CANCELLED` Run 可在 receiver/reservation 已收束、所有 READ_WRITE scope clean、Git binding 未变化且 HEAD 精确等于 turn-start commit 时，用 `unchangedSinceTurnStart` 证明安全释放。该例外只覆盖可验证的零变化取消；空提交、控制面提交、业务提交缺失但 HEAD 已漂移、脏工作区和错误分支仍失败关闭。
+
+本版本 MCP 工具联集仍为 35，schema v3、SQLite schema、公开操作、三个 Profile 和 `.layered-delivery/` namespace 不变，无运行数据迁移。候选已完成 505 项 Python 测试（504 通过、1 项按环境跳过）、合成性能预算、全树编译、四个 canonical Skill、Codex/Claude/ZCode Plugin、release candidate、runtime 镜像文件与差异校验。
+
 ## 0.43.9 发布候选矩阵
 
 0.43.9 将 Entry Router 契约升级到版本 5，修复工作区已有多个 Delivery 时，明确的“新建一个全新的独立 Delivery”“创建一个新的 Delivery”等中英混合请求未命中 `NEW_DELIVERY`、反而被 `DELIVERY_SELECTION_REQUIRED` 阻断的问题。Router 现在识别创建动词、可选量词、新/全新/独立修饰语与 `Delivery`/“交付”的常见组合；否定的新建请求仍被排除，多入口或含糊请求继续失败关闭，不会误选、续接或修改旧 Delivery。

@@ -14,7 +14,7 @@
 
 - `HANDOFF_READY`：在实际开发 workspace 调用 `start_manual_handoff`；在此之前不检查或修改代码。
 - `QUEUED`：执行响应中的串行释放检查；只有前一个 Delivery 的 `workspaceRelease=RELEASED` 且 `WORKSPACE_TURN_RELEASED` 已持久化，才机械完成授权的 branch 准备并调用 `resume_execution_mode`。
-- `ACTIVE/BLOCKED/PAUSED`：先处理 `workspaceRelease`。`PENDING` 只允许按 `nextAction` quiesce、在冻结独立分支完成业务 commit/clean、恢复漂移并重新检查；不得切换下一分支。之后调用一次 `graph_frontier`，完整消费 action。
+- `ACTIVE/BLOCKED/PAUSED`：先处理 `workspaceRelease`。`PENDING` 禁止切换下一分支；显式恢复同一 PAUSED Loop 时先调用一次 `graph_frontier`，若 action 为 `RESUME_LOOP_IN_INDEPENDENT_CONTEXT`，新 receiver 可对尚未释放且仍由本 Delivery 持有的 turn 原地 `resume_loop`。其他让路场景按 `nextAction` quiesce、在冻结独立分支完成业务 commit/clean、恢复漂移并重新检查。
 - `CHOICE_READY/PREPARED`：转交 `$delivery-graph`，不要替用户确认 baseline 或执行模式。
 - `COMPLETED` + `OPEN/未上线`：转交 `$delivery-graph`，由用户决定追加 Revision 或在生产上线后关闭；协调器不代签。
 - `COMPLETED` + `CLOSED/已上线交付`：不再派遣或修订；仅报告可选归档动作。
@@ -64,6 +64,7 @@ Maven/Gradle 首次依赖预热或其他预计超过 60 秒的命令，由 recei
 | receiver 失联/lease 过期 | 刷新 frontier，按 action 调用 `advance_graph`，不复用旧 operation |
 | `PAUSED` 且 turn 未释放 | 保持当前冻结分支；新建独立接收上下文，由 receiver 调用 `resume_loop` |
 | `PAUSED` 且 turn 已释放 | 新建独立接收上下文调用 `resume_loop` 重新排队；`QUEUED` 时节点继续 PAUSED，轮到后宿主恢复冻结分支并再次调用，Controller 记录新的 clean turn start 后才恢复 READY |
+| `CANCELLED` 且所有 scope 自 turn start 零业务变化 | receiver/reservation 静默、工作树 clean、binding 匹配且 HEAD 等于 turn-start 时以零变化证据释放；不得制造空提交或控制面提交 |
 | HOST/EXECUTOR 容量耗尽 | 仅按结构化 `resetAt` 等待并恢复，不猜文本、不换模型 |
 | workspace/fingerprint/operation 错误 | receiver 立即停止仓库操作，把稳定错误码交回 |
 | decision fingerprint 与当前有效 reservation 不匹配 | 若错误 details 返回 `retryWithSameReservation=true`，使用同一 reservation 和 `expectedDecisionFingerprint` 重试；否则重新规划，不混用多轮凭据 |

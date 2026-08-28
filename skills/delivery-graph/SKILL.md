@@ -29,7 +29,7 @@ allowed-tools:
 - 本 Skill 只做发现、规划、基线、Revision、执行选择、冻结、Revision 完成确认与 Delivery 关闭交互；不得调用 frontier、dispatch、claim、heartbeat、result 等执行工具，也不得在 primary 内实现或审查 Loop。
 - Graph 范围不是 Git 或外部操作授权。Controller 不写 Git；commit、merge、push、发布、迁移和新增权限仍分别取得授权。
 - 一个物理 checkout 只运行一个 Delivery turn，策略固定为 `CURRENT_WORKSPACE_SERIAL`。每个 Delivery 使用独立分支；不得把 linked checkout 当成自动新建 worktree 的授权。
-- `PAUSED`、`COMPLETED`、`CANCELLED` 不等同于 workspace release。必须先收束 receiver/reservation，再在每个冻结独立分支完成业务 commit 并保持 tree/index clean 与 binding 匹配，由协议复核并持久化 `WORKSPACE_TURN_RELEASED`；只有响应明确为 `workspaceRelease=RELEASED` 后宿主才可切换分支。
+- `PAUSED`、`COMPLETED`、`CANCELLED` 不等同于 workspace release。让出 turn 前必须收束 receiver/reservation，再在每个冻结独立分支完成业务 commit 并保持 tree/index clean 与 binding 匹配，由协议复核并持久化 `WORKSPACE_TURN_RELEASED`；唯一零提交例外是 `CANCELLED` 且全部 scope 从 turn start 起无业务变化、clean、binding 匹配、HEAD 未移动，此时用确定性零变化证据释放。只有 `workspaceRelease=RELEASED` 后宿主才可切换分支；尚未释放且仍由本 Delivery 持有的 PAUSED turn 可由独立 receiver 原地恢复。
 - 同一需求保持稳定 `delivery.id`、`requirementKey` 和 `.layered-delivery/<delivery-id>/`。新业务目标默认新建 Delivery；同一需求延续或 `REPLAN_REQUIRED` 才创建下一不可变 Revision。
 - 只有真实用户确认后才记录当前 Revision 完成。`COMPLETED` 不会自动关闭 Delivery：`OPEN/未上线` 可继续追加 Revision；测试、业务验收和生产上线完成后，必须再次明确授权 `close_delivery` 才进入 `CLOSED/已上线交付`。归档与关闭分离，也必须单独明确授权。
 

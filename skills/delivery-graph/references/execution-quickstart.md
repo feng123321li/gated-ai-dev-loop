@@ -169,7 +169,7 @@ MCP 写响应未知时先读状态。operation ID 永不复用。
 
 ## 资源锁
 
-租约有效的已 claim Loop 占用其全部 `resourceClaims`。共享控制根内任何 Delivery 的另一个 Ready Loop 只要存在相同键就不能 dispatch；frontier 会用 `<rootId>/<nodeId>` 标识跨 Delivery 冲突。租约过期后不再占用跨 Delivery 资源；原 Delivery 下次推进时仍按 `WORKER_LOST` 回收旧 attempt。无 claim 交集也不能绕过 `CURRENT_WORKSPACE_SERIAL`：同一实际 workspace 中已选择 `AUTOMATIC` 或 `MANUAL` 的后启动或后发现 Delivery 都标记为 `QUEUED`，直到前一个 Delivery 已进入 Run 终态或到达最终用户确认边界，并形成可验证业务 commit、working tree/index clean、HEAD 未漂移且 receiver/reservation 安全释放才按记录模式续调；手动冻结 Delivery 内部保持 `HANDOFF_READY`。`CANCELLED` 在该安全边界释放 owner，不需要归档；终态查询忽略过期 `workspaceRebase`。冲突、owner dirty、未合并状态或漂移使队列保持等待，不创建新 worktree 规避，也不 stash owner 的未完成改动。不要从路径、仓库层级或模块前缀推导额外资源锁。
+租约有效的已 claim Loop 占用其全部 `resourceClaims`。共享控制根内任何 Delivery 的另一个 Ready Loop 只要存在相同键就不能 dispatch；frontier 会用 `<rootId>/<nodeId>` 标识跨 Delivery 冲突。租约过期后不再占用跨 Delivery 资源；原 Delivery 下次推进时仍按 `WORKER_LOST` 回收旧 attempt。无 claim 交集也不能绕过 `CURRENT_WORKSPACE_SERIAL`：同一实际 workspace 中已选择 `AUTOMATIC` 或 `MANUAL` 的后启动或后发现 Delivery 都标记为 `QUEUED`，直到前一个 Delivery 已进入 Run 终态或到达最终用户确认边界，并形成可验证业务 commit（或 `CANCELLED` 的零变化证明）、working tree/index clean、HEAD 未漂移且 receiver/reservation 安全释放才按记录模式续调；手动冻结 Delivery 内部保持 `HANDOFF_READY`。`CANCELLED` 在该安全边界释放 owner，不需要归档；终态查询忽略过期 `workspaceRebase`。冲突、owner dirty、未合并状态或漂移使队列保持等待，不创建新 worktree 规避，也不 stash owner 的未完成改动。不要从路径、仓库层级或模块前缀推导额外资源锁。
 
 ## 未开始 TASK 的需求修订
 

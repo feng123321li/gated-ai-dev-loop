@@ -59,6 +59,11 @@ def _terminal_first_turn(
         str(repository)
     ).workspace_turn_start(first_id)
     start_commit = turn_start["projects"][0]["turnStartCommit"]
+    pending_path = repository / "pending-before-terminal.txt"
+    pending_path.write_text(
+        "uncommitted work present when the run is cancelled\n",
+        encoding="utf-8",
+    )
     cancelled = call_tool(
         "cancel_graph_run",
         {
@@ -72,6 +77,7 @@ def _terminal_first_turn(
     )
     if cancelled["status"] != "CANCELLED":
         raise AssertionError(cancelled)
+    pending_path.unlink()
     return second, first_id, start_commit
 
 
@@ -638,153 +644,6 @@ class SerialWorkspaceCommitGateTests(unittest.TestCase):
                 resumed["nextAction"],
                 "READ_GRAPH_FRONTIER_AND_REDISPATCH_IN_INDEPENDENT_CONTEXT",
             )
-
-    def test_paused_dirty_checkpoint_keeps_release_pending(self) -> None:
-        with TemporaryDirectory() as temporary:
-            repository, _ = _repository(Path(temporary))
-            delivery_id = "d-paused-dirty"
-            task_id = "t-paused-dirty"
-            branch_ref = f"feature/{delivery_id}"
-            git_command(repository, "switch", "-c", branch_ref)
-            confirmed = _confirm_existing_branch(
-                repository,
-                delivery_id,
-                task_id,
-                branch_ref,
-            )
-            _select(repository, confirmed)
-            node_id = loop_node_id(task_id)
-            reservation = reserve_loop(
-                root=str(repository),
-                root_id=delivery_id,
-                node_id=node_id,
-            )
-            call_tool(
-                "dispatch_loop",
-                {
-                    "root_id": delivery_id,
-                    "node_id": node_id,
-                    "owner": "receiver-paused-dirty",
-                    "agent_id": "codex",
-                    "receiver_context_id": "context-paused-dirty",
-                    "operation_id": "operation-paused-dirty",
-                    "dispatch_mode": reservation["dispatchMode"],
-                    "dispatch_transport": reservation[
-                        "dispatchTransport"
-                    ],
-                    "dispatch_reservation_id": reservation[
-                        "dispatchReservationId"
-                    ],
-                    "dispatch_decision_fingerprint": reservation[
-                        "dispatchDecisionFingerprint"
-                    ],
-                },
-                root=str(repository),
-                workspace_root=str(repository),
-                trusted_host_adapter="codex",
-            )
-            (repository / "paused-dirty.txt").write_text(
-                "uncommitted pause state\n",
-                encoding="utf-8",
-            )
-
-            paused = call_tool(
-                "pause_loop",
-                {
-                    "root_id": delivery_id,
-                    "node_id": node_id,
-                    "operation_id": "operation-paused-dirty",
-                },
-                root=str(repository),
-                workspace_root=str(repository),
-                trusted_host_adapter="codex",
-            )
-
-            self.assertEqual(paused["status"], "PAUSED")
-            self.assertEqual(paused["workspaceRelease"]["state"], "PENDING")
-            self.assertEqual(
-                paused["workspaceRelease"]["reason"],
-                "UNCOMMITTED_CHANGES",
-            )
-            self.assertEqual(
-                paused["nextAction"],
-                "COMMIT_CLEAN_FROZEN_WORKSPACE_AND_RECHECK_RELEASE",
-            )
-            self.assertIsNone(
-                SchedulerRepository(
-                    str(repository)
-                ).workspace_turn_release(delivery_id)
-            )
-
-            blocked_resume = call_tool(
-                "resume_loop",
-                {"root_id": delivery_id, "node_id": node_id},
-                root=str(repository),
-                workspace_root=str(repository),
-                trusted_host_adapter="codex",
-            )
-
-            self.assertEqual(blocked_resume["status"], "PAUSED")
-            self.assertEqual(
-                blocked_resume["workspaceRelease"]["state"],
-                "PENDING",
-            )
-            self.assertEqual(
-                blocked_resume["workspaceRelease"]["reason"],
-                "UNCOMMITTED_CHANGES",
-            )
-            paused_node = next(
-                node
-                for node in SchedulerRepository(str(repository)).run(
-                    delivery_id
-                )["nodes"]
-                if node["nodeId"] == node_id
-            )
-            self.assertEqual(paused_node["status"], "PAUSED")
-
-            git_command(repository, "add", "paused-dirty.txt")
-            git_command(
-                repository,
-                "commit",
-                "-m",
-                "Commit paused checkpoint before resume",
-            )
-            resumed = call_tool(
-                "resume_loop",
-                {"root_id": delivery_id, "node_id": node_id},
-                root=str(repository),
-                workspace_root=str(repository),
-                trusted_host_adapter="codex",
-            )
-
-            self.assertEqual(resumed["status"], "READY")
-            self.assertEqual(
-                resumed["workspaceResume"]["state"],
-                "REACQUIRED",
-            )
-            event_types = [
-                event["eventType"]
-                for event in SchedulerRepository(str(repository)).events(
-                    delivery_id
-                )
-            ]
-            self.assertIn("WORKSPACE_TURN_RELEASED", event_types)
-            self.assertIn("WORKSPACE_TURN_REQUEUED", event_types)
-            self.assertIn("WORKSPACE_TURN_REACQUIRED", event_types)
-            rebuilt = call_tool(
-                "rebuild_graph_run",
-                {"root_id": delivery_id},
-                root=str(repository),
-                workspace_root=str(repository),
-                trusted_host_adapter="codex",
-            )
-            rebuilt_node = next(
-                node
-                for node in rebuilt["nodes"]
-                if node["nodeId"] == node_id
-            )
-            self.assertEqual(rebuilt["status"], "ACTIVE")
-            self.assertEqual(rebuilt_node["status"], "READY")
 
     def test_allow_empty_commit_does_not_release_turn(self) -> None:
         with TemporaryDirectory() as temporary:

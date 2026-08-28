@@ -394,35 +394,13 @@ def resume_loop(
             verify_delivery_git_binding,
             verify_runtime_delivery_project_scopes,
         )
-        from .planning_gates import (
-            _capture_workspace_turn_start,
-            _serial_workspace_release_handshake,
-        )
+        from .planning_gates import _capture_workspace_turn_start
         from .planning_workspace import (
             _automatic_workspace_requests,
             _paused_serial_workspace_preparation,
         )
 
         release = repository.workspace_turn_release(root_id)
-        if release is None and repository.run(root_id)["status"] == "PAUSED":
-            handshake = _serial_workspace_release_handshake(
-                repository,
-                workspace_root,
-                root_id,
-            )
-            if handshake["workspaceRelease"]["state"] != "RELEASED":
-                return {
-                    "rootId": root_id,
-                    "nodeId": node_id,
-                    "status": "PAUSED",
-                    "deliveryStatus": "PAUSED",
-                    **handshake,
-                    "workspaceResume": {
-                        "state": "WAITING_FOR_WORKSPACE_RELEASE",
-                        "nextAction": handshake["nextAction"],
-                    },
-                }
-            release = repository.workspace_turn_release(root_id)
         if release is not None:
             repository.requeue_paused_workspace_turn(
                 root_id,
@@ -484,6 +462,19 @@ def resume_loop(
                     workspace_turn_start=turn_start,
                 )
             )
+        else:
+            workspace_turn = repository.serial_workspace_turn_state(root_id)
+            if (
+                workspace_turn["state"] != "ACQUIRED"
+                or workspace_turn["ownerRootId"] != root_id
+            ):
+                fail(
+                    "SCHEDULER_WORKSPACE_TURN_NOT_OWNED",
+                    "An unreleased paused Loop can resume only while its "
+                    "Delivery retains the serial workspace turn",
+                    rootId=root_id,
+                    workspaceTurn=workspace_turn,
+                )
         stored = repository.hierarchy(root_id)
         repository.assert_delivery_workspace(root_id, workspace_root)
         verified_projects = verify_runtime_delivery_project_scopes(
@@ -562,8 +553,16 @@ def resume_loop(
                     repository.serial_workspace_turn_state(root_id)
                 ),
                 "workspaceResume": {
-                    "state": "REACQUIRED",
-                    "reacquisition": workspace_reacquisition,
+                    "state": (
+                        "REACQUIRED"
+                        if workspace_reacquisition is not None
+                        else "RETAINED"
+                    ),
+                    **(
+                        {"reacquisition": workspace_reacquisition}
+                        if workspace_reacquisition is not None
+                        else {}
+                    ),
                     "nextAction": result["nextAction"],
                 },
             }

@@ -622,7 +622,7 @@ def _serial_commit_barrier(
     workspace_root: str,
     previous_turn: dict[str, str],
 ) -> dict[str, Any] | None:
-    """Return a fail-closed barrier until the previous Delivery is committed."""
+    """Return a fail-closed barrier until the previous turn is releasable."""
 
     if repository.workspace_turn_release(previous_turn["rootId"]) is not None:
         return None
@@ -769,7 +769,15 @@ def _serial_commit_barrier(
                 }
             )
             continue
-        if not commit_range["businessChangedFiles"]:
+        cancelled_unchanged_turn = (
+            previous_turn["status"] == "CANCELLED"
+            and commit_range["headCommit"]
+            == commit_range["turnStartCommit"]
+        )
+        if (
+            not commit_range["businessChangedFiles"]
+            and not cancelled_unchanged_turn
+        ):
             pending_projects.append(
                 {
                     "projectId": request["projectId"],
@@ -787,26 +795,25 @@ def _serial_commit_barrier(
                 }
             )
             continue
-        release_projects.append(
-            {
-                "projectId": request["projectId"],
-                "workspaceRoot": str(
-                    Path(target_root).absolute().resolve(strict=True)
-                ),
-                "branchRef": request["gitBinding"]["branchRef"],
-                "turnStartCommit": commit_range["turnStartCommit"],
-                "headCommit": commit_range["headCommit"],
-                "businessChangedFiles": commit_range[
-                    "businessChangedFiles"
-                ],
-                "businessTreeFingerprint": commit_range[
-                    "businessTreeFingerprint"
-                ],
-                "workingTreeStateFingerprint": working_tree[
-                    "stateFingerprint"
-                ],
-            }
-        )
+        release_project = {
+            "projectId": request["projectId"],
+            "workspaceRoot": str(
+                Path(target_root).absolute().resolve(strict=True)
+            ),
+            "branchRef": request["gitBinding"]["branchRef"],
+            "turnStartCommit": commit_range["turnStartCommit"],
+            "headCommit": commit_range["headCommit"],
+            "businessChangedFiles": commit_range["businessChangedFiles"],
+            "businessTreeFingerprint": commit_range[
+                "businessTreeFingerprint"
+            ],
+            "workingTreeStateFingerprint": working_tree[
+                "stateFingerprint"
+            ],
+        }
+        if cancelled_unchanged_turn:
+            release_project["unchangedSinceTurnStart"] = True
+        release_projects.append(release_project)
     if not pending_projects:
         try:
             repository.release_serial_workspace_turn(

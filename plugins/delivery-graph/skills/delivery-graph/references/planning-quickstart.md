@@ -502,7 +502,7 @@ MCP 根固定只限制当前会话的主工作区锚点，不把同一 Delivery 
 
 ## 多 Delivery 工作区与资源串行化
 
-同一个实际 workspace 可以绑定多个 Delivery，Graph 状态、Revision、run 和验收始终按 `rootId` 路由，但执行策略只有 `CURRENT_WORKSPACE_SERIAL`。每个 Delivery 保持独立分支；已选择 `AUTOMATIC` 或 `MANUAL` 的后启动或后发现 Delivery 都标记 `QUEUED`，前一个 Delivery 进入 Run 终态，或到达最终用户确认边界，并形成可验证业务 commit、working tree/index clean、HEAD 未漂移且 receiver/reservation 安全释放后按已记录模式续调队首。`CANCELLED` 的 owner 在安全边界独立释放，不需要归档；终态状态不继续返回过期 `workspaceRebase`。手动冻结 Delivery 内部保持 `HANDOFF_READY` 并等待接收方显式启动，手动 Run 到达相同安全边界后也可 commit 并让出 checkout。资源冲突、owner dirty、未合并状态或 HEAD 漂移时保持排队，不创建新 worktree，也不允许跨 Delivery 并行。
+同一个实际 workspace 可以绑定多个 Delivery，Graph 状态、Revision、run 和验收始终按 `rootId` 路由，但执行策略只有 `CURRENT_WORKSPACE_SERIAL`。每个 Delivery 保持独立分支；已选择 `AUTOMATIC` 或 `MANUAL` 的后启动或后发现 Delivery 都标记 `QUEUED`，前一个 Delivery 进入 Run 终态，或到达最终用户确认边界，并形成可验证业务 commit（或 `CANCELLED` 的零变化证明）、working tree/index clean、HEAD 未漂移且 receiver/reservation 安全释放后按已记录模式续调队首。`CANCELLED` 的 owner 在安全边界独立释放，不需要归档；终态状态不继续返回过期 `workspaceRebase`。手动冻结 Delivery 内部保持 `HANDOFF_READY` 并等待接收方显式启动，手动 Run 到达相同安全边界后也可 commit 并让出 checkout。资源冲突、owner dirty、未合并状态或 HEAD 漂移时保持排队，不创建新 worktree，也不允许跨 Delivery 并行。
 
 ### 同文件/同区域：声明式串行化（`resourceClaims`）
 

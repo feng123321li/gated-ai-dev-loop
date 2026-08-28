@@ -292,7 +292,9 @@ RUNTIME_TOOLS = (
             "current attempt and frozen Graph. The response separately "
             "reports workspaceRelease=PENDING or RELEASED; release requires "
             "all receivers/reservations quiesced plus a business commit and "
-            "clean matching frozen branch in every writable Git scope."
+            "clean matching frozen branch in every writable Git scope. A "
+            "pending release does not prevent the same Delivery from "
+            "resuming in place while it retains the workspace turn."
         ),
         _object(
             {
@@ -307,10 +309,11 @@ RUNTIME_TOOLS = (
         "resume_loop",
         (
             "Resume one paused Loop in a receiving independent context. If "
-            "its workspace turn was released, first append it to the serial "
-            "queue, wait for ownership, prepare the frozen branches, and "
-            "capture a fresh clean turn start; only then return the node to "
-            "Graph readiness."
+            "its workspace turn was not released, retain the current owner "
+            "turn and return the node to Graph readiness in place. If it was "
+            "released, first append it to the serial queue, wait for "
+            "ownership, prepare the frozen branches, and capture a fresh "
+            "clean turn start."
         ),
         _object(
             {"root_id": ROOT_ID, "node_id": NODE_ID},
